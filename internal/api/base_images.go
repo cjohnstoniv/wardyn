@@ -25,7 +25,7 @@ import (
 // (validateWorkspaceBaseImage's rules, catalog-shaped): a known reusable kind and
 // a non-empty image ref with no control characters.
 //
-// The step caps are gone (D3): they justified themselves as "the same caps the
+// The step caps are gone: they justified themselves as "the same caps the
 // wizard's build-steps editor enforces", and that editor does not exist — nor
 // could the steps ever run. See types.BaseImageEntry.Steps.
 func validateBaseImageWrite(b types.BaseImageEntry) string {
@@ -95,7 +95,7 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if created.ID != entry.ID {
 		status = http.StatusOK
-		// W7-S1-3: an identity hit is the Add dialog's ONLY rename route (no
+		// An identity hit is the Add dialog's ONLY rename route (no
 		// separate edit UI/API/CLI/SDK) — apply the operator's explicitly
 		// typed name here, never inside UpsertBaseImage's own conflict clause
 		// (see its doc comment: that upsert is also a passthrough path with

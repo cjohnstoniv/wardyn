@@ -60,7 +60,7 @@ type ImageBuildSweeper interface {
 // per-run agent/proxy containers + network running under a run row with an EMPTY
 // sandbox_ref — and every ref-keyed teardown (reconcileOrphanedSandbox,
 // SweepTerminalSandboxes) skips a ref-empty row, so those containers leak across
-// every reboot, untracked (D13). This sweep finds them by the wardyn.run-id
+// every reboot, untracked. This sweep finds them by the wardyn.run-id
 // label the substrate stamps and tears down any whose run isOrphan, past the
 // minAge dispatch grace. Checked by type assertion (like ImageBuildSweeper) so
 // api stays target-agnostic; a Runner without it (nil, a test fake, a future
@@ -115,7 +115,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// sweepOrphanedSandboxes runs LAST: finalizeUndispatchedRuns above has by now
 	// flipped every ref-empty abandoned run terminal, so those runs' leaked
 	// containers are visible to the label sweep as "row terminal, containers still
-	// alive" — the exact leak (D13). It repeats on the same slow cadence in
+	// alive" — the exact leak. It repeats on the same slow cadence in
 	// runWatcherSweeper.
 	// NOT wired here: SweepTerminalSandboxes.
 	//
@@ -212,10 +212,9 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 	return nil
 }
 
-// reconcileOrphanedSandbox is ReconcileOnBoot's fourth pass, closing
-// W15-W15c-terminal-lifecycle-4: on the finalizeRunTail path a terminal run's
-// SandboxRef only survives non-empty when THAT run's own StopSandbox call
-// failed (the tail clears it on success). Kill and idle-stop tear down on
+// reconcileOrphanedSandbox is ReconcileOnBoot's fourth pass: on the
+// finalizeRunTail path a terminal run's SandboxRef only survives non-empty
+// when THAT run's own StopSandbox call failed (the tail clears it on success). Kill and idle-stop tear down on
 // their own paths and never clear, so their runs also reach this sweep — a
 // safe no-op retry against an already-gone sandbox — and this file's other
 // three passes
@@ -231,7 +230,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 // sweeps; a still-failing teardown leaves it set (stopSandboxOrAudit already
 // audits it with teardown_error) for the NEXT boot to retry.
 //
-// It also re-runs revokeRunCascade (bug-lifecycle-1 / W22-S1-7): a run that
+// It also re-runs revokeRunCascade: a run that
 // reaches this pass may have had its ORIGINAL finalize/kill/idle-stop
 // teardown fail after its revoke ran — or its revoke itself fail — so it may
 // carry an un-revoked identity/broker credential regardless of the teardown
@@ -296,7 +295,7 @@ func (s *Server) orphanedBuildSweeper(ctx context.Context, every time.Duration) 
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			// Recover PER TICK (GAP-RECONCILE-6): one panicking tick must not degrade
+			// Recover PER TICK: one panicking tick must not degrade
 			// the sweep to boot-only for the whole process lifetime.
 			func() {
 				defer func() {
@@ -337,7 +336,7 @@ const undispatchedGrace = 2 * imageBuildTimeout
 // token and un-revoked grants — because the one boot that could have reaped it
 // saw it too young and no later boot is coming.
 //
-// AGE GATE: the scan is table-wide, and under multiple replicas "boot" is not
+// Age gate: the scan is table-wide, and under multiple replicas "boot" is not
 // this process's private event — without the gate, ANY replica restarting would
 // FAIL every in-flight pre-dispatch run fleet-wide, including ones another live
 // replica is still building an image for. undispatchedGrace is the ceiling on
@@ -358,8 +357,8 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 		if now.Sub(run.CreatedAt) < undispatchedGrace {
 			continue // still inside its own dispatch window; not abandoned
 		}
-		// A FRESH watcher lease means a LIVE process is responsible for this run
-		// (GAP-RECONCILE-4): a run whose SetSandboxRef write was merely lost to a
+		// A FRESH watcher lease means a LIVE process is responsible for this run:
+		// a run whose SetSandboxRef write was merely lost to a
 		// transient store error reaches RUNNING with SandboxRef=="" but a live
 		// completion watcher heartbeating its lease. Finalizing it would false-fail a
 		// working agent mid-task and leak its sandbox forever (reconcileFinalize has
@@ -399,7 +398,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 	base := s.watcherBaseCtx()
 	var reattached, finalized int
 	for _, run := range runs {
-		// STRAND GUARD (GAP-RECONCILE-2): a crash between SetSandboxRef and Exec
+		// Strand guard: a crash between SetSandboxRef and Exec
 		// leaves a non-interactive task run with a sandbox_ref but no persisted
 		// agent_exec_id — no agent was ever exec'd and none ever will be. Probing the
 		// container with an empty exec id falls back to container Status, which reads
@@ -407,16 +406,14 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 		// eternally (the exact C3 strand the sweep exists to close). Finalize it
 		// instead. An interactive run legitimately has no exec id, so it is exempt.
 		//
-		// W15-c: keyed on a GENUINELY empty AgentExecID only — dispatch
-		// (runs_dispatch.go, mainProcessExecID) now persists a non-empty sentinel
+		// Keyed on a GENUINELY empty AgentExecID only — dispatch
+		// (runs_dispatch.go, mainProcessExecID) persists a non-empty sentinel
 		// for an exec-less (krun) launch, which legitimately has no separate exec
 		// id but IS a live, healthy run (the container's main process is the
-		// agent). Before that fix, dispatch persisted a bare "" for that case too,
-		// so this guard could not tell "never exec'd, stranded" apart from
-		// "exec-less, healthy" and finalized+killed the latter on every stale-lease
-		// sweep. Do NOT widen this back to "AgentExecID doesn't look like a real
-		// exec id" or similar — "" must stay reserved for "SetRunAgentExecID was
-		// never called".
+		// agent), so this guard can tell "never exec'd, stranded" apart from
+		// "exec-less, healthy". Do NOT widen this back to "AgentExecID doesn't
+		// look like a real exec id" or similar — "" must stay reserved for
+		// "SetRunAgentExecID was never called".
 		//
 		// No age gate: dispatch HOLDS this run's watcher lease continuously from just
 		// before SetSandboxRef until the completion watcher takes over its own hold
@@ -493,7 +490,7 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			// Recover PER TICK (GAP-RECONCILE-6), not once around the whole loop: a
+			// Recover PER TICK, not once around the whole loop: a
 			// store-driver edge that panics on ONE claimed row must not permanently
 			// degrade adoption to boot-only for the process lifetime on the strength
 			// of a single log line — the next tick simply tries again.
@@ -512,7 +509,7 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 					// Same slow cadence as the undispatched pass (both are unbounded
 					// full-table reads whose eligibility only changes on the
 					// undispatchedGrace timescale), and AFTER it, so a just-finalized
-					// ref-empty run's leaked containers are swept the same tick (D13).
+					// ref-empty run's leaked containers are swept the same tick.
 					// ponytail: no separate ticker — piggy-backing this cadence keeps
 					// one ContainerList per grace period, free next to what it reclaims.
 					if err := s.sweepOrphanedSandboxes(ctx); err != nil {
@@ -596,13 +593,13 @@ func (s *Server) watcherBaseCtx() context.Context { return s.cfg.BaseCtx }
 
 // reconcileProbeErrorCeiling bounds how LONG (wall-clock) a reconcile watcher
 // tolerates PERSISTENT AgentStatus probe errors before giving up on a
-// genuinely-wedged ref. It replaced a 12-error (~60s) count (GAP-RECONCILE-5):
-// AgentStatus returns an error only for daemon-level unreachability (a gone
-// sandbox arrives as a terminal STATE, not an error) or an ambiguous exec-404
-// under a still-running container (GAP-RECONCILE-1) — and a routine loaded-dockerd
-// restart, or a live-restore exec-map loss, errors for a minute or two. Finalizing
-// on that mass-failed every in-flight run adopted onto reconcileWatch after any
-// wardynd restart. So the watcher now BACKS OFF while errors persist and only
+// genuinely-wedged ref: AgentStatus returns an error only for daemon-level
+// unreachability (a gone sandbox arrives as a terminal STATE, not an error) or
+// an ambiguous exec-404 under a still-running container — and a routine
+// loaded-dockerd restart, or a live-restore exec-map loss, errors for a minute
+// or two, which would false-fail every in-flight run adopted onto
+// reconcileWatch after a wardynd restart under a short, count-based ceiling.
+// So the watcher BACKS OFF while errors persist and only
 // finalizes after this generous ceiling, and prefers a definitive "gone"
 // observation (a successful probe returning a terminal state) to ever finalizing.
 const reconcileProbeErrorCeiling = 30 * time.Minute
@@ -639,8 +636,8 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 			if err != nil {
 				// A probe error is NOT "the run finished" (a gone sandbox arrives as a
 				// terminal STATE, not an error) — finalizing here would false-kill a
-				// healthy RUNNING run on a daemon blip or a >60s loaded-dockerd restart
-				// (GAP-RECONCILE-5). BACK OFF and keep the sandbox alive; only give up
+				// healthy RUNNING run on a daemon blip or a >60s loaded-dockerd restart.
+				// BACK OFF and keep the sandbox alive; only give up
 				// after a generous wall-clock ceiling for a genuinely-wedged ref.
 				if firstErr.IsZero() {
 					firstErr = s.cfg.Now()
@@ -674,7 +671,7 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 // writes, the revoke cascade, and StopSandbox) so one wedged ContainerStop cannot
 // hang the single-threaded sweeper — or the boot pass that gates serveAndShutdown,
 // where an unbounded StopSandbox would keep the control plane from ever serving
-// /healthz and crashloop the pod (GAP-RECONCILE-3). Generous: it must cover a
+// /healthz and crashloop the pod. Generous: it must cover a
 // graceful SIGTERM→SIGKILL stop (the driver's own stopTimeout is 10s) plus the
 // revoke cascade, so 2× that with headroom.
 const reconcileFinalizeTimeout = 60 * time.Second
@@ -683,7 +680,7 @@ const reconcileFinalizeTimeout = 60 * time.Second
 // on it still being non-terminal so a concurrent kill/complete is never clobbered
 // — then runs the revoke cascade and (best-effort) tears the sandbox down.
 func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to types.RunState, ref, reason string) {
-	// Bound the whole tail (GAP-RECONCILE-3): the sweep loop and the boot pass call
+	// Bound the whole tail: the sweep loop and the boot pass call
 	// this SYNCHRONOUSLY, so an unbounded wedged StopSandbox would stall adoption
 	// for the process lifetime (or block boot from serving).
 	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)

@@ -1,12 +1,12 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Access / role-mapping CRUD (Phase 2 lane A, migration 0051): the console's
+// Access / role-mapping CRUD (migration 0051): the console's
 // Getting Started -> People editor over the store half of
 // internal/auth/oidc's RoleMappingSource. Modeled on permissions.go's shape —
 // one read that shows the whole picture, small validated writes, an audit
 // event per write — but with two guards permissions.go has no analogue for:
-// this table decides who derives ADMIN AT ALL, so a bad write here can either
+// this table decides who derives admin at all, so a bad write here can either
 // silently widen access (a collision with the operator allowlist) or lock the
 // acting admin out of their own deployment (see the posture-flip and lockout
 // guards below).
@@ -36,14 +36,14 @@ import (
 // any string the role map could actually produce.
 const accessDeniedRole = "denied"
 
-// accessEmailKeyRefused is EMAIL_KEY_REFUSED — the frozen string the Q7
+// accessEmailKeyRefused is EMAIL_KEY_REFUSED — the frozen string the
 // adjudication (docs/design/people-access-prompt.md) creates, rendered
 // verbatim on a POST /access/mappings refused for carrying an email-shaped
 // value with Config.AllowEmailMappings unset. Byte-for-byte per the
 // adjudication; do not reword without updating that doc too.
 const accessEmailKeyRefused = "Email mappings are disabled on this install. Map an App Role or group instead, or opt in with WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS in your chart."
 
-// accessStaleSnapshot (A-1) is the lockout guard's OTHER refusal: a caller
+// accessStaleSnapshot is the lockout guard's OTHER refusal: a caller
 // whose login-time claim snapshot (oidcGroupsFromContext) cannot even
 // reproduce the admin role they demonstrably hold right now — because their
 // admin-granting group fell off the 2048-byte groups-snapshot truncation
@@ -61,7 +61,7 @@ const accessStaleSnapshot = "your sign-in is too old to verify this change — s
 // This guard fires on ANY caller whose frozen claim snapshot cannot reproduce
 // the admin role they hold — and apiTokenAuth installs exactly such a snapshot:
 // api_tokens.groups is stamped at MINT and read verbatim on every request, and a
-// NULL groups_truncated (a pre-0.7 token) reads as truncated by PF-26. So a
+// NULL groups_truncated (a pre-0.7 token) reads as truncated. So a
 // wdn_-token admin is refused every POST/DELETE /access/mappings and told to
 // sign in again — which changes nothing they hold. RefreshAPITokenRoles
 // re-stamps the ROLE column and provably does not touch groups, so there is no
@@ -99,7 +99,7 @@ func (s *Server) requireOIDC(w http.ResponseWriter) bool {
 	return false
 }
 
-// ─── GET /access ───────────────────────────────────────────────────────────
+// GET /access
 
 type accessMappingView struct {
 	ID          string    `json:"id,omitempty"`
@@ -123,17 +123,17 @@ type accessResponse struct {
 	Mappings              []accessMappingView `json:"mappings"`
 	DefaultRole           string              `json:"default_role"`
 	OperatorEmailsPresent bool                `json:"operator_emails_present"`
-	// OperatorEmails (A-3) is the ADDRESSES themselves — api.Config.OperatorEmails,
+	// OperatorEmails is the ADDRESSES themselves — api.Config.OperatorEmails,
 	// the same list fed into oidc.Config.LegacyAdminEmails at boot — so the
 	// console's Defaults block can render the addresses, not just the bool
 	// above (which stays for the guard-note logic that only needs presence).
 	OperatorEmails []string `json:"operator_emails"`
-	// AllowEmailMappings mirrors Config.AllowEmailMappings (Q7 adjudication) —
+	// AllowEmailMappings mirrors Config.AllowEmailMappings —
 	// the console derives email-ness of a row from "@" in its value itself
 	// (no new per-row field), and uses this alongside that to render the
 	// §7.2 warn badge / the opt-in state, matching what a write would accept.
 	AllowEmailMappings bool `json:"allow_email_mappings"`
-	// EmailDomainsConfigured (A-4) reports whether WARDYN_OIDC_EMAIL_DOMAINS
+	// EmailDomainsConfigured reports whether WARDYN_OIDC_EMAIL_DOMAINS
 	// is set (oidc.Authenticator.HasEmailDomains) — the EMAIL_KEY badge copy
 	// depends on this, and the response otherwise cannot express it.
 	EmailDomainsConfigured bool `json:"email_domains_configured"`
@@ -255,7 +255,7 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		EmailDomainsConfigured: s.cfg.OIDC.HasEmailDomains(),
 		Provider:               ssoProviderName(s.cfg.OIDC.Issuer()),
 		Posture: accessPosture{
-			// MapEmpty (A-5) is the REAL merged-map emptiness (chart + rows,
+			// MapEmpty is the REAL merged-map emptiness (chart + rows,
 			// with a shadowed row contributing nothing) — not a raw row
 			// count, which diverges whenever a stored row collides with the
 			// chart or the operator allowlist.
@@ -279,7 +279,7 @@ func toOIDCRoleMappings(rows []types.RoleMapping) []oidc.RoleMapping {
 
 // accessUnmatchedOutcome is the ONE derivation both write-guards and the GET
 // posture display use to ask "what role does an UNMATCHED signed-in human
-// get against rows" (A-5): PreviewRoleAgainst with no roles/groups/email,
+// get against rows": PreviewRoleAgainst with no roles/groups/email,
 // mapped to accessDeniedRole on ok=false. Routing every caller through
 // mergeRoleMaps+deriveRole this way — rather than a hand-mirrored arm
 // computation keyed on raw row counts — means it can never diverge from what
@@ -292,7 +292,7 @@ func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping) string {
 	return role
 }
 
-// ─── shared: canonicalization, candidate-map construction, guards ─────────
+// shared: canonicalization, candidate-map construction, guards
 
 // canonicalRoleMapValue trims+lowers value and validates it against EXACTLY
 // the contract mergeRoleMaps enforces on a console row (RoleMapping's own doc
@@ -302,7 +302,7 @@ func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping) string {
 // an empty/control-char value stored raw would be either a dead key or,
 // worse for whitespace, one that matches ANY empty/whitespace claim).
 //
-// THE ASCII GUARD RUNS BEFORE THE FOLD, mirroring the chart-side twin
+// The ASCII guard runs before the fold, mirroring the chart-side twin
 // oidc.ParseRoleMap (its ASCIIOnly refusal precedes its own ToLower) and
 // oidc's deriveRole lookup loop. strings.ToLower folds KELVIN SIGN U+212A to
 // 'k' and U+0130 to 'i', so guarding the LOWERED value accepts a value the
@@ -324,7 +324,7 @@ func canonicalRoleMapValue(value string) (string, error) {
 	return v, nil
 }
 
-// accessCollisionBody (A-2) is POST /access/mappings' collision 400: a
+// accessCollisionBody is POST /access/mappings' collision 400: a
 // candidate value that already resolves through boot-time config always
 // wins the same collision at login (mergeRoleMaps), so the write is refused
 // — structured, keyed on Cause, reusing the exact "chart" | "operator_allowlist"
@@ -364,7 +364,7 @@ func writeAccessCollision(w http.ResponseWriter, value, cause string) {
 	})
 }
 
-// accessCandidateRows builds the role-mapping set AS IT WOULD BE after a
+// accessCandidateRows builds the role-mapping set as it would be after a
 // proposed write — replace/add valueRole (role == "" means: this write is a
 // DELETE, drop the row instead), leaving every other existing row untouched —
 // so the lockout guard can hand it to PreviewRoleAgainst and ask "would the
@@ -402,13 +402,13 @@ func accessCandidateRows(existing []types.RoleMapping, id, value, role string) [
 // only remaining path to UNDO a bad mapping once every SSO admin has already
 // locked themselves out. That exemption IS the recovery path.
 //
-// A-1: the snapshot itself can be too stale to trust — an admin whose
+// The snapshot itself can be too stale to trust — an admin whose
 // admin-granting group fell off the 2048-byte groups-snapshot truncation
 // (sessionGroups), or whose cookie predates snapshots entirely (Groups nil),
 // would derive NON-admin against the snapshot regardless of what the write
-// does, which used to trip the lockout message on every write (false
-// positive). Fixed by checking roleBefore — the SAME snapshot run against
-// the EXISTING rows, before this write — first: only when roleBefore is
+// does, which would trip the lockout message on every write as a false
+// positive if left unchecked. Checking roleBefore — the SAME snapshot run against
+// the EXISTING rows, before this write — first avoids that: only when roleBefore is
 // genuinely admin does a roleAfter that comes out non-admin mean the WRITE
 // caused the demotion (the real lockout); when roleBefore already isn't
 // admin, the snapshot cannot reproduce the admin access the caller
@@ -424,7 +424,7 @@ func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping,
 	groups, email := oidcGroupsFromContext(r.Context()), oidcEmailFromContext(r.Context())
 	roleBefore, ok := s.cfg.OIDC.PreviewRoleAgainst(toOIDCRoleMappings(existing), nil, groups, email)
 	if !ok || roleBefore != oidc.RoleAdmin {
-		// SAME REFUSAL, the caller's own REMEDY. The two lanes reach this arm
+		// Same refusal, the caller's own REMEDY. The two lanes reach this arm
 		// for the same reason — a frozen snapshot that cannot reproduce the
 		// admin they hold — but only the cookie lane can fix it by signing in
 		// again; a token's GROUP snapshot is stamped at mint and no login
@@ -462,7 +462,7 @@ func writeAccessPostureFlip(w http.ResponseWriter, before, after string) {
 	})
 }
 
-// ─── POST /access/mappings ─────────────────────────────────────────────────
+// POST /access/mappings
 
 type roleMappingWriteRequest struct {
 	Value                   string `json:"value"`
@@ -475,9 +475,9 @@ type roleMappingWriteRequest struct {
 // (store.UpsertRoleMapping), same 201-new/200-updated status split
 // handleUpsertCapabilityGrant uses. Four gates run, in order, before the
 // store is ever touched: shape/canonicalization, the chart/operator
-// collision, the Q7 email-mapping opt-in, and the posture-flip guard —
+// collision, the email-mapping opt-in, and the posture-flip guard —
 // which fires whenever this write actually moves the unmatched-human
-// outcome (accessUnmatchedOutcome over existing vs. candidate rows, A-5),
+// outcome (accessUnmatchedOutcome over existing vs. candidate rows),
 // not merely on a first-console-row precondition. The lockout guard runs
 // last, against the write's actual candidate outcome.
 func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request) {
@@ -502,7 +502,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeAccessCollision(w, value, cause)
 		return
 	}
-	// Q7 adjudication (docs/design/people-access-prompt.md): an email-shaped
+	// Adjudication (docs/design/people-access-prompt.md): an email-shaped
 	// CONSOLE value is refused unless the org opted in
 	// (WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS) — an SSO/Entra deployment's default
 	// posture steers an admin to an App Role or group key instead. env
@@ -524,10 +524,10 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 	candidate := accessCandidateRows(existing, "", value, req.Role)
 
-	// POSTURE-FLIP GUARD (A-5): fires iff this write actually moves the
+	// Posture-flip guard: fires iff this write actually moves the
 	// unmatched-human outcome — derived from the REAL merged map via
 	// accessUnmatchedOutcome (existing rows vs. candidate rows), not a raw
-	// row-count precondition, which used to miss a flip whenever a stored
+	// row-count precondition, which would miss a flip whenever a stored
 	// row was shadowed (see accessUnmatchedOutcome's doc).
 	if !req.AcknowledgeAccessChange {
 		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing))
@@ -558,7 +558,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	if saved.ID != m.ID {
 		status = http.StatusOK
 	}
-	// A DEMOTION MADE HERE IS EFFECTIVE HERE. A role mapping decides the role a
+	// A demotion made here is effective here. A role mapping decides the role a
 	// LOGIN derives; an outstanding wdn_ token carries a role stamped at MINT
 	// and read verbatim on every request until its owner's OWN next login
 	// re-stamps it (store.RefreshAPITokenRoles) — a real bound, but on their
@@ -576,7 +576,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		action, saved.ID.String(), "success", mustJSON(map[string]any{
 			"value": saved.Value, "role": saved.Role, "stale_token_snapshots": stale, "tokens_revoked": revoked,
 		})))
-	// EMBEDDED, so the response is a strict SUPERSET of the RoleMapping every
+	// Embedded, so the response is a strict SUPERSET of the RoleMapping every
 	// existing client already decodes — the console, pkg/client and the CLI keep
 	// working byte for byte, and a client that wants the signal reads one more
 	// key. omitempty: a deployment with no outstanding tokens sees no new field
@@ -588,11 +588,11 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	}{RoleMapping: saved, StaleTokenSnapshots: stale, TokensRevoked: revoked})
 }
 
-// ─── DELETE /access/mappings/{id} ──────────────────────────────────────────
+// DELETE /access/mappings/{id}
 
 // handleDeleteRoleMapping removes one console row by id. The lockout guard
 // runs against the candidate set with this row removed; the REVERSE
-// posture-flip guard (A-5) fires whenever removing this row actually moves
+// posture-flip guard fires whenever removing this row actually moves
 // the unmatched-human outcome — derived from the real merged map, the same
 // accessUnmatchedOutcome the add-side guard uses, not a hand-mirrored arm
 // computation keyed on chart/row counts.
@@ -609,7 +609,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "list role mappings: "+err.Error())
 		return
 	}
-	// The matched row, kept for the audit event below (A-6) — once deleted,
+	// The matched row, kept for the audit event below — once deleted,
 	// the store can no longer say which value/role this id ever named.
 	var matched types.RoleMapping
 	for _, m := range existing {
@@ -622,7 +622,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 
 	// acknowledge_access_change is a query param (this route's own
 	// natural-key delete has no body) — ParseBool over a bare == "true"
-	// (A-10) so "1"/"TRUE"/"T" also work, err (including absent) => false.
+	// so "1"/"TRUE"/"T" also work, err (including absent) => false.
 	acknowledge, _ := strconv.ParseBool(r.URL.Query().Get("acknowledge_access_change"))
 	if !acknowledge {
 		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing))
@@ -661,7 +661,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ─── POST /access/preview ──────────────────────────────────────────────────
+// POST /access/preview
 
 type accessPreviewRequest struct {
 	Roles      []string `json:"roles,omitempty"`

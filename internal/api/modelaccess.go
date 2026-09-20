@@ -16,7 +16,7 @@ import (
 //
 // Two things live here because they are the same question asked twice. An
 // AgentProviders row says whether a deployment's model credential is ONE
-// credential for everyone (`shared`, today) or ONE PER PERSON (`per_user`,
+// credential for everyone (`shared`, today) or one per person (`per_user`,
 // captured by that person's own AWS SSO sign-in), and every lane that reads or
 // writes a captured AWS SSO session has to resolve that before it touches the
 // secret store — a member served the admin's session is the exact failure
@@ -37,7 +37,7 @@ const modelAccessAgent = "claude-code"
 
 // awsSSOScope names WHOSE captured AWS SSO credential a lane may read or write.
 //
-// THE ZERO VALUE IS THE OPERATOR NAMESPACE — today's behaviour, and what a
+// The zero value is the operator namespace — today's behaviour, and what a
 // `shared` row (or legacy open mode, where there is no roster at all) resolves
 // to. Every call site that has nothing to say about per-principal credentials
 // therefore keeps reading exactly the row it read before.
@@ -77,7 +77,7 @@ func awsSSOScopeIsMechanism(sc awsSSOScope) bool {
 }
 
 // AdminTokenPrincipal exports adminTokenPrincipal for cmd/wardynd's boot-time
-// validation (S-06): a -local-operator value equal to it would collide with
+// validation: a -local-operator value equal to it would collide with
 // this mechanism principal, refusing the SAME operator seat at harness-login
 // that boot just accepted.
 func AdminTokenPrincipal() string { return adminTokenPrincipal }
@@ -96,7 +96,7 @@ func awsSSOCredentialSourceLabel(sc awsSSOScope) string {
 // namespace under an enabled `per_user` row for this agent, the operator
 // namespace otherwise (a `shared` row, a disabled row, no row, or no roster).
 //
-// "NO ROSTER" HERE MEANS A SITE CONFIG THAT WAS READ AND CARRIES NO ROW — never
+// "No roster" here means a site config that was read and carries no row — never
 // one that could not be read. The two are indistinguishable in the VALUE (both
 // are the zero SiteConfig), which is exactly why the distinction is made by the
 // CALLER and not here: dispatch retries the read once (siteConfigForDispatch)
@@ -104,7 +104,7 @@ func awsSSOCredentialSourceLabel(sc awsSSOScope) string {
 // (enforceReadableRosterForCredential), and /setup/status fails closed to the
 // caller's own namespace (setupStatusSSOScope below). This function is pure over
 // the value it is handed and has no way to tell those apart, so it must never be
-// handed a value nobody proved they read. Owner decision 3 / B2-F1.
+// handed a value nobody proved they read.
 //
 // Pure over the site config, so the three call sites that already hold one
 // (dispatch, the create-time mechanism gate) spend no extra read.
@@ -118,13 +118,13 @@ func awsSSOScopeFor(sc types.SiteConfig, agentID, subject string) awsSSOScope {
 
 // setupStatusSSOScope is the AWS SSO namespace a /setup/status READ answers
 // for: the roster's, except that a roster read which FAILED resolves FAIL-
-// CLOSED to the caller's own per-user namespace (R-4). awsSSOScopeFor's "no
+// CLOSED to the caller's own per-user namespace. awsSSOScopeFor's "no
 // row" fallback is the OPERATOR namespace — right at a WRITE door, where an
 // unreadable roster must not silently re-point a credential; on this read it
 // handed every caller, a member included, the admin's harness row and
 // model_access for the duration of a store blip, the one window in which a
 // forged capture marker in a member's own login sandbox is corroborated by a
-// session that is not theirs (S-13). readAWSSSOBlob answers a per-user scope
+// session that is not theirs. readAWSSSOBlob answers a per-user scope
 // it cannot name with "nothing". storeConfigured keeps a NIL store on the old
 // path: that is an install with no roster, not a blip.
 func setupStatusSSOScope(sc types.SiteConfig, scOK, storeConfigured bool, subject string) awsSSOScope {
@@ -135,15 +135,14 @@ func setupStatusSSOScope(sc types.SiteConfig, scOK, storeConfigured bool, subjec
 }
 
 // awsSSOScopeForAgent is awsSSOScopeFor for a caller that does NOT already hold
-// a site config. ok=false means THE ROSTER COULD NOT BE READ, and the scope
+// a site config. ok=false means the roster could not be read, and the scope
 // returned with it is the old legacy-open answer (the operator namespace) —
 // never a scope a caller may write or delete under.
 //
-// The (scope, ok) pair, rather than the bare scope this used to return, because
+// The (scope, ok) pair, rather than a bare scope, because
 // dropping ok is a fail-OPEN at every door that decides WHERE a credential
 // lands: a store blip read as "no per_user row" sent a member's capture, and a
-// Disconnect's Delete, to the deployment-wide row every run inherits (S2-01,
-// S2-08). A read door may still ignore ok — dispatch does, deliberately — but
+// Disconnect's Delete, to the deployment-wide row every run inherits. A read door may still ignore ok — dispatch does, deliberately — but
 // it now has to say so.
 func (s *Server) awsSSOScopeForAgent(ctx context.Context, agentID, subject string) (awsSSOScope, bool) {
 	if s.cfg.Store == nil {
@@ -167,7 +166,7 @@ const (
 	// modelAccessLive: nothing for the person to do. A refresh token is present
 	// and the registration is not near lapsing (or carries no expiry at all —
 	// see registrationLapsed for why a zero timestamp counts as live).
-	// expired_renewable FOLDS IN HERE deliberately: dispatch renews it, so
+	// expired_renewable folds in here deliberately: dispatch renews it, so
 	// reporting it as a problem would ask for an hourly re-login the product no
 	// longer needs.
 	modelAccessLive = "live"
@@ -203,7 +202,6 @@ const modelAccessExpiringWindow = 24 * time.Hour
 // console renders a server action line verbatim; the chip LABELS are the
 // console's own copy module.
 const (
-	// DRAFT (M2 canon pending)
 	modelAccessExpiringAction = "Sign in again before %s"
 	// DRAFT (M2 canon pending)
 	modelAccessSignInAction = "Sign in to AWS"
@@ -216,16 +214,12 @@ const (
 	// "sign in again" on its own reads like a transient glitch rather than a
 	// deployment rule they are now on the wrong side of. %s = the stored
 	// account, role; then the allowed account, role.
-	//
-	// DRAFT (M2 canon pending)
 	modelAccessPinContradictedAction = "Your stored AWS session is for account %s / role %s; this row now allows %s / %s — sign in again."
 	// harnessCredentialAWSPinMismatchDetail is the OPERATOR's half of the same
 	// fact, on the harness_credential_aws checklist row (members never see the
 	// checklist — redactSetupStatusForMember empties it). It exists because the
 	// expired_signin arm it shares says "expired at <ts> and cannot be renewed",
 	// which of this credential is simply false.
-	//
-	// DRAFT (M2 canon pending)
 	harnessCredentialAWSPinMismatchDetail = "Your captured AWS SSO session names an AWS account and role this agent's roster row no longer allows, so Bedrock runs using it are refused before they start."
 	// harnessCredentialAWSRenewalSpentDetail is the operator's checklist-row
 	// text for `expiring` reached via Cause == causeRenewalSpent: AWS itself
@@ -234,8 +228,6 @@ const (
 	// at <deadline>" sentence would say the wrong thing — that one describes a
 	// registration lapsing on its own schedule, not a grant AWS has already
 	// killed. %s is ma.Deadline (ExpiresAt − awsSSORefreshSkew).
-	//
-	// DRAFT (M2 canon pending)
 	harnessCredentialAWSRenewalSpentDetail = "Your captured AWS SSO session's refresh token was retired by AWS (a renewal attempt was refused) — " +
 		"it cannot be renewed and stops answering Bedrock calls at %s. Sign in again before then."
 )
@@ -246,11 +238,11 @@ const (
 const harnessLoginMechanismPrincipalRefusal = "this deployment gives each person their own AWS sign-in, and the admin token is a shared credential rather than a person — every capture made with it would land in one namespace and overwrite the last. Sign in to the console, or use your own wdn_ API token, and start the sign-in from there"
 
 // refuseHarnessLoginMechanismPrincipal writes the 422 refusal for a per_user
-// row reached by the shared admin-bearer-token principal, audits it (S-07:
-// the SIBLING refusals in this same function, denyMemberField/
+// row reached by the shared admin-bearer-token principal, audits it — the
+// SIBLING refusals in this same function, denyMemberField/
 // denyMemberCapability, both audit — this is the one refusal on the
 // credential-capture route an operator's own CI job hits with no error
-// budget, and a row is how they find out it stopped capturing), and returns
+// budget, and a row is how they find out it stopped capturing — and returns
 // false so authorizeHarnessLogin can `return types.AgentProvider{}, s.refuse...(w, r)`.
 func (s *Server) refuseHarnessLoginMechanismPrincipal(w http.ResponseWriter, r *http.Request) bool {
 	writeError(w, http.StatusUnprocessableEntity, harnessLoginMechanismPrincipalRefusal)
@@ -281,19 +273,17 @@ type SetupModelAccess struct {
 	// Deadline is the instant Action names — the registration's lapse, or the
 	// access token's expiry for a blob that cannot be renewed. It serves the
 	// admin's checklist row, which prints the same one the member's action line
-	// does, and since 0.7.6 it is ON THE WIRE.
+	// does, and it is on the wire.
 	//
-	// It was in-process only, on the reasoning that Action already states this
-	// fact in the member's own words and the console never re-composes that
-	// sentence. Finding 2 replaced that reasoning with LOCALISATION: `expiring`
-	// now rides a strip on every screen for the whole 24-hour window, and the
+	// Localisation is why: `expiring`
+	// rides a strip on every screen for the whole 24-hour window, and the
 	// sentence carries an RFC3339 UTC stamp, which a reader in another timezone
 	// misreads every time they see it. The console re-composes that ONE line
 	// through the same frozen template (AGENTS.MODEL_ACCESS_EXPIRING_ACTION) on
 	// the reader's own clock, and relativeTime in the strip; it needs the
 	// instant to do either.
 	//
-	// SAFE FOR A MEMBER only because memberModelAccess builds a FRESH struct
+	// Safe for a member only because memberModelAccess builds a FRESH struct
 	// that drops it — the leak that function exists to close was this same
 	// instant republished one field over. Pinned:
 	// TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember.
@@ -305,8 +295,8 @@ type SetupModelAccess struct {
 	// tell an operator their live session "expired at <ts> and cannot be
 	// renewed", which of this one credential is simply false.
 	PinMismatch bool `json:"-"`
-	// PerUser says whether this answer is about a credential THIS PRINCIPAL
-	// OWNS. IN-PROCESS only (json:"-"): it is not a fact the console renders, it
+	// PerUser says whether this answer is about a credential this principal
+	// owns. IN-PROCESS only (json:"-"): it is not a fact the console renders, it
 	// is what memberModelAccess needs to decide whether a member may be told a
 	// deadline or offered a sign-in at all. False is `shared` AND legacy open
 	// mode — in both, the graded blob is the OPERATOR's.
@@ -339,7 +329,7 @@ const (
 // memberModelAccess is the member-facing projection of a model-access answer,
 // applied by redactSetupStatusForMember.
 //
-// UNDER `shared` (AND LEGACY OPEN MODE) A MEMBER OWNS NOTHING HERE. The blob
+// Under `shared` (and legacy open mode) a member owns nothing here. The blob
 // setupModelAccess graded is the OPERATOR's, so every state that asks the
 // reader to act on their own credential — `expiring` with the admin's lapse
 // timestamp, `expired_signin`/`not_configured` with "Sign in to AWS" — is both
@@ -384,12 +374,12 @@ func memberModelAccess(ma SetupModelAccess) SetupModelAccess {
 // person to do YET. On the one-hour-token estate this design comes from, such a
 // blob reaches `expiring` within the hour on its own.
 //
-// spent SKIPS THE renewable ARM ENTIRELY (Finding 5): once AWS has retired the
+// spent SKIPS THE renewable ARM ENTIRELY: once AWS has retired the
 // refresh token, whether the client registration ALSO lapsed is moot — no
 // retry redeems it either way — so the only question left is the one dispatch
 // itself asks, needsRefresh: inside the refresh skew a dispatch would already
 // refuse this run, so grading anything but DEAD there would promise a launch
-// the person cannot make (Codex #6); outside it the access token still signs
+// the person cannot make; outside it the access token still signs
 // requests, so `expiring` (not `live`) is what tells the person while there is
 // still time to act.
 func awsSSOCredentialState(blob awsSSOBlob, found, perUser, spent bool, now time.Time) string {
@@ -460,7 +450,7 @@ func modelAccessAction(state, ts string) string {
 // registration's lapse when the blob can be renewed (that is what actually runs
 // out), the access token's own expiry when it cannot.
 //
-// spent is checked EXPLICITLY (Finding 5), ahead of the renewable arm: a spent
+// spent is checked EXPLICITLY, ahead of the renewable arm: a spent
 // credential is never renewed again regardless of what registration timestamp
 // it carries, so the deadline that matters is the moment dispatch itself stops
 // serving the access token — ExpiresAt − awsSSORefreshSkew, the same instant
@@ -483,7 +473,7 @@ func modelAccessDeadline(blob awsSSOBlob, found, spent bool, now time.Time) stri
 // the caller's own namespace — passed in rather than re-read, so the probe and
 // the harness row can never be about two different credentials.
 //
-// oidcConfigured gates the mechanism arm below (S-01/S-02): with no OIDC, the
+// oidcConfigured gates the mechanism arm below: with no OIDC, the
 // admin token IS the only working per_user capture path (there is no console
 // sign-in or wdn_ token to redirect to instead — see
 // harnessLoginMechanismPrincipalRefusal), so a no-OIDC deployment must keep
@@ -501,7 +491,7 @@ func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found, spent bool, s
 	row, declared := agentProviderFor(sc, modelAccessAgent)
 	ssoLane := declared && !row.Disabled && row.Mechanism == types.AgentMechanismBedrockSSO
 	// The caller is the shared admin bearer token, not a person: no sign-in it
-	// could complete FOR A NEW SESSION. It is NOT an unreadable namespace —
+	// could complete for a new session. It is NOT an unreadable namespace —
 	// "admin-token" is a non-empty owner, read and written like any other
 	// (readAWSSSOBlob only refuses an EMPTY owner) — so a session already
 	// captured there is real and dispatch still serves it to admin-token-
@@ -519,11 +509,11 @@ func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found, spent bool, s
 	if state == modelAccessExpiring {
 		out.Cause = awsSSOCredentialCause(blob, spent, now)
 	}
-	// A STORED SESSION THE ROSTER NO LONGER ALLOWS grades expired_signin, which
+	// A stored session the roster no longer allows grades expired_signin, which
 	// is the one thing that matters here: MODEL_ACCESS_ACTIONABLE
 	// (workspace-providers-copy.ts) is what decides whether the console offers
 	// "Sign in to AWS" at all, and this session grades `live` on expiry alone —
-	// so dispatch and create refuse the person's runs (P4) while the button that
+	// so dispatch and create refuse the person's runs while the button that
 	// would repair it is hidden and they are stranded. Signing in again IS the
 	// repair: a new login run stamps the CURRENT pin and its capture overwrites
 	// the blob, with no server-side invalidation anywhere.

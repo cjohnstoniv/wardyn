@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// THE LOGIN LAUNCH, SPLIT AT THE RUN ID (P5, 0.7.3 field report).
+// The login launch, split at the run id.
 //
 // POST /setup/harness-login used to run the WHOLE launch inside the request:
 // CreateRun, the audit stamp, then dispatchRun — which blocks on CreateSandbox
@@ -32,7 +32,7 @@ import (
 // context.WithoutCancel so the client's own disconnect cannot strand a
 // half-provisioned sandbox.
 //
-// WHY A KILL LANDING DURING THE PULL IS SAFE: dispatchRun claims
+// Why a kill landing during the pull is safe: dispatchRun claims
 // PENDING->STARTING with a CAS (runs_dispatch.go), so a POST /runs/{id}/kill
 // that wins the race makes dispatch ABORT rather than resurrect the run, and
 // stampRunWatcherLease runs before CreateSandbox, so no reconcile sweep adopts
@@ -53,11 +53,11 @@ type harnessLoginDispatch struct {
 }
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the dispatch ceiling
-// cannot be resolved AFTER the run row exists. Before P5 this was a 500 with no
-// run to speak of; now the caller already holds a 200 and a run id, so the run
-// itself has to carry the reason or it sits PENDING forever with no hint and no
-// watcher lease. Mirrors dispatchRun's own unresolved-ceiling sentence
-// (runs_dispatch.go), in this lane's words.
+// cannot be resolved AFTER the run row exists. Synchronously this would be a
+// 500 with no run to speak of; here the caller already holds a 200 and a run
+// id, so the run itself has to carry the reason or it sits PENDING forever
+// with no hint and no watcher lease. Mirrors dispatchRun's own
+// unresolved-ceiling sentence (runs_dispatch.go), in this lane's words.
 const harnessLoginCeilingUnresolved = "this sign-in sandbox was not launched: Wardyn could not resolve the governance ceiling that bounds it — try again, and tell your admin if it keeps failing"
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
@@ -121,9 +121,9 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	// sandbox whose auto-typed command is guaranteed to fail.
 	startURL := strings.TrimSpace(req.SSOStartURL)
 	if row.SSOStartURL != "" {
-		// ADMIN-OWNED, and it OVERRIDES the request rather than merely defaulting
+		// Admin-owned, and it OVERRIDES the request rather than merely defaulting
 		// it. A per_user row means many people sign in, and the capture is bound to
-		// whatever portal the launch was seeded with (ssotoken.go's F006 check
+		// whatever portal the launch was seeded with (ssotoken.go's own check
 		// compares the blob to THIS run's own audit record) — so honouring a
 		// caller-supplied start URL would let anyone bind their capture to an
 		// IdP/account of their choosing and have Wardyn bake it into every later
@@ -166,7 +166,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "launch login sandbox", err)
 		return
 	}
-	// ANSWER FIRST, then finish the launch. WithoutCancel keeps the request's
+	// Answer first, then finish the launch. WithoutCancel keeps the request's
 	// values — the ceiling memo above all, so the dispatch axis resolves exactly
 	// the ceiling the Limits axis already bound — while dropping the deadline
 	// that dies with this response.
@@ -179,7 +179,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 // run.interactive). It runs detached, after the caller already holds a 200 and
 // a run id.
 //
-// THE CEILING ERROR IS THE MISSED DOOR. resolveDispatchCeiling errors AFTER the
+// The ceiling error is the missed door. resolveDispatchCeiling errors AFTER the
 // run row and its audit stamp exist. Synchronously that was a 500 and the
 // caller knew the launch had failed; detached, returning would leave a 200
 // already answered, a run PENDING forever, no failure_hint for the pane to show
@@ -196,7 +196,7 @@ func (s *Server) finishHarnessLoginLaunch(ctx context.Context, run types.AgentRu
 	// Contain a panic in a detached goroutine so a launch bug cannot take the
 	// daemon down with it (same idiom as startCompletionWatcher).
 	//
-	// FAIL FROM THE RUN'S CURRENT STATE, re-read. `from` is a CAS precondition,
+	// Fail from the run's current state, re-read. `from` is a CAS precondition,
 	// and by the time anything here can realistically panic dispatchRun has
 	// already CASed PENDING->STARTING (runs_dispatch.go) — so a hard-coded
 	// RunPending would not apply, and failAndRevoke's non-applied path is SILENT

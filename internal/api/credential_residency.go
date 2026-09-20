@@ -1,13 +1,11 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// WHERE A RUN'S MODEL CREDENTIAL LIVES, graded once by the server.
+// Where a run's model credential lives, graded once by the server.
 //
-// The New Run rail used to state this as unconditional static copy — "Minted at
-// launch, injected by the proxy. Never written into the sandbox." — beside a
-// second unconditional claim about recording. Both were false on the estate the
-// 0.7.4 field report came from, and the first is a FALSE ASSURANCE: it is read
-// by the person deciding whether a per-user AWS credential may sit inside a
+// An unconditional static claim — "Minted at launch, injected by the proxy.
+// Never written into the sandbox." — is a FALSE ASSURANCE: it is read by the
+// person deciding whether a per-user AWS credential may sit inside a
 // shared-kernel container, at the moment they decide.
 //
 // So the console stops asserting and starts repeating. This file is the one
@@ -95,7 +93,7 @@ func gradeModelCredential(row types.AgentProvider, declared bool, lanes llmLanes
 		f.Mechanism, f.CredentialSource = string(row.Mechanism), string(row.CredentialSource)
 	}
 
-	// THE ONE CASE FIXED BY THE ROW RATHER THAN BY A RESOLVED LANE. Under
+	// The one case fixed by the row rather than by a resolved lane. Under
 	// per_user the only admissible lane is the principal's OWN captured AWS SSO
 	// session — resolveBedrockAuth refuses to fall through to the operator's
 	// bearer/mount/static arms, and mechanismSatisfied admits nothing else — and

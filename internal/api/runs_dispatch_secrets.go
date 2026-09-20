@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// DISPATCH-TIME SECRET RESOLUTION: the two phases that read a STORED SECRET's
+// Dispatch-time secret resolution: the two phases that read a STORED SECRET's
 // VALUE out of the store and put it somewhere the run can reach — the LLM
 // inspection corpus (in-process, for the detector) and env_secret (the sandbox
 // process environment). Split out of runs_dispatch.go for the 1000-line
@@ -32,7 +32,7 @@ import (
 // — never a stored/ceiling spec, never re-read, never logged (the
 // run.policy.effective audit above redacts it to a count).
 //
-// Belt-and-braces (W12-A-2): every resolved value is ALSO registered with the
+// Belt-and-braces: every resolved value is ALSO registered with the
 // run's mask registry, so a verbatim leak into PTY capture, a session
 // recording, or any OTHER audit event's Data/Target is scrubbed the same way
 // any other run secret is (cmd/wardynd's maskingRecorder) — not merely kept
@@ -62,7 +62,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 	// with an operator's own run identity string — see injection.go's Get for
 	// the same reasoning).
 	//
-	// THE SUBJECT, NOT THE ATTRIBUTION (B2-F2, F099's chokepoint). run.CreatedBy
+	// The subject, not the attribution. run.CreatedBy
 	// is what the run row records as its actor, and in LocalMode that is whatever
 	// the DEV-ONLY X-Wardyn-Principal header said (actorFromRequest's case 1) —
 	// so this resolver and its env_secret sibling below were the two credential
@@ -72,7 +72,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 	// every OIDC and admin-token caller is byte-identical; inside it a run is now
 	// served the namespace its own identity was minted for and nothing else.
 	for _, name := range li.WorkspaceSecretNames {
-		// F126: the reserved-name guard every credential SINK takes
+		// The reserved-name guard every credential SINK takes
 		// (sinkReservedSecret, secrets.go — "reject it at every sink"), which
 		// this one was missing while its direct sibling below
 		// (resolveEnvSecretGrants) carried it. This lane resolves a name to
@@ -133,7 +133,7 @@ const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
 // scrubbed like any other run secret. Values NEVER enter the audit stream: the
 // events below carry the variable name and the secret NAME only.
 //
-// FAIL-CLOSED PER GRANT, deliberately the opposite of resolveLLMInspectionSecrets'
+// Fail-closed per grant, deliberately the opposite of resolveLLMInspectionSecrets'
 // fail-open: that one feeds a detection corpus, where a missing entry costs
 // detection coverage; this one delivers a credential the task needs, where a
 // silently absent variable surfaces as an unauthenticated API call the agent
@@ -175,7 +175,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 		}
 		if skip == "" {
 			// runIdentitySubject(run.CreatedBy): same owner-then-operator-fallback
-			// rule as resolveLLMInspectionSecrets above, through the same F099
+			// rule as resolveLLMInspectionSecrets above, through the same
 			// chokepoint.
 			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(ctx, secretName)
 			if gerr != nil || len(val) == 0 {

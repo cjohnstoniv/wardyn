@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// THE DEPLOYMENT'S HOST-ROOT CEILING over a host_path drive, and the one gate
+// The deployment's host-root ceiling over a host_path drive, and the one gate
 // that has to look at the OTHER drive rows.
 //
 // Split out of user_drives.go because these two are the only parts of that file
@@ -29,7 +29,7 @@ import (
 // hook: internal/types must not read the environment, and a ceiling that lived
 // in two places would be a ceiling one of them could forget.
 //
-// EMPTY ROOTS REFUSE EVERY host_path DRIVE, and the refusal is inside the
+// Empty roots refuse every host_path drive, and the refusal is inside the
 // closure rather than a caller's `if`, so no call site can acquire the
 // fail-open version by forgetting the guard.
 func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
@@ -40,7 +40,7 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 // the other ROWS: a host_path drive whose host_root sits inside — or contains —
 // another host_path drive's host_root is refused, 422, naming the other drive.
 //
-// THE HOLE IT CLOSES IS A MEMBER'S, NOT AN ADMIN'S TYPO. Drive A is rooted at
+// The hole it closes is a member's, not an admin's typo. Drive A is rooted at
 // /srv/shares and gives alice a WRITABLE home at /srv/shares/alice. Drive B is
 // then rooted at /srv/shares/alice/team. Nothing above notices: B's root is
 // inside the deployment's ceiling, exists, is not a credential directory and is
@@ -52,16 +52,16 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 // drives sharing a tree means one drive's members author the other drive's
 // storage.
 //
-// STRICT nesting only. Two drives on the SAME root are left alone: that is the
+// Strict nesting only. Two drives on the SAME root are left alone: that is the
 // ordinary "one share, two allocations with different home templates" shape, and
 // neither drive's members can move the other's root, because the root is not
 // inside anybody's home. Equal roots are a naming question; nested roots are a
 // containment one.
 //
-// ON THE STORED STRINGS **AND ON THE RESOLVED PATHS**, and it has to be both.
+// On the stored strings **and on the resolved paths**, and it has to be both.
 // The lexical half is what the rows say; the resolved half is what the
-// filesystem says, and no other check compares TWO DRIVES' roots. This gate
-// used to delegate the symlink half to UserDriveHostRootCheck — but that check
+// filesystem says, and no other check compares TWO DRIVES' roots. The symlink
+// half cannot be delegated to UserDriveHostRootCheck: that check
 // resolves ONE root against the deployment's env ceiling and has no second
 // drive in scope, so it cannot see nesting at all. The gap was reachable with
 // the deployment's own ceiling honoured throughout: drive A rooted at
@@ -71,7 +71,7 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 // refused while the link to it is accepted, which is the same containment loss
 // with an extra hop.
 //
-// A RESOLVE FAILURE ON THE OTHER ROW FALLS BACK TO THE LEXICAL ANSWER, not to a
+// A resolve failure on the other row falls back to the lexical answer, not to a
 // 500 and not to a refusal. This drive's own root has ALREADY resolved (gate 3,
 // UserDriveHostRootCheck, which fails closed on exactly that), so the only path
 // that can fail here is a STORED row whose share is gone — and a drive that
@@ -79,18 +79,18 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 // Turning that into a refusal would let one dead row block every new drive an
 // admin tries to author.
 //
-// ONE STORE READ, on the drive-write path only — a handful of calls in a
+// One store read, on the drive-write path only — a handful of calls in a
 // deployment's lifetime, and the same list the console already loads on every
 // visit to the screen.
 //
-// AND IT IS A READ FOLLOWED BY AN UNCONDITIONAL WRITE, exactly as
+// And it is a read followed by an unconditional write, exactly as
 // driveRehomeGuard is, which that gate says out loud and this one did not. Two
 // concurrent creates — /srv/shares and /srv/shares/alice/team — can both list
 // before either writes, and both are then stored: the pair this gate exists to
 // refuse, accepted 201/201. It is application-level for the same reason the
 // re-home guard is (the Store interface exposes finished operations rather
 // than a tx handle, to PG and to every test double alike), the database-level
-// form is 0.7.1, and what it does close is the case that actually happens —
+// form is deferred, and what it does close is the case that actually happens —
 // one admin authoring one drive at a time. Stated here because a residual an
 // operator cannot read is a residual nobody can plan around, and because the
 // sibling gate stating its own made this one's silence read as absence.
@@ -102,10 +102,10 @@ func (s *Server) driveHostRootNesting(r *http.Request, d types.UserDrive) (int, 
 		// on exactly the deployment whose database is unhappy.
 		return http.StatusInternalServerError, "list user drives: " + err.Error()
 	}
-	// ONE BOUND FOR THE WHOLE GATE, for userDriveHostRootsUsableWithin's reason:
+	// One bound for the whole gate, for userDriveHostRootsUsableWithin's reason:
 	// this loop resolves EVERY stored host_path root, so without a deadline on
 	// the loop's own context the first request after a mount hangs pays
-	// driveShareProbeTimeout per distinct dead root (R-03). An expired context
+	// driveShareProbeTimeout per distinct dead root. An expired context
 	// makes the rest answer "" and fall back to the lexical comparison, which is
 	// the same fall-back an unresolvable root already takes.
 	ctx, cancel := context.WithTimeout(r.Context(), driveShareProbeTimeout)
@@ -151,12 +151,12 @@ func driveRootReal(root string) string {
 // driveRootInside reports whether inner is STRICTLY nested inside outer, asking
 // the question on the stored strings and again on the resolved paths.
 //
-// EITHER answer refuses, which is the fail-closed direction: a link that lands
+// Either answer refuses, which is the fail-closed direction: a link that lands
 // inside the other tree nests just as surely as a literal path does, and a link
 // that lands OUT of it does not un-nest a literal one (the link is host-side
 // state a member with a run in the outer drive can replace).
 //
-// STRICT on both, for driveHostRootNesting's stated reason: two drives on the
+// Strict on both, for driveHostRootNesting's stated reason: two drives on the
 // SAME root are the ordinary "one share, two allocations" shape, and equal roots
 // are a naming question rather than a containment one — including the case where
 // two different strings resolve to one directory, which is that same shape

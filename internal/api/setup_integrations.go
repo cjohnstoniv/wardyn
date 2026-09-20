@@ -33,9 +33,9 @@ import (
 // integrationView alone. Read-only throughout (Peek/host-CLI detection,
 // never a refresh or a write).
 //
-// present/providers are taken as parameters (PLATFORM-API-7), not recomputed;
-// bedrock likewise (its own SetupStatus/GET-/integrations callers already
-// compute it once). See integrationsWithCapabilities' doc for why.
+// present/providers are taken as parameters, not recomputed; bedrock likewise
+// (its own SetupStatus/GET-/integrations callers already compute it once).
+// See integrationsWithCapabilities' doc for why.
 func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, providers []SetupProvider, bedrock SetupBedrock) capEnv {
 	residentLive := false
 	if s.cfg.SubscriptionToken != nil {
@@ -107,11 +107,11 @@ func (s *Server) integrationsWithCapabilities(ctx context.Context, present map[s
 // integrationsWithCapabilitiesUsing is integrationsWithCapabilities' pure-ish
 // half, taking the three live signals capabilitiesFor's inputs are built from
 // (present secret names, detected providers, Bedrock readiness) as parameters
-// instead of recomputing them (PLATFORM-API-7): /setup/status ALREADY
-// computes all three for its own checklist rows, and this used to silently
-// redo each 1-2 more times on the SAME polled request — a full secret
-// listing, a filesystem CLI-detection sweep + subscription peek, an
-// AWS-SSO-blob age decrypt, each 2-3x instead of once.
+// instead of recomputing them: /setup/status ALREADY computes all three for
+// its own checklist rows, and recomputing here would silently redo each 1-2
+// more times on the SAME polled request — a full secret listing, a filesystem
+// CLI-detection sweep + subscription peek, an AWS-SSO-blob age decrypt, each
+// 2-3x instead of once.
 func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present map[string]bool, providers []SetupProvider, bedrock SetupBedrock) []SetupIntegration {
 	rows := s.effectiveIntegrations(ctx, present, bedrock)
 	env := s.liveCapEnv(ctx, present, providers, bedrock)
@@ -126,23 +126,23 @@ func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present 
 // non-operator, used by both routes that publish these rows: GET /integrations
 // and GET /setup/status.
 //
-// WHAT IT DROPS AND WHY. secrets[].secret_name is a credential REF — the exact
+// What it drops and why. secrets[].secret_name is a credential REF — the exact
 // datum routes.go names as the reason GET /site-config is admin-only ("every
 // integrations[].secrets[].secret_name are credential REFS"). egress[] is where
-// the system LIVES: internal hostnames, the same class R1 narrowed /sources and
-// /base-images for. config[] is operator-authored connection detail (base_url,
-// endpoint_hint, app_id/installation_id) and docs[] is wherever the operator
-// documented the internal system. None of it is readable by a member on
+// the system LIVES: internal hostnames, the same class already narrowed for
+// /sources and /base-images. config[] is operator-authored connection detail
+// (base_url, endpoint_hint, app_id/installation_id) and docs[] is wherever the
+// operator documented the internal system. None of it is readable by a member on
 // /site-config, and serving the identical rows through two other routes made
 // that narrowing cosmetic — a member could read "acme-artifactory-token" from
 // GET /integrations while GET /site-config answered them 403.
 //
-// WHAT IT KEEPS is exactly what the run-launch UI renders: identity (id, name,
+// What it keeps is exactly what the run-launch UI renders: identity (id, name,
 // kind), whether it is off, what it is the default for, and the live capability
 // matrix — enough to choose an integration for a run, and nothing about how the
 // platform reaches it. Source stays too: "stored" vs "legacy" is not topology.
 //
-// THE CAPABILITY MATRIX IS DERIVED FROM WHAT THIS DROPS, so nil-ing the four
+// The capability matrix is derived from what this drops, so nil-ing the four
 // fields is not enough on its own: capabilitiesFor computes each cell FROM the
 // row, and a needs_setup cell states why — gatedCap/secretGate interpolate the
 // credential ref verbatim ("secret %q not stored", integrations.go). A member
@@ -258,7 +258,7 @@ func memberDropsIntegration(in SetupIntegration) bool {
 // untouched — both call sites share a value computed once per request
 // (integrationsWithCapabilitiesUsing), so editing in place would redact an
 // operator's own copy. Rows memberDropsIntegration names are omitted
-// entirely (B7-F1); every other row is projected by memberSafeIntegration.
+// entirely; every other row is projected by memberSafeIntegration.
 func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 	if len(rows) == 0 {
 		return rows
@@ -276,15 +276,13 @@ func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 // handleListIntegrations returns the effective integration set (stored ∪
 // legacy-derived) with each row's live capabilities. Read-only, humanOrAdmin.
 //
-// PROJECTED FOR A NON-OPERATOR (memberSafeIntegration). This route used to
-// justify its wide tier with "Credentials only ever holds secret NAMES, never
-// values, so this is safe for any authenticated human" — and routes.go called it
-// "the same RBAC posture as site-config's GET". Both went false when site-config's
-// GET moved to operatorOnly precisely BECAUSE a secret name is a credential ref:
-// a member read secrets[].secret_name and the internal egress hosts here at 200
-// while the document that embeds the identical rows answered them 403. The tier
-// stays (the console's launch card needs the identity and capability half); the
-// credential refs, hosts and operator config do not cross it.
+// Projected for a non-operator (memberSafeIntegration): a secret name IS a
+// credential ref, the same reason GET /site-config is operatorOnly, so a
+// member may not read secrets[].secret_name or the internal egress hosts
+// through this route either, even though the identical rows sit behind that
+// admin-only door. The tier stays (the console's launch card needs the
+// identity and capability half); the credential refs, hosts and operator
+// config do not cross it.
 //
 // No audit — this is a read, like GET /site-config.
 //
@@ -353,7 +351,7 @@ type putIntegrationRequest struct {
 // semantics: naming a mark here CLEARS it from every OTHER stored row in the
 // SAME write (applyDefaultForRadio) — never a 409, per the approved spec.
 //
-// ADOPTION: the write IS the adoption now. A PUT whose id so far exists only
+// Adoption: the write IS the adoption now. A PUT whose id so far exists only
 // as a DERIVATION simply stores it — the explicit POST {id}/adopt promotion
 // route left with the integration catalog, and a 409 naming a route the
 // router no longer registers would be a dead end. Same audit event either
@@ -494,7 +492,7 @@ type SetupHarnessTool struct {
 	// does not mention at all.
 	//
 	// NOT omitempty, and that is the whole point: false is the value that has to
-	// reach the console, which renders a disabled row DISABLED WITH A REASON
+	// reach the console, which renders a disabled row disabled with a reason
 	// rather than hiding it. A roster that silently drops agents is how "Claude
 	// Code is just gone" becomes a support ticket.
 	Enabled bool `json:"enabled"`
@@ -533,12 +531,12 @@ type SetupHarnessTool struct {
 // setupHarnessTools projects the static harness catalog for SetupStatus, folded
 // with the org's agent roster (agent_providers.go).
 //
-// THE ROW COUNT IS THE CATALOG'S PLUS ANY ROSTER ROW THE CATALOG DOES NOT
-// NAME (catalog ∪ roster), not the catalog's alone: an agent the admin did
+// The row count is the catalog's plus any roster row the catalog does not
+// name (catalog ∪ roster), not the catalog's alone: an agent the admin did
 // not enable is published as a catalog row with enabled=false so the console
 // can say "not enabled by your admin" (setup_test.go's
 // len(Harnesses) == len(harnessCatalog) still holds when the roster names
-// only catalog ids), and — B7-F3 — a roster row naming a WARDYN_AGENT_IMAGES
+// only catalog ids), and a roster row naming a WARDYN_AGENT_IMAGES
 // id the catalog does NOT know is appended too: OPERATIONS.md's
 // "Capabilities: what one member, or one group, may do" section documents
 // custom-image agents as supported, but before this a fresh pick of one was

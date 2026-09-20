@@ -42,12 +42,11 @@ const maxGovernanceGrantTTLSeconds = 3600
 // was not while a ceiling with two same-kind grants let the clamp cap against
 // one grant and this comparator judge against another.
 //
-// This is the whole of PF-28, and it is the difference between a comparator
-// that works and one that admits the widening it was written to refuse: raw
-// `profile.TTL <= ceiling.TTL` accepts a profile TTL of 0 under a ceiling of
-// 300, because 0 < 300 — while 0 MEANS 3600, so the "narrower" profile mints
-// credentials that live twelve times as long. Both sides normalize before
-// comparing.
+// This is the difference between a comparator that works and one that admits
+// the widening it was written to refuse: raw `profile.TTL <= ceiling.TTL`
+// accepts a profile TTL of 0 under a ceiling of 300, because 0 < 300 — while
+// 0 MEANS 3600, so the "narrower" profile mints credentials that live twelve
+// times as long. Both sides normalize before comparing.
 //
 // A NEGATIVE ttl normalizes to the max too, which is one notch STRICTER than
 // clampGrants (which leaves a negative alone). Strict is the right direction
@@ -87,7 +86,7 @@ const (
 // MONOTONE-⊆ some grant in ceiling, returning a caller-facing error naming the
 // first grant that is not.
 //
-// WHY THIS BOUND EXISTS. A profile's ceiling is otherwise freely narrower OR
+// Why this bound exists. A profile's ceiling is otherwise freely narrower OR
 // wider than the deployment's — that asymmetry IS the feature for egress, tool
 // rules and confinement. Eligible grants are the one axis where it cannot be:
 // they are DEPLOYER-PROVISIONED material (a stored operator secret, a GitHub
@@ -101,7 +100,7 @@ const (
 // egress to carry it out. A profile may narrow credential eligibility; it may
 // never mint it.
 //
-// MONOTONE, not membership and not equality — both of those are wrong in one
+// Monotone, not membership and not equality — both of those are wrong in one
 // direction:
 //
 //   - Membership alone ("the pairing is listed") would let a profile keep the
@@ -149,14 +148,11 @@ func governanceGrantWithinCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 		return fmt.Errorf("eligible grant %q: invalid scope: %w", g.Kind, derr)
 	}
 
-	// IDENTITY IS COMPOSER'S ANSWER, not a second copy of it. Which ceiling
+	// Identity is composer's answer, not a second copy of it. Which ceiling
 	// grants a proposal is judged against — same kind, and for the kinds that
 	// name a stored secret the same (host, secret, known_hosts) pairing — is
-	// exactly the question the runtime clamp asks about the same proposal, and
-	// F014 is that question having been implemented twice. Round 1 shared only
-	// the pairing PREDICATE and left the two SEARCHES standing; they drifted
-	// again inside the round, on github_token, whose scope names no pairing at
-	// all and which the two searches therefore disagreed about. One search now.
+	// exactly the question the runtime clamp asks about the same proposal. One
+	// search now.
 	//
 	// What stays here is the BOUNDS half — approval, TTL, github scope — because
 	// that is where the two sides legitimately differ: the clamp NARROWS a

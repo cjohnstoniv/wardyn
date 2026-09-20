@@ -26,8 +26,8 @@ import (
 )
 
 // validArtifactEcosystems is the closed set of ArtifactOverrides keys (the
-// ecosystems Wardyn has emit-time config support for — R5 findings: npm/pip/
-// cargo/maven/go each get their own registry config file, nuget its own).
+// ecosystems Wardyn has emit-time config support for — npm/pip/cargo/maven/go
+// each get their own registry config file, nuget its own).
 var validArtifactEcosystems = map[string]bool{
 	"npm": true, "pip": true, "cargo": true, "maven": true, "go": true, "nuget": true,
 }
@@ -49,21 +49,17 @@ var ecosystemPublicURL = map[string]string{
 	"nuget": "https://api.nuget.org/v3/index.json",
 }
 
-// PUT /site-config refusal bodies new in 0.7.4 — B7-F9, F3-F5 (server half).
+// PUT /site-config refusal bodies.
 //
 // DRAFT (M2 canon pending)
 const (
-	// legacyArtifactOverridesUnknownEcosystemRefusal: B7-F9. An unknown key
-	// used to resolve ecosystemPublicURL[eco] to "" and 400 two guards later as
-	// an opaque "invalid from \"\"", never naming the actual offending key.
-	//
-	// DRAFT (M2 canon pending)
+	// legacyArtifactOverridesUnknownEcosystemRefusal names the offending key
+	// directly, before the generic "invalid from \"\"" refusal two guards
+	// later could ever fire for it.
 	legacyArtifactOverridesUnknownEcosystemRefusal = "artifact_overrides.%s: unknown ecosystem"
-	// egressRedirectDuplicateFromRefusal: F3-F5 (server half). A duplicate
-	// From was producible with no guard; findEgressRedirect resolves the
-	// first match only, so a second row sharing a From silently never fires.
-	//
-	// DRAFT (M2 canon pending)
+	// egressRedirectDuplicateFromRefusal rejects a duplicate From:
+	// findEgressRedirect resolves the first match only, so a second row
+	// sharing a From would silently never fire.
 	egressRedirectDuplicateFromRefusal = "egress_redirects[%d]: duplicate from %q — egress_redirects[%d] already uses it, and a lookup resolves the first match only"
 )
 
@@ -149,8 +145,8 @@ func validSiteURLOrHost(raw string) bool {
 }
 
 // normalizeSiteConfigTopology canonicalizes PUT /site-config's plain-string
-// topology fields IN THE HANDLER, beside normalizeWorkspaceProviders, before
-// validateSiteConfig runs — B7-F8. Without this, a field validated only
+// topology fields in the handler, beside normalizeWorkspaceProviders, before
+// validateSiteConfig runs. Without this, a field validated only
 // because HostOf/validSiteHost trim+lowercase a THROWAWAY copy before
 // checking it (hostrules.go) still PERSISTED whatever case/whitespace the
 // operator typed: findEgressRedirect's read-time EqualFold masked the effect
@@ -230,32 +226,30 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		// callers) but the sidecar's own config validation rejects https: the hop
 		// TO the corp proxy is a plaintext CONNECT + Proxy-Authorization, and an
 		// https:// URL would need a TLS wrap first or leak that Basic credential
-		// in cleartext. Before this gate, an https:// URL saved clean, displayed
-		// as the live chain (site_config_probe.go), and was silently dropped at
-		// dispatch — every run went direct with no signal anywhere (W13-S1-4).
+		// in cleartext.
 		if _, ok := normalizedHTTPProxyURL(cfg.UpstreamProxyURL); !ok {
 			return fmt.Errorf("upstream_proxy_url: must be http:// — https is not supported (the hop to the corp proxy is a plaintext CONNECT that cannot be TLS-wrapped)")
 		}
 		// And the PORT, by the sidecar's OWN loader (proxy.ValidUpstreamProxyURL),
 		// exactly as upstream_proxy_no_proxy delegates to proxy.ValidNoProxyEntry
 		// (site_config_noproxy.go) — the gate above checks the scheme and
-		// hostrules.HostOf discards the port entirely, so ":0"/":99999" saved with
-		// 200 OK and then failed the sidecar's applyDefaultsAndValidate at
-		// container start, os.Exit(1)ing the egress proxy of every dispatched run.
-		// One matcher, at the trust boundary, so the two can never drift again.
+		// hostrules.HostOf discards the port entirely, so an invalid port like
+		// ":0"/":99999" would otherwise pass here and only fail the sidecar's
+		// applyDefaultsAndValidate at container start, os.Exit(1)ing the egress
+		// proxy of every dispatched run. One matcher, at the trust boundary, so
+		// the two can never drift again.
 		if err := proxy.ValidUpstreamProxyURL(cfg.UpstreamProxyURL); err != nil {
 			return fmt.Errorf("upstream_proxy_url: %w (the proxy sidecar loads this URL itself and refuses to start on it)", err)
 		}
 	}
-	// F3-F5 (server half): a duplicate From is producible (no client/server
-	// guard existed) — findEgressRedirect (site_config_probe_classify.go)
-	// resolves the FIRST match only, so a second row sharing a From silently
-	// never fires; the UI's own fix is disabling Add on a collision, not index
-	// keys (F3-F5's verdict explicitly rejects re-keying by index, which
-	// shifts every LATER row's identity/verdict on an unrelated edit).
-	// Case-insensitive, matching findEgressRedirect's own EqualFold compare —
-	// two rows differing only in From's case collide at read time exactly the
-	// same way.
+	// A duplicate From is producible (no client/server guard existed) —
+	// findEgressRedirect (site_config_probe_classify.go) resolves the FIRST
+	// match only, so a second row sharing a From silently never fires; the
+	// UI's own fix is disabling Add on a collision, not index keys —
+	// re-keying by index would shift every LATER row's identity/verdict on
+	// an unrelated edit. Case-insensitive, matching findEgressRedirect's own
+	// EqualFold compare — two rows differing only in From's case collide at
+	// read time exactly the same way.
 	seenFrom := make(map[string]int, len(cfg.EgressRedirects))
 	for i, red := range cfg.EgressRedirects {
 		if !validSiteURLOrHost(red.From) {
@@ -282,13 +276,10 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		}
 		// The PORT of both endpoints, which NOTHING above examines:
 		// validSiteURLOrHost bottoms out in hostrules.HostOf, and HostOf discards
-		// everything from the first ':' onward. An unusable port therefore saved
-		// with 200 OK and was then read differently by every downstream parser —
-		// redirectPort coerced ":0"/":99999"/a query-bearing authority to 443
-		// (mis-scoping the MITM/token-injection set and making the redirect probe
-		// dial a port the operator never configured), while url.Parse refused
-		// ":-1" outright and dropped the probe's --connect-to swap. One decision,
-		// at the write, so no two readers of the stored string can disagree.
+		// everything from the first ':' onward. An unusable port would otherwise
+		// mis-scope the MITM/token-injection set and leave downstream parsers to
+		// disagree about which port a redirect actually names. One decision, at
+		// the write, so no two readers of the stored string can disagree.
 		for _, ep := range []struct{ field, raw string }{{"from", red.From}, {"to", red.To}} {
 			if _, _, ok := redirectEndpointPort(ep.raw); !ok {
 				return fmt.Errorf("egress_redirects[%d]: invalid port in %s %q — a port must be a decimal 1-65535, "+
@@ -333,7 +324,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	//
 	// The SIBLING agent_providers block is validated by its own gate at each of
 	// those two doors instead of here (validateAgentProviders, agent_providers.go):
-	// admitting a row needs the BOOT AGENT-IMAGE MAP, which is server state this
+	// admitting a row needs the boot agent-image map, which is server state this
 	// deliberately pure function has no access to. Both doors run it, so the
 	// "one validator, two doors" property is the same.
 	return validateWorkspaceProviders(cfg.WorkspaceProviders)
@@ -372,7 +363,7 @@ func validateInternalHosts(hosts []types.InternalHost) error {
 // logWarnUnenforcedNetPolOptOut's contract (internal/runner/k8s/driver.go): the
 // declaration itself, then what it does and does not lift.
 //
-// A warn, not an acknowledgement flag (PF-46): the write is operator-only,
+// A warn, not an acknowledgement flag: the write is operator-only,
 // audited and Liftable-validated, and it grants no policy allow — the host must
 // still pass allowed_domains separately. No declarations => silent.
 func logWarnInternalHostsDeclared(hosts []types.InternalHost) {
@@ -385,7 +376,7 @@ func logWarnInternalHostsDeclared(hosts []types.InternalHost) {
 // internalHostsDeclaredSentence is the ONE sentence naming what an
 // InternalHosts declaration does and does not lift — shared by the write-time
 // deployment log above and the console's own dedicated internal_hosts check
-// row (internalHostsCheck, setup_checks.go — B7-F5), so an operator reads the
+// row (internalHostsCheck, setup_checks.go), so an operator reads the
 // identical claim on whichever surface they are looking at. Callers check
 // len(hosts) > 0 themselves; this renders unconditionally.
 func internalHostsDeclaredSentence(hosts []types.InternalHost) string {
@@ -404,7 +395,7 @@ func internalHostsDeclaredSentence(hosts []types.InternalHost) string {
 }
 
 // maxAuditEgressRedirectPairs bounds how many from→to pairs site_config.write's
-// datum embeds (B7-F4) — egress_redirects_count stays the honest, UNBOUNDED
+// datum embeds — egress_redirects_count stays the honest, UNBOUNDED
 // total, so truncation costs review detail only, mirroring maxAuditFindings'
 // own append-only-audit-log-size reasoning (internal.go): one operator
 // declaring hundreds of redirects must not turn this row into the biggest
@@ -429,7 +420,7 @@ func auditEgressRedirectPairs(redirects []types.EgressRedirect) ([]string, bool)
 }
 
 // auditInternalHostSuffixes renders saved.InternalHosts as sorted host
-// suffixes for site_config.write's datum (B7-F4) — a suffix is exactly what
+// suffixes for site_config.write's datum — a suffix is exactly what
 // logWarnInternalHostsDeclared already puts in the deployment's own log, so
 // this adds nothing an operator couldn't already read there, just makes it
 // reviewable from the audit trail too. CIDRs are left out: the scoping detail
@@ -468,7 +459,7 @@ func foldLegacyArtifactOverrides(cfg *types.SiteConfig) error {
 		return fmt.Errorf("artifact_overrides and egress_redirects must not both be set — artifact_overrides is deprecated, migrate to egress_redirects")
 	}
 	for _, eco := range slices.Sorted(maps.Keys(cfg.ArtifactOverrides)) {
-		// B7-F9: reject an unknown ecosystem key HERE, naming the offending
+		// Reject an unknown ecosystem key HERE, naming the offending
 		// key. Left unchecked, ecosystemPublicURL[eco] resolves to "" for an
 		// unknown eco, and the fold emits a redirect whose From is empty —
 		// validateSiteConfig's very next pass then 400s it as
@@ -548,7 +539,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // vocabulary cannot NAME these, so their absence from its body is not a
 // decision.
 //
-// ADD A KEY HERE WHEN YOU ADD ONE TO types.SiteConfig, and
+// Add a key here when you add one to types.SiteConfig, and
 // TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName fails until you
 // have decided which side of this line it sits on.
 var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"}
@@ -556,17 +547,17 @@ var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hos
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
 // body did not MENTION, for the fields an older client cannot know about.
 //
-// ABSENT IS NOT CLEARED, and that distinction is the whole fix. PUT /site-config
+// Absent is not cleared, and that distinction is the whole fix. PUT /site-config
 // is a whole-document replace, so a v0.6.6 `wardyn site-config get | ... | apply`
 // round trip — decode into a struct with no field for internal_hosts, re-marshal,
 // PUT — silently erased the operator's internal_hosts and upstream_proxy_no_proxy
 // with no warning on either side. Integrations and onboarding_completed_at were
 // each rescued from this by hand; these two were added afterwards and were not.
 //
-// A BARE CARRY-FORWARD WOULD MAKE THEM UNCLEARABLE, which is why this keys on
+// A bare carry-forward would make them unclearable, which is why this keys on
 // the body's own keys rather than on emptiness: `{"internal_hosts": []}` and
 // `{"internal_hosts": null}` both MENTION the field and both clear it, exactly
-// as a 0.7 client intends. Only silence is treated as silence.
+// as a client intends. Only silence is treated as silence.
 func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
 	if !present["upstream_proxy_no_proxy"] {
 		cfg.UpstreamProxyNoProxy = existing.UpstreamProxyNoProxy
@@ -632,7 +623,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 // PUT /permissions/enforcement gets in permissions.go.
 func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	var cfg types.SiteConfig
-	// THE KEYS THE BODY CARRIED, not just the values it decoded to — see the
+	// The keys the body carried, not just the values it decoded to — see the
 	// carry-forward below for why this document cannot answer with the struct
 	// alone.
 	present, msg := decodeStrictKeys(w, r, &cfg)
@@ -656,7 +647,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// lowercase-host/no-trailing-slash form.
 	cfg.WorkspaceProviders = normalizeWorkspaceProviders(cfg.WorkspaceProviders)
 	cfg.AgentProviders = normalizeAgentProviders(cfg.AgentProviders)
-	// B7-F8: ScmHosts / EgressRedirects[].{From,To} / UpstreamProxyURL on the
+	// ScmHosts / EgressRedirects[].{From,To} / UpstreamProxyURL on the
 	// same terms — see normalizeSiteConfigTopology's doc.
 	normalizeSiteConfigTopology(&cfg)
 	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages, s.cfg.BedrockModel); err != nil {
@@ -713,7 +704,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
-	// NARROWING IS NEVER SILENT ON THIS DOOR EITHER, and this is the door where
+	// Narrowing is never silent on this door either, and this is the door where
 	// it matters most: a laptop re-applies /etc/wardyn/site-config.json on EVERY
 	// boot, so an MDM-tightened base URL lands here, not on the providers page,
 	// and nobody is watching a console toast when it does. Counted only when the
@@ -738,8 +729,8 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	redirectPairs, redirectsTruncated := auditEgressRedirectPairs(saved.EgressRedirects)
 	hostSuffixes := auditInternalHostSuffixes(saved.InternalHosts)
 	datum := map[string]any{
-		// B7-F4: upstream_proxy_url/upstream_proxy_secret_ref, the egress_redirects
-		// from→to pairs and internal_hosts[].host_suffix are IN THE CLEAR on
+		// upstream_proxy_url/upstream_proxy_secret_ref, the egress_redirects
+		// from→to pairs and internal_hosts[].host_suffix are in the clear on
 		// purpose — same precedent as workspace_provider.write's base_urls:
 		// topology, not a credential (a secret ref is a NAME, never the value it
 		// names). Without them, an MDM-applied narrowing or opening of the
@@ -806,8 +797,8 @@ type siteConfigPutResponse struct {
 	// none. The write still succeeded: the field is server-owned and always
 	// carried forward, so this is a REPORT of a dropped value, never a
 	// refusal (see handlePutSiteConfig). It is what the capture/reset/apply
-	// and MDM every-boot flows see instead of the 400 that used to break
-	// them, and `wardyn site-config apply` prints it as a warning.
+	// and MDM every-boot flows see instead of a 400, and `wardyn
+	// site-config apply` prints it as a warning.
 	OnboardingCompletedAtIgnored bool `json:"onboarding_completed_at_ignored,omitempty"`
 	// AppliesFrom names WHEN this write takes effect, because the honest answer
 	// is not "now": the egress proxy sidecar loads its compiled config once at

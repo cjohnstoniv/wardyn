@@ -104,7 +104,7 @@ type RecordTaskResult struct {
 	// a CONFINED entry (nil for an open recording — the verdict only means
 	// something under confinement). Absent (nil) also covers old rows written
 	// before this field existed: unknown, not "not clean" — render neutral,
-	// never red. Clean means clean FOR WHAT WAS REPLAYED: reconcile finalizes
+	// never red. Clean means clean for what was replayed: reconcile finalizes
 	// on any terminal state, so a replay the operator ends early earns the
 	// same verdict as a full one.
 	Clean *bool `json:"clean,omitempty"`
@@ -203,8 +203,8 @@ func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspac
 	// already terminated — settle it to a clear failure so the operator sees a
 	// reason instead of an endless spinner. reconcileWorkspaceRun re-fences on the
 	// active_run_id, so a newer run that has taken the slot is left untouched.
-	// (The `verifying` status this used to also cover is retired — collapsed
-	// into scanned/pending_scan/scanning/error.)
+	// (The `verifying` status is retired — collapsed into
+	// scanned/pending_scan/scanning/error.)
 	if ws.ActiveRunID != nil && ws.Status == types.WorkspaceScanning {
 		if run, err := s.cfg.Store.GetRun(ctx, *ws.ActiveRunID); err == nil && isTerminalRunState(run.State) {
 			s.reconcileWorkspaceRun(ctx, *ws.ActiveRunID)
@@ -289,7 +289,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	if req.Confined {
 		key = recordVerifyKeyPrefix + key
 	} else if prev, ok := recordResultsMap(ws)[key]; ok && prev.Label != "" && prev.Label != label {
-		// SLUG COLLISION, refused. recordSessionKey collapses every run of
+		// Slug collision, refused. recordSessionKey collapses every run of
 		// non-[a-z0-9] to one dash, so "build & test" and "Build/Test" share the
 		// key `build-test` — and the launch write is a per-key upsert with an
 		// EMPTY onlyIfStatus, i.e. a plain UPDATE with no CAS. Naming a second
@@ -313,13 +313,12 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	// A stale active_run_id (its run failed to upload, was killed, or idle-reaped)
 	// must not permanently 409-brick recording: only block on a genuinely live run.
-	// W20-W20-capture-store-5: ws.ActiveRunID is CAS'd onto the workspace by
-	// ClaimWorkspaceActiveRun BEFORE Store.CreateRun persists the run row
-	// (workspaceSourceGrants needs the run row to exist first for its FK) — so
-	// a run that just claimed the slot but hasn't been CreateRun'd yet reads
-	// GetRun => ErrNotFound RIGHT NOW, not "run confirmed terminal". The old
-	// `gerr == nil && !isTerminalRunState(...)` treated that indeterminate
-	// window as "not busy" and let a SECOND concurrent record request jump the
+	// ws.ActiveRunID is CAS'd onto the workspace by ClaimWorkspaceActiveRun
+	// BEFORE Store.CreateRun persists the run row (workspaceSourceGrants needs
+	// the run row to exist first for its FK) — so a run that just claimed the
+	// slot but hasn't been CreateRun'd yet reads GetRun => ErrNotFound RIGHT
+	// NOW, not "run confirmed terminal". That indeterminate window must never
+	// read as "not busy", or a SECOND concurrent record request could jump the
 	// serial import-step gate into it — two open-egress sandboxes for one
 	// workspace. Only a GetRun that SUCCEEDS and proves the run definitively
 	// terminal may pass; any error (including ErrNotFound) is treated as busy.
@@ -340,14 +339,10 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lerr != nil {
-		// AUDIT FIRST, then map the status — the shape errGroupsSnapshotStale
-		// below already had, and which the source-target 422 did NOT when it was
-		// added: it returned above this emit, so a workspace refused for a bad
-		// stored target produced no run.record.start row at all, while every
-		// other launch failure produced one. That is the same fail-silent
-		// give-up this wave fixed in learnVerifyEgress and the boot heal,
-		// introduced two commits earlier by the fix for it. Status mapping is a
-		// tail decision; the record of the attempt is not.
+		// Audit first, then map the status: every launch failure must produce a
+		// run.record.start row — a workspace refused for a bad stored target is
+		// not exempt just because its status maps differently below. Status
+		// mapping is a tail decision; the record of the attempt is not.
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 			"run.record.start", id.String(), "failure",
 			auditWorkspaceData(r, ws.OwnedBy, map[string]any{"task": key, "detail": lerr.Error()})))
@@ -361,7 +356,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, lerr.Error())
 			return
 		}
-		// The agent roster (0.7.2): 422, the SAME status run create answers when
+		// The agent roster: 422, the SAME status run create answers when
 		// it refuses the identical agent for the identical reason — the two doors
 		// must not disagree about what "this agent is not offered here" costs.
 		// The sentence is the create path's, verbatim (agent_providers.go).
@@ -369,7 +364,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, strings.TrimPrefix(lerr.Error(), errAgentNotEnabled.Error()+": "))
 			return
 		}
-		// Provider admission (0.7.2), the roster refusal's sibling and mapped the
+		// Provider admission, the roster refusal's sibling and mapped the
 		// same way: the status and the sentence are the ones every other admission
 		// door answers, so "this repository is not on an enabled provider" costs
 		// the same here as it does at create.
@@ -385,7 +380,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// now. Answering the create path's own status would also make the two
 		// routes' 422s mean two different things.
 		//
-		// NO EXISTENCE ORACLE: this refusal is reached only after the caller has
+		// No existence oracle: this refusal is reached only after the caller has
 		// already cleared the route's own authorization and the workspace read,
 		// so it reveals nothing a principal who may launch here could not
 		// already see. The sentence is the create path's, verbatim.
@@ -413,23 +408,20 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	if weakCC {
 		auditData["weak_confinement"] = "cc1"
 	}
-	// THE O5 CROSS-USER MARKER, on both emits. workspace_owner.go states the
+	// The cross-user audit marker, on both emits. workspace_owner.go states the
 	// decision as "the cross-user audit marker every workspace-scoped write
 	// stamps", and warns that "a second copy of the actor != owner comparison is
-	// exactly how the marker drifts onto some writes and off others" — these two
-	// emits were the drift. Every workspace-scoped sibling stamps it, including
-	// the one in THIS file (workspace.egress.approve), and record is the most
-	// privileged of them: it launches an interactive open-egress sandbox with the
-	// workspace's directory mounted and its credentials injected.
+	// exactly how the marker drifts onto some writes and off others". Every
+	// workspace-scoped sibling stamps it, including the one in THIS file
+	// (workspace.egress.approve), and record is the most privileged of them: it
+	// launches an interactive open-egress sandbox with the workspace's
+	// directory mounted and its credentials injected.
 	//
-	// The RATIONALE, restated. This was filed as "the one securityOps route that
-	// acts on a member's workspace"; the route is operatorOnly now (R1 re-tiered
-	// it), so that sentence is false. The defect is not: an ADMIN recording a
-	// MEMBER-owned workspace is exactly the act O5 exists for — auditWorkspaceDataFor's
-	// own doc frames it as "an admin acting on a MEMBER's workspace stays
-	// visible" — so re-tiering moved this route INTO the class the marker was
-	// written for rather than out of it. ws.OwnedBy is already in hand from the
-	// load above; it was simply unused.
+	// The rationale, restated: an ADMIN recording a MEMBER-owned workspace is
+	// exactly the act this marker exists for — auditWorkspaceDataFor's own doc
+	// frames it as "an admin acting on a MEMBER's workspace stays visible" —
+	// and this route, now operatorOnly, sits squarely inside that class.
+	// ws.OwnedBy is already in hand from the load above.
 	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor,
 		"run.record.start", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, auditData)))
 
@@ -522,8 +514,8 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 // The entries are kept VERBATIM — a ceiling's "*.anthropic.com" (the spelling
 // llmcred.go documents), the broker's "*.githubusercontent.com", an operator's
 // "corp.example:443" or deny row — so the match is entryCoversAny's, the
-// package's one wildcard/port rule (artifact_redirect.go), not the map lookup
-// this used to be. An exact lookup silently offered api.anthropic.com and
+// package's one wildcard/port rule (artifact_redirect.go), not a plain map
+// lookup: an exact lookup would silently offer api.anthropic.com and
 // raw.githubusercontent.com for promotion under precisely the wildcard entries
 // that make them plumbing, writing harness/broker-dead rows as `required`.
 func skipCovers(skipHost map[string]struct{}, host string) bool {
@@ -626,9 +618,9 @@ func promotableHosts(obs *recordmode.Observations, selfHost string, skipHost map
 			continue // plumbing, or a host the operator permanently denies
 		}
 		if net.ParseIP(host) != nil {
-			// An IP LITERAL, refused here rather than by shape:
+			// An IP literal, refused here rather than by shape:
 			// hostrules.ValidApprovedHost's regex accepts dotted digits, so a
-			// public literal reached under allow-all used to become an
+			// public literal reached under allow-all would otherwise become an
 			// `egress:93.184.216.34 required` row. A literal names no service —
 			// it cannot be re-verified, it drifts the moment the address is
 			// reassigned, and the private/metadata ranges are deny-only at the
@@ -665,7 +657,7 @@ func (s *Server) promotableRecordHosts(r *http.Request, ws types.Workspace, task
 	// brokered routes.
 	selfHost := controlPlaneHost(s.cfg.ControlPlaneURL)
 	if selfHost == "" {
-		// FAIL CLOSED. That exclusion is the ONLY thing keeping Wardyn's own API
+		// Fail closed. That exclusion is the ONLY thing keeping Wardyn's own API
 		// off a workspace's permanent allowlist, and with no configured name
 		// there is nothing to compare a captured host against — the guard
 		// silently becomes inert, which is the one way a "never promotable"
@@ -675,7 +667,7 @@ func (s *Server) promotableRecordHosts(r *http.Request, ws types.Workspace, task
 			"off this workspace's allowlist cannot be evaluated — set WARDYN_CONTROL_PLANE_URL and retry"
 	}
 	skipHost := s.promoteSkipHosts(r.Context(), ws)
-	// FALLBACK, and only ever a WIDENING of that exclusion: a deployment is often
+	// Fallback, and only ever a WIDENING of that exclusion: a deployment is often
 	// dialled by a name other than the configured one (host.docker.internal, the
 	// in-cluster service name, an ingress host), and an exact match sees none of
 	// them. The name THIS request arrived on is one more name for "us". It does
@@ -694,7 +686,7 @@ func (s *Server) promotableRecordHosts(r *http.Request, ws types.Workspace, task
 	// X at T1, promote at T2 would write `egress:X required` beside
 	// DeniedEgress=[X]. Deny beats allow at the proxy, so nothing is widened; what
 	// is written is a contract "declaring a need it can never satisfy", exactly
-	// what denyAlwaysReject's M1 rule refuses from the other direction — and every
+	// what denyAlwaysReject refuses from the other direction — and every
 	// later confined replay would Catch X forever.
 	for _, d := range ws.DeniedEgress {
 		skipHost[strings.ToLower(strings.TrimSpace(d))] = struct{}{}
@@ -799,14 +791,13 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// capture between the operator's read and the click, the marker (and the
 	// response) must not resurrect the stale entry.
 	//
-	// W20-S1-1: this used to be an unconditional `true` — a click whose
-	// entire wantHosts set was already in `existing` (every one deduped away
-	// above, promoted staying empty) still flipped the marker, so the UI
-	// rendered "Promoted" for a click that promoted nothing. OR'd with the
-	// PRIOR value (not overwritten) so a genuine earlier promotion is never
-	// un-set by a later no-op click against the same (immutable-once-
-	// recorded) observations — EgressPromoted means "this session HAS ever
-	// promoted something real", not "this specific click did".
+	// OR'd with the PRIOR value (not overwritten): a click whose entire
+	// wantHosts set is already in `existing` (every one deduped away above,
+	// promoted staying empty) must not flip the marker — a genuine earlier
+	// promotion must never be un-set by a later no-op click against the same
+	// (immutable-once-recorded) observations. EgressPromoted means "this
+	// session HAS ever promoted something real", not "this specific click
+	// did".
 	priorPromoted := res.EgressPromoted
 	res.EgressPromoted = priorPromoted || len(promoted) > 0
 	updated, applied, perr := s.putRecordResult(r.Context(), id, taskKey, res, recordStatusRecorded)
@@ -822,7 +813,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	if len(promoted) > 0 {
 		wsAfter, serr := s.cfg.Store.MergeWorkspaceRequirements(r.Context(), id, add)
 		if serr != nil {
-			// bug-record-1: the CAS above already committed EgressPromoted=true,
+			// The CAS above already committed EgressPromoted=true,
 			// but the widening it claims did NOT land — compensate by writing
 			// the marker back to its pre-click value (best-effort; the CAS
 			// gate against a concurrent re-record already happened above, so

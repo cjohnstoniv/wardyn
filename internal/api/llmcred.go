@@ -385,7 +385,7 @@ func subscriptionLane(integ types.Integration) string {
 // secret: requirement (applyRequiredSecretGrant, runs_create.go) or an
 // explicit run grant, never from an integration binding.
 // `owner` is the caller's secret namespace (secretOwnerFromRequest): the
-// uniform-fold branch checks the row's credential is stored FOR THIS CALLER,
+// uniform-fold branch checks the row's credential is stored for this caller,
 // so a member's own copy of the provider-convention name folds exactly as an
 // operator's row does ("" = operator namespace).
 func (s *Server) applyIntegrationCreds(ctx context.Context, owner string, spec *types.RunPolicySpec, integ types.Integration, agent string) (kind string, bedrockRef *types.WorkspaceBedrockRef) {
@@ -442,7 +442,7 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, owner string, spec *
 		}
 		return integ.Kind, &types.WorkspaceBedrockRef{Region: region, Model: model}
 	default:
-		// UNIFORM FOLD — the base-component default: an api-key AI kind and a
+		// Uniform fold — the base-component default: an api-key AI kind and a
 		// generic connection are the same thing here. The row's proxy-header
 		// credential becomes ONE api_key grant on the agent's provider host, and
 		// the row's own egress joins the allowlist. The two kinds above keep
@@ -567,10 +567,10 @@ func (s *Server) resolveRunIntegration(ctx context.Context, owner, integrationID
 // preflight can call the SAME fold and discard the result.
 //
 // Both launch and preflight call THIS, so Review cannot predict a different
-// model access than launch grants. Preflight used to fold only the workspace
-// tier — it had the createRunRequest all along, so an explicit integration_id
-// or an operator's site-wide default simply went unseen in the checklist, and
-// a run whose model access came from either would preview as having none.
+// model access than launch grants: an explicit integration_id or an
+// operator's site-wide default must be folded here too, alongside the
+// workspace tier, or a run whose model access came from either would
+// preview as having none.
 // kind == "" means nothing was bound (no integration resolved, a non-LLM
 // agent, or a resolved integration whose fold applied nothing).
 func (s *Server) foldRunIntegration(ctx context.Context, owner string, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) (types.Integration, string, *types.WorkspaceBedrockRef) {
@@ -602,7 +602,7 @@ func (s *Server) foldRunIntegration(ctx context.Context, owner string, spec *typ
 		return types.Integration{}, "", nil
 	}
 	kind, bedrockRef := s.applyIntegrationCreds(ctx, owner, spec, integ, req.Agent)
-	// POSTURE: this branch re-injects the operator's ceiling ~/.claude mounts AFTER
+	// Posture: this branch re-injects the operator's ceiling ~/.claude mounts AFTER
 	// the clamp, deliberately (see applyLLMCredMount's contract) — which means any
 	// authenticated member can reach the resident subscription lane by passing
 	// integration_id alone, with no policy of their own. That is exactly the

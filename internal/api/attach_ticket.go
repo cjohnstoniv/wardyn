@@ -39,7 +39,7 @@ const attachTicketTTL = 30 * time.Second
 // another, and a restart no longer invalidates every outstanding ticket.
 
 // mintAttachTicket issues a fresh single-use ticket bound to runID, to the
-// minting principal, and to that principal's role (admin/member) AT MINT TIME
+// minting principal, and to that principal's role (admin/member) at mint time
 // — the WS attach route's ?ticket= lane bypasses humanOrAdminAuth entirely, so
 // this stamped role is the only signal available to re-check owner-or-admin
 // when the ticket is consumed (see attach.go's handleAttachWS).
@@ -82,8 +82,8 @@ type ticketActorCtxKey struct{}
 type ticketActor struct {
 	actorType types.ActorType
 	principal string
-	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleMember) AT
-	// MINT TIME, stamped by handleAttachTicket. It is the ONLY role source
+	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleMember) at
+	// mint time, stamped by handleAttachTicket. It is the ONLY role source
 	// available in the ?ticket= WS lane (ticketOrHumanAuth bypasses
 	// humanOrAdminAuth for it entirely) — see handleAttachWS's owner-or-admin
 	// re-check.
@@ -106,8 +106,8 @@ func ticketActorFromContext(ctx context.Context) (ticketActor, bool) {
 // Mounted INSIDE the humanOrAdminAuth group, owner-or-admin (getRunAuthorized):
 // a run's OWNER may mint a ticket for their own run, same as an admin — a
 // member who did not create this run gets the byte-identical 404 a missing run
-// would (no existence oracle). The minted ticket carries the minter's OWN role
-// (item 3), which is the ONLY authorization signal the WS handler has left to
+// would (no existence oracle). The minted ticket carries the minter's OWN
+// role, which is the ONLY authorization signal the WS handler has left to
 // check at consume time, since the ?ticket= lane bypasses humanOrAdminAuth
 // entirely.
 func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
@@ -119,8 +119,8 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// EXPLICIT STRICT RE-CHECK, on top of getRunAuthorized. Since 0.7's third
-	// tier, ownsRunOrAdmin (which getRunAuthorized delegates to) passes a
+	// Explicit strict re-check, on top of getRunAuthorized. ownsRunOrAdmin
+	// (which getRunAuthorized delegates to) passes a
 	// SECURITY ADMIN on any run — deliberately, for incident response. Minting
 	// is the one route under that predicate that is not inspect-or-stop: this
 	// ticket becomes a live interactive PTY inside a foreign sandbox, an
@@ -177,13 +177,13 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 
 // ticketOrHumanAuth guards the attach WS route: a valid ?ticket= (single-use,
 // unexpired, bound to this run id) authenticates on its own and stamps the
-// minting principal (AND role — item 3) for attribution; anything else falls
+// minting principal (AND role) for attribution; anything else falls
 // through to the standard humanOrAdminAuth middleware (OIDC session / admin
 // token / local mode). A PRESENT-but-invalid ticket fails closed with 403
 // rather than falling through — a caller that chose ticket auth gets a crisp
 // answer, never a silent downgrade to cookie auth.
 //
-// The two lanes are NOT symmetric since item 3, and get there differently.
+// The two lanes are NOT symmetric, and get there differently.
 // The FALL-THROUGH lane stays admin-only (s.requireOperator): humanOrAdminAuth
 // only AUTHENTICATES, so a member who never minted a ticket must not simply
 // omit ?ticket= and get the same live PTY straight from their session cookie

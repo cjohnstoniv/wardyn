@@ -190,7 +190,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// R4-F077: same server-side projection handleListRuns applies per page —
+	// Same server-side projection handleListRuns applies per page —
 	// a single run's own detail read must agree with what the list showed.
 	runs := []types.AgentRun{run}
 	s.projectRecordingMeta(r, runs)
@@ -257,18 +257,19 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 // returns the caller's own CEILING with a nil id (no stored row is involved).
 //
 // ceiling ARRIVES as a parameter rather than being resolved here, and that is
-// the whole reason it exists: this used to hand back Config.DefaultPolicy
-// unconditionally — the DEPLOYMENT's ceiling, not necessarily this principal's.
-// A member under a governance profile who authors no policy at all has to get
-// THEIR ceiling, and "no policy authored" is the most-travelled create path
-// there is, so leaving it on the site-wide spec would have made the feature
-// optional in practice. For an UNASSIGNED principal the ceiling IS
-// DefaultPolicy, so this is byte-for-byte today for them.
+// the whole reason it exists: resolving it here would hand back
+// Config.DefaultPolicy unconditionally — the DEPLOYMENT's ceiling, not
+// necessarily this principal's. A member under a governance profile who
+// authors no policy at all has to get THEIR ceiling, and "no policy authored"
+// is the most-travelled create path there is, so leaving it on the site-wide
+// spec would make the feature optional in practice. For an UNASSIGNED
+// principal the ceiling IS DefaultPolicy, so this is byte-for-byte today for
+// them.
 //
 // The stored branch is deliberately untouched here: a stored row is
 // admin-authored content, and bounding it to the caller's ceiling needs the
 // full member pipeline rather than a spec swap — that is resolveRunPolicy's
-// job (PF-1/PF-23).
+// job.
 func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling governanceCeiling) (types.RunPolicySpec, *uuid.UUID, error) {
 	// Clone before handing the spec out. The ceiling is either cfg.DefaultPolicy
 	// — a process-global shared by every run — or a freshly-read profile row; a
@@ -302,8 +303,8 @@ func bestClass(classes []types.ConfinementClass) types.ConfinementClass {
 	return best
 }
 
-// strongestAdvertisedAtOrAbove is the DEFAULT confinement rule (0.7.8): the
-// strongest advertised class that meets floor — MEMBERSHIP, not rank (M8: a
+// strongestAdvertisedAtOrAbove is the DEFAULT confinement rule: the
+// strongest advertised class that meets floor — MEMBERSHIP, not rank (a
 // Kata-only host advertises [CC1, CC3], no CC2, so a rank check could pick a
 // class the runner never declared). It reduces to bestClass over the
 // membership-filtered subset rather than a second "strongest of a set"
@@ -362,7 +363,7 @@ func agentImage(agent string, images map[string]string) string {
 //
 // It exists for the container-login lane. The `claude-code` catalog row points
 // its ImageKey at `base`, because agent-base is the image actually published
-// (0.6.2 stopped publishing agent-claude-code) and because four production
+// (agent-claude-code is not) and because four production
 // callers — source_scan, site_config_probe, workspace_run_image and setup —
 // pass the literal "claude-code" when what they want is simply "the default
 // general-purpose agent image". agent-base is correct for all of them.
@@ -379,7 +380,8 @@ func agentImageForKey(agent, key string, images map[string]string) string {
 }
 
 // agentImageTag picks the tag for a convention agent image: the daemon's OWN
-// version (images are published per-semver, so a 0.6 daemon pulls a 0.6 agent)
+// version (images are published per-semver, so a daemon pulls the agent built
+// alongside it)
 // rather than a floating ":latest" that a later release re-points under a
 // version-pinned fleet's feet. ":latest" is the last resort only when the build
 // carries no version string.
@@ -399,7 +401,7 @@ func primaryWorkspacePath(spec types.RunPolicySpec) string {
 // resourceLimitsToRunner maps a policy's optional ResourceLimits onto the runner
 // spec. A nil policy block (or a zero field) yields the zero value, which the
 // docker driver fills with conservative platform defaults — so EVERY run is
-// CPU/memory/PID capped even when a policy sets nothing (C5: fleet safety).
+// CPU/memory/PID capped even when a policy sets nothing.
 func resourceLimitsToRunner(rl *types.ResourceLimits) runner.Resources {
 	if rl == nil {
 		return runner.Resources{}
@@ -438,7 +440,7 @@ func principalFromRequest(r *http.Request) string {
 // must land in the "" namespace regardless of which string identifies that
 // particular operator caller.
 //
-// DELIBERATELY isOperator: this is NAMESPACE ISOLATION, not an admin surface.
+// Deliberately isOperator: this is NAMESPACE ISOLATION, not an admin surface.
 // A security admin owns their own secrets and their own workspaces like any
 // other principal — dropping them into the shared operator namespace would
 // hand them the deployer's credential material, which is precisely the reach
@@ -451,7 +453,7 @@ func (s *Server) secretOwnerFromRequest(r *http.Request) string {
 }
 
 // runIdentitySubject resolves the subject a RUN IDENTITY is minted with — the
-// string that becomes claims.Sub and therefore SELECTS THE SECRET NAMESPACE
+// string that becomes claims.Sub and therefore selects the secret namespace
 // every credential-bearing path resolves against: broker ownerOf(caller) ==
 // caller.Sub (internal/broker/broker_mint_kinds.go, used by mintGitPAT and
 // mintSSHKey), the injection sink's Secrets.For(claims.Sub)
@@ -460,7 +462,7 @@ func (s *Server) secretOwnerFromRequest(r *http.Request) string {
 // (internal/secretstore/pg/pg.go) — where the attacker-chosen string IS the
 // selector and the named owner's own row WINS over the operator's.
 //
-// It is deliberately NOT actorFromRequest's name (F099). In LocalMode that name
+// It is deliberately NOT actorFromRequest's name. In LocalMode that name
 // is the DEV-ONLY X-Wardyn-Principal header when one is present, and a header
 // the caller writes must not choose whose stored secrets a run may mint. The
 // header keeps its documented job — ATTRIBUTION: it still names run.CreatedBy,
@@ -506,7 +508,7 @@ func actorTypeFromRequest(r *http.Request) types.ActorType {
 // control-character-free — the identical pair access.go's canonicalRoleMapValue
 // and apitokens.go's token name already apply. "" means "no usable override".
 //
-// WHY A DEV-ONLY, LOCAL-MODE-ONLY HEADER IS STILL VALIDATED. Local mode trusts
+// Why a dev-only, local-mode-only header is still validated. Local mode trusts
 // the caller to SAY who they are; that is the whole point of the override. It
 // does not follow that the audit trail has to accept the bytes they say it in.
 // This value becomes the ACTOR of append-only rows, and unbounded it wrote a
@@ -516,7 +518,7 @@ func actorTypeFromRequest(r *http.Request) types.ActorType {
 // those bytes. Every other caller-supplied string that reaches a row in this
 // package is capped and control-char-checked; this was the one that was not.
 //
-// IT FALLS BACK RATHER THAN REFUSING, unlike its two siblings, because this is
+// It falls back rather than refusing, unlike its two siblings, because this is
 // an ATTRIBUTION string and not an authorization input: nothing about the
 // request's reach changes with it. A malformed header must not 400 a working
 // local workflow — it must simply not become the actor, leaving the configured
@@ -533,16 +535,16 @@ func localPrincipalOverride(r *http.Request) string {
 // actorFromRequest resolves the audit actor (type + name) for an admin-gated
 // public-API action. Resolution order, strongest attribution first (invariant 4):
 //
-//  1. LOCAL HOST MODE — the operator injected by humanOrAdminAuth on the trusted
+//  1. Local host mode — the operator injected by humanOrAdminAuth on the trusted
 //     single-dev machine. Here (and ONLY here, off SSO) the X-Wardyn-Principal
 //     DEV-ONLY override (docs/sdk.md) is honored, since the machine is trusted;
 //     otherwise the configured operator (e.g. "local:alice") is used.
-//  2. A VERIFIED OIDC SSO session (the IdP "sub"), published by humanOrAdminAuth.
+//  2. A verified OIDC SSO session (the IdP "sub"), published by humanOrAdminAuth.
 //     A real human already won, so the X-Wardyn-Principal header is moot.
 //  3. Admin bearer token, NO verified human. Attributed to a non-human
 //     system actor ("admin-token").
 //
-// SECURITY (FIX #10 — human-attribution forgery): X-Wardyn-Principal is
+// Security (human-attribution forgery): X-Wardyn-Principal is
 // attacker-controllable and is documented as a DEV-ONLY override. It is
 // therefore trusted ONLY in LocalMode (case 1). For a plain admin-token caller
 // (case 3) the header is IGNORED: honoring it would let any WARDYN_ADMIN_TOKEN
@@ -581,15 +583,12 @@ func mustJSON(v any) json.RawMessage {
 // vendor CLI this project does not redistribute, and the operator has not
 // supplied an image that carries one.
 //
-// The failure it describes CHANGED SHAPE in 0.7 and the wording follows.
-// Previously claude-code's convention ref was agent-claude-code, which is not
-// published, so the symptom was a registry 404 on a tag that looks like it
-// should exist. That row's ImageKey now points at `base` — agent-base IS
-// published — so the pull succeeds and the symptom moves: the sandbox comes up
-// correctly and `claude` is not on PATH, because deploy/images/base/Dockerfile
-// is "the agent image contract, with NO vendor CLI". Same root cause (we do not
-// redistribute the CLI), a different thing for the operator to see, so warn
-// about what they will actually hit.
+// claude-code's ImageKey points at `base` — agent-base IS published — so the
+// pull succeeds and the sandbox comes up, but `claude` is not on PATH, because
+// deploy/images/base/Dockerfile is "the agent image contract, with NO vendor
+// CLI". Same root cause as an unpublished vendor image (we do not redistribute
+// the CLI), a different thing for the operator to see, so warn about what they
+// will actually hit.
 //
 // The trigger is the catalog's loginImageKey rather than a hardcoded agent name:
 // a row carries one exactly when its harness needs a vendor CLI whose image we

@@ -118,8 +118,8 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 // record route and every existing test keep that.
 func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
 	var events []requirementAuditEntry
-	// Resolved AT MOST ONCE per call, lazily on the first integration: key
-	// found (PLATFORM-API-8) — effectiveIntegrations reads the site-config
+	// Resolved at most once per call, lazily on the first integration key
+	// found — effectiveIntegrations reads the site-config
 	// store, a full secret listing, and peeks the subscription/Bedrock state,
 	// so recomputing it per requirement (a workspace with 6 integration
 	// requirements = 6 full derivations) multiplied that I/O by the
@@ -147,8 +147,8 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 				if !enabled {
 					continue
 				}
-				// #12: same TRUST BOUNDARY as the secret case below, gated
-				// behind RequireOperatorSetEgress (DEFAULT TRUE since 0.7 —
+				// Same TRUST BOUNDARY as the secret case below, gated
+				// behind RequireOperatorSetEgress (DEFAULT TRUE —
 				// see the Config field doc). When enabled, a scan_seeded
 				// egress host (the workspace scanner reading untrusted repo
 				// content) is skipped; only an operator's DIRECT declaration
@@ -262,8 +262,8 @@ func (s *Server) applyRequiredSecretGrant(present map[string]bool, spec *types.R
 	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
 		Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
 	})
-	// Couple the exact-host egress entry UNCONDITIONALLY, even under allow-all
-	// (SPINE-4): AllowedExactHost does not honor allow-all, so a grant whose host
+	// Couple the exact-host egress entry UNCONDITIONALLY, even under allow-all:
+	// AllowedExactHost does not honor allow-all, so a grant whose host
 	// is missing from AllowedDomains fails the proxy injector closed at startup
 	// (zero egress) — e.g. a required operator_set secret on an allow_all_egress
 	// ceiling would otherwise brick every run granted it.

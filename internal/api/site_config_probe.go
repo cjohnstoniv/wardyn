@@ -220,7 +220,7 @@ fi
 //     passed-through curl code.
 //  3. From could not be reached: the redirect is enforced end to end (reached).
 //
-// PROBE 2 CLASSIFIES, IT DOES NOT JUST TEST FOR SUCCESS, and that is the whole
+// Probe 2 classifies, it does not just test for success, and that is the whole
 // difference between the two questions it can be asked. "Did the fetch
 // succeed?" and "did the public host answer?" are not the same question, and
 // only the second one is about enforcement. -f collapsed them: it turns a 403
@@ -254,7 +254,7 @@ fi
 // reached the host, which is what enforcement looks like: exit 0, reported as
 // reached.
 //
-// WITH ONE EXCEPTION, because "no connection was made" and "curl never tried"
+// With one exception, because "no connection was made" and "curl never tried"
 // are not the same fact either. A curl that fails BEFORE any dial writes no
 // count to read: %{num_connects} comes back empty when curl wrote no -w output
 // at all, and rc is 1 (unsupported protocol) or 3 (malformed URL) when the URL
@@ -267,7 +267,7 @@ fi
 // untested redirect. The bypass arms are checked FIRST, so nothing that DID
 // connect can be downgraded to inconclusive.
 //
-// PROBE 1 HAS TWO SHAPES, and the second is why WARDYN_PROBE_TO_CONNECT exists.
+// Probe 1 has two shapes, and the second is why WARDYN_PROBE_TO_CONNECT exists.
 // A private-endpoint To is a LITERAL IP whose TLS certificate is scoped to the
 // PUBLIC (From) hostname -- that is the normal, correct shape of a VPC
 // endpoint, not a misconfiguration. Curling the IP directly presents the IP as
@@ -315,7 +315,7 @@ exit 0`
 // PORT1 matches, so a mismatched port would silently fall back to dialing the
 // public host and report a false "blocked".
 //
-// THE REQUESTED URL BORROWS FROM'S AUTHORITY, NEVER ITS SCHEME. --connect-to
+// The requested URL borrows From's authority, NEVER its scheme. --connect-to
 // decides the CONNECTION; the URL still decides which application protocol curl
 // speaks inside it. Built from From's whole URL, an `http://` From made the
 // probe speak cleartext into the mirror's TLS port, and an `https://` From made
@@ -474,7 +474,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 		return runID, probeRunResult{}, errProbeNoRunner
 	}
 	// The proxy probe is the DEPLOYMENT's diagnostic on an operator-only route,
-	// not any principal's work: neither governance limit binds it (F153).
+	// not any principal's work: neither governance limit binds it.
 	run, token, err := s.newStepRun(launchCtx, runID, actor, script, cc, operatorStepGovernance(probeCeiling), func(run *types.AgentRun) {
 		run.AutoStopAfterSec = siteConfigProbeIdleCapSec
 		// The probe runs a plain curl, never a coding agent (see the Image
@@ -843,7 +843,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	// The resolved secret VALUE stays inside dispatch (resolveRunUpstreamProxy)
 	// and must never surface in a detail or audit line.
 	//
-	// Set ONLY when it actually RESOLVES (W13-S1-4 / W12-W12-C-2): configured
+	// Set ONLY when it actually RESOLVES: configured
 	// but unresolvable (an https:// URL from a pre-gate row, a dangling secret
 	// ref) must never claim "through wardyn-proxy chained to X" — that is
 	// exactly the chain dispatch would silently drop and run direct instead,

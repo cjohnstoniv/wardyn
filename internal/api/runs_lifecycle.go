@@ -28,21 +28,21 @@ import (
 // agent process exits and then propagates its outcome to the run's durable
 // state + audit trail. Invariants it upholds:
 //
-//   - DETACHED CONTEXT: it derives its context from s.cfg.BaseCtx (the daemon
+//   - Detached context: it derives its context from s.cfg.BaseCtx (the daemon
 //     rootCtx), NOT the request/dispatch ctx. The request ctx is cancelled the
 //     moment the create-run handler returns, which would otherwise cancel
 //     Runner.Wait and the watcher before the agent ever finishes. BaseCtx lives
 //     for the daemon's lifetime (cancelled on shutdown).
-//   - KILLED-RACE GUARD: the terminal transition is a conditional store update
+//   - Killed-race guard: the terminal transition is a conditional store update
 //     from RUNNING only (UpdateRunStateIf). A user may `wardyn run kill` mid-run,
 //     moving the run to KILLED and tearing the sandbox down; the watcher must
 //     NOT clobber that. If the conditional update does not apply (the run is no
 //     longer RUNNING), the watcher does nothing further — in particular it does
 //     NOT tear the sandbox down (kill already did).
-//   - TEARDOWN ONLY ON WIN: StopSandbox is called only when the watcher won the
+//   - Teardown only on win: StopSandbox is called only when the watcher won the
 //     RUNNING->terminal transition, so resources are freed exactly once and a
 //     run someone else killed is left alone.
-//   - NO SILENT ABANDONMENT: this is the run's only watcher, so a Wait error that
+//   - No silent abandonment: this is the run's only watcher, so a Wait error that
 //     is not the daemon shutting down hands off to reconcileWatch rather than
 //     returning — see the Wait-error branch. agentExecID (the id Exec returned,
 //     "" for exec-less substrates) is what reconcileWatch probes for AGENT, not
@@ -257,7 +257,7 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 	// left PENDING to count: wardyn_credential_reauth_total{outcome="cancelled"}
 	// is a STATE-TRANSITION counter, and the first shape bumped it at a later
 	// resolve that happened to meet a terminal row — which counts retries, and
-	// never fires at all once the sidecar has given up (security NIT-3).
+	// never fires at all once the sidecar has given up.
 	reauth := s.countPendingReauth(ctx, runID)
 	n, err := s.cfg.Approvals.CancelForRun(ctx, runID, s.terminalCancelReason(ctx, runID))
 	if err != nil {
@@ -332,7 +332,7 @@ func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) stri
 	}
 }
 
-// SweepTerminalSandboxes is the retry surface W22-S1-7 names as missing: a
+// SweepTerminalSandboxes is the retry surface for a gap: a
 // failed StopSandbox/RevokeRun step inside a prior finalize (finalizeRunTail)
 // or kill (handleKillRun) leaves a terminal run row with a sandbox nothing
 // else revisits — ReconcileOnBoot skips terminal runs outright (reconcile.go),
@@ -384,12 +384,9 @@ const RunSecretGrace = time.Hour
 
 // SweepRunSecrets drops the per-run plaintext secret corpora held in memory for
 // runs that went terminal more than RunSecretGrace ago, and reports how many it
-// evicted (W12-S1-2 / W21-S1-9: nothing in production called Registry.Evict, so
-// every run's credentials accumulated in wardynd's heap for the process
-// lifetime — a long-lived daemon ended up holding plaintext for every run it
-// had ever dispatched).
+// evicted.
 //
-// Eligibility is read from the RUN'S OWN STATE rather than hooked onto a
+// Eligibility is read from the run's own state rather than hooked onto a
 // terminal-transition call site, so every path that ends a run (watcher, kill,
 // idle reaper, boot reconcile, failAndRevoke) is covered by construction and no
 // new one can be forgotten. It fails CLOSED on anything it cannot positively
@@ -487,11 +484,11 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 // path has its minted identity + broker credentials revoked, not merely its state
 // flipped. Every terminal transition must revoke (the documented cascade-on-every-
 // stop promise); previously only the completion watcher, kill, and reconciler did,
-// leaving the create/dispatch FAILED paths leaking a live run token + broker creds
-// (C003). Revoke runs only when THIS transition won, so a concurrent kill that
+// leaving the create/dispatch FAILED paths leaking a live run token + broker
+// creds. Revoke runs only when THIS transition won, so a concurrent kill that
 // already moved the run is not double-handled.
-// hint is the operator-facing one-line reason surfaced under the FAILED badge
-// (D9); it is persisted (best-effort, run.FailureHint) only when THIS transition
+// hint is the operator-facing one-line reason surfaced under the FAILED badge;
+// it is persisted (best-effort, run.FailureHint) only when THIS transition
 // won, so a concurrent kill that legitimately moved the run first is never
 // annotated with a failure reason it did not have. "" leaves the column empty
 // (a clean FAILED-by-nonzero-exit carries its exit code instead).
@@ -509,12 +506,10 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		return
 	}
 	if applied {
-		// THE CASCADE IS CONDITIONAL ON `from`, and the condition is load-bearing
-		// (V1-r2-lensS #2).
+		// The cascade is conditional on `from`, and the condition is load-bearing.
 		//
-		// from == RUNNING: CASCADE. This path is NOT only the create side, which
-		// is what the previous version of this comment claimed and what the census
-		// froze. runs_dispatch.go fails a run with from=RunRunning three times
+		// from == RUNNING: CASCADE. This path is NOT only the create side.
+		// runs_dispatch.go fails a run with from=RunRunning three times
 		// AFTER the STARTING->RUNNING CAS — the exec-less BYOI refusal, a failed
 		// `agent-run --selftest` (up to 2 minutes of a vendor image's own
 		// entrypoint), and a failed task Exec — and by then the sandbox and the
@@ -530,7 +525,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		// is running yet. Cascading there would be one list-all-PENDING read per
 		// failed dispatch that can only ever find nothing.
 		//
-		// THE CENSUS OF TRANSITIONS THAT CAN STRAND AN APPROVAL IS FOUR:
+		// The census of transitions that can strand an approval is four:
 		// finalizeRunTail's (the completion watcher, the boot reconciler and the
 		// probe reclaim all route through it), handleKillRun's,
 		// lifecycleStopper.StopRun's RUNNING->STOPPED in cmd/wardynd (the ONLY
@@ -560,7 +555,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 }
 
 // runFailureHintSetter is the OPTIONAL store capability failAndRevoke uses to
-// persist a run's FailureHint (D9). Kept off the core store.Store interface on
+// persist a run's FailureHint. Kept off the core store.Store interface on
 // purpose — see the assertion site above.
 type runFailureHintSetter interface {
 	SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) error
@@ -570,11 +565,11 @@ type runFailureHintSetter interface {
 // terminal CAS first, THEN runner teardown, identity revocation, broker credential
 // revocation — then audits run.kill. The order matters: winning the CAS first means
 // a kill that loses to a concurrent forward-transition 409s WITHOUT revoking, so it
-// can never strip a still-live run's credentials (C002); once the transition is ours
+// can never strip a still-live run's credentials; once the transition is ours
 // we tear the sandbox down (so it cannot use a credential it holds) and deny any
 // future mints (identity + broker).
 //
-// IDEMPOTENCY / TERMINAL GUARD: a run in a NON-KILLED terminal state
+// Idempotency / terminal guard: a run in a NON-KILLED terminal state
 // (COMPLETED/FAILED/STOPPED/ARCHIVED) is NOT re-killed — blindly writing KILLED
 // would corrupt that recorded outcome — so we 409 without touching state, the
 // runner, or the cascade. An already-KILLED run is the EXCEPTION: its
@@ -595,7 +590,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TERMINAL GUARD: do not clobber a NON-KILLED already-ended run. A KILLED run
+	// Terminal guard: do not clobber a NON-KILLED already-ended run. A KILLED run
 	// is exempt — re-killing re-runs the idempotent teardown/revoke cascade so a
 	// first kill whose teardown failed can still free the sandbox + credentials
 	//. COMPLETED/FAILED/STOPPED/ARCHIVED still 409 (writing KILLED would
@@ -609,7 +604,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	// Run the teardown/revocation cascade and the terminal state write on a
 	// context DETACHED from the request: once a kill begins it must complete even
 	// if the client disconnects, or a half-applied kill could strand a live token
-	// or a running sandbox (C4). Read the principal from the request first.
+	// or a running sandbox. Read the principal from the request first.
 	killerType, killer := actorFromRequest(r)
 	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
@@ -664,7 +659,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 // run.revoke row for a run that was torn down correctly).
 func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) (bool, map[string]any, error) {
 	id := run.ID
-	// THE CASCADE DETACHES ITSELF (C4; R1-F1). Once a kill begins it must finish
+	// The cascade detaches itself. Once a kill begins it must finish
 	// even if the CALLER's context dies, or a half-applied kill strands exactly
 	// what a kill exists to remove: past the CAS the row reads KILLED while
 	// KillSandbox is cancelled, retryQuick bails on ctx.Done() without revoking
@@ -679,7 +674,7 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 	// post-cascade run.revoke row needs a live context too.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	// (1) WIN THE TERMINAL TRANSITION FIRST (C002). Revoking before this CAS meant a
+	// (1) Win the terminal transition first. Revoking before this CAS meant a
 	// kill that then LOST the CAS to a concurrent dispatch forward-transition
 	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
 	// RUNNING run with dead creds behind a silent 409. Own the KILLED transition
@@ -727,7 +722,7 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 		}
 	}
 
-	// HONEST OUTCOME (C2): the kill-switch is the central governance control and
+	// Honest outcome: the kill-switch is the central governance control and
 	// the audit log is the system of record. If ANY teardown/revocation step
 	// failed, the run is marked KILLED but a minted token may still be valid until
 	// its TTL or the sandbox may still be live — so we must NOT report success.

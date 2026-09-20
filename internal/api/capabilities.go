@@ -14,12 +14,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the closed kind set ──────────────────────────────────────────────────────
+// the closed kind set
 //
 // Seven kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// an eighth kind is a constant here plus its enforcement call site, with no DDL
-// (0.7 added the fifth and sixth, 0.7.2 the seventh, on exactly those terms).
+// an eighth kind is a constant here plus its enforcement call site, with no DDL.
 // The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
 // mirrors these ids and must not drift.
 //
@@ -64,7 +63,7 @@ const (
 	// capIntegration NARROWS: it bounds which AI-provider integration a member
 	// may name on a run — req.IntegrationID, and NOTHING ELSE.
 	//
-	// TIER 1 ONLY (PF-33). resolveRunIntegration has three tiers, and the other
+	// Tier 1 only. resolveRunIntegration has three tiers, and the other
 	// two — a workspace's own LLMCred pin (tier 2) and the operator's
 	// DefaultFor:agent_runs site default (tier 3) — are OPERATOR-authored. Gating
 	// them would contradict the doctrine rendered on the very screen this kind
@@ -74,12 +73,12 @@ const (
 	// at denyMemberRequest, on the one member-authored input, and never inside
 	// resolveRunIntegration — which operator callers reach too.
 	capIntegration = "integration"
-	// capWorkspaceProvider NARROWS: it bounds which GIT PROVIDER ROW a member's
+	// capWorkspaceProvider NARROWS: it bounds which git provider row a member's
 	// work may come from — the row workspace_providers.go's providerFor resolves
 	// a repository's derived clone URL to. Values are the provider row's own id
 	// (the lowercase-ASCII slug an integration id is written in), plus `*`.
 	//
-	// NARROWING, on the same rule capAgent's comment states: a member could
+	// Narrowing, on the same rule capAgent's comment states: a member could
 	// already launch a run against ANY onboarded repository, so the unenforced
 	// default stays ALLOWED and an upgraded 0.7.1 deployment is unchanged. A
 	// DENY row still bites immediately, before anyone enforces the kind — which
@@ -114,7 +113,7 @@ func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKi
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 
-// ─── resolution ───────────────────────────────────────────────────────────────
+// resolution
 
 // canonicalUserSubject canonicalizes ONE human identity — an IdP `sub` or an
 // email claim — into the exact string a `user` subject row is matched by. It is
@@ -124,7 +123,7 @@ const capWildcard = "*"
 // validateGovernanceAssignment, the governance preview's claim normalizer).
 // One function, so what a caller can BE is exactly what an admin can WRITE.
 //
-// THE ASCII GUARD RUNS ON THE RAW VALUE, BEFORE THE FOLD, and the ORDER is the
+// The ASCII guard runs on the raw value, before the fold, and the order is the
 // security property — the same ordering CanonicalGroupSubject, ParseRoleMap and
 // deriveRole already use, for the same reason. strings.ToLower does UNICODE
 // case mapping: KELVIN SIGN U+212A folds to ASCII 'k' and U+0130 folds to ASCII
@@ -132,9 +131,8 @@ const capWildcard = "*"
 // resolve to "kim@korp.com" — the exact string another human's capability
 // grants, governance assignment and drive allocation are written against, since
 // every one of those columns is matched by `subject = ANY($1::text[])` exact
-// equality. The tree stated the opposite premise in two places ("A plain
-// ToLower is the WHOLE rule for a user subject"); it was the whole rule for an
-// ASCII one only.
+// equality. A plain ToLower is the whole rule only for an ASCII subject — not
+// for one that isn't.
 //
 // A NON-ASCII identity is kept VERBATIM rather than dropped, and that is where
 // this differs from the group rule — deliberately. A group subject is matched
@@ -149,8 +147,8 @@ const capWildcard = "*"
 // because both sides call this function, a subject that can be written is
 // exactly a subject that can be matched.
 //
-// TRIMMED ON BOTH ARMS. The sub arm used not to be, so a claim with a trailing
-// space resolved to a subject no write boundary (which trims) could produce.
+// Trimmed on both arms: an untrimmed sub arm would let a claim with a trailing
+// space resolve to a subject no write boundary (which trims) could ever produce.
 func canonicalUserSubject(s string) string {
 	s = strings.TrimSpace(s)
 	if !oidc.ASCIIOnly(s) {
@@ -302,7 +300,7 @@ func (s *Server) capGranted(ctx context.Context, kind, value string) (bool, erro
 // against a request, so the narrowing and widening answers can never disagree
 // about what a row covers.
 //
-// AN UNANSWERABLE GROUP SNAPSHOT IS NOT "NO GROUP ROWS" (PF-26, the capability
+// An unanswerable group snapshot is not "no group rows" (the capability
 // half). capabilitySubjects' stale bit says the group list this scan matched
 // against is missing or partial, so a group DENY the caller actually holds may
 // simply not be in `grants` — and every seam above reads a clean scan as
@@ -365,7 +363,7 @@ func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow b
 // costs the caller access (capAllowed falls through to the enforcement switch,
 // capGranted refuses outright), which is the fail-CLOSED direction already.
 //
-// THE ROWS ARE SELECTED IN SQL, NOT SCANNED IN GO, and the reason is not
+// The rows are selected in SQL, not scanned in Go, and the reason is not
 // tidiness. This runs on the path taken by every caller whose group snapshot is
 // unanswerable — which, by the fail-closed reading of a NULL groups_truncated
 // column, is EVERY API token minted before 0.7, on every request it makes — and
@@ -405,7 +403,7 @@ func (s *Server) capUnresolvableGroupDeny(ctx context.Context, kind, value strin
 	return false, nil
 }
 
-// capSeamAllowed is capAllowed AT AN ENFORCEMENT SEAM — same answer, plus the
+// capSeamAllowed is capAllowed at an enforcement seam — same answer, plus the
 // one case a seam has and the resolver deliberately refuses to guess at: a
 // deployment with no Store cannot hold a grant OR an enforcement row, so there
 // is nothing to enforce and the seam behaves exactly as 0.5 did.
@@ -455,8 +453,8 @@ func (s *Server) capEnforced(ctx context.Context, kind string) (bool, error) {
 // Every other kind is an exact, case-sensitive compare. A secret name, a
 // workspace uuid, an image ref, an agent id, an integration id and a git
 // provider row id are all identifiers where a near-miss must not match; only
-// egress hosts have a defensible subdomain semantics. The two 0.7 kinds and
-// 0.7.2's workspace_provider therefore need no arm of their own — this default
+// egress hosts have a defensible subdomain semantics. The agent and
+// workspace_provider kinds therefore need no arm of their own — this default
 // IS their matcher, exact plus the shared wildcard.
 func capValueMatches(kind, grantValue, want string) bool {
 	grantValue = strings.TrimSpace(grantValue)
@@ -491,19 +489,13 @@ func capValueOverlaps(kind, grantValue, want string) bool {
 	return kind == capEgressHost && capValueMatches(kind, want, grantValue)
 }
 
-// ─── the batch seam ───────────────────────────────────────────────────────────
+// the batch seam
 
 // capBatch is capSeamAllowed for MANY values: it resolves the caller's grants,
 // the enforcement map and (only when needed) the unresolvable-group-deny table
 // ONCE, then answers every value in process with the same matchers capScan uses.
 //
-// This is the fix capSeamAllowed's own doc comment prescribes, taken at the
-// moment its stated premise stopped holding. That comment reads "one call per
-// value, so a seam asking about N values pays 2N indexed reads on a small
-// table. N is a handful everywhere it is used today (a run's egress allowlist,
-// a deployment's secret names). If one grows, resolve the caller's grants +
-// enforcement ONCE and match in-process — capValueMatches is already the whole
-// matcher." A run's egress allowlist is NOT a handful: it is
+// A run's egress allowlist is NOT a handful: it is
 // spec.AllowedDomains, taken verbatim from the request body, and nothing on the
 // member create/preflight path caps or de-duplicates it before
 // narrowMemberInlinePolicy loops over it — validatePolicySpec's count caps
@@ -512,7 +504,7 @@ func capValueOverlaps(kind, grantValue, want string) bool {
 // partition appends every element that passes) and is skipped outright under a
 // ceiling with allow_all_egress.
 //
-// MEASURED, against a real store.PG over loopback with an empty grants table:
+// Measured, against a real store.PG over loopback with an empty grants table:
 // ~505µs per entry, linear, so one member request carrying the most entries
 // that fit under maxJSONBody (52,425 x "api.anthropic.com") spent 104,850
 // sequential round trips and 27.0s inside this one function — 157,275 and 45.3s
@@ -520,13 +512,13 @@ func capValueOverlaps(kind, grantValue, want string) bool {
 // the member router group and persists nothing, so that is repeatable for free.
 // After: 2 round trips (3 stale), flat in N.
 //
-// NOT A CACHE, deliberately, and that distinction is the whole reason this is
+// Not a cache, deliberately, and that distinction is the whole reason this is
 // safe: the batch lives for ONE narrowMemberInlinePolicy call and is discarded,
 // so a grant revoked between requests still binds on the next one. Caching
 // across requests is the HA blocker capAllowed's own comment names, and nothing
 // here reaches for it.
 //
-// LAZY, so a spec with nothing to check performs no reads at all and the ~30
+// Lazy, so a spec with nothing to check performs no reads at all and the ~30
 // nil-store doubles in this package keep the behaviour capSeamAllowed gives
 // them.
 type capBatch struct {
@@ -539,12 +531,10 @@ type capBatch struct {
 
 	loaded bool
 	grants []types.CapabilityGrant
-	// byKind indexes grants by capability, built ONCE in load(). allowed() used
-	// to walk the caller's WHOLE grant set per value, `continue`-ing past every
-	// row of another kind — so a spec asking about N egress hosts paid
-	// O(N x every grant the caller holds) inside one handler, on a path any
-	// authenticated member reaches (POST /runs/preflight). The store round trips
-	// were fixed; the CPU was not.
+	// byKind indexes grants by capability, built ONCE in load() — so a spec
+	// asking about N egress hosts does not pay O(N x every grant the caller
+	// holds) inside one handler, on a path any authenticated member reaches
+	// (POST /runs/preflight).
 	byKind map[string][]types.CapabilityGrant
 	enf    map[string]bool
 
@@ -656,12 +646,9 @@ func (b *capBatch) unresolvableGroupDeny(ctx context.Context, kind, value string
 		// capability=$1 in SQL, so nothing is filtered again here and the match
 		// is capValueOverlaps alone — one shared matcher, as capScan uses.
 		//
-		// This memo used to hold the WHOLE capability_grants table, because that
-		// is what the predicate read when the batch was written. A concurrent
-		// change narrowed the read, and keeping the old one would have quietly
-		// reintroduced the full-table scan on exactly the path this batch exists
-		// to make O(1) — the two would not have disagreed about the ANSWER, only
-		// about the cost, which is the kind of drift nothing fails on.
+		// The predicate here must track ListGroupDenyGrants' own narrow read
+		// exactly — a mismatch would not change the ANSWER, only the cost,
+		// which is the kind of drift nothing fails on.
 		if grants, err = b.s.cfg.Store.ListGroupDenyGrants(ctx, kind); err != nil {
 			return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 		}
@@ -675,7 +662,7 @@ func (b *capBatch) unresolvableGroupDeny(ctx context.Context, kind, value string
 	return false, nil
 }
 
-// ─── the owned-secret seam ────────────────────────────────────────────────────
+// the owned-secret seam
 
 // ownedSecretMemoKey carries one request's owned-secret memo. A pointer holder
 // rather than the value, so a memo installed once at the top of a resolution is
@@ -699,7 +686,7 @@ type ownedSecretMemoKey struct{}
 // persists nothing and is repeatable for free. After: one read per owner per
 // request, flat in N.
 //
-// NOT A CACHE, on the same terms capBatch states: it lives for ONE resolution
+// Not a cache, on the same terms capBatch states: it lives for ONE resolution
 // and is discarded with the request, so a secret created or deleted between
 // requests is seen by the next one.
 //

@@ -20,8 +20,8 @@ import (
 )
 
 // workspace_build.go — the wizard's BUILD step endpoints. Building the
-// recommended/custom image used to happen lazily INSIDE a session launch,
-// which froze the "Verify" click behind minutes of invisible work. Building
+// recommended/custom image lazily INSIDE a session launch would freeze
+// the "Verify" click behind minutes of invisible work. Building
 // is its own process now: POST kicks it asynchronously (single-flight per
 // workspace), GET reports it honestly, and the session launch finds the image
 // already cached (resolveWorkspaceImage's hash check) so it starts fast.
@@ -38,7 +38,7 @@ type buildState struct {
 	// Log is the bounded tail of this build's output (maxBuildLogLines), fed by
 	// buildLogWriter. Same in-memory-only caveat as the rest of buildState.
 	Log []string `json:"log,omitempty"`
-	// Key is the workspace's image cache key AT THE MOMENT THIS BUILD STARTED
+	// Key is the workspace's image cache key at the moment this build started
 	// (Server.workspaceBuiltImageKey) — what the build was building, not what
 	// it produced. The `done` half of a stale entry is answered by the row, but
 	// a FAILED build has no ref for the row to disagree with, so without this a
@@ -88,7 +88,7 @@ func (t *buildTracker) begin(id uuid.UUID, now time.Time) bool {
 }
 
 // drop forgets everything this process remembers about id's build. Called by
-// every invalidator of the built image (B4-F2): the tracker is a CACHE of a
+// every invalidator of the built image: the tracker is a CACHE of a
 // build, so once the thing it was caching is gone — the workspace edited, the
 // row deleted — its memory is not a stale answer to be outranked later, it is
 // an answer to a question nobody can ask any more. Without it, a failed build's
@@ -227,7 +227,7 @@ type buildResponse struct {
 	State  string `json:"state"`
 	Image  string `json:"image,omitempty"`
 	Detail string `json:"detail,omitempty"`
-	// StartedAt is a pointer (WIRE-6): encoding/json's omitempty is a no-op for
+	// StartedAt is a pointer: encoding/json's omitempty is a no-op for
 	// a struct, so a plain time.Time shipped the zero instant
 	// ("0001-01-01T00:00:00Z") on every non-"building" response instead of
 	// omitting the field the TS WorkspaceBuildState declares optional/absent.
@@ -273,7 +273,7 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 		}
 		return nil
 	}
-	// B4-F1: the builder's OWN error is the fourth Detail this function can
+	// The builder's OWN error is the fourth Detail this function can
 	// answer, and the only one that is not fixed prose — it quotes the
 	// operator's authored base-image coordinate verbatim in the pull/FROM line
 	// that failed, which is exactly the datum redactWorkspaceForRead blanks on
@@ -289,9 +289,9 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 	}
 	// An explicit image CHOICE (registry/byo) boots verbatim ONLY once an image
 	// builder has wrapped it with the agent runtime — resolveWorkspaceImage's
-	// FinalizeBase call, the SAME wrap a devcontainer build needs. W7-S1-2: this
-	// used to report "nothing_to_build ... no build involved" unconditionally,
-	// which is false on a builder-less host (the default bare binary AND every
+	// FinalizeBase call, the SAME wrap a devcontainer build needs. Reporting
+	// "nothing_to_build ... no build involved" unconditionally would be
+	// false on a builder-less host (the default bare binary AND every
 	// Helm/k8s install unless WARDYN_ENVBUILD is set) — a run against this
 	// workspace is refused there (runs_create.go's wsRefs door), not booted
 	// as-is. Gate on the builder so a builder-less host instead falls through
@@ -309,12 +309,12 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 		// Only about the composition it actually ran against — see buildState.Key.
 		return buildResponse{State: "failed", Detail: builderError(st.Error), Log: buildLog(st.Log)}
 	}
-	// THE ROW DECIDES WHETHER ANYTHING IS BUILT; THE TRACKER ONLY REMEMBERS HOW
-	// (B4-F2). The tracker used to answer `done` from its own st.Image before
-	// anything consulted the row, so an image invalidated underneath it — a PUT
+	// The row decides whether anything is built; the tracker only remembers
+	// how. Answering `done` from the tracker's own st.Image before
+	// consulting the row would let an image invalidated underneath it — a PUT
 	// that removeStaleImage'd the ref and cleared the cache columns, a rescan
 	// that moved the profile hash — still read `done` with a ref no run would
-	// ever resolve, and POST /build short-circuited on that same view, leaving
+	// ever resolve, and POST /build would short-circuit on that same view, leaving
 	// the workspace unbuildable until wardynd restarted. The row is what
 	// resolveWorkspaceImage actually consults, so it is what this reports; the
 	// tracker contributes only the LOG, and only while it is talking about the
@@ -331,7 +331,7 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 			// Explicit base image (registry/byo/custom), no builder wired: unlike
 			// the generic "sessions boot the stock agent image" fallback below,
 			// this workspace's chosen image is refused outright at run creation
-			// rather than silently substituted (PARITY-4, runs_create.go).
+			// rather than silently substituted (runs_create.go).
 			return buildResponse{State: "none", Image: authoredImage(b.Image),
 				Detail: "the sandbox image builder is not wired on this host, so this base image cannot be wrapped with the agent runtime — a run against this workspace is REFUSED, not silently substituted; set WARDYN_ENVBUILD on a wardynd built with -tags docker to enable it, or drop the base image"}
 		}
@@ -352,14 +352,15 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 // own devcontainer on (clone URL, ref), everything else on the scanned
 // profile's CacheKey.
 //
-// THE EXPLICIT-IMAGE LANE IS NOT DEAD CODE, although resolveBuildView answers
+// The explicit-image lane is not dead code, although resolveBuildView answers
 // "nothing_to_build" above for most of it: that branch excludes kind "custom",
 // which is exactly the composition that falls through to here with a byoi key
-// on the row. Keying it on the profile instead reported `none` for a workspace
-// that had built perfectly, in-process AND after a restart, and made every
-// Build click re-run the whole resolve. The builder gate keeps the honest
-// builder-less refusal below (W7-S1-2) — with no builder that base image is
-// REFUSED at run creation, so a cached wrap for it is not "done" here.
+// on the row. Keying it on the profile instead would report `none` for a
+// workspace that had built perfectly, in-process AND after a restart, and
+// would make every Build click re-run the whole resolve. The builder gate
+// keeps the honest builder-less refusal below — with no builder that base
+// image is REFUSED at run creation, so a cached wrap for it is not "done"
+// here.
 //
 // Reporting these lanes from the ROW is also what lets their built images read
 // `done` at all after a restart: neither key is the profile's, so the old

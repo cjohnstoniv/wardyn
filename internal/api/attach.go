@@ -52,10 +52,10 @@ func (s *Server) attachKeepaliveEvery() time.Duration {
 // client socket cannot wedge the read pump forever.
 const attachWriteTimeout = 30 * time.Second
 
-// attachPingInterval is D1's liveness probe cadence for an otherwise-idle
+// attachPingInterval is the liveness probe cadence for an otherwise-idle
 // attach socket.
 //
-// THE GAP THIS CLOSES: attachWriteTimeout already reaps a stuck peer once
+// The gap this closes: attachWriteTimeout already reaps a stuck peer once
 // server->client output is FLOWING — a Write blocks under the timeout and the
 // pump ends. It never engages on a SILENT PTY (no output => no Write is ever
 // attempted), and the client->server half blocks on c.Read with no deadline of
@@ -73,7 +73,7 @@ const attachWriteTimeout = 30 * time.Second
 // (coder/websocket's own contract) — attachPump's client->server goroutine
 // provides exactly that, so this adds no second reader.
 //
-// DEADLINE: worst case ~2x this interval before a truly dead peer is reaped
+// Deadline: worst case ~2x this interval before a truly dead peer is reaped
 // (one tick to notice the idle window, one full interval waiting for the
 // pong). 30s reuses attachWriteTimeout's own budget rather than inventing a
 // second "how unresponsive is too unresponsive" number: tighter risks
@@ -132,7 +132,7 @@ type resizeMsg struct {
 //     reaper leaves an actively-attached run alone.
 //  7. Emit session.attach on open and session.detach on close.
 //
-// SECURITY (invariants 3 & 4):
+// Security (invariants 3 & 4):
 //   - Invariant 3 (confinement / no new egress): the interactive shell runs
 //     INSIDE the existing sandbox via the runner, so it is bounded by exactly
 //     the same L0 structural-egress + confinement envelope as the agent. Attach
@@ -148,7 +148,7 @@ type resizeMsg struct {
 func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// FIX #8 + N1 (defense-in-depth): in LOCAL no-auth mode the attach WS is
+	// Defense-in-depth: in LOCAL no-auth mode the attach WS is
 	// protected only by same-origin at websocket.Accept. Reject BEFORE the upgrade
 	// so the socket is never opened. Two gates, same as the REST surface in
 	// humanOrAdminAuth: (1) a non-loopback TCP peer (a direct LAN client forging
@@ -164,7 +164,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SAME-ORIGIN, decided HERE rather than by the library. coder/websocket's
+	// Same-origin, decided HERE rather than by the library. coder/websocket's
 	// own check authorises r.Host and then consults OriginPatterns — which are
 	// path.Match GLOBS, so the one extra name an ingress deployment needs could
 	// not be expressed as a literal (attachOriginRefused, csrf.go, carries the
@@ -180,13 +180,13 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// origin", which is what this block is; leaving it false would re-refuse the
 	// ingress host this widening exists for.
 	//
-	// DECIDED HERE, beside the other CALLER gates and above every read of state
-	// (S2-10): it judges who is asking, not what they asked for, so running it
+	// Decided here, beside the other CALLER gates and above every read of state:
+	// it judges who is asking, not what they asked for, so running it
 	// after getRunOr404 and the ticket re-check spent a store read on a request
 	// that was never going to be served — and could answer a cross-origin
 	// upgrade with 404/409, or an authz.denied row, instead of the refusal.
 	if s.attachOriginRefused(r) {
-		// AUDITED like the REST guard's two arms (http.go), on the same
+		// Audited like the REST guard's two arms (http.go), on the same
 		// auth.failed action, reason and actor — a control that refuses
 		// silently cannot answer either question an operator has at 3am
 		// (csrf.go), and that argument started applying to this socket the
@@ -212,7 +212,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ticket lane authorization (item 3): ticketOrHumanAuth's ?ticket= branch
+	// Ticket lane authorization: ticketOrHumanAuth's ?ticket= branch
 	// runs neither humanOrAdminAuth nor requireOperator, so the ticket's OWN
 	// stamped role/principal (captured at MINT time — see attach_ticket.go) is
 	// the only authorization signal left. owner-or-admin, re-checked here
@@ -229,7 +229,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// FAIL CLOSED before upgrading: only a RUNNING run with a live sandbox ref
+	// Fail closed before upgrading: only a RUNNING run with a live sandbox ref
 	// can be attached. Rejecting here (plain HTTP) keeps a bad attach a clean
 	// error rather than a WebSocket that opens and immediately dies.
 	if run.State != types.RunRunning {
@@ -287,7 +287,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 			"sandbox_ref": run.SandboxRef, "cols": opts.Cols, "rows": opts.Rows,
 		})))
 
-	// HOLDER REGISTRY (attach_holder.go). Attach is a SHARED tmux session: a
+	// Holder registry (attach_holder.go). Attach is a SHARED tmux session: a
 	// fresh Runner.Attach per client lands on the SAME persistent session, so
 	// without this two clients silently compete for one PTY and neither can see
 	// the other. Name the holder; admit a second client READ-ONLY (its input is
@@ -317,7 +317,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
-	// DEFERRED as the crash backstop, NOT the release point (see the explicit
+	// Deferred as the crash backstop, NOT the release point (see the explicit
 	// call right after attachPump returns, below): a panicking pump would
 	// otherwise strand a phantom holder that every later attach reads as
 	// "held" forever, curable only by a restart. release is idempotent and
@@ -340,7 +340,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// not pretending it succeeded.
 	_ = writeAttachMode(ctx, c, readOnly, s.attachHolderFor(id))
 
-	// PROVENANCE (PIECE 3): record this interactive session as a replayable
+	// Provenance: record this interactive session as a replayable
 	// asciicast so the human-in-sandbox is in the audit trail. We tee the server
 	// -> client PTY OUTPUT (what appeared on the terminal) through a re-snapshotting
 	// masker (liveMaskWriter, same MaskRegistry recording.go uses) into a v2
@@ -348,7 +348,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// run+session (a session suffix) so concurrent/sequential attaches never
 	// clobber each other or the batch run's cast (keyed by bare runID).
 	//
-	// LIMITATIONS (honest): (1) only the OUTPUT direction is recorded, not
+	// Limitations (honest): (1) only the OUTPUT direction is recorded, not
 	// keystroke input — this matches asciinema's "o" event model and the existing
 	// player. (2) Masking is verbatim-only (the documented secretmask residual:
 	// base64/hex/narrated secrets are not caught); a secret split across two writes
@@ -376,7 +376,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	closeReason := s.attachPump(pumpCtx, c, sess, castTee, holder)
 	cancel()
 
-	// D2: FREE THE SLOT HERE, before the recording persist + the session.detach
+	// Free the slot HERE, before the recording persist + the session.detach
 	// audit below — not after them, which is where the deferred call above
 	// would otherwise leave it (function return, i.e. the very end). A focus-
 	// mode remount closes the old attach socket and opens the new one in the
@@ -412,10 +412,10 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	// session.detach on close (always emitted, even on error pumps).
 	//
-	// FINDING (medium, fixed): this audit was recorded on the request ctx, which
-	// the WebSocket layer cancels the instant the socket closes — exactly when
-	// detach happens — so the detach audit was routinely dropped (a hole in the
-	// attribution trail). Record it on finishCtx (the daemon-lifetime BaseCtx /
+	// The request ctx cannot be used here: the WebSocket layer cancels it the
+	// instant the socket closes — exactly when detach happens — which would
+	// routinely drop the detach audit (a hole in the attribution trail).
+	// Record it on finishCtx (the daemon-lifetime BaseCtx /
 	// background fallback computed above), so the close event is durably written
 	// even though the request context is already cancelled.
 	// read_only rides along so the trail distinguishes the human who was DRIVING
@@ -478,7 +478,7 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 
 	reasonCh := make(chan string, 3)
 
-	// D1 liveness probe (attachPingInterval): a silent PTY produces no
+	// Liveness probe (attachPingInterval): a silent PTY produces no
 	// server->client Write for attachWriteTimeout to bound, so without this a
 	// dead peer holds its slot until the daemon restarts. Runs for every
 	// attach (holder or read-only observer) — cheap, and an observer's dead
@@ -622,14 +622,14 @@ func runIsUnrecordable(run types.AgentRun) bool {
 //     event. It is best-effort: a persist failure is audited as a failure but
 //     never fails the detach.
 //
-// SECURITY: the recording is masked against the MaskRegistry (invariant 1: no
+// Security: the recording is masked against the MaskRegistry (invariant 1: no
 // verbatim secret leakage into the recording). Unlike the agent UPLOAD path
 // (which snapshots once at run end, after every mint is registered), an attach
 // is live, so the masker RE-SNAPSHOTS the registry on each write to catch a
 // credential minted mid-session. When MaskRegistry is nil it is a safe
 // pass-through (documented residual unchanged).
 //
-// NOT-RECORDED RUNS: a run whose terminal exists to PRINT a credential is never
+// Not-recorded runs: a run whose terminal exists to PRINT a credential is never
 // recorded at all — see runIsUnrecordable. Masking cannot protect those: the
 // registry only masks values it already holds, and such a token is unknown to
 // wardynd until the operator pastes it back, which is strictly AFTER the bytes
@@ -694,7 +694,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 	mw := &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: cast}
 
 	finish := func(ctx context.Context, principalType types.ActorType, principal string) {
-		// FIX #12 + #13: take the masker lock across (a) flushing the retained tail
+		// Take the masker lock across (a) flushing the retained tail
 		// into the cast and (b) reading the recording buffer, so a secret sitting in
 		// the tail at session end is still masked (not dropped or leaked) and the
 		// buffer is never read while the attach Read pump is mid-write. mw.mu is the
@@ -773,7 +773,7 @@ func (w *liveMaskWriter) Write(p []byte) (int, error) {
 	// One CACHED masker per registry generation, not NewMasker(Snapshot(...)) per
 	// chunk: the pair cloned every secret twice and sorted the whole set on every
 	// PTY write, which is why a 32 KiB chunk went from 29.8us at one secret to
-	// 1.51ms at 1024 (F076). Masker.Secrets is the same corpus the snapshot was,
+	// 1.51ms at 1024. Masker.Secrets is the same corpus the snapshot was,
 	// longest-first, so pendingTailLen below reads it off the cached masker
 	// instead of taking a second snapshot of the unchanged set.
 	masker := w.reg.Masker(w.runID)

@@ -70,16 +70,15 @@ type ApprovalService interface {
 	// CancelForRun moves every still-PENDING approval of a run that has just
 	// reached a terminal state to CANCELLED, returning how many it moved. It is
 	// part of the terminal cascade, beside identity/broker revocation: an
-	// approval whose run has ended is a control that cannot function, and the
-	// console used to render live Approve/Deny buttons on it. reason names the
-	// transition ("run_killed", "run_completed", ...). Idempotent by
+	// approval whose run has ended is a control that cannot function, and a row
+	// left PENDING renders live Approve/Deny buttons in the console. reason names
+	// the transition ("run_killed", "run_completed", ...). Idempotent by
 	// construction — a second call finds nothing PENDING and emits nothing.
 	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error)
 	// CountForRun returns how many approvals a run has raised, in ANY state —
-	// the per-run cap handleInternalRequestApproval enforces (R3-F071). A
-	// sandbox chooses the hosts it asks about, so the number of rows one run can
-	// create was bounded by nothing; the count had no accessor here, which is the
-	// whole reason the cap did not exist.
+	// the per-run cap handleInternalRequestApproval enforces. A sandbox chooses
+	// the hosts it asks about, so without that cap the number of rows one run can
+	// create is bounded by nothing.
 	CountForRun(ctx context.Context, runID uuid.UUID) (int, error)
 }
 
@@ -166,14 +165,14 @@ type Config struct {
 	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for
 	// the wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit
 	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
-	// sinks configured has nothing to report. See D2.
+	// sinks configured has nothing to report.
 	AuditSinkDrops func() map[string]int64
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
 	AdminToken string
-	// LocalMode enables LOCAL HOST MODE: the public-API auth (humanOrAdminAuth)
+	// LocalMode enables local host mode: the public-API auth (humanOrAdminAuth)
 	// is bypassed entirely and every admin-gated action is attributed to
 	// LocalOperator. This is the single-developer localhost path — no SSO, no
 	// token, no Dex. It NEVER affects internalAuth (sidecar/run-token
@@ -252,7 +251,7 @@ type Config struct {
 	// so a valid session cookie OR the admin bearer token authenticates a caller.
 	// The admin token still works for the CLI when OIDC is configured.
 	OIDC *oidc.Authenticator
-	// Directory (§I / PF-29), when set, backs GET /access/directory/search — the
+	// Directory, when set, backs GET /access/directory/search — the
 	// console's autocomplete over the identity provider for every "who" field (a
 	// governance assignment's subject, the People-step mapping value), so an
 	// admin picks a DisplayName and Wardyn stores the ClaimValue instead of
@@ -267,7 +266,7 @@ type Config struct {
 	// stated plainly in docs/OPERATIONS.md, because it is a real expansion of
 	// the minimal-reach posture rather than a convenience toggle.
 	Directory directory.Directory
-	// SessionRevocations (D16) is the write side of the revoke-a-human-now
+	// SessionRevocations is the write side of the revoke-a-human-now
 	// lever: handleRevokeSessions calls RevokeSub/RevokeAll on it.
 	// oidc.Middleware holds the matching READ side (Config.Revocations, wired
 	// by the same cmd/wardynd adapter) — this field is nil exactly when OIDC
@@ -276,7 +275,7 @@ type Config struct {
 	SessionRevocations oidc.SessionRevocations
 	// OperatorEmails is WARDYN_OIDC_OPERATOR_EMAILS, the legacy admin allowlist.
 	// internal/api no longer reads this field directly: requireOperator/isOperator
-	// (http.go) gate on the session's B1-derived Role instead. The list still
+	// (http.go) gate on the session's derived Role instead. The list still
 	// matters — cmd/wardynd feeds the SAME value into oidc.Config.LegacyAdminEmails,
 	// so an email on it is still an additional RoleAdmin match at OIDC-login role
 	// derivation time (see internal/auth/oidc's deriveRole) — it just flows through
@@ -357,7 +356,7 @@ type Config struct {
 	// ValidateBedrockBaseURL at boot). Empty (the default) => every Bedrock
 	// lane dials the regional public host, byte-identical to today.
 	//
-	// A BOOT flag, never a SiteConfig field (PF-43): in bearer mode this value
+	// A boot flag, never a SiteConfig field: in bearer mode this value
 	// IS the TLS-MITM target and the Authorization-injection scope, so a
 	// runtime-writable field would let an admin re-point the operator's Bedrock
 	// credential at a host of their choosing with no restart and no boot log —
@@ -367,7 +366,7 @@ type Config struct {
 	// proxy serves the host over /wardyn/llm/*), while Bedrock is a CONNECT
 	// tunnel with SigV4, or MITM + bearer.
 	//
-	// CEILING (PF-44): ONE data-plane host per deployment — the override wins
+	// Ceiling: ONE data-plane host per deployment — the override wins
 	// for every region, including a workspace's own region override, so a
 	// multi-region estate must not set it. The CONTROL plane
 	// (bedrock.<region>.amazonaws.com) is deliberately NOT overridden; an
@@ -387,17 +386,18 @@ type Config struct {
 	// WARNs on every boot that carries it. Empty (the default, and every real
 	// deployment) => every SSO derivation is byte-identical to a build that
 	// never had this field. A BOOT flag, never a SiteConfig field, for the same
-	// reason as BedrockBaseURL (PF-43): a runtime-writable spelling would let an
+	// reason as BedrockBaseURL: a runtime-writable spelling would let an
 	// admin re-point a credential exchange with no restart and no boot log.
 	AWSSSOEndpointOverride string
 
-	// AWSSSOProxyInject is the PHASE B kill switch (WARDYN_AWS_SSO_PROXY_INJECT,
+	// AWSSSOProxyInject is the kill switch for proxy-side SSO token injection
+	// (WARDYN_AWS_SSO_PROXY_INJECT,
 	// resolved by ResolveAWSSSOProxyInject at boot): when true a captured-AWS-SSO
 	// Bedrock dispatch stages an inert placeholder in the sandbox's token cache
 	// and authors a proxy-side injection of the real token onto that run's own
-	// portal.sso host, so the session is never resident; when false the 0.7.5
-	// bytes are restored for NEW dispatches (a run already dispatched keeps its
-	// authored lane until it ends).
+	// portal.sso host, so the session is never resident; when false NEW
+	// dispatches stage the real token in the sandbox's own cache instead (a run
+	// already dispatched keeps its authored lane until it ends).
 	//
 	// It is the rollback for an SDK or corporate-MITM surprise without a
 	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
@@ -509,33 +509,33 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
-	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, DEFAULT TRUE
-	// SINCE 0.7) makes applyWorkspaceRequirements apply the same provenance gate
+	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, DEFAULT
+	// TRUE) makes applyWorkspaceRequirements apply the same provenance gate
 	// to a scan_seeded EGRESS requirement that the SECRET side has always applied
 	// unconditionally (runs_create.go): only an operator_set requirement is
 	// auto-added at launch, and a scan_seeded one — the workspace scanner reading
 	// UNTRUSTED repo content — is skipped.
 	//
-	// It shipped off, because flipping it narrows egress for existing workspaces
-	// on upgrade. 0.7 flips it anyway: the asymmetry was the anomaly. The secret
-	// side calls this exact boundary "security-critical — do not relax", for a
-	// reason that applies verbatim to egress — a hostile or simply never-reviewed
-	// repo could widen a run's allowlist just by naming a host in a committed
-	// file, with no operator ever acting.
+	// Defaulting it TRUE narrows egress for existing workspaces on upgrade, and
+	// that cost is deliberate: the secret side calls this exact boundary
+	// "security-critical — do not relax", for a reason that applies verbatim to
+	// egress — a hostile or simply never-reviewed repo could widen a run's
+	// allowlist just by naming a host in a committed file, with no operator ever
+	// acting.
 	//
 	// The upgrade cost is real and bounded: a workspace whose egress
 	// requirements are scan_seeded stops having them auto-added, and the run's
 	// warnings say which were skipped. The fix is an operator declaring the host
 	// (making it operator_set), which is the action the gate exists to require.
-	// Set false to restore pre-0.7 behavior.
+	// Set false to auto-add scan_seeded egress requirements again.
 	RequireOperatorSetEgress bool
-	// DisableGitPATBroker (WARDYN_GIT_PAT_BROKER=off) is the OPERATOR ESCAPE
-	// HATCH for the never-resident git_pat lane.
+	// DisableGitPATBroker (WARDYN_GIT_PAT_BROKER=off) is the operator escape
+	// hatch for the never-resident git_pat lane.
 	//
 	// With the broker on (the default), a git_pat for a non-GitHub forge is
 	// minted PROXY-SIDE and injected on the outbound leg, so the PAT never enters
 	// the sandbox — the same posture github_token has always had. Turning it off
-	// restores the pre-0.7 behaviour, where the grant id rides the sandbox env and
+	// restores the in-sandbox lane, where the grant id rides the sandbox env and
 	// the in-sandbox credential helper mints the PAT into the agent's process.
 	//
 	// It exists because the broker changes the git TRANSPORT for those hosts (an
@@ -680,8 +680,8 @@ type Server struct {
 	// constant" (attachKeepaliveEvery). Per-server rather than a package var so
 	// two tests running side by side cannot race on it.
 	keepaliveEvery time.Duration
-	// pingEvery overrides attachPingInterval for THIS server only (D1's
-	// liveness probe on an otherwise-idle attach socket) — same reason and same
+	// pingEvery overrides attachPingInterval for THIS server only (the liveness
+	// probe on an otherwise-idle attach socket) — same reason and same
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery time.Duration
@@ -759,7 +759,7 @@ type Server struct {
 	// identityExpiredSeen is the per-run once-guard behind run.identity.expired
 	// (claimIdentityExpired, http.go): a run whose identity has expired keeps
 	// calling /internal/* and 401ing, so the row has to be emitted once per run
-	// rather than once per request — the flood is the thing B5 exists to stop.
+	// rather than once per request, or the audit log floods.
 	// It is CLAIMED BEFORE the run read, so a repeat refusal costs no store read
 	// either, and bounded at 4096 entries exactly like lastTouch. In memory and
 	// process-local, like lastTouch/sshSessions above: a restart may re-emit once

@@ -33,7 +33,7 @@ type artifactRedirectPlan struct {
 	// mitmHosts is "host:port" (net.JoinHostPort) — NOT a bare host — for each
 	// corp mirror to TLS-MITM for token injection, so the proxy's MITM-eligibility
 	// and its post-decrypt dial are both scoped to the port this redirect
-	// actually names (W13-S1-5) rather than always assuming 443.
+	// actually names rather than always assuming 443.
 	mitmHosts []string
 }
 
@@ -104,7 +104,7 @@ func redirectEndpointPort(rawURL string) (port int, spelled, ok bool) {
 //
 // planArtifactRedirect needs the port beside the host so mitmHosts can carry
 // "host:port" and the proxy's TLS termination dials the mirror's REAL port
-// instead of always assuming 443 (W13-S1-5); an http:// To is reached through
+// instead of always assuming 443; an http:// To is reached through
 // handlePlain, never a CONNECT, so the 80 default narrows that MITM-eligibility
 // entry to a port no CONNECT arrives on rather than widening anything.
 //
@@ -114,7 +114,7 @@ func redirectEndpointPort(rawURL string) (port int, spelled, ok bool) {
 //
 // Also used for the Bedrock data-plane authority — WARDYN_BEDROCK_BASE_URL,
 // runs_bedrock.go — so the two MITM-authoring lanes derive their port by the
-// SAME rule rather than each keeping a copy (F037).
+// SAME rule rather than each keeping a copy.
 func redirectPort(rawURL string) int {
 	if p, spelled, ok := redirectEndpointPort(rawURL); ok && spelled {
 		return p
@@ -127,9 +127,9 @@ func redirectPort(rawURL string) int {
 
 // redirectIsCleartext reports whether a redirect `to` asks for PLAIN HTTP — the
 // operator spelled `http://`. One predicate, two readers (redirectPort's 80/443
-// default and the injection scope's require_tls), for the F037 reason: two
-// hand-rolled scheme tests over one operator-authored field is how the port and
-// the transport intent drift apart.
+// default and the injection scope's require_tls), because two hand-rolled
+// scheme tests over one operator-authored field is how the port and the
+// transport intent drift apart.
 func redirectIsCleartext(rawURL string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "http://")
 }
@@ -176,7 +176,7 @@ func artifactRedirectApplies(r types.EgressRedirect, have map[string]bool) bool 
 // entryCoversAny reports whether ONE egress-allowlist entry names (or, via a "*."
 // wildcard, covers) any bare host in drop — the port/wildcard-aware match the
 // ecosystem substitution drop needs so a "*.pythonhosted.org" or "pypi.org:443"
-// entry is subtracted like a bare "pypi.org" is (GAP-EGRESS-6).
+// entry is subtracted like a bare "pypi.org" is.
 func entryCoversAny(entry string, drop map[string]bool) bool {
 	h := egressEntryHost(entry)
 	if suffix, wild := strings.CutPrefix(h, "*"); wild {
@@ -232,7 +232,7 @@ func artifactBaseURLs(sc types.SiteConfig) map[string]string {
 //
 // preDomains is the run's PRE-substitution egress allowlist. A token injection +
 // TLS-MITM is authored for a redirect ONLY when the run actually reaches one of
-// the public hosts it fronts (artifactRedirectApplies, GAP-EGRESS-2) — the SAME
+// the public hosts it fronts (artifactRedirectApplies) — the SAME
 // scope substituteArtifactEgress uses for the To-host add — so an unrelated sealed
 // run never has the operator's registry token injected onto a host it never named.
 func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, sc types.SiteConfig, preDomains []string) artifactRedirectPlan {
@@ -272,7 +272,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		if r.TokenSecretRef == "" && r.TokenIntegrationRef == "" {
 			continue // no token configured for this redirect
 		}
-		// SCOPE (GAP-EGRESS-2): inject the corp token only for a run that actually
+		// Scope: inject the corp token only for a run that actually
 		// reaches the public host this redirect fronts — never a run whose reviewed
 		// egress named neither the From host nor the ecosystem.
 		if !artifactRedirectApplies(r, have) {
@@ -294,7 +294,6 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		// carries proxy-side bearer injection exactly as the anthropic/openai
 		// lanes do (resolveBedrockAuth's preferred bearer mode, runs_bedrock.go),
 		// so a redirect To one of them is the SAME last-write-wins collision.
-		// Same predicate gap as F019, in the same direction.
 		//
 		// A ZERO types.Workspace is passed deliberately. This plan is composed
 		// before dispatch resolves the run's LLM transport (the resolveLLMTransport
@@ -302,7 +301,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		// several onboarded workspaces (run.WorkspaceIDs), so there is no single
 		// workspace to consult here — only the daemon-wide BedrockRegion pair is
 		// decidable at this point. bedrockLaneHosts' per-workspace half is
-		// therefore not exercised at this site (FILED: F019-artifact-redirect-ws).
+		// therefore not exercised at this site.
 		if s.isModelProviderRejectHost(ctx, types.Workspace{}, host) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "warn", mustJSON(map[string]any{
@@ -311,7 +310,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 				})))
 			continue
 		}
-		// W13-S1-5: the redirect's REAL port travels with the host into
+		// The redirect's REAL port travels with the host into
 		// plan.mitmHosts (below) so the proxy's TLS-MITM allowlist — and the dial
 		// it performs once it has decrypted the tunnel — are scoped to the mirror
 		// this redirect actually names, not always port 443.
@@ -328,12 +327,12 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		seenHost[host] = true
 		grantID := uuid.New()
 		// require_tls: the redirect's OWN transport intent, declared here because
-		// this producer is the one place that knows it (B10-F5). A redirect the
+		// this producer is the one place that knows it. A redirect the
 		// operator spelled `https://` is TLS by construction — the proxy
 		// TLS-terminates it and injects on the decrypted leg — so a cleartext
 		// request to the mirror is the SANDBOX choosing the transport, and the
 		// corp token must be refused (403, policy:require-tls) rather than
-		// silently withheld. It is also what keeps B10-F1 from widening the
+		// silently withheld. It is also what keeps this from widening the
 		// cleartext door it walks through: the allowlist entry this redirect
 		// authors is port-qualified, and AuthoredPortFor reads a port-qualified
 		// entry as declared transport intent.
@@ -412,8 +411,8 @@ func (s *Server) resolveRedirectToken(ctx context.Context, r types.EgressRedirec
 		case integ.Disabled:
 			return redirectToken{}, "the integration named by token_integration_ref is disabled"
 		case slices.Contains(integ.DisabledCapabilities, "credential"):
-			// PLATFORM-API-1's sibling: the read matrix reports this
-			// integration's "credential" cell off (applyDisabled,
+			// This is the read matrix's dispatch-side sibling: the read matrix
+			// reports this integration's "credential" cell off (applyDisabled,
 			// integrations.go) — dispatch must actually honor that, not just
 			// the read surface, or the operator sees "off" while the token
 			// keeps injecting on every matching run.
@@ -424,7 +423,7 @@ func (s *Server) resolveRedirectToken(ctx context.Context, r types.EgressRedirec
 		// the header value; injectionRuleFromScope reads "" as "Bearer %s",
 		// which would be wrong here).
 		//
-		// ROLE-AGNOSTIC, DELIBERATELY (base-component model, same rule as
+		// Role-agnostic, DELIBERATELY (base-component model, same rule as
 		// applyIntegrationInjection): whatever role the row calls its secret,
 		// its proxy_header delivery is what makes it a presentable credential —
 		// so a row an operator points a redirect at with token_integration_ref

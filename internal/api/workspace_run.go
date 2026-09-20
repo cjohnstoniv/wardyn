@@ -65,30 +65,30 @@ var errWorkspaceSourceTarget = errors.New("invalid workspace source target")
 // the FIRST one (see launchRecordRun's call site); an additional repo source
 // needs its own pre-existing access until multi-repo grant minting is wired.
 //
-// ORDERING (load-bearing): this is a PURE run/policy mutation, so it must run
-// BEFORE Store.CreateRun persists the row — whereas the clone grants it used to
-// also create must run AFTER it, since credential_grants.run_id REFERENCES
-// agent_runs(id) with an immediate FK. Doing both halves here forced one of the
-// two orders to be wrong; the grant half is split out for that reason.
+// Ordering (load-bearing): this is a PURE run/policy mutation, so it must run
+// BEFORE Store.CreateRun persists the row — whereas the clone grants must run
+// AFTER it, since credential_grants.run_id REFERENCES agent_runs(id) with an
+// immediate FK. One function cannot satisfy both orders, which is why the grant
+// half is split out.
 func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURLs, ephemeralDirs []string, err error) {
 	for _, src := range ws.Sources {
-		// RE-VALIDATED ABOVE THE SWITCH, so it covers repo, local_dir and
+		// Re-validated above the switch, so it covers repo, local_dir and
 		// ephemeral alike — the shape seedRequestWorkspace already has
-		// (runs_create.go). It used to sit inside the EPHEMERAL arm only, which
-		// is the branch that never needed it least: an ephemeral target is a
+		// (runs_create.go). Validating only inside the EPHEMERAL arm would miss
+		// the branches that need it most: an ephemeral target is a
 		// mkdir, while a repo or local_dir target becomes a real clone or bind
 		// MOUNT, and nothing downstream re-imposes the rule for either. The
 		// composed record policy never goes through validatePolicySpec, and the
 		// driver's own gate is runner.ValidateMount -> ValidateTarget, which does
 		// NOT carry the reserved-drive rule (targetReservedForDrive is reached
-		// only from ValidateAuthoredTarget) — so /home/agent/drive passed it as an
-		// ordinary /home/agent path and became an operator bind mount at the one
+		// only from ValidateAuthoredTarget) — so /home/agent/drive would pass as an
+		// ordinary /home/agent path and become an operator bind mount at the one
 		// path the runner reserves for the user's own drive.
 		//
-		// A REFUSAL, not a silent skip. The repo half used to fail late and
-		// invisibly — buildRepoRecords drops a repo whose dest fails this same
-		// check with no error to the operator (runs_scm.go), so the session
-		// started with a repo that never cloned and nothing said why. The same
+		// A refusal, not a silent skip: buildRepoRecords otherwise drops a repo
+		// whose dest fails this same
+		// check with no error to the operator (runs_scm.go), so the session would
+		// start with a repo that never cloned and nothing said why. The same
 		// stored workspace already 422s on the ordinary create-run path; a
 		// workspace cannot be legal on one door and quietly broken on the other.
 		if src.Target != "" {
@@ -163,14 +163,14 @@ func (s *Server) workspaceSourceGrants(ctx context.Context, runID uuid.UUID, now
 // the grant, so the launch must fail loudly rather than dispatch a sandbox
 // whose private-repo clone is guaranteed to 403.
 //
-// SCOPED TO THE CLONE'S OWN REPO — the SAME key gitBrokerGrant uses for the
+// Scoped to the clone's own repo — the SAME key gitBrokerGrant uses for the
 // broker map, so the grant and the route it is reached through can never
-// disagree. It used to write `"repos": []`, which the real minter refuses
-// outright (githubMinter.MintInstallationToken: an installation token is
-// per-installation and the owner comes from the first repo), so every
-// scan/record clone of a GitHub HTTPS repo 502'd at handleGitBroker the
-// moment a real GitHub App was configured. No test saw it because
-// FakeGitHubMinter did not reproduce that precondition; it does now.
+// disagree. Writing `"repos": []` would 502 at handleGitBroker: the real
+// minter refuses outright (githubMinter.MintInstallationToken: an
+// installation token is per-installation and the owner comes from the first
+// repo), so every scan/record clone of a GitHub HTTPS repo would fail the
+// moment a real GitHub App was configured. FakeGitHubMinter reproduces that
+// precondition, so a regression here is caught by test.
 //
 // A github.com URL with no derivable "<org>/<repo>" (a deeper path) yields NO
 // grant: there is nothing a token could be scoped to, and an unmintable grant is
@@ -181,7 +181,7 @@ func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now 
 	if repo == "" {
 		return nil, nil
 	}
-	// PROVIDER LANE VETO (0.7.2): a row that does not permit the `app` lane gets
+	// Provider lane veto: a row that does not permit the `app` lane gets
 	// no brokered GitHub token, on this lane exactly as on run create's. Sited
 	// BEFORE the grant is written, for this function's own stated reason: an
 	// eligibility record nothing may mint would still set
@@ -227,7 +227,7 @@ func (s *Server) maybeSSHKeyGrant(ctx context.Context, runID uuid.UUID, now time
 	if !ok {
 		return nil, nil
 	}
-	// PROVIDER LANE VETO (0.7.2), the `ssh` arm: a row that does not permit the
+	// Provider lane veto, the `ssh` arm: a row that does not permit the
 	// SSH lane mints no run-scoped key grant, so nothing writes a private key into
 	// the sandbox for a clone the admin said must not use one. ABOVE the
 	// secret-store read below, because the lane question does not depend on
@@ -296,7 +296,7 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 	if ws.ActiveRunID == nil || *ws.ActiveRunID != runID {
 		return
 	}
-	// LEGACY ROWS ONLY (STORE-4): for an attachment-backed workspace, hydrate
+	// Legacy rows only: for an attachment-backed workspace, hydrate
 	// derives ws.Status as the worst-of-attached-sources status
 	// (store_sources.go), so WorkspaceScanning here can only mean an attached
 	// SOURCE is scanning — already handled above by the run.SourceID != nil
@@ -307,7 +307,7 @@ func (s *Server) reconcileWorkspaceRun(ctx context.Context, runID uuid.UUID) {
 	case types.WorkspaceScanning:
 		// A repo scan run ended without uploading facts — leave a clear error via a
 		// SCOPED write: touch only status + clear the in-flight pointer. The
-		// previous full-row UpdateWorkspace replayed a stale pre-read snapshot over
+		// full-row UpdateWorkspace would replay a stale pre-read snapshot over
 		// EVERY column, clobbering any concurrently-persisted async field (profile,
 		// record_results, approvals). Fenced on THIS run still owning the import
 		// step: a newer scan that already claimed the slot must not be reverted by
@@ -362,7 +362,7 @@ const captureAuditTruncatedNote = "audit-event capture reached its ceiling; the 
 // dispatchFailureReason scans a run's already-fetched audit events for the
 // LAST failed run.create/run.dispatch entry and returns its error/note field
 // — the honest "why the sandbox never started" for a record run whose
-// SandboxRef is empty (W20-W20-capture-store-4). "" when no such event is
+// SandboxRef is empty. "" when no such event is
 // found (a truncated capture, or a failure mode that never audited a reason).
 func dispatchFailureReason(events []types.AuditEvent) string {
 	reason := ""
@@ -436,20 +436,20 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	if truncated {
 		res.Caveats = append(res.Caveats, captureAuditTruncatedNote)
 	}
-	// W20-W20-groundtruth-mapper-4: surface the eBPF sensor's own coverage
-	// state on the capture itself — before this it lived only on the
-	// admin-only /healthz endpoint, nowhere an operator reviewing a recording
+	// Surface the eBPF sensor's own coverage
+	// state on the capture itself, not only on the
+	// admin-only /healthz endpoint, where no operator reviewing a recording
 	// would see it. Orthogonal to KernelSensorBlind above (that's THIS run's
 	// structural CC3 blindness; this is the host sensor's own health/coverage,
 	// which can be degraded or partial regardless of confinement class).
 	//
-	// B11b-F7: two lines, not one. What THIS capture was corroborated by comes
+	// Two lines, not one. What THIS capture was corroborated by comes
 	// from its own kernel evidence; the host sensor's state is reported as
 	// review-time state about the host. One sentence could not honestly be both.
 	res.Caveats = append(res.Caveats, s.groundtruthCaveats(ctx, obs)...)
 	if len(obs.Domains) == 0 {
 		res.Status = recordStatusFailed
-		// W20-W20-capture-store-4: recordEmptyCaptureHint blames the operator's
+		// recordEmptyCaptureHint blames the operator's
 		// proxy/WSL2 networking — a fair guess for a run that actually reached
 		// RUNNING and then observed nothing. A run whose sandbox never came up
 		// AT ALL (SandboxRef is set only once CreateSandbox succeeds —
@@ -501,8 +501,7 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 }
 
 // outcomeBool renders a bool as the audit outcome string convention
-// ("success"/"failure"). Its only remaining caller is reconcileRecordRun; it
-// used to be shared with the (now-removed) verify-result upload handler.
+// ("success"/"failure"). Its only remaining caller is reconcileRecordRun.
 func outcomeBool(ok bool) string {
 	if ok {
 		return "success"

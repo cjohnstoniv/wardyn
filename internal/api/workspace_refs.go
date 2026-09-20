@@ -72,9 +72,9 @@ func indexWorkspacesBySource(all []types.Workspace) workspaceSourceIndex {
 func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPolicySpec) (int, error) {
 	// A mount at a system target (subscription creds) is exempt from the onboarding
 	// gate ONLY when its SOURCE matches the operator's TRUSTED ceiling (DefaultPolicy)
-	// entry for that target (H8). The exemption used to key on the target ALONE, so a
-	// user-authored inline/stored policy could name a system target with an ARBITRARY
-	// host source (e.g. /home/<user>/.ssh, even RW) and have it mounted un-onboarded.
+	// entry for that target. Keying on the target ALONE would let a user-authored
+	// inline/stored policy name a system target with an ARBITRARY host source
+	// (e.g. /home/<user>/.ssh, even RW) and have it mounted un-onboarded.
 	// The operator stages creds and blesses the mount in DefaultPolicy
 	// (scripts/stage-claude-creds.sh + WARDYN_DEFAULT_POLICY), so the ceiling is the
 	// single source of truth for a legitimate system-mount source.

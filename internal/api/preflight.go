@@ -28,10 +28,9 @@ type preflightResponse struct {
 	// Composer's Review (composeResponse carries the same two fields under the
 	// same wire names). The manual wizard's Review renders the SAME RiskPanel +
 	// HIGH-only acknowledgment gate from these, so the manual path can never show
-	// a rosier picture than the AI Review would for the same spec — before this,
-	// it showed no risk data at all, and "Edit in wizard" silently walked the
-	// operator around the composer's HIGH-risk ack gate (pass2-coherence-report
-	// finding N1).
+	// a rosier picture than the AI Review would for the same spec — without
+	// these fields, "Edit in wizard" would silently walk the operator around
+	// the composer's HIGH-risk ack gate.
 	RiskAssessment []composer.RiskItem `json:"risk_assessment"`
 	OverallRisk    composer.RiskLevel  `json:"overall_risk"`
 	// Warnings is resolveRunPolicy's clamp-warning list — non-empty only when a
@@ -42,8 +41,8 @@ type preflightResponse struct {
 	Warnings []string `json:"warnings,omitempty"`
 	// ModelCredential is WHERE this run's model credential will land, graded from
 	// the lanes the mechanism gate just resolved (gradeModelCredential). The New
-	// Run rail states it verbatim instead of the unconditional "never written
-	// into the sandbox" it used to assert.
+	// Run rail states it verbatim, replacing the unconditional "never written
+	// into the sandbox" claim.
 	//
 	// It OVERRIDES the /setup/status harness row's own residency, which is the
 	// default-path answer graded against the deployment default policy: this one
@@ -65,7 +64,7 @@ type preflightResponse struct {
 // runs.go does (requested-vs-floor + blast-radius CC3 raise), and returns the
 // deterministic setup checklist. It mints nothing and dispatches nothing.
 //
-// IT DOES PERSIST ONE THING, and the claim used to say otherwise. Every gate it
+// It does persist one thing. Every gate it
 // reproduces is a real gate, and a gate that REFUSES a member writes its
 // authz.denied audit row — denyMemberField, from inside the shared code path.
 // So a dry run that is refused (task_mode, the drive door, any other profile
@@ -97,15 +96,15 @@ type preflightResponse struct {
 // identity-provider 422 — launch still enforces all of them.
 // TestPreflightMirrorsLaunchGates now scans THROUGH decodeAndValidateCreateRun
 // rather than excepting the whole wrapper, so this inventory is executable gate
-// by gate instead of wrapper by wrapper (B1-F3).
+// by gate instead of wrapper by wrapper.
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req createRunRequest
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	// THE ORDER OF THE FIVE GATES BELOW IS CREATE'S OWN ORDER, and it is
-	// load-bearing rather than tidy (R9). The structural parity guard
+	// The order of the five gates below is create's own order, and it is
+	// load-bearing rather than tidy. The structural parity guard
 	// (TestPreflightMirrorsLaunchGates) can see the gate SET but not the
 	// sequence, so a body violating two gates would otherwise get a different
 	// status from Review than from launch — Review's job is to answer the
@@ -114,9 +113,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// member request denial, provider admission over the free-text repositories,
 	// the free-text field caps, then the eager integration_id check.
 
-	// The ORG ROSTER: an agent this deployment does not offer 422s at launch, so
+	// The org roster: an agent this deployment does not offer 422s at launch, so
 	// previewing it as a clean checklist is the same lie provider admission was.
-	// Surfaced by narrowing this pair's parity exception (B1-F3) rather than by a
+	// Surfaced by narrowing this pair's parity exception rather than by a
 	// second field report. With no AgentProviders block agentRosterRefusal
 	// short-circuits to "" and Review is byte-for-byte what it was.
 	if msg, rerr := s.agentRosterRefusal(ctx, req.Agent); rerr != nil {
@@ -140,7 +139,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// workspace_admission.go). Neither `repo` nor `devcontainer_repo` is a spec
 	// entry, so the resolved-spec gate below never sees them — Review showed a
 	// clean checklist for a repository POST /runs then refused, 422 for an
-	// operator and 403 for a member (B1-F3).
+	// operator and 403 for a member.
 	//
 	// The SAME function, not a copy, so the two doors cannot answer different
 	// refusals.
@@ -184,10 +183,10 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// The SAME seed-and-admit block launch runs — called, not re-implemented.
 	// seedAndAdmitWorkspace (runs.go) is the one place that owns the four gates
 	// seeding can invalidate, in order: the workspace_id seed's 400/422s, the G3
-	// (PF-34) post-seed capability re-check, the base_image XOR + builder-wired
-	// re-check, and the un-bypassable onboarded-source gate. Preflight used to
-	// inline all four verbatim, so a fifth gate added to launch's block reached
-	// Review only if someone remembered to copy it — the exact drift
+	// post-seed capability re-check, the base_image XOR + builder-wired
+	// re-check, and the un-bypassable onboarded-source gate. Inlining all four
+	// verbatim would let a fifth gate added to launch's block reach Review only
+	// if someone remembered to copy it — the exact drift
 	// TestPreflightMirrorsLaunchGates now refuses. ephemeralDirs is launch-only
 	// (WARDYN_EPHEMERAL_DIRS at dispatch) — preflight dispatches nothing, so it
 	// is discarded here.
@@ -221,7 +220,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// run launch credentials fine. No audit event — preflight persists nothing
 	// (the run.workspace.creds audit is the create path's launch-only half).
 	wsRefs := s.referencedWorkspaces(ctx, spec)
-	// W15-S1-3: widen the spec's egress from onboarded-workspace registries +
+	// Widen the spec's egress from onboarded-workspace registries +
 	// clone hosts the SAME way launch-time unionRunEgress does (runs.go),
 	// side-effect-free (no audit — mirrors the fold's own "preflight persists
 	// nothing" note above) — otherwise this preview graded/checklisted a
@@ -250,9 +249,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
 		return
 	}
-	// BEST-EFFORT capabilities read for the same reason enforcedConfinement now
+	// Best-effort capabilities read for the same reason enforcedConfinement now
 	// needs them: an unspecified request's default is the strongest advertised
-	// class, not the bare policy minimum (0.7.8). Never refused on here — a nil
+	// class, not the bare policy minimum. Never refused on here — a nil
 	// Runner or a Capabilities error just leaves the default at the policy
 	// minimum, matching this handler's "advisory only, never blocks Review"
 	// contract; the runner-capability REFUSAL stays un-reproduced (doc comment
@@ -281,7 +280,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		DevcontainerRepo: req.DevcontainerRepo,
 	}
 
-	// Deterministic risk grade (N1 fix): the SAME composer.Grade/OverallLevel
+	// Deterministic risk grade: the SAME composer.Grade/OverallLevel
 	// call compose.go runs for the AI Run Composer's Review, on the SAME
 	// resolved spec deriveSetupItems sees below — NOT the llmSpec copy just
 	// below (that copy exists only so reconcileLLMAccess sees a droppable clone
@@ -326,7 +325,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// drops orphaned grants in place, but launch persists every grant on the resolved
 	// spec, so the checklist must keep seeing the FULL spec.
 	//
-	// W16-S1-3: skipped for task_mode=exec, mirroring runNeedsModelWarning's own
+	// Skipped for task_mode=exec, mirroring runNeedsModelWarning's own
 	// exec gate at create time — an exec run runs a plain shell command, invokes
 	// no model, and needs no credential, so resolving it unconditionally previewed
 	// a false "missing model access" blocker on every CI exec job's --dry-run.

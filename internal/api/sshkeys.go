@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Self-service SSH key management: GET/POST/DELETE /api/v1/me/ssh-keys[/{fingerprint}].
-// This is the REST half of C3; the gateway that AUTHENTICATES against these
-// rows lives in sshgateway.go. Any authenticated human manages their OWN keys
+// This is the REST counterpart to the SSH gateway: the gateway that
+// AUTHENTICATES against these rows lives in sshgateway.go. Any authenticated
+// human manages their OWN keys
 // (scoped by principal, both at the store and here) — this is deliberately
 // NOT operator-gated, unlike secret/policy/workspace writes: an SSH key is a
 // personal credential binding, not deployment configuration.
@@ -53,7 +54,7 @@ func (s *Server) handleListSSHKeys(w http.ResponseWriter, r *http.Request) {
 // so validation here fails closed: unparseable input, private-key material,
 // and more-than-one-key input are all refused (422), never stored.
 func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
-	// MEMBER MODE REFUSES, it does not clamp (0.7.4, P2). A key registered here
+	// Member mode refuses, it does not clamp. A key registered here
 	// carries a role STAMP (migration 0046) that OnLogin re-derives from the
 	// human's real role at their next sign-in — so a key registered "as a
 	// member" would come back admin and outlive the mode that made it. See
@@ -112,7 +113,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// role_checked_at exceeds WARDYN_SSH_ROLE_TTL (migration 0046), whichever
 	// comes first — never instantly, and never without one of those two.
 	//
-	// DELIBERATELY isOperator, and a security admin's key stamps member. This
+	// Deliberately isOperator, and a security admin's key stamps member. This
 	// field means exactly "reaches runs its holder does not own"
 	// (sshgateway.go's == oidc.RoleAdmin check), not the registering session's
 	// tier — the asymmetry the three-tier model exists to express

@@ -13,13 +13,13 @@ import (
 // that no genuine token is refused and tight enough that the value going into
 // MaskRegistry.AddGlobal — which holds it for the daemon's whole life and scans
 // every PTY, asciicast and decision-log byte against it — cannot be made large
-// enough to matter (B2-F5).
+// enough to matter.
 const maxHarnessPasteTokenLen = 8 << 10
 
 // DRAFT (M2 canon pending)
 const (
 	// harnessPasteViaHelperRefusal answers PUT /setup/harness-credential/{p} for
-	// a provider whose credential is CAPTURED BY A HELPER inside a login sandbox
+	// a provider whose credential is captured by a helper inside a login sandbox
 	// (harnessLogin.captureViaHelper), not pasted. aws is the live case: its
 	// reserved secret holds a structured SSO blob, and a pasted {"token":…} both
 	// destroys that blob — Bedrock then silently falls through to ~/.aws or
@@ -38,7 +38,7 @@ const (
 // harnessPasteRefusal validates an operator-pasted harness credential and
 // returns the 400 sentence, or "" when the paste may proceed.
 //
-// THE FIRST CHECK IS THE POINT. `captureViaHelper` is a real field on the
+// The first check is the point. `captureViaHelper` is a real field on the
 // provider row (harnesscred.go): it says this credential is written to a file
 // inside a login sandbox and uploaded by an in-sandbox helper, never printed to
 // a PTY and scraped. aws is such a row, and it also has no tokenPrefix, so the

@@ -70,15 +70,12 @@ const (
 // (a later wave's Tools-tab listing); lookup is always by ID (harnessByID).
 var harnessCatalog = []harnessDef{
 	{
-		// ImageKey is "base", NOT "claude-code": 0.6.2 stopped publishing
-		// agent-claude-code and publishes agent-base in its place, so the ghcr
-		// fallback for this row resolved to an image that does not exist —
-		// `--agent claude-code` 404'd on every published install (the one-line
-		// installer, Helm, and the desktop tier), leaving codex-cli as the only
-		// working agent name. agent-base carries the full image contract minus
-		// the vendor CLI, which is also exactly what the four callers passing a
-		// literal "claude-code" (source_scan, site_config_probe,
-		// workspace_run_image, setup) actually want.
+		// ImageKey is "base", NOT "claude-code": ghcr publishes agent-base, not
+		// agent-claude-code, so the ghcr fallback for this row must resolve to
+		// the image that actually exists. agent-base carries the full image
+		// contract minus the vendor CLI, which is also exactly what the four
+		// callers passing a literal "claude-code" (source_scan,
+		// site_config_probe, workspace_run_image, setup) actually want.
 		//
 		// An operator who wants the real Claude Code CLI builds it locally and
 		// names it in WARDYN_AGENT_IMAGES, which is consulted FIRST and is keyed

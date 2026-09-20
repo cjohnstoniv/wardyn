@@ -52,9 +52,8 @@ func gitEmailLocal(principal string) string {
 //
 // The RULE lives in internal/gitremote (FieldSafe) and this delegates to it, so
 // the door that AUTHORS a repo field and the scanner that DETECTS one cannot
-// answer differently about the same value — they did, until B11a-F10: the
-// scanner still carried a fixed whitespace list from before this function moved
-// to unicode.IsSpace.
+// answer differently about the same value — a scanner carrying its own
+// separate whitespace list would disagree the moment this rule changes.
 func repoFieldSafe(s string) bool {
 	return gitremote.FieldSafe(s)
 }
@@ -80,7 +79,7 @@ const repo400LocatorShape = "%s is not a repository address — a repository add
 	`no percent-escapes, no backslash, and no "", "." or ".." path segment`
 
 // repoLocatorPathSafe reports whether a repo locator's PATH is a plain
-// repository address. It is the CHOKEPOINT rule behind V1 lens A's blocker: git
+// repository address. It is the CHOKEPOINT rule behind this blocker: git
 // squashes "." and ".." client-side and sends `%2F` raw, so
 // `https://github.com/acme/../evil/repo.git` is admitted by an
 // `https://github.com/acme` provider row's prefix match and then cloned — with
@@ -215,7 +214,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 		// brokered run no longer has. A BARE slug is already this shape and is left
 		// untouched, casing included.
 		//
-		// SIDE EFFECT, deliberate: the canonical key is lowercased, so a full URL's
+		// Side effect, deliberate: the canonical key is lowercased, so a full URL's
 		// default dest follows — `https://github.com/octocat/Hello-World` clones to
 		// ~/work/hello-world, where HEAD gave ~/work/Hello-World. Accepted rather
 		// than derived-before-canonicalisation, because it is what makes the dest
@@ -239,15 +238,15 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 			return
 		}
 		if terr := runner.ValidateAuthoredTarget(dest); terr != nil {
-			// LOUD, for the same reason the dest-collision skip below is (W8-S1-3)
-			// and one the write door cannot cover: 0.7.2 put the reserved-target
-			// rule on POST /policies only (validatePolicySpec → 400), and
-			// resolvePolicy hands dispatch a STORED spec VERBATIM. A pre-0.7.2
-			// workspace_repos row targeting /home/agent/drive therefore still
-			// reaches here, where the repo was dropped in silence — a 201, an
-			// empty WARDYN_REPOS, and an agent that starts looking for a repo
-			// nothing ever cloned. Say it on the 201 (run create appends the
-			// returned sentence) and in the log.
+			// Loud, for the same reason the dest-collision skip below is, and one
+			// the write door cannot cover: the reserved-target rule sits on POST
+			// /policies only (validatePolicySpec → 400), and resolvePolicy hands
+			// dispatch a STORED spec VERBATIM. A pre-0.7.2 workspace_repos row
+			// targeting /home/agent/drive therefore still reaches here, where the
+			// repo would otherwise be dropped in silence — a 201, an empty
+			// WARDYN_REPOS, and an agent that starts looking for a repo nothing
+			// ever cloned. Say it on the 201 (run create appends the returned
+			// sentence) and in the log.
 			slog.Warn("wardynd: repo clone target is not an allowed destination; dropping the repo",
 				slog.String("slug", slug), slog.String("dest", dest), slog.String("err", terr.Error()))
 			warnings = append(warnings, fmt.Sprintf(
@@ -256,7 +255,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 			return
 		}
 		if seenDest[dest] {
-			// W8-S1-3: loud, not silent — an unqualified caller (no explicit
+			// Loud, not silent — an unqualified caller (no explicit
 			// Target on either source, e.g. a raw API/CLI request that skips
 			// the wizard's own basename-collision disambiguation) can still
 			// reach here with two repos deriving the SAME default dest. A
@@ -295,7 +294,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 // runner.InjectionGrant into the proxy's own config (probeInjections,
 // mintRecordAPIKeyInjections), which is where the plain lane reads it.
 //
-// STRICT, and require_tls is why. A plain Unmarshal ignores a key it does not
+// Strict, and require_tls is why. A plain Unmarshal ignores a key it does not
 // know, so `{"requiretls":true}` or `{"require-tls":true}` decoded to false and
 // the operator's TLS-only declaration silently did not exist — a security
 // control failing OPEN on a typo, with the policy accepted and every gate green.
@@ -408,7 +407,7 @@ func sshKeyScopeFields(scope json.RawMessage) (host, keySecretRef, username, kno
 }
 
 // envSecretScopeFields decodes an env_secret grant scope {name, secret_name}.
-// Both are REQUIRED (fail closed). name is the SANDBOX ENV VAR the stored
+// Both are REQUIRED (fail closed). name is the sandbox env var the stored
 // secret_name's value lands under at dispatch (resolveEnvSecretGrants).
 //
 // The name is VALIDATED here, not merely decoded, because it is written into a

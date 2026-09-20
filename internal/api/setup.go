@@ -35,8 +35,8 @@ const setupRecheckParam = "recheck"
 //
 // GET /api/v1/setup/status returns the aggregate a first-run "Getting started"
 // wizard needs to detect the environment, providers, credentials, and runner
-// capability of THIS control plane. The struct types below are the SINGLE
-// FROZEN CONTRACT shared with the UI (ui/src/app/lib/types.ts SetupStatus) —
+// capability of THIS control plane. The struct types below are the single
+// frozen contract shared with the UI (ui/src/app/lib/types.ts SetupStatus) —
 // keep the two in exact sync (snake_case wire fields).
 
 // SetupStatus is the aggregate readiness snapshot for GET /api/v1/setup/status.
@@ -61,13 +61,12 @@ type SetupStatus struct {
 	// HasRuns drives the wizard's "launch your first run" done state.
 	HasRuns bool `json:"has_runs"`
 	// OnboardingComplete reports whether an operator has finished (or
-	// deliberately left) the Getting Started funnel ON THIS INSTALL —
+	// deliberately left) the Getting Started funnel on this install —
 	// SiteConfig.OnboardingCompletedAt, flattened to the only bit the console
-	// needs. It is a fact about the install, not about the browser: the console
-	// used to keep this in localStorage, where it outlived wiped databases and
-	// disagreed with itself between 127.0.0.1 and localhost (different origins,
-	// different storage). The first-run landing, the welcome hero and the setup
-	// gate all read THIS.
+	// needs. It is a fact about the install, not about the browser: browser
+	// localStorage would outlive wiped databases and disagree with itself
+	// between 127.0.0.1 and localhost (different origins, different storage).
+	// The first-run landing, the welcome hero and the setup gate all read THIS.
 	OnboardingComplete bool `json:"onboarding_complete"`
 	// Platform is the OS + WSL posture the environment-step copy keys off.
 	Platform SetupPlatform `json:"platform"`
@@ -208,7 +207,7 @@ type SetupRunner struct {
 	// The Workspace Providers screen renders it beside default_disk_mib so an
 	// admin setting a number can see whether anything will hold it.
 	//
-	// OPERATOR-ONLY: redactSetupStatusForMember rebuilds this struct with
+	// Operator-only: redactSetupStatusForMember rebuilds this struct with
 	// ConfinementClasses alone, so the word never reaches a member. It is
 	// deliberately absent from the ANONYMOUS /healthz, which composes its own body
 	// field by field.
@@ -406,7 +405,7 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 func agentImageCheck(images map[string]string) SetupCheck {
 	ref := agentImage("claude-code", images)
 	if isConventionLimitedToolchainImage(ref) {
-		// INFO, not warn. This is the SHIPPED DEFAULT: it is true of every stock
+		// Info, not warn. This is the SHIPPED DEFAULT: it is true of every stock
 		// install, it is documented rather than misconfigured, and it clears only
 		// by building or wiring a multi-toolchain image that a JS/Python operator
 		// never needs. setup_checks.go reserves "info" for exactly that —
@@ -425,7 +424,7 @@ func agentImageCheck(images map[string]string) SetupCheck {
 	}
 	// The setup connectivity probe (site_config_probe.go) dispatches the "base"
 	// image, never "claude-code" (a probe is a bare curl task, not a coding
-	// agent). Since 0.7 the claude-code catalog row's ImageKey ALSO points at
+	// agent). The claude-code catalog row's ImageKey ALSO points at
 	// base, so on a stock deployment these are the same image and stating them
 	// as a contrast would present one image as two. They diverge only when an
 	// operator pins claude-code in WARDYN_AGENT_IMAGES — which is exactly when
@@ -446,9 +445,9 @@ func agentImageCheck(images map[string]string) SetupCheck {
 // shipped convention images — the ones known, by construction, to carry a
 // limited toolchain, so a Go/Rust/Java workspace fails verify/record at exit 127.
 //
-// agent-base is in this set. It became reachable in 0.7 when the claude-code
-// catalog row's ImageKey was re-pointed at `base` (agent-claude-code is not
-// published), so the ghcr fallback now resolves here — and without this entry
+// agent-base is in this set. It is reachable because the claude-code catalog
+// row's ImageKey points at `base` (agent-claude-code is not published), so the
+// ghcr fallback resolves here — and without this entry
 // the check silently downgraded from warn to info for the DEFAULT install,
 // which is exactly the configuration that most needs the warning. Verified
 // against ghcr.io/cjohnstoniv/agent-base:0.6.4: node, npm, python3 and git are
@@ -457,7 +456,7 @@ func agentImageCheck(images map[string]string) SetupCheck {
 // The pre-rename :demo tag stays matched so holdout boxes keep the accurate warn.
 func isConventionLimitedToolchainImage(ref string) bool {
 	// Prefix, not an exact tag: the ghcr convention carries the daemon's own
-	// version tag (D19), not a fixed :latest — every published tag is the same
+	// version tag, not a fixed :latest — every published tag is the same
 	// convention image.
 	for _, p := range []string{
 		"ghcr.io/cjohnstoniv/agent-claude-code:",
@@ -741,7 +740,7 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 
 // redactSetupStatusForMember drops the operator/admin-facing DIAGNOSTIC detail
 // a member has no route to act on — the environment/credential checklist rows,
-// resident-CLI login detection, and secret NAMES — item 2's explicit drop list
+// resident-CLI login detection, and secret NAMES — the explicit drop list
 // (checks/providers/secret names/runner detail), plus the integration rows' OWN
 // credential refs, egress hosts and operator config, which are secret names by
 // another name and were shipping in the same body — while keeping everything a
@@ -758,7 +757,7 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // button (demo-screen.tsx) for every role. Dropping it zeroed barrierReady
 // for every member regardless of the real runner state. Only Driver and the
 // per-class ConfinementSubstrates map — genuine diagnostic detail — are
-// dropped — and so, from 0.7.2, is EphemeralDiskEnforcement: which word binds a
+// dropped — and so is EphemeralDiskEnforcement: which word binds a
 // run's disk_mib is an operator's sizing answer, actionable only on the
 // providers/setup surfaces a member has no route to. The strip is structural
 // (the SetupRunner below is rebuilt from ConfinementClasses alone, so a field
@@ -768,12 +767,12 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // row scoped the read to their namespace). It decides one field — see Harness.
 func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
-	// X3-F1: say the strip happened, so a reader never takes [] for "nothing is wired".
+	// Say the strip happened, so a reader never takes [] for "nothing is wired".
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: []string{}}
 	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
-	// RIDER B7-F6: rebuilt from an explicit field list, exactly like Runner two
+	// Rebuilt from an explicit field list, exactly like Runner two
 	// lines up — SetupBedrock passed through WHOLE, two fields after SCM/
 	// HostProxy are zeroed as "the operator's machine": Region/Model are boot-time
 	// config naming the AWS account's transport, and CredsPresent/AWSMount/
@@ -808,7 +807,7 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	// separating "this sign-in captured something" from "a credential was
 	// already there" (S-13 / R-1, harness-login-pane.tsx). Any other row — a
 	// shared/legacy aws row, the unscoped anthropic blob — is the OPERATOR's.
-	// THE SAME ROWS /integrations publishes, and the same projection. Dropping
+	// The same rows /integrations publishes, and the same projection. Dropping
 	// SetupSecrets.Present as "secret NAMES" while shipping
 	// integrations[].secrets[].secret_name in the SAME response body was the
 	// contradiction: one credential-ref list withheld, an equivalent one beside
@@ -915,7 +914,7 @@ func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, sco
 	// below can speak for this person rather than for the deployment.
 	blob, found, err := s.readAWSSSOBlob(ctx, scope)
 	if err != nil {
-		// A WEDGED STORE IS NOT A CREDENTIAL FACT. readHarnessBlob propagates
+		// A wedged store is not a credential fact. readHarnessBlob propagates
 		// every non-ErrNotFound error precisely so a rotated age key or a PG blip
 		// is never mistaken for "not connected"; grading that into a state would
 		// undo it at the last step and tell a member "Sign in to AWS" (per_user)
@@ -1009,7 +1008,7 @@ func k8sNetpolVerdict(driver string, caps runner.Capabilities) string {
 	// orchestrator-aggregated ClassSupport signals; a genuinely indeterminate
 	// canary (no ack, no override) refuses to boot entirely (internal/runner/
 	// k8s's newWithClient), so a LIVE daemon can only ever report one of these
-	// three. Acknowledged checked first: B1's WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY
+	// three. Acknowledged checked first: WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY
 	// produces a driver that never set NetworkPolicy true (it is not proof), so
 	// the two are mutually exclusive in practice, but acknowledged-not-proven
 	// must never read as the stronger "enforced" claim if that ever changed.
