@@ -37,6 +37,12 @@ type decisionSink struct {
 	wg     sync.WaitGroup
 	mu     sync.Mutex
 	closed bool
+
+	// outMu serialises writes to out. mirror() is called from the request
+	// path (concurrently, one call per request), and a single Write of a
+	// line over PIPE_BUF is not atomic at the OS level, so two concurrent
+	// lines can interleave into a corrupted record without it.
+	outMu sync.Mutex
 }
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
@@ -103,9 +109,12 @@ func (s *decisionSink) mirror(log egress.DecisionLog) {
 		return
 	}
 	line := maskDecisionBytes(append(b, '\n'))
-	// Single Write of the line+newline; concurrent emits may interleave at
-	// the OS level but each line is written atomically here.
+	// A line over PIPE_BUF is not an atomic OS write, so a concurrent emit()
+	// from another request could interleave into a corrupted record without
+	// serialising the write itself here.
+	s.outMu.Lock()
 	_, _ = s.out.Write(line)
+	s.outMu.Unlock()
 }
 
 // dropReportInterval bounds how often the worker flushes a synthetic
