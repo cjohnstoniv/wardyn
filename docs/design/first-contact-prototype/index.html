@@ -114,6 +114,11 @@ button,input,label{font:inherit;letter-spacing:inherit}
 button{font-weight:500}
 label{font-weight:500}
 code,.mono{font-family:var(--font-mono);font-size:var(--text-body)}
+/* Every icon is 16px unless a component says otherwise. Without this a bare
+   icon() outside a sized context paints at the SVG's own scale — the rail's
+   disclosure carets rendered several times their intended size. Specificity
+   0,0,1, so every `.component svg` rule below still wins. */
+svg{width:16px;height:16px;flex:none}
 a{color:var(--info)}
 a:hover{text-decoration:underline}
 :focus-visible{outline:3px solid var(--ring);outline-offset:1px;border-radius:var(--radius-sm)}
@@ -332,7 +337,7 @@ textarea.input{height:auto;padding:9px 12px;resize:vertical;font-family:inherit}
   font-size:var(--text-body);color:var(--muted-foreground)}
 .rail summary::-webkit-details-marker{display:none}
 .rail summary:hover{background:var(--accent);color:var(--foreground)}
-.rail summary .caret{margin-left:auto;transition:transform .15s}
+.rail summary .caret{margin-left:auto;width:14px;height:14px;transition:transform .15s}
 .rail details[open] summary .caret{transform:rotate(90deg)}
 .rail details ul{list-style:none;padding:0 0 0 18px;margin:0}
 .step-count{margin-bottom:8px}
