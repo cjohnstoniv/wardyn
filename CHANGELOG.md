@@ -8,6 +8,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site
+  citations and `docs/design/CONSOLE-RULES.md`'s 51 component citations moved from `path/file.go:NNN`
+  to `path/file.go#Symbol` (`#Type.Method` for a method, `#heading-slug` into another document,
+  `#--token` or `#.selector` for CSS). The guards resolve them with `go/parser` (and a source glob on
+  the console side) and fail unless the action appears **inside the cited symbol's own body**, so a
+  citation that drifts onto the wrong function still reds — but an insertion ANYWHERE above a cited
+  line no longer does. Contributors: inserting a line in a heavily-cited file is no longer a
+  required-check failure, and the re-point-at-rebase step for those two documents is retired. The
+  tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
+  too.
+
 ## [0.7.8] — 2026-09-19
 
 ### Added

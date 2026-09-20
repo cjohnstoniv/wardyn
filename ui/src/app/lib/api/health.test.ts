@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { health } from "./health";
+import { WFETCH_TIMEOUT_MS } from "./core";
 import { SERVER_OWNED_SITE_CONFIG_KEYS } from "../types";
 
 // Regression for the sign-out HIGH finding: signing out only cleared the local
@@ -385,7 +386,14 @@ describe("health.readyz — the store probe /healthz deliberately isn't", () => 
   // forever instead of degrading. One AbortSignal.timeout suffices; readyz's
   // own catch already turns any thrown/aborted fetch into {} (= not ready).
   it("a request that never answers resolves to {} at the deadline, not a permanent hang", async () => {
-    vi.useFakeTimers();
+    // vitest 4's fake timers don't intercept AbortSignal.timeout — it's a
+    // native timer, not a JS setTimeout callback (vitest-dev/vitest#3088) —
+    // so advancing a fake clock past it never fires the abort. Stub it to
+    // return a signal this test controls directly, and assert readyz() asked
+    // for the real WFETCH_TIMEOUT_MS budget rather than trusting a fake-timer
+    // advance past an assumed constant.
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     fetchMock.mockImplementation(
       (_url: string, init: RequestInit = {}) =>
         new Promise<Response>((_resolve, reject) => {
@@ -393,9 +401,10 @@ describe("health.readyz — the store probe /healthz deliberately isn't", () => 
         }),
     );
     const p = health.readyz();
-    await vi.advanceTimersByTimeAsync(70_000); // past WFETCH_TIMEOUT_MS (60s)
+    expect(timeoutSpy).toHaveBeenCalledWith(WFETCH_TIMEOUT_MS);
+    controller.abort();
     await expect(p).resolves.toEqual({});
-    vi.useRealTimers();
+    timeoutSpy.mockRestore();
   });
 
   // neg: a fast, well-behaved readyz is UNAFFECTED by the new signal — still
