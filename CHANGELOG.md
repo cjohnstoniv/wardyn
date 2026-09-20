@@ -8,6 +8,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
+  finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
+  `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
+  reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
+  FAILED so a run reaching a successful terminal state through the same path gets no hint.
+
 ### Changed
 
 - **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
