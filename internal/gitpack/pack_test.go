@@ -69,8 +69,17 @@ func newRepo(t *testing.T, initArgs ...string) *repo {
 
 func (r *repo) runIn(dir string, args ...string) string {
 	r.t.Helper()
+	return r.feed(dir, "", args...)
+}
+
+// feed is runIn with something on stdin, for the plumbing that reads an object
+// body there: `git mktree` and the `git hash-object` that writes the commit
+// shapes `git commit-tree` refuses to produce.
+func (r *repo) feed(dir, stdin string, args ...string) string {
+	r.t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Env = append(os.Environ(),
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_AUTHOR_DATE=@1767225600 +0000", "GIT_COMMITTER_DATE=@1767225600 +0000")
@@ -82,6 +91,11 @@ func (r *repo) runIn(dir string, args ...string) string {
 }
 
 func (r *repo) git(args ...string) string { r.t.Helper(); return r.runIn(r.work, args...) }
+
+func (r *repo) gitStdin(stdin string, args ...string) string {
+	r.t.Helper()
+	return r.feed(r.work, stdin, args...)
+}
 
 // write puts one file in the work tree and stages it.
 func (r *repo) write(path, content string, mode os.FileMode) {
@@ -348,6 +362,103 @@ func TestPackInspect_DeleteOnlyPushHasNothingToInspect(t *testing.T) {
 	}
 }
 
+// TestPackInspect_DuplicateTreeHeaderIsRefused is the disagreement that must
+// never be answered: git's commit parser takes the FIRST tree header, so a
+// second one placed after the committer is a tree only a last-wins reader sees.
+// The benign tree it names is not in the pack — nothing reaches it — so a
+// last-wins reader treats it as already present on the receiving side and
+// reports no change at all, while git checks the evil tree out. `git fsck` is
+// clean on this object and a remote with receive.fsckObjects=true takes it, so
+// only the inspector can refuse it.
+//
+// It is assembled with `git hash-object -t commit`: `git commit-tree` will not
+// emit a second tree header.
+func TestPackInspect_DuplicateTreeHeaderIsRefused(t *testing.T) {
+	r := newRepo(t)
+	benignBlob := r.gitStdin("benign\n", "hash-object", "-w", "-t", "blob", "--stdin")
+	evilBlob := r.gitStdin("SECRET=1\n", "hash-object", "-w", "-t", "blob", "--stdin")
+	benignTree := r.gitStdin("100644 blob "+benignBlob+"\treadme.md\n", "mktree")
+	evilTree := r.gitStdin("100644 blob "+evilBlob+"\tsecrets.env\n", "mktree")
+	commit := r.gitStdin("tree "+evilTree+"\n"+
+		"author T <t@example.com> 1767225600 +0000\n"+
+		"committer T <t@example.com> 1767225600 +0000\n"+
+		"tree "+benignTree+"\n\nx\n",
+		"hash-object", "-w", "-t", "commit", "--stdin")
+
+	// What the receiving side would store, so the fixture cannot rot into a
+	// commit git reads the same way this package does.
+	if got := r.git("rev-parse", commit+"^{tree}"); got != evilTree {
+		t.Fatalf("git resolves the commit to tree %s, want the first header %s", got, evilTree)
+	}
+	r.git("update-ref", "refs/heads/evil", commit)
+	body := r.push("refs/heads/evil")
+
+	res, err := Inspect(body)
+	if !errors.Is(err, ErrUninspectable) {
+		t.Fatalf("Inspect = (%v, %v), want ErrUninspectable", paths(res.Changes), err)
+	}
+	if len(res.Changes) != 0 {
+		t.Errorf("Changes = %v, want none alongside an error", paths(res.Changes))
+	}
+}
+
+// TestPackCommit_HeadersGitWouldNotReadAreRefused covers the same class at the
+// parser: git stops its parent loop at the first header that is not a parent,
+// so a parent line below the committer is one git never reads either.
+func TestPackCommit_HeadersGitWouldNotReadAreRefused(t *testing.T) {
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	ident := "author T <t@example.com> 1767225600 +0000\n" +
+		"committer T <t@example.com> 1767225600 +0000\n"
+	for _, tc := range []struct {
+		name, obj string
+		refused   bool
+	}{
+		{"one tree and its parents", "tree " + a + "\nparent " + b + "\n" + ident + "\nok\n", false},
+		{"a second tree below the committer", "tree " + a + "\n" + ident + "tree " + b + "\n\nx\n", true},
+		{"a second tree above the committer", "tree " + a + "\ntree " + b + "\n" + ident + "\nx\n", true},
+		{"a parent below the committer", "tree " + a + "\n" + ident + "parent " + b + "\n\nx\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseCommit([]byte(tc.obj), 20)
+			switch {
+			case tc.refused && !errors.Is(err, ErrUninspectable):
+				t.Fatalf("parseCommit = (%+v, %v), want ErrUninspectable", got, err)
+			case !tc.refused && err != nil:
+				t.Fatalf("parseCommit: %v", err)
+			case !tc.refused && (got.tree != a || len(got.parents) != 1):
+				t.Fatalf("parseCommit = %+v, want tree %s and one parent", got, a)
+			}
+		})
+	}
+}
+
+// TestPackInspect_ZeroPaddedDirectoryModeIsWalked: "040000" is a directory to
+// git, which parses the digits, and was a leaf here, which matched the string —
+// so the entry was reported as one path named after the directory and every
+// path beneath it disappeared. receive.fsckObjects would reject this object,
+// but it is off by default, so the inspector cannot lean on it.
+func TestPackInspect_ZeroPaddedDirectoryModeIsWalked(t *testing.T) {
+	blob := []byte("SECRET=1\n")
+	sub := mkTree(treeLine{"100644", "secrets.env", hashObject("blob", blob)})
+	root := mkTree(treeLine{"040000", "config", hashObject("tree", sub)})
+	commit := mkCommit(hashObject("tree", root))
+	pack := buildPack(t,
+		rawObject{typ: objBlob, payload: blob},
+		rawObject{typ: objTree, payload: sub},
+		rawObject{typ: objTree, payload: root},
+		rawObject{typ: objCommit, payload: commit},
+	)
+	zero := strings.Repeat("0", 40)
+	body := append(commandSection("report-status object-format=sha1",
+		zero+" "+hashObject("commit", commit)+" refs/heads/main"), pack...)
+
+	res, err := Inspect(body)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	wantChanges(t, res.Changes, "config/secrets.env 100644 9")
+}
+
 // ─── the wire ───────────────────────────────────────────────────────────────
 
 // TestPackInspect_SkipsThePushOptionsSection: `git push -o` puts a second
@@ -523,11 +634,147 @@ func TestPackTree_DiffReportsOnlyWhatChanged(t *testing.T) {
 			idx.put(typ, p)
 		}
 	}
-	w := &walker{idx: idx, seen: map[Change]bool{}}
+	w := newWalker(idx)
 	if err := w.diff("", hashObject("tree", oldRoot), hashObject("tree", newRoot), 0); err != nil {
 		t.Fatalf("diff: %v", err)
 	}
 	wantChanges(t, w.out, "dir/y.txt 100644 6")
+}
+
+// ─── the walk's ceilings ────────────────────────────────────────────────────
+//
+// Real git cannot build these: every one is a tree object naming another tree
+// object that was never written to describe a directory.
+
+// fanOut stacks levels of trees, each naming the level below under every name
+// given, and returns the root. A DAG, not a tree: one object per level, b^d
+// paths through it.
+func fanOut(idx *index, bottom []byte, levels int, names ...string) string {
+	oid := idx.put(objTree, bottom)
+	for range levels {
+		lines := make([]treeLine, 0, len(names))
+		for _, n := range names {
+			lines = append(lines, treeLine{"40000", n, oid})
+		}
+		oid = idx.put(objTree, mkTree(lines...))
+	}
+	return oid
+}
+
+// TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes is the cheapest denial of
+// service the format allows: 65 tree objects, 3 KB, and 2^65 expansions if the
+// walk follows every path. The bottom names SUBTREES the pack does not carry,
+// so the fan-out resolves to no leaves and maxChanges is never reached — and
+// maxTreeDepth is satisfied the whole way down, because depth is not what is
+// unbounded here.
+//
+// The assertion is the work done, not the time taken: a wall clock would only
+// say this machine was fast today.
+func TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes(t *testing.T) {
+	idx := newIndex(sha1Format)
+	absent := strings.Repeat("0", 40)
+	root := fanOut(idx, mkTree(
+		treeLine{"40000", "a", absent}, treeLine{"40000", "b", absent}),
+		maxTreeDepth, "a", "b")
+
+	w := newWalker(idx)
+	err := w.walk("", root, 0)
+	if !errors.Is(err, ErrUninspectable) {
+		t.Fatalf("walk = %v, want ErrUninspectable", err)
+	}
+	if w.nodes > maxTreeNodes+1 {
+		t.Errorf("expanded %d trees, want the walk stopped at %d", w.nodes, maxTreeNodes)
+	}
+	if len(w.out) != 0 {
+		t.Errorf("Changes = %v, want none", paths(w.out))
+	}
+}
+
+// TestPackTree_RepeatedSubtreeIsExpandedOnce pins the memo that makes the
+// common shape cheap without changing the answer: a subtree reached by two
+// paths is expanded once per path, never twice per path, and still contributes
+// its leaves under BOTH prefixes — skipping the second prefix would
+// under-report, which is the unsafe direction.
+func TestPackTree_RepeatedSubtreeIsExpandedOnce(t *testing.T) {
+	blob := []byte("x\n")
+	sub := mkTree(treeLine{"100644", "f.txt", hashObject("blob", blob)})
+	idx := newIndex(sha1Format)
+	idx.put(objBlob, blob)
+	subOID := idx.put(objTree, sub)
+	root := idx.put(objTree, mkTree(
+		treeLine{"40000", "one", subOID}, treeLine{"40000", "two", subOID}))
+
+	w := newWalker(idx)
+	if err := w.walk("", root, 0); err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	wantChanges(t, w.out, "one/f.txt 100644 2", "two/f.txt 100644 2")
+	// The root and the subtree under each of its two prefixes.
+	if w.nodes != 3 {
+		t.Errorf("expanded %d trees, want 3", w.nodes)
+	}
+	if err := w.walk("", root, 0); err != nil || w.nodes != 3 {
+		t.Errorf("re-walking the same root: err=%v, expanded %d trees, want 3", err, w.nodes)
+	}
+}
+
+// TestPackTree_MaxTreeDepthIsEnforced pins the nesting ceiling from both sides,
+// so it stays where the constant says it is.
+func TestPackTree_MaxTreeDepthIsEnforced(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		levels  int
+		refused bool
+	}{
+		{"at the ceiling", maxTreeDepth, false},
+		{"one level past it", maxTreeDepth + 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			blob := []byte("x\n")
+			idx := newIndex(sha1Format)
+			idx.put(objBlob, blob)
+			root := fanOut(idx, mkTree(treeLine{"100644", "f.txt", hashObject("blob", blob)}),
+				tc.levels, "d")
+
+			w := newWalker(idx)
+			err := w.walk("", root, 0)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("walk: %v", err)
+				}
+				wantChanges(t, w.out, strings.Repeat("d/", tc.levels)+"f.txt 100644 2")
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "nested deeper") {
+				t.Fatalf("walk = %v, want the depth ceiling named", err)
+			}
+		})
+	}
+}
+
+// TestPackTree_MaxChangesIsEnforced pins the change-set ceiling. 16 levels of
+// two-way fan-out over a four-entry bottom describe 262,144 distinct paths in
+// 17 tree objects, so the walk stops with the ceiling's own refusal rather than
+// on the node ceiling or a truncated answer.
+func TestPackTree_MaxChangesIsEnforced(t *testing.T) {
+	idx := newIndex(sha1Format)
+	absent := strings.Repeat("0", 40)
+	root := fanOut(idx, mkTree(
+		treeLine{"100644", "f0", absent}, treeLine{"100644", "f1", absent},
+		treeLine{"100644", "f2", absent}, treeLine{"100644", "f3", absent}),
+		16, "a", "b")
+
+	w := newWalker(idx)
+	err := w.walk("", root, 0)
+	if !errors.Is(err, ErrUninspectable) || !strings.Contains(err.Error(), "paths") {
+		t.Fatalf("walk = %v, want the maxChanges refusal", err)
+	}
+	if len(w.out) != maxChanges {
+		t.Errorf("collected %d changes, want it to stop at %d", len(w.out), maxChanges)
+	}
+	if w.nodes > maxTreeNodes {
+		t.Errorf("expanded %d trees: maxTreeNodes fired first, not maxChanges", w.nodes)
+	}
 }
 
 // ─── hand-built hostile fixtures ────────────────────────────────────────────

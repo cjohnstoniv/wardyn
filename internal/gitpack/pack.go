@@ -38,8 +38,9 @@
 // Everything else that would make the answer a guess is a refusal:
 // ErrUninspectable for a pack that does not carry what an answer needs (a thin
 // pack's delta bases, a ref whose commit is not in the pack, more objects or
-// bytes than the ceilings below allow), and a plain error for a malformed or
-// hostile one.
+// bytes than the ceilings below allow) or that git would read differently from
+// this package (a commit carrying a header git's own parser stops before), and
+// a plain error for a malformed or hostile one.
 package gitpack
 
 import (
@@ -82,6 +83,11 @@ const (
 	// maxTreeDepth bounds directory nesting. Real trees are shallow; a pack that
 	// claims otherwise is trying to exhaust the stack.
 	maxTreeDepth = 64
+	// maxTreeNodes bounds how many trees one inspection expands, which
+	// maxTreeDepth does not: trees are a DAG, so d levels that each name the
+	// level below b times describe b^d paths in a few kilobytes of objects. Five
+	// times maxChanges, so no push whose change set is inspectable can reach it.
+	maxTreeNodes = 5 * maxChanges
 	// maxPeel bounds tag-to-tag chasing when a push updates a tag ref.
 	maxPeel = 8
 	// maxVarintBytes bounds the length of a pack's variable-length integers.

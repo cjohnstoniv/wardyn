@@ -14,15 +14,24 @@ import (
 	"strings"
 )
 
-// modeTree is the mode a tree entry carries for a subdirectory. Note the missing
-// leading zero: `git ls-tree` prints "040000", the object itself stores "40000".
-const modeTree = "40000"
+// modeTree is the mode a tree entry carries for a subdirectory, as a NUMBER.
+// `git ls-tree` prints "040000" and a tree object normally stores "40000", but
+// git's own tree walk reads the digits rather than matching the string, so a
+// hand-written tree spelling the mode "040000" is a directory to every
+// receiving side whose fsck is off — the default. Matching the string here
+// classified that entry as a leaf and hid every path beneath it.
+const modeTree = 0o40000
 
 // treeEntry is one entry of a tree object: a mode, a name and the object id of
 // what the name points at.
 type treeEntry struct{ mode, name, oid string }
 
-func (e treeEntry) isTree() bool { return e.mode == modeTree }
+// isTree compares the parsed mode, never the spelling. parseTree has already
+// rejected a mode that is not octal.
+func (e treeEntry) isTree() bool {
+	m, err := strconv.ParseUint(e.mode, 8, 32)
+	return err == nil && m == modeTree
+}
 
 // parseTree reads a tree object: "<mode> <name>\0<object-id>" repeated, with the
 // id raw rather than hex and the whole thing unterminated.
@@ -90,19 +99,37 @@ type commitInfo struct {
 
 // parseCommit reads the headers of a commit object, which run to the first blank
 // line.
+//
+// Git's own parser takes the FIRST tree header and stops its parent loop at the
+// first header that is not a parent, so a second "tree" line — or a "parent"
+// line after the author — is a header git never sees while a last-wins reader
+// takes it as authoritative. A commit shaped that way is hostile by
+// construction and no git writes one, so it is refused rather than reconciled:
+// the two sides disagreeing about what a push contains is the one answer this
+// package must never give.
 func parseCommit(data []byte, hashLen int) (commitInfo, error) {
 	var c commitInfo
+	inParentBlock := true
 	for _, line := range strings.Split(headersOf(data), "\n") {
 		key, val, found := strings.Cut(line, " ")
-		if !found {
+		switch {
+		case !found:
+			inParentBlock = false
 			continue
-		}
-		switch key {
-		case "tree":
+		case key == "tree":
+			if c.tree != "" {
+				return commitInfo{}, fmt.Errorf("%w: the commit object carries more than one tree header",
+					ErrUninspectable)
+			}
 			c.tree = val
-		case "parent":
+		case key == "parent":
+			if !inParentBlock {
+				return commitInfo{}, fmt.Errorf("%w: the commit object carries a parent header git would not read",
+					ErrUninspectable)
+			}
 			c.parents = append(c.parents, val)
 		default:
+			inParentBlock = false
 			continue
 		}
 		if len(val) != hashLen*2 || !isHex(val) {
@@ -176,7 +203,7 @@ func (i *index) coverCommands(cmds []Command) error {
 // afterwards would go unreported. The union is walked in object-id order so that
 // the same pack always produces the same answer.
 func (i *index) changes() ([]Change, error) {
-	w := &walker{idx: i, seen: map[Change]bool{}}
+	w := newWalker(i)
 	for _, oid := range slices.Sorted(maps.Keys(i.byOID)) {
 		if i.byOID[oid].typ != objCommit {
 			continue
@@ -201,7 +228,34 @@ func (i *index) changes() ([]Change, error) {
 type walker struct {
 	idx  *index
 	seen map[Change]bool
-	out  []Change
+	// walked is every (prefix, tree) pair already expanded, for the duration of
+	// one inspection. Trees are a DAG: a pack of 64 levels that each name the
+	// level below twice is 3 KB of objects and 2^65 expansions, and maxTreeDepth
+	// bounds the depth of that walk, not its width. The PREFIX belongs in the key
+	// because the same subtree reached by two paths contributes leaves under
+	// both, and dropping it would under-report. With it the skip is exact:
+	// expanding one tree under one prefix is a pure function of that pair — the
+	// depth is the prefix's component count — and leaf already deduplicates, so
+	// the second expansion could only re-emit what the first did.
+	walked map[string]bool
+	// nodes counts expansions against maxTreeNodes. The memo collapses a repeat
+	// of the same path; it cannot collapse b^d distinct paths through d levels of
+	// fan-out, and a fan-out whose subtrees resolve to no leaves never reaches
+	// maxChanges either.
+	nodes int
+	out   []Change
+}
+
+func newWalker(i *index) *walker {
+	return &walker{idx: i, seen: map[Change]bool{}, walked: map[string]bool{}}
+}
+
+// node charges one tree expansion.
+func (w *walker) node() error {
+	if w.nodes++; w.nodes > maxTreeNodes {
+		return fmt.Errorf("%w: the push expands more than %d tree objects", ErrUninspectable, maxTreeNodes)
+	}
+	return nil
 }
 
 // introduced reports what one commit brings in: a diff against every parent the
@@ -245,6 +299,9 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 	if err != nil || !ok {
 		return err
 	}
+	if err := w.node(); err != nil {
+		return err
+	}
 	prev, ok, err := w.idx.tree(oldOID)
 	if err != nil {
 		return err
@@ -280,16 +337,24 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 // walk reports every entry under one tree. A subtree the pack does not carry is
 // skipped, not refused: see the package comment.
 func (w *walker) walk(prefix, oid string, depth int) error {
+	key := prefix + "\x00" + oid
+	if w.walked[key] {
+		return nil
+	}
 	entries, ok, err := w.idx.tree(oid)
 	if err != nil || !ok {
 		return err
 	}
+	w.walked[key] = true
 	return w.walkEntries(prefix, entries, depth)
 }
 
 func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) error {
 	if depth > maxTreeDepth {
 		return fmt.Errorf("gitpack: trees nested deeper than %d", maxTreeDepth)
+	}
+	if err := w.node(); err != nil {
+		return err
 	}
 	for _, e := range entries {
 		path := prefix + e.name
