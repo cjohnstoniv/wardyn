@@ -78,6 +78,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   with a Retry that resumes from the same offset. No total is ever shown — the server doesn't send
   one (#296).
 
+### Security
+
+- **`composer.Clamp` hands back a spec that owns its memory.** The clamped spec began as a shallow
+  copy of the proposal, so every field the operator ceiling had no opinion on reached the caller as
+  the caller's own backing array or pointee: `allowed_domains`, `denied_domains`, `allowed_methods`,
+  `ui_apps`, `workspace_repos`, `tool_rules`, `workspace_mounts`, each eligible grant's `scope`
+  bytes, and — whenever the proposal's sizes already sat inside the ceiling — the very
+  `*ResourceLimits` the clamp exists to bound. A later in-place write through either side would
+  have moved a ceiling the clamp had already enforced, in the widening direction, with nothing to
+  notice; no caller mutates one today, which is a property of today's callers rather than of the
+  function. `Clamp` now reallocates every reference field on the way out (`llm_inspection` and each
+  mount's `read_only` pointee included, though the clamp replaces or drops those before they can
+  reach a caller). What the clamp permits is unchanged — no allowed-or-denied outcome moves.
+
 ## [0.7.8] — 2026-09-19
 
 ### Added
