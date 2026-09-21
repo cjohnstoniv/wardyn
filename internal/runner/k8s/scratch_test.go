@@ -5,13 +5,14 @@
 
 package k8s
 
-// scratch_test.go covers the two emptyDir scratch volumes that make disk_mib
-// bound the AGENT's writes on this substrate — 0.7.4's known gap (a). The
-// interesting assertions are not "the fields are set": they are the shape
-// constraints that a fake clientset would otherwise let through and a real
-// apiserver rejects (no SubPath on a mount Exec copies onto an ephemeral
-// container), and the negative control that a budget-less run keeps the
-// volume-less pod this substrate has always produced.
+// scratch_test.go covers the three emptyDir scratch volumes that make
+// disk_mib bound the AGENT's writes on this substrate — 0.7.4's known gap (a),
+// narrowed further by #164's cache volume. The interesting assertions are not
+// "the fields are set": they are the shape constraints that a fake clientset
+// would otherwise let through and a real apiserver rejects (no SubPath on a
+// mount Exec copies onto an ephemeral container), and the negative control
+// that a budget-less run keeps the volume-less pod this substrate has always
+// produced.
 
 import (
 	"context"
@@ -26,20 +27,22 @@ import (
 // rather than read from the constants it asserts about, so renaming a path in
 // naming.go reds this instead of silently agreeing with itself.
 var wantScratch = map[string]string{
-	"wardyn-tmp":  "/tmp",
-	"wardyn-work": "/home/agent/work",
+	"wardyn-tmp":   "/tmp",
+	"wardyn-work":  "/home/agent/work",
+	"wardyn-cache": "/home/agent/.cache",
 }
 
-// TestEphemeralScratchVolumes_TwoWholeVolumeEmptyDirsAtTheBudget pins the
-// volumes themselves: both paths the agent writes, each a WHOLE-volume mount of
-// a disk-backed emptyDir whose SizeLimit is the run's own disk_mib.
+// TestEphemeralScratchVolumes_ThreeWholeVolumeEmptyDirsAtTheBudget pins the
+// volumes themselves: every path the agent writes through disk_mib, each a
+// WHOLE-volume mount of a disk-backed emptyDir whose SizeLimit is the run's
+// own disk_mib.
 //
 // THE MEDIUM IS THE SUBTLE ONE. `medium: Memory` would make the emptyDir a
 // tmpfs counted against the container's MEMORY limit instead of its ephemeral
 // storage — the pod would OOM-kill on a big clone rather than be evicted for
 // disk, and disk_mib would still bound nothing. Empty medium is the disk-backed
 // one, and it is the only one this fix can be built on.
-func TestEphemeralScratchVolumes_TwoWholeVolumeEmptyDirsAtTheBudget(t *testing.T) {
+func TestEphemeralScratchVolumes_ThreeWholeVolumeEmptyDirsAtTheBudget(t *testing.T) {
 	vols, mounts := ephemeralScratchVolumes(64)
 	if len(vols) != len(wantScratch) || len(mounts) != len(wantScratch) {
 		t.Fatalf("ephemeralScratchVolumes(64) = %d volumes / %d mounts, want %d of each (%v)",
@@ -71,12 +74,17 @@ func TestEphemeralScratchVolumes_TwoWholeVolumeEmptyDirsAtTheBudget(t *testing.T
 	if len(seen) != len(wantScratch) {
 		t.Errorf("scratch volumes present = %v, want %v", seen, wantScratch)
 	}
-	// Two volumes, two Quantities: one shared pointer would alias both spec
-	// fields onto the same object, so a later per-volume change would silently
-	// move both.
-	if len(vols) == 2 && vols[0].EmptyDir != nil && vols[1].EmptyDir != nil &&
-		vols[0].EmptyDir.SizeLimit == vols[1].EmptyDir.SizeLimit {
-		t.Error("both scratch volumes share one *Quantity — give each its own, an aliased spec field is a change nobody means to make twice")
+	// One Quantity per volume: a shared pointer would alias two spec fields
+	// onto the same object, so a later per-volume change would silently move
+	// both. Checked pairwise so a fourth volume is covered without rewriting
+	// this block again.
+	for i := range vols {
+		for j := i + 1; j < len(vols); j++ {
+			if vols[i].EmptyDir != nil && vols[j].EmptyDir != nil &&
+				vols[i].EmptyDir.SizeLimit == vols[j].EmptyDir.SizeLimit {
+				t.Errorf("scratch volumes %q and %q share one *Quantity — give each its own, an aliased spec field is a change nobody means to make twice", vols[i].Name, vols[j].Name)
+			}
+		}
 	}
 }
 

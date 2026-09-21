@@ -5512,36 +5512,44 @@ driver, not a guess:
   kubelet `podPidsLimit` (or your distribution's
   `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb
   backstop — coarser but real, and the only lever this substrate has today.
-- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 it reaches an AUTONOMOUS run's `/tmp`
-  and workdir writes — a narrowing, not a close.** All of this describes AUTONOMOUS (task-mode)
+- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 (further narrowed by #164 in 0.8) it
+  reaches an AUTONOMOUS run's `/tmp`, workdir and toolchain-cache writes — a narrowing, not a
+  close.** All of this describes AUTONOMOUS (task-mode)
   runs. An interactive run's agent runs in the pod's main container, whose whole writable layer —
   `$HOME` and the toolchain caches included — the kubelet has counted against `disk_mib` since
   0.7.2; there nothing is outside the cap, so size an interactive run's budget for its caches too.
   A run's `disk_mib` is the agent container's
-  `resources.limits[ephemeral-storage]` and the `sizeLimit` of the two `emptyDir` volumes mounted
-  on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp` and
-  `wardyn-work` at `/home/agent/work`. The ephemeral container `Exec` attaches for the agent
+  `resources.limits[ephemeral-storage]` and the `sizeLimit` of the three `emptyDir` volumes mounted
+  on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp`,
+  `wardyn-work` at `/home/agent/work`, and `wardyn-cache` at `/home/agent/.cache`. The ephemeral
+  container `Exec` attaches for the agent
   process (`internal/runner/k8s/exec.go`) copies the main container's mounts verbatim, so writes
-  to those two paths land in volumes the kubelet meters as the pod's local ephemeral storage.
+  to those paths land in volumes the kubelet meters as the pod's local ephemeral storage.
   Before 0.7.5 they landed on the ephemeral container's own writable layer, which the kubelet
   meters not at all: the limit evicted writes by the pod's idle main container only, and the
   conformance case `EphemeralDiskLimit/OverTheLimitTheRunIsEvicted` was red from 0.7.2 for exactly
-  that reason (0.7.4 disclosed it; it now runs for BOTH fill targets and passes). The two
-  `sizeLimit`s are one budget, not two: `emptyDir` usage counts toward the pod's
-  `ephemeral-storage` total as well, so filling both volumes halfway still evicts. **Upgrade
+  that reason (0.7.4 disclosed it; it now runs for all fill targets and passes). The three
+  `sizeLimit`s are one budget, not three: `emptyDir` usage counts toward the pod's
+  `ephemeral-storage` total as well, so filling every volume partway still evicts. **Upgrade
   note:** an operator's `default_disk_mib` or policy `disk_mib` did not bind an autonomous k8s run
-  before 0.7.5 and does now — size it for the clone plus installs before upgrading, or a run that
-  used to finish will be evicted with its in-flight work lost. **What is still OUTSIDE the cap:**
-  everything the agent writes beyond those two paths — the rest of `$HOME`, including the
-  toolchain caches a build actually fills (`/home/agent/go`, `~/.cache/go-build`, `~/.gotmp`,
-  `~/.npm`, `~/.cache/pip`; `internal/api/runs_dispatch_mounts.go` sets the Go ones) and the
+  before 0.7.5 and does now — size it for the clone, installs and toolchain caches before
+  upgrading, or a run that used to finish will be evicted with its in-flight work lost. **What is
+  still OUTSIDE the cap:**
+  everything the agent writes beyond those three paths — the rest of `$HOME` (`/home/agent/go` —
+  GOPATH itself is unmoved, so the installed tool binaries under its `bin/` stay reachable; only
+  `GOMODCACHE` moved under the cache volume — and `~/.cache/pip`) and the
   dotfiles (`~/.wardyn`, `~/.ssh`, `~/.claude`); `/opt/rust`; and any authored `workspace_repos`
   or ephemeral-source target outside `/home/agent/work`, since an authored target may legally sit
   at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed
   target prefixes). Nothing is mounted at `/home/agent` itself, because a volume there would
   shadow each image's baked `.bashrc`, swallow the reserved drive target `/home/agent/drive`, and
-  hide the read-only `~/.claude` bind the subscription path mounts; pointing the cache env under
-  the workdir on this substrate, or a third cache volume, is the 0.7.6 follow-up. **What the proof
+  hide the read-only `~/.claude` bind the subscription path mounts. **Risk carried by the cache
+  volume specifically:** an `emptyDir` at `/home/agent/.cache` shadows the full image's
+  pre-created, agent-owned `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`) with a
+  fresh directory whose ownership the kubelet decides — `FSGroup` is only applied to a pod with a
+  drive attached (`internal/runner/k8s/drives.go`), so a run with `disk_mib` set and no drive can
+  get a root-owned mount the uid-1000 agent cannot write into; only the conformance "Cache" fill
+  target, run against a real cluster, catches this. **What the proof
   does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
   runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and
   Kata. The live kind SSO walk separately exercises a real `agent-run` boot — the aws-sso sign-in
