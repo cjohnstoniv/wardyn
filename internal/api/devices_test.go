@@ -136,7 +136,10 @@ func (f *fakeDeviceStore) RevokeDevice(_ context.Context, id uuid.UUID, now time
 	return d, nil
 }
 
-func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, rows []types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+// IngestDeviceAudit mirrors the PG store's answers — ErrDeviceRevoked for a
+// revoked device, the peer in place of the claimed source_ip — so the handler
+// is tested against the store's contract.
+func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, peer string, rows []types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.ingestErr != nil {
@@ -147,7 +150,7 @@ func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, row
 		return store.DeviceIngestResult{}, store.ErrNotFound
 	}
 	if d.RevokedAt != nil {
-		return store.DeviceIngestResult{}, store.ErrConflict
+		return store.DeviceIngestResult{}, store.ErrDeviceRevoked
 	}
 	start := 0
 	for start < len(rows) && rows[start].Seq <= d.LastSeq {
@@ -168,7 +171,10 @@ func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, row
 			return store.DeviceIngestResult{}, store.ErrConflict
 		}
 	}
-	f.ingested[id] = append(f.ingested[id], fresh...)
+	for _, r := range fresh {
+		r.SourceIP = peer
+		f.ingested[id] = append(f.ingested[id], r)
+	}
 	d.LastSeq, d.LastRowHash = fresh[len(fresh)-1].Seq, fresh[len(fresh)-1].RowHash
 	f.devices[id] = d
 	return store.DeviceIngestResult{Accepted: len(fresh), Reset: reset}, nil
@@ -509,6 +515,9 @@ func TestDevices_FailClosedWithoutTheStoreCapability(t *testing.T) {
 	}
 	srv := New(cfg)
 	id := uuid.NewString()
+	if w := do(t, srv, http.MethodPost, "/api/v1/devices/enrol", "", `{"token":"wde_x"}`); strings.Contains(strings.ToLower(w.Body.String()), "postgres") {
+		t.Errorf("anonymous enrol 501 names the backend: %s", w.Body.String())
+	}
 	for _, c := range []struct {
 		method, path, bearer, body string
 		want                       int
@@ -589,6 +598,10 @@ func TestDevices_IngestContract(t *testing.T) {
 	srv, st, rec := newDeviceTestServer(t, false)
 	id, tok := enrolTestDevice(t, srv, "alices-laptop")
 	path := "/api/v1/devices/" + id.String() + "/audit"
+	// Every refusal below must write its row: lift the per-device bucket this
+	// walk would otherwise exhaust (TestDevices_IngestFailureRowsAreBoundedPerDevice
+	// pins the bucket itself).
+	srv.ingestFailureLimiter.burst, srv.ingestFailureLimiter.rate = 1000, 1000
 	post := func(body string) *httptest.ResponseRecorder { return do(t, srv, http.MethodPost, path, tok, body) }
 	lastFailure := func(t *testing.T) string {
 		t.Helper()
@@ -612,6 +625,12 @@ func TestDevices_IngestContract(t *testing.T) {
 	}
 	if got := ackedSeq(t, post("[]")); got != 3 {
 		t.Fatalf("empty batch acked %d, want the cursor (3)", got)
+	}
+	st.mu.Lock()
+	stored := st.ingested[id][0].SourceIP
+	st.mu.Unlock()
+	if stored != "127.0.0.1:54321" {
+		t.Fatalf("store was handed source_ip %q, want the TCP peer the server saw (127.0.0.1:54321), never the claim", stored)
 	}
 
 	refusals := []struct {
@@ -651,6 +670,19 @@ func TestDevices_IngestContract(t *testing.T) {
 		_ = json.Unmarshal(resets[0].Data, &data)
 		if data["prior_seq"] != float64(3) || data["prior_row_hash"] != "h3" || data["accepted"] != float64(2) {
 			t.Fatalf("chain_reset data = %v, want the prior head (3, h3) and the accepted count", data)
+		}
+	})
+
+	t.Run("a row under an organisation run is a 422 and a failure row", func(t *testing.T) {
+		st.mu.Lock()
+		st.ingestErr = store.ErrFederatedOrgRun
+		st.mu.Unlock()
+		defer func() { st.mu.Lock(); st.ingestErr = nil; st.mu.Unlock() }()
+		if w := post(string(mustJSON(chainRows(12, 1, "h11")))); w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422: %s", w.Code, w.Body.String())
+		}
+		if got := lastFailure(t); got != "org_run" {
+			t.Fatalf("failure reason = %q, want org_run", got)
 		}
 	})
 

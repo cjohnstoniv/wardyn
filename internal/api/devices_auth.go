@@ -204,8 +204,10 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "too many enrolment attempts from this address; retry later")
 		return
 	}
-	ds, ok := s.deviceStoreOr501(w)
+	ds, ok := s.cfg.Store.(store.DeviceStore)
 	if !ok {
+		// Content-free: an unauthenticated caller learns nothing about the backend.
+		writeError(w, http.StatusNotImplemented, http.StatusText(http.StatusNotImplemented))
 		return
 	}
 	var req deviceEnrolRequest
@@ -240,28 +242,41 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, deviceEnrolResponse{DeviceID: d.ID, Name: d.Name, Token: raw})
 }
 
-// auditEnrolFailure writes one device.enrol failure row, unless the shared
-// auth-failure bucket is empty — the route is anonymous, so an unbounded
-// failure row would be an unauthenticated write into the append-only log.
+// auditEnrolFailure writes one device.enrol failure row, bounded the way
+// auth.failed is: identical consecutive refusals fold into one streak whose
+// summary carries the count (enrolFailures), and every row that is written —
+// opening row or summary — pays the process-wide auth-failure bucket
+// (emitEnrolFailure).
+//
+// The streak key is the reason and the path, NOT the peer. auth.failed keys on
+// the peer because on a loopback deployment it separates principals; on this
+// anonymous route the peer is the caller's to rotate, and a key it can rotate
+// is a fold it can defeat. Each opening row still carries its peer, and the
+// per-peer limiter has already bounded each address.
 func (s *Server) auditEnrolFailure(r *http.Request, reason string) {
-	if !s.authFailedLimiter.allow(s.cfg.Now()) {
-		s.metrics.authFailedSuppressedInc()
-		return
-	}
 	ev := s.auditEvent(nil, types.ActorSystem, deviceEnrolActor, "device.enrol", r.URL.Path, "failure",
 		mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = r.RemoteAddr
-	s.recordAudit(r.Context(), ev)
+	absorbed, summary := s.enrolFailures.fold(s, "", reason+" "+r.URL.Path, reason, ev, s.emitEnrolFailure)
+	s.emitEnrolFailure(s.cfg.BaseCtx, summary)
+	if absorbed {
+		s.metrics.authFailedSuppressedInc()
+		return
+	}
+	s.emitEnrolFailure(r.Context(), &ev)
 }
 
 // handleDeviceAuditIngest is POST /api/v1/devices/{id}/audit: one batch of the
 // laptop's own chained audit rows, oldest first, answered 200 {acked_seq}.
 // Verification — the claimed hashes recomputed in SQL, the link to what this
-// organisation last recorded — is store.PG.IngestDeviceAudit's; this handler
-// bounds and shapes the batch and maps the outcome to what the forwarder acts
-// on: 401 revoked (from deviceAuth), 422 a batch that does not extend the
-// recorded chain, 5xx retry. Every refusal after authentication is audited
-// with its reason; a chain reset is accepted and audited as one.
+// organisation last recorded, no row under an org run — is
+// store.PG.IngestDeviceAudit's, handed the TCP peer to record as source_ip in
+// place of the device's claim. This handler bounds and shapes the batch and
+// maps the outcome to what the forwarder acts on: 401 revoked (from
+// deviceAuth, or revoked mid-request), 422 a batch that does not extend the
+// recorded chain or names an org run, 5xx retry. Every refusal after
+// authentication is audited with its reason (bounded per device); a chain
+// reset is accepted and audited as one.
 func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request) {
 	d, ok := deviceFromContext(r.Context())
 	ds, isDS := s.cfg.Store.(store.DeviceStore)
@@ -292,10 +307,20 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	res, err := ds.IngestDeviceAudit(r.Context(), d.ID, rows)
+	res, err := ds.IngestDeviceAudit(r.Context(), d.ID, r.RemoteAddr, rows)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusUnauthorized, "invalid device token")
+		return
+	case errors.Is(err, store.ErrDeviceRevoked):
+		// Revoked after deviceAuth admitted this request: the same 401 its
+		// next request gets, recorded as the revocation it is.
+		s.auditIngestFailure(r, d, "revoked", len(rows))
+		writeError(w, http.StatusUnauthorized, "invalid device token")
+		return
+	case errors.Is(err, store.ErrFederatedOrgRun):
+		s.auditIngestFailure(r, d, "org_run", len(rows))
+		writeError(w, http.StatusUnprocessableEntity, "a row names one of this organisation's own runs")
 		return
 	case errors.Is(err, store.ErrConflict):
 		s.auditIngestFailure(r, d, "chain_mismatch", len(rows))
@@ -345,13 +370,23 @@ func invalidFederatedRow(rows []types.FederatedAuditEvent) string {
 
 // auditIngestFailure writes the device.audit.ingest failure row: which device,
 // why (a closed set), how many rows it sent and where this organisation's
-// record of its chain stood. Not rate-bound: the caller is an authenticated,
-// revocable device, and revocation is the control for one that floods.
+// record of its chain stood. Bounded like auth.failed, per device: identical
+// consecutive refusals from one device fold into a streak (ingestFailures,
+// keyed on device and reason) and every row written pays that device's own
+// bucket — a forwarder replaying one refused batch on its backoff costs two
+// rows however long it retries.
 func (s *Server) auditIngestFailure(r *http.Request, d types.Device, reason string, rows int) {
 	ev := s.auditEvent(nil, types.ActorSystem, deviceActor(d.ID), "device.audit.ingest", d.ID.String(), "failure",
 		mustJSON(map[string]any{"reason": reason, "rows": rows, "acked_seq": d.LastSeq}))
 	ev.SourceIP = r.RemoteAddr
-	s.recordAudit(r.Context(), ev)
+	emit := s.ingestFailureEmitter(d.ID)
+	absorbed, summary := s.ingestFailures.fold(s, d.ID.String(), reason, reason, ev, emit)
+	emit(s.cfg.BaseCtx, summary)
+	if absorbed {
+		s.metrics.deviceIngestSuppressedInc()
+		return
+	}
+	emit(r.Context(), &ev)
 }
 
 // handleDeviceHeartbeat is POST /api/v1/devices/{id}/heartbeat: the idle

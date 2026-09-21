@@ -66,7 +66,8 @@ func (s *Server) mountDeviceRoutes(r chi.Router) {
 }
 
 // deviceStoreOr501 is the fail-closed half of the optional capability for the
-// routes that answer 501 without it.
+// admin routes, which answer 501 without it (the anonymous enrol route answers
+// its own, content-free 501).
 func (s *Server) deviceStoreOr501(w http.ResponseWriter) (store.DeviceStore, bool) {
 	ds, ok := s.cfg.Store.(store.DeviceStore)
 	if !ok {

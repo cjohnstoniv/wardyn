@@ -1,23 +1,61 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The SECOND bound on the auth.failed emit. http.go's authFailedLimiter caps the
-// RATE (~1 row/sec, burst 5); this file folds a slow, permanent DRIP — the
+// The two bounds on the auth.failed emit. authFailedLimiter caps the RATE (~1
+// row/sec, burst 5); the streak below folds a slow, permanent DRIP — the
 // failure mode that actually emptied a deployment's audit window: one row a
 // minute from a single sidecar retrying a renew the control plane would never
-// grant, forever, under a limiter it never once tripped. Split out of http.go
-// along that seam — the limiter answers "how fast", this answers "how many of the
-// same thing" — and because http.go was at its size ceiling.
+// grant, forever, under a limiter it never once tripped. The limiter answers
+// "how fast", the streak "how many of the same thing"; both were split out of
+// http.go along that seam because http.go was at its size ceiling.
 
 package api
 
 import (
 	"context"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// authFailedRatePerSec and authFailedBurst bound the auth.failed audit emit
+// (see authFailedLimiter.allow) — a steady 1/sec with a small burst so a
+// handful of genuine failures in the same second are not silently dropped,
+// while a scanner's rapid-fire 401s past the burst are.
+const (
+	authFailedRatePerSec = 1.0
+	authFailedBurst      = 5.0
+)
+
+// authFailedLimiter is a process-local token bucket gating auth.failed
+// audit emits. Zero value is ready to use (tokens fill to authFailedBurst on
+// first call).
+type authFailedLimiter struct {
+	mu     sync.Mutex
+	last   time.Time
+	tokens float64
+}
+
+func (l *authFailedLimiter) allow(now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last.IsZero() {
+		l.tokens = authFailedBurst
+	} else if elapsed := now.Sub(l.last).Seconds(); elapsed > 0 {
+		l.tokens += elapsed * authFailedRatePerSec
+		if l.tokens > authFailedBurst {
+			l.tokens = authFailedBurst
+		}
+	}
+	l.last = now
+	if l.tokens < 1 {
+		return false
+	}
+	l.tokens--
+	return true
+}
 
 // authFailedKey is what makes two auth.failed rows "identical" for coalescing:
 // the boundary that refused, its bounded reason, the request path, and the peer
@@ -155,14 +193,16 @@ func (s *Server) FlushAuthFailedStreak() {
 	s.authFailedStreakMu.Lock()
 	ev := s.closeAuthFailedStreakLocked()
 	s.authFailedStreakMu.Unlock()
-	if ev == nil {
-		return
-	}
 	base := s.cfg.BaseCtx
 	if base == nil {
 		base = context.Background()
 	}
-	s.recordAuthFailedSummary(context.WithoutCancel(base), ev)
+	ctx := context.WithoutCancel(base)
+	// The device routes' failure streams close here too, for the same reason
+	// (device_audit_bounds.go).
+	s.enrolFailures.flush(s, ctx)
+	s.ingestFailures.flush(s, ctx)
+	s.recordAuthFailedSummary(ctx, ev)
 }
 
 // recordAuthFailedSummary is the ONE way a closing streak's summary row reaches

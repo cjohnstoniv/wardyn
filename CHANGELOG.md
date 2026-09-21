@@ -35,9 +35,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `wardyn device revoke <id>` are the inventory-then-revoke pair, on the same tier as `/tokens`; a
   revoked device's next push is 401. The device credential authenticates a daemon, never a person:
   it has its own middleware that publishes a device and no human, every human route answers it
-  401, and it cannot create a run. A push that does not extend the chain the organisation recorded
-  is refused with 422; a purge on the laptop is accepted and audited as a chain reset. New audit
-  actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
+  401, it cannot create a run, and a device request is never an operator. A forwarded row keeps
+  the laptop's claimed actor and action, marked by `data.device_origin`; its `source_ip` is the
+  peer the organisation saw (the claim is kept in `device_origin`), and a row naming one of the
+  organisation's own runs refuses the batch. A push that does not extend the chain the
+  organisation recorded is refused with 422 — its hashes are recomputed before the audit chain's
+  lock is taken, so a refused or replayed batch never delays the organisation's own audit writes —
+  and a purge on the laptop is accepted and audited as a chain reset. Failure rows are coalesced
+  like `auth.failed`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
   (failures) and `device.audit.chain_reset`.
 
 - **A user drive's minted object name can no longer be forged by a crafted `home_override`.**

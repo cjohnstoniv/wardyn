@@ -166,6 +166,10 @@ func TestPG_Devices_CreateGetRevoke(t *testing.T) {
 	}
 }
 
+// testPeer is the address the organisation "saw" a test push arrive from —
+// what IngestDeviceAudit records in source_ip in place of the device's claim.
+const testPeer = "203.0.113.7:45000"
+
 // auditRowHash computes what audit_row_hash would produce for one row,
 // exactly as the device's own local trigger would have — the fixture builder
 // every IngestDeviceAudit test below uses to construct a genuinely LINKED
@@ -231,7 +235,7 @@ func TestPG_Devices_IngestDeviceAudit_LinkedBatchVerifies(t *testing.T) {
 	r2 := chainedRow(t, pool, r1.RowHash, 2, "egress.deny")
 	r3 := chainedRow(t, pool, r2.RowHash, 3, "credential.mint")
 
-	result, err := st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{r1, r2, r3})
+	result, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2, r3})
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -283,7 +287,7 @@ func TestPG_Devices_IngestDeviceAudit_LinkedBatchVerifies(t *testing.T) {
 
 	// Idempotent retry: re-submitting the SAME already-ingested batch accepts
 	// nothing new and does not error.
-	retry, err := st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{r1, r2, r3})
+	retry, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2, r3})
 	if err != nil {
 		t.Fatalf("idempotent retry: %v", err)
 	}
@@ -309,7 +313,7 @@ func TestPG_Devices_IngestDeviceAudit_EditedDataRefused(t *testing.T) {
 	// exactly what an edited-in-flight or edited-at-rest row looks like.
 	r2.Data = json.RawMessage(`{"seq":99}`)
 
-	_, err = st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{r1, r2})
+	_, err = st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2})
 	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("ingest edited batch err = %v, want ErrConflict", err)
 	}
@@ -351,7 +355,7 @@ func TestPG_Devices_IngestDeviceAudit_GenesisAfterReset(t *testing.T) {
 	// First chain: establishes a recorded cursor.
 	r1 := chainedRow(t, pool, "", 1, "run.create")
 	r2 := chainedRow(t, pool, r1.RowHash, 2, "egress.deny")
-	if _, err := st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{r1, r2}); err != nil {
+	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2}); err != nil {
 		t.Fatalf("ingest first chain: %v", err)
 	}
 
@@ -360,7 +364,7 @@ func TestPG_Devices_IngestDeviceAudit_GenesisAfterReset(t *testing.T) {
 	// relation to r1/r2's hashes.
 	g1 := chainedRow(t, pool, "", 5, "run.create")
 
-	result, err := st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{g1})
+	result, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{g1})
 	if err != nil {
 		t.Fatalf("ingest genesis-after-reset: %v", err)
 	}

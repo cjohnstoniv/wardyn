@@ -471,7 +471,8 @@ type Config struct {
 	// minute forever from a single retrying sidecar, which the 1/sec rate limiter
 	// never trips and which still evicted every real security event out of the
 	// console's 1000-row window in minutes. See coalesceAuthFailed (http.go) for
-	// the bounds that keep a burst from collapsing into one row.
+	// the bounds that keep a burst from collapsing into one row. The same
+	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
@@ -774,6 +775,12 @@ type Server struct {
 	// /devices/enrol, per TCP peer (devices_auth.go's peerKey), with per-entry
 	// eviction so the map cannot grow without bound. Configured in New.
 	enrolLimiter principalLimiter
+	// The device routes' failure-row bounds (device_audit_bounds.go):
+	// enrolFailures is the anonymous route's one stream, ingestFailures one
+	// stream per device, ingestFailureLimiter that stream's per-device bucket.
+	enrolFailures        failureStreams
+	ingestFailures       failureStreams
+	ingestFailureLimiter principalLimiter
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
@@ -812,7 +819,10 @@ func New(cfg Config) *Server {
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()
 	}
-	s := &Server{cfg: cfg, enrolLimiter: principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers}}
+	s := &Server{cfg: cfg,
+		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+	}
 	s.router = s.routes()
 	// drain the durable audit-fallback spool back into the store once it
 	// recovers, so a PG outage no longer leaves spooled events permanently invisible

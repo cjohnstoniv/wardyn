@@ -1,0 +1,286 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+// The device routes' boundaries beyond authentication: what a device context
+// may never be mistaken for, how many failure rows the routes may write, and
+// what never reaches a log or a row.
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// A device context is never an operator. deviceAuth publishes no human, and
+// the predicates' no-human branch is the admin token — so they refuse a device
+// FIRST, whichever file the handler asking was written in, and a device request
+// is attributed to the device, never to "admin-token". The AST guard over
+// devices_auth.go is the second line, not the only one.
+func TestDevices_OperatorPredicatesRefuseADeviceContext(t *testing.T) {
+	for _, withOIDC := range []bool{false, true} {
+		t.Run(fmt.Sprintf("oidc=%v", withOIDC), func(t *testing.T) {
+			srv, _, _ := newDeviceTestServer(t, withOIDC)
+			ctx := context.WithValue(context.Background(), deviceCtxKey{}, types.Device{ID: uuid.New(), Name: "laptop"})
+			if _, ok := deviceFromContext(ctx); !ok {
+				t.Fatal("control: device is on the context")
+			}
+			if srv.isOperator(ctx) {
+				t.Errorf("isOperator(device ctx) = true, want false: a device context reads as the SUPER admin")
+			}
+			if srv.isSecurityOperator(ctx) {
+				t.Errorf("isSecurityOperator(device ctx) = true, want false")
+			}
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/devices/x/audit", nil).WithContext(ctx)
+			if got := principalFromRequest(r); got == adminTokenPrincipal {
+				t.Errorf("principalFromRequest(device request) = %q: a device would be audited as the admin token", got)
+			}
+			// Router level: a handler mounted behind deviceAuth that asks for
+			// the operator tier is refused rather than answered as the admin.
+			id, tok := enrolTestDevice(t, srv, "laptop")
+			rt := chi.NewRouter()
+			rt.With(srv.deviceAuth, srv.requireOperator).Get("/devices/{id}/probe", func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+			rq := httptest.NewRequest(http.MethodGet, "/devices/"+id.String()+"/probe", nil)
+			rq.Header.Set("Authorization", "Bearer "+tok)
+			rw := httptest.NewRecorder()
+			rt.ServeHTTP(rw, rq)
+			if rw.Code != http.StatusForbidden {
+				t.Errorf("operator-gated handler behind deviceAuth answered a device token %d, want 403", rw.Code)
+			}
+		})
+	}
+}
+
+// The anonymous enrol route's failure rows are coalesced like auth.failed's.
+// Ten rotating peers stay under the per-peer limiter; without the fold they
+// would write one row per second forever — 86,400 a day into the append-only
+// chain from an unauthenticated caller — and spend auth.failed's budget too.
+func TestDevices_EnrolFailureDripIsCoalesced(t *testing.T) {
+	ast := newAuthzStore()
+	rec := &safeRecorder{}
+	cfg := baseTestConfig(newHarness(t), ast)
+	cfg.Audit = rec
+	cfg.AuditCoalesceWindow = 5 * time.Minute
+	clock := time.Unix(1_800_000_000, 0).UTC()
+	cfg.Now = func() time.Time { return clock }
+	srv := New(cfg)
+
+	const seconds = 120
+	for i := 0; i < seconds; i++ {
+		clock = clock.Add(time.Second)
+		peer := fmt.Sprintf("198.51.100.%d:4000", i%10)
+		w := doPeer(t, srv, http.MethodPost, "/api/v1/devices/enrol", "", `{"token":"wde_guess"}`, peer)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("enrol #%d from %s: %d, want 401 (limiter must not trip at 1/s over 10 peers): %s", i, peer, w.Code, w.Body.String())
+		}
+		// The same drip on the public routes, for comparison.
+		if w := doPeer(t, srv, http.MethodGet, "/api/v1/me", "not-the-admin-token", "", peer); w.Code != http.StatusUnauthorized {
+			t.Fatalf("control: bad admin token = %d", w.Code)
+		}
+	}
+	enrol := auditRows(rec, "device.enrol", "failure")
+	authFailed := auditRows(rec, "auth.failed", "failure")
+	t.Logf("%d simulated seconds: device.enrol failure rows = %d, auth.failed rows (coalesced) = %d", seconds, len(enrol), len(authFailed))
+	if len(enrol) > len(authFailed)+2 {
+		t.Errorf("device.enrol failure rows = %d over %d s; auth.failed on the same drip = %d — the anonymous enrol drip is not coalesced", len(enrol), seconds, len(authFailed))
+	}
+}
+
+// device.audit.ingest failure rows are bounded per device: a laptop sending
+// refused pushes as fast as it likes writes a handful of rows, not one per
+// request. auth.failed on the same server caps at its burst.
+func TestDevices_IngestFailureRowsAreBoundedPerDevice(t *testing.T) {
+	srv, _, rec := newDeviceTestServer(t, false)
+	id, tok := enrolTestDevice(t, srv, "laptop")
+	const n = 300
+	for i := 0; i < n; i++ {
+		w := do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, `{"not":"an array"}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("#%d: %d, want 400: %s", i, w.Code, w.Body.String())
+		}
+		do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", "wdd_wrong", "[]")
+	}
+	ingest := auditRows(rec, "device.audit.ingest", "failure")
+	authFailed := auditRows(rec, "auth.failed", "failure")
+	t.Logf("%d refused pushes -> device.audit.ingest failure rows = %d; %d bad tokens -> auth.failed rows = %d", n, len(ingest), n, len(authFailed))
+	if len(ingest) >= n {
+		t.Errorf("device.audit.ingest failure rows = %d for %d requests: unbounded per-request writes into the append-only log", len(ingest), n)
+	}
+
+	// With the fold on (the boot default), one refused batch replayed is ONE
+	// streak: its opening row now, and a summary carrying the count when the
+	// streak closes — here at shutdown.
+	t.Run("coalesced", func(t *testing.T) {
+		st := newAuthzStore()
+		rec := &safeRecorder{}
+		cfg := baseTestConfig(newHarness(t), st)
+		cfg.Audit = rec
+		cfg.AuditCoalesceWindow = 5 * time.Minute
+		srv := New(cfg)
+		id, tok := enrolTestDevice(t, srv, "laptop")
+		for range n {
+			do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, `{"not":"an array"}`)
+		}
+		if got := len(auditRows(rec, "device.audit.ingest", "failure")); got != 1 {
+			t.Fatalf("%d identical refusals wrote %d rows, want the opening row only", n, got)
+		}
+		srv.FlushAuthFailedStreak()
+		rows := auditRows(rec, "device.audit.ingest", "failure")
+		if len(rows) != 2 {
+			t.Fatalf("after the streak closed: %d rows, want the opening row and one summary", len(rows))
+		}
+		var data map[string]any
+		_ = json.Unmarshal(rows[1].Data, &data)
+		if data["count"] != float64(n) || data["reason"] != "invalid_body" || rows[1].Actor != deviceActor(id) {
+			t.Fatalf("summary = %s by %s, want count %d, reason invalid_body, the device as actor", rows[1].Data, rows[1].Actor, n)
+		}
+	})
+}
+
+// A device revoked between deviceAuth and the ingest transaction is answered
+// as revoked — the 401 its next request gets — and recorded with reason
+// "revoked", never as a chain mismatch.
+type revokeDuringIngest struct{ *authzStore }
+
+func (s revokeDuringIngest) IngestDeviceAudit(ctx context.Context, id uuid.UUID, peer string, rows []types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+	if _, err := s.authzStore.RevokeDevice(ctx, id, time.Now().UTC()); err != nil {
+		return store.DeviceIngestResult{}, err
+	}
+	return s.authzStore.IngestDeviceAudit(ctx, id, peer, rows)
+}
+
+func TestDevices_RevokedBetweenAuthAndIngestIsReportedAsRevoked(t *testing.T) {
+	rs := revokeDuringIngest{newAuthzStore()}
+	rec := &safeRecorder{}
+	cfg := baseTestConfig(newHarness(t), rs)
+	cfg.Audit = rec
+	srv := New(cfg)
+	id, tok := enrolTestDevice(t, srv, "laptop")
+	body, _ := json.Marshal(chainRows(1, 2, ""))
+	w := do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, string(body))
+	rows := auditRows(rec, "device.audit.ingest", "failure")
+	reason := ""
+	if len(rows) > 0 {
+		reason = auditReason(t, rows[0])
+	}
+	t.Logf("status = %d body = %s; failure row reason = %q", w.Code, strings.TrimSpace(w.Body.String()), reason)
+	if w.Code == http.StatusUnprocessableEntity || reason == "chain_mismatch" {
+		t.Errorf("revoked-during-ingest answered %d with reason %q — should read as revoked (401), not as a chain mismatch", w.Code, reason)
+	}
+	// Control: the next request IS 401.
+	if w := do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/heartbeat", tok, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("control: next request after revoke = %d, want 401", w.Code)
+	}
+}
+
+// Raw tokens and their hashes never reach the log or an audit row, on the
+// mint, enrol, replayed-token, bad-token and store-error paths.
+func TestDevices_SecretsNeverReachLogsOrAuditRows(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	srv, ast, rec := newDeviceTestServer(t, false)
+	enrolTok := mintEnrolmentToken(t, srv, "laptop")
+	w := doPeer(t, srv, http.MethodPost, "/api/v1/devices/enrol", "", `{"token":"`+enrolTok+`"}`, "203.0.113.10:4000")
+	var got deviceEnrolResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusCreated {
+		t.Fatalf("enrol: %d %s", w.Code, w.Body.String())
+	}
+	// Failure paths that log: a store error on ingest, a bad token, a second redemption.
+	ast.ingestErr = fmt.Errorf("boom: %s", "synthetic")
+	do(t, srv, http.MethodPost, "/api/v1/devices/"+got.DeviceID.String()+"/audit", got.Token, "[]")
+	ast.ingestErr = nil
+	doPeer(t, srv, http.MethodPost, "/api/v1/devices/enrol", "", `{"token":"`+enrolTok+`"}`, "203.0.113.10:4000")
+	do(t, srv, http.MethodPost, "/api/v1/devices/"+got.DeviceID.String()+"/audit", got.Token+"x", "[]")
+
+	sum := func(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
+	secrets := map[string]string{"raw enrolment token": enrolTok, "raw device token": got.Token,
+		"sha256(enrolment token)": sum(enrolTok), "sha256(device token)": sum(got.Token)}
+	rec.mu.Lock()
+	var auditText strings.Builder
+	for _, ev := range rec.events {
+		b, _ := json.Marshal(ev)
+		auditText.Write(b)
+	}
+	rec.mu.Unlock()
+	for name, s := range secrets {
+		if strings.Contains(logs.String(), s) {
+			t.Errorf("%s appears in slog output", name)
+		}
+		if strings.Contains(auditText.String(), s) {
+			t.Errorf("%s appears in an audit row", name)
+		}
+	}
+	t.Logf("checked %d log bytes and %d audit rows for 4 secret strings", logs.Len(), len(rec.events))
+}
+
+// Deeply nested JSON is refused promptly, and a full 500-row batch under the
+// 8 MiB cap is answered, not hung.
+func TestDevices_DeepJSONAndFullBatchAreAnswered(t *testing.T) {
+	srv, _, _ := newDeviceTestServer(t, false)
+	id, tok := enrolTestDevice(t, srv, "laptop")
+	deep := `[{"seq":1,"id":"` + uuid.NewString() + `","time":"2026-01-01T00:00:00Z","actor_type":"human","actor":"a","action":"x","outcome":"success","data":` +
+		strings.Repeat("[", 300000) + strings.Repeat("]", 300000) + `}]`
+	start := time.Now()
+	w := do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, deep)
+	t.Logf("deep JSON (600 KB, depth 300000): %d in %s", w.Code, time.Since(start))
+	if w.Code != http.StatusBadRequest || time.Since(start) > 5*time.Second {
+		t.Errorf("deep JSON: %d in %s, want 400 promptly", w.Code, time.Since(start))
+	}
+	// 500 rows x ~16 KiB data, under the 8 MiB cap.
+	rows := chainRows(1, 500, "")
+	pad := strings.Repeat("x", 16000)
+	for i := range rows {
+		rows[i].Data = json.RawMessage(`{"pad":"` + pad + `"}`)
+	}
+	body, _ := json.Marshal(rows)
+	start = time.Now()
+	w = do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, string(body))
+	t.Logf("full batch (%d bytes, 500 rows): %d in %s", len(body), w.Code, time.Since(start))
+	if w.Code != http.StatusOK {
+		t.Errorf("full batch: %d, want 200: %.200s", w.Code, w.Body.String())
+	}
+}
+
+// A wdd_ bearer is refused on /metrics, and on the human surface in LocalMode
+// from a non-loopback peer; the device routes ignore LocalMode entirely.
+func TestDevices_DeviceTokenOnMetricsAndLocalMode(t *testing.T) {
+	srv, _, _ := newDeviceTestServer(t, false)
+	id, tok := enrolTestDevice(t, srv, "laptop")
+	if w := do(t, srv, http.MethodGet, "/metrics", tok, ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("device token on /metrics = %d, want 401", w.Code)
+	}
+	ast := newAuthzStore()
+	cfg := baseTestConfig(newHarness(t), ast)
+	cfg.LocalMode = true
+	lm := New(cfg)
+	for _, p := range []string{"/api/v1/me", "/api/v1/admin/devices", "/api/v1/runs"} {
+		if w := doPeer(t, lm, http.MethodGet, p, tok, "", "203.0.113.9:1"); w.Code != http.StatusUnauthorized && w.Code != http.StatusForbidden {
+			t.Errorf("LocalMode, non-loopback peer, device token on %s = %d, want 401/403", p, w.Code)
+		}
+	}
+	// deviceAuth ignores LocalMode: a device route still needs the wdd_ bearer.
+	if w := doPeer(t, lm, http.MethodPost, "/api/v1/devices/"+id.String()+"/heartbeat", "", "", "127.0.0.1:1"); w.Code != http.StatusUnauthorized {
+		t.Errorf("LocalMode loopback, no bearer, device route = %d, want 401", w.Code)
+	}
+}
