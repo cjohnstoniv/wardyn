@@ -607,12 +607,14 @@ k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
 other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
 "One replica, by construction").
 
-**Narrowed in 0.7.5: `DiskMiB` now bounds an AUTONOMOUS (task-mode) run's writes to `/tmp` and its
-workdir `/home/agent/work`.** A run's `disk_mib` becomes the agent container's
+**Narrowed in 0.7.5, further in 0.8 (#164): `DiskMiB` now bounds an AUTONOMOUS (task-mode) run's
+writes to `/tmp`, its workdir `/home/agent/work`, and its toolchain cache root
+`/home/agent/.cache`.** A run's `disk_mib` becomes the agent container's
 `resources.limits[ephemeral-storage]` (with a small fixed 256Mi request, so scheduling is
 unchanged except that a node short on allocatable ephemeral storage can newly leave the pod
-Pending) **and** the `sizeLimit` of two `emptyDir` volumes mounted on that container —
-`wardyn-tmp` at `/tmp` and `wardyn-work` at `/home/agent/work`. An autonomous run's commands run in
+Pending) **and** the `sizeLimit` of three `emptyDir` volumes mounted on that container —
+`wardyn-tmp` at `/tmp`, `wardyn-work` at `/home/agent/work`, and `wardyn-cache` at
+`/home/agent/.cache`. An autonomous run's commands run in
 an ephemeral container `Exec` attaches to the pod, and the kubelet meters no part of an ephemeral
 container's writable layer: that is why 0.7.2's limit alone bound an idle container nothing writes
 in on such a run (0.7.4 disclosed it). An `emptyDir` is metered as the pod's local ephemeral storage
@@ -623,22 +625,30 @@ container**, whose whole writable layer (`$HOME` and the toolchain caches includ
 metered against `disk_mib` since 0.7.2; nothing below is outside the cap for that run shape.
 
 **Inside the cap, for an autonomous run:** the clone at its default destination and everything
-written under the workdir (the checked-out tree, `node_modules`, in-tree build output), plus `/tmp`
-and the per-run CA files.
+written under the workdir (the checked-out tree, `node_modules`, in-tree build output); `/tmp` and
+the per-run CA files; and the Go and npm caches a build fills (`GOCACHE`, `GOTMPDIR`, `GOMODCACHE`,
+`npm_config_cache` all point under `/home/agent/.cache` — `internal/api/runs_dispatch_mounts.go`).
 
 **Outside it, for an autonomous run — this is a narrowing, not a close:** everything the agent
 writes anywhere else stays on the ephemeral container's unmetered layer. That is the rest of
-`$HOME` — including the
-toolchain caches a build actually fills (`/home/agent/go`, `~/.cache/go-build`, `~/.gotmp`,
-`~/.npm`, `~/.cache/pip`) and the dotfiles (`~/.wardyn`, `~/.ssh`, `~/.claude`) — `/opt/rust`, and
+`$HOME` — `/home/agent/go` (GOPATH itself is unmoved, so the installed tool binaries under its
+`bin/` stay reachable — only `GOMODCACHE` moved out) and `~/.cache/pip`, and the dotfiles
+(`~/.wardyn`, `~/.ssh`, `~/.claude`) — `/opt/rust`, and
 any authored `workspace_repos` or ephemeral-source target outside `/home/agent/work` (a target may
-legally sit at `/work`, `/workspace` or elsewhere under `/home/agent`). On a Go or Node build the
-residual is the larger half by bytes. Nothing is mounted at `/home/agent` itself on purpose: a
+legally sit at `/work`, `/workspace` or elsewhere under `/home/agent`). Nothing is mounted at
+`/home/agent` itself on purpose: a
 volume there would shadow the baked `.bashrc` every agent image ships, swallow the reserved drive
 mount point `/home/agent/drive`, and hide the read-only `~/.claude` bind the subscription path
 uses. `readOnlyRootFilesystem` would close the residual and is deliberately not set, because the
-agent legitimately writes those paths. Pointing the cache env under the workdir here, or a third
-cache volume, is the 0.7.6 follow-up.
+agent legitimately writes those paths.
+
+**Risk carried by the cache volume specifically:** an `emptyDir` mounted at `/home/agent/.cache`
+shadows the full image's pre-created, agent-owned `/home/agent/.cache/go-build`
+(`deploy/images/full/Dockerfile`) with a fresh directory whose ownership the kubelet decides —
+`FSGroup` is only applied to a pod that has a drive attached (`internal/runner/k8s/drives.go`), so
+a run with `disk_mib` set and no drive can get a root-owned mount the uid-1000 agent cannot write
+into. Only `test/conformance`'s `ephemeralFillTargets` "Cache" target, run against a real cluster,
+catches this — a fake-clientset unit test cannot see real `emptyDir` ownership.
 
 Each volume AND their sum are capped at `disk_mib`: the kubelet counts `emptyDir` usage toward the
 pod's `ephemeral-storage` total as well, so a pod with the run's shape writing 40Mi into each

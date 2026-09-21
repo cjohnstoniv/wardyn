@@ -138,7 +138,7 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 
 	// 1. Platform sandboxEnv + artifact config delivery + the Bedrock switch —
 	// all riding the same Env map.
-	for _, k := range []string{"GOTMPDIR", "GOCACHE", "MAVEN_OPTS"} {
+	for _, k := range []string{"GOTMPDIR", "GOCACHE", "GOMODCACHE", "MAVEN_OPTS"} {
 		if spec.Env[k] == "" {
 			t.Errorf("Env[%q] empty, want platform toolchain env set", k)
 		}

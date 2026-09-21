@@ -202,6 +202,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **On Kubernetes, a run's Go and npm caches now count against `disk_mib`.** A third `emptyDir`
+  (`wardyn-cache` at `/home/agent/.cache`) joins the existing `/tmp` and workdir scratch volumes
+  (`ephemeralScratchVolumes`), and dispatch's toolchain env now points `GOTMPDIR`, `GOMODCACHE` and
+  `npm_config_cache` under it — `GOCACHE` already did. `GOPATH` itself is unchanged, so the
+  installed tool binaries under `/home/agent/go/bin` stay put. The full agent image's login profile
+  (`/etc/profile.d/toolchains.sh`) was moved to the same paths so a login-shell task (`exec` mode's
+  `/bin/sh -lc`) doesn't undo the relocation. `test/conformance`'s ephemeral-disk case gained a
+  third fill target for the cache root.
+
 - **The webhook sink's Close test no longer reds CI at random.** `TestWebhookSink_CloseFlushesAndAwaitsDrain`
   decided whether `Close` had awaited the drain by sampling whether the goroutine running `Run` had
   reached the statement after `Run` returned. Nothing orders that statement before `Close` returns —

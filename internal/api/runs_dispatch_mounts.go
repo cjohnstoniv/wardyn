@@ -258,6 +258,13 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		"GIT_TERMINAL_PROMPT": "0",
 		"GIT_ASKPASS":         "",
 		"SSH_ASKPASS":         "",
+		// npm's cache, redirected under the agent's HOME cache root alongside
+		// the Go toolchain env below so a k8s run's npm installs land inside
+		// disk_mib too (issue #164) instead of on the ephemeral container's
+		// unmetered writable layer. Unconditional (unlike the Go/JVM env
+		// below): npm ships in every agent image, not just workspaces a scan
+		// detected as needing it.
+		"npm_config_cache": "/home/agent/.cache/npm",
 	}
 	// Agent-CLI telemetry, suppressed by default. Claude Code phones home to a
 	// Datadog host on first run; in a Confined run that host is the FIRST pending
@@ -278,11 +285,19 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 	// key is absent (agent-run's make_toolchain_dirs, the attach shell guard).
 	if needs == nil || needs.goTools {
 		// GOTMPDIR: the sandbox mounts /tmp NOEXEC, but `go test` compiles+EXECS
-		// its test binaries in $TMPDIR → "permission denied". Point it (and the
-		// build cache) at the agent's exec-allowed HOME. (Plain env survives a
-		// shell; only PATH is reset by a login shell.)
-		env["GOTMPDIR"] = "/home/agent/.gotmp"
-		env["GOCACHE"] = "/home/agent/.cache/go-build"
+		// its test binaries in $TMPDIR → "permission denied". Point it at the
+		// agent's exec-allowed HOME cache root. NOT a plain-env-only fix: the
+		// full image's login profile (/etc/profile.d/toolchains.sh) sources on
+		// every login shell (exec task mode's `/bin/sh -lc`) and unconditionally
+		// re-exports GOTMPDIR/GOCACHE/GOMODCACHE, which would undo an env-only
+		// relocation the moment a task ran that way — so the profile was moved to
+		// the SAME paths this dispatch env sets (deploy/images/full/Dockerfile),
+		// and the two now agree instead of racing.
+		env["GOTMPDIR"] = "/home/agent/.cache/gotmp"
+		env["GOCACHE"] = "/home/agent/.cache/go-build" // already inside the cache volume
+		// GOMODCACHE, not GOPATH: moving GOPATH itself would relocate
+		// /home/agent/go/bin too, losing the installed tool binaries it carries.
+		env["GOMODCACHE"] = "/home/agent/.cache/go/mod"
 	}
 	if needs == nil || needs.jvmTools {
 		// MAVEN_OPTS: Maven ALONE ignores HTTP(S)_PROXY (npm/pip/cargo/go/git
