@@ -37,7 +37,10 @@ const secretOrgDeviceCredential = "wardyn-org-device-credential"
 // with is a fresh token, so the laptop re-enrols: that is how a revoked device
 // comes back. The spent token MDM leaves in secret.env matches, and changes
 // nothing. A new device identity starts an empty chain at the organisation, so
-// the cursor goes back to 0 and the whole local table is pushed again.
+// the cursor goes back to 0, the revoked mark clears, and the whole local table
+// is pushed again. Re-enrolment is the ONLY thing that clears that mark: a
+// laptop the organisation revoked comes back up still refusing new runs, the
+// organisation reachable or not.
 func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets secretKeyStore, st federation.Store, rec audit.Recorder) (func() federation.Status, error) {
 	if orgURL == "" {
 		return nil, nil
@@ -58,7 +61,7 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 			if err != nil {
 				return nil, fmt.Errorf("refusing to start: enrolment at WARDYN_ORG_URL failed: %w", err)
 			}
-			if err := st.SetFederationCursor(ctx, 0); err != nil {
+			if err := st.ResetFederation(ctx); err != nil {
 				return nil, err
 			}
 			enrolled = &resp
@@ -80,6 +83,13 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 		}
 	}
 	fwd := federation.NewForwarder(client, st, cred, rec)
+	if err := fwd.Load(ctx); err != nil {
+		return nil, fmt.Errorf("load org federation state: %w", err)
+	}
+	if fwd.Status().Revoked {
+		slog.Error("wardynd: the organisation revoked this device; new runs are refused until it is re-enrolled with a fresh WARDYN_ORG_ENROLMENT_TOKEN",
+			"device_id", cred.DeviceID)
+	}
 	go fwd.Run(rootCtx)
 	return fwd.Status, nil
 }

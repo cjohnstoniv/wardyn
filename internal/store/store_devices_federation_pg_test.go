@@ -513,3 +513,40 @@ func TestPG_Devices_ConcurrentPushesNeitherDeadlockNorBreakTheChain(t *testing.T
 		t.Fatalf("verify after load: %+v %v", status, err)
 	}
 }
+
+// The laptop's revoked mark lives beside its cursor: set once, kept by a later
+// cursor advance, cleared only by ResetFederation (a re-enrolment), which also
+// returns the cursor to 0.
+func TestPG_Devices_FederationRevokedMark(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	if _, err := pool.Exec(ctx, `DELETE FROM org_federation`); err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := st.FederationRevoked(ctx); err != nil || revoked {
+		t.Fatalf("no row: revoked=%v err=%v", revoked, err)
+	}
+	if err := st.SetFederationCursor(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := st.MarkFederationRevoked(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.SetFederationCursor(ctx, 43); err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := st.FederationRevoked(ctx); err != nil || !revoked {
+		t.Fatalf("after mark and a cursor advance: revoked=%v err=%v", revoked, err)
+	}
+	if err := st.ResetFederation(ctx); err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := st.FederationRevoked(ctx)
+	cur, cerr := st.GetFederationCursor(ctx)
+	if err != nil || cerr != nil || revoked || cur != 0 {
+		t.Fatalf("after reset: revoked=%v cursor=%d err=%v/%v", revoked, cur, err, cerr)
+	}
+}

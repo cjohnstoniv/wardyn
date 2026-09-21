@@ -49,7 +49,8 @@ func TokenSHA256(token string) string {
 }
 
 // StatusError is a non-2xx answer from the organisation. RetryAfter is the
-// parsed Retry-After header (seconds form), zero when absent.
+// parsed Retry-After header (seconds or HTTP-date form), zero when absent or
+// unparseable.
 type StatusError struct {
 	Code       int
 	RetryAfter time.Duration
@@ -128,9 +129,18 @@ func (c *Client) post(ctx context.Context, path, bearer string, in any, want int
 	defer resp.Body.Close()
 	if resp.StatusCode != want {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		secs, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
-		return &StatusError{Code: resp.StatusCode, RetryAfter: time.Duration(max(secs, 0)) * time.Second,
+		return &StatusError{Code: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
 			Message: strings.TrimSpace(string(msg))}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
+}
+
+func parseRetryAfter(h string) time.Duration {
+	if secs, err := strconv.Atoi(h); err == nil {
+		return time.Duration(max(secs, 0)) * time.Second
+	}
+	if t, err := http.ParseTime(h); err == nil {
+		return max(time.Until(t), 0)
+	}
+	return 0
 }

@@ -28,13 +28,16 @@ const (
 // AuditActor names this package on the local rows it writes.
 const AuditActor = "wardyn/federation"
 
-// Store is the local table the forwarder reads and the durable cursor it
-// advances (store.PG).
+// Store is the local table the forwarder reads and the durable org_federation
+// row it keeps: the cursor and the revoked mark (store.PG).
 type Store interface {
 	ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error)
 	GetFederationCursor(ctx context.Context) (int64, error)
 	SetFederationCursor(ctx context.Context, seq int64) error
 	AuditHeadSeq(ctx context.Context) (int64, error)
+	FederationRevoked(ctx context.Context) (bool, error)
+	MarkFederationRevoked(ctx context.Context) error
+	ResetFederation(ctx context.Context) error
 }
 
 // Status is the forwarder's published state. DeviceID is for this daemon's
@@ -69,7 +72,7 @@ type Forwarder struct {
 	backoff time.Duration
 }
 
-// NewForwarder returns a forwarder for cred. Nothing is read until Run.
+// NewForwarder returns a forwarder for cred. Nothing is read until Load or Run.
 func NewForwarder(c *Client, st Store, cred Credential, rec audit.Recorder) *Forwarder {
 	return &Forwarder{client: c, store: st, cred: cred, audit: rec, interval: tickInterval,
 		status: Status{DeviceID: cred.DeviceID}}
@@ -86,6 +89,28 @@ func (f *Forwarder) update(fn func(*Status)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	fn(&f.status)
+}
+
+// Load reads the durable cursor and revoked mark. bootHybrid calls it before
+// the server starts, so a laptop revoked before a restart refuses new runs from
+// its first request, whether or not the organisation is reachable.
+func (f *Forwarder) Load(ctx context.Context) error {
+	acked, err := f.store.GetFederationCursor(ctx)
+	if err != nil {
+		return err
+	}
+	revoked, err := f.store.FederationRevoked(ctx)
+	if err != nil {
+		return err
+	}
+	f.update(func(s *Status) {
+		s.AckedSeq, s.Revoked = acked, revoked
+		if revoked {
+			s.LastError = "the organisation revoked this device before this start"
+		}
+	})
+	f.loaded = true
+	return nil
 }
 
 // Run forwards until ctx ends or the organisation revokes this device. A
@@ -116,12 +141,12 @@ func (f *Forwarder) Run(ctx context.Context) {
 // never sent, and the cursor moves past them.
 func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 	if !f.loaded {
-		acked, err := f.store.GetFederationCursor(ctx)
-		if err != nil {
+		if err := f.Load(ctx); err != nil {
 			return f.retry(err, 0), false
 		}
-		f.update(func(s *Status) { s.AckedSeq = acked })
-		f.loaded = true
+	}
+	if f.Status().Revoked {
+		return 0, true
 	}
 	head, err := f.store.AuditHeadSeq(ctx)
 	if err != nil {
@@ -129,6 +154,18 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 	}
 	f.update(func(s *Status) { s.HeadSeq = head })
 	acked := f.Status().AckedSeq
+	if head < acked {
+		// The local table was truncated or restored under a kept cursor: its rows
+		// would never be read again. Start over; the organisation skips what it
+		// already holds and records a genesis row as a chain reset.
+		slog.Error("federation: the local audit head is below the forwarding cursor; resending from the start",
+			"device_id", f.cred.DeviceID, "head_seq", head, "acked_seq", acked)
+		if err := f.store.SetFederationCursor(ctx, 0); err != nil {
+			return f.retry(err, 0), false
+		}
+		acked = 0
+		f.update(func(s *Status) { s.AckedSeq = 0 })
+	}
 
 	var rows []types.FederatedAuditEvent
 	if !f.halted && head > acked {
@@ -173,7 +210,8 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 }
 
 // refused maps an organisation answer to what the forwarder does next:
-// 401/410 revoke; 429 waits as told; any other 4xx is definitive — the batch
+// 401/410 revoke; 429 waits as its Retry-After says, or backs off when it says
+// nothing usable; any other 4xx is definitive — the batch
 // will never be accepted as sent, so it is not retried (the forwarder halts
 // pushing, keeps heart-beating so revocation is still noticed, and says so on
 // its status until a restart); everything else backs off and retries.
@@ -186,10 +224,10 @@ func (f *Forwarder) refused(ctx context.Context, err error) (time.Duration, bool
 	case se.Revoked():
 		f.revoke(ctx, se)
 		return 0, true
-	case se.Code == 429:
+	case se.Code == 429 && se.RetryAfter > 0:
 		f.update(func(s *Status) { s.LastError = se.Error() })
-		return min(max(se.RetryAfter, time.Second), maxBackoff), false
-	case se.Code >= 400 && se.Code < 500 && se.Code != 408:
+		return min(se.RetryAfter, maxBackoff), false
+	case se.Code >= 400 && se.Code < 500 && se.Code != 408 && se.Code != 429:
 		f.halted = true
 		slog.Error("federation: the organisation refused an audit batch definitively; forwarding is halted until wardynd restarts",
 			"device_id", f.cred.DeviceID, "acked_seq", f.Status().AckedSeq, "error", se)
@@ -213,6 +251,9 @@ func (f *Forwarder) revoke(ctx context.Context, se *StatusError) {
 	slog.Error("federation: the organisation revoked this device; new runs are refused until it is re-enrolled",
 		"device_id", f.cred.DeviceID, "status", se.Code, "acked_seq", st.AckedSeq)
 	f.update(func(s *Status) { s.Revoked, s.LastError = true, se.Error() })
+	if err := f.store.MarkFederationRevoked(ctx); err != nil {
+		slog.Error("federation: recording the revocation durably failed; a restart will not remember it", "error", err)
+	}
 	data, _ := json.Marshal(map[string]any{"status": se.Code, "acked_seq": st.AckedSeq})
 	if err := f.audit.Record(ctx, types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem, Actor: AuditActor,

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -18,11 +19,32 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// memStore is the local audit table and org_federation cursor.
+// memStore is the local audit table and the org_federation row.
 type memStore struct {
-	mu     sync.Mutex
-	rows   []types.FederatedAuditEvent
-	cursor int64
+	mu      sync.Mutex
+	rows    []types.FederatedAuditEvent
+	cursor  int64
+	revoked bool
+}
+
+func (m *memStore) FederationRevoked(context.Context) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.revoked, nil
+}
+
+func (m *memStore) MarkFederationRevoked(context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.revoked = true
+	return nil
+}
+
+func (m *memStore) ResetFederation(context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cursor, m.revoked = 0, false
+	return nil
 }
 
 func (m *memStore) add(n int, chained bool) {
@@ -252,6 +274,7 @@ func TestForwarder_HonoursRetryAfter(t *testing.T) {
 		{http.StatusTooManyRequests, "7", 7 * time.Second},
 		{http.StatusServiceUnavailable, "120", 120 * time.Second},
 		{http.StatusServiceUnavailable, "86400", maxBackoff},
+		{http.StatusTooManyRequests, time.Now().Add(90 * time.Second).UTC().Format(http.TimeFormat), 90 * time.Second},
 	} {
 		st, rec := &memStore{}, &memRecorder{}
 		st.add(1, true)
@@ -262,7 +285,8 @@ func TestForwarder_HonoursRetryAfter(t *testing.T) {
 		f, _ := newTestForwarder(srv.URL, st, rec)
 		wait, stop := f.step(context.Background())
 		srv.Close()
-		if stop || wait != tc.want {
+		// The HTTP-date form is second-granular and read a moment later.
+		if stop || wait > tc.want || wait < tc.want-2*time.Second {
 			t.Errorf("%d Retry-After %s: wait=%v stop=%v, want %v", tc.code, tc.after, wait, stop, tc.want)
 		}
 	}
@@ -278,5 +302,72 @@ func TestForwarder_SkipsRowsThatPredateTheChain(t *testing.T) {
 	f.step(context.Background())
 	if len(org.pushes) != 1 || len(org.pushes[0]) != 2 || org.pushes[0][0].Seq != 4 || st.cursor != 5 {
 		t.Fatalf("pushes=%v cursor=%d", org.pushes, st.cursor)
+	}
+}
+
+// TestForwarder_RevocationSurvivesRestart: a revocation the forwarder saw is
+// durable. A fresh forwarder over the same store — a restart, with the
+// organisation now unreachable — starts revoked and never calls the org.
+func TestForwarder_RevocationSurvivesRestart(t *testing.T) {
+	st, rec := &memStore{}, &memRecorder{}
+	st.add(2, true)
+	cred := Credential{DeviceID: uuid.New(), Token: "wdd_test"}
+	org := &orgStub{answer: func(w http.ResponseWriter) bool { w.WriteHeader(http.StatusUnauthorized); return true }}
+	srv := org.serve(t, cred.DeviceID)
+	f := NewForwarder(NewClient(srv.URL), st, cred, rec)
+	if _, stop := f.step(context.Background()); !stop || !f.Status().Revoked {
+		t.Fatal("setup: expected revocation")
+	}
+	srv.Close()
+	g := NewForwarder(NewClient(srv.URL), st, cred, rec)
+	if _, stop := g.step(context.Background()); !stop || !g.Status().Revoked {
+		t.Fatalf("after a restart with the org unreachable: stop=%v status=%+v — the revocation was forgotten", stop, g.Status())
+	}
+	if len(rec.events) != 1 {
+		t.Fatalf("a restart re-recorded the revocation: %d local rows", len(rec.events))
+	}
+}
+
+// TestForwarder_429WithoutUsableRetryAfterBacksOff: an intermediary's 429 with
+// no Retry-After, or one that does not parse, backs off like any other retry
+// rather than hammering the org every second.
+func TestForwarder_429WithoutUsableRetryAfterBacksOff(t *testing.T) {
+	for _, after := range []string{"", "soon"} {
+		st, rec := &memStore{}, &memRecorder{}
+		st.add(1, true)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if after != "" {
+				w.Header().Set("Retry-After", after)
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		f, _ := newTestForwarder(srv.URL, st, rec)
+		var waits []time.Duration
+		for range 3 {
+			wait, stop := f.step(context.Background())
+			if stop {
+				t.Fatal("a 429 is not a revocation")
+			}
+			waits = append(waits, wait)
+		}
+		srv.Close()
+		if want := []time.Duration{15 * time.Second, 30 * time.Second, time.Minute}; !slices.Equal(waits, want) {
+			t.Errorf("Retry-After %q: waits = %v, want %v", after, waits, want)
+		}
+	}
+}
+
+// TestForwarder_HeadBelowCursorResendsFromTheStart: a local table truncated or
+// restored under a kept cursor is resent from seq 0 instead of being silently
+// never forwarded with lag 0.
+func TestForwarder_HeadBelowCursorResendsFromTheStart(t *testing.T) {
+	st, rec := &memStore{cursor: 500}, &memRecorder{}
+	st.add(10, true)
+	cred := Credential{DeviceID: uuid.New(), Token: "wdd_test"}
+	org := &orgStub{}
+	f := NewForwarder(NewClient(org.serve(t, cred.DeviceID).URL), st, cred, rec)
+	f.step(context.Background())
+	if len(org.pushes) != 1 || len(org.pushes[0]) != 10 || org.pushes[0][0].Seq != 1 || st.cursor != 10 {
+		t.Fatalf("pushes=%d cursor=%d status=%+v", len(org.pushes), st.cursor, f.Status())
 	}
 }

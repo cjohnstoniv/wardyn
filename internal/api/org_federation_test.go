@@ -130,8 +130,8 @@ func TestCreateRunGateRefusesBeforeTheStore(t *testing.T) {
 }
 
 // TestRunCreationRoutesThroughTheRevocationGate enumerates every run-creating
-// path in this package and fails if one skips createRun's revocation gate: the
-// store's CreateRun may be called only from createRun, each launcher below must
+// path in this package and fails if one skips createRun's revocation gate: a
+// method named CreateRun — on any receiver — may be called only from createRun, each launcher below must
 // call createRun, and a sandbox is created only by the dispatch chain, which
 // runs for a row createRun wrote. A new launcher that calls the store directly,
 // or a listed one that stops calling the gate, fails here.
@@ -179,18 +179,17 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 				if !ok {
 					return true
 				}
-				recv := ""
-				if inner, ok := sel.X.(*ast.SelectorExpr); ok {
-					recv = inner.Sel.Name
-				}
-				switch {
-				case sel.Sel.Name == "CreateRun" && recv == "Store":
+				// By method name, whatever the receiver: an aliased store
+				// (st := s.cfg.Store; st.CreateRun) or one passed in as a
+				// parameter must not slip past.
+				switch sel.Sel.Name {
+				case "CreateRun":
 					direct = append(direct, where)
-				case sel.Sel.Name == "createRun":
+				case "createRun":
 					gated = append(gated, where)
-				case sel.Sel.Name == "CreateSandbox" && recv == "Runner":
+				case "CreateSandbox":
 					sandboxes = append(sandboxes, where)
-				case sel.Sel.Name == "dispatchRun":
+				case "dispatchRun":
 					dispatchers = append(dispatchers, where)
 				}
 				return true
@@ -200,13 +199,13 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 	slices.Sort(gated)
 	slices.Sort(dispatchers)
 	if !slices.Equal(direct, []string{"org_revocation.go:createRun"}) {
-		t.Errorf("Store.CreateRun is called from %v; only org_revocation.go:createRun may call it — route the launcher through s.createRun", direct)
+		t.Errorf("a CreateRun method is called from %v; only org_revocation.go:createRun may call one — route the launcher through s.createRun", direct)
 	}
 	if !slices.Equal(gated, wantGated) {
 		t.Errorf("launchers calling the revocation gate = %v, want %v", gated, wantGated)
 	}
 	if !slices.Equal(sandboxes, []string{"runs_dispatch.go:dispatchRun"}) {
-		t.Errorf("Runner.CreateSandbox is called from %v; a sandbox must only ever be created by dispatchRun, for a run createRun wrote", sandboxes)
+		t.Errorf("a CreateSandbox method is called from %v; a sandbox must only ever be created by dispatchRun, for a run createRun wrote", sandboxes)
 	}
 	if !slices.Equal(dispatchers, wantDispatchers) {
 		t.Errorf("dispatchRun callers = %v, want %v — a new dispatch path must dispatch a row createRun wrote, then be listed here", dispatchers, wantDispatchers)

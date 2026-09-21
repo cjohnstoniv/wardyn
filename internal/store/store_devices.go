@@ -607,6 +607,47 @@ func (s PG) GetFederationCursor(ctx context.Context) (int64, error) {
 	return seq, nil
 }
 
+// FederationRevoked reports whether the organisation revoked this laptop's
+// device credential (MarkFederationRevoked), false when no row exists.
+func (s PG) FederationRevoked(ctx context.Context) (bool, error) {
+	var revoked bool
+	err := s.Pool.QueryRow(ctx, `SELECT revoked_at IS NOT NULL FROM org_federation WHERE singleton`).Scan(&revoked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: get federation revoked: %w", err)
+	}
+	return revoked, nil
+}
+
+// MarkFederationRevoked durably records that the organisation revoked this
+// laptop, so a restart comes back still refusing new runs.
+func (s PG) MarkFederationRevoked(ctx context.Context) error {
+	const q = `
+		INSERT INTO org_federation (singleton, revoked_at, updated_at)
+		VALUES (true, now(), now())
+		ON CONFLICT (singleton) DO UPDATE SET revoked_at = COALESCE(org_federation.revoked_at, now()), updated_at = now()`
+	if _, err := s.Pool.Exec(ctx, q); err != nil {
+		return fmt.Errorf("store: mark federation revoked: %w", err)
+	}
+	return nil
+}
+
+// ResetFederation is a (re-)enrolment: a new device identity starts an empty
+// chain at the organisation, so the cursor returns to 0 and the revoked mark
+// clears. The only writer that clears it.
+func (s PG) ResetFederation(ctx context.Context) error {
+	const q = `
+		INSERT INTO org_federation (singleton, last_forwarded_seq, revoked_at, updated_at)
+		VALUES (true, 0, NULL, now())
+		ON CONFLICT (singleton) DO UPDATE SET last_forwarded_seq = 0, revoked_at = NULL, updated_at = now()`
+	if _, err := s.Pool.Exec(ctx, q); err != nil {
+		return fmt.Errorf("store: reset federation: %w", err)
+	}
+	return nil
+}
+
 // SetFederationCursor durably advances the forwarder's cursor, upserting the
 // singleton row — the write PutSiteConfig's shape mirrors. Called after a
 // batch is successfully accepted upstream (docs/design/0.8/PLAN.md: "the

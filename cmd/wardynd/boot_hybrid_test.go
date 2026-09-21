@@ -35,16 +35,46 @@ func (m hybridSecrets) Put(_ context.Context, name string, v []byte) error {
 	return nil
 }
 
-// hybridStore is the local audit table (empty) and org_federation cursor.
+// hybridStore is the local audit table (empty) and the org_federation row.
 type hybridStore struct {
-	mu     sync.Mutex
-	cursor int64
+	mu      sync.Mutex
+	cursor  int64
+	head    int64
+	revoked bool
+}
+
+func (s *hybridStore) cursorNow() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cursor
+}
+
+func (s *hybridStore) FederationRevoked(context.Context) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revoked, nil
+}
+func (s *hybridStore) MarkFederationRevoked(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revoked = true
+	return nil
+}
+func (s *hybridStore) ResetFederation(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cursor, s.revoked = 0, false
+	return nil
 }
 
 func (s *hybridStore) ListAuditEventsAfterSeq(context.Context, int64, int) ([]types.FederatedAuditEvent, error) {
 	return nil, nil
 }
-func (s *hybridStore) AuditHeadSeq(context.Context) (int64, error) { return 0, nil }
+func (s *hybridStore) AuditHeadSeq(context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.head, nil
+}
 func (s *hybridStore) GetFederationCursor(context.Context) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,7 +192,7 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 	if st.cursor != 0 {
 		t.Errorf("cursor = %d, want 0 for a new device identity", st.cursor)
 	}
-	st.cursor = 7
+	st.cursor, st.head = 7, 7
 	st.mu.Unlock()
 	if len(rec.events) != 1 || rec.events[0].Action != "device.local.enrol" || rec.events[0].Target != cred.DeviceID.String() {
 		t.Fatalf("local rows = %+v", rec.events)
@@ -177,8 +207,8 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	enrols, _ = org.seen()
-	if len(enrols) != 1 || len(rec.events) != 1 || st.cursor != 7 {
-		t.Fatalf("restart re-enrolled: enrols=%d rows=%d cursor=%d", len(enrols), len(rec.events), st.cursor)
+	if len(enrols) != 1 || len(rec.events) != 1 || st.cursorNow() != 7 {
+		t.Fatalf("restart re-enrolled: enrols=%d rows=%d cursor=%d", len(enrols), len(rec.events), st.cursorNow())
 	}
 
 	// A fresh token re-enrols as a new device and resets the cursor.
@@ -187,7 +217,43 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 	}
 	_ = json.Unmarshal(secrets[secretOrgDeviceCredential], &cred)
 	enrols, devices = org.seen()
-	if len(enrols) != 2 || cred.DeviceID != devices[1] || st.cursor != 0 || len(rec.events) != 2 {
-		t.Fatalf("re-enrol: enrols=%v cred=%v cursor=%d rows=%d", enrols, cred.DeviceID, st.cursor, len(rec.events))
+	if len(enrols) != 2 || cred.DeviceID != devices[1] || st.cursorNow() != 0 || len(rec.events) != 2 {
+		t.Fatalf("re-enrol: enrols=%v cred=%v cursor=%d rows=%d", enrols, cred.DeviceID, st.cursorNow(), len(rec.events))
+	}
+}
+
+// TestBootHybrid_RevokedLaptopBootsStillRefusing: the durable revoked mark is
+// read at boot, before any org call — a revoked laptop restarted with the org
+// unreachable publishes Revoked from the start. A fresh token re-enrols and
+// clears it.
+func TestBootHybrid_RevokedLaptopBootsStillRefusing(t *testing.T) {
+	org := &hybridOrg{}
+	srv := org.serve(t)
+	secrets, st, rec := hybridSecrets{}, &hybridStore{}, &hybridRecorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if _, err := bootHybrid(context.Background(), ctx, srv.URL, "wde_first", secrets, st, rec); err != nil {
+		t.Fatal(err)
+	}
+	st.mu.Lock()
+	st.revoked = true // what Forwarder.revoke leaves behind
+	st.mu.Unlock()
+	down := httptest.NewServer(http.NotFoundHandler())
+	down.Close()
+	status, err := bootHybrid(context.Background(), ctx, down.URL, "wde_first", secrets, st, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status().Revoked {
+		t.Fatal("a revoked laptop came back up enrolled")
+	}
+	status, err = bootHybrid(context.Background(), ctx, srv.URL, "wde_second", secrets, st, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if status().Revoked || st.revoked {
+		t.Fatal("re-enrolment did not clear the revoked mark")
 	}
 }

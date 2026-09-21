@@ -107,7 +107,7 @@ func validateHybridPosture(orgURL, enrolToken string, memberMode, allowPlaintext
 	}
 	if !strings.EqualFold(u.Scheme, "https") && !allowPlaintextListen && !listenIsLoopback(u.Hostname()) {
 		return fmt.Errorf("refusing to start: WARDYN_ORG_URL %q is not https:// and its host is not loopback — "+
-			"the enrolment token travels with every request this daemon makes to it, and a plaintext non-loopback URL "+
+			"the device credential travels with every request this daemon makes to it, and a plaintext non-loopback URL "+
 			"sends that credential in cleartext to any peer on the path; use https://, point WARDYN_ORG_URL at a "+
 			"loopback host for local testing, or set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", orgURL)
 	}
