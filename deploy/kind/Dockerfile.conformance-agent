@@ -6,5 +6,5 @@
 # same `go build ./cmd/wardyn-rec` every agent image's own builder stage
 # runs — not rebuilt here, so this file stays exactly what it is: busybox
 # plus one binary.
-FROM busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+FROM busybox:1.38@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
 COPY wardyn-rec /usr/local/bin/wardyn-rec
