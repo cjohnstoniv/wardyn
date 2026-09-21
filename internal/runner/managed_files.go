@@ -47,12 +47,6 @@ type ManagedFile struct {
 // with: readable by the agent, writable only by root.
 const DefaultManagedFileMode fs.FileMode = 0o644
 
-// ManagedFileDirMode is the mode every directory a driver has to create on a
-// managed file's path is given. Root-owned 0755 is what makes the file
-// unreplaceable as well as unwritable: a non-root agent that cannot write the
-// PARENT cannot unlink the file and put its own there instead.
-const ManagedFileDirMode fs.FileMode = 0o755
-
 // ManagedFilesMaxBytes caps the total content one spec may carry. The binding
 // constraint is the Kubernetes substrate: every managed file rides the same
 // per-run Secret as the proxy config and each SecretEnv value, and a Secret is
@@ -72,9 +66,7 @@ const ManagedFilesMaxBytes = 256 << 10
 // actually runs in (see internal/runner/k8s/exec.go). Mounting over a
 // top-level directory would therefore hide the image's own /etc (or /usr, or
 // /bin) and the sandbox would not come up at all, so a managed path must be at
-// least two directories deep. Docker honours the same rule for the mirror
-// reason: it never re-owns a directory the image already shipped at the top
-// level.
+// least two directories deep.
 func ValidateManagedFiles(files []ManagedFile) error {
 	total := 0
 	seen := make(map[string]bool, len(files))

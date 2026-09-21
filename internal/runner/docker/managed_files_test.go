@@ -51,8 +51,9 @@ func readTar(t *testing.T, b []byte) []tarEntry {
 }
 
 // The archive IS the security boundary on this substrate: every header must
-// carry uid/gid 0, and the directory chain must stop short of the top level so
-// the image's own /etc is never re-owned on the way past.
+// carry uid/gid 0, and there must be no directory entry at all — the daemon
+// applies one to a directory that already exists, which is how a delivery
+// re-owned a host bind-mount source to root.
 func TestManagedFilesTar(t *testing.T) {
 	buf, err := managedFilesTar([]runner.ManagedFile{
 		{Path: "/etc/wardyn/agent/settings.json", Mode: 0o644, Content: []byte(`{"a":1}`)},
@@ -65,16 +66,12 @@ func TestManagedFilesTar(t *testing.T) {
 	got := readTar(t, buf.Bytes())
 
 	want := []tarEntry{
-		{name: "etc/wardyn/", typ: tar.TypeDir, mode: 0o755, body: ""},
-		{name: "etc/wardyn/agent/", typ: tar.TypeDir, mode: 0o755, body: ""},
 		{name: "etc/wardyn/agent/settings.json", typ: tar.TypeReg, mode: 0o644, body: `{"a":1}`},
 		{name: "etc/wardyn/agent/locked", typ: tar.TypeReg, mode: 0o444, body: "x"},
-		{name: "opt/wardyn/", typ: tar.TypeDir, mode: 0o755, body: ""},
-		{name: "opt/wardyn/policy/", typ: tar.TypeDir, mode: 0o755, body: ""},
 		{name: "opt/wardyn/policy/rules", typ: tar.TypeReg, mode: 0o644, body: "r"},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("archive has %d entries %v, want %d %v", len(got), got, len(want), want)
+		t.Fatalf("archive has %d entries %v, want %d %v — a directory entry re-owns a directory that already exists", len(got), got, len(want), want)
 	}
 	for i, w := range want {
 		g := got[i]
@@ -83,13 +80,6 @@ func TestManagedFilesTar(t *testing.T) {
 		}
 		if g.uid != 0 || g.gid != 0 {
 			t.Errorf("entry %q has uid/gid %d/%d — every managed-file header MUST be 0/0 or the file lands writable by the thing it is meant to constrain", g.name, g.uid, g.gid)
-		}
-	}
-	// The vacuity guard for the rule above: the top-level directories the image
-	// already ships must not appear at all.
-	for _, g := range got {
-		if g.name == "etc/" || g.name == "opt/" {
-			t.Errorf("archive re-owns the top-level directory %q; the chain must start one level down", g.name)
 		}
 	}
 }
@@ -208,6 +198,34 @@ func TestCreateSandbox_FailsClosedWhenDeliveryFails(t *testing.T) {
 	}
 	if _, ok := f.networks[internalNetName(spec.RunID)]; ok {
 		t.Error("the per-run network survived a failed managed-file delivery; the rollback must be complete")
+	}
+}
+
+// A managed file's directory that already exists — shipped by the image, or
+// mounted there — is refused, not delivered into: nothing the daemon reports
+// says who owns it, and a mounted one is a host directory.
+func TestCreateSandbox_RefusesAManagedFileDirectoryThatAlreadyExists(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	f.existingPaths = map[string]bool{"/etc/wardyn/agent": true}
+	d := newTestDriver(f)
+
+	spec := managedSpec()
+	_, err := d.CreateSandbox(context.Background(), spec)
+	if err == nil {
+		t.Fatal("CreateSandbox delivered into a managed-file directory that already existed")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("refusal = %v, want it to say the directory already exists", err)
+	}
+	if len(f.copies) != 0 {
+		t.Errorf("the refusal still copied %d archives into the container", len(f.copies))
+	}
+	if slices.Contains(f.startedNames, agentContainerName(spec.RunID)) {
+		t.Error("the agent was STARTED after its managed files were refused")
+	}
+	if _, ok := f.networks[internalNetName(spec.RunID)]; ok {
+		t.Error("the per-run network survived the refusal; the rollback must be complete")
 	}
 }
 

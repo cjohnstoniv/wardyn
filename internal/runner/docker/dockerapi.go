@@ -64,6 +64,9 @@ type dockerAPI interface {
 	// between ContainerCreate and ContainerStart — the only window in which a
 	// file the agent cannot modify can be placed without racing the agent.
 	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
+	// ContainerStatPath tells deliverManagedFiles whether a managed file's
+	// directory already exists (in the image or as a mount) before the copy.
+	ContainerStatPath(ctx context.Context, containerID string, options client.ContainerStatPathOptions) (client.ContainerStatPathResult, error)
 
 	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
 	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)

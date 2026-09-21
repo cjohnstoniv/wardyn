@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"path"
 	"strings"
 	"time"
 
@@ -42,9 +41,26 @@ var managedFileEpoch = time.Unix(0, 0).UTC()
 // IMAGE'S USER (uid 1000 for every Wardyn agent image), which is precisely the
 // agent-writable outcome runner.ManagedFile exists to rule out. Left false,
 // the daemon honours the header ids and the file lands root:root.
+//
+// IT NEVER DELIVERS INTO A DIRECTORY THAT ALREADY EXISTS. The daemon creates a
+// missing directory root-owned 0755; one that is already there — shipped by
+// the image, or a bind mount, which the daemon mounts for the copy — is
+// refused. The stat carries a mode but no owner, so an existing directory
+// cannot be told apart from one the agent owns (which makes the file
+// replaceable whatever its own mode), and a bind-mounted one is a HOST
+// directory the delivery would write into.
 func (d *Driver) deliverManagedFiles(ctx context.Context, containerID string, files []runner.ManagedFile) error {
 	if len(files) == 0 {
 		return nil
+	}
+	for _, dir := range runner.ManagedFileDirs(files) {
+		_, err := d.cli.ContainerStatPath(ctx, containerID, client.ContainerStatPathOptions{Path: dir})
+		if err == nil {
+			return fmt.Errorf("docker: managed file directory %s already exists in the container (shipped by the image or mounted there); a managed file is delivered only into a directory the delivery creates, never into one it would have to trust or re-own", dir)
+		}
+		if !isNotFound(err) {
+			return fmt.Errorf("docker: stat managed file directory %s: %w", dir, err)
+		}
 	}
 	archive, err := managedFilesTar(files)
 	if err != nil {
@@ -62,42 +78,23 @@ func (d *Driver) deliverManagedFiles(ctx context.Context, containerID string, fi
 	return nil
 }
 
-// managedFilesTar builds the archive deliverManagedFiles extracts at "/":
-// every parent directory root-owned 0755, every file root-owned at its own
-// mode, all with numeric uid/gid 0 rather than a user NAME the daemon would
-// have to resolve against the image's /etc/passwd.
+// managedFilesTar builds the archive deliverManagedFiles extracts at "/": one
+// entry per file, root-owned at its own mode, with numeric uid/gid 0 rather
+// than a user NAME the daemon would have to resolve against the image's
+// /etc/passwd.
 //
-// The directory chain deliberately STOPS SHORT of the top level: for
-// /etc/wardyn/agent/settings.json it emits etc/wardyn/ and etc/wardyn/agent/,
-// never etc/. Extraction applies a directory header's ownership to a directory
-// that already exists, so emitting the top level would re-own the image's own
-// /etc (or /home, or /usr) on the way past — a change nothing asked for, on a
-// tree the image already got right. runner.ValidateManagedFiles' two-deep rule
-// is what guarantees there is always at least one directory below it to own.
+// It carries NO directory entries. The daemon applies a directory entry's
+// owner and mode to a directory that already exists — an earlier version of
+// this archive re-owned a host bind-mount source to root that way — whereas a
+// file whose directory is missing gets that directory created root-owned 0755
+// and every existing ancestor left exactly as it was.
 func managedFilesTar(files []runner.ManagedFile) (*bytes.Buffer, error) {
 	if err := runner.ValidateManagedFiles(files); err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	done := map[string]bool{}
 	for _, f := range files {
-		for _, dir := range managedFileDirChain(f.Path) {
-			if done[dir] {
-				continue
-			}
-			done[dir] = true
-			if err := tw.WriteHeader(&tar.Header{
-				Typeflag: tar.TypeDir,
-				Name:     strings.TrimPrefix(dir, "/") + "/",
-				Mode:     int64(runner.ManagedFileDirMode.Perm()),
-				Uid:      0,
-				Gid:      0,
-				ModTime:  managedFileEpoch,
-			}); err != nil {
-				return nil, err
-			}
-		}
 		if err := tw.WriteHeader(&tar.Header{
 			Typeflag: tar.TypeReg,
 			Name:     strings.TrimPrefix(f.Path, "/"),
@@ -117,18 +114,6 @@ func managedFilesTar(files []runner.ManagedFile) (*bytes.Buffer, error) {
 		return nil, err
 	}
 	return &buf, nil
-}
-
-// managedFileDirChain lists the directories on p that the archive owns,
-// outermost first and excluding the top level: /a/b/c/d yields /a/b and /a/b/c.
-// A path shorter than that cannot occur — ValidateManagedFiles refuses it.
-func managedFileDirChain(p string) []string {
-	segs := strings.Split(strings.Trim(path.Dir(p), "/"), "/")
-	dirs := make([]string, 0, len(segs))
-	for i := 2; i <= len(segs); i++ {
-		dirs = append(dirs, "/"+strings.Join(segs[:i], "/"))
-	}
-	return dirs
 }
 
 // preflightSpec refuses everything about spec that can be refused for free —

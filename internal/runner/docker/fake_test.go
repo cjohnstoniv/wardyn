@@ -83,6 +83,9 @@ type fakeDocker struct {
 	// failCopyToContainer makes every CopyToContainer fail, so a test can prove
 	// the sandbox is torn down rather than started without its ceiling.
 	failCopyToContainer bool
+	// existingPaths are the in-container paths ContainerStatPath reports as
+	// present; every other path is not-found, as a fresh image's is.
+	existingPaths map[string]bool
 
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
@@ -356,6 +359,18 @@ func (f *fakeDocker) CopyToContainer(ctx context.Context, id string, opts client
 	started := slices.Contains(f.startedNames, id)
 	f.copies = append(f.copies, fakeCopy{id: id, dest: opts.DestinationPath, archive: body, copyUIDGID: opts.CopyUIDGID, afterStart: started})
 	return client.CopyToContainerResult{}, nil
+}
+
+func (f *fakeDocker) ContainerStatPath(ctx context.Context, id string, opts client.ContainerStatPathOptions) (client.ContainerStatPathResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.containers[id] == nil {
+		return client.ContainerStatPathResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	if !f.existingPaths[opts.Path] {
+		return client.ContainerStatPathResult{}, fakeNotFound{msg: "no such path: " + opts.Path}
+	}
+	return client.ContainerStatPathResult{}, nil
 }
 
 func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
