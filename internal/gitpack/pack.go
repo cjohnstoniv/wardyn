@@ -5,11 +5,10 @@
 // request: which paths would this push change, with what file modes and sizes?
 //
 // It is a pure library. It opens no sockets, reads no configuration and talks to
-// no part of the control plane: the whole point is that the proxy can judge a
-// push WITHOUT fetching the base objects a thin pack refers to, because fetching
-// them would put the proxy on the network on the run's behalf — the thing the
-// git broker exists to prevent. Enforcement — which rules apply, what a refusal
-// says — belongs to the caller.
+// no part of the control plane: it never fetches the base objects a thin pack
+// refers to, so a push is judged from its own bytes. Enforcement — which rules
+// apply, what a refusal says, and whether to ask the forge about what the pack
+// leaves out or re-sends — belongs to the caller.
 //
 // # What the answer is worth
 //
@@ -29,15 +28,22 @@
 //     fallback.
 //   - A directory whose tree object is not in the pack is reported as ONE
 //     opaque entry at its own path (Change.Opaque), never skipped. Its contents
-//     are a tree the receiving side stores, but without the pre-image nothing
+//     are a tree the receiving side stores, but nothing in the pack
 //     distinguishes a directory the push left alone from one it moved onto that
 //     path, copied there from an earlier push, or restored from an older
 //     revision — and skipping it let any of those place anything at any path
-//     unread. The cost is that, in the enumerated case, every directory a push
-//     did not change is reported this way, so a caller's deny rule that could
-//     match beneath one refuses the push. Only a diff against a parent the pack
-//     carries skips a subtree, because only there does an unchanged object id
-//     at the same name prove it untouched.
+//     unread. Only a diff against a parent the pack carries skips a subtree,
+//     because only there does an unchanged object id at the same name prove it
+//     untouched. Everywhere else the entry carries its object id (Change.OID)
+//     and the answer names the commits the push builds on (Result.Bases), so a
+//     caller that can read those commits' trees from the receiving side can
+//     prove an entry unchanged the same way.
+//   - A pack is not always only what is new. git leaves out what is reachable
+//     from the tips the receiving side advertises that the sender also has, so
+//     a sender holding none of them — a clone taken before its branch moved on
+//     — re-sends its history, and that history's first commit is enumerated
+//     whole. Result.Settle takes out the commits a caller says the receiving
+//     side already holds.
 //   - A removal is invisible. The enumerated case has no pre-image to compare
 //     against, so this package reports what a push INTRODUCES, not what it takes
 //     away.
@@ -132,7 +138,17 @@ type Change struct {
 	// A size rule must DECIDE what -1 means rather than compare it, because -1
 	// passes every "is this under the limit" test by accident.
 	Size int64
+	// OID is the object id the tree entry names — the blob, the submodule's
+	// commit, or for an uncarried directory its tree. Object ids are content
+	// addresses, so an entry whose mode and OID match the ones the same path
+	// held in a commit the push builds on is unchanged, everything beneath a
+	// directory included.
+	OID string
 }
+
+// Carried reports whether the pack holds the object c names. One it does not
+// hold is content the receiving side already stores, at some path.
+func (c Change) Carried() bool { return c.Size >= 0 }
 
 // Command is one ref update from the request's command section.
 type Command struct {
@@ -150,6 +166,18 @@ type Result struct {
 	Commands []Command
 	// Changes are the paths the push introduces, sorted and deduplicated.
 	Changes []Change
+	// Bases are the commits the push builds on: every parent a commit in the
+	// pack names that the pack does not carry, sorted and deduplicated. The
+	// receiving side holds them if the push is to succeed — but a commit may
+	// name ANY object id as its parent, so a caller must establish for itself
+	// that a base belongs to the history it trusts before comparing against it.
+	// After Settle, a carried commit the caller said the receiving side holds
+	// is a base too.
+	Bases []string
+
+	// idx is the parsed pack, kept so Settle can answer again without reading
+	// the body twice.
+	idx *index
 }
 
 // objectType is a pack object's wire type.
@@ -229,9 +257,10 @@ func Inspect(body []byte) (Result, error) {
 	if err := idx.coverCommands(cmds); err != nil {
 		return Result{}, err
 	}
-	if res.Changes, err = idx.changes(); err != nil {
+	if res.Changes, res.Bases, err = idx.changes(nil); err != nil {
 		return Result{}, err
 	}
+	res.idx = idx
 	return res, nil
 }
 

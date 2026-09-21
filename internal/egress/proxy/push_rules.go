@@ -26,13 +26,16 @@ package proxy
 // git_push_any_branch: true would read as governed and enforce nothing.
 //
 // A REFUSED PUSH IS NEVER FORWARDED; ITS CREDENTIAL MAY ALREADY EXIST. Both
-// call sites run this ahead of their token lookup, so the refused request
-// itself mints nothing. But it is never a push's first request: git sends GET
+// call sites run this ahead of their token lookup, so a push passed by its own
+// bytes mints nothing itself. One its pack alone would refuse asks the lane for
+// the credential first, to read the forge (push_forge.go). Neither is a push's
+// first request: git sends GET
 // info/refs?service=git-receive-pack before every push, the forge will not
 // advertise refs to it without the credential, and that discovery mints (or
-// reuses) it. So these rules decide what reaches the forge, not whether a
-// credential is issued — an approval-gated single-use grant is spent at
-// discovery, and its cached credential serves the corrected retry.
+// reuses) it — so the forge read normally reuses it too. These rules decide
+// what reaches the forge, not whether a credential is issued: an
+// approval-gated single-use grant is spent at discovery, and its cached
+// credential serves the corrected retry.
 //
 // OFFENDING PATHS DO NOT RIDE THE DECISION LOG. They go to the structured log
 // and, at most ten of them, to the refusal body. The decision log's free-text
@@ -45,22 +48,27 @@ package proxy
 // render, and is refused here for confinePush's reason: it would claim
 // "unpack ok" for a pack that was never forwarded.
 //
-// WHAT THE RULES SEE is the pack and nothing else (internal/gitpack's package
-// comment, docs/POLICIES.md and threatmodel/THREAT-MODEL.md carry this in
-// full). A pack leaves out every object the forge already stores, wherever
-// the new tree puts it, and the broker never has the pre-image — a governed
-// push lands on the run's own branch, so its parent stays on the forge — so
-// the new tree is enumerated. Every file at the repository ROOT is reported
-// whether the push touched it or not, and every directory the pack does not
-// carry is reported as one OPAQUE entry: nothing distinguishes a directory
-// left alone from one moved, copied or restored onto that path, so what is
-// beneath it is unknown. Symlinks and submodules are opaque the same way — a
-// checkout resolves paths beneath them to content no tree entry here names.
-// An opaque entry is denied when a pattern could match anything beneath it
-// (matchesBeneath). So a pattern reaching into a directory the repository
-// already has refuses every push whose tree still contains that directory —
-// the price of the rule meaning anything at all: skipping those directories
-// let a forge-held tree be placed at any path unread.
+// WHAT THE RULES SEE (internal/gitpack's package comment, docs/POLICIES.md
+// and threatmodel/THREAT-MODEL.md carry this in full). A pack leaves out every
+// object the forge already stores, wherever the new tree puts it, and a
+// governed push lands on the run's own branch, so its parent stays on the
+// forge and the new tree is enumerated: every file at the repository ROOT is
+// reported whether the push touched it or not, and every directory the pack
+// does not carry is reported as one OPAQUE entry — nothing in the pack
+// distinguishes a directory left alone from one moved, copied or restored onto
+// that path. Symlinks and submodules are opaque the same way: a checkout
+// resolves paths beneath them to content no tree entry here names. An opaque
+// entry is matched when a pattern could match anything beneath it
+// (matchesBeneath).
+//
+// Before any entry refuses the push, the history the pack re-sends — commits
+// the forge already holds in the history it vouches for — is taken out of the
+// answer (push_forge.go). A matched entry the rest of the pack CARRIES is then
+// refused from the pack alone. One it does not carry is compared with the same
+// path in a commit the push builds on, read from the forge: the same mode and
+// object id there means the push left it unchanged, and it is dropped. Every
+// other outcome — a different or absent entry, no commit the repository's own
+// history vouches for, a forge that cannot be read — refuses, and says which.
 //
 // Phase one has no size rule, so nothing here compares gitpack.Change.Size.
 // Whoever adds max_file_size_mib must DECIDE what Size == -1 means rather than
@@ -165,15 +173,17 @@ func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 	return rs
 }
 
-// match reports the paths a deny rule claims: a capped SAMPLE for the log and
-// the exact total. It stops at the first pattern that claims a path — the
+// match reports the entries a deny rule claims. Those the pack carries are
+// refused outright: a capped SAMPLE for the log and the exact total. Those it
+// does not carry come back whole in unknown, for the forge to clear or not
+// (push_forge.go). It stops at the first pattern that claims an entry — the
 // answer is per path, not per rule.
 //
 // An opaque entry (gitpack.Change.Opaque: a directory the pack does not carry,
 // a symlink, a submodule) is claimed when a pattern could match anything
 // beneath it, not only the entry itself: what is beneath it is unknown, and a
 // deny rule has to treat unknown as matched.
-func (rs *pushRuleSet) match(changes []gitpack.Change) (sample []string, total int, err error) {
+func (rs *pushRuleSet) match(changes []gitpack.Change) (sample []string, total int, unknown []gitpack.Change, err error) {
 	budget := maxGlobOps
 	for _, c := range changes {
 		var segs []string // the root is zero segments, not one empty one
@@ -187,18 +197,27 @@ func (rs *pushRuleSet) match(changes []gitpack.Change) (sample []string, total i
 				ok, err = matchesBeneath(pat, segs, &budget)
 			}
 			if err != nil {
-				return nil, 0, err
+				return nil, 0, nil, err
 			}
 			if ok {
-				total++
-				if len(sample) < maxDeniedPathsLogged {
-					sample = append(sample, shownPath(c))
+				if c.Carried() {
+					sample, total = claim(sample, total, c)
+				} else {
+					unknown = append(unknown, c)
 				}
 				break
 			}
 		}
 	}
-	return sample, total, nil
+	return sample, total, unknown, nil
+}
+
+// claim adds c to a refusal's capped sample and exact count.
+func claim(sample []string, total int, c gitpack.Change) ([]string, int) {
+	if len(sample) < maxDeniedPathsLogged {
+		sample = append(sample, shownPath(c))
+	}
+	return sample, total + 1
 }
 
 // shownPath is how a claimed entry is named to the person: an uncarried
@@ -348,11 +367,14 @@ func nonIdentityEncoding(h http.Header) (string, bool) {
 // and nothing is buffered, so a nil push_rules behaves exactly as it does
 // today.
 //
+// forge reads what the pack does not carry from the lane's own forge; nil
+// when the lane cannot, which keeps the strict reading (push_forge.go).
+//
 // The returned release MUST be deferred by the caller, as scanBufferedBody's
 // is: the buffer stays charged to scanRetained until the forwarded request is
 // done with it. It is always non-nil and safe to call more than once.
 func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.Reader,
-	subject slog.Attr, deny func(ruleSource string)) (io.Reader, func(), bool) {
+	subject slog.Attr, deny func(ruleSource string), forge *forgeRepo) (io.Reader, func(), bool) {
 	noRelease := func() {}
 	rules := p.policy.contentRules()
 	if rules == nil {
@@ -414,7 +436,7 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 				" every object it deltifies against")
 		return nil, noRelease, false
 	}
-	sample, total, err := rules.match(res.Changes)
+	sample, total, why, err := p.deniedPaths(r, rules, res, forge, subject)
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
@@ -427,8 +449,9 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 			slog.String("run_id", p.runID.String()),
 			subject,
 			slog.Int("denied_paths", total),
-			slog.Any("paths", sample))
-		http.Error(w, deniedPathsBody(sample, total), http.StatusForbidden)
+			slog.Any("paths", sample),
+			slog.String("reason", why))
+		http.Error(w, deniedPathsBody(sample, total, why), http.StatusForbidden)
 		return nil, noRelease, false
 	}
 	// The buffer outlives the slot: it is forwarded from here. Charged while the
@@ -440,6 +463,43 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	var once sync.Once
 	n := len(buf)
 	return bytes.NewReader(buf), func() { once.Do(func() { scanRetained.release(n) }) }, true
+}
+
+// deniedPaths is the verdict on one inspected push: what the rules refuse, and
+// why when the forge was asked. A push the pack alone passes is never asked
+// about. Otherwise, inside forgeReadWait, the history the pack re-sends is
+// taken out first (forgeRepo.settle); an entry the rest of the pack carries is
+// then refused outright, and only when none is does the forge get to clear
+// the entries the pack does not carry.
+func (p *Proxy) deniedPaths(r *http.Request, rules *pushRuleSet, res gitpack.Result, forge *forgeRepo,
+	subject slog.Attr) (sample []string, total int, why string, err error) {
+	sample, total, unknown, err := rules.match(res.Changes)
+	if err != nil || total == 0 && len(unknown) == 0 {
+		return sample, total, "", err
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), forgeReadWait)
+	defer cancel()
+	left := unknown
+	if res, why = forge.settle(ctx, res); why == "" {
+		if sample, total, unknown, err = rules.match(res.Changes); err != nil {
+			return nil, 0, "", err
+		}
+		left = nil
+		if total == 0 && len(unknown) > 0 {
+			left, why = forge.unchanged(ctx, unknown, res)
+		}
+	}
+	for _, c := range left {
+		sample, total = claim(sample, total, c)
+	}
+	if forge != nil && forge.reads > 0 {
+		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
+			slog.String("run_id", p.runID.String()),
+			subject,
+			slog.Int("still_refused", total),
+			slog.Int("forge_reads", forge.reads))
+	}
+	return sample, total, why, nil
 }
 
 // refusePush records, logs and answers one content-rule refusal that names no
@@ -457,8 +517,8 @@ func (p *Proxy) refusePush(w http.ResponseWriter, r *http.Request, subject slog.
 }
 
 // deniedPathsBody is the refusal git shows the person: the paths that matched,
-// capped, and what to do about it.
-func deniedPathsBody(sample []string, total int) string {
+// capped, why the forge did not clear them when it was asked, and what to do.
+func deniedPathsBody(sample []string, total int, why string) string {
 	var b strings.Builder
 	b.WriteString("wardyn: this push is refused by the run's push content rules\n")
 	shown := min(len(sample), maxDeniedPathsInBody)
@@ -469,8 +529,10 @@ func deniedPathsBody(sample []string, total int) string {
 		fmt.Fprintf(&b, "  ... and %d more denied path(s)\n", total-shown)
 	}
 	if slices.ContainsFunc(sample, func(s string) bool { return strings.HasSuffix(s, "/") }) {
-		b.WriteString("a path ending in / is a directory this push carries only by reference to what the" +
-			" forge already stores, so what is beneath it cannot be checked\n")
+		b.WriteString("a path ending in / is a directory this push does not carry (/ alone is the whole tree)\n")
+	}
+	if why != "" {
+		b.WriteString(why + "\n")
 	}
 	b.WriteString("remove these paths from the push, or ask an operator to widen push_rules.deny_paths")
 	return b.String()

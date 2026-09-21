@@ -192,7 +192,8 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// (info/refs, upload-pack) never enter this branch: pure streaming, zero added
 	// latency. A denial happens BEFORE gitToken, so the refused request mints
 	// nothing itself — but the push's own discovery (GET info/refs) came first
-	// and already did (push_rules.go).
+	// and already did (push_rules.go), and a content-rules verdict that has to
+	// read the forge looks the credential up before it is reached.
 	//
 	// allowSrc is the rule_source the ALLOW row below carries. A push forwarded
 	// with the parser opted out gets its own value (ruleSourceGitNSOff) so the
@@ -219,9 +220,13 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// inside its else. git_push_any_branch opts out of WHERE a push may land;
 	// wiring this inside that block would let a WHERE opt-out silently switch
 	// off a WHAT control (push_rules.go). A refused push is never forwarded.
+	// What the pack does not carry is compared with the repository's own trees,
+	// read with this lane's credential (push_forge.go).
 	if isPush {
+		forge := &forgeRepo{p: p, repo: orgRepo,
+			token: func(ctx context.Context) (string, error) { return p.gitToken(ctx, grantID) }}
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("repo", orgRepo),
-			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) })
+			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) }, forge)
 		defer release()
 		if !ok {
 			return

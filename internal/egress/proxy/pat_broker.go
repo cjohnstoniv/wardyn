@@ -178,7 +178,8 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	//
 	// A refusal happens BEFORE patToken, so the refused request mints nothing
 	// itself — but the push's own discovery (GET info/refs) came first and
-	// already did (push_rules.go).
+	// already did (push_rules.go), and a content-rules verdict that has to read
+	// the forge looks the credential up before it is reached.
 	var reqBody io.Reader = r.Body
 	allowSrc := ruleSourcePAT
 	if verb == "git-receive-pack" && PATBranchNSEnforced() {
@@ -199,10 +200,12 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// on a WHERE switch the operator may never have turned on would leave a
 	// policy that reads as governed enforcing nothing (push_rules.go). A run
 	// that sets no push_rules buffers nothing and behaves exactly as it did.
-	// A refused push is never forwarded.
+	// A refused push is never forwarded. What the pack does not carry is
+	// compared with the forge's own trees on github.com only (patForge).
 	if verb == "git-receive-pack" {
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
-			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) })
+			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
+			p.patForge(host, rest, grant))
 		defer release()
 		if !ok {
 			return

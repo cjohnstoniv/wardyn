@@ -515,7 +515,7 @@ func TestPushRulesGlobMatching(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.pattern+" vs "+c.path, func(t *testing.T) {
 			rs := compilePushRules(&types.PushRulesSpec{DenyPaths: []string{c.pattern}})
-			_, total, err := rs.match([]gitpack.Change{{Path: c.path, Mode: "100644"}})
+			_, total, _, err := rs.match([]gitpack.Change{{Path: c.path, Mode: "100644"}})
 			if err != nil {
 				t.Fatalf("match: %v", err)
 			}
@@ -546,7 +546,7 @@ func TestPushRulesBoundTheirOwnWork(t *testing.T) {
 				changes[i] = gitpack.Change{Path: fmt.Sprintf("src/mod%06d/file.go", i), Mode: mode}
 			}
 			start := time.Now()
-			_, _, err := rs.match(changes)
+			_, _, _, err := rs.match(changes)
 			elapsed := time.Since(start)
 
 			if !errors.Is(err, errGlobBudget) {
@@ -633,20 +633,17 @@ func pushThroughBroker(t *testing.T, deny ...string) (string, error) {
 //
 // Under branch-namespace confinement every governed push lands on the run's
 // own branch, so the pushed commit's parent stays on the forge and the
-// inspector has no pre-image to diff against: it enumerates the new tree
-// instead. A pack carries only objects the forge lacks, so that enumeration
-// descends into changed directories and names every file at the ROOT, changed
-// or not — and every directory the push did not change arrives as a tree the
-// forge already stores, which is exactly what a directory moved or restored
-// onto that path looks like. It is reported as one opaque entry, and a pattern
-// that could match beneath it refuses the push.
+// inspector has no pre-image in the pack to diff against: it enumerates the
+// new tree instead. A pack carries only objects the forge lacks, so that
+// enumeration descends into changed directories and names every file at the
+// ROOT, changed or not — and every directory the push did not change arrives
+// as a tree the forge already stores, which is exactly what a directory moved
+// or restored onto that path looks like.
 //
-// The consequence an operator has to know before authoring a rule: a pattern
-// reaching into a directory the repository already has refuses every push
-// whose tree still contains that directory, and a pattern naming a file at the
-// repository root fires on every push. Both err toward the safe side of a
-// deny rule; the only directory the rules can leave alone is one whose
-// pattern could not match beneath it.
+// What the pack carries is judged from the pack: the edited path is refused.
+// What it does not carry — the root-level file and the directory this push
+// left alone — is compared with the same path in the commit the push builds
+// on, read from the forge, and passes because it is unchanged.
 func TestPushRulesSeeWhatThePackCarriesAndNoMore(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -654,9 +651,9 @@ func TestPushRulesSeeWhatThePackCarriesAndNoMore(t *testing.T) {
 		wantRefus bool
 	}{
 		{"the edited path is matched", "src/**", true},
-		{"a file at the root is matched even though this push did not touch it", "Makefile", true},
-		{"a directory this push did not carry is refused, since what is beneath it is unknown",
-			".github/workflows/**", true},
+		{"a file at the root this push did not touch is compared with the base and passes", "Makefile", false},
+		{"a directory this push did not carry is compared with the base and passes",
+			".github/workflows/**", false},
 		{"a pattern that cannot reach into an uncarried directory lets the push through",
 			"docs/**", false},
 	}
@@ -673,7 +670,7 @@ func TestPushRulesSeeWhatThePackCarriesAndNoMore(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("git push was refused under deny %q, which the pack does not carry:\n%s", c.deny, out)
+				t.Fatalf("git push was refused under deny %q, which this push leaves unchanged:\n%s", c.deny, out)
 			}
 		})
 	}

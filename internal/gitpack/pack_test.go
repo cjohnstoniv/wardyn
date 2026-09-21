@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -714,6 +715,63 @@ func TestPackTree_UncarriedDirectoryIsReportedNotSkipped(t *testing.T) {
 			t.Fatalf("diff: %v", err)
 		}
 		wantChanges(t, w.out, "a.txt 100644 2")
+	})
+}
+
+// TestPackSettle_HistoryTheReceiverHoldsIntroducesNothing: a sender holding
+// none of the tips the receiving side advertises re-sends its history, and
+// Inspect enumerates that history's first commit whole. Settle takes out what
+// the caller says the receiving side holds, diffs what is left against it,
+// and asks as few questions as it can.
+func TestPackSettle_HistoryTheReceiverHoldsIntroducesNothing(t *testing.T) {
+	r := newRepo(t)
+	r.write(".github/ci.yml", "on: push\n", 0o644)
+	r.write("src/a.go", "a\n", 0o644)
+	root := r.commit("root")
+	r.write("src/a.go", "a two\n", 0o644)
+	base := r.commit("base")
+	r.write("src/a.go", "a three\n", 0o644)
+	mid := r.commit("mid")
+	r.write("src/b.go", "b\n", 0o644)
+	r.commit("tip")
+	// The remote is empty and advertises nothing, so all four commits go.
+	res, err := Inspect(r.push("HEAD:refs/heads/work", "--no-thin"))
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	wantChanges(t, res.Changes, ".github/ci.yml 100644 9", "src/a.go 100644 2", "src/a.go 100644 6",
+		"src/a.go 100644 8", "src/b.go 100644 2")
+
+	settle := func(t *testing.T, holds ...string) (Result, []string) {
+		t.Helper()
+		var asked []string
+		out, err := res.Settle(func(c string) (bool, error) {
+			asked = append(asked, c)
+			return slices.Contains(holds, c), nil
+		})
+		if err != nil {
+			t.Fatalf("Settle: %v", err)
+		}
+		return out, asked
+	}
+	t.Run("the receiving side holds the history beneath the push", func(t *testing.T) {
+		out, asked := settle(t, root, base)
+		wantChanges(t, out.Changes, "src/a.go 100644 8", "src/b.go 100644 2")
+		if !slices.Equal(out.Bases, []string{base}) {
+			t.Errorf("Bases = %v, want the held commit the push builds on, %s", out.Bases, base)
+		}
+		// The bottom first, then down from the tip until a held commit answers
+		// for the rest. The tip itself is never asked about.
+		if want := []string{root, mid, base}; !slices.Equal(asked, want) {
+			t.Errorf("asked about %v, want %v", asked, want)
+		}
+	})
+	t.Run("the receiving side holds none of it", func(t *testing.T) {
+		out, asked := settle(t)
+		wantChanges(t, out.Changes, paths(res.Changes)...)
+		if want := []string{root}; !slices.Equal(asked, want) {
+			t.Errorf("asked about %v, want only %v: nothing above a new commit is held", asked, want)
+		}
 	})
 }
 

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,9 +38,20 @@ type forgeRun struct {
 	bare, work, ref string
 	decisions       *bytes.Buffer
 	brokerURL       string
+	forge           *gitForge
+	mu              sync.Mutex
+	refusal         string // the body of the last refused receive-pack POST
 }
 
 func newForgeRun(t *testing.T, seed map[string]string, cloneArgs []string, deny ...string) *forgeRun {
+	t.Helper()
+	return newForgeRunVia(t, "", seed, cloneArgs, deny...)
+}
+
+// newForgeRunVia is newForgeRun through the git_pat lane for patHost, or
+// through the GitHub App lane when patHost is "".
+func newForgeRunVia(t *testing.T, patHost string, seed map[string]string, cloneArgs []string,
+	deny ...string) *forgeRun {
 	t.Helper()
 	forge := newGitForge(t)
 	bare := filepath.Join(forge.root, "octocat", "hello-world.git")
@@ -54,16 +66,52 @@ func newForgeRun(t *testing.T, seed map[string]string, cloneArgs []string, deny 
 	runGit(t, s, "commit", "-qm", "seed")
 	runGit(t, s, "push", "-q", bare, "HEAD:refs/heads/main")
 
-	p, decisions := newGitBrokerProxyWithSpec(t,
-		map[string]uuid.UUID{"octocat/hello-world": uuid.New()},
-		upstreamAddr(forge.srv), contentRulesSpec(deny...))
-	broker := httptest.NewServer(p)
+	var p *Proxy
+	var decisions *bytes.Buffer
+	repoPath := "/wardyn/gh/octocat/hello-world"
+	if patHost == "" {
+		p, decisions = newGitBrokerProxyWithSpec(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()},
+			upstreamAddr(forge.srv), contentRulesSpec(deny...))
+	} else {
+		p, decisions = newPATBrokerProxySpec(t, contentRulesSpec(deny...),
+			map[string]PATGrant{patHost: {GrantID: uuid.New(), Username: "x-access-token"}},
+			upstreamAddr(forge.srv))
+		repoPath = "/wardyn/git/" + patHost + "/octocat/hello-world.git"
+	}
+	r := &forgeRun{bare: bare, ref: BranchNSPrefix(p.runID) + "work", decisions: decisions, forge: forge}
+	// git drops a refused receive-pack's body, so the broker's answer is kept
+	// here for the tests that assert on the reason it gives.
+	broker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if !strings.HasSuffix(req.URL.Path, "/git-receive-pack") {
+			p.ServeHTTP(w, req)
+			return
+		}
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+		if rec.Code >= http.StatusBadRequest {
+			r.mu.Lock()
+			r.refusal = rec.Body.String()
+			r.mu.Unlock()
+		}
+		for k, v := range rec.Header() {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(rec.Body.Bytes())
+	}))
 	t.Cleanup(broker.Close)
-	work := filepath.Join(t.TempDir(), "work")
-	args := append(append([]string{"clone", "-q"}, cloneArgs...), broker.URL+"/wardyn/gh/octocat/hello-world", work)
+	r.brokerURL = broker.URL
+	r.work = filepath.Join(t.TempDir(), "work")
+	args := append(append([]string{"clone", "-q"}, cloneArgs...), broker.URL+repoPath, r.work)
 	runGit(t, t.TempDir(), args...)
-	return &forgeRun{bare: bare, work: work, ref: BranchNSPrefix(p.runID) + "work",
-		decisions: decisions, brokerURL: broker.URL}
+	return r
+}
+
+// lastRefusal is the body the broker answered the last refused push with.
+func (r *forgeRun) lastRefusal() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.refusal
 }
 
 // commit stages everything in the working tree and commits it.
@@ -118,9 +166,11 @@ func (r *forgeRun) wantRefused(t *testing.T, out string, err error, path string)
 // TestPushRulesRefuseAForgeHeldTreeOnADeniedPath: a pack leaves out every
 // object the forge already stores, wherever the new tree puts it, so a
 // directory the forge holds could be placed at any path with nothing beneath
-// it read. The broker has no pre-image to tell a directory left alone from one
-// moved there, so a directory the pack does not carry is opaque, and a deny
-// pattern that could match beneath it refuses the push.
+// it read. Nothing in the pack tells a directory left alone from one moved
+// there, so a directory the pack does not carry is opaque: where a deny
+// pattern could match beneath it, it is compared with the same path in the
+// commit the push builds on, and one moved there is not what that commit
+// holds.
 func TestPushRulesRefuseAForgeHeldTreeOnADeniedPath(t *testing.T) {
 	seed := map[string]string{
 		".github/workflows/ci.yml": "on: push\n",
@@ -164,16 +214,16 @@ func TestPushRulesRefuseAForgeHeldTreeOnADeniedPath(t *testing.T) {
 		out, err := r.push()
 		r.wantRefused(t, out, err, ".github/workflows/pwn.yml")
 	})
-	// Where the repository already has the denied directory, the FIRST push is
-	// refused: .github/ goes uncarried, and nothing in the pack says it is the
-	// directory that stood there before. That is the cost of the rule, and it
-	// closes the attack one step earlier.
+	// Where the repository already has the denied directory, the first push
+	// leaves .github/ exactly as the commit it builds on holds it, so it passes.
+	// The second puts the staged tree at .github/workflows, which is not what
+	// the run's own branch held there.
 	t.Run("the same two pushes where the repository already has the denied directory", func(t *testing.T) {
 		r := newForgeRun(t, seed, []string{"--depth", "1"}, ".github/workflows/**")
 		writeFiles(t, r.work, pwn)
 		r.commit(t, "stage")
 		out, err := r.push()
-		r.wantRefused(t, out, err, "staging/pwn.yml")
+		r.wantAllowed(t, out, err)
 		runGit(t, r.work, "rm", "-rq", ".github/workflows")
 		if err := os.MkdirAll(filepath.Join(r.work, ".github"), 0o755); err != nil {
 			t.Fatal(err)
@@ -181,7 +231,7 @@ func TestPushRulesRefuseAForgeHeldTreeOnADeniedPath(t *testing.T) {
 		runGit(t, r.work, "mv", "staging", ".github/workflows")
 		r.commit(t, "rename")
 		out, err = r.push()
-		r.wantRefused(t, out, err, ".github/workflows/pwn.yml")
+		r.wantRefusedFor(t, out, err, ".github/workflows/pwn.yml", whyChanged)
 	})
 
 	// The sandbox owns its client, so it chooses what the pack omits: here a
@@ -279,11 +329,11 @@ func TestPushRulesMatchWhatCouldLieBeneathAnOpaqueEntry(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.pattern+" vs "+c.path+" "+c.mode, func(t *testing.T) {
 			rs := compilePushRules(&types.PushRulesSpec{DenyPaths: []string{c.pattern}})
-			_, total, err := rs.match([]gitpack.Change{{Path: c.path, Mode: c.mode, Size: -1}})
+			_, total, unknown, err := rs.match([]gitpack.Change{{Path: c.path, Mode: c.mode, Size: -1}})
 			if err != nil {
 				t.Fatalf("match: %v", err)
 			}
-			if got := total > 0; got != c.want {
+			if got := total+len(unknown) > 0; got != c.want {
 				t.Errorf("matched = %v, want %v", got, c.want)
 			}
 		})
