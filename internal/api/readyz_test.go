@@ -41,7 +41,7 @@ func TestReadyzPingsStore(t *testing.T) {
 	t.Run("db reachable", func(t *testing.T) {
 		srv := New(Config{Store: &pingStore{}})
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		panicFails(t, srv.Handler()).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", w.Code)
 		}
@@ -57,7 +57,7 @@ func TestReadyzPingsStore(t *testing.T) {
 	t.Run("db unreachable", func(t *testing.T) {
 		srv := New(Config{Store: &pingStore{err: errors.New("dial tcp: connection refused")}})
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		panicFails(t, srv.Handler()).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 		if w.Code != http.StatusServiceUnavailable {
 			t.Fatalf("status = %d, want 503", w.Code)
 		}
@@ -73,7 +73,7 @@ func TestReadyzPingsStore(t *testing.T) {
 	t.Run("no store configured stays ok", func(t *testing.T) {
 		srv := New(Config{})
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		panicFails(t, srv.Handler()).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", w.Code)
 		}

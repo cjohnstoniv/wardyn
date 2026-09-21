@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
@@ -287,6 +288,63 @@ func (h *harness) mintRunToken(t *testing.T, runID uuid.UUID) string {
 	return id.Token
 }
 
+// panicCatcher is a minimal middleware.LogEntry (go-chi/chi/v5/middleware):
+// Write is a no-op (nothing in this package reads a request log), and Panic
+// records what routes.go's middleware.Recoverer recovered. Recoverer calls
+// GetLogEntry(r).Panic(rvr, stack) whenever the request context carries a
+// LogEntry INSTEAD OF just printing the stack — a seam chi ships for exactly
+// this, that production code never uses (wardynd sets no LogFormatter, so
+// GetLogEntry(r) is always nil there; grep WithLogEntry|RequestLogger outside
+// _test.go is empty). Guarded by a mutex: httptest.NewServer(panicFails(...))
+// serves each request on its OWN connection goroutine (net/http.Server.Serve),
+// never the test's own, so the write here and panicFails' read below can race.
+type panicCatcher struct {
+	mu        sync.Mutex
+	recovered bool
+	v         any
+	stack     []byte
+}
+
+func (c *panicCatcher) Write(int, int, http.Header, time.Duration, interface{}) {}
+
+func (c *panicCatcher) Panic(v any, stack []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recovered, c.v, c.stack = true, v, stack
+}
+
+func (c *panicCatcher) take() (v any, stack []byte, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.v, c.stack, c.recovered
+}
+
+// panicFails wraps h so any panic its router recovers, across every request
+// the wrapped handler serves, fails t instead of answering with an
+// unremarkable 500 that every assertion still matches (#338). The check runs
+// in t.Cleanup rather than inline: a DIRECT h.ServeHTTP(w, r) call (do/doSSO,
+// every raw ServeHTTP site in the package) executes on the test's own
+// goroutine and could fail immediately, but httptest.NewServer(panicFails(t,
+// h)) serves each connection on a goroutine net/http.Server spawns — where
+// calling t.FailNow is unsafe (testing.T's own doc comment) — so both forms
+// go through the one path that IS always safe. Every srv.Handler().ServeHTTP
+// / httptest.NewServer(srv.Handler()) call site in the package wraps its
+// handler with this rather than calling it bare, so no test path bypasses
+// the check. Nothing about the response or the production logging path
+// changes — this only reads what Recoverer already computes.
+func panicFails(t testing.TB, h http.Handler) http.Handler {
+	t.Helper()
+	c := &panicCatcher{}
+	t.Cleanup(func() {
+		if v, stack, ok := c.take(); ok {
+			t.Fatalf("recovered a panic instead of answering it — a recovered panic must fail its test (#338):\n%v\n%s", v, stack)
+		}
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, middleware.WithLogEntry(r, c))
+	})
+}
+
 func do(t *testing.T, srv *Server, method, path, bearer, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var r *http.Request
@@ -310,10 +368,7 @@ func do(t *testing.T, srv *Server, method, path, bearer, body string) *httptest.
 	// loopback peer. Model that so local-mode tests exercise the allowed path.
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
-	if p, ok := srv.takeRecoveredPanic(); ok {
-		t.Fatalf("%s %s recovered a panic instead of answering it — a recovered panic must fail its test (#338):\n%s", method, path, p)
-	}
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 

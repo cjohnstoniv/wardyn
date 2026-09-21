@@ -568,7 +568,7 @@ func TestAttachTakeover_NoHolderIsRejected(t *testing.T) {
 // take-over that closes the displaced socket with a reason the UI can read.
 func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	srv, _, fr, audit, run := holderTestServer(t)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
@@ -933,7 +933,7 @@ func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 // 1 MiB-capable frame landed, after the take-over was decided AND audited.
 func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 	srv, gr, _, run := f5Server(t)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
 	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")
@@ -996,7 +996,7 @@ func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 func TestAttachWS_DeadPeerHolderIsFreed(t *testing.T) {
 	srv, _, fr, _, run := holderTestServer(t)
 	srv.pingEvery = 15 * time.Millisecond // test-only override; see attachPingEvery
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
 	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")
@@ -1061,7 +1061,7 @@ func TestAttachWS_RemountReleasesHolderBeforeAuditTail(t *testing.T) {
 		}
 	})
 	srv, _, fr, run := holderTestServerWithAudit(t, audit)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
 	// ── the departing session: the OLD terminal instance ──

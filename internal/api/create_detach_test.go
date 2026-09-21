@@ -172,7 +172,7 @@ func TestCreateRun_ClientDisconnectDuringBuild_StillCompensates(t *testing.T) {
 	r.Host = "127.0.0.1"
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r.WithContext(ctx))
+	panicFails(t, srv.Handler()).ServeHTTP(w, r.WithContext(ctx))
 
 	if len(st.runs) != 1 {
 		t.Fatalf("expected exactly one run row, got %d", len(st.runs))

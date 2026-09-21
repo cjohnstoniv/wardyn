@@ -121,10 +121,7 @@ func doSSO(t *testing.T, srv *Server, method, path string, cookie *http.Cookie, 
 		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
-	if p, ok := srv.takeRecoveredPanic(); ok {
-		t.Fatalf("%s %s recovered a panic instead of answering it — a recovered panic must fail its test (#338):\n%s", method, path, p)
-	}
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 

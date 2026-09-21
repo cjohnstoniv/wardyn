@@ -715,7 +715,7 @@ func doIfMatch(t *testing.T, srv *Server, method, path, bearer, ifMatch, body st
 	r.Host = "127.0.0.1"             // see do (api_test.go) FIX #8
 	r.RemoteAddr = "127.0.0.1:54321" // see do (api_test.go) N1
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 

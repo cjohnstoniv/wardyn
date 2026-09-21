@@ -733,7 +733,7 @@ func TestHandleHarnessLogin_LocalDevHeaderDoesNotTripTheRefusal(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:54321"
 	req.Header.Set("X-Wardyn-Principal", adminTokenPrincipal)
 	w := httptest.NewRecorder()
-	local.Handler().ServeHTTP(w, req)
+	panicFails(t, local.Handler()).ServeHTTP(w, req)
 	if w.Code == http.StatusUnprocessableEntity {
 		t.Fatalf("the dev header must not trip the refusal — runIdentitySubject ignores it in LocalMode, got 422: %s", w.Body.String())
 	}

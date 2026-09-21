@@ -179,7 +179,7 @@ func localDecide(t *testing.T, srv *Server, apID uuid.UUID, verb, principalHeade
 		req.Header.Set("X-Wardyn-Principal", principalHeader)
 	}
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
+	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	return w
 }
 

@@ -4,38 +4,11 @@
 package api
 
 import (
-	"fmt"
-	"net/http"
-	"runtime/debug"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
-
-// recordPanic is mounted immediately inside middleware.Recoverer, so it is the
-// first recover() a panic reaches. It records the panic onto the Server and
-// re-panics unchanged — middleware.Recoverer, mounted just outside it, still
-// owns the response (the 500 + stderr stack trace) exactly as before. Its ONLY
-// job is to make a panic visible to the test that triggered it: do/doSSO
-// (api_test.go, rbac_test.go) call Server.takeRecoveredPanic after every
-// request and fail the test if this ran (#338 — a recovered panic must never
-// pass as a green test). A production request pays for one extra deferred
-// closure; a panic is already the expensive, rare path.
-func (s *Server) recordPanic(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rvr := recover(); rvr != nil {
-				s.panicMu.Lock()
-				s.recoveredPanic = fmt.Sprintf("%v\n%s", rvr, debug.Stack())
-				s.panicMu.Unlock()
-				panic(rvr)
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
-}
 
 // routes builds the chi router: every mount point, middleware group, and the
 // role/ownership gate each route sits behind. Split out of server.go (which
@@ -55,7 +28,7 @@ func (s *Server) routes() chi.Router {
 	// real TCP peer instead. If Wardyn is ever fronted by a trusted reverse proxy,
 	// reintroduce X-Forwarded-For parsing ONLY behind an explicit allowlist of
 	// trusted proxy addresses.
-	r.Use(middleware.Recoverer, s.recordPanic)
+	r.Use(middleware.Recoverer)
 	r.Use(securityHeaders)
 
 	r.Get("/healthz", s.handleHealthz)

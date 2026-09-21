@@ -30,7 +30,7 @@ func TestSourceIPNotForgeableViaXForwardedFor(t *testing.T) {
 	h := newHarness(t)
 
 	// A real listening server so RemoteAddr is the actual TCP peer.
-	ts := httptest.NewServer(h.srv.Handler())
+	ts := httptest.NewServer(panicFails(t, h.srv.Handler()))
 	defer ts.Close()
 
 	runID := uuid.New()

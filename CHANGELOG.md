@@ -49,11 +49,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The five `handleCreateRun` panics were a deliberate no-Store harness design ("a request accepted
   past validation panics inside `CreateRun`, which chi turns into the 500 that proves it got there")
   that the same class caught: `createRunUnconfiguredStore` now answers that same "accepted past
-  validation" 500 from a real `CreateRun` error instead of a crash. The durable half: every test
-  server's router now records a recovered panic onto the `Server` (`recordPanic`, mounted just
-  inside `middleware.Recoverer`), and `do`/`doSSO` — the two request drivers nearly every test in the
-  package uses — fail the test if one ran, so the next incomplete double fails loudly instead of
-  passing quietly (#338).
+  validation" 500 from a real `CreateRun` error instead of a crash, and the two tests that read that
+  sentinel now assert the 500 directly rather than only its side effects. The durable half needs no
+  production code: chi's `Recoverer` already calls `GetLogEntry(r).Panic(rvr, stack)` when the
+  request carries one instead of just printing the stack, a seam nothing outside `_test.go` uses, so
+  a new `panicFails` test helper attaches a catcher via `middleware.WithLogEntry` and fails the test
+  if `Panic` ran. Every `srv.Handler().ServeHTTP` and `httptest.NewServer(srv.Handler())` call site in
+  the package — about 55 of them — now wraps its handler with it, so no test path in the package can
+  read a recovered panic back as a passing test (#338).
 
 ### Changed
 

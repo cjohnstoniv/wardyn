@@ -36,6 +36,7 @@ import (
 //     controlled response instead of a crash, and a request that reaches any
 //     OTHER store method still panics loudly rather than quietly matching this
 //     double's intent.
+//
 // Status 500 is still the "accepted past validation" sentinel in this harness.
 //
 // createRunUnconfiguredStore embeds noGovernanceStore rather than a bare
@@ -169,12 +170,21 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 
 	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC1"}}`
 
-	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	// Status 500 is createRunUnconfiguredStore's controlled errCreateRunNoStoreConfigured
+	// (its doc comment above), the proof each request reached CreateRun rather
+	// than stopping at an earlier refusal — asserted here, not just implied.
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
+	}
 	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC2) {
 		t.Fatalf("member: policy.inline min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
 	}
 
-	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
+	}
 	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC1) {
 		t.Fatalf("admin: policy.inline min_confinement_class = %q, want %q (unclamped)", got, types.CC1)
 	}
@@ -342,14 +352,23 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"api_key","scope":{"host":"attacker.example","secret_name":"anthropic-api-key"}}]}}`
 
 	// Member: the exfil pairing is dropped - the resolved inline policy carries
-	// zero grants, so nothing is ever injected.
-	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	// zero grants, so nothing is ever injected. Status 500 is
+	// createRunUnconfiguredStore's controlled errCreateRunNoStoreConfigured
+	// (its doc comment above), the proof this request reached CreateRun rather
+	// than stopping at an earlier refusal.
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
+	}
 	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 0 {
 		t.Fatalf("member: policy.inline eligible_grants = %d, want 0 (exfil pairing dropped)", got)
 	}
 
 	// Operator (ceiling authority) is unclamped - their grant is kept.
-	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
+	}
 	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 1 {
 		t.Fatalf("admin: policy.inline eligible_grants = %d, want 1 (unclamped)", got)
 	}

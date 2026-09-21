@@ -86,12 +86,12 @@ func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []st
 }
 
 // GetCapabilityEnforcement answers the empty switch map — an absent row means
-// unenforced (its own doc comment in store_capabilities.go), so nil is the
-// SAME "this deployment has adopted neither" answer as ListCapabilityGrantsFor
-// above, reached via the capGranted-shaped seams ListCapabilityGrantsFor's
-// comment does not cover (#338).
+// unenforced (its own doc comment in store_capabilities.go, "Never nil"), so
+// an empty non-nil map is the SAME "this deployment has adopted neither"
+// answer as ListCapabilityGrantsFor above, reached via the capGranted-shaped
+// seams ListCapabilityGrantsFor's comment does not cover (#338).
 func (noGovernanceStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
-	return nil, nil
+	return map[string]bool{}, nil
 }
 
 // ListGroupDenyGrants answers no group-deny rows — capUnresolvableGroupDeny's

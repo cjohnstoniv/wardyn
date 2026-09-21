@@ -36,7 +36,7 @@ func r3bServedCSP(t *testing.T, h *harness, host string) string {
 	r.Host = host
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	h.srv.Handler().ServeHTTP(w, r)
+	panicFails(t, h.srv.Handler()).ServeHTTP(w, r)
 	csp := w.Header().Get("Content-Security-Policy")
 	if csp == "" {
 		t.Fatalf("Host %q: no Content-Security-Policy on the response at all", host)
