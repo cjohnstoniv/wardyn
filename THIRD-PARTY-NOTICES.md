@@ -79,7 +79,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `go.yaml.in/yaml/v2` | Apache-2.0 | https://github.com/yaml/go-yaml/blob/v2.4.4/LICENSE |
 | `go.yaml.in/yaml/v3` | MIT | https://github.com/yaml/go-yaml/blob/v3.0.4/LICENSE |
 | `golang.org/x/crypto` | BSD-3-Clause | https://cs.opensource.google/go/x/crypto/+/v0.57.0:LICENSE |
-| `golang.org/x/net` | BSD-3-Clause | https://cs.opensource.google/go/x/net/+/v0.58.0:LICENSE |
+| `golang.org/x/net` | BSD-3-Clause | https://cs.opensource.google/go/x/net/+/v0.59.0:LICENSE |
 | `golang.org/x/oauth2` | BSD-3-Clause | https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE |
 | `golang.org/x/sync/semaphore` | BSD-3-Clause | https://cs.opensource.google/go/x/sync/+/v0.23.0:LICENSE |
 | `golang.org/x/sys` | BSD-3-Clause | https://cs.opensource.google/go/x/sys/+/v0.48.0:LICENSE |
