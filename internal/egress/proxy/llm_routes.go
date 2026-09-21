@@ -394,9 +394,8 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		Path:     "/" + rest,
 		RawQuery: r.URL.RawQuery,
 	}
-	outReq, err := http.NewRequestWithContext(
-		context.WithValue(r.Context(), vettedIPKey{}, target),
-		r.Method, upstreamURL.String(), bodyReader)
+	traceCtx, alpnState := alpnCapture(context.WithValue(r.Context(), vettedIPKey{}, target))
+	outReq, err := http.NewRequestWithContext(traceCtx, r.Method, upstreamURL.String(), bodyReader)
 	if err != nil {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
 		p.httpError(w, "build llm request", err, http.StatusBadGateway)
@@ -414,6 +413,12 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	// summary) instead.
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
+		if isH2Preface(err) {
+			proto, hadTLS := alpnState()
+			p.emitH2Mismatch(ruleSourceUpstreamProtocolMismatch, p.reqOf(r, host, port), host, proto, hadTLS, scanSummary)
+			p.writeUpstreamProtocolMismatch(w, host, "llm upstream error", p.upstreamProtocolMismatchCause(proto, hadTLS))
+			return
+		}
 		if p.sink != nil {
 			p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
 		}
