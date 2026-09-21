@@ -581,6 +581,30 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 	return injections, mitmHosts, true
 }
 
+// dropUnauthoredBedrockBearerInjections removes every injection naming
+// bedrock-api-key, auditing each one.
+//
+// The key has ONE author: authorBedrockBearerInjection, whose grant records the
+// namespace the key was read from. Any other injection naming it — a stored
+// policy's, a recorded profile that captured an earlier run's grant — carries
+// no record of THIS run's choice, and the sink refuses it, which would fail the
+// proxy's startup. Every drop is audited, as filterMemberGrants' and
+// persistRunGrants' are, so an operator whose policy named the key can see why
+// that injection is gone.
+func (s *Server) dropUnauthoredBedrockBearerInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant) []runner.InjectionGrant {
+	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
+		if ig.Rule.SecretName != bedrockAPIKeySecret {
+			return false
+		}
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.dropped",
+			ig.GrantID.String(), "denied", mustJSON(map[string]any{
+				"grant_id": ig.GrantID, "secret_name": bedrockAPIKeySecret, "host": ig.Rule.Host,
+				"reason": "bedrock_bearer_not_dispatch_authored",
+			})))
+		return true
+	})
+}
+
 // llmInspectMITMEnabled reports whether the policy's intercept_tls content
 // inspection is active (mode set and not "off") — the content-inspection reason
 // to provision the per-run MITM CA and TLS-terminate the built-in LLM hosts.
@@ -742,14 +766,9 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		}
 	}
 
-	// bedrock-api-key has ONE author: the block below, whose grant records the
-	// namespace the key was read from. Any other injection naming it — a stored
-	// policy, a recorded profile that captured an earlier run's grant — carries
-	// no record of THIS run's choice, and the sink refuses it, which would fail
-	// the proxy's startup. The run's own bearer, if it has one, is authored below.
-	injections = slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
-		return ig.Rule.SecretName == bedrockAPIKeySecret
-	})
+	// The run's own bearer, if it has one, is authored below — the only
+	// injection naming bedrock-api-key the proxy is handed.
+	injections = s.dropUnauthoredBedrockBearerInjections(ctx, run, injections)
 
 	// Bedrock BEARER injection + its per-run MITM host (see
 	// authorBedrockBearerInjection). Same stop-on-failure contract.
