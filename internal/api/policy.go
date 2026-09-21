@@ -697,6 +697,10 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 		if sinkReservedSecret(name) {
 			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is a reserved platform-internal secret name", i, name)
 		}
+		if name == bedrockAPIKeySecret {
+			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is read only for the grant Wardyn authors "+
+				"when a run launches on the Bedrock bearer key, never by name", i, name)
+		}
 	}
 	if mode != "" && mode != "off" {
 		if !li.DetectSecrets && !li.DetectSecretPatterns && !li.DetectEntropy &&
