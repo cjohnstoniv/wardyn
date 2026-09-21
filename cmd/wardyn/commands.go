@@ -181,12 +181,8 @@ func runCmd(client clientFn) *cobra.Command {
 			} else {
 				fmt.Printf("created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
 				fmt.Printf("  spiffe id: %s\n", run.SPIFFEID)
-				// The resolved image is the only signal that a --devcontainer-repo
-				// build actually happened: with no image builder wired the server
-				// silently falls back to the convention image (a 201 either way).
-				if run.Image != "" {
-					fmt.Printf("  image: %s\n", run.Image)
-				}
+				// The image is resolved after the 201 (the build runs server-side),
+				// so it is read back later with `wardyn run get`, never printed here.
 				if interactive {
 					fmt.Printf("  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
 				}
@@ -214,7 +210,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&confinement, "confinement", "", "confinement class (CC1|CC2|CC3, or fence|wall|vault; optional — unset defaults to the strongest class the runner advertises at or above the policy minimum, never the bare minimum itself)")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive run: come up idle for 'wardyn attach'; --task, if set, seeds the session's startup shell command at boot instead (empty --task stays idle, today's default); use a never-reap policy (auto_stop_after_sec <= 0)")
 	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side; wraps the image only — nothing runs until inside the run's confinement tier, unlike --devcontainer-repo, which builds unconfined on the host)")
-	cmd.Flags().StringVar(&devcontainerRepo, "devcontainer-repo", "", "git repo whose .devcontainer is built into the sandbox image (requires the server's image builder — WITHOUT it the run silently uses the convention image, so check the printed image; mutually exclusive with --image; builds/runs on the host, unconfined — trust the repo)")
+	cmd.Flags().StringVar(&devcontainerRepo, "devcontainer-repo", "", "git repo whose .devcontainer is built into the sandbox image (requires the server's image builder — WITHOUT it the run silently uses the convention image, so check 'wardyn run get <id>'; mutually exclusive with --image; builds/runs on the host, unconfined — trust the repo)")
 	cmd.Flags().StringVar(&devcontainerRef, "devcontainer-ref", "", "git ref (branch/tag/sha) to build for --devcontainer-repo")
 	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, and the operator's model access is not auto-injected; an explicit policy grant or a workspace's declared secret still applies)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
