@@ -106,6 +106,17 @@ func (s *driveCRUDStore) UpsertUserDrive(_ context.Context, d types.UserDrive, r
 			}
 		}
 	}
+	// object_scheme mirrors store.UpsertUserDrive's own derivation (#163): 'id'
+	// on an INSERT, the row's OWN stored value carried through unconditionally
+	// on an UPDATE — never whatever d.ObjectScheme happened to carry in, which
+	// on every real request is "" (the field is not client-authored). A double
+	// that echoed the input instead would make every create-path assertion in
+	// this file pass on a value production never actually writes.
+	if existing, ok := s.drives[d.ID]; ok {
+		d.ObjectScheme = existing.ObjectScheme
+	} else {
+		d.ObjectScheme = types.DriveObjectSchemeID
+	}
 	s.drives[d.ID] = d
 	return d, nil
 }
@@ -352,6 +363,7 @@ func TestCreateUserDriveWritesAndAudits(t *testing.T) {
 		"host_root":     "",
 		"storage_class": "",
 		"home_template": "hash",
+		"object_scheme": "id",
 		"size_mib":      float64(10240),
 		"writable":      false,
 		"reclaim":       "retain",
@@ -424,6 +436,7 @@ func TestUserDriveWriteAuditIsTheWholeRow(t *testing.T) {
 				"host_root":     inside,
 				"storage_class": "",
 				"home_template": "email_local",
+				"object_scheme": "id",
 				"size_mib":      float64(0),
 				"writable":      writable,
 				"reclaim":       "delete",

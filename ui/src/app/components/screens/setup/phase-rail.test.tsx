@@ -108,20 +108,24 @@ describe("PhaseRail", () => {
 
   // The rail offers only what stepOrder(status) says is walkable: a demo whose
   // needsModel/needsSecret precondition is unmet is not a step you can open,
-  // and a PHASE left with no surviving steps renders nothing — never an empty
-  // group heading over a 0/0 counter.
-  it("omits filtered-out steps, and drops a phase left with none of them", () => {
+  // and a demo SUBSECTION left with no surviving steps renders nothing —
+  // never an empty "Secrets" heading over a 0.
+  it("omits filtered-out steps, and drops a demo subsection left with none of them", () => {
     cleanup();
-    // Derived from the catalog, not a hand-kept id list: the point is a phase
-    // with NO surviving steps, and a literal list silently stops emptying the
-    // Secrets phase the moment a demo is added to it.
+    // Derived from the catalog, not a hand-kept id list: the point is a
+    // subsection with NO surviving steps, and a literal list silently stops
+    // emptying the Secrets subsection the moment a demo is added to it.
     const dropped = new Set<string>(["agent-in-the-box", ...DEMOS.filter((d) => d.section === "secrets").map((d) => d.id)]);
     const order = STEP_ORDER.filter((id) => !dropped.has(id));
     render(<PhaseRail current="environment" badges={BADGES} done={DONE} onSelect={vi.fn()} order={order} />);
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const rail = within(navs[navs.length - 1]);
-    expect(rail.getByText("Egress demos")).toBeInTheDocument();
-    expect(rail.queryByText("Secrets demos")).not.toBeInTheDocument();
+    // The demo subsection headings render as <div>s; the config step's own
+    // rail-item label ("Secrets", for `integrations`) is a <span> and is
+    // ALWAYS present — so the subsection query is scoped to div to avoid a
+    // false multi-match against that unrelated item.
+    expect(rail.getByText("Egress", { selector: "div" })).toBeInTheDocument();
+    expect(rail.queryByText("Secrets", { selector: "div" })).not.toBeInTheDocument();
     expect(rail.queryByRole("button", { name: /the agent in the box/i })).toBeNull();
     expect(rail.getByRole("button", { name: /record a policy/i })).toBeInTheDocument();
   });
@@ -184,25 +188,30 @@ describe("PhaseRail", () => {
     }
   });
 
-  it("counts the essentials phase honestly (environment + people + corp_network + integrations)", () => {
+  // #213 — three categories, not the old five phases. Each group header now
+  // shows a plain count (not an X/Y progress fraction — Optional setup and
+  // Demos have no notion of "done" any more; per-step dots still track real
+  // progress inside each group).
+  it("shows the three group headers with their counts (Required · 4, Optional setup · 3, Demos · N)", () => {
+    // renderRail's default `order` is the unfiltered STEP_ORDER (the full
+    // 16-demo catalog, not a status-walked subset) — see the demo-catalog
+    // count pin below for why 16, not 10.
     const rail = renderRail("environment");
-    // Essentials = environment + people + corp_network + integrations. The
-    // fixture has environment, people (an explainer, done on arrival) and
-    // integrations done, corp_network merely Skipped (not done) — 3 of 4, an
-    // honest partial count.
-    expect(rail.getByText("3/4")).toBeInTheDocument();
+    expect(rail.getByText("Required")).toBeInTheDocument();
+    expect(rail.getByText("· 4")).toBeInTheDocument();
+    expect(rail.getByText("Optional setup")).toBeInTheDocument();
+    expect(rail.getByText("· 3")).toBeInTheDocument();
+    expect(rail.getByText("Demos")).toBeInTheDocument();
+    expect(rail.getByText(`· ${DEMOS.length}`)).toBeInTheDocument();
   });
 
-  it('all-optional phases read "all optional", never a counter that cannot fill', () => {
+  it("numbers only the Required group's items 1-4 (decorative, aria-hidden — never in the button's accessible name)", () => {
     const rail = renderRail("environment");
-    // Three phases are made only of optional steps and so read "all optional":
-    // the two demo phases (Egress demos, Secrets demos) and "Your work" (now
-    // just workspaces). Essentials no longer qualifies: it contains the one
-    // hard requirement (environment).
-    expect(rail.getAllByText("all optional")).toHaveLength(3);
-    // Finish is one step now (Review) — the Launch step was cut, so its counter
-    // is 0/1, not 0/2.
-    expect(rail.getByText("0/1")).toBeInTheDocument();
+    const nums = rail.getAllByText(/^[1-4]$/, { selector: "span[aria-hidden]" }).map((el) => el.textContent);
+    expect(nums).toEqual(["1", "2", "3", "4"]);
+    // The Optional-setup/Demos items carry no ordinal at all.
+    const secrets = rail.getByRole("button", { name: /^secrets/i });
+    expect(within(secrets).queryByText(/^[0-9]+$/)).not.toBeInTheDocument();
   });
 
   it("marks only the active step aria-current=step, and no button anywhere uses aria-pressed", () => {
