@@ -81,3 +81,25 @@ func TestGovernanceLimitsRefuseNegatives(t *testing.T) {
 		}
 	}
 }
+
+// TestGovernanceLimitsAutonomyRubricRefusal is AutonomyRubric's half of the
+// write boundary above: nine string fields instead of three numbers, so the
+// boundary is "every set field is one of the four defined levels" rather than
+// "non-negative". governanceLimitsRefusal calls AutonomyRubric.Validate and
+// prefixes "limits.autonomy_rubric." onto its error, so the 400 names both the
+// block and the one bad field out of nine.
+func TestGovernanceLimitsAutonomyRubricRefusal(t *testing.T) {
+	body := govLimitsBody(`"autonomy_rubric":{"egress_open":"bogus"}`)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(body))
+	_, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r)
+	if !strings.Contains(msg, "limits.autonomy_rubric") || !strings.Contains(msg, "egress_open") {
+		t.Errorf("msg = %q, want it to name both the block (limits.autonomy_rubric) and the field (egress_open)", msg)
+	}
+
+	// THE CONTROL: a rubric authored entirely with defined levels is writable.
+	valid := govLimitsBody(`"autonomy_rubric":{"egress_open":"L2","secrets_none":"L3","confinement_cc1":"L0"}`)
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(valid))
+	if _, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r); msg != "" {
+		t.Errorf("body %s refused with %q; every level named is defined", valid, msg)
+	}
+}
