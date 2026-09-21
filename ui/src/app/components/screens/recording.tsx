@@ -6,6 +6,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import {
+  CircleX,
   FilterX,
   Loader2,
   Play,
@@ -19,7 +20,6 @@ import { runHeadline } from "../../lib/types";
 import { recordings as api } from "../../lib/api/recordings";
 import { runs as runsApi } from "../../lib/api/runs";
 import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
-import { LIST_LIMIT } from "../../lib/api/core";
 import { fmtBytes, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -39,10 +39,26 @@ import {
 } from "../ui/dialog";
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
-import { EmptyState, ErrorState, TruncatedNote } from "../wardyn/states";
+import { EmptyState, ErrorState } from "../wardyn/states";
 import { RECORDING_DISABLED_DESC, RECORDING_DISABLED_TITLE } from "../wardyn/copy";
+import {
+  RECORDINGS_ALL_LOADED,
+  RECORDINGS_FILTER_SCOPE,
+  RECORDINGS_LOADING,
+  RECORDINGS_LOAD_MORE,
+  RECORDINGS_MORE_NOTE,
+  RECORDINGS_PAGE_ERROR_BODY,
+  RECORDINGS_PAGE_ERROR_TITLE,
+} from "./recording-copy";
 import { PageHeader } from "../wardyn/page-header";
 import { TerminalPlayer } from "../wardyn/terminal-player";
+
+// #159: the server-side page size. `?limit=&offset=` has been supported by
+// /runs for a while; nothing here read it until this screen — the client-side
+// cap this replaced only re-sliced a window that listRuns() had already
+// fetched (and, past LIST_LIMIT, already dropped rows from). 100 keeps the
+// first paint cheap; four presses covers a thousand runs.
+const PAGE_SIZE = 100;
 
 // R4-F077: has_recording / recording_bytes / recording_duration_sec are
 // DERIVED fields on AgentRun (internal/types.AgentRun; ui/lib/types/runs.ts
@@ -73,6 +89,15 @@ const MIN_CARDS_FOR_FILTERS = 4;
 export function RecordingScreen() {
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [runs, setRuns] = React.useState<AgentRun[]>([]);
+  // Whether the server told us (X-Wardyn-Truncated) that more rows exist past
+  // the pages fetched so far. No total ever comes with it (#159) — this is a
+  // yes/no, never a count of what's left.
+  const [truncated, setTruncated] = React.useState(false);
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  // A failed LOAD MORE, not a failed first page (that's `status === "error"`,
+  // unchanged below) — the rows already on screen stay put and Retry resumes
+  // from the same offset, because the failed fetch never touched `runs`.
+  const [pageError, setPageError] = React.useState(false);
 
   const [query, setQuery] = React.useState("");
   const [agentFacet, setAgentFacet] = React.useState("all");
@@ -90,11 +115,13 @@ export function RecordingScreen() {
   const load = React.useCallback(() => {
     let cancelled = false;
     setStatus("loading");
+    setPageError(false);
     runsApi
-      .listRuns({ includeRecordingMeta: true })
+      .listRuns({ includeRecordingMeta: true, limit: PAGE_SIZE, offset: 0 })
       .then((got) => {
         if (cancelled) return;
-        setRuns(got);
+        setRuns(got.runs);
+        setTruncated(got.truncated);
         setStatus("ready");
       })
       .catch(() => {
@@ -106,6 +133,23 @@ export function RecordingScreen() {
   }, []);
 
   React.useEffect(load, [load]);
+
+  // #159: fetch the next PAGE_SIZE rows starting where the loaded set ends.
+  // `runs.length` IS the next offset — every row this screen holds came from
+  // one of these paged fetches, one page at a time, so nothing else can have
+  // advanced it out from under this call.
+  const loadMore = React.useCallback(() => {
+    setLoadingMore(true);
+    setPageError(false);
+    runsApi
+      .listRuns({ includeRecordingMeta: true, limit: PAGE_SIZE, offset: runs.length })
+      .then((got) => {
+        setRuns((prev) => [...prev, ...got.runs]);
+        setTruncated(got.truncated);
+      })
+      .catch(() => setPageError(true))
+      .finally(() => setLoadingMore(false));
+  }, [runs.length]);
 
   // Fetches the cast for `playing` — and ONLY `playing` — whenever it
   // changes. Nothing here runs while the library is just being browsed.
@@ -179,11 +223,6 @@ export function RecordingScreen() {
           </Button>
         }
       />
-
-      {/* R4-F077: past the cap this library only ever saw the fetched
-          window, so a run's recording past it is invisible with no sign why —
-          same reuse as runs.tsx's own TruncatedNote. */}
-      <TruncatedNote count={runs.length} cap={LIST_LIMIT} />
 
       {status === "error" ? (
         <div className="rounded-xl border border-border bg-card">
@@ -280,6 +319,10 @@ export function RecordingScreen() {
               )}
               <span className="ml-auto text-xs text-muted-foreground">
                 Showing {filtered.length} of {library.length} recording{library.length === 1 ? "" : "s"}
+                {/* #159: filters only ever ran over the pages fetched so far —
+                    an honest caveat only earns its place once there's
+                    genuinely more, unfetched, that a filter can't see. */}
+                {filtersActive && truncated && <> · {RECORDINGS_FILTER_SCOPE(library.length)}</>}
               </span>
             </div>
           )}
@@ -303,6 +346,41 @@ export function RecordingScreen() {
               ))}
             </div>
           )}
+
+          {/* #159 — the house pattern for a paged list: a text link matching
+              the Runs board's own "Load N more" (runs.tsx#RunsTable), never a
+              second button convention. No total ever renders — see
+              recording-copy.ts. */}
+          <div className="mt-4">
+            {pageError ? (
+              <div className="flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger-subtle p-3.5">
+                <CircleX className="mt-0.5 size-4 shrink-0 text-danger" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground">{RECORDINGS_PAGE_ERROR_TITLE}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {RECORDINGS_PAGE_ERROR_BODY(library.length)}
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={loadMore}>
+                  <RotateCw className="size-3.5" /> Retry
+                </Button>
+              </div>
+            ) : truncated ? (
+              <p className="text-center text-xs text-muted-foreground">
+                {RECORDINGS_MORE_NOTE(library.length)}{" "}
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="font-medium text-info hover:underline disabled:pointer-events-none disabled:opacity-60"
+                >
+                  {loadingMore ? RECORDINGS_LOADING : RECORDINGS_LOAD_MORE(PAGE_SIZE)}
+                </button>
+              </p>
+            ) : (
+              <p className="text-center text-xs text-muted-foreground">{RECORDINGS_ALL_LOADED(library.length)}</p>
+            )}
+          </div>
         </>
       )}
 
