@@ -1016,8 +1016,12 @@ migration `0050`)** are the second and third owned nouns after runs.
   refused (403) for every non-operator PUT: SigV4 is always signed out of the
   operator namespace, so a member row under one of those names would read as
   configured in setup while dispatch never uses it. `bedrock-api-key` is NOT one
-  of them — the bearer is injected per run from the run owner's own namespace,
-  so a member may store their own.
+  of them, so a member may store their own: under a `per_user` agent row the
+  bearer is injected from the run owner's own namespace, under `shared` from the
+  operator's. Dispatch records that choice on the grant it authors, and the
+  injection sink resolves the key from exactly that record
+  (`resolveBedrockBearerInjection`) — a member's own key never stands in for
+  the operator's, nor the operator's for a member's.
 - **`GET /secrets` returns `{names, mine}`.** `mine` is always the queried
   namespace's own rows (reserved names filtered out). `names` keeps its pre-0.7
   meaning for an admin — the operator namespace, or one member's own rows with
@@ -4638,6 +4642,10 @@ re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
 `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)
+The same shape recurs one release later: `0067` adds `user_drives.object_scheme`,
+and `user_drives` itself was `0054`'s table — created inside the already-shipped
+0.7 line, not this upgrade's own batch — so an install carried forward from a
+released 0.7.x hits the identical ownership requirement on its next upgrade.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does
@@ -5149,10 +5157,13 @@ identity-affecting `PUT /api/v1/drives/{id}` on a drive that already has
 allocations answers **`409`** (`driveRehomeGuard`), naming what changes and how
 many allocations move: *"this drive is allocated to N subjects and this change
 re-homes them: name "old" → "new". … re-send as PUT
-/drives/{id}?confirm=rehome."* Four fields count as identity-affecting —
-`backend`, `home_template`, `host_root`, and a `name` that folds to a
-**different slug** (a purely cosmetic rename that folds to the same slug is not
-refused, and neither is any edit to a drive nothing is allocated from).
+/drives/{id}?confirm=rehome."* Five fields count as identity-affecting —
+`backend`, `home_template`, `host_root`, a `name` that folds to a **different
+slug** (a purely cosmetic rename that folds to the same slug is not refused,
+and neither is any edit to a drive nothing is allocated from — and on an
+`object_scheme: id` drive a rename never counts at all, because the drive's
+name plays no part in that scheme's minted name), and `object_scheme` itself
+(see "Legacy rows keep their old object name, permanently" below).
 
 Confirming is an API action, deliberately:
 
@@ -5203,15 +5214,28 @@ claim whose `wardyn.drive` or `wardyn.home` names a different pair, or whose
 `wardyn.subject` names a different person (that third label is checked only when
 it is PRESENT, so claims stamped before it existed still mount), or a share
 whose claim turns out to carry `wardyn.managed=true` (i.e. it is one person's
-managed drive, not an admin's share). That one is the collision the object name
-cannot rule out: `wardyn-drive-<drive-slug>-<home>` joins two variable-width
-fields with the separator both of them admit, so drive `eng` + home `us-bob` and
-drive
-`eng-us` + home `bob` resolve to the same claim name. Wardyn holds no `delete`
-verb and cannot repair the collision, so it refuses the run rather than mount
-one member's private drive inside another member's agent. The fix is to rename
-one of the two drives (see the rename caveat above) or to give the colliding
-people distinct home names.
+managed drive, not an admin's share).
+
+**Legacy rows keep their old object name, permanently — and only they carry
+this collision.** A drive's `object_scheme` (migration `0067`) decides which
+half of the minted name carries the drive: `slug` — every drive registered
+before `0067` shipped, forever, since neither substrate can rename a storage
+object and Wardyn will not copy bytes between an old object and a new one to
+"fix" a row in place — folds the drive's NAME to a DNS-1123 fragment
+(`types.DriveSlug`) at a VARIABLE offset before `<home>`, and that is the
+collision the object name cannot rule out: `wardyn-drive-<drive-slug>-<home>`
+joins two variable-width fields with the separator both of them admit, so
+drive `eng` + home `us-bob` and drive `eng-us` + home `bob` resolve to the
+same claim name. Wardyn holds no `delete` verb and cannot repair the
+collision, so it refuses the run rather than mount one member's private drive
+inside another member's agent. The fix on a `slug` drive is to rename one of
+the two drives (see the rename caveat above) or to give the colliding people
+distinct home names. Every drive registered from `0067` onward is minted
+`id` instead — `wardyn-drive-<drive-id-hex>-<home>` — and the id is
+always exactly 32 lowercase hex characters, so `<home>` starts at a FIXED
+offset no drive name or home override can move; this whole collision does not
+exist for an `id`-scheme drive, by construction rather than by convention.
+`GET /api/v1/drives/{id}` reports which scheme a drive is on.
 
 Both refusals also cover the loser of a create race. Two first runs can collide
 inside the lookup→create window, and the loser's create comes back

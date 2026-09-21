@@ -16,6 +16,9 @@ package api
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -55,8 +58,10 @@ func resolveFor(s *Server, sso awsSSOScope) bedrockAuth {
 		true /* modelRun */, false /* refresh */, nil, sso)
 }
 
+// memberScope is the scope awsSSOScopeFor derives for the member under a
+// per_user row that declares the bearer lane.
 func memberScope() awsSSOScope {
-	return awsSSOScope{perUser: true, owner: perUserBearerMember}
+	return awsSSOScope{perUser: true, owner: perUserBearerMember, bearer: true}
 }
 
 // TestResolveBedrockAuth_PerUser_MemberOwnBearerIsSelected is the lane #153
@@ -242,4 +247,99 @@ func TestSetupBedrock_PerUser_BearerPresentIsTheCallersOwn(t *testing.T) {
 			t.Fatalf("BearerPresent=false for the operator under a shared scope — pre-#153 behaviour changed")
 		}
 	})
+}
+
+// TestResolveBedrockAuth_PerUserSSORowIgnoresTheMembersOwnBearer: storing a
+// bearer must not break a member's working SSO lane. Under a per_user row that
+// declares bedrock_sso the member's own bedrock-api-key is not the credential
+// the row names, so it must not win the precedence chain — if it did, the
+// mechanism gate would refuse every run while the member's session was fine.
+func TestResolveBedrockAuth_PerUserSSORowIgnoresTheMembersOwnBearer(t *testing.T) {
+	s, sec := perUserBedrockSrv(t)
+	putScopedSSOBlob(t, sec, "member-sub", awsSSOTestFixedNow.Add(time.Hour), "member-access-token")
+	scope := awsSSOScope{perUser: true, owner: "member-sub"}
+	before := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, false, nil, scope)
+	if err := sec.For("member-sub").Put(context.Background(), bedrockAPIKeySecret, []byte("member-own-bearer-1234")); err != nil {
+		t.Fatal(err)
+	}
+	after := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, false, nil, scope)
+	row := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, CredentialSource: types.CredentialSourcePerUser}
+	selB, okB := s.selectedMechanism("claude-code", false, before, false, false)
+	selA, okA := s.selectedMechanism("claude-code", false, after, false, false)
+	t.Logf("before bearer: selected=%s satisfied=%v; after: selected=%s satisfied=%v",
+		selB, mechanismSatisfied(row, selB, okB), selA, mechanismSatisfied(row, selA, okA))
+	if mechanismSatisfied(row, selB, okB) && !mechanismSatisfied(row, selA, okA) {
+		t.Errorf("storing a bearer disabled the member's own working SSO lane on a per_user bedrock_sso row")
+	}
+}
+
+// TestSetupBedrock_PerUserReportsOnlyTheDeclaredLane keeps setup honest with
+// the resolve above: a member holding BOTH a captured session and a bearer of
+// their own is reported on the lane their row declares and nothing else, so
+// setup never reads "ready" off a credential dispatch will not select.
+func TestSetupBedrock_PerUserReportsOnlyTheDeclaredLane(t *testing.T) {
+	s, sec := perUserBedrockSrv(t)
+	putScopedSSOBlob(t, sec, "member-sub", awsSSOTestFixedNow.Add(time.Hour), "member-access-token")
+	if err := sec.For("member-sub").Put(context.Background(), bedrockAPIKeySecret, []byte("member-own-bearer-1234")); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name               string
+		row                types.AgentMechanism
+		wantSSO, wantBearr bool
+	}{
+		{"bedrock_sso row", types.AgentMechanismBedrockSSO, true, false},
+		{"bedrock_bearer row", types.AgentMechanismBedrockBearer, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scope := awsSSOScopeFor(agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: tc.row,
+				CredentialSource: types.CredentialSourcePerUser}), "claude-code", "member-sub")
+			b := s.setupBedrock(context.Background(), map[string]bool{}, scope)
+			if b.SSOPresent != tc.wantSSO || b.BearerPresent != tc.wantBearr {
+				t.Fatalf("SSOPresent=%v BearerPresent=%v, want %v/%v — setup reports a lane dispatch does not select",
+					b.SSOPresent, b.BearerPresent, tc.wantSSO, tc.wantBearr)
+			}
+			ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, false, nil, scope)
+			if sel, ok := s.selectedMechanism("claude-code", false, ba, false, false); !ok || sel != tc.row {
+				t.Fatalf("dispatch selected %q (ok=%v), want the declared %q", sel, ok, tc.row)
+			}
+		})
+	}
+}
+
+// TestResolveEnvSecretGrants_NeverWritesTheBedrockBearerIntoTheSandbox: the
+// bearer is proxy-injected and never resident, and the env_secret read falls
+// back to the operator's row — so an env_secret naming bedrock-api-key would put
+// the OPERATOR's raw key into a member's sandbox environment.
+func TestResolveEnvSecretGrants_NeverWritesTheBedrockBearerIntoTheSandbox(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	sec.m[bedrockAPIKeySecret] = []byte(bedrockGuardOperatorBearer)
+	scope := []byte(`{"name":"BEDROCK_KEY","secret_name":"bedrock-api-key"}`)
+	pol := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantEnvSecret, Scope: scope}}}
+	env := map[string]string{}
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: "alice@example.com"}
+	h.srv.resolveEnvSecretGrants(context.Background(), run, pol, env)
+	t.Logf("env=%v", env)
+	if env["BEDROCK_KEY"] == bedrockGuardOperatorBearer {
+		t.Errorf("operator bearer delivered RAW into a member's sandbox env via env_secret (no per_user guard on this sink)")
+	}
+}
+
+// TestFilterMemberGrants_DropsAMemberAuthoredBedrockBearerGrant: owning the
+// bedrock-api-key row must not let a member author a grant naming it — the
+// own-key arm would admit it to any model-provider host in the run's egress
+// under a header of their choosing. The run's bearer comes from dispatch.
+func TestFilterMemberGrants_DropsAMemberAuthoredBedrockBearerGrant(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{bedrockAPIKeySecret: []byte("op")},
+		owned: map[string]map[string][]byte{"bob": {bedrockAPIKeySecret: []byte("bob-own-bearer-123")}}}
+	g := types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{
+		"host": "api.openai.com", "secret_name": bedrockAPIKeySecret, "header": "X-Member-Chosen", "format": "%s"})}
+	kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "bob", []string{"api.openai.com"}, []types.GrantSpec{g})
+	t.Logf("kept=%d warns=%v code=%d err=%v", len(kept), warns, code, err)
+	if len(kept) == 1 {
+		t.Errorf("member-authored bedrock-api-key grant to api.openai.com with a custom header was admitted")
+	}
+	code2, verr := h.srv.validateInlineSecretRefs(context.Background(), "bob", types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
+	t.Logf("validateInlineSecretRefs code=%d err=%v", code2, verr)
 }

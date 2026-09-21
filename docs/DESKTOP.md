@@ -244,11 +244,13 @@ falls back to the operator's, never to another member's.
 
 The fourth Bedrock name is the exception, and it is one name: a member may store
 their own `bedrock-api-key`. The BEARER is a static `Authorization` header the
-proxy injects per run out of the run owner's own namespace, so a member's own
+proxy injects per run, so under an agent row marked `per_user` a member's own
 key is a credential their runs really authenticate with rather than a row
-nothing reads. Under an agent row marked `per_user` it is the ONLY bearer their
-runs see — the operator's does not stand in for a member who has stored none,
-and the member's does not stand in for anyone else.
+nothing reads — and it is the ONLY bearer their runs see: the operator's does
+not stand in for a member who has stored none. Under a `shared` row the
+operator's key serves every run and a member's own is not read. Which namespace
+a run uses is decided once, at dispatch, and recorded on the run's grant; the
+proxy is handed the key from exactly that namespace.
 See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
 
 **Mounting their own project directory.** The one power m′ adds that no other
