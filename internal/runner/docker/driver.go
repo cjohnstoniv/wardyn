@@ -154,9 +154,9 @@ type Driver struct {
 // an exec-less runtime; Exec sets its Cmd to the (recorder-wrapped) workload and
 // creates the container.
 type pendingAgent struct {
-	cfg    *container.Config
-	host   *container.HostConfig
-	netcfg *network.NetworkingConfig
+	cfg     *container.Config
+	host    *container.HostConfig
+	netcfg  *network.NetworkingConfig
 	managed []runner.ManagedFile // delivered by runAsMainProcess, between ITS create and start
 }
 
@@ -236,7 +236,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// preflight, so it is true only while that path exists: declaring it
 		// without the mount is a run that previews green and fails at dispatch,
 		// and TestCreateSandbox_MountsAUserDrive pins the two together.
-		UserDrives: true,
+		UserDrives:   true,
 		ManagedFiles: true, // deliverManagedFiles, between create and start (managed_files.go)
 		// What a run's disk_mib actually binds on this daemon: `filesystem` when
 		// the storage driver can enforce a per-container size quota, `none` when
