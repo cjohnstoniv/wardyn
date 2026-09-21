@@ -244,7 +244,9 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 
 	p.emitPATDecision(r, host, egress.Allow, allowSrc)
 
-	resp, err := p.transport.RoundTrip(outReq)
+	// roundTripUpstream, not the transport directly: see the GitHub lane
+	// (git_broker.go) — the same HTTP/2 fallback applies to a forge.
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
 		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
 		return

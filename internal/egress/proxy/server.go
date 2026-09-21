@@ -115,7 +115,13 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = nil
 		if tlsCfg != nil {
-			tr.TLSClientConfig = tlsCfg
+			// A COPY, not the shared pointer: this transport has HTTP/2 enabled,
+			// and enabling it prepends "h2" to the config's own NextProtos on
+			// first use (net/http's http2configureTransports). Shared, that edit
+			// reached the proxy's forward transport, which then OFFERED h2 —
+			// the estate that reported #359 had a corporate CA, which is the
+			// only way this config is non-nil.
+			tr.TLSClientConfig = tlsCfg.Clone()
 		}
 		c := *client
 		c.Transport = tr
@@ -208,10 +214,11 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 
 	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE, forwarded from wardynd as
 	// trusted_ca_pem): additive to the system roots for THIS sidecar's own
-	// outbound TLS. mkTransport (proxy.go) shares opts.TLSClientConfig between
-	// the forward/egress transport (MITM-terminated forwards + the brokered
-	// LLM/git/PAT routes) and the control-plane transport — one config covers
-	// both. Nil (unset) leaves it nil, byte-identical to today (system roots,
+	// outbound TLS. One config covers the forward/egress transport
+	// (MITM-terminated forwards + the brokered LLM/git/PAT routes) and the
+	// control-plane transport; each transport that may EDIT it — anything with
+	// HTTP/2 enabled — takes its own copy first (offerHTTP2,
+	// upstream_protocol.go, and the control-plane client above). Nil (unset) leaves it nil, byte-identical to today (system roots,
 	// ServerName from URL). applyDefaultsAndValidate already fail-fast-checked
 	// this same PEM at config-load time without retaining a pool; this is the
 	// live proxy's own parse, matching parseUpstreamProxy's "validate at load,

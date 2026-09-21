@@ -308,11 +308,12 @@ func (m *metrics) egressDenied() {
 //     egress lane) and is DELIBERATELY absent from this exclusion list below —
 //     a guard refusal counts as a denial like any other.
 //   - builtin:upstream-protocol-mismatch — a round trip that GOT AN ANSWER: an
-//     HTTP/2 frame where the HTTP/1.1-only transport expected an HTTP/1.1
-//     response (a TLS-terminating peer that speaks HTTP/2 unconditionally —
-//     internal/egress/proxy's isH2Preface). Kept separate from
+//     HTTP/2 frame on a connection that negotiated no ALPN, which the proxy
+//     could not complete over HTTP/2 either (internal/egress/proxy's
+//     roundTripUpstream, which detects such a peer from its first bytes or
+//     from net/http's parse error and resends when it can). Kept separate from
 //     builtin:dial-failed for the same reason as errGatewayVet above, but the
-//     opposite direction: a protocol mismatch never succeeds on retry, so it is
+//     opposite direction: an identical retry does not fix it, so it is
 //     also DELIBERATELY absent from the exclusion list below and counts as a
 //     denial like any other.
 //   - egress.decisions.dropped:<n> — decisions.go's synthetic summary for
