@@ -59,11 +59,24 @@ const (
 	// rendered, so a checked-out repo could answer the question this rung
 	// exists to ask a person. With the key, the same hook never ran and the
 	// prompt rendered.
+	//
+	// The remaining keys close the same route through the other settings a
+	// repository can carry, each measured on the pinned CLI:
+	//   - `allowManagedPermissionRulesOnly`: without it a repo `permissions.allow`
+	//     rule resolved the call and no prompt rendered. It also drops rules
+	//     from user settings and --allowedTools, which only ever widen here.
+	//   - `defaultMode: default`: without it a repo `defaultMode: acceptEdits`
+	//     brought the session up accepting edits, and Write ran unasked.
+	//   - `disableAutoMode`: auto mode is unreachable on this pin, so this one
+	//     holds the door for a CLI bump rather than closing a measured route.
 	claudeL0 = `{
   "permissions": {
-    "disableBypassPermissionsMode": "disable"
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable"
   },
-  "allowManagedHooksOnly": true
+  "allowManagedHooksOnly": true,
+  "allowManagedPermissionRulesOnly": true
 }
 `
 	// L1 "gated" — the rung that permits an unattended run but derives its
@@ -79,11 +92,22 @@ const (
 	// (--mcp-config … --strict-mcp-config --permission-prompt-tool
 	// mcp__gate__approve) still starts under this key, so the key does not buy
 	// the hooks ceiling at the cost of the gate.
+	//
+	// `allowManagedPermissionRulesOnly` for the same reason one layer over: a
+	// repo `permissions.allow` rule resolves a call before the permission
+	// prompt tool too, and without the key the hold lane's approve tool was
+	// never called and the tool ran. With it, the gate was called for the same
+	// repo file. `defaultMode` and `disableAutoMode` as at L0, for an
+	// interactive attach to an L1 run (the hold branch passes its own
+	// --permission-mode).
 	claudeL1 = `{
   "permissions": {
-    "disableBypassPermissionsMode": "disable"
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable"
   },
-  "allowManagedHooksOnly": true
+  "allowManagedHooksOnly": true,
+  "allowManagedPermissionRulesOnly": true
 }
 `
 	// L2 "unattended" — auto-approval and seeded auto tools are PERMITTED at
@@ -96,9 +120,16 @@ const (
 	// — a file that looks stricter and does the opposite of what it claims.
 	// `defaultMode: acceptEdits` is the honest agent-side statement of the same
 	// posture for the interactive attach, where no launch flag is passed at all.
+	//
+	// `disableAutoMode` as on every rung. NOT `allowManagedPermissionRulesOnly`:
+	// this rung permits --dangerously-skip-permissions, which resolves every
+	// call without consulting a rule, so restricting whose rules count would
+	// constrain nothing the rung does not already allow — and would drop a
+	// person's own allow rules at an interactive attach for no gain.
 	claudeL2 = `{
   "permissions": {
-    "defaultMode": "acceptEdits"
+    "defaultMode": "acceptEdits",
+    "disableAutoMode": "disable"
   }
 }
 `

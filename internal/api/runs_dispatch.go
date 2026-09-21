@@ -264,7 +264,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
-	agentPolicy := s.agentPolicyFor(ctx, run)
+	agentPolicy, apErr := s.agentPolicyFor(ctx, run)
+	if apErr != nil {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "this run was not launched: "+apErr.Error())
+		return
+	}
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
 	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
 	// settings — the same "only a discriminator + non-secret payload changes;
@@ -569,7 +575,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
 	s.auditDriveMount(ctx, run.ID, p.Drive)
-	s.auditAgentPolicy(ctx, run, agentPolicy, spec)
+	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
+	if !agentPolicy.execLess {
+		auditAgentPolicy()
+		auditAgentPolicy = nil
+	}
 
 	// HOLD the run's watcher lease for the rest of dispatch — starting the moment
 	// there is a sandbox to watch and BEFORE SetSandboxRef publishes its ref, so a
@@ -633,7 +643,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive)
+	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, auditAgentPolicy)
 }
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
@@ -672,7 +682,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 // concrete runner substrate and must stay target-agnostic.
 const mainProcessExecID = "main-process"
 
-func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool) {
+// onAgentStarted, when non-nil, runs once the agent's Exec has succeeded: on an
+// exec-less runner that is the moment its container — and the managed files
+// delivered into it — first exists.
+func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, onAgentStarted func()) {
 	byoi := strings.HasPrefix(image, "wardyn-byoi/")
 
 	if interactive {
@@ -715,6 +728,9 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			// clobber it with FAILED.
 			s.failAndRevoke(ctx, run.ID, types.RunRunning, "the agent process could not be started in the sandbox: "+xerr.Error())
 			return
+		}
+		if onAgentStarted != nil {
+			onAgentStarted()
 		}
 		// Persist the agent exec id so the boot reconciler can observe AGENT liveness
 		// (ExecInspect) across a wardynd restart: an idle-container exec run whose

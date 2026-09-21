@@ -179,6 +179,11 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 			"%s has no Wardyn tool-approval lane: autonomy level %s is enforced at launch and by the proxy, and nothing inside the sandbox gates this agent's tool calls",
 			autonomyAgentLabel(req.Agent), level))
 	}
+	if req.TaskMode != "exec" {
+		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level); msg != "" {
+			warnings = append(warnings, msg)
+		}
+	}
 	// Derivation is NON-INTERACTIVE ONLY, for the structural reason
 	// effectiveToolApprovals states: applyDispatchModeEnv writes
 	// WARDYN_TOOL_APPROVALS when !interactive alone, and an interactive run

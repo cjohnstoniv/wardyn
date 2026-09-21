@@ -806,21 +806,42 @@ func bytesContainsKey(body []byte, key string) bool {
 func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 	const derived = "tool_approvals was set to hold"
 	const noLane = "has no Wardyn tool-approval lane"
+	const undelivered = "managed settings for autonomy level"
 	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
 
 	for _, tc := range []struct {
-		name   string
-		level  types.AutonomyLevel
-		body   string
-		want   []string
-		absent []string
+		name           string
+		level          types.AutonomyLevel
+		body           string
+		noManagedFiles bool
+		want           []string
+		absent         []string
 	}{
 		{
 			name:   "an overridden auto is reported, with the profile and every tied cause",
 			level:  types.AutonomyL1,
 			body:   `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto"}`,
 			want:   []string{derived, `governance profile "autonomy-warnings"`, "L1", "bound by egress_sealed, secrets_none and confinement_cc2"},
-			absent: []string{noLane},
+			absent: []string{noLane, undelivered},
+		},
+		{
+			// The run launches (A-Q3), and the person launching it is told the
+			// managed layer will not be there, in the row's own words.
+			name:           "a gated run on a runner that cannot deliver managed settings says so",
+			level:          types.AutonomyL1,
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			noManagedFiles: true,
+			want:           []string{"claude-code's " + undelivered + " L1 are not delivered", `runner "fake" does not deliver managed files`, "launch flags alone"},
+			absent:         []string{derived, noLane},
+		},
+		{
+			// No file is generated for this agent, so there is nothing undelivered.
+			name:           "an agent with no managed settings is not told they are undelivered",
+			level:          types.AutonomyL2,
+			body:           `{"agent":"codex-cli","task":"t","confinement_class":"CC2"}`,
+			noManagedFiles: true,
+			want:           []string{noLane},
+			absent:         []string{undelivered},
 		},
 		{
 			// Nothing was derived: the caller already asked for the supervision
@@ -860,6 +881,9 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 				p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(tc.level)}
 			}
 			srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
+			if tc.noManagedFiles {
+				srv.cfg.Runner = &fakeRunner{noManagedFiles: true}
+			}
 			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), tc.body)
 			if w.Code != http.StatusCreated {
 				t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())

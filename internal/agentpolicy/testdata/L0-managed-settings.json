@@ -1,6 +1,9 @@
 {
   "permissions": {
-    "disableBypassPermissionsMode": "disable"
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable"
   },
-  "allowManagedHooksOnly": true
+  "allowManagedHooksOnly": true,
+  "allowManagedPermissionRulesOnly": true
 }

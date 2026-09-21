@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -23,6 +25,10 @@ type runAgentPolicy struct {
 	// withheld says why a generated document is not on the spec. Empty when
 	// it is.
 	withheld string
+	// execLess: the runner creates this run's agent container at Exec, not at
+	// CreateSandbox (krun), so delivery — or the driver's refusal — happens
+	// there, and the row waits for it.
+	execLess bool
 }
 
 // agentPolicyFor generates the agent-side half of this run's autonomy level
@@ -35,6 +41,11 @@ type runAgentPolicy struct {
 // (WARDYN_AUTONOMY_LEVEL) and the create audit row's `autonomy` block all cite
 // one source.
 //
+// A Capabilities error fails the run (err != nil): whether this runner can
+// place the file is unknown, and launching anyway would be the one silent
+// route to a gated run with no managed layer — the same read fails a
+// workspace launch closed.
+//
 // A runner that does not advertise Capabilities.ManagedFiles gets no file and
 // the run still launches, under its CLI-flag levers alone. That is the
 // decided fallback, not an oversight: refusing would make every L0–L2
@@ -43,29 +54,58 @@ type runAgentPolicy struct {
 // operator looks for it. Handing such a runner the file anyway would be worse
 // than withholding it — a driver that cannot make it root-owned would place a
 // ceiling the agent can rewrite, reported as delivered.
-func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun) runAgentPolicy {
+func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun) (runAgentPolicy, error) {
 	path, content, ok := agentpolicy.ForAgent(run.Agent, run.AutonomyLevel)
 	if !ok {
-		return runAgentPolicy{}
+		return runAgentPolicy{}, nil
+	}
+	caps, err := s.cfg.Runner.Capabilities(ctx)
+	if err != nil {
+		return runAgentPolicy{}, fmt.Errorf("the runner's capabilities could not be read, so whether it can deliver this run's managed settings (autonomy level %s) is unknown: %w",
+			run.AutonomyLevel, err)
 	}
 	p := runAgentPolicy{path: path, bytes: len(content)}
-	caps, err := s.cfg.Runner.Capabilities(ctx)
-	switch {
-	case err != nil:
-		p.withheld = "runner capabilities unavailable: " + err.Error()
-	case !caps.ManagedFiles:
-		p.withheld = "runner " + caps.Driver + " does not deliver managed files"
-	default:
-		p.files = []runner.ManagedFile{{Path: path, Content: []byte(content)}}
+	if !caps.ManagedFiles {
+		p.withheld = managedFilesWithheldReason(caps.Driver)
+		return p, nil
 	}
-	return p
+	p.files = []runner.ManagedFile{{Path: path, Content: content}}
+	// The same label byoiExecLessRefused reads.
+	p.execLess = strings.HasPrefix(caps.Resolved[run.ConfinementClass], "oci/krun")
+	return p, nil
 }
 
-// auditAgentPolicy records run.agent_policy once the sandbox exists, so
-// `delivered` is the driver's answer rather than dispatch's intent: the driver
-// refuses the run outright when it cannot place the file root-owned (the
-// Docker driver's image USER and /etc checks), so a sandbox that exists with
-// the file on its spec is a sandbox that has it.
+// managedSettingsUndeliveredWarning is the 201's half of delivered:false: the
+// same fact the run.agent_policy row records, said where the person launching
+// the run reads it. Empty when the level generates no file or the runner can
+// deliver it. A Capabilities error says nothing here: dispatch fails that run
+// with the reason.
+func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, agent string, level types.AutonomyLevel) string {
+	if _, _, ok := agentpolicy.ForAgent(agent, level); !ok || s.cfg.Runner == nil {
+		return ""
+	}
+	caps, err := s.cfg.Runner.Capabilities(ctx)
+	if err != nil || caps.ManagedFiles {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%s's managed settings for autonomy level %s are not delivered: %s, so this run's agent runs under its launch flags alone and a repository's own settings can let it run tools without asking",
+		autonomyAgentLabel(agent), level, managedFilesWithheldReason(caps.Driver))
+}
+
+// managedFilesWithheldReason is the one sentence the audit row carries and the
+// 201 warning quotes, so the two cannot drift.
+func managedFilesWithheldReason(driver string) string {
+	return fmt.Sprintf("runner %q does not deliver managed files", driver)
+}
+
+// auditAgentPolicy records run.agent_policy once the agent's container exists,
+// so `delivered` is the driver's answer rather than dispatch's intent: the
+// driver refuses the run outright when it cannot place the file root-owned
+// (the Docker driver's image USER and /etc checks), so a container that exists
+// with the file on its spec is a container that has it. That is after
+// CreateSandbox on most runners, and after the agent's Exec on an exec-less
+// one (runAgentPolicy.execLess).
 //
 // SILENT for a run with no agent-side layer, which is the ordinary case: an
 // unrestricted or unbound level, and every agent but claude-code. A row saying

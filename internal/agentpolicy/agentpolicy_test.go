@@ -51,57 +51,55 @@ func TestAgentPolicyMatchesTheVerifiedGoldenPerLevel(t *testing.T) {
 	}
 }
 
-// TestAgentPolicyGatedRungRestrictsHooks is the trap that defeats the whole
-// feature, asserted by name so a golden-file swap fails with a sentence that
-// says what broke rather than only as a byte diff.
+// TestAgentPolicySupervisedRungsIgnoreRepoPermissions is the trap that
+// defeats the whole feature, asserted by name so a golden-file swap fails with
+// a sentence that says what broke rather than only as a byte diff.
 //
-// L1 is the rung where Wardyn derives tool_approvals=hold and routes every
-// gated tool call through wardyn-toolgate. A repository-scoped PreToolUse hook
-// — inside the workspace the agent can write — runs before the permission
-// prompt tool is consulted, so without allowManagedHooksOnly the run carries
-// the gate in its launch flags and obeys a hook instead.
-func TestAgentPolicyGatedRungRestrictsHooks(t *testing.T) {
-	_, content, ok := ForAgent("claude-code", types.AutonomyL1)
-	if !ok {
-		t.Fatal("ForAgent(claude-code, L1) ok=false, want the gated rung's managed settings")
-	}
-	var doc struct {
-		AllowManagedHooksOnly bool `json:"allowManagedHooksOnly"`
-		Permissions           struct {
-			DisableBypassPermissionsMode string `json:"disableBypassPermissionsMode"`
-		} `json:"permissions"`
-	}
-	if err := json.Unmarshal(content, &doc); err != nil {
-		t.Fatalf("decode L1 managed settings: %v", err)
-	}
-	if !doc.AllowManagedHooksOnly {
-		t.Error("L1 does not set allowManagedHooksOnly: a repository-scoped PreToolUse hook can resolve a tool " +
-			"call before wardyn-toolgate is consulted, so the hold lane this rung derives would be routed around")
-	}
-	if doc.Permissions.DisableBypassPermissionsMode != "disable" {
-		t.Errorf("L1 disableBypassPermissionsMode = %q, want \"disable\": the gated rung must refuse the bypass flag",
-			doc.Permissions.DisableBypassPermissionsMode)
-	}
-}
-
-// TestAgentPolicyAttendedRungRestrictsHooks pins #334: at L0 the human
-// answering the CLI's own permission prompt is the gate, and on the pinned CLI a
-// repository-scoped PreToolUse hook answering "allow" resolved that prompt
-// before it rendered unless allowManagedHooksOnly was set.
-func TestAgentPolicyAttendedRungRestrictsHooks(t *testing.T) {
-	_, content, ok := ForAgent("claude-code", types.AutonomyL0)
-	if !ok {
-		t.Fatal("ForAgent(claude-code, L0) ok=false, want the attended rung's managed settings")
-	}
-	var doc struct {
-		AllowManagedHooksOnly bool `json:"allowManagedHooksOnly"`
-	}
-	if err := json.Unmarshal(content, &doc); err != nil {
-		t.Fatalf("decode L0 managed settings: %v", err)
-	}
-	if !doc.AllowManagedHooksOnly {
-		t.Error("L0 does not set allowManagedHooksOnly: a repository-scoped PreToolUse hook can answer the " +
-			"permission prompt this rung exists to show a person")
+// L0 and L1 are the rungs where something other than the agent answers a
+// tool call: a person at the CLI's own prompt (L0), or wardyn-toolgate on the
+// hold lane (L1). Each key below closes one way a checked-out repository — a
+// file the agent can write — answered that call first on the pinned CLI:
+//   - allowManagedHooksOnly: a repo PreToolUse hook answering "allow" (#334);
+//   - allowManagedPermissionRulesOnly: a repo `permissions.allow` rule;
+//   - defaultMode=default: a repo `defaultMode: acceptEdits`;
+//   - disableBypassPermissionsMode / disableAutoMode: the agent handing itself
+//     a mode that answers every call.
+func TestAgentPolicySupervisedRungsIgnoreRepoPermissions(t *testing.T) {
+	for _, level := range []types.AutonomyLevel{types.AutonomyL0, types.AutonomyL1} {
+		t.Run(string(level), func(t *testing.T) {
+			_, content, ok := ForAgent("claude-code", level)
+			if !ok {
+				t.Fatalf("ForAgent(claude-code, %s) ok=false, want managed settings", level)
+			}
+			var doc struct {
+				AllowManagedHooksOnly           bool `json:"allowManagedHooksOnly"`
+				AllowManagedPermissionRulesOnly bool `json:"allowManagedPermissionRulesOnly"`
+				Permissions                     struct {
+					DefaultMode                  string `json:"defaultMode"`
+					DisableBypassPermissionsMode string `json:"disableBypassPermissionsMode"`
+					DisableAutoMode              string `json:"disableAutoMode"`
+				} `json:"permissions"`
+			}
+			if err := json.Unmarshal(content, &doc); err != nil {
+				t.Fatalf("decode %s managed settings: %v", level, err)
+			}
+			if !doc.AllowManagedHooksOnly {
+				t.Error("allowManagedHooksOnly unset: a repository PreToolUse hook can answer the call first")
+			}
+			if !doc.AllowManagedPermissionRulesOnly {
+				t.Error("allowManagedPermissionRulesOnly unset: a repository permissions.allow rule can answer the call first")
+			}
+			if doc.Permissions.DefaultMode != "default" {
+				t.Errorf("defaultMode = %q, want \"default\": a repository defaultMode can start the session accepting edits",
+					doc.Permissions.DefaultMode)
+			}
+			if doc.Permissions.DisableBypassPermissionsMode != "disable" {
+				t.Errorf("disableBypassPermissionsMode = %q, want \"disable\"", doc.Permissions.DisableBypassPermissionsMode)
+			}
+			if doc.Permissions.DisableAutoMode != "disable" {
+				t.Errorf("disableAutoMode = %q, want \"disable\"", doc.Permissions.DisableAutoMode)
+			}
+		})
 	}
 }
 
@@ -127,6 +125,9 @@ func TestAgentPolicyUnattendedRungKeepsTheBypassMode(t *testing.T) {
 	}
 	if doc.Permissions["defaultMode"] != "acceptEdits" {
 		t.Errorf("L2 permissions.defaultMode = %v, want \"acceptEdits\"", doc.Permissions["defaultMode"])
+	}
+	if doc.Permissions["disableAutoMode"] != "disable" {
+		t.Errorf("L2 permissions.disableAutoMode = %v, want \"disable\"", doc.Permissions["disableAutoMode"])
 	}
 }
 

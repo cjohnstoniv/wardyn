@@ -73,9 +73,17 @@ type agentPolicyDatum struct {
 // still pass with the call site deleted.
 func agentPolicyDispatch(t *testing.T, fr *fakeRunner, agent string, level types.AutonomyLevel) (runner.SandboxSpec, *agentPolicyDatum, *dispatchTestStore) {
 	t.Helper()
+	// No task: no agent exec / completion watcher, this is about composition.
+	return agentPolicyDispatchTask(t, fr, agent, level, "")
+}
+
+// agentPolicyDispatchTask is agentPolicyDispatch with a task, for the paths
+// where the agent's Exec is what creates its container.
+func agentPolicyDispatchTask(t *testing.T, fr *fakeRunner, agent string, level types.AutonomyLevel, task string) (runner.SandboxSpec, *agentPolicyDatum, *dispatchTestStore) {
+	t.Helper()
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Agent, run.AutonomyLevel = agent, level
-	run.Task = "" // no agent exec / completion watcher: this is about composition
+	run.Task = task
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 	})
@@ -199,4 +207,69 @@ func TestAgentPolicyDispatchCarriesNothingWhereThereIsNoLayer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAgentPolicyDispatchFailsTheRunWhenCapabilitiesAreUnknown: a gated run
+// whose runner cannot say whether it delivers managed files is not launched.
+// Withholding the file there would be the one silent route to a gated run with
+// no managed layer, since both shipped runners have the capability.
+func TestAgentPolicyDispatchFailsTheRunWhenCapabilitiesAreUnknown(t *testing.T) {
+	fr := &fakeRunner{capsErr: errors.New("docker info: connection refused")}
+	_, data, st := agentPolicyDispatch(t, fr, "claude-code", types.AutonomyL1)
+	if fr.createCalls != 0 {
+		t.Errorf("CreateSandbox calls = %d, want 0: the run must not launch on an unknown capability", fr.createCalls)
+	}
+	if st.state != types.RunFailed {
+		t.Errorf("run state = %s, want FAILED", st.state)
+	}
+	for _, want := range []string{"capabilities could not be read", "autonomy level L1", "connection refused"} {
+		if !strings.Contains(st.failureHint, want) {
+			t.Errorf("failure hint = %q, want it to say %q", st.failureHint, want)
+		}
+	}
+	if data != nil {
+		t.Errorf("run.agent_policy %+v recorded for a run that never launched", *data)
+	}
+
+	// A run with no agent-side layer never asks, so the same error does not
+	// stop it here.
+	fr = &fakeRunner{capsErr: errors.New("docker info: connection refused")}
+	_, _, st = agentPolicyDispatch(t, fr, "claude-code", types.AutonomyL3)
+	if strings.Contains(st.failureHint, "capabilities could not be read") {
+		t.Errorf("an L3 run was failed on the managed-settings capability read it does not need: %q", st.failureHint)
+	}
+}
+
+// TestAgentPolicyDispatchExecLessRowWaitsForTheAgent: on an exec-less runner
+// (krun) CreateSandbox returns before any agent container exists, and the
+// driver delivers the file — or refuses the image — at Exec. The row is
+// written only once Exec has succeeded, and never for a refused one.
+func TestAgentPolicyDispatchExecLessRowWaitsForTheAgent(t *testing.T) {
+	krun := map[types.ConfinementClass]string{types.CC1: "oci/krun"}
+
+	t.Run("delivered once the agent starts", func(t *testing.T) {
+		fr := &fakeRunner{capsResolved: krun}
+		spec, data, _ := agentPolicyDispatchTask(t, fr, "claude-code", types.AutonomyL1, "do the thing")
+		if len(spec.ManagedFiles) != 1 {
+			t.Fatalf("spec.ManagedFiles = %d entries, want the L1 document", len(spec.ManagedFiles))
+		}
+		if fr.execCount() != 1 {
+			t.Fatalf("Exec calls = %d, want 1", fr.execCount())
+		}
+		if data == nil || !data.Delivered {
+			t.Errorf("row = %+v, want delivered=true once the agent's Exec succeeded", data)
+		}
+	})
+
+	t.Run("refused at Exec: no row", func(t *testing.T) {
+		refusal := `docker: managed files need an image whose USER is a non-root user; this image (USER "0") runs its workload as root, which owns /etc and may rename /etc/claude-code aside and replace the file`
+		fr := &fakeRunner{capsResolved: krun, execErr: errors.New(refusal)}
+		_, data, st := agentPolicyDispatchTask(t, fr, "claude-code", types.AutonomyL1, "do the thing")
+		if data != nil {
+			t.Errorf("run.agent_policy %+v recorded, but the driver refused the file at Exec and no agent ever ran", *data)
+		}
+		if st.state != types.RunFailed || !strings.Contains(st.failureHint, refusal) {
+			t.Errorf("run state %s hint %q, want FAILED carrying the driver's refusal", st.state, st.failureHint)
+		}
+	})
 }
