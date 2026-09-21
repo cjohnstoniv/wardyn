@@ -781,6 +781,10 @@ type Server struct {
 	enrolFailures        failureStreams
 	ingestFailures       failureStreams
 	ingestFailureLimiter principalLimiter
+	// ingestInFlight holds the id of every device with a push in progress —
+	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
+	// the limiters above; an entry lives only as long as its request.
+	ingestInFlight sync.Map
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two

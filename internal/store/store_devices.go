@@ -13,10 +13,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -227,6 +229,42 @@ var ErrDeviceRevoked = errors.New("store: device is revoked")
 // would file a device's claim in that run's evidence trail.
 var ErrFederatedOrgRun = errors.New("store: federated row names an organisation run")
 
+// ErrFederatedRowInvalid refuses a batch holding a row this organisation cannot
+// store so that the device's claim re-checks from the stored row
+// (FederatedRowProblem), or a claimed value Postgres cannot represent (an
+// SQLSTATE class 22 data exception from the recompute — a \u0000 escape, a NUL
+// in text). The device's fault, never the store's: the caller answers 4xx so
+// the forwarder stops rather than retrying a 5xx forever.
+var ErrFederatedRowInvalid = errors.New("store: federated row cannot be stored as claimed")
+
+// FederatedRowProblem says why r cannot be stored so that its claim re-checks
+// from the stored row, or "" when it can. data must be a JSON object without a
+// top-level device_origin key (that key is this organisation's marker, and
+// overwriting a claimed one would lose what the device signed), JSON null, or
+// absent; target must be one CapAuditTarget leaves unchanged, which every row a
+// laptop stored is, since the cap is applied at its own insert. Exported so the
+// API refuses these with a 400 before any database work.
+func FederatedRowProblem(r types.FederatedAuditEvent) string {
+	if CapAuditTarget(r.Target) != r.Target {
+		return fmt.Sprintf("target exceeds %d bytes", MaxAuditTargetLen)
+	}
+	if len(r.Data) == 0 || isJSONNull(r.Data) {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(r.Data, &m) != nil {
+		return "data must be a JSON object or null"
+	}
+	if _, claimed := m["device_origin"]; claimed {
+		return "data carries a device_origin key"
+	}
+	return ""
+}
+
+func isJSONNull(data json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(data), []byte("null"))
+}
+
 // IngestDeviceAudit appends one device's forwarded batch to THIS
 // organisation's own audit_events, as the organisation's own chained rows —
 // "one chain per writer" (docs/design/0.8/PLAN.md). A federated row keeps the
@@ -242,6 +280,9 @@ var ErrFederatedOrgRun = errors.New("store: federated row names an organisation 
 // Order of work, chosen so a device can make the organisation's own audit
 // writers wait for at most its inserts:
 //
+//  0. Every row must be storable so its claim re-checks (FederatedRowProblem),
+//     and every claimed value must be one Postgres can represent; otherwise
+//     ErrFederatedRowInvalid.
 //  1. Every claimed RowHash is recomputed BEFORE any transaction or lock, in
 //     ONE statement (verifyClaimedHashes). Each row is hashed against its OWN
 //     claimed PrevHash, so the check needs no cursor; step 4 is what ties the
@@ -270,6 +311,11 @@ var ErrFederatedOrgRun = errors.New("store: federated row names an organisation 
 func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer string, rows []types.FederatedAuditEvent) (DeviceIngestResult, error) {
 	if len(rows) == 0 {
 		return DeviceIngestResult{}, nil
+	}
+	for _, r := range rows {
+		if p := FederatedRowProblem(r); p != "" {
+			return DeviceIngestResult{}, fmt.Errorf("store: federated row seq %d: %s: %w", r.Seq, p, ErrFederatedRowInvalid)
+		}
 	}
 	if err := s.verifyClaimedHashes(ctx, rows); err != nil {
 		return DeviceIngestResult{}, err
@@ -405,6 +451,10 @@ func (s PG) verifyClaimedHashes(ctx context.Context, rows []types.FederatedAudit
 			var h string
 			return h, row.Scan(&h)
 		})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "22") {
+		return fmt.Errorf("store: a claimed value cannot be stored (SQLSTATE %s): %w", pgErr.Code, ErrFederatedRowInvalid)
+	}
 	if err != nil {
 		return err
 	}
@@ -443,40 +493,53 @@ func refuseOrgRuns(ctx context.Context, tx pgx.Tx, rows []types.FederatedAuditEv
 	return nil
 }
 
+// FederatedClaimHashSQL recomputes, from one STORED federated row aliased e,
+// the hash the device claimed for it. It equals
+// e.data->'device_origin'->>'row_hash' for every row IngestDeviceAudit
+// accepts: the claimed source_ip and prev_hash are in device_origin, the
+// claimed object is the stored data minus that key, and a data-less claim is
+// named by device_origin.data_null — "json" for a JSON null (what a laptop
+// row with no data holds), "sql" for an absent value.
+const FederatedClaimHashSQL = `audit_row_hash(e.data->'device_origin'->>'prev_hash', e.id, e.time, e.run_id,
+	e.actor_type, e.actor, e.action, e.target, e.outcome, e.data->'device_origin'->>'source_ip',
+	CASE e.data->'device_origin'->>'data_null' WHEN 'json' THEN 'null'::jsonb WHEN 'sql' THEN NULL
+	     ELSE e.data - 'device_origin' END)`
+
 // mergeDeviceOrigin folds one federated row's provenance into its data as a
 // "device_origin" object: which device forwarded it, that device's own local
 // seq, the link it claimed, and the source_ip it claimed (the column holds
 // the peer this organisation saw instead).
 //
-// The claimed data's top-level values are carried as raw JSON, never decoded,
-// so an object's members survive byte-for-byte (a float64 round trip would
-// rewrite a large integer). That keeps the device's own claim re-checkable
-// from the stored row: audit_row_hash(device_origin.prev_hash, id, time,
-// run_id, actor_type, actor, action, target, outcome,
-// device_origin.source_ip, data - 'device_origin') equals
-// device_origin.row_hash for an object-valued claim whose target fits
-// CapAuditTarget. The row's own org-chain hash is computed by this
+// The claimed object's members are carried as raw JSON, never decoded, so
+// they survive byte-for-byte (a float64 round trip would rewrite a large
+// integer); FederatedRowProblem has already refused every other shape. That
+// is what keeps the device's claim re-checkable from the stored row
+// (FederatedClaimHashSQL). The row's own org-chain hash is computed by this
 // organisation's trigger over whatever lands in the column.
 func mergeDeviceOrigin(data json.RawMessage, deviceID uuid.UUID, seq int64, rowHash, prevHash, sourceIP string) (json.RawMessage, error) {
-	var m map[string]json.RawMessage
-	if len(data) > 0 && json.Unmarshal(data, &m) != nil {
-		// Not a JSON object (array/scalar) — wrap it rather than lose it.
-		m = map[string]json.RawMessage{"data": data}
-	}
-	if m == nil {
-		m = map[string]json.RawMessage{}
-	}
-	origin, err := json.Marshal(map[string]any{
+	origin := map[string]any{
 		"device_id": deviceID,
 		"seq":       seq,
 		"row_hash":  rowHash,
 		"prev_hash": prevHash,
 		"source_ip": sourceIP,
-	})
+	}
+	m := map[string]json.RawMessage{}
+	switch {
+	case len(data) == 0:
+		origin["data_null"] = "sql"
+	case isJSONNull(data):
+		origin["data_null"] = "json"
+	default:
+		if err := json.Unmarshal(data, &m); err != nil {
+			return nil, err
+		}
+	}
+	o, err := json.Marshal(origin)
 	if err != nil {
 		return nil, err
 	}
-	m["device_origin"] = origin
+	m["device_origin"] = o
 	return json.Marshal(m)
 }
 

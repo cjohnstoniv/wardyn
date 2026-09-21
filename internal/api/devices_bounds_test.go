@@ -284,3 +284,160 @@ func TestDevices_DeviceTokenOnMetricsAndLocalMode(t *testing.T) {
 		t.Errorf("LocalMode loopback, no bearer, device route = %d, want 401", w.Code)
 	}
 }
+
+// blockingIngestStore parks every IngestDeviceAudit until released, so a test
+// can hold one push in flight and see what a second one gets.
+type blockingIngestStore struct {
+	*authzStore
+	entered chan uuid.UUID
+	release chan struct{}
+}
+
+func (s blockingIngestStore) IngestDeviceAudit(ctx context.Context, id uuid.UUID, peer string, rows []types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+	s.entered <- id
+	<-s.release
+	return s.authzStore.IngestDeviceAudit(ctx, id, peer, rows)
+}
+
+// One push per device at a time: while a device's push is in the store, its
+// second concurrent push is 429 with Retry-After and never reaches the store
+// (where the hash recompute would hold a pool connection); another device is
+// unaffected, and the cap lifts when the first push completes.
+func TestDevices_OneIngestInFlightPerDevice(t *testing.T) {
+	bs := blockingIngestStore{authzStore: newAuthzStore(), entered: make(chan uuid.UUID, 8), release: make(chan struct{})}
+	cfg := baseTestConfig(newHarness(t), bs)
+	cfg.Audit = &safeRecorder{}
+	srv := New(cfg)
+	idA, tokA := enrolTestDevice(t, srv, "a")
+	idB, tokB := enrolTestDevice(t, srv, "b")
+	push := func(id uuid.UUID, tok string, seq int64, prev string) chan *httptest.ResponseRecorder {
+		out := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			out <- do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, string(mustJSON(chainRows(seq, 1, prev))))
+		}()
+		return out
+	}
+	first := push(idA, tokA, 1, "")
+	if got := <-bs.entered; got != idA {
+		t.Fatalf("store entered for %s, want %s", got, idA)
+	}
+	second := push(idA, tokA, 1, "")
+	select {
+	case w := <-second:
+		if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") == "" {
+			t.Fatalf("second concurrent push from one device = %d (Retry-After %q), want 429 with Retry-After: %s",
+				w.Code, w.Header().Get("Retry-After"), w.Body.String())
+		}
+	case id := <-bs.entered:
+		close(bs.release)
+		t.Fatalf("a second concurrent push from device %s reached the store", id)
+	case <-time.After(5 * time.Second):
+		t.Fatal("second concurrent push neither answered nor reached the store")
+	}
+	other := push(idB, tokB, 1, "")
+	select {
+	case got := <-bs.entered:
+		if got != idB {
+			t.Fatalf("store entered for %s, want %s", got, idB)
+		}
+	case w := <-other:
+		t.Fatalf("another device's push was refused while device A's was in flight: %d", w.Code)
+	}
+	close(bs.release)
+	if w := <-first; w.Code != http.StatusOK {
+		t.Fatalf("first push = %d: %s", w.Code, w.Body.String())
+	}
+	if w := <-other; w.Code != http.StatusOK {
+		t.Fatalf("other device's push = %d: %s", w.Code, w.Body.String())
+	}
+	if w := <-push(idA, tokA, 2, "h1"); w.Code != http.StatusOK {
+		t.Fatalf("a push after the first completed = %d, want 200 (the cap lifts): %s", w.Code, w.Body.String())
+	}
+}
+
+// A claim the organisation could only store by changing it — so the device's
+// hash would no longer recompute from the stored row — is a 400 invalid_row
+// before any database work (store.FederatedRowProblem, which the store also
+// enforces).
+func TestDevices_IngestRefusesClaimsThatCannotReCheck(t *testing.T) {
+	srv, st, rec := newDeviceTestServer(t, false)
+	srv.ingestFailureLimiter.burst, srv.ingestFailureLimiter.rate = 1000, 1000
+	id, tok := enrolTestDevice(t, srv, "laptop")
+	for name, mutate := range map[string]func(*types.FederatedAuditEvent){
+		"a device_origin key":   func(r *types.FederatedAuditEvent) { r.Data = json.RawMessage(`{"device_origin":{"device_id":"x"}}`) },
+		"array data":            func(r *types.FederatedAuditEvent) { r.Data = json.RawMessage(`[1,2]`) },
+		"scalar data":           func(r *types.FederatedAuditEvent) { r.Data = json.RawMessage(`42`) },
+		"a target over the cap": func(r *types.FederatedAuditEvent) { r.Target = strings.Repeat("t", store.MaxAuditTargetLen+1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			rows := chainRows(1, 1, "")
+			mutate(&rows[0])
+			w := do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, string(mustJSON(rows)))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+			}
+			fails := auditRows(rec, "device.audit.ingest", "failure")
+			if len(fails) == 0 || auditReason(t, fails[len(fails)-1]) != "invalid_row" {
+				t.Fatalf("want an invalid_row failure row, have %d rows", len(fails))
+			}
+			if st.ingestedFor(id) != 0 {
+				t.Fatal("a refused claim reached the store")
+			}
+		})
+	}
+	// JSON null and absent data are what data-less laptop rows hold: accepted.
+	rows := chainRows(1, 2, "")
+	rows[0].Data = json.RawMessage(`null`)
+	if got := ackedSeq(t, do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, string(mustJSON(rows)))); got != 2 {
+		t.Fatalf("acked %d, want 2", got)
+	}
+}
+
+// A claimed value the store cannot represent is the device's fault: 400
+// invalid_row, which the forwarder stops on — never the 500 it would retry
+// forever. (The store half is TestPG_Devices_UnstorableClaimedValueIsErrFederatedRowInvalid.)
+func TestDevices_UnstorableClaimedValueIsA400NotARetry(t *testing.T) {
+	srv, st, rec := newDeviceTestServer(t, false)
+	id, tok := enrolTestDevice(t, srv, "laptop")
+	st.mu.Lock()
+	st.ingestErr = fmt.Errorf("store: a claimed value cannot be stored (SQLSTATE 22P05): %w", store.ErrFederatedRowInvalid)
+	st.mu.Unlock()
+	w := do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, string(mustJSON(chainRows(1, 1, ""))))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	fails := auditRows(rec, "device.audit.ingest", "failure")
+	if len(fails) != 1 || auditReason(t, fails[0]) != "invalid_row" {
+		t.Fatalf("failure rows = %+v, want one with reason invalid_row", fails)
+	}
+}
+
+// A device cycling two refusal reasons opens a new streak on every switch, so
+// every refusal is an opening row — bounded by the per-device bucket (5, then
+// one a minute) all the same.
+func TestDevices_IngestFailureRowsBoundedWhenReasonsAlternate(t *testing.T) {
+	st := newAuthzStore()
+	rec := &safeRecorder{}
+	cfg := baseTestConfig(newHarness(t), st)
+	cfg.Audit = rec
+	cfg.AuditCoalesceWindow = 5 * time.Minute
+	clock := time.Unix(1_800_000_000, 0).UTC()
+	cfg.Now = func() time.Time { return clock }
+	srv := New(cfg)
+	id, tok := enrolTestDevice(t, srv, "laptop")
+	big, _ := json.Marshal(chainRows(1, 501, ""))
+	for i := range 600 {
+		clock = clock.Add(time.Second)
+		body := `{"not":"an array"}`
+		if i%2 == 1 {
+			body = string(big)
+		}
+		do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, body)
+	}
+	srv.FlushAuthFailedStreak()
+	rows := auditRows(rec, "device.audit.ingest", "failure")
+	t.Logf("600 refusals alternating invalid_body/batch_too_large over 600 simulated seconds: %d failure rows", len(rows))
+	if len(rows) > 5+10+2 {
+		t.Errorf("per-device bound exceeded: %d rows (bucket 5 + 10 minutes of refill)", len(rows))
+	}
+}

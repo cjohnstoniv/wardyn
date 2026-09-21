@@ -273,8 +273,9 @@ func (s *Server) auditEnrolFailure(r *http.Request, reason string) {
 // store.PG.IngestDeviceAudit's, handed the TCP peer to record as source_ip in
 // place of the device's claim. This handler bounds and shapes the batch and
 // maps the outcome to what the forwarder acts on: 401 revoked (from
-// deviceAuth, or revoked mid-request), 422 a batch that does not extend the
-// recorded chain or names an org run, 5xx retry. Every refusal after
+// deviceAuth, or revoked mid-request), 400 a row that cannot be stored as
+// claimed, 422 a batch that does not extend the recorded chain or names an
+// org run, 429 a push already in progress, 5xx retry. Every refusal after
 // authentication is audited with its reason (bounded per device); a chain
 // reset is accepted and audited as one.
 func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request) {
@@ -284,6 +285,17 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
 	}
+	// One push per device at a time, taken before the body is read. The hash
+	// recompute holds a pool connection for as long as it runs, so without this
+	// one device's concurrent pushes could occupy the pool the organisation's
+	// own requests need. A real forwarder pushes one batch at a time and never
+	// meets it; the 429 writes no audit row (nothing was refused on content).
+	if _, busy := s.ingestInFlight.LoadOrStore(d.ID, struct{}{}); busy {
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, "a push from this device is already in progress; retry after it completes")
+		return
+	}
+	defer s.ingestInFlight.Delete(d.ID)
 	body, ok := readCappedBody(w, r, maxDeviceIngestBytes, "device audit batch")
 	if !ok {
 		s.auditIngestFailure(r, d, "invalid_body", 0)
@@ -318,6 +330,12 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		s.auditIngestFailure(r, d, "revoked", len(rows))
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
+	case errors.Is(err, store.ErrFederatedRowInvalid):
+		// A value Postgres cannot represent: the device's fault, so a 4xx the
+		// forwarder stops on, never a 5xx it would retry forever.
+		s.auditIngestFailure(r, d, "invalid_row", len(rows))
+		writeError(w, http.StatusBadRequest, "a row holds a value that cannot be stored as claimed")
+		return
 	case errors.Is(err, store.ErrFederatedOrgRun):
 		s.auditIngestFailure(r, d, "org_run", len(rows))
 		writeError(w, http.StatusUnprocessableEntity, "a row names one of this organisation's own runs")
@@ -351,7 +369,8 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 // answer to: seq must strictly increase (the store's idempotency skip reads
 // the batch in order), and actor_type/outcome must be values audit_events'
 // CHECK constraints accept — otherwise the INSERT fails as a 500 the forwarder
-// retries forever.
+// retries forever. The row must also be storable so the device's claim
+// re-checks from it (store.FederatedRowProblem, which the store enforces too).
 func invalidFederatedRow(rows []types.FederatedAuditEvent) string {
 	var prev int64
 	for i, e := range rows {
@@ -362,6 +381,9 @@ func invalidFederatedRow(rows []types.FederatedAuditEvent) string {
 			return fmt.Sprintf("row %d: invalid actor_type %q", i, e.ActorType)
 		case !slices.Contains([]string{"success", "failure", "denied"}, e.Outcome):
 			return fmt.Sprintf("row %d: invalid outcome %q", i, e.Outcome)
+		}
+		if p := store.FederatedRowProblem(e); p != "" {
+			return fmt.Sprintf("row %d: %s", i, p)
 		}
 		prev = e.Seq
 	}
