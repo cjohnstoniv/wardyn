@@ -682,3 +682,75 @@ type DriveProber interface {
 	// the caller is a request thread, not a background sweep.
 	ProbeDrive(ctx context.Context, mount types.DriveMount) (DriveProbe, error)
 }
+
+// DriveReclaimOutcome is the closed set of answers a DriveReclaimer gives for
+// one object it was asked to destroy. Two states, and the second is not an
+// error: the object being gone already is the same END STATE the caller asked
+// for, reached by a prior partial reclaim or by the operator's own
+// `docker volume rm` / `kubectl delete pvc` — the idempotent-teardown contract
+// StopSandbox already takes. Telling the two apart matters only to the audit
+// row, which is exactly why it is a value and not a bool.
+type DriveReclaimOutcome string
+
+const (
+	// DriveReclaimDeleted: this call issued the delete and the substrate
+	// accepted it. The bytes are gone.
+	DriveReclaimDeleted DriveReclaimOutcome = "deleted"
+	// DriveReclaimAlreadyAbsent: no object answered to that name, so this call
+	// destroyed nothing. Not an error — but never reported as "deleted"
+	// either, because an audit row that says a person's storage was destroyed
+	// when it was already missing is the one row an operator must be able to
+	// trust.
+	DriveReclaimAlreadyAbsent DriveReclaimOutcome = "already_absent"
+)
+
+// ErrDriveInUse is the sentinel a DriveReclaimer returns when a sandbox still
+// holds the object: a running container mounts the Docker volume, or a pod
+// still references the claim. The caller answers 409 and the operator retries
+// once the run has finished.
+//
+// A refusal rather than a force-delete, and the asymmetry is deliberate: on
+// Docker a forced remove would pull the volume out from under a live agent
+// mid-write, and on Kubernetes the apiserver ACCEPTS a delete against an
+// in-use claim and leaves it Terminating behind the pvc-protection finalizer —
+// which destroys nothing now and refuses the member's NEXT run with
+// errDriveClaimTerminating until the pod goes. Neither is "reclaimed".
+var ErrDriveInUse = errors.New("runner: the drive's storage is still held by a running sandbox")
+
+// ErrDriveNotReclaimable is the sentinel a DriveReclaimer returns when the
+// object that answers to the drive's name is NOT the storage this drive
+// allocated — another drive's object under a colliding minted name, another
+// principal's object under a home template that folds two people onto one, an
+// operator's own pre-existing object, or one already being deleted.
+//
+// The same identity evidence the mount path refuses on (driveClaimIdentity /
+// driveVolumeAdoptable), asked one last time before anything is destroyed:
+// a mount that gets identity wrong shows one member another member's files,
+// and a reclaim that gets it wrong deletes them.
+var ErrDriveNotReclaimable = errors.New("runner: the object under this drive's name is not the storage it allocated")
+
+// DriveReclaimer is an OPTIONAL Runner capability, modelled on ImageRemover:
+// a substrate that can DESTROY the per-person storage object a user drive
+// allocated.
+//
+// It is the one verb in this file that is irreversible, and it exists because
+// there was no verb at all: deleting a drive removed its row and left the
+// volume or the claim behind, with nothing in the product able to name it
+// afterwards. The alternative — a daemon that reclaims on its own, at teardown
+// or when an allocation goes away — is refused outright: a drive OUTLIVES
+// every run that mounts it, so no automatic path may ever reach this.
+//
+// On Kubernetes the verb is not even granted by default. The chart's Role
+// carries `persistentvolumeclaims: [get, create]` and gains `delete` only
+// under `userDrives.reclaim.enabled`, so a stock install cannot execute this
+// call at all and the apiserver's own 403 is the backstop under the API's
+// super-admin gate.
+type DriveReclaimer interface {
+	// ReclaimDrive destroys the storage object mount names, bounded by ctx.
+	//
+	// It MUST refuse rather than destroy when the object is not this drive's
+	// (ErrDriveNotReclaimable) or is still held by a sandbox (ErrDriveInUse),
+	// and it MUST answer DriveReclaimAlreadyAbsent — not an error — when
+	// nothing answers to the name.
+	ReclaimDrive(ctx context.Context, mount types.DriveMount) (DriveReclaimOutcome, error)
+}

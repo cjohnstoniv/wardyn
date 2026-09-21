@@ -878,6 +878,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
 | the `/drives` routes — registering a **user drive**, allocating it to people or groups, previewing whose drive resolves (`mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| `POST /drives/{id}/reclaim` — **destroys** one person's drive storage on the substrate (`internal/api/user_drives_reclaim.go`) | ⛔ admin only, and the only irreversible row in this table. It is fenced four ways: super-admin here; a `409` while a run still holds the object or while the object under that name is not this drive's; a `drive.reclaim` audit row on every attempt, refusals included; and on Kubernetes wardynd does not even hold the `delete` verb unless the chart's `userDrives.reclaim.enabled` is set. There is no console button — API and CLI only |
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | signing in to YOUR OWN model provider (`POST /setup/harness-login`) — the container-login sandbox that captures an AWS SSO session | 🟡 any signed-in human, but ONLY under a `per_user` agent row: the agent roster must declare that each person signs in themselves, and the caller must hold the `agent` capability for that row's agent. Otherwise ⛔ admin only. An admin always reaches it, and under a `per_user` row captures their OWN session like anyone else. The start URL is the ADMIN'S — a sign-in can never choose another portal |
@@ -999,10 +1000,10 @@ migration `0050`)** are the second and third owned nouns after runs.
   departed member's objects stay findable after the row is gone — that is the
   recovery path if you skipped the preview; a share's subdirectory and a static
   claim carry **nothing**, so for those the preview is the only thing that names
-  the object at all. Reclaiming it is a deliberate operator command, one per
-  substrate, and Wardyn holds no `delete` verb that could do it by accident: the
-  recipes are "User drives on Docker" and "User drives on Kubernetes" in this
-  document, and are not repeated here. Deleting the **drive row** itself
+  the object at all. Reclaiming it is a deliberate command — `POST
+  /drives/{id}/reclaim` (`wardyn drive reclaim`), or the substrate command by
+  hand; both stay supported, and "Reclaiming a departed person's storage" below
+  is the runbook for both. Deleting the **drive row** itself
   is a `409` while any allocation still points at it (`ON DELETE RESTRICT`), so
   the deallocation is always its own audited event and offboarding can never
   silently widen anything.
@@ -1204,6 +1205,62 @@ the sandbox except `wardyn-proxy`, and the session is still recorded. A governan
 control, not a containment boundary against the operator holding the laptop. Full
 accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
 
+### Reclaiming a departed person's storage
+
+Deleting a drive removes its row and deleting an allocation stops the mount;
+neither deletes a byte. The storage object one person's allocation resolved to
+— a Docker named volume, a PersistentVolumeClaim, or a directory on a share —
+outlives both. **Reclaiming it destroys data and nothing undoes it.**
+
+There are two supported ways, and both stay supported: the substrate command by
+hand (the recipes in "User drives on Docker" and "User drives on Kubernetes"
+below), or the product's own verb.
+
+**The verb.** `POST /api/v1/drives/{id}/reclaim`, body
+`{"subject_type":"user","subject":"<the person's sign-in subject>"}`, or from
+the CLI:
+
+```sh
+wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
+```
+
+It answers `deleted` (this call destroyed the storage) or `already_absent`
+(nothing answered to the name). **There is no console button**: a destructive
+confirmation is a screen, and this one has no approved mock, so the API and the
+CLI are the whole surface in 0.8.
+
+**Do it in this order.** Reclaim the storage **first**, then delete the
+allocation. A home directory an admin pinned (`home_override`) lives on the
+allocation, so once that row is gone the pinned name cannot be recovered from
+the database and the object name this verb derives is the drive template's
+instead — a different directory. Check the name it reports against
+`POST /drives/preview`, which prints the object name for a principal.
+
+**What refuses it, and why each one is there:**
+
+| Refusal | What it means |
+| --- | --- |
+| `403` | Not a super-admin. Same tier as the rest of `/drives`, for a sharper reason: this one is irreversible |
+| `400` | The `subject_type` is `group` or `all`. Those give **every** person they match their own object, so they name no single thing to destroy — reclaim the people one at a time |
+| `422` | The drive is a share (`host_path`, `k8s_pvc_static`). Wardyn did not create that object and never deletes it; reclaiming it is a change on the share itself. There is no recursive delete in this product, at any privilege, for any backend |
+| `409` | A run still holds the object, a reclaim is already in flight (a claim already `Terminating`), or the object answering to that name is **not this drive's** (the driver re-checks the `wardyn.drive` / `wardyn.home` / `wardyn.subject` labels before issuing any delete) |
+| `501` | This deployment's runner cannot reclaim at all — use the substrate command |
+
+**On Kubernetes the daemon does not even hold the verb by default.** The chart's
+Role carries `persistentvolumeclaims: [get, create]` and adds `delete` only
+under `userDrives.reclaim.enabled` (default `false`, see
+[the chart's values](../deploy/helm/wardyn/values.yaml)). Leave it off and every
+attempt ends in the apiserver's own `403`, recorded as a failed `drive.reclaim`
+row; turn it on only when your offboarding runbook calls the API instead of
+running `kubectl delete pvc` by hand. Nothing else changes either way: no run
+path, no teardown and no sweep can reach a claim on either setting.
+
+**Every attempt is audited**, refusals and failures included, as `drive.reclaim`
+— naming the drive, the person, the backend, the object and what became of it
+([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). That row is deliberately the only
+durable record: the drive row and the allocation can both be gone by the time
+anyone reads the trail.
+
 ### User drives on Docker
 
 A **user drive** is persistent storage an admin registers once and allocates to
@@ -1223,7 +1280,8 @@ label is the only key that still finds a drive's volumes across one, which is
 what the reclaim recipes below select on); `wardyn.home` = that person's directory name; and
 `wardyn.subject` = a **digest** of the person
 themselves (never their claim — see the restore note below). Reclaim is a
-command, not a button:
+command, never a button — either `wardyn drive reclaim` ("Reclaiming a departed
+person's storage" above) or, by hand:
 
 - one person: `docker volume rm wardyn-drive-<drive-slug>-<home>` — `POST /drives/preview`
   prints the object name for a principal — paste the sign-in subject FIRST: on a
@@ -5128,8 +5186,9 @@ the name every FUTURE claim is
 created under. The claims already provisioned keep their old names, keep the
 member data in them, and are never looked up again — the next run for each
 person provisions a fresh, empty claim under the new name. Nothing deletes the
-old ones, on purpose: Wardyn holds no `delete` verb, and a rename must never be
-able to destroy storage. The `wardyn.drive` label carries the drive's row **id**
+old ones, on purpose: no run path, teardown or sweep can reach a claim — the
+only delete in the product is the operator's explicit reclaim — and a rename
+must never be able to destroy storage. The `wardyn.drive` label carries the drive's row **id**
 rather than its name precisely so the orphans stay findable:
 
 ```sh
@@ -5186,8 +5245,8 @@ next run onward — so the claim now asks for more than the drive says, and that
 disagreement is reported by the same warning as any other: *"disagrees with the
 drive"*, naming the claim and `request is 10Gi, the drive's allocation is 2048
 MiB`. Nothing shrinks and nothing is refused. **A PVC request cannot be reduced
-in place**, Wardyn holds no `delete` verb for a claim, and refusing the run would
-mean an admin editing a ceiling breaks every existing member's runs — so the
+in place**, no run path may delete a claim (the only delete is the operator's
+explicit reclaim), and refusing the run would mean an admin editing a ceiling breaks every existing member's runs — so the
 product's answer to a lowered ceiling is a smaller number on the next
 allocation, plus this warning on the claims that predate it. To actually reclaim
 the space, plan the data move (the `kubectl cp` / snapshot recipes above) and
@@ -5276,12 +5335,18 @@ share is backed up by whoever owns the export, not by Wardyn.
 
 **Offboarding — the reclaim command.** Deleting the allocation in the console is
 the product-side half and it deletes no data. Reclaiming the storage is one
-deliberate operator command, and Wardyn holds no `delete` verb that could do it
-by accident:
+deliberate command, by hand:
 
 ```sh
 kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 ```
+
+or, when `userDrives.reclaim.enabled` is set, through the product's own verb
+(`wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes`, super-admin
+only, audited, refused while a pod still mounts the claim) — see "Reclaiming a
+departed person's storage" above. **With that value left at its default `false`
+wardynd holds no `delete` verb on claims at all**, so the by-hand command is the
+only path and nothing in the deployment can destroy a claim by accident.
 
 The drive's `when a person leaves` column records the intent (`retain` or
 `delete`) so the log says what the operator was told to do; the console's drive

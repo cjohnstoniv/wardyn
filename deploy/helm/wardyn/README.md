@@ -517,8 +517,9 @@ body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
 whose pods are both gone, and it is asked for best-effort — a Role without it
 degrades the sweep rather than killing it); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
-only ever resolves one by name). One rule is conditional:
-`persistentvolumeclaims` get+create, rendered only with `userDrives.enabled` —
+only ever resolves one by name). One rule is conditional, and it is the only
+one switched twice: `persistentvolumeclaims` get+create, rendered only with
+`userDrives.enabled`, plus `delete` only with `userDrives.reclaim.enabled` —
 see [User drives](#user-drives-userdrivesenabled) below. A run's `disk_mib`
 cap needs **no new verb**: `ephemeral-storage` is a field on the pod spec the
 runner already creates, and eviction is read back through the `pods: get` the
@@ -552,14 +553,27 @@ to the namespaced Role. Leave it on for **any** drive at all: a static share
 needs `get`, and with the rule absent the LOOKUP is what the apiserver refuses
 first. Off, any drive's run fails at dispatch with a hint naming this switch.
 
-**There is no `delete` verb, on purpose.** A drive outlives every run that mounts
-it, and the claim carries no `wardyn.run-id` label, so the per-run teardown sweep
-cannot select it. Reclaiming a departed person's storage is an operator command,
-run once, deliberately:
+**The `delete` verb is off by default, and it is a second switch.** A drive
+outlives every run that mounts it, and the claim carries no `wardyn.run-id`
+label, so no per-run teardown sweep can ever select it — that holds on every
+setting. What `userDrives.reclaim.enabled=true` adds is `delete` on the same
+rule, for exactly one caller: the operator's explicit
+`POST /api/v1/drives/{id}/reclaim` (`wardyn drive reclaim`), super-admin only,
+refused while a pod still mounts the claim, and audited as `drive.reclaim` on
+every attempt. **It destroys a member's stored bytes and nothing undoes it**, so
+it is opt-in: leave the value unset and this Role is byte-for-byte the one it
+has always been, every reclaim attempt ends in the apiserver's own `403`, and
+reclaiming a departed person's storage stays an operator command, run once,
+deliberately:
 
 ```sh
 kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 ```
+
+Turn it on when your offboarding runbook calls the API instead. Both paths stay
+supported; only one is the default. `deletecollection` is still never granted —
+a label-scoped sweep would reclaim every claim matching a selector in one call,
+and a reclaim is one person's object at a time, by name, or it is not reviewable.
 
 The console's drive preview prints the object name for a principal — paste the
 sign-in subject FIRST: on a `hash`/`sub` drive the name keys on the first claim,
@@ -1037,9 +1051,13 @@ See `values.yaml` for all options. Key settings:
   [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above.
 - `userDrives.enabled`: adds `persistentvolumeclaims: get, create` to the
   k8s-runner Role so runs can mount per-person storage, off by default — see
-  [User drives](#user-drives-userdrivesenabled) above. It is the only key in the
-  block: a drive's storage class is a per-drive field in the console, not a chart
-  value.
+  [User drives](#user-drives-userdrivesenabled) above.
+- `userDrives.reclaim.enabled`: adds `delete` on that same rule, also off by
+  default, and **it is the one value in this chart that can destroy a member's
+  stored bytes** — it exists only so the operator's explicit
+  `POST /api/v1/drives/{id}/reclaim` can work. Same section above. Those two are
+  the whole block: a drive's storage class is a per-drive field in the console,
+  not a chart value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
   [Split SSH exposure](#split-ssh-exposure) above.
 - `replicas`: **leave at 1 — the chart refuses anything higher.** A render with
