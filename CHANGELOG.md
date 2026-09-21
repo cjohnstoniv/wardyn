@@ -22,6 +22,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A read-only terminal observer is now promoted in place when the writer leaves, instead of
+  having to reconnect.** The registry keeps one writer and the observers queued behind it in
+  arrival order; an ordinary release promotes the oldest of them on the socket it already has,
+  and a take-over promotes the taking principal's own observer — never a bystander, whose typing
+  would otherwise be attributed to an act somebody else was audited for. The promoted client
+  receives a second `attach-mode` frame (web) or its geometry plus a notice (SSH), the change is
+  recorded as `session.promote`, and a `session.detach` row now reports the mode the session
+  ENDED in rather than the one it connected with. Known residual: a promoted observer whose
+  socket is already dead holds the slot until the attach ping probe notices, up to about twice
+  the ping interval.
 - **The decision-log line printed to stdout is now written under its own mutex.** A line over
   `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
   could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
