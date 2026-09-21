@@ -532,7 +532,7 @@ func uiErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 		}
 	}
 	slog.WarnContext(r.Context(), "wardynd: ui relay failed", "path", r.URL.Path, "err", err)
-	writeError(w, http.StatusBadGateway, "the sandbox closed the UI connection: "+err.Error())
+	writeError(w, http.StatusBadGateway, loggedMsg(r.Context(), "the sandbox closed the UI connection", err))
 }
 
 // uiDial opens ONE relay connection: it re-checks the run is still live,
