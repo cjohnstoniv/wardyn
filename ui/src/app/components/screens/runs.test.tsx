@@ -47,6 +47,7 @@ import { AttentionPublisherProvider } from "../../lib/attention-context";
 import { baseStatus } from "../../lib/test-fixtures";
 import { DEMOS } from "./demos/demo-catalog";
 import { STARTING_UNSCHEDULABLE } from "./run-status-detail";
+import { HttpError } from "../../lib/api/core";
 
 const run: AgentRun = {
   id: "run-1",
@@ -493,8 +494,11 @@ describe("RunsScreen — Live indicator uses the shared Chip primitive (matches 
   it("renders the Live copy inside the Chip pill (title carries the polling reason, like Audit's)", async () => {
     renderScreen();
     await screen.findByRole("button", { name: /run actions/i });
-    const chip = screen.getByTitle("Polling for new runs");
-    expect(chip).toHaveTextContent("Live · refreshes every 3s");
+    // #215: "Live" alone — "refreshes every 3s" narrated the polling
+    // implementation; the title says the same thing without the number.
+    const chip = screen.getByTitle("Refreshing on its own");
+    expect(chip).toHaveTextContent("Live");
+    expect(chip).not.toHaveTextContent("refreshes every");
   });
 });
 
@@ -545,6 +549,56 @@ describe("RunsScreen — runs are grouped by title", () => {
     ]);
     renderScreen();
     expect(await screen.findByText("Debug the payments box")).toBeInTheDocument();
+  });
+
+  // #215 — "Other runs" replaces "Ungrouped", a data-model word. Shown only
+  // when there is a real title group to distinguish it FROM, same rule as before.
+  it("labels the loose section 'Other runs' once a real title group exists above it", async () => {
+    listRunsMock.mockResolvedValue([
+      titled("r1", "Nightly dependency audit"),
+      titled("r2", "Nightly dependency audit", { state: "COMPLETED" }),
+      { ...run, id: "r3", title: "", task: "A loose one-off run" },
+    ]);
+    renderScreen();
+    await screen.findByRole("region", { name: "Nightly dependency audit" });
+    expect(screen.getByText("Other runs")).toBeInTheDocument();
+    expect(screen.queryByText("Ungrouped")).not.toBeInTheDocument();
+  });
+});
+
+// #215 — a run opens from a link, in the product's vocabulary: the title is a
+// real <a href> (board AND table), a failed run offers "Open" not "Review",
+// the workspace facet/column says "Workspace" not "Repo", and the Live chip
+// drops the polling detail.
+describe("RunsScreen — a run opens from a link (#215)", () => {
+  it("the board card's title is a real, keyboard-reachable <a href>", async () => {
+    renderScreen();
+    const link = await screen.findByRole("link", { name: "Fix flaky auth tests" });
+    expect(link).toHaveAttribute("href", "/runs/run-1");
+  });
+
+  it("the table row's title is a real <a href> too — the same click-handler-on-a-div defect runs.tsx had", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: /^table$/i }));
+    const link = await screen.findByRole("link", { name: "Fix flaky auth tests" });
+    expect(link).toHaveAttribute("href", "/runs/run-1");
+    expect(screen.getByRole("columnheader", { name: "Workspace" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Repo" })).not.toBeInTheDocument();
+  });
+
+  it("the workspace facet says Workspace, not Repo", async () => {
+    renderScreen();
+    await screen.findByRole("button", { name: /run actions/i });
+    expect(screen.getByRole("combobox", { name: "Workspace" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Repo" })).not.toBeInTheDocument();
+  });
+
+  it("a failed run's card offers Open, not Review — it is a report, not a request", async () => {
+    listRunsMock.mockResolvedValue([{ ...run, id: "r1", state: "FAILED" }]);
+    renderScreen();
+    expect(await screen.findByRole("button", { name: "Open" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
   });
 });
 
@@ -773,5 +827,26 @@ describe("RunsScreen — what a starting run is waiting on", () => {
     expect(await screen.findByText("Fix flaky auth tests")).toBeInTheDocument();
     expect(screen.queryByText(STARTING_UNSCHEDULABLE)).toBeNull();
     expect(screen.queryByText(/^Waiting:/)).toBeNull();
+  });
+});
+
+// getSetupStatus only ever rejects on a real 401 (setup.ts's own contract) —
+// a lapsed session while this screen is mounted. loadSetupStatus used to have
+// no .catch, so that rejection floated as an unhandled promise rejection
+// right on the landing screen; vitest fails a run on an unhandled rejection
+// on its own, so this test's whole job is to prove the mount survives the
+// reject without one.
+describe("RunsScreen — a lapsed session's 401 never floats unhandled (loadSetupStatus)", () => {
+  it("mounts and boards the runs it already has when getSetupStatus rejects", async () => {
+    getSetupStatusMock.mockRejectedValue(new HttpError(401, "Unauthorized"));
+    renderScreen();
+
+    // The board itself never depended on setup status to render runs it
+    // already has — a rejected read must not blank it.
+    expect(await screen.findByText("Fix flaky auth tests")).toBeInTheDocument();
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    // setupStatus stays null on a reject, same as "not answered yet" — never
+    // the no-barrier banner off a read that never actually answered.
+    expect(screen.queryByText(/no sandbox barrier/i)).toBeNull();
   });
 });
