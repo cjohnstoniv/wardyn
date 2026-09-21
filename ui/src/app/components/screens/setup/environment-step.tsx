@@ -55,18 +55,17 @@ const TIER_NAME_TINT: Record<ConfinementClass, string> = {
   CC3: "text-vault-fg",
 };
 
-// The strongest-COMPATIBLE recommendation, computed from the probe alone — a
-// kvm-capable host recommends Vault even before its runtime is installed (its
-// card just says "Needs setup"). NEVER demoted for a merely-uninstalled tier;
-// only a hardware-impossible one is skipped. Exported for tests only — CC1+CC2
-// are always compatible, so this can only ever return CC2 or CC3.
-export function recommendedTier(status: SetupStatus): ConfinementClass {
-  const available = new Set(status.runner.confinement_classes ?? []);
-  const kvm =
-    status.platform.kvm ?? !(status.platform.wsl || /darwin|mac/i.test(status.platform.os));
-  const incompatible = (cc: ConfinementClass) => cc === "CC3" && !kvm && !available.has(cc);
-  const compatible = CC_ORDER.filter((cc) => !incompatible(cc));
-  return compatible[compatible.length - 1];
+// #213 — the strongest INSTALLED class, never inferred from the operating
+// system or from hardware compatibility. The old rule recommended the
+// strongest class the host could *theoretically* run (stepping down only for
+// a hardware-impossible Vault), which put Recommended on Vault — experimental,
+// and not installed — on any Linux host, including one with no confinement
+// classes at all. This reads only `status.runner.confinement_classes`: null
+// when the host reports none (nothing is recommended), the strongest member
+// otherwise. Exported for tests only.
+export function recommendedTier(status: SetupStatus): ConfinementClass | null {
+  const installed = CC_ORDER.filter((cc) => (status.runner.confinement_classes ?? []).includes(cc));
+  return installed.length ? installed[installed.length - 1] : null;
 }
 
 // Per-tier "pick this when…" guidance — the sole copy (the barrier picker lives
@@ -192,6 +191,10 @@ export function EnvironmentStep({
   const noRunner = noDriver || classes.length === 0;
   const available = new Set(classes);
   const rec = recommendedTier(status);
+  // Every class stronger than the recommendation, by name — empty once rec is
+  // already the strongest class that exists (CC3), which is when the note
+  // below has nothing left to say.
+  const recStronger = rec ? CC_ORDER.slice(CC_ORDER.indexOf(rec) + 1).map((cc) => CC_META[cc].label) : [];
   const k8s = status.runner.driver === "k8s";
   // TIER_GUIDES/NOT_DETECTED are docker-shaped (`wardyn setup
   // wall`, `docker info` runtimes) — meaningless on a k8s runner, where the
@@ -428,6 +431,30 @@ export function EnvironmentStep({
         </table>
       </div>
 
+      {/* #213 — says WHY the recommendation isn't the strongest class that
+          exists, or that nothing is recommended at all. Only ever one of the
+          two: a host with nothing installed is always noRunner (the danger
+          card above already says so), and a host whose recommendation IS the
+          strongest class (rec === CC3) has no stronger class left to name. */}
+      {!noRunner && rec && recStronger.length > 0 && (
+        <div className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3">
+          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <p className="text-sm text-muted-foreground">
+            Recommended is the strongest barrier installed on this host. {recStronger.join(" and ")} are
+            stronger and each needs a one-time setup step.
+          </p>
+        </div>
+      )}
+      {noRunner && (
+        <div className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3">
+          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <p className="text-sm text-muted-foreground">
+            Nothing is recommended while the host reports no barrier. Wardyn recommends what it can
+            see, not what the operating system suggests.
+          </p>
+        </div>
+      )}
+
       {/* Constant note — exactly once, near the picker. */}
       <div className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3">
         <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -549,10 +576,15 @@ function ColumnState({
 
   return (
     <div className="mt-3 space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
+      {/* #213/CONSOLE-RULES §2 — fixed height (22px, one chip row) so the
+          matrix cannot shift when the Recommended chip appears or moves
+          (docs/img/getting-started.png's misalignment); `tone="neutral"`,
+          not the former `"primary"` teal — a recommendation is not an
+          action. */}
+      <div className="flex h-[22px] items-center gap-2 overflow-hidden">
         <StatusChip status={chipStatus} reason={incompatibleReason} />
         {recommended && (
-          <Chip tone="primary" className="uppercase tracking-wide">
+          <Chip tone="neutral" className="uppercase tracking-wide">
             Recommended
           </Chip>
         )}
