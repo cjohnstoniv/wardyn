@@ -5,6 +5,7 @@ package composer
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -95,7 +96,12 @@ func TestAutonomyPostureAxes(t *testing.T) {
 }
 
 // TestFoldAutonomyMinimum pins the fold: the minimum over the applicable caps,
-// the field that bound it, and the two ways nothing binds at all.
+// EVERY field that tied at it, and the two ways nothing binds at all.
+//
+// The tie rows are the load-bearing ones. A fold that kept the first cause
+// would satisfy every single-cause row here and still ship the wrong wire:
+// the resolution's bound_by is what an admin edits by, and one name out of a
+// three-way tie points at a row they can raise without the level moving.
 func TestFoldAutonomyMinimum(t *testing.T) {
 	sealedNoneCC2 := types.AutonomyPosture{
 		Egress: types.AutonomyEgressSealed, Secrets: types.AutonomySecretsNone, Confinement: types.CC2,
@@ -105,40 +111,49 @@ func TestFoldAutonomyMinimum(t *testing.T) {
 		rubric    types.AutonomyRubric
 		posture   types.AutonomyPosture
 		wantLevel types.AutonomyLevel
-		wantBound string
+		wantBound []string
 	}{
-		{"an all-unset rubric caps nothing", types.AutonomyRubric{}, sealedNoneCC2, "", ""},
+		{"an all-unset rubric caps nothing", types.AutonomyRubric{}, sealedNoneCC2, "", nil},
 		{"a rubric that names only inapplicable postures caps nothing",
 			types.AutonomyRubric{EgressOpen: types.AutonomyL0, SecretsPowerful: types.AutonomyL0, ConfinementCC1: types.AutonomyL0},
-			sealedNoneCC2, "", ""},
+			sealedNoneCC2, "", nil},
 		{"one applicable field binds",
-			types.AutonomyRubric{EgressSealed: types.AutonomyL2}, sealedNoneCC2, types.AutonomyL2, "egress_sealed"},
+			types.AutonomyRubric{EgressSealed: types.AutonomyL2}, sealedNoneCC2, types.AutonomyL2, []string{"egress_sealed"}},
 		{"the minimum wins, not the last",
 			types.AutonomyRubric{EgressSealed: types.AutonomyL3, SecretsNone: types.AutonomyL1, ConfinementCC2: types.AutonomyL2},
-			sealedNoneCC2, types.AutonomyL1, "secrets_none"},
+			sealedNoneCC2, types.AutonomyL1, []string{"secrets_none"}},
 		{"the minimum wins, not the first",
 			types.AutonomyRubric{EgressSealed: types.AutonomyL3, SecretsNone: types.AutonomyL3, ConfinementCC2: types.AutonomyL0},
-			sealedNoneCC2, types.AutonomyL0, "confinement_cc2"},
-		{"a tie keeps the first field in order",
+			sealedNoneCC2, types.AutonomyL0, []string{"confinement_cc2"}},
+		{"a two-way tie names both causes",
 			types.AutonomyRubric{EgressSealed: types.AutonomyL1, SecretsNone: types.AutonomyL1},
-			sealedNoneCC2, types.AutonomyL1, "egress_sealed"},
+			sealedNoneCC2, types.AutonomyL1, []string{"egress_sealed", "secrets_none"}},
+		{"a three-way tie names all three, in field order",
+			types.AutonomyRubric{EgressSealed: types.AutonomyL1, SecretsNone: types.AutonomyL1, ConfinementCC2: types.AutonomyL1},
+			sealedNoneCC2, types.AutonomyL1, []string{"egress_sealed", "secrets_none", "confinement_cc2"}},
+		// A cause that ties with a LOSING cap already in hand: the third field
+		// must join the winners, not the field it was compared against.
+		{"a tie found after a higher cap replaces it, never appends to it",
+			types.AutonomyRubric{EgressSealed: types.AutonomyL2, SecretsNone: types.AutonomyL1, ConfinementCC2: types.AutonomyL1},
+			sealedNoneCC2, types.AutonomyL1, []string{"secrets_none", "confinement_cc2"}},
 		// The zero posture is what the api gate holds for a run under no
 		// profile. It must select NO cap, or a rubric would bind a run nothing
 		// was meant to bind.
 		{"the zero posture selects nothing",
 			types.AutonomyRubric{EgressSealed: types.AutonomyL0, SecretsNone: types.AutonomyL0, ConfinementCC1: types.AutonomyL0},
-			types.AutonomyPosture{}, "", ""},
+			types.AutonomyPosture{}, "", nil},
 	} {
 		level, bound := FoldAutonomy(tc.rubric, tc.posture)
-		if level != tc.wantLevel || bound != tc.wantBound {
-			t.Errorf("%s: got (%q, %q), want (%q, %q)", tc.name, level, bound, tc.wantLevel, tc.wantBound)
+		if level != tc.wantLevel || !slices.Equal(bound, tc.wantBound) {
+			t.Errorf("%s: got (%q, %v), want (%q, %v)", tc.name, level, bound, tc.wantLevel, tc.wantBound)
 		}
 	}
 }
 
-// TestFoldAutonomyBoundNamesARubricField keeps `bound` editable: it is shown to
-// an admin as provenance, so every value it can take has to be a field name
-// AutonomyRubric.Validate itself reports on.
+// TestFoldAutonomyBoundNamesARubricField keeps bound_by editable: it is shown
+// to an admin as provenance, so every value it can take has to be a field name
+// AutonomyRubric.Validate itself reports on — and, over the rubric below where
+// all nine fields tie, every posture has to name all three of its causes.
 func TestFoldAutonomyBoundNamesARubricField(t *testing.T) {
 	fields := map[string]bool{}
 	for _, f := range []string{
@@ -157,8 +172,13 @@ func TestFoldAutonomyBoundNamesARubricField(t *testing.T) {
 		for _, se := range []types.AutonomySecretsPosture{types.AutonomySecretsPowerful, types.AutonomySecretsBaseline, types.AutonomySecretsNone} {
 			for _, cc := range []types.ConfinementClass{types.CC1, types.CC2, types.CC3} {
 				_, bound := FoldAutonomy(all, types.AutonomyPosture{Egress: eg, Secrets: se, Confinement: cc})
-				if !fields[bound] {
-					t.Errorf("posture %s/%s/%s bound %q, which is not an AutonomyRubric field", eg, se, cc, bound)
+				if len(bound) != 3 {
+					t.Errorf("posture %s/%s/%s bound %v; all nine fields tie at L0, so all three causes are due", eg, se, cc, bound)
+				}
+				for _, b := range bound {
+					if !fields[b] {
+						t.Errorf("posture %s/%s/%s bound %q, which is not an AutonomyRubric field", eg, se, cc, b)
+					}
 				}
 			}
 		}

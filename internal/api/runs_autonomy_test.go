@@ -6,6 +6,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -289,6 +291,138 @@ func TestAutonomyReviewMatchesLaunch(t *testing.T) {
 		if got, _ := posture[field].(string); got != want {
 			t.Errorf("posture.%s = %q, want %q (fixture: %v)", field, got, want, posture)
 		}
+	}
+	// And this fixture's rubric caps all nine postures at the same rung, so
+	// the run is a THREE-WAY tie — the case the byte equality above is least
+	// able to police on its own. A fold that kept one cause would still make
+	// the two sides equal (both wrong, identically), so the tie is spelled out
+	// here and the parity assertion keeps the two doors on it together.
+	for _, side := range []struct {
+		name string
+		got  map[string]any
+	}{{"review", resp.Autonomy}, {"launch", launched}} {
+		if got := autonomyBoundBy(t, side.got); !slices.Equal(got, []string{"egress_sealed", "secrets_none", "confinement_cc2"}) {
+			t.Errorf("%s: bound_by = %v, want all three tied causes in field order", side.name, got)
+		}
+	}
+}
+
+// autonomyBoundBy pulls bound_by out of a decoded resolution.
+func autonomyBoundBy(t *testing.T, resolution map[string]any) []string {
+	t.Helper()
+	raw, _ := resolution["bound_by"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("bound_by carries a non-string cause %v (%T)", v, v)
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// ─── every tied cause is named ────────────────────────────────────────────────
+
+// TestAutonomyBoundByNamesEveryTiedCause is the #96 wire ruling, asserted
+// where it is load-bearing: bound_by is a LIST, and a member capped by a
+// three-way tie is told all three rows rather than the first in a fixed order.
+//
+// The counterfactual is what makes this a test and not a preference. A fold
+// that kept one cause passes every other case in this file unchanged — same
+// level, same refusal, same Review/launch parity — while telling an admin to
+// raise `egress_sealed`, which moves nothing, because `secrets_none` and
+// `confinement_cc2` cap the run at the same rung. So both halves are asserted:
+// the SENTENCE the member reads and the ARRAY the console and the audit row
+// read, and a losing cap is checked for its absence beside the winners.
+func TestAutonomyBoundByNamesEveryTiedCause(t *testing.T) {
+	// govEscapeFixture's posture is sealed / none / CC2; exec is refused at
+	// every rung below L3, which is what puts the clause in front of a member.
+	const execBody = `{"agent":"claude-code","task":"echo hi","confinement_class":"CC2","task_mode":"exec"}`
+	const okBody = `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`
+	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
+
+	for _, tc := range []struct {
+		name    string
+		rubric  *types.AutonomyRubric
+		clause  string
+		boundBy []string
+	}{
+		{
+			name:    "one cause stands alone",
+			rubric:  &types.AutonomyRubric{EgressSealed: types.AutonomyL1},
+			clause:  "(bound by egress_sealed)",
+			boundBy: []string{"egress_sealed"},
+		},
+		{
+			name:    "two tied causes are joined with and",
+			rubric:  &types.AutonomyRubric{EgressSealed: types.AutonomyL1, ConfinementCC2: types.AutonomyL1},
+			clause:  "(bound by egress_sealed and confinement_cc2)",
+			boundBy: []string{"egress_sealed", "confinement_cc2"},
+		},
+		{
+			name:    "three tied causes are all named, in field order",
+			rubric:  autonomyRubric(types.AutonomyL1),
+			clause:  "(bound by egress_sealed, secrets_none and confinement_cc2)",
+			boundBy: []string{"egress_sealed", "secrets_none", "confinement_cc2"},
+		},
+		{
+			// A row that caps HIGHER than the resolved level is not a cause and
+			// must not ride along: naming it would send an admin to edit the one
+			// row that is already permissive enough.
+			name: "a losing cap is not named beside the winners",
+			rubric: &types.AutonomyRubric{
+				EgressSealed: types.AutonomyL3, SecretsNone: types.AutonomyL1, ConfinementCC2: types.AutonomyL1,
+			},
+			clause:  "(bound by secrets_none and confinement_cc2)",
+			boundBy: []string{"secrets_none", "confinement_cc2"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := govProfile("autonomy-tie")
+			p.Limits = types.GovernanceLimits{AutonomyRubric: tc.rubric}
+
+			srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), execBody)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("create = %d, want 403: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tc.clause) {
+				t.Errorf("the refusal does not name every tied cause:\n  want substring %q\n  got %s", tc.clause, w.Body.String())
+			}
+
+			// The same resolution on the wire, at both doors, for a request
+			// this rung permits.
+			srv2, st2, audit2 := govEscapeFixture(t, autonomyCapStore(p))
+			if c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), okBody); c.Code != http.StatusCreated {
+				t.Fatalf("create = %d, want 201: %s", c.Code, c.Body.String())
+			}
+			launched, _ := autonomyCreateAudit(t, st2, audit2)["autonomy"].(map[string]any)
+			if launched == nil {
+				t.Fatalf("run.create carries no autonomy provenance")
+			}
+			pf := doSSO(t, srv2, http.MethodPost, "/api/v1/runs/preflight", member(t), okBody)
+			if pf.Code != http.StatusOK {
+				t.Fatalf("preflight = %d, want 200: %s", pf.Code, pf.Body.String())
+			}
+			var resp struct {
+				Autonomy map[string]any `json:"autonomy"`
+			}
+			if err := json.Unmarshal(pf.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode preflight: %v", err)
+			}
+			for _, side := range []struct {
+				name string
+				got  map[string]any
+			}{{"launch", launched}, {"review", resp.Autonomy}} {
+				if side.got == nil {
+					t.Fatalf("%s published no autonomy object", side.name)
+				}
+				if got := autonomyBoundBy(t, side.got); !slices.Equal(got, tc.boundBy) {
+					t.Errorf("%s: bound_by = %v, want %v", side.name, got, tc.boundBy)
+				}
+			}
+		})
 	}
 }
 

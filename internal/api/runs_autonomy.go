@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -45,8 +46,8 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 		return types.AutonomyResolution{}, nil, true
 	}
 	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs), enforced)
-	level, bound := composer.FoldAutonomy(*ceiling.Limits.AutonomyRubric, posture)
-	res := types.AutonomyResolution{Level: level, Posture: posture, Bound: bound}
+	level, boundBy := composer.FoldAutonomy(*ceiling.Limits.AutonomyRubric, posture)
+	res := types.AutonomyResolution{Level: level, Posture: posture, BoundBy: boundBy}
 	// An all-unset rubric — or one that leaves this posture's three fields
 	// unset — caps nothing, identically to a nil rubric (AutonomyRubric's own
 	// doc). The posture still travels, so the audit row and Review record what
@@ -55,6 +56,9 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 		return res, nil, true
 	}
 	name := ceiling.Profile.Name
+	// Rendered ONCE and passed down, so the refusals and the derived-hold
+	// warning cannot drift into naming different causes for one resolution.
+	bound := autonomyBoundList(boundBy)
 	// The ladder, expressed as the LOWEST level that permits each capability
 	// rather than one arm per rung. Separate arms are how a hole gets shipped:
 	// L0 is the most supervised rung, so anything L1 refuses it must refuse
@@ -98,7 +102,9 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 // rung. Split from the refusals above so each function holds one decision (and
 // so resolveRunAutonomy stays under the complexity gate).
 //
-// Returns ok=false once it has written its 403, and otherwise the 201 warnings.
+// Returns ok=false once it has written its 403, and otherwise the 201
+// warnings. `bound` arrives already rendered (autonomyBoundList) so this half
+// and the refusals above name the same causes by construction.
 func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *createRunRequest,
 	level types.AutonomyLevel, bound, name string, interactive bool,
 ) ([]string, bool) {
@@ -139,6 +145,29 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 		"tool_approvals was set to hold: your governance profile %q permits autonomy level %s for this run's posture (bound by %s), "+
 			"so this run's tool calls wait for your approval instead of running unsupervised",
 		name, level, bound)), true
+}
+
+// autonomyBoundList renders the tied causes into the clause every refusal and
+// the derived-hold warning carry: "egress_open", "egress_open and
+// secrets_powerful", "egress_open, secrets_powerful and confinement_cc1".
+//
+// EVERY cause, never the first. A member reads this sentence to learn what to
+// narrow and an admin reads it to learn which rubric row to edit, and with a
+// tie the first cause is not the answer: raise egress_open alone and the level
+// does not move. The order is FoldAutonomy's fixed field order, so the same
+// run reads the same sentence on Review and at launch.
+//
+// The empty case is UNREACHABLE — resolveRunAutonomy returns before the ladder
+// when nothing bound the level — and degrades to a readable phrase rather than
+// to an empty parenthetical.
+func autonomyBoundList(boundBy []string) string {
+	switch len(boundBy) {
+	case 0:
+		return "its rubric"
+	case 1:
+		return boundBy[0]
+	}
+	return strings.Join(boundBy[:len(boundBy)-1], ", ") + " and " + boundBy[len(boundBy)-1]
 }
 
 // agentHasHoldLane reports whether an agent can actually honour

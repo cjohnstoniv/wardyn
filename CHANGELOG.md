@@ -48,9 +48,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   an agent with no tool-approval lane; `L2` refuses `task_mode=exec`; `L3` refuses nothing.
   Refusals reuse the existing member 403 and its `governance_profile` `authz.denied` row — the
   closed reason enum is unchanged. The level is frozen on `agent_runs.autonomy_level`; the level,
-  the posture and the rubric field that bound it ride the `run.create` audit row and `POST
-  /runs/preflight`'s new `autonomy` field, so Review and launch answer with the same object from
-  the same call (`resolveRunAutonomy`, `internal/api/runs_autonomy.go`; the arithmetic is pure, in
+  the posture and `bound_by` — EVERY rubric field that tied at that level, not the first in a
+  fixed order, since raising one row of a tie does not move the level — ride the `run.create`
+  audit row and `POST /runs/preflight`'s new `autonomy` field, so Review and launch answer with
+  the same object from the same call (`resolveRunAutonomy`, `internal/api/runs_autonomy.go`; the arithmetic is pure, in
   `internal/composer/autonomy.go`). A member with no assigned profile — and a profile with no
   rubric, or one that caps nothing at this posture — is unchanged: no refusal, no derived field and
   no `autonomy` key on either surface.

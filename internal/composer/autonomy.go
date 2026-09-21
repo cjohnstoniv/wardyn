@@ -91,30 +91,38 @@ func autonomyConfinement(enforced types.ConfinementClass) types.ConfinementClass
 }
 
 // FoldAutonomy folds a rubric against a posture: the level is the MINIMUM over
-// the three fields the posture selects, and bound names the field that produced
-// it (the rubric's own wire name, so provenance reads back as something an
-// admin can edit).
+// the three fields the posture selects, and boundBy names EVERY field that
+// landed on it (each the rubric's own wire name, so provenance reads back as
+// something an admin can edit).
+//
+// ALL of the tied fields, not the first one. A min() over three axes ties
+// routinely, and the list is what makes the answer actionable: told only
+// "egress_sealed", an admin raises that row and watches the level not move,
+// because secrets_none and confinement_cc2 capped it at the same rung. See
+// types.AutonomyResolution.BoundBy — this is the wire shape, not a rendering
+// choice.
 //
 // An unset field caps nothing and is skipped, so a rubric that leaves every
-// applicable posture unset returns ("", "") — indistinguishable from no rubric
-// at all, which is the "empty means unrestricted" rule every GovernanceLimits
-// field follows.
+// applicable posture unset returns ("", nil) — indistinguishable from no
+// rubric at all, which is the "empty means unrestricted" rule every
+// GovernanceLimits field follows.
 //
-// Ties keep the FIRST field in the fixed order below. Nothing depends on which
-// of two equal caps is named, but something depends on it being the same one
-// every time: the audit row and the Review response must agree byte for byte.
-func FoldAutonomy(rubric types.AutonomyRubric, posture types.AutonomyPosture) (types.AutonomyLevel, string) {
+// The order is applicableAutonomyCaps's fixed field order, never the order the
+// caps happened to tie in: the audit row and the Review response must agree
+// byte for byte.
+func FoldAutonomy(rubric types.AutonomyRubric, posture types.AutonomyPosture) (types.AutonomyLevel, []string) {
 	var level types.AutonomyLevel
-	var bound string
+	var boundBy []string
 	for _, c := range applicableAutonomyCaps(rubric, posture) {
-		if c.level == "" {
-			continue
-		}
-		if bound == "" || c.level.Rank() < level.Rank() {
-			level, bound = c.level, c.field
+		switch {
+		case c.level == "":
+		case boundBy == nil || c.level.Rank() < level.Rank():
+			level, boundBy = c.level, []string{c.field}
+		case c.level.Rank() == level.Rank():
+			boundBy = append(boundBy, c.field)
 		}
 	}
-	return level, bound
+	return level, boundBy
 }
 
 // autonomyCap is one rubric field the posture selects.
@@ -124,7 +132,7 @@ type autonomyCap struct {
 }
 
 // applicableAutonomyCaps returns the three caps this posture selects, in the
-// fixed order FoldAutonomy breaks ties on.
+// fixed order FoldAutonomy lists tied causes in.
 //
 // A posture axis whose value is not one of its three defined states selects NO
 // cap — the zero AutonomyPosture (what resolveRunAutonomy returns for a run

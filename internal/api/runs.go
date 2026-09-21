@@ -641,7 +641,7 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 	}
 	if autonomy.Level != "" {
 		// The WHOLE resolution — level, the three-axis posture that produced
-		// it, and the rubric field that bound it. The run row freezes the level
+		// it, and EVERY rubric field that tied at it. The run row freezes the level
 		// alone, so this event is the only record of WHY that level: a posture
 		// is a function of a spec that is about to be widened (unionRunEgress
 		// runs below) and of an enforced class that is live-probed, so it
