@@ -39,6 +39,8 @@ import { Chip } from "../wardyn/primitives";
 import { SHELL } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { lastCheckedLabel } from "../../lib/readiness";
+import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
+import { SidebarSettingsLink } from "./sidebar-settings-link";
 // GOVERNANCE.TITLE is ONE string for two places — this nav label and the
 // screen's own heading — the way every other nav entry already works. There is
 // no second "Governance profiles" label (governance-prompt.md §7.2).
@@ -423,6 +425,15 @@ function SidebarNav({
   onNavigate?: () => void;
 }) {
   const items = navItemsForRole(meta.role, meta.identityResolved);
+  const navigate = useNavigate();
+  // #217 — a sidebar click can navigate away from a dirty form (Settings ➝
+  // Providers is the case the mock walks); this asks the shared guard first
+  // instead of always navigating straight through (lib/use-unsaved-guard.tsx).
+  const guardedClick = useGuardedNavClick(navigate);
+  // Same gate as the account menu's own Settings entry (TopBar below): hidden
+  // only while identity is settled but unknown, when the shell paints no
+  // route at all for it to open.
+  const settingsReachable = !(meta.resolved && !meta.identityResolved);
   return (
     <>
       <nav className="space-y-0.5">
@@ -438,7 +449,7 @@ function SidebarNav({
               key={item.to}
               to={item.to}
               end
-              onClick={onNavigate}
+              onClick={guardedClick(item.to, onNavigate)}
               className={({ isActive }) => navLinkClass(isActive)}
             >
               {({ isActive }) => (
@@ -460,6 +471,12 @@ function SidebarNav({
             </NavLink>
           );
         })}
+        {/* #217 — last, under a divider: the screen an admin visits most is
+            reachable from the rail, not only the account menu (which keeps
+            its own entry too, so no muscle memory breaks). */}
+        {settingsReachable && (
+          <SidebarSettingsLink navLinkClass={navLinkClass} onClick={guardedClick("/settings", onNavigate)} />
+        )}
       </nav>
 
       <div className="mt-auto space-y-3">
@@ -571,6 +588,9 @@ export function AppShell({
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
         <FocusContext.Provider value={focusValue}>
+        {/* #217 — above BOTH the sidebar that can navigate away and every
+          screen below it that can register a dirty form (lib/use-unsaved-guard.tsx). */}
+        <UnsavedGuardProvider>
           <div className="flex h-screen flex-col bg-background text-foreground">
             {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
@@ -724,6 +744,7 @@ export function AppShell({
           screen you reached last, after making them all blind. The one-page
           screen shows the live policy rail beside the form the whole time. */}
           </div>
+        </UnsavedGuardProvider>
         </FocusContext.Provider>
       </RoleProvider>
     </OperatorProvider>

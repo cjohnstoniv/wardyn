@@ -115,7 +115,11 @@ export const PROVIDERS = {
   LEGACY_OPEN_BODY: "Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name.",
   LEGACY_OPEN_OTHER_HOSTS: "A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page.",
   SAVED_ELSEWHERE_TITLE: "Someone else saved providers since you loaded this page",
-  SAVED_ELSEWHERE_BODY: "Reload to see their version before saving yours.",
+  // #217: the old sentence ("Reload to see their version before saving
+  // yours.") described the only offered exit — discard and reload — as if it
+  // were the only one. It no longer is: Copy my changes
+  // (PROVIDERS_DRAFT.CONFLICT_COPY) reads the edits out first.
+  SAVED_ELSEWHERE_BODY: "Your changes are still here and still unsaved. Copy them first — reloading replaces them with the saved version.",
   SAVED_TOAST: "Providers saved.",
   // Inline pluralisation — the PERM.ENFORCE_ON_BODY shape, not a second
   // helper (§5 #9). Stays on the page as an amber note until the next save,
@@ -383,10 +387,19 @@ export const AGENTS_DRAFT = {
 // AGENTS out of the doc).
 export const PROVIDERS_DRAFT = {
   // F4-F3 (Appendix A V8, corrected verdict): the keep-draft-mounted 412
-  // banner's ONE control — discards the admin's own unsaved edits and reloads
-  // the server's version. NO "Save over theirs" arm: a security document is
-  // never last-writer-wins from this banner.
+  // banner's SECOND control — discards the admin's own unsaved edits and
+  // reloads the server's version. NO "Save over theirs" arm: a security
+  // document is never last-writer-wins from this banner. #217: now a ghost
+  // button, not the banner's only exit — Copy my changes sits before it.
   DISCARD_AND_RELOAD: "Discard mine and reload",
+  // #217: the 412 banner's FIRST control — the changed fields, as readable
+  // text (lib/readable-diff.ts), never the whole draft as JSON (issue #217's
+  // binding default: the person is about to paste this somewhere human).
+  CONFLICT_COPY: "Copy my changes",
+  CONFLICT_COPIED_TOAST: "Copied — your changes are on the clipboard.",
+  // #217: beside Save whenever the draft differs from what loaded — the same
+  // fact the unsaved-navigation guard (lib/use-unsaved-guard.tsx) is armed on.
+  UNSAVED_MARKER: "Unsaved changes",
   // F6-F6: PUT /site-config's dangling_secret_refs, surfaced in the
   // Corporate-network save toast — an ADDITIONAL warning beside whatever
   // success toast the saving step already shows, never a replacement for it.

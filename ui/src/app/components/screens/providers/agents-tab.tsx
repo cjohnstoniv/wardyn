@@ -29,6 +29,8 @@ import { agentProviders as api, type AgentProvider, type AgentProviders } from "
 import { AI_TYPES, IMPOSSIBLE, type AiType } from "../../../lib/integrations";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
+import { readableDiff } from "../../../lib/readable-diff";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import {
   AGENTS,
@@ -43,7 +45,8 @@ import {
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";
-import { Chip } from "../../wardyn/primitives";
+import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
+import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { HarnessLoginPane, isLikelyStartUrl } from "../settings/harness-login-pane";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
@@ -550,6 +553,11 @@ export function AgentsTab({
   onStatusRefresh: () => void;
 }) {
   const [draft, setDraft] = React.useState<AgentProviders | null>(null);
+  // #217 — the snapshot `draft` started from, same role as providers-screen's
+  // own `original`: what "Copy my changes" and the unsaved-navigation guard
+  // both diff against. This tab is its own resource with its own Save, so it
+  // keeps its own baseline rather than sharing the parent's.
+  const [original, setOriginal] = React.useState<AgentProviders | null>(null);
   const [etag, setEtag] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [saving, setSaving] = React.useState(false);
@@ -562,7 +570,9 @@ export function AgentsTab({
     api
       .getAgentProviders()
       .then((snap) => {
-        setDraft(normalizeAgentProviders(snap.providers));
+        const normalized = normalizeAgentProviders(snap.providers);
+        setDraft(normalized);
+        setOriginal(normalized);
         setEtag(snap.etag);
         setStatus("ready");
       })
@@ -574,6 +584,9 @@ export function AgentsTab({
   // F4-F9: any stored row the server is guaranteed to 400 withholds Save —
   // the Git tab's own invalidGitRow precedent.
   const invalidAgentRow = agents.some(agentRowInvalid);
+  // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.
+  const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
+  useUnsavedGuard(changedLines.length > 0);
   const roster = harnesses ?? [];
   const catalogIds = new Set(roster.map((h) => h.id));
   // Any row not in this build's catalog (a custom WARDYN_AGENT_IMAGES id) is
@@ -610,7 +623,11 @@ export function AgentsTab({
       });
       const next: AgentProviders = { agents: [...catalogRows, ...customRows] };
       const result = await api.putAgentProviders(next, etag);
-      setDraft(normalizeAgentProviders(result.providers));
+      const normalized = normalizeAgentProviders(result.providers);
+      setDraft(normalized);
+      // #217 — the new baseline: a save with nothing left unsaved must not
+      // still read as dirty to the guard above.
+      setOriginal(normalized);
       setEtag(result.etag);
       toast.success(PROVIDERS.SAVED_TOAST);
       // The staleness root cause (Appendix A finding 4): modelAccess is the
@@ -682,17 +699,9 @@ export function AgentsTab({
 
       {/* F4-F3 (Appendix A V8): keep the draft mounted — the banner sits
           above the rows rather than replacing them, so an edit typed
-          moments before the 412 is still readable. One control, "Discard
-          mine and reload" — there is no "Save over theirs" arm. */}
-      {savedElsewhere && (
-        <div className="space-y-3 rounded-lg border border-warning/30 bg-warning-subtle p-4">
-          <p className="text-sm font-medium text-foreground">{PROVIDERS.SAVED_ELSEWHERE_TITLE}</p>
-          <p className="text-body text-muted-foreground">{PROVIDERS.SAVED_ELSEWHERE_BODY}</p>
-          <Button variant="outline" size="sm" onClick={load}>
-            {PROVIDERS_DRAFT.DISCARD_AND_RELOAD}
-          </Button>
-        </div>
-      )}
+          moments before the 412 is still readable. #217: Copy my changes
+          before Discard mine and reload — there is no "Save over theirs" arm. */}
+      {savedElsewhere && <SavedElsewhereBanner changedLines={changedLines} onDiscard={load} />}
       {saveError && (
         <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
           <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>
@@ -720,7 +729,12 @@ export function AgentsTab({
           only thing it could write is `{agents: []}`, which nobody asked
           for. A control appears when there is something to save. */}
       {roster.length > 0 && (
-        <div className="flex justify-end border-t border-border pt-4">
+        <div className="flex items-center justify-end gap-3 border-t border-border pt-4">
+          {/* #217 — beside the control, not only in a title tooltip. */}
+          {!operator && <OperatorOnlyHint />}
+          {operator && changedLines.length > 0 && (
+            <span className="mr-auto text-meta text-muted-foreground">{PROVIDERS_DRAFT.UNSAVED_MARKER}</span>
+          )}
           <Button disabled={!operator || saving || invalidAgentRow} onClick={save}>
             {PROVIDERS.SAVE_CTA}
           </Button>

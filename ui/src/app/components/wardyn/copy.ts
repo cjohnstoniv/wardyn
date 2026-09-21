@@ -800,6 +800,18 @@ export const SITE = {
   TRUSTED_CA_COUNT: (n: number) => `${n} trusted CA certificate${n === 1 ? "" : "s"}`,
 } as const;
 
+// #217 — the console's one dirty-navigation guard (lib/use-unsaved-guard.tsx),
+// generic across every form that uses it rather than owned by Settings/
+// Providers: a blocking confirm, never an inline banner that a click could
+// sail past (issue #217's binding default — "An inline banner that never
+// interrupts cannot prevent the loss it exists to prevent").
+export const UNSAVED_GUARD = {
+  TITLE: "Leave without saving?",
+  BODY: "This form has changes that aren't saved. Leaving now discards them.",
+  STAY: "Keep editing",
+  LEAVE: "Discard changes",
+} as const;
+
 // DRAFT (M2 canon pending) — staged in workspace-providers-prompt.md §7.6
 // ("B-γ → wardyn/copy.ts"), parsed by nothing today.
 //
