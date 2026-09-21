@@ -43,6 +43,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The Recordings screen pages instead of stopping at 1,000.** It fetched the whole run list in one
+  shot (capped at `LIST_LIMIT`), so an install past 1,000 runs silently lost every recording beyond
+  that window, with only a passive "truncated" note and nothing to press. `listRuns()` now takes an
+  optional `limit`/`offset` and, when both are given, returns `{ runs, truncated }` off the server's
+  own `?limit=&offset=` paging and its `X-Wardyn-Truncated` header — every other caller is unchanged.
+  The screen fetches 100 runs at a time; a "Load 100 more" text link (matching the Runs board's own
+  "Load N more") appears while more is known to exist, and a failed page keeps what already loaded
+  with a Retry that resumes from the same offset. No total is ever shown — the server doesn't send
+  one.
 - **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
   `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
   failure, so it can be called from a background worker. `internal/api/runs.go`'s
