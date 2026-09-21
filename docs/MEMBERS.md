@@ -218,9 +218,12 @@ stay the admin's; only the value is yours.
 
 Bounds: this is API-key mode only — the resident Claude-subscription mount
 stays operator-only (see [DESKTOP.md § Model access on
-m′](DESKTOP.md#model-access-on-m)), and `bedrock-api-key`/AWS credential
-names are refused for a member's own `PUT /secrets` regardless: on THAT door
-Bedrock stays the MDM-managed lane. Your own row is visible only to you and to
+m′](DESKTOP.md#model-access-on-m)), and the three AWS SigV4 names
+(`aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`) are refused
+for your own `PUT /secrets` regardless: on THAT door Bedrock stays the
+MDM-managed lane. A `bedrock-api-key` bearer is the exception — you may store
+your own, and under a `per_user` agent row it is the only one your runs use.
+Your own row is visible only to you and to
 your own runs — another member can never read or inject it, even by naming it in
 their own inline policy.
 

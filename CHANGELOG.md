@@ -39,6 +39,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **A member may store their own Bedrock bearer key.** `PUT`/`DELETE /secrets/bedrock-api-key`
+  is no longer refused to a non-operator: the BEARER is a static `Authorization` header the proxy
+  injects per run, so under a `per_user` agent row a member's own key is a credential their runs
+  really authenticate with. The three AWS SigV4 names — `aws-access-key-id`,
+  `aws-secret-access-key` and `aws-session-token` — are **unchanged** and still `403` for every
+  non-operator, because SigV4 is always signed out of the operator namespace; so are the reserved
+  platform and sentinel names. `credential_source: per_user` is now accepted for a
+  `bedrock_bearer` agent row beside `bedrock_sso`, and under it there is **no cross-source
+  fallback in either direction**: the resolve reads the caller's own namespace and never the
+  operator's, and an empty or whitespace-only value reads as no credential rather than as a
+  configured one that fails upstream. The row's mechanism decides the lane, so a member holding
+  both their own AWS SSO session and their own bearer is resolved — and reported by setup — on the
+  one the row names. Under `shared` a member's own key is never read: dispatch records on the
+  grant it authors whose key it read (the operator's under `shared`, the run owner's under
+  `per_user`), and the injection sink resolves `bedrock-api-key` from exactly that record and
+  refuses a grant that carries none — it no longer goes through the owner-then-operator fallback
+  read, which could hand a run a different key from the one dispatch chose. Any other injection
+  naming the key is dropped at dispatch and audited as `run.injection.dropped`. For the same
+  reason a member's inline grant naming `bedrock-api-key` is dropped, and an `env_secret` or an
+  `llm_inspection.workspace_secret_names` entry naming it is never resolved (the latter is also
+  refused at write): the bearer is proxy-injected only. `runs_bedrock.go` was split by seam first — the probe
+  and reporting half now lives in `runs_bedrock_probe.go` — because it had reached the
+  1000-line file-size gate.
+
 - **Drive grants and preview now admit `security_admin`, not just super-admin.** `POST
   /drives/grants`, `DELETE /drives/grants/{id}`, and `POST /drives/preview` moved off the
   super-admin-only tier onto `securityOps` (admin or `security_admin`): none of the three names a
@@ -73,6 +97,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the file names over the existing `POST /drives`, `PUT /drives/{id}` and `POST /drives/grants`
   routes — no new route. `wardyn drive get > f && wardyn drive apply f` is a no-op round trip. Adds
   `Client.GetDrives`/`Client.ApplyDrives` to the public SDK.
+
+- **The runner contract can now place a file inside a sandbox that the agent cannot modify.**
+  `SandboxSpec.ManagedFiles` carries operator-authored `{Path, Mode, Content}` entries, and
+  `Capabilities.ManagedFiles` (a conjunction across substrates, like `UserDrives`) says whether a
+  deployment can deliver them. Docker extracts a uid/gid-0 archive of file entries only between
+  `ContainerCreate` and `ContainerStart`, into a directory it creates, and refuses a directory that
+  already exists rather than re-owning it; Kubernetes projects each file out of the per-run Secret
+  as a read-only volume with explicit `items`. Both land the file root-owned, at the requested mode,
+  inside a directory the agent can neither write nor replace, and both do it before the agent's
+  first instruction runs — materialising it as the sandbox user leaves it writable by the thing it
+  is meant to constrain, and a one-shot root exec after start races the main process. A managed file
+  must sit directly in `/etc/claude-code`, where Claude Code reads its managed settings: a directory
+  under an agent-owned parent can be renamed aside, a tmpfs mounted at start hides the file, and
+  recording setup loosens `/var/log/wardyn`. A group- or other-writable mode is refused. On Docker
+  the run is also refused unless the image's `USER` resolves to a non-root uid and its `/etc` is a
+  root-owned directory not writable by group or others, because the agent runs as that user over
+  that `/etc`; Kubernetes runs the agent as uid 1000 on a read-only mount whatever the image says.
+  Conformance case 8 (`ManagedFiles`) holds both substrates to it, and its load-bearing assertion is
+  that a write is REFUSED, not that the file reads back. Nothing populates the field yet.
 
 - **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL`, `WARDYN_ORG_ENROLMENT_TOKEN` and
   `WARDYN_ORG_DEVICE_NAME` tell a managed laptop which org control plane it belongs to. Boot is
