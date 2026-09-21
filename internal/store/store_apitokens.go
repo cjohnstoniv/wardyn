@@ -143,23 +143,28 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 	return queryAPITokens(ctx, s, q)
 }
 
-// RefreshAPITokenRoles re-stamps role on EVERY token principal holds, and it is
-// the api-token twin of RefreshSSHKeyRoles: the OIDC callback's OnLogin hook
-// fires both, so one login bounds both frozen credentials at once.
+// RefreshAPITokenIdentity re-stamps role AND the group snapshot (with its
+// completeness bit) on EVERY token principal holds, and it is the api-token
+// twin of RefreshSSHKeyRoles: the OIDC callback's OnLogin hook fires both, so
+// one login bounds both frozen credentials at once.
 //
-// It exists because a token's role is frozen at mint, with nothing else able
-// to refresh it: demoting a human from admin otherwise leaves every
+// It exists because a token's identity is frozen at mint, with nothing else
+// able to refresh it: demoting a human from admin otherwise leaves every
 // outstanding wdn_ token of theirs authenticating AS AN ADMIN until it is
-// explicitly revoked (DELETE /api/v1/tokens/{id}). The sibling credential is
-// bound the same way, in migration 0046; this is the token lane's
-// counterpart.
+// explicitly revoked (DELETE /api/v1/tokens/{id}), and a human whose group
+// memberships moved on keeps authorizing against the groups they held at mint
+// time until they mint a fresh token. The role half was bound this way in
+// migration 0046; this widens the token lane's counterpart to cover groups
+// too.
 //
-// role only — NOT groups. The hook carries the freshly derived role and nothing
-// else, and the group snapshot is a separate frozen field with its own
-// fail-closed treatment (a NULL groups_truncated already reads as truncated).
-// Widening the hook to re-stamp groups is a bigger change than this bound
-// needs, and re-stamping a snapshot without also re-stamping its completeness
-// bit would be worse than leaving it alone.
+// truncated is bound EXACTLY as the caller passes it, never defaulted or
+// inferred here: it must come straight from the login's own session-
+// completeness signal (sessionGroups in internal/auth/oidc/derive.go), the
+// same bit a fresh mint stamps. A NULL groups_truncated already reads as
+// TRUNCATED downstream (fail closed) — silently defaulting this parameter to
+// false for a caller that does not know would do the opposite, asserting
+// "these are all their groups" for a snapshot that is not, which is the wrong
+// direction for an authorization decision.
 //
 // It is still bounded-stale, not live, and the ceiling is the owner's next login —
 // exactly what docs/SSH.md §Bounds already documents for the key lane. A human
@@ -169,12 +174,16 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 //
 // No error when the principal holds no tokens: an UPDATE matching zero rows is
 // the ordinary case for most humans, not a failure.
-func (s PG) RefreshAPITokenRoles(ctx context.Context, principal, role string) error {
-	_, err := s.Pool.Exec(ctx,
-		`UPDATE api_tokens SET role = $1 WHERE principal = $2 AND revoked_at IS NULL`,
-		role, principal)
+func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role string, groups []string, truncated bool) error {
+	g, err := marshalGroups(groups)
 	if err != nil {
-		return fmt.Errorf("store: refresh api token roles: %w", err)
+		return err
+	}
+	_, err = s.Pool.Exec(ctx,
+		`UPDATE api_tokens SET role = $1, groups = $2, groups_truncated = $3 WHERE principal = $4 AND revoked_at IS NULL`,
+		role, g, truncated, principal)
+	if err != nil {
+		return fmt.Errorf("store: refresh api token identity: %w", err)
 	}
 	return nil
 }

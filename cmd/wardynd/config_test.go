@@ -709,6 +709,37 @@ func TestValidateMemberModePosture(t *testing.T) {
 	}
 }
 
+// TestValidateHybridPosture covers validateHybridPosture's preconditions
+// (issue #100): nil with no org URL, a token with no URL refused, an org URL
+// with member mode off refused, and the plaintext/loopback/override scheme
+// rule on the URL itself.
+func TestValidateHybridPosture(t *testing.T) {
+	for _, tt := range []struct {
+		name                             string
+		orgURL, enrolToken               string
+		memberMode, allowPlaintextListen bool
+		wantErr                          bool
+	}{
+		{name: "nothing set: no hybrid posture"},
+		{name: "token with no org url is refused", enrolToken: "tok", wantErr: true},
+		{name: "org url with member mode off is refused", orgURL: "https://org.example.com", wantErr: true},
+		{name: "org url https with member mode on", orgURL: "https://org.example.com", memberMode: true},
+		{name: "org url http non-loopback is refused", orgURL: "http://org.example.com", memberMode: true, wantErr: true},
+		{name: "org url http loopback is allowed", orgURL: "http://127.0.0.1:9999", memberMode: true},
+		{name: "org url http localhost is allowed", orgURL: "http://localhost:9999", memberMode: true},
+		{name: "org url http non-loopback with override", orgURL: "http://org.example.com", memberMode: true, allowPlaintextListen: true},
+		{name: "malformed org url is refused", orgURL: "http://[::1", memberMode: true, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateHybridPosture(tt.orgURL, tt.enrolToken, tt.memberMode, tt.allowPlaintextListen)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateHybridPosture(url=%q, token=%q, member=%v, allowPlaintext=%v) error = %v, want error: %v",
+					tt.orgURL, tt.enrolToken, tt.memberMode, tt.allowPlaintextListen, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // ─── the O-10 kill switch, end to end through the real boot path ────────────────
 
 // THE ONE CONSTANT (general N-new-1). `awsSSOProxyInjectDefaultOn` in
