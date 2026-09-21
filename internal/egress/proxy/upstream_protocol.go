@@ -331,22 +331,28 @@ func (b *shieldedBody) Read(p []byte) (int, error) {
 func (b *shieldedBody) Close() error { return nil }
 
 // resendable returns the request to send over HTTP/2, or false when this one
-// cannot be sent again. A sniffed peer failed the dial, so a body nothing has
-// read yet goes out as it is. A peer detected from its answer (isH2Preface)
-// was already written to, so only a body net/http can rebuild — absent, or
-// with GetBody — can be sent again.
+// cannot be sent again. A body net/http can rebuild is rebuilt. Failing that,
+// a sniffed peer failed the dial, so a body nothing has read yet goes out as
+// it is. A peer detected from its answer (isH2Preface) was already written to,
+// so only a rebuildable body can be sent again.
 func resendable(req *http.Request, shield *shieldedBody, sniffed bool) (*http.Request, bool) {
 	out := req.Clone(req.Context())
 	switch {
 	case shield == nil: // no body, or http.NoBody
-	case sniffed && !shield.read.Load():
-		out.Body = shield
 	case req.GetBody != nil:
+		// Tried FIRST, and that order is the guard: net/http only retries a
+		// request it can rebuild, so a GetBody request may still have a write
+		// goroutine from the failed attempt alive when we get here. Rebuilding
+		// hands the resend its own reader, which that goroutine cannot touch.
 		body, err := req.GetBody()
 		if err != nil {
 			return nil, false
 		}
 		out.Body = body
+	case sniffed && !shield.read.Load():
+		// Only reachable with GetBody nil — exactly the shape net/http never
+		// retries — so nothing else can be reading this body.
+		out.Body = shield
 	default:
 		return nil, false
 	}
