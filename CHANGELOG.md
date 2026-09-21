@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **`wardyn drive` reads and replaces admin-registered drives from the CLI.** `wardyn drive get`
+  prints every drive and allocation as JSON; `wardyn drive apply <file>` (or stdin, `-`) upserts what
+  the file names over the existing `POST /drives`, `PUT /drives/{id}` and `POST /drives/grants`
+  routes — no new route. `wardyn drive get > f && wardyn drive apply f` is a no-op round trip. Adds
+  `Client.GetDrives`/`Client.ApplyDrives` to the public SDK.
 - **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
   profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
   secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`
