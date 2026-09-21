@@ -258,7 +258,7 @@ func TestFirstUsePendingPath(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode pending body: %v (%q)", err, rec.Body.String())
 	}
-	if body.Wardyn != "approval_pending" {
+	if body.Wardyn != "approval-pending" {
 		t.Fatalf("wardyn field = %q", body.Wardyn)
 	}
 	if body.ApprovalID != apID.String() {
