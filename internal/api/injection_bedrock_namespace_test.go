@@ -198,8 +198,8 @@ func TestBedrockBearerSink_PerUserRunGetsTheOwnersKey(t *testing.T) {
 // TestDispatch_BedrockBearerGrantIsTheOnlyOneNamingTheKey: an injection naming
 // bedrock-api-key that dispatch did not author (a stored policy's, a recorded
 // profile's) carries no record of this run's choice and would be refused at
-// the sink, failing the proxy's startup — so dispatch drops it and the run is
-// served by its own grant alone.
+// the sink, failing the proxy's startup — so dispatch drops it, audits the
+// drop, and the run is served by its own grant alone.
 func TestDispatch_BedrockBearerGrantIsTheOnlyOneNamingTheKey(t *testing.T) {
 	st := &bearerGuardStore{run: types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: bedrockGuardMember},
 		site: bearerRow(types.CredentialSourceShared)}
@@ -217,6 +217,13 @@ func TestDispatch_BedrockBearerGrantIsTheOnlyOneNamingTheKey(t *testing.T) {
 	}
 	if len(named) != 1 || named[0] != grant.ID {
 		t.Fatalf("injections naming %s = %v, want only dispatch's own grant %s", bedrockAPIKeySecret, named, grant.ID)
+	}
+	// The drop is audited, naming the dropped grant and why.
+	ev := lastAuditEvent(t, h.audit.events, "run.injection.dropped")
+	if ev.Target != stale.GrantID.String() || ev.Outcome != "denied" ||
+		!strings.Contains(string(ev.Data), "bedrock_bearer_not_dispatch_authored") {
+		t.Fatalf("drop audit = target %s outcome %s data %s, want the stale grant %s denied with its reason",
+			ev.Target, ev.Outcome, ev.Data, stale.GrantID)
 	}
 }
 
