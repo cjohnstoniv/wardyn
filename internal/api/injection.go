@@ -89,7 +89,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// The broker enforces run ownership, kind dispatch, and audit (jti).
 	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, grantID)
 	if err != nil {
-		s.writeMintError(w, err)
+		s.writeMintError(w, r, err)
 		return
 	}
 	if minted.Kind != types.GrantAPIKey || minted.Injection == nil {
