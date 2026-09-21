@@ -18,7 +18,12 @@ vi.mock("../../lib/api/health", () => ({
   health: { health: (...a: unknown[]) => healthMock(...a) },
 }));
 
-import { SignIn } from "./sign-in";
+import {
+  EMAIL_DOMAIN_REFUSAL,
+  SignIn,
+  TOKEN_HINT,
+  UNREACHABLE_ERROR,
+} from "./sign-in";
 import { SESSION_ENDED_REASON } from "../../lib/api/core";
 
 function renderSignIn() {
@@ -109,32 +114,27 @@ describe("SignIn — SSO entry point", () => {
   });
 });
 
-// Regression: wardynd never prints an admin token on startup — it
-// only ever READS WARDYN_ADMIN_TOKEN from the environment (cmd/wardynd's
-// boot_flags.go/main.go). The sign-in copy claiming otherwise was the gate's
-// only instruction AND part of the threat model's own token-provenance claim
-// (THREAT-MODEL.md's "Console auth token storage" section, fixed alongside
-// this file); a false instruction here is a bad-first-run trap that sends an
-// operator hunting server logs for output that will never appear.
-describe("SignIn — admin token instructions are honest about provenance", () => {
-  it("tells the operator to paste the token the control plane was STARTED WITH, not one wardynd printed", async () => {
+// #212 (design/first-contact-prototype): the sign-in screen used to
+// advertise a working demo credential (`demo-admin-token`, in both the
+// placeholder and the hint) and named the env var it reads
+// (WARDYN_ADMIN_TOKEN) — internals a reader who has not authenticated has no
+// business seeing. The hint now says what belongs in the field and where the
+// person saw it, with neither the env var name nor the compose token.
+describe("SignIn — the token field advertises no working credential or env var (#212)", () => {
+  it("the hint says what belongs in the field and where it came from, naming no env var and no demo token", async () => {
     healthMock.mockResolvedValue({});
     renderSignIn();
-    expect(
-      await screen.findByText(/paste the token this control plane was started with/i),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/WARDYN_ADMIN_TOKEN/)).toBeInTheDocument();
-    expect(screen.queryByText(/wardynd printed/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(TOKEN_HINT)).toBeInTheDocument();
+    expect(screen.queryByText(/WARDYN_ADMIN_TOKEN/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/demo-admin-token/)).not.toBeInTheDocument();
   });
 
-  it("the token input's placeholder carries no fake fixed-prefix format", () => {
+  it("the token input's placeholder carries no working demo credential", () => {
     healthMock.mockResolvedValue({});
     renderSignIn();
     const input = screen.getByLabelText(/admin token/i);
-    // Real admin tokens are whatever the operator set WARDYN_ADMIN_TOKEN to
-    // (e.g. openssl rand -hex 32) — there is no "wardyn_admin_" value prefix;
-    // that string is only the UNRELATED localStorage key name (core.ts).
-    expect(input).toHaveAttribute("placeholder", "demo-admin-token");
+    expect(input).not.toHaveAttribute("placeholder", "demo-admin-token");
+    expect(input.getAttribute("placeholder") ?? "").toBe("");
   });
 });
 
@@ -178,10 +178,10 @@ describe("SignIn — submitToken tells a rejected token apart from a reachabilit
     expect(getToken()).toBe("sometoken");
   });
 
-  it("a network error (daemon down / unreachable) shows a reachability message, not the rejected-token copy", async () => {
+  it("a network error (daemon down / unreachable) shows a reachability message naming Wardyn and one thing to check, not the rejected-token copy (#212)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     await submit();
-    expect(await screen.findByText(/could not reach the control plane/i)).toBeInTheDocument();
+    expect(await screen.findByText(UNREACHABLE_ERROR)).toBeInTheDocument();
     expect(screen.queryByText(/that admin token was rejected/i)).not.toBeInTheDocument();
     expect(getToken()).toBe("sometoken");
   });
@@ -210,11 +210,13 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
     expect(window.location.search).toBe("");
   });
 
-  it("renders the email_domain message", async () => {
+  it("renders the email_domain message, pointing this locked-out reader at their admin rather than an env var they cannot reach (#212)", async () => {
     window.history.pushState({}, "", "/?auth_error=email_domain");
     healthMock.mockResolvedValue({});
     renderSignIn();
-    expect(await screen.findByRole("alert")).toHaveTextContent(/domain isn't allowed/i);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(EMAIL_DOMAIN_REFUSAL);
+    expect(alert).not.toHaveTextContent(/WARDYN_OIDC_EMAIL_DOMAINS/);
   });
 
   it("renders the email_unverified message", async () => {
