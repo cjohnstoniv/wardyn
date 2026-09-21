@@ -85,7 +85,12 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		// Skipped by NAME (never a value) and audited, matching this lane's
 		// fail-open-per-name discipline; validateLLMInspection refuses the same
 		// name at write time so an operator sees a 400 rather than a silent skip.
-		if sinkReservedSecret(name) {
+		//
+		// bedrock-api-key is skipped the same way: its namespace is the one
+		// dispatch records on its own grant (resolveBedrockBearerInjection), which
+		// this owner-then-operator read cannot honour — on a per_user member's run
+		// it would put the OPERATOR's key into that run's corpus.
+		if sinkReservedSecret(name) || name == bedrockAPIKeySecret {
 			reserved = append(reserved, name)
 			continue
 		}

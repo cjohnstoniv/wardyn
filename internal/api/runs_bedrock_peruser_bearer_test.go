@@ -343,3 +343,34 @@ func TestFilterMemberGrants_DropsAMemberAuthoredBedrockBearerGrant(t *testing.T)
 	code2, verr := h.srv.validateInlineSecretRefs(context.Background(), "bob", types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
 	t.Logf("validateInlineSecretRefs code=%d err=%v", code2, verr)
 }
+
+// TestResolveLLMInspectionSecrets_NeverReadsTheBedrockBearerByName: the
+// inspection corpus resolves names through the owner-then-operator read, so
+// naming bedrock-api-key there would put the OPERATOR's key into a member's
+// run's corpus. The name is skipped; the key is read only for dispatch's grant.
+func TestResolveLLMInspectionSecrets_NeverReadsTheBedrockBearerByName(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	sec.m[bedrockAPIKeySecret] = []byte(bedrockGuardOperatorBearer)
+	pol := types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{WorkspaceSecretNames: []string{bedrockAPIKeySecret}}}
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: "alice@example.com"}
+	h.srv.resolveLLMInspectionSecrets(context.Background(), run, &pol)
+	t.Logf("values=%q", pol.LLMInspection.WorkspaceSecretValues)
+	for _, v := range pol.LLMInspection.WorkspaceSecretValues {
+		if v == bedrockGuardOperatorBearer {
+			t.Errorf("operator bearer resolved into a member run's llm_inspection values via owner-fallback Get")
+		}
+	}
+}
+
+// TestValidateLLMInspection_RefusesTheBedrockBearerName is the write-door half:
+// an operator naming the key under workspace_secret_names gets a 400 rather
+// than a corpus silently missing it.
+func TestValidateLLMInspection_RefusesTheBedrockBearerName(t *testing.T) {
+	pol := types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true,
+		WorkspaceSecretNames: []string{bedrockAPIKeySecret}}}
+	err := validateLLMInspection(pol)
+	t.Logf("validateLLMInspection err=%v", err)
+	if err == nil {
+		t.Errorf("bedrock-api-key accepted under llm_inspection.workspace_secret_names at the write door")
+	}
+}
