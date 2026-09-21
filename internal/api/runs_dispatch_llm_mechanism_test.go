@@ -470,12 +470,12 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 // widget's only join key), and it is absent — not empty — when nothing narrowed.
 func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 	warns := []string{"resources capped to operator maximum", `dropped 1 egress domain(s) not in operator allowlist: ["evil.example"]`}
-	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns)
+	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns, types.AutonomyResolution{})
 	got, ok := data["clamp_warnings"].([]string)
 	if !ok || len(got) != len(warns) || got[0] != warns[0] {
 		t.Fatalf("clamp_warnings = %#v, want %#v", data["clamp_warnings"], warns)
 	}
-	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil)["clamp_warnings"]; present {
+	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil, types.AutonomyResolution{})["clamp_warnings"]; present {
 		t.Error("clamp_warnings must be absent when launch narrowed nothing")
 	}
 }
@@ -487,10 +487,10 @@ func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 // distinction survives (docs/AUDIT-ACTIONS.md's run.create row).
 func TestCreateRunAuditData_ConfinementSource(t *testing.T) {
 	req := createRunRequest{Agent: "claude-code"}
-	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil)["confinement_source"]; got != "defaulted" {
+	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil, types.AutonomyResolution{})["confinement_source"]; got != "defaulted" {
 		t.Errorf("confinement_source = %v, want \"defaulted\" for an empty reqCC", got)
 	}
-	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil)["confinement_source"]; got != "requested" {
+	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil, types.AutonomyResolution{})["confinement_source"]; got != "requested" {
 		t.Errorf("confinement_source = %v, want \"requested\" when the caller named CC1 explicitly", got)
 	}
 }

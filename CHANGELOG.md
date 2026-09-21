@@ -10,6 +10,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A run's autonomy level is now resolved once and enforced at launch and on Review.** With an
+  `autonomy_rubric` on the assigned governance profile, a run's posture — egress reach (`open` with
+  allow-all or any allowlisted host beyond the safe baseline, `reviewed` when first-use approval
+  escalates to a human, else `sealed`), secret power (`powerful` with a write-capable grant, an
+  `api_key` to a non-baseline host, or a `git_pat`/`ssh_key`/`env_secret`; `baseline` with any
+  grant; else `none`) and the ENFORCED confinement class — folds to the minimum level the rubric
+  permits. `L0` refuses an unattended run and seeded auto tools; `L1` additionally refuses
+  `task_mode=exec` and derives `tool_approvals=hold` on an unattended run, refusing it outright for
+  an agent with no tool-approval lane; `L2` refuses `task_mode=exec`; `L3` refuses nothing.
+  Refusals reuse the existing member 403 and its `governance_profile` `authz.denied` row — the
+  closed reason enum is unchanged. The level is frozen on `agent_runs.autonomy_level`; the level,
+  the posture and the rubric field that bound it ride the `run.create` audit row and `POST
+  /runs/preflight`'s new `autonomy` field, so Review and launch answer with the same object from
+  the same call (`resolveRunAutonomy`, `internal/api/runs_autonomy.go`; the arithmetic is pure, in
+  `internal/composer/autonomy.go`). A member with no assigned profile — and a profile with no
+  rubric, or one that caps nothing at this posture — is unchanged: no refusal, no derived field and
+  no `autonomy` key on either surface.
+  **Known gap:** the posture is graded BEFORE the three grant-dependent egress unions — an
+  `ssh_key`'s SSH-over-443 endpoint, a `git_pat`'s Azure DevOps hosts, and the site-config
+  enterprise SCM hosts, all of which `unionRunEgress` adds after the resolution. They cannot be
+  graded on both doors, because no grant is minted at Review time, so a run whose only
+  beyond-baseline reach comes from one of those lanes grades `sealed` or `reviewed` rather than
+  `open`. The workspace egress lanes, which both doors can compute, ARE included.
 - **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
   profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
   secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`

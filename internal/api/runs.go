@@ -219,6 +219,18 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Posture-gated autonomy, resolved ONCE and enforced at both doors
+	// (handlePreflightRun calls the SAME gate). Sited immediately after the
+	// enforced class because that class is the posture's third axis — and
+	// before the mint, so a refusal leaves no run row, and before
+	// createRunAuditData and the dispatchParams literal below, which both read
+	// the req.ToolApprovals this gate may derive to `hold`. Writes its own 403
+	// and stops on false; its warnings join the 201 list further down.
+	autonomy, autonomyWarns, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	if !ok {
+		return
+	}
+
 	// No cross-mechanism fallback, at the door: when the org declared how this
 	// agent reaches its model and the lane that would carry this run is not that
 	// one, refuse HERE — before a run row, an identity or a grant exists — rather
@@ -270,6 +282,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		WorkspacePath:    workspacePath,
 		WorkspaceIDs:     workspaceIDsOf(wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
 		AutoStopAfterSec: spec.AutoStopAfterSec,
+		// The LEVEL only. The posture and the bound field are provenance and
+		// live on the create audit row (AgentRun.AutonomyLevel's own doc);
+		// freezing them on the row would mirror a computation into a column
+		// nothing reads back.
+		AutonomyLevel: autonomy.Level,
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
@@ -305,21 +322,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if taskWarning != "" {
 		warnings = append(warnings, taskWarning)
 	}
-	// Provider admission ALREADY refused anything outside the enabled rows, at
-	// three doors above (the resolved spec, req.repo, req.devcontainer_repo).
-	// What is left to say is the one thing it ADMITTED on sufferance: a host the
-	// legacy scm_hosts list still names and no provider row claims. Said once
-	// here — the only run-create response with a warnings channel — over all
-	// three inputs, rather than at each door, so one host earns one sentence.
-	// The AUDIT half is not here: admitRepoSources records it at every one of the
-	// ten doors, so the eight with no warnings channel are not silent either.
-	warnings = append(warnings, s.legacyHostAdmissionWarnings(ctx,
-		append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)...)...)
-	// …and the other outcome admission cannot state in a refusal: an SSH clone
-	// URL carries no path, so a row scoped to one org admitted it for the WHOLE
-	// host. Wider than the policy reads, and therefore never silent.
-	warnings = append(warnings, s.sshHostLevelWarnings(ctx, runID,
-		append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)...)...)
+	// The autonomy gate's own sentences (a derived hold; an agent with no
+	// agent-side tool-approval lane), raised before the run id existed and
+	// carried here — this is the only channel that reaches the caller.
+	warnings = append(warnings, autonomyWarns...)
+	// The two things provider admission ADMITTED rather than refused; see
+	// repoSourceWarnings.
+	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
 
 	// The model-access + requirements folds that ran ABOVE the confinement floor,
 	// audited now that the run id exists. See recordCreateFolds.
@@ -348,19 +357,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
 
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns))))
+		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy))))
 
-	// Model-resolution fail-fast: a non-interactive harness run whose agent
-	// needs a model but has NO resolvable credential boots and 404s on its FIRST model
-	// call — classically a codex-cli run whose only model access is a claude-code-only
-	// managed subscription. WARN (never hard-reject: edge cases); the CLI already prints
-	// warnings, so the operator sees it before the run wastes a sandbox. Computed on the
-	// resolved spec via the SAME helper preflight's checklist uses, so the two agree.
-	if runNeedsModelWarning(req) {
-		if la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef, ssoSubject); la == nil || !la.Provisioned {
-			warnings = append(warnings, s.noModelAccessWarningFor(req.Agent))
-		}
-	}
+	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
+	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject)...)
 
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
@@ -536,6 +536,48 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 	return ephemeralDirs, true
 }
 
+// repoSourceWarnings is the pair of 201 sentences provider admission cannot
+// state in a refusal, because in both cases it ADMITTED the request.
+//
+// The first: a host the legacy `scm_hosts` list still names and no provider row
+// claims. Said ONCE here — the only run-create response with a warnings channel
+// — over all three free-text inputs rather than at each door, so one host earns
+// one sentence. The AUDIT half is not here: admitRepoSources records it at every
+// one of the ten doors, so the eight with no warnings channel are not silent.
+//
+// The second: an SSH clone URL carries no path, so a provider row scoped to one
+// org admitted it for the WHOLE host. Wider than the policy reads, and
+// therefore never silent.
+//
+// Extracted from handleCreateRun for the function-size gate; the locator list
+// is built once and read by both (neither retains it).
+func (s *Server) repoSourceWarnings(ctx context.Context, runID uuid.UUID, spec types.RunPolicySpec, req createRunRequest) []string {
+	locators := append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)
+	return append(s.legacyHostAdmissionWarnings(ctx, locators...), s.sshHostLevelWarnings(ctx, runID, locators...)...)
+}
+
+// noModelAccessWarning is the model-resolution fail-fast, as a sentence on the
+// 201: a non-interactive harness run whose agent needs a model but has NO
+// resolvable credential boots and 404s on its FIRST model call — classically a
+// codex-cli run whose only model access is a claude-code-only managed
+// subscription.
+//
+// WARN, never hard-reject (edge cases); the CLI already prints warnings, so the
+// operator sees it before the run wastes a sandbox. Computed on the resolved
+// spec through the SAME helper preflight's checklist uses, so the two agree.
+// Extracted from handleCreateRun for the function-size gate.
+func (s *Server) noModelAccessWarning(ctx context.Context, req createRunRequest, spec types.RunPolicySpec,
+	present map[string]bool, bedrockRef *types.WorkspaceBedrockRef, ssoSubject string,
+) []string {
+	if !runNeedsModelWarning(req) {
+		return nil
+	}
+	if la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef, ssoSubject); la != nil && la.Provisioned {
+		return nil
+	}
+	return []string{s.noModelAccessWarningFor(req.Agent)}
+}
+
 // createRunAuditData assembles the run.create event's payload.
 //
 // Extracted from handleCreateRun rather than inlined, and the reason is the
@@ -553,7 +595,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 // day and "this is what today's runner offered" the next if a runtime
 // disappears — the row is the one place that distinction survives.
 func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced types.ConfinementClass, reqCC types.ConfinementClass, jti string,
-	clampWarnings []string,
+	clampWarnings []string, autonomy types.AutonomyResolution,
 ) map[string]any {
 	confinementSource := "defaulted"
 	if reqCC != "" {
@@ -596,6 +638,17 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		// carries the merged policy, not the list of tightenings that produced it.
 		// The run-detail "Effective policy" widget reads exactly this.
 		data["clamp_warnings"] = clampWarnings
+	}
+	if autonomy.Level != "" {
+		// The WHOLE resolution — level, the three-axis posture that produced
+		// it, and the rubric field that bound it. The run row freezes the level
+		// alone, so this event is the only record of WHY that level: a posture
+		// is a function of a spec that is about to be widened (unionRunEgress
+		// runs below) and of an enforced class that is live-probed, so it
+		// cannot be re-derived from the row afterwards. Omitted entirely for a
+		// run under no profile or no rubric, which keeps the payload
+		// byte-for-byte what it was for every deployment that authors neither.
+		data["autonomy"] = autonomy
 	}
 	return data
 }

@@ -544,6 +544,89 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 			t.Fatalf("create with a 0.7-stamped token = %d, want 201: %s", w.Code, w.Body.String())
 		}
 	})
+
+	// ─── rows 19-21, the AUTONOMY doors (0.8 #97) ─────────────────────────────
+	//
+	// A rubric bounds what a run may do UNATTENDED, so its escapes are neither
+	// egress nor grants and none of them appears in the envelope the rows above
+	// are asserted on. Each row names its own oracle: the status plus the
+	// absence of a run row for the two refusals, and the SANDBOX ENV for the
+	// derived hold — the only place that says whether the supervision actually
+	// reached the container.
+	//
+	// The profile is built per row rather than shared with assigned() above.
+	// The walled fixture carries deny_interactive AND a deny tool_rule, both of
+	// which refuse these same request shapes on their own, so a row sharing it
+	// would pass without the rubric ever being consulted.
+	autonomyAssigned := func(level types.AutonomyLevel) *capStore {
+		p := govProfile("autonomy-walled")
+		p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(level)}
+		return autonomyCapStore(p)
+	}
+
+	// Row 19 — THE EXEC DOOR. task_mode=exec runs a bare command with no agent
+	// and no toolgate, so no rubric, tool rule or approval binds it once it is
+	// running; only the top rung may open it. Counterfactual: leave exec to the
+	// profile's own deny_task_mode_exec and a profile that authors a rubric
+	// without that boolean hands every member the unsupervised door.
+	t.Run("row 19: task_mode=exec below L3", func(t *testing.T) {
+		srv, st, _ := govEscapeFixture(t, autonomyAssigned(types.AutonomyL2))
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+			`{"agent":"claude-code","task":"echo hi","confinement_class":"CC2","task_mode":"exec"}`)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("create = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		runs := len(st.runs)
+		st.mu.Unlock()
+		if runs != 0 {
+			t.Errorf("the refused exec run left %d row(s) behind", runs)
+		}
+	})
+
+	// Row 20 — OPTING OUT OF THE DERIVED HOLD. L1 permits an unattended run and
+	// not an unsupervised one, so an explicit `tool_approvals=auto` has to lose.
+	// Asserted on WARDYN_TOOL_APPROVALS in the sandbox the run actually got,
+	// never on the audit row: the derivation has to land on the request BEFORE
+	// the dispatch parameters are built, and a gate running one line too late
+	// would audit `hold` while the container ran unsupervised — the same escape
+	// with a clean paper trail.
+	t.Run("row 20: tool_approvals=auto cannot opt out of the L1 hold", func(t *testing.T) {
+		srv, _, _ := govEscapeFixture(t, autonomyAssigned(types.AutonomyL1))
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+			`{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+		}
+		fr, ok := srv.cfg.Runner.(*fakeRunner)
+		if !ok {
+			t.Fatal("the fixture's runner is no longer the recording double")
+		}
+		if got := fr.lastSandboxEnv()["WARDYN_TOOL_APPROVALS"]; got != "hold" {
+			t.Errorf("WARDYN_TOOL_APPROVALS = %q, want hold — the member ran unsupervised under a rung that forbids it", got)
+		}
+	})
+
+	// Row 21 — LAUNDERING THE HOLD THROUGH AN AGENT THAT IGNORES IT. The rung
+	// above is only real if the agent honours the derived value; codex-cli has
+	// no external tool-approval contract, so a member who cannot opt out of the
+	// hold could otherwise opt out of the ENFORCEMENT by changing agent.
+	// Counterfactual: warn instead of refusing and the run launches carrying a
+	// WARDYN_TOOL_APPROVALS no launcher in that image reads.
+	t.Run("row 21: an agent with no hold lane cannot launder an unattended L1 run", func(t *testing.T) {
+		srv, st, _ := govEscapeFixture(t, autonomyAssigned(types.AutonomyL1))
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+			`{"agent":"codex-cli","task":"t","confinement_class":"CC2"}`)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("create = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		runs := len(st.runs)
+		st.mu.Unlock()
+		if runs != 0 {
+			t.Errorf("the refused codex-cli run left %d row(s) behind", runs)
+		}
+	})
 }
 
 // TestGovernanceProfileNonEscape_Dispatch is the escape table's DISPATCH half —
