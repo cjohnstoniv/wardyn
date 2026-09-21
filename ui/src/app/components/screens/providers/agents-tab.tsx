@@ -167,10 +167,16 @@ function normalizeAgentProviders(p: AgentProviders): AgentProviders {
   return p.agents ? { ...p, agents: p.agents.map(normalizeAgentRow) } : p;
 }
 
-const MODEL_ACCESS_TONE: Record<string, "success" | "warning"> = { live: "success" };
+const MODEL_ACCESS_TONE: Record<string, "success" | "warning" | "neutral"> = {
+  live: "success",
+  // #158: not_applicable is neither a success nor a warning — it is the
+  // admin-token principal's own answer ("this caller is a mechanism, not a
+  // person"), never a claim that something needs attention.
+  not_applicable: "neutral",
+};
 
 function ModelAccessNote({ access }: { access: SetupModelAccess }) {
-  // NO CHIP for a state outside the five (MODEL_ACCESS_CHIP_LABEL's own doc
+  // NO CHIP for a state outside the six (MODEL_ACCESS_CHIP_LABEL's own doc
   // comment): the old final `else` painted MODEL_ACCESS_NOT_CONFIGURED over
   // anything unrecognised, so a daemon reporting `expired_renewable` — a live,
   // renewable credential — told the admin they were signed out. The server's own
@@ -290,11 +296,13 @@ function Row({
       : onUpdate({ ...row, credential_source: "per_user" }),
   );
 
-  // C4.2 is claude-code only (modelAccess is scoped server-side) and NEVER
-  // renders for not_applicable (finding 5 — the admin-token principal's own
-  // answer; an empty chip with ADMIN_OWN_CHIP_NOTE still under it would be a
-  // claim with nothing behind it).
-  const showModelAccess = harness.id === "claude-code" && !!modelAccess && modelAccess.state !== "not_applicable";
+  // C4.2 is claude-code only (modelAccess is scoped server-side). #158: it now
+  // renders for not_applicable too — MODEL_ACCESS_CHIP_LABEL carries a real,
+  // neutral label for it (finding 5's old exclusion existed only because that
+  // label didn't exist, which made the block an empty chip with
+  // ADMIN_OWN_CHIP_NOTE still under it; a real label makes it an honest claim
+  // instead).
+  const showModelAccess = harness.id === "claude-code" && !!modelAccess;
   // Prominence (finding 4): a per_user row with something actionable to do
   // moves this block to the TOP of the row instead of its usual spot at the
   // bottom — the legacy Settings door stops being the one an admin reaches
