@@ -8,6 +8,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **A handler that builds a 5xx body's `(status, message)` pair and hands it to a helper could still
+  forward driver/substrate error text into it, past the guard added for #173.** The guard only read
+  direct `writeError` call sites, so a helper's own call site — where the message had already
+  collapsed into one opaque string argument — reported clean. Seven sites did this: `refuseCapture`'s
+  four callers in `ssotoken.go` (the AWS SSO capture path — the door the sandbox itself talks to),
+  `driveBindFailureHere`'s runner-capabilities-unavailable arm (`user_drives_run.go`), and `uiFail`'s
+  two callers in `uigateway.go`, which forwarded `sshExecStreamErrorMessage`'s own raw-error fallback.
+  All seven now log the error and send a fixed sentence; their `reason` codes are unchanged, since the
+  SDK reads them as a wire contract. The guard (`TestNoDriverTextInServerErrorBody`) now follows one
+  hop into a known forwarder (`refuseCapture`, `uiFail`, and the `*driveBindFailure` composite-literal
+  shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
+  `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
+  handler written in this indirect style no longer passes CI clean.
+
 ### Fixed
 
 - **Four console DTOs closed against their Go wire types.** `AgentRun` was missing `agent_exec_id`,
