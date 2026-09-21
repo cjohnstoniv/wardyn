@@ -31,11 +31,39 @@ func hostEqual(a, b string) bool {
 // UI agree on the name.
 const subscriptionOAuthSecret = types.SubscriptionOAuthSecret
 
-// subscriptionInjectionHost is the ONLY host the subscription/managed OAuth
-// sentinels may target. They resolve to a LIVE Anthropic OAuth access token,
-// which has exactly one correct destination; injecting it anywhere else would
-// exfiltrate a long-lived operator credential.
+// subscriptionInjectionHost is the vendor-default host the subscription/
+// managed OAuth sentinels may target. They resolve to a LIVE Anthropic OAuth
+// access token, which has exactly one correct destination; injecting it
+// anywhere else would exfiltrate a long-lived operator credential. See
+// subscriptionInjectionHostAllowed for the one other host this may widen to.
 const subscriptionInjectionHost = "api.anthropic.com"
+
+// subscriptionInjectionHostAllowed reports whether host is a permitted target
+// for the subscription/managed OAuth sentinel: the vendor default, or the
+// operator-configured Anthropic gateway (anthropicGatewayHost) — taken from
+// CONFIGURATION, never from host itself or anything else a grant/request
+// supplies. That distinction is the security property: an authored/inline/
+// recorded grant can never widen its own destination by naming a host that
+// happens to match; only the operator's own boot-time
+// WARDYN_ANTHROPIC_BASE_URL can add the second host this accepts.
+func (s *Server) subscriptionInjectionHostAllowed(host string) bool {
+	if hostEqual(host, subscriptionInjectionHost) {
+		return true
+	}
+	if h := s.anthropicGatewayHost(); h != "" && hostEqual(host, h) {
+		return true
+	}
+	return false
+}
+
+// subscriptionInjectionHostDesc is the human-readable list of hosts
+// subscriptionInjectionHostAllowed accepts, for refusal text.
+func (s *Server) subscriptionInjectionHostDesc() string {
+	if h := s.anthropicGatewayHost(); h != "" {
+		return subscriptionInjectionHost + " or the configured gateway " + h
+	}
+	return subscriptionInjectionHost
+}
 
 // oauthProviderForSentinel maps a grant's secret name to the OAuth token
 // provider that resolves it, if it is one of the two Anthropic OAuth sentinels.
@@ -113,11 +141,11 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		// token (in cleartext on a plain-HTTP allowlist entry). This is the single
 		// sink chokepoint that protects every caller; the policy validator rejects a
 		// mis-authored host earlier as defense-in-depth.
-		if !hostEqual(minted.Injection.Host, subscriptionInjectionHost) {
+		if !s.subscriptionInjectionHostAllowed(minted.Injection.Host) {
 			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 				"secret.read", sentinel, "failure",
 				mustJSON(map[string]any{"reason": "oauth-host-not-anthropic", "host": minted.Injection.Host, "grant_id": grantID, "source": source})))
-			writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+subscriptionInjectionHost)
+			writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+s.subscriptionInjectionHostDesc())
 			return
 		}
 		// Posture pin: refuse to resolve a SHARED subscription credential unless this
