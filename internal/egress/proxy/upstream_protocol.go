@@ -52,8 +52,11 @@ import (
 // HTTP status code" arm, carrying only a fragment of the line, not the frame
 // header. This function cannot see that shape from the error text alone (see
 // TestIsH2Preface's own case for it); such an answer is misfiled as
-// builtin:dial-failed today. A post-TLS byte sniff that does not depend on
-// net/http's parse error at all is issue #360's fix for that gap.
+// builtin:dial-failed today. So is a peer whose frames arrive before net/http
+// has counted the request as outstanding: the transport drops them as an
+// unsolicited response on an idle connection and the error carries no bytes.
+// A post-TLS byte sniff that does not depend on net/http's parse error at all
+// is issue #360's fix for both gaps.
 func isH2Preface(err error) bool {
 	if err == nil {
 		return false

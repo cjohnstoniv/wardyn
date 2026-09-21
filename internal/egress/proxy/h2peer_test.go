@@ -97,17 +97,15 @@ func startH2Peer(t *testing.T) *h2Peer {
 }
 
 // serveH2Frames is the deterministic field-report peer: complete the TLS
-// handshake, write fieldReportFrames UNCONDITIONALLY — no preface check, no
-// waiting on the client — then read whatever the client sends (or hit a short
-// deadline) before closing.
+// handshake, read the client's request (or hit a short deadline), then write
+// fieldReportFrames UNCONDITIONALLY — no preface check — and close.
 //
-// The read-before-close matters: without draining the client's own request
-// bytes first, closing this conn while they still sit unread in the kernel's
-// receive buffer can turn the close into a RST rather than a clean FIN, which
-// on some stacks discards this peer's OWN just-written (but not yet
-// acknowledged) bytes along with it — turning the intended malformed-response
-// shape into a bare connection-reset error instead. Reading first, even
-// best-effort, avoids that.
+// Reading first matters twice. It is the reported peer's order (a GOAWAY with
+// last-stream-id 0 answers a preface it has already read), and frames written
+// before the client has counted its request as outstanding are dropped by
+// net/http as an unsolicited response on an idle connection, with no bytes in
+// the error. Draining before the close also keeps it a FIN rather than a RST
+// that could discard the frames just written.
 func serveH2Frames(c net.Conn) {
 	defer c.Close()
 	tc, ok := c.(*tls.Conn)
@@ -117,12 +115,10 @@ func serveH2Frames(c net.Conn) {
 	if err := tc.Handshake(); err != nil {
 		return
 	}
-	if _, err := tc.Write([]byte(fieldReportFrames)); err != nil {
-		return
-	}
 	_ = tc.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 	buf := make([]byte, 4096)
 	_, _ = tc.Read(buf)
+	_, _ = tc.Write([]byte(fieldReportFrames))
 }
 
 // serveConnectTunnel answers one CONNECT with "200 Connection Established"
