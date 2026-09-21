@@ -60,6 +60,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **`scripts/gpl-source-offer.sh` covers a first-time image publish before it ships.** The image list
+  is now read straight out of `release.yml`'s publish matrix instead of a hand-maintained array that
+  had already drifted once (the retired `agent-claude-code` name stayed listed after 0.6.2 stopped
+  publishing it). For an image with no prior published digest to scan, a documented local-build path
+  (`BOOTSTRAP_IMAGES=`, or an automatic fallback once the image is in the matrix) scans the identical
+  build recipe instead, and the generated section says so in plain prose. A missing SBOM now fails
+  the script loudly rather than writing a silent "_No SBOM available._" section. `scripts/check-image-
+  pins.sh` gains a cross-check tying every published image to a section in `deploy/images/
+  THIRD-PARTY-GPL.md`, which nothing verified before.
+
 - **The console now says when network confinement is unenforced, acknowledged-not-proven, or unconfirmed.**
   A Kubernetes deployment's boot-time NetworkPolicy canary verdict (`/healthz`'s `network_policy`) now
   drives a shell-level banner and a ring + glyph on every `ConfinementChip` — mounted last in the banner
@@ -127,6 +137,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   set bedrock-api-key`); this deployment gives each person their own, so storing one is what
   carries your runs — an AWS sign-in, a read-only ~/.aws mount and aws-access-key-id +
   aws-secret-access-key cannot".
+
+- **5xx responses no longer echo driver/substrate error text to the caller.** ~90 handlers across
+  `internal/api` built a 500 (or other 5xx) body by concatenating `err.Error()` onto an action
+  string, so a transient Postgres or runner failure could hand an unprivileged-adjacent caller the
+  database host, port, SQLSTATE and constraint name, or similar substrate detail. Every such site
+  now goes through `writeServerError`/`loggedMsg` (`internal/api/writeservererror.go`), which log
+  the error with method and path and answer the caller with the action alone; a source-walking guard
+  test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
+  which are already caller-facing by design, are unchanged.
 
 - **A read-only terminal observer is now promoted in place when the writer leaves, instead of
   having to reconnect.** The registry keeps one writer and the observers queued behind it in
@@ -245,6 +264,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   than queueing sign-ins behind a connection it cannot spare.
 
 ### Changed
+
+- **The sign-in screen stops advertising the demo admin token.** The admin-token field's
+  placeholder no longer carries `demo-admin-token`, and its hint no longer names
+  `WARDYN_ADMIN_TOKEN` or the compose demo token — it says what belongs in the field and where the
+  person saw it. The unreachable-daemon refusal now names Wardyn and names the `wardynd` daemon to
+  check, instead of a bare "Could not reach the control plane." with no next step. The email-domain
+  refusal no longer tells a locked-out, unauthenticated reader to go set `WARDYN_OIDC_EMAIL_DOMAINS`
+  themselves — it points them at their Wardyn admin instead. `sign-in.tsx` (Closes #212).
 
 - **The Recordings screen pages instead of stopping at 1,000.** It fetched the whole run list in one
   shot (capped at `LIST_LIMIT`), so an install past 1,000 runs silently lost every recording beyond
