@@ -361,6 +361,91 @@ test.describe("setup gate — forced on access, never a prison", () => {
   });
 });
 
+// #213 — the step counter counts only what blocks a run, the rail keeps three
+// categories apart (Required / Optional setup / Demos, not one flat
+// "optional" list), and the barrier recommendation is derived from what the
+// host reports installed, never inferred from hardware or the OS.
+test.describe("setup counter and rail — three categories, not two (#213)", () => {
+  test.afterEach(async ({ page }) => {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
+  test("Environment shows the four-step counter and its honest, live-derived subline", async ({ page }) => {
+    await mockGatedStatus(page);
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    await expect(page.getByText("Step 1 of 4")).toBeVisible();
+    // "3" (CONFIG_STEPS) is a constant; the demo count is derived live from
+    // stepOrder(status), so it's asserted by pattern, not a hand-kept number.
+    await expect(
+      page.getByText(/^Required before a run can launch\. 3 optional setup steps and \d+ demos follow\.$/),
+    ).toBeVisible();
+  });
+
+  test("the rail keeps Required / Optional setup / Demos apart, and Secrets (not required) is still reachable with the optional-step footer", async ({
+    page,
+  }) => {
+    await mockGatedStatus(page);
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+
+    // Scoped to the full rail's own landmark: "Required" is also a substring
+    // of the step-counter's subline ("Required before a run can launch…"),
+    // and Playwright's text matcher is substring/case-insensitive by default.
+    const navs = page.getByRole("navigation", { name: /setup steps/i });
+    const rail = navs.last();
+    await expect(rail.getByText("Required", { exact: true })).toBeVisible();
+    await expect(rail.getByText("· 4")).toBeVisible();
+    await expect(rail.getByText("Optional setup")).toBeVisible();
+    await expect(rail.getByText("· 3")).toBeVisible();
+    await expect(rail.getByText("Demos", { exact: true })).toBeVisible();
+
+    // Prove the mandatory Network gate (the e2e backend has no real sandbox
+    // runner, so the probe answers no_runner — the one honest bypass) before
+    // Secrets becomes reachable: it is real configuration, not one of the
+    // four required steps, but it still sits BEHIND the same crossing gate.
+    await rail.getByRole("button", { name: /^Network/ }).click();
+    await expect(page.getByRole("heading", { name: "Network" })).toBeVisible();
+    await page.getByRole("button", { name: /^Test connectivity$/i }).click();
+    await expect(page.getByRole("button", { name: /^Next:/i })).toBeEnabled();
+
+    // Secrets opens from the rail, and its footer is the optional-step pair,
+    // never a numbered Next.
+    await rail.getByRole("button", { name: /^Secrets/ }).click();
+    await expect(page.getByRole("heading", { name: "Secrets" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Next:/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Back to required steps" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Done with this one" })).toBeVisible();
+  });
+
+  test("a host reporting no barrier gets no Recommended chip, and the honest note names why", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.onboarding_complete = false;
+      json.runner = { driver: "docker", confinement_classes: [] };
+      await route.fulfill({ response, json });
+    });
+    await skipHero(page);
+    await page.goto("/setup");
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    // exact: Playwright's default text match is substring + case-insensitive,
+    // and the honest note below contains "recommended" as a lowercase word.
+    await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByText(
+        "Nothing is recommended while the host reports no barrier. Wardyn recommends what it can see, not what the operating system suggests.",
+      ),
+    ).toBeVisible();
+  });
+});
+
 // F3-F8/F7-F7: the egress-redirect "From" picker (FromCombobox) opens a
 // PopoverContent fixed at w-[420px] — wider than a 390px viewport, which used
 // to force horizontal scroll on the WHOLE page the moment it opened, not just
