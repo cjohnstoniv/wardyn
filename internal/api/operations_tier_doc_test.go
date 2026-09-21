@@ -110,6 +110,12 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
 	{"DELETE /api/v1/drives/grants/{id}", "`mountUserDriveRoutes`"},
 	{"POST /api/v1/drives/preview", "`mountUserDriveRoutes`"},
+	// The destroy verb gets its OWN token rather than riding the family's:
+	// it is not registered by mountUserDriveRoutes (its mount lives beside
+	// it in user_drives_reclaim.go), and an operator reading the tier table
+	// to find out who can delete a person's storage must find a row that
+	// says so rather than a family name that happens to cover it.
+	{"POST /api/v1/drives/{id}/reclaim", "`POST /drives/{id}/reclaim`"},
 	{"DELETE /api/v1/access/mappings/{id}", "`/access` role-mapping routes"},
 	{"GET /api/v1/access", "`/access` role-mapping routes"},
 	{"POST /api/v1/access/preview", "`/access` role-mapping routes"},

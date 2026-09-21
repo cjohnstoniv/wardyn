@@ -70,11 +70,15 @@ type dockerAPI interface {
 
 	// VolumeInspect / VolumeCreate back MANAGED user drives (docker_volume):
 	// a per-person named volume, looked up by name and created on first use.
-	// The ONLY volume writes the driver makes — see driver_volumes.go for why
-	// no VolumeRemove sits beside them (reclaim is an operator command in v1,
-	// so nothing here may delete a member's persistent storage).
+	// VolumeRemove is the third and last one, and it is reached from exactly
+	// ONE caller — ReclaimDrive, the operator's explicit verb (runner.
+	// DriveReclaimer, #166). No teardown, no sweep and no run path may call
+	// it: a drive outlives every run that mounts it, so an automatic
+	// reclaim is a data-loss path, not a cleanup. See drive_reclaim.go for
+	// the identity check that runs before it and why force is never set.
 	VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error)
 	VolumeCreate(ctx context.Context, options client.VolumeCreateOptions) (client.VolumeCreateResult, error)
+	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
 }
 
 // the real client must implement our slice.

@@ -369,6 +369,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/drives/grants":        {class: classAdmin},
 	"DELETE /api/v1/drives/grants/{id}": {class: classAdmin},
 	"POST /api/v1/drives/preview":       {class: classAdmin},
+	// The DESTROY verb (#166), classAdmin like the seven above and for a
+	// sharper reason than any of them: it deletes a named person's stored
+	// bytes and nothing undoes it. Deliberately NOT securityOps — the tier
+	// line is "never the host", and this reaches the host's volumes and the
+	// cluster's claims — and deliberately not member-reachable at any
+	// distance: a member's own drive is theirs to fill, never theirs to drop.
+	"POST /api/v1/drives/{id}/reclaim": {class: classAdmin},
 	// Directory autocomplete (§I) — classSecurity, and the contrast with the
 	// four classAdmin /access routes above is the whole tier argument in one
 	// pair: those decide who DERIVES admin, this one only READS the directory
@@ -1073,11 +1080,12 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// with no route to model access at all, so the tier moved and the predicate
 	// went inside the handler. Its two sibling credential verbs (the token paste
 	// and the disconnect) did NOT move: they write the deployment's shared
-	// credential. = 41 SUPER. A route silently reclassified in the table above
+	// credential. = 41 SUPER. 0.8 then added POST /drives/{id}/reclaim, the
+	// drive DESTROY verb, born SUPER beside the family it belongs to, = 42. A route silently reclassified in the table above
 	// would still pass every probe — it would just be enforcing the WRONG tier,
 	// exactly the drift the per-route loop cannot see.
-	if sec != 21 || super != 41 {
-		t.Errorf("tier split = %d security / %d admin, want 21 / 41 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers, MINUS the reclassified POST /setup/harness-login)", sec, super)
+	if sec != 21 || super != 42 {
+		t.Errorf("tier split = %d security / %d admin, want 21 / 42 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers, MINUS the reclassified POST /setup/harness-login, PLUS POST /drives/{id}/reclaim)", sec, super)
 	}
 }
 

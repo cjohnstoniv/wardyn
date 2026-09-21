@@ -473,8 +473,10 @@ persistence:
 #
 # Off => ANY drive's run fails at dispatch with a hint naming this switch: the
 # lookup is the first call a drive makes, and a share makes no other.
-# Wardyn holds no `delete` verb: reclaiming a departed person's claim is an
-# operator command (see this chart's README and docs/OPERATIONS.md).
+# The `delete` verb is a SECOND switch below, off by default: with
+# reclaim.enabled unset the Role carries get+create and nothing in this
+# deployment can destroy a claim, so reclaiming a departed person's storage is
+# an operator command (see this chart's README and docs/OPERATIONS.md).
 #
 # On size, quoted verbatim from the product's own words, because it is the one
 # thing an allocation is routinely mistaken for:
@@ -490,6 +492,24 @@ persistence:
 # is exactly what it was until this release removed it.
 userDrives:
   enabled: false
+
+  # reclaim.enabled adds `delete` on persistentvolumeclaims — and with it the
+  # ability to DESTROY a member's stored bytes, which nothing else in this file
+  # can do and nothing undoes.
+  #
+  # OFF is the default and the safe posture. Leave it off and the Role is
+  # exactly what it has always been (get + create): the API's own reclaim verb
+  # still exists but every attempt ends in the apiserver's 403, recorded as a
+  # failed `drive.reclaim` audit row. Turn it on only when your offboarding
+  # runbook calls `POST /drives/{id}/reclaim` (super-admin only, refused while a
+  # run still holds the claim, audited on every attempt) instead of running
+  # `kubectl delete pvc` by hand. Reclaiming by hand stays supported either way.
+  #
+  # It does not weaken anything else: no run path, no teardown and no sweep can
+  # reach a claim on either setting — a drive object carries no wardyn.run-id
+  # label, which is what the per-run reaper selects on.
+  reclaim:
+    enabled: false
 
 nodeSelector: {}
 affinity: {}

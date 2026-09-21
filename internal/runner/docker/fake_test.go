@@ -143,6 +143,16 @@ type fakeDocker struct {
 	volumeInspectMissesExisting bool
 	// failVolumeCreate makes VolumeCreate fail (quota, driver refusal).
 	failVolumeCreate bool
+	// volumeRemoves records every VolumeRemove call, so a test can prove a
+	// REFUSED reclaim issued none at all — the assertion that matters most,
+	// since the call it is refusing is irreversible.
+	volumeRemoves []string
+	// lastVolumeRemoveForce pins that the driver never sets Force: a forced
+	// remove would pull a member's storage out from under a live agent.
+	lastVolumeRemoveForce bool
+	// volumeInUse names the one volume whose removal answers CONFLICT, the way
+	// a real daemon refuses a volume a container still mounts.
+	volumeInUse string
 
 	// listItems is what ContainerList answers — a test seeds it to model the
 	// daemon's view for SweepOrphanedSandboxes. lastListFilters/lastListAll
@@ -150,6 +160,13 @@ type fakeDocker struct {
 	listItems       []container.Summary
 	lastListFilters client.Filters
 	lastListAll     bool
+
+	// probeExitCode is the exit code ContainerWait reports for a container
+	// whose name carries the drive-probe prefix ("wardyn-drive-probe-") —
+	// there is no real command interpreter here to run `test -r/-x` against a
+	// bind mount, so a ProbeDrive test scripts the answer this way instead.
+	// Zero (readable) unless a test overrides it.
+	probeExitCode int64
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -328,7 +345,15 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
-	c.state = &container.State{Status: "running", Running: true}
+	if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
+		// No real command interpreter here to run the probe's `test -r/-x`
+		// against a bind mount — model it as already exited with the
+		// scripted code, the same "immediate" shape a real one-shot process
+		// this fast would leave ContainerWait to observe.
+		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
+	} else {
+		c.state = &container.State{Status: "running", Running: true}
+	}
 	f.startedNames = append(f.startedNames, id)
 	return client.ContainerStartResult{}, nil
 }
@@ -540,6 +565,34 @@ func (f *fakeDocker) VolumeCreate(ctx context.Context, opts client.VolumeCreateO
 	f.volumes[opts.Name] = opts
 	return client.VolumeCreateResult{Volume: volume.Volume{Name: opts.Name, Driver: opts.Driver, Labels: opts.Labels}}, nil
 }
+
+// VolumeRemove is ReclaimDrive's destroy call and nothing else's. It answers
+// the two errors the real daemon answers and that the driver branches on: a
+// not-found for a name this fake does not hold, and a CONFLICT (the errdefs
+// shape a live daemon returns for "volume is in use") when volumeInUse names
+// it — the refusal that becomes runner.ErrDriveInUse.
+func (f *fakeDocker) VolumeRemove(_ context.Context, volumeID string, opts client.VolumeRemoveOptions) (client.VolumeRemoveResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeRemoves = append(f.volumeRemoves, volumeID)
+	f.lastVolumeRemoveForce = opts.Force
+	if _, ok := f.volumes[volumeID]; !ok {
+		return client.VolumeRemoveResult{}, fakeNotFound{msg: "no such volume: " + volumeID}
+	}
+	if f.volumeInUse == volumeID {
+		return client.VolumeRemoveResult{}, fakeConflict{msg: "remove " + volumeID + ": volume is in use"}
+	}
+	delete(f.volumes, volumeID)
+	return client.VolumeRemoveResult{}, nil
+}
+
+// fakeConflict is the errdefs-shaped 409 a real daemon answers when a volume
+// is still mounted by a container — the one error ReclaimDrive must NOT read
+// as a failure to remove, but as "a run still holds this".
+type fakeConflict struct{ msg string }
+
+func (e fakeConflict) Error() string { return e.msg }
+func (e fakeConflict) Conflict()     {}
 
 // fakeConn is a net.Conn whose reads return EOF immediately, so the Exec
 // drain goroutine completes promptly.

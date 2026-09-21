@@ -93,7 +93,8 @@ func (s *Server) routes() chi.Router {
 			//   mountAccessRoutes      (access.go)  operatorOnly
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
 			//       despite naming its parameter operatorOnly; read the call site
-			//   mountUserDriveRoutes   (user_drives.go) operatorOnly
+			//   mountUserDriveFamily   (user_drives_reclaim.go) operatorOnly —
+			//       wraps mountUserDriveRoutes (user_drives.go) + the destroy verb
 			//   mountWorkspaceProviderRoutes        operatorOnly
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
@@ -592,7 +593,9 @@ func (s *Server) routes() chi.Router {
 			// Registered UNCONDITIONALLY (mountUserDriveRoutes' own doc), so
 			// TestAuthzMatrix's every-conditional-route-mounted doctrine has
 			// nothing to arrange.
-			s.mountUserDriveRoutes(operatorOnly)
+			// …and POST /drives/{id}/reclaim with them: mountUserDriveFamily
+			// (user_drives_reclaim.go) joins the family's two halves.
+			s.mountUserDriveFamily(operatorOnly)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
 			// recordingAuthorizer is the SAME ownership rule

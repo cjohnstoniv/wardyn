@@ -625,3 +625,132 @@ type ImageRemover interface {
 	// NOT an error — same idempotent-teardown contract as StopSandbox.
 	ImageRemove(ctx context.Context, ref string) error
 }
+
+// DriveProbeResult is the closed set of answers a DriveProber gives about one
+// resolved drive mount. Three states, not a bool, because "I checked and it
+// is fine" and "I could not tell" are different claims with different
+// remedies — see DriveProbeUnknown.
+type DriveProbeResult string
+
+const (
+	// DriveProbeReadable: the probe ran AS THE AGENT'S OWN UID (never the
+	// daemon's process, which is root) and that uid could read the mount.
+	DriveProbeReadable DriveProbeResult = "readable"
+	// DriveProbeUnreadable: the probe ran as the agent's own uid and that uid
+	// could NOT read the mount — the exact failure a daemon-side os.Stat (run
+	// as root) cannot see, because root can read almost anything the agent
+	// user cannot.
+	DriveProbeUnreadable DriveProbeResult = "unreadable"
+	// DriveProbeUnknown: the probe could not be run to a conclusion — e.g. the
+	// Kubernetes substrate has no filesystem of its own to stat and can only
+	// Get the claim and read its phase, which is a fact about provisioning,
+	// not about whether the agent uid can read it once mounted. A caller MUST
+	// NOT treat Unknown as DriveProbeReadable: a probe that cannot see the
+	// storage has not proved anything, and reading Unknown as a pass would
+	// re-introduce the exact bug this interface exists to close.
+	DriveProbeUnknown DriveProbeResult = "unknown"
+)
+
+// DriveProbe is a DriveProber's answer for one resolved mount.
+type DriveProbe struct {
+	Result DriveProbeResult
+	// Detail is operator-facing context on why the probe landed here (an exec
+	// exit code, a claim phase) — logged, never shown to the member.
+	Detail string
+}
+
+// DriveProber is an OPTIONAL Runner capability, modelled on ImageChecker: a
+// substrate that can ask whether the SANDBOX'S OWN USER — not the daemon's own
+// process, which is root — can actually read a resolved user-drive mount.
+//
+// It exists because the inline os.Stat a daemon runs itself
+// (internal/api/user_drives_run.go, pre-#165) always runs as root, so a share
+// readable by root but not by the agent uid passed create, preflight and /me
+// and only failed once the run was already inside the sandbox — and on
+// Kubernetes there was no filesystem for the daemon to stat at all.
+//
+// An OPTIONAL capability rather than a widening of Runner: five
+// implementations satisfy Runner today, mounting a drive five different ways,
+// and a new required method would have to be stubbed everywhere it means
+// nothing. Callers type-assert the wired Runner and treat "does not
+// implement" the same as ImageChecker's absence — the check simply does not
+// run, which is exactly what the code answered before this interface existed.
+type DriveProber interface {
+	// ProbeDrive answers whether mount would be readable by the uid the
+	// sandbox actually runs as, bounded by ctx. It is called BEFORE a sandbox
+	// exists (create, preflight, a /me poll) and MUST honour ctx's deadline —
+	// the caller is a request thread, not a background sweep.
+	ProbeDrive(ctx context.Context, mount types.DriveMount) (DriveProbe, error)
+}
+
+// DriveReclaimOutcome is the closed set of answers a DriveReclaimer gives for
+// one object it was asked to destroy. Two states, and the second is not an
+// error: the object being gone already is the same END STATE the caller asked
+// for, reached by a prior partial reclaim or by the operator's own
+// `docker volume rm` / `kubectl delete pvc` — the idempotent-teardown contract
+// StopSandbox already takes. Telling the two apart matters only to the audit
+// row, which is exactly why it is a value and not a bool.
+type DriveReclaimOutcome string
+
+const (
+	// DriveReclaimDeleted: this call issued the delete and the substrate
+	// accepted it. The bytes are gone.
+	DriveReclaimDeleted DriveReclaimOutcome = "deleted"
+	// DriveReclaimAlreadyAbsent: no object answered to that name, so this call
+	// destroyed nothing. Not an error — but never reported as "deleted"
+	// either, because an audit row that says a person's storage was destroyed
+	// when it was already missing is the one row an operator must be able to
+	// trust.
+	DriveReclaimAlreadyAbsent DriveReclaimOutcome = "already_absent"
+)
+
+// ErrDriveInUse is the sentinel a DriveReclaimer returns when a sandbox still
+// holds the object: a running container mounts the Docker volume, or a pod
+// still references the claim. The caller answers 409 and the operator retries
+// once the run has finished.
+//
+// A refusal rather than a force-delete, and the asymmetry is deliberate: on
+// Docker a forced remove would pull the volume out from under a live agent
+// mid-write, and on Kubernetes the apiserver ACCEPTS a delete against an
+// in-use claim and leaves it Terminating behind the pvc-protection finalizer —
+// which destroys nothing now and refuses the member's NEXT run with
+// errDriveClaimTerminating until the pod goes. Neither is "reclaimed".
+var ErrDriveInUse = errors.New("runner: the drive's storage is still held by a running sandbox")
+
+// ErrDriveNotReclaimable is the sentinel a DriveReclaimer returns when the
+// object that answers to the drive's name is NOT the storage this drive
+// allocated — another drive's object under a colliding minted name, another
+// principal's object under a home template that folds two people onto one, an
+// operator's own pre-existing object, or one already being deleted.
+//
+// The same identity evidence the mount path refuses on (driveClaimIdentity /
+// driveVolumeAdoptable), asked one last time before anything is destroyed:
+// a mount that gets identity wrong shows one member another member's files,
+// and a reclaim that gets it wrong deletes them.
+var ErrDriveNotReclaimable = errors.New("runner: the object under this drive's name is not the storage it allocated")
+
+// DriveReclaimer is an OPTIONAL Runner capability, modelled on ImageRemover:
+// a substrate that can DESTROY the per-person storage object a user drive
+// allocated.
+//
+// It is the one verb in this file that is irreversible, and it exists because
+// there was no verb at all: deleting a drive removed its row and left the
+// volume or the claim behind, with nothing in the product able to name it
+// afterwards. The alternative — a daemon that reclaims on its own, at teardown
+// or when an allocation goes away — is refused outright: a drive OUTLIVES
+// every run that mounts it, so no automatic path may ever reach this.
+//
+// On Kubernetes the verb is not even granted by default. The chart's Role
+// carries `persistentvolumeclaims: [get, create]` and gains `delete` only
+// under `userDrives.reclaim.enabled`, so a stock install cannot execute this
+// call at all and the apiserver's own 403 is the backstop under the API's
+// super-admin gate.
+type DriveReclaimer interface {
+	// ReclaimDrive destroys the storage object mount names, bounded by ctx.
+	//
+	// It MUST refuse rather than destroy when the object is not this drive's
+	// (ErrDriveNotReclaimable) or is still held by a sandbox (ErrDriveInUse),
+	// and it MUST answer DriveReclaimAlreadyAbsent — not an error — when
+	// nothing answers to the name.
+	ReclaimDrive(ctx context.Context, mount types.DriveMount) (DriveReclaimOutcome, error)
+}

@@ -26,6 +26,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The storage behind a deleted drive can now be reclaimed — and this DESTROYS DATA, so it is off
+  by default.** Deleting a drive removed its row and deleting an allocation stopped the mount;
+  neither deleted a byte, and nothing in the product could even name the volume or claim left
+  behind. `POST /api/v1/drives/{id}/reclaim` (`wardyn drive reclaim <drive-id> --subject <s>
+  --yes`) destroys the storage object one person's allocation resolved to, irreversibly. Four rails
+  hold it: on Kubernetes the daemon does not hold the `delete` verb on claims at all unless the new
+  Helm value `userDrives.reclaim.enabled` is set (**default `false`** — leave it off and the Role is
+  byte-for-byte what it was, and every attempt ends in the apiserver's own 403); the route is
+  super-admin only; it is refused `409` while a run still holds the object, while a reclaim is
+  already in flight, or when the object answering to that name is not this drive's (the driver
+  re-checks the same identity labels the mount path refuses on, on both substrates); and every
+  attempt — successes, refusals and failures alike — is audited as `drive.reclaim`, naming the
+  drive, the person, the backend, the object and what became of it. A share (`host_path`,
+  `k8s_pvc_static`) is refused `422`: Wardyn did not create that object and never deletes it, and
+  there is no recursive delete in this product at any privilege. There is **no console button** — a
+  destructive confirmation is a screen and this one has no approved mock, so the API and the CLI are
+  the whole surface. Runbook: docs/OPERATIONS.md, "Reclaiming a departed person's storage".
+
+- **A user drive readable by root but not by the agent user is refused, not launched.** The daemon's
+  own `os.Stat` in `internal/api/user_drives_run.go` ran as root, so a share only the daemon (not the
+  sandboxed uid 1000) could read passed create, preflight and `/me` and only failed once the run was
+  already inside the sandbox — and on Kubernetes there was no filesystem for the daemon to stat at
+  all. A new optional `runner.DriveProber` capability (mirroring `ImageChecker`, not a change to the
+  `Runner` interface) asks the substrate to answer instead: the Docker driver runs a short-lived
+  container as uid 1000 against the resolved host root, and the Kubernetes driver reads the claim's
+  phase, answering `unknown` — never a guessed pass — for a claim it cannot even read.
+
 - **Device and audit-federation storage** (migration `0066_devices_and_federation`, part of hybrid
   enrolment and audit federation). Three tables: `devices` (organisation-side inventory of enrolled
   laptops, credential hashed at rest, soft-revocable), `device_enrolment_tokens` (single-use
