@@ -161,12 +161,12 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	// screen as if the switch were on for a deployment where every write 422s.
 	provider, err := s.userDriveProvider(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list user drives: "+err.Error())
+		writeServerError(w, r, "list user drives", err)
 		return
 	}
 	total := 0
@@ -182,7 +182,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 		// SQL, so the window here starts at 0.
 		got, gerr := pg.ListUserDriveGrantsPage(r.Context(), store.Page{Limit: page.Limit + 1, Offset: page.Offset})
 		if gerr != nil {
-			writeError(w, http.StatusInternalServerError, "list user drive grants: "+gerr.Error())
+			writeServerError(w, r, "list user drive grants", gerr)
 			return
 		}
 		grants, truncated = pageWindow(got, 0, page.Limit)
@@ -191,7 +191,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 		// is. Windowed in Go so every caller sees ONE contract either way.
 		got, gerr := s.cfg.Store.ListUserDriveGrants(r.Context())
 		if gerr != nil {
-			writeError(w, http.StatusInternalServerError, "list user drive grants: "+gerr.Error())
+			writeServerError(w, r, "list user drive grants", gerr)
 			return
 		}
 		grants, truncated = pageWindow(got, page.Offset, page.Limit)
@@ -276,7 +276,7 @@ func (s *Server) userDriveProvider(ctx context.Context) (types.UserDriveProvider
 func (s *Server) userDriveWriteRefusal(ctx context.Context, sizeMiB int) (int, string) {
 	provider, err := s.userDriveProvider(ctx)
 	if err != nil {
-		return http.StatusInternalServerError, "get site config: " + err.Error()
+		return http.StatusInternalServerError, loggedMsg(ctx, "get site config", err)
 	}
 	if provider.Disabled {
 		return http.StatusUnprocessableEntity, driveDisabledMsg
@@ -426,7 +426,7 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "write user drive: "+err.Error())
+		writeServerError(w, r, "write user drive", err)
 		return
 	}
 	// The WHOLE ROW, minus nothing: a drive carries no secret (a share
@@ -583,7 +583,7 @@ const driveRehomeConfirm = "rehome"
 func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, msg string, rehome driveRehome, refuseIfAllocated bool) {
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
-		return http.StatusInternalServerError, "list user drives: " + err.Error(), driveRehome{}, false
+		return http.StatusInternalServerError, loggedMsg(r.Context(), "list user drives", err), driveRehome{}, false
 	}
 	var before *types.UserDriveListItem
 	for i := range drives {
@@ -719,7 +719,7 @@ func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete user drive: "+err.Error())
+		writeServerError(w, r, "delete user drive", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -870,7 +870,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if derr != nil {
-			writeError(w, http.StatusInternalServerError, "get user drive: "+derr.Error())
+			writeServerError(w, r, "get user drive", derr)
 			return
 		}
 		if _, herr := types.DriveHomeName(d, "", g.HomeOverride); herr != nil {
@@ -901,7 +901,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert user drive grant: "+err.Error())
+		writeServerError(w, r, "upsert user drive grant", err)
 		return
 	}
 	status := http.StatusCreated
@@ -946,7 +946,7 @@ func (s *Server) handleDeleteUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete user drive grant: "+err.Error())
+		writeServerError(w, r, "delete user drive grant", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

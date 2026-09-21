@@ -9,6 +9,7 @@ import {
   INTERACTIVE_HEADLINE,
   NO_REPO,
   approvalSignals,
+  groupWaitBreakdown,
   needsAttention,
   needsYou,
   repoLabel,
@@ -90,6 +91,66 @@ describe("approvalSignals — held vs passive", () => {
       approval({ requested_scope: { host: "h", mode: "wait_for_review" }, requested_at: stale }),
     ]);
     expect(s.get("run-1")).toEqual({ pending: 1, passiveHold: true });
+  });
+
+  // #160 — isHeld's 60-minute stale-hold ceiling on tool_call/credential_reauth.
+  it("a tool_call past the 60-minute ceiling is staleHeld, not held — and NOT reauth", () => {
+    const old = new Date(Date.now() - 61 * 60_000).toISOString();
+    const s = approvalSignals([
+      approval({ kind: "tool_call", requested_scope: { tool: "Bash", cmd: "rm -rf build" }, requested_at: old }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, staleHeld: true });
+  });
+
+  it("a credential_reauth past the 60-minute ceiling is staleHeld, not held, and drops the reauth flag", () => {
+    const old = new Date(Date.now() - 90 * 60_000).toISOString();
+    const s = approvalSignals([
+      approval({ kind: "credential_reauth", requested_scope: {}, requested_at: old }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, staleHeld: true });
+  });
+
+  it("a credential_reauth well inside the ceiling is both held AND reauth", () => {
+    const s = approvalSignals([approval({ kind: "credential_reauth", requested_scope: {} })]);
+    expect(s.get("run-1")).toEqual({ pending: 1, held: true, reauth: true });
+  });
+});
+
+// #160 — the group header's second chip row is built from this pure count,
+// exclusive per run so no run is ever double-counted across reasons.
+describe("groupWaitBreakdown", () => {
+  it("the five-run acceptance shape: two held, one reauth, one starting, one clean", () => {
+    const signals = approvalSignals([
+      approval({ id: "a1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
+      approval({ id: "a2", run_id: "r2", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "rm -rf x" } }),
+      approval({ id: "a3", run_id: "r3", kind: "credential_reauth", requested_scope: {} }),
+    ]);
+    const runs = [
+      run({ id: "r1", state: "WAITING_FOR_CONFIRMATION" }),
+      run({ id: "r2", state: "WAITING_FOR_CONFIRMATION" }),
+      run({ id: "r3", state: "RUNNING" }),
+      run({ id: "r4", state: "STARTING" }),
+      run({ id: "r5", state: "RUNNING" }), // clean — counted nowhere
+    ];
+    expect(groupWaitBreakdown(runs, signals)).toEqual({ held: 2, reauth: 1, starting: 1, staleHeld: 0 });
+  });
+
+  it("a stale hold moves from held to staleHeld — the header's counted claim shrinks by one", () => {
+    const old = new Date(Date.now() - 90 * 60_000).toISOString();
+    const signals = approvalSignals([
+      approval({ id: "a1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
+      approval({ id: "a2", run_id: "r2", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" }, requested_at: old }),
+    ]);
+    const runs = [
+      run({ id: "r1", state: "WAITING_FOR_CONFIRMATION" }),
+      run({ id: "r2", state: "WAITING_FOR_CONFIRMATION" }),
+    ];
+    expect(groupWaitBreakdown(runs, signals)).toEqual({ held: 1, reauth: 0, starting: 0, staleHeld: 1 });
+  });
+
+  it("no signals and no STARTING runs counts nothing — the caller renders the uncounted 'Nothing waiting' chip itself", () => {
+    const runs = [run({ id: "r1", state: "RUNNING" }), run({ id: "r2", state: "COMPLETED" })];
+    expect(groupWaitBreakdown(runs, new Map())).toEqual({ held: 0, reauth: 0, starting: 0, staleHeld: 0 });
   });
 });
 
