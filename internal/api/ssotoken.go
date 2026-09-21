@@ -147,6 +147,18 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The SAME per-person lock a sign-in launch takes (lockLoginSupersede), keyed
+	// on this login run's CREATOR off the GetRun at the top of this handler —
+	// because the read-modify-write below is the other half of the race: this
+	// capture and the person's next sign-in's supersede pass are two requests
+	// minutes apart, and unserialized they interleave into the stored credential.
+	// Taken FIRST, before the per-scope mutex below, and that order is fixed:
+	// creator key, then scope key, everywhere both are held. Inverting it here
+	// would be the only place in the tree that did, which is how a deadlock gets
+	// written. Fails open exactly as the launch's does.
+	releaseLoginLock := s.lockLoginSupersede(r.Context(), run.CreatedBy)
+	defer releaseLoginLock()
+
 	// Serialised per scope, because the once-only guard below is a read-then-put
 	// (a read-then-put race): two concurrent PUTs from the same login sandbox both read
 	// "not captured yet" and both stored, last write winning, so the guard held

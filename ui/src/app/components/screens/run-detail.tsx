@@ -25,13 +25,13 @@ import {
   canDecideApproval,
   decisionArgs,
   runHasWorkspace,
-  type AgentRun,
   type ApprovalRequest,
   type ApprovalScope,
   type AuditEvent,
   type CredentialGrant,
   type EgressDecision,
   type Recording,
+  type RunDetail,
 } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
@@ -99,7 +99,7 @@ export function RunDetailScreen() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
 
-  const [run, setRun] = React.useState<AgentRun | null | undefined>(undefined);
+  const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
   const [grants, setGrants] = React.useState<CredentialGrant[]>([]);
   const [egress, setEgress] = React.useState<EgressDecision[]>([]);
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
@@ -511,7 +511,7 @@ function Cockpit({
   onGoAudit,
   onGoRecording,
 }: {
-  run: AgentRun;
+  run: RunDetail;
   terminal: boolean;
   grants: CredentialGrant[];
   egress: EgressDecision[];
