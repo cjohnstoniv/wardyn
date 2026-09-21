@@ -32,6 +32,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The console now says when network confinement is unenforced, acknowledged-not-proven, or unconfirmed.**
+  A Kubernetes deployment's boot-time NetworkPolicy canary verdict (`/healthz`'s `network_policy`) now
+  drives a shell-level banner and a ring + glyph on every `ConfinementChip` — mounted last in the banner
+  stack, after the model-access strip. Enforced (or Docker, where the check does not apply) stays silent;
+  acknowledged and unenforced each get their own strip and chip ring, with `unenforced` also carrying a
+  warning glyph (a ring alone is never the only signal). A Kubernetes daemon that reports a runner but
+  omits the verdict now warns too, rather than reading identically to Docker's "not applicable" — the
+  shell resolves posture from `runner` together with `network_policy`, since one absent field covered
+  two opposite meanings.
+
 - **A user drive's minted object name can no longer be forged by a crafted `home_override`.**
   `types.DriveObjectName` built a managed drive's storage-object name from the drive's
   variable-width slug and its home segment (`wardyn-drive-<drive-slug>-<home>`), so the
