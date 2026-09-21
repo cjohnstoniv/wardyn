@@ -394,8 +394,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		Path:     "/" + rest,
 		RawQuery: r.URL.RawQuery,
 	}
-	traceCtx, alpnState := alpnCapture(context.WithValue(r.Context(), vettedIPKey{}, target))
-	outReq, err := http.NewRequestWithContext(traceCtx, r.Method, upstreamURL.String(), bodyReader)
+	outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), bodyReader)
 	if err != nil {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
 		p.httpError(w, "build llm request", err, http.StatusBadGateway)
@@ -411,12 +410,10 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	// accuracy fix as handleConnect/handlePlain, E3): a failed upstream dial
 	// must NOT over-report an allow. Emit a dial-failed deny (carrying any scan
 	// summary) instead.
-	resp, err := p.transport.RoundTrip(outReq)
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
-		if isH2Preface(err) {
-			proto, hadTLS := alpnState()
-			p.emitH2Mismatch(ruleSourceUpstreamProtocolMismatch, p.reqOf(r, host, port), host, proto, hadTLS, scanSummary)
-			p.writeUpstreamProtocolMismatch(w, host, "llm upstream error", p.upstreamProtocolMismatchCause(proto, hadTLS), err)
+		seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary}
+		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
 			return
 		}
 		if p.sink != nil {

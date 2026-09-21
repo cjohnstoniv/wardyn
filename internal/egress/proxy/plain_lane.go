@@ -167,10 +167,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		summary == nil && hasScannableBody(r) {
 		p.emitLLMBlindOnce(host)
 	}
-	// traceCtx/alpnState: the ONLY reason to attach a ClientTrace here is to
-	// name the ALPN outcome in an isH2Preface refusal's Cause below.
-	traceCtx, alpnState := alpnCapture(context.WithValue(r.Context(), vettedIPKey{}, target))
-	outReq := r.Clone(traceCtx)
+	outReq := r.Clone(context.WithValue(r.Context(), vettedIPKey{}, target))
 	// RequestURI must be empty for client requests.
 	outReq.RequestURI = ""
 	if bodyOverride != nil {
@@ -188,14 +185,9 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// 6. Forward to the vetted target over the pinned transport. Its DialContext
 	// dials the vetted ip:port carried on the request context (vettedIPKey), so the
 	// host is never re-resolved. Invoked only post-allow+vet.
-	resp, err := p.transport.RoundTrip(outReq)
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
-		if isH2Preface(err) {
-			proto, hadTLS := alpnState()
-			if log != nil {
-				p.emitH2Mismatch(ruleSourceUpstreamProtocolMismatch, log.Request, host, proto, hadTLS, log.Scan)
-			}
-			p.writeUpstreamProtocolMismatch(w, host, "upstream error", p.upstreamProtocolMismatchCause(proto, hadTLS), err)
+		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, log, host, "upstream error") {
 			return
 		}
 		// The allow decision is emitted only AFTER a successful round-trip (same

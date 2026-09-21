@@ -139,6 +139,9 @@ type Proxy struct {
 	// dials the vetted IP directly and NEVER chains through the upstream corp
 	// proxy — the split that keeps the run token off the corp-proxy wire.
 	controlTransport *http.Transport
+	// h2 is the egress lane's HTTP/2 fallback and per-run memo of peers that
+	// speak HTTP/2 without negotiating it (upstream_protocol.go).
+	h2 h2Fallback
 	// upstream is the OPTIONAL corporate parent proxy. Nil == direct dial (the
 	// common, backward-compatible case). When set, forward egress is issued as
 	// CONNECT <real-host> to it; see upstream.go and dialThroughUpstream.
@@ -483,6 +486,7 @@ func newProxy(opts Options) *Proxy {
 		}
 	}
 	p.transport = mkTransport(egressDial)
+	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.controlTransport = mkTransport(directDial)
 	// localClient uses the CONTROL transport: local-route forwards to the control
 	// plane carry the vetted dial target on the request context so the host is

@@ -47,9 +47,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **An HTTP/2 answer to the egress proxy's HTTP/1.1 request is now recorded as
   `builtin:upstream-protocol-mismatch` with a plain cause, and answered with a 400 so SDKs stop
   retrying, instead of a `builtin:dial-failed` that was retried until the SDK gave up (#359).**
+- **The MITM and plain egress lanes now work against a TLS peer that speaks HTTP/2, negotiated or
+  not (#360).** A peer that picks `h2` over ALPN gets HTTP/2. A peer that speaks HTTP/2 without
+  negotiating it is recognised from its first frame (a SETTINGS frame read right after the TLS
+  handshake, or net/http's parse error when it only answers a request), remembered for the rest of
+  the run, and the request is resent over HTTP/2 when its body can be replayed; later requests to
+  that host go straight to HTTP/2. This also catches the two shapes the #359 error-text check missed:
+  a SETTINGS payload with a space byte before any newline, and SETTINGS that arrive before the
+  request goes out. A request that cannot be resent, or whose HTTP/2 resend also fails, still gets
+  #359's `builtin:upstream-protocol-mismatch` row and 400, with the cause naming both attempts.
 
 ### Changed
 
+- **The egress proxy now offers HTTP/2 to TLS peers.** Its forward transport offers `h2,http/1.1`
+  over ALPN, as the control plane's own transport already does; the control-plane transport is
+  unchanged. A new connection whose handshake negotiates no ALPN protocol waits up to 250 ms for an
+  unprompted HTTP/2 SETTINGS frame before it is used for HTTP/1.1.
 - **A member may store their own Bedrock bearer key.** `PUT`/`DELETE /secrets/bedrock-api-key`
   is no longer refused to a non-operator: the BEARER is a static `Authorization` header the proxy
   injects per run, so under a `per_user` agent row a member's own key is a credential their runs
