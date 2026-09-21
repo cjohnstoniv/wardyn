@@ -238,7 +238,7 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := s.cfg.Store.ListRoleMappings(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list role mappings: "+err.Error())
+		writeServerError(w, r, "list role mappings", err)
 		return
 	}
 	chart := s.cfg.OIDC.ChartRoleMap()
@@ -524,7 +524,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 
 	existing, err := s.cfg.Store.ListRoleMappings(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list role mappings: "+err.Error())
+		writeServerError(w, r, "list role mappings", err)
 		return
 	}
 	candidate := accessCandidateRows(existing, "", value, req.Role)
@@ -556,7 +556,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	m := types.RoleMapping{ID: uuid.New(), Value: value, Role: req.Role, CreatedBy: principalFromRequest(r)}
 	saved, err := s.cfg.Store.UpsertRoleMapping(r.Context(), m)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert role mapping: "+err.Error())
+		writeServerError(w, r, "upsert role mapping", err)
 		return
 	}
 	action, status := "access.role_mapping.write", http.StatusCreated
@@ -611,7 +611,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 	existing, err := s.cfg.Store.ListRoleMappings(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list role mappings: "+err.Error())
+		writeServerError(w, r, "list role mappings", err)
 		return
 	}
 	// The matched row, kept for the audit event below — once deleted,
@@ -647,7 +647,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		if notFoundIf(w, err, "role mapping") {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "delete role mapping: "+err.Error())
+		writeServerError(w, r, "delete role mapping", err)
 		return
 	}
 	// The delete side of the same act, and the sharper one: removing a mapping
