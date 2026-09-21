@@ -10,13 +10,15 @@
 // other. The Redraw button in ui/src/app/components/attach-terminal.tsx exists
 // only to clean up the tmux clamp that competition leaves behind.
 //
-// The honest version: name the holder, admit the second client READ-ONLY, and
-// make displacing them an audited act.
+// The honest version: name the holder, admit the second client READ-ONLY, hand
+// it the PTY in place when the holder leaves, and make displacing them an
+// audited act.
 package api
 
 import (
 	"context"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,11 +61,12 @@ const attachTakeoverReasonPrefix = "taken over by "
 // take-over from a network drop. attachTakeoverReason enforces it.
 const wsCloseReasonMax = 123
 
-// attachHolder is the client currently holding a run's shared tmux PTY: the one
-// whose keystrokes reach the terminal. A second client is admitted as a
-// read-only observer and is NOT recorded here — the registry names the WRITER,
-// which is the only thing a take-over needs to displace and the only thing the
-// "who has this terminal" question is really asking.
+// attachHolder is ONE client attached to a run's shared tmux PTY — the writer
+// whose keystrokes reach the terminal, or a read-only observer queued behind
+// it. The two are the same type because an observer becomes the writer in
+// place, on the socket it already has, the moment the writer leaves: writable
+// says which one it is right now, and "who has this terminal" is answered by
+// the registry's writer slot, never by the object's type.
 type attachHolder struct {
 	principal string
 	actorType types.ActorType
@@ -91,6 +94,27 @@ type attachHolder struct {
 	cols uint16
 	rows uint16
 
+	// writable is THIS client's write authority, and it is also the OBSERVER
+	// MARKER. It used to be "holder == nil": both pumps nulled their own holder
+	// for an observer, so a promoted observer had no object left to flip and
+	// the only way to get the keyboard was to reconnect. Moving the marker onto
+	// the client makes promotion one atomic store under the registry lock, and
+	// every write and resize — which already funnel through canWrite — changes
+	// answer together.
+	//
+	// atomic, not mu: the pumps read it per chunk and must never contend with a
+	// resize write.
+	writable atomic.Bool
+
+	// notify tells THIS client its mode changed — today only read-only ->
+	// writable, on promotion. Transport-specific (a second attach-mode frame on
+	// the WebSocket, the client's own geometry plus a stderr line on the SSH
+	// channel) and NEVER called with the registry lock held: a client write can
+	// block for the full attachWriteTimeout, which would stall every other
+	// attach on the daemon behind one unresponsive peer. The registry hands the
+	// caller a closure to run on its own goroutine instead (releaseAttach).
+	notify func(readOnly bool, holder *attachHolder)
+
 	// evicted flips the instant a take-over removes this holder from the
 	// registry, and it is what actually REVOKES write authority.
 	//
@@ -116,11 +140,13 @@ type attachHolder struct {
 	evicted atomic.Bool
 }
 
-// canWrite reports whether this holder may still drive the PTY. A nil holder is
-// a read-only observer (never registered); an evicted one was displaced by a
-// take-over and must stop writing AT EVICTION, not whenever its socket happens
-// to finish dying.
-func (h *attachHolder) canWrite() bool { return h != nil && !h.evicted.Load() }
+// canWrite reports whether this holder may still drive the PTY: it must hold
+// the write slot (writable — an observer never did, a promoted observer does)
+// and must not have been displaced (evicted AT EVICTION, not whenever its
+// socket happens to finish dying). A nil holder is nobody and never writes.
+func (h *attachHolder) canWrite() bool {
+	return h != nil && h.writable.Load() && !h.evicted.Load()
+}
 
 // attachWriteChunk bounds ONE Session.Write issued on a client's behalf, and so
 // is the granularity at which write authority is re-tested.
@@ -169,6 +195,16 @@ func (h *attachHolder) setSize(cols, rows uint16) {
 	h.mu.Lock()
 	h.cols, h.rows = cols, rows
 	h.mu.Unlock()
+}
+
+// size is the client's own last-known geometry, which a promoted observer has
+// to re-apply: it never resized the shared tmux window while it was watching
+// (that would clamp the writer's terminal), so the window it inherits is the
+// departed writer's.
+func (h *attachHolder) size() (cols, rows uint16) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cols, h.rows
 }
 
 // attachHolderView is the wire shape for BOTH GET /runs/{id}/attach-holder and
@@ -240,7 +276,8 @@ func writeAttachMode(ctx context.Context, c *websocket.Conn, readOnly bool, hold
 	return c.Write(wctx, websocket.MessageText, mustJSON(msg))
 }
 
-// attachHolderRegistry is the per-daemon map of run id -> current PTY holder.
+// attachHolderRegistry is the per-daemon map of run id -> attach state: the
+// current PTY writer and the observers queued behind it.
 //
 // Ceiling: it is IN-PROCESS. A multi-replica control plane sees only its OWN
 // replica's holders, so "held:false" means "nobody is attached through this
@@ -251,8 +288,18 @@ func writeAttachMode(ctx context.Context, c *websocket.Conn, readOnly bool, hold
 // store row keyed by run id (holder principal + since + source + a heartbeat to
 // expire a holder whose replica died) if wardynd ever runs multi-replica.
 type attachHolderRegistry struct {
-	mu      sync.Mutex
-	holders map[uuid.UUID]*attachHolder
+	mu       sync.Mutex
+	attaches map[uuid.UUID]*runAttach
+}
+
+// runAttach is one run's attach state: the single writer, and the observers
+// queued behind it in arrival order. The queue is what makes in-place promotion
+// possible at all — while the registry knew only the writer, a writer leaving
+// meant "nobody is attached" even with three clients watching, and every one of
+// them had to reconnect to get the keyboard.
+type runAttach struct {
+	writer    *attachHolder
+	observers []*attachHolder // oldest first; observers[0] is promoted first
 }
 
 // The registry lives on Server (server.go's attachHolders field), beside
@@ -264,71 +311,193 @@ type attachHolderRegistry struct {
 // struct field.
 func (s *Server) attachRegistry() *attachHolderRegistry { return &s.attachHolders }
 
-// registerAttachHolder claims runID's PTY for h.
+// registerAttachHolder claims runID's PTY for h, or queues h behind the client
+// that already holds it.
 //
-// readOnly=true means somebody ELSE already holds it: h was NOT registered and
-// the caller is an observer — it streams output and its input is dropped
-// server-side (see attachPump / sshShellPump).
+// readOnly=true means h is an OBSERVER: it streams output, its input and its
+// resizes are dropped server-side (see attachPump / sshShellPump), and it is
+// now IN LINE for the write slot — h.writable flips on this same object the
+// moment the writer leaves, with no reconnect and no new socket.
 //
 // release MUST be deferred by the caller, not called inline next to its
 // session.detach audit: a panicking pump would otherwise strand a phantom
 // holder that every later attach reads as "held" forever, and only a restart
 // would clear it. release is idempotent and identity-checked — a holder that
 // was already displaced by a take-over (and replaced by a fresh attach) never
-// evicts its successor.
-func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnly bool, release func()) {
+// evicts its successor, and an observer's release only leaves the queue.
+//
+// release RETURNS the promotion it caused, or nil. Run it on your own
+// goroutine (releaseAttach does both in one call): it audits the promotion and
+// writes to the PROMOTED client's socket, and that write can block for the full
+// attachWriteTimeout — under the registry lock it would stall every other
+// attach on the daemon behind one unresponsive peer.
+func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnly bool, release func() (announce func())) {
 	reg := s.attachRegistry()
 	reg.mu.Lock()
-	_, held := reg.holders[runID]
-	if !held {
-		// Lazily built so the zero Server is ready to use (every other
-		// per-run map on Server does the same). Reads elsewhere in this file
-		// need no such guard — a nil map reads as empty.
-		if reg.holders == nil {
-			reg.holders = map[uuid.UUID]*attachHolder{}
-		}
-		reg.holders[runID] = h
+	// Lazily built so the zero Server is ready to use (every other per-run map
+	// on Server does the same). Reads elsewhere in this file need no such
+	// guard — a nil map reads as empty.
+	if reg.attaches == nil {
+		reg.attaches = map[uuid.UUID]*runAttach{}
+	}
+	ra := reg.attaches[runID]
+	if ra == nil {
+		ra = &runAttach{}
+		reg.attaches[runID] = ra
+	}
+	if ra.writer == nil {
+		ra.writer = h
+		h.writable.Store(true)
+	} else {
+		ra.observers = append(ra.observers, h)
+		readOnly = true
 	}
 	reg.mu.Unlock()
 
-	if held {
-		return true, func() {} // observer: nothing was registered, nothing to release
-	}
-	return false, func() {
+	return readOnly, func() (announce func()) {
 		reg.mu.Lock()
-		if reg.holders[runID] == h {
-			delete(reg.holders, runID)
+		ra := reg.attaches[runID]
+		if ra == nil {
+			reg.mu.Unlock()
+			return nil // already released (release is deferred AND called)
+		}
+		var promoted *attachHolder
+		if ra.writer == h {
+			ra.writer = nil
+			// FIFO: the oldest observer still on its socket takes the slot.
+			// A promoted observer whose socket is ALREADY dead holds it until
+			// the pump's ping probe notices — up to about twice
+			// attachPingInterval. Named, not fixed: the registry cannot tell a
+			// silent peer from an idle one, and the probe already exists.
+			if len(ra.observers) > 0 {
+				promoted, ra.observers = ra.observers[0], ra.observers[1:]
+				ra.writer = promoted
+				promoted.writable.Store(true)
+			}
+		} else {
+			ra.observers = slices.DeleteFunc(ra.observers, func(o *attachHolder) bool { return o == h })
+		}
+		if ra.writer == nil && len(ra.observers) == 0 {
+			delete(reg.attaches, runID)
 		}
 		reg.mu.Unlock()
+		return s.announceAttachPromotion(runID, promoted, h.principal)
 	}
 }
 
-// attachHolderFor returns runID's current holder, or nil when nobody holds it.
+// releaseAttach frees a client's slot and delivers the promotion it caused on
+// its own goroutine. One shape, used by both transports, so the two cannot
+// drift on it. The goroutine is not optional: the promotion writes to ANOTHER
+// client's socket, and a departing session must not wait out a stranger's
+// unresponsive peer before recording its own detach.
+func releaseAttach(release func() (announce func())) {
+	if announce := release(); announce != nil {
+		go announce()
+	}
+}
+
+// announceAttachPromotion is the deferred half of a promotion — the audit row
+// and the promoted client's own notice — built under the registry lock and run
+// after it is dropped. nil when nothing was promoted, which is the common case.
+//
+// Audited (session.promote) because write authority over a live sandbox moved
+// without anyone asking for it, which is the same reason session.takeover is.
+// It grants no NEW capability — every observer passed the same owner-or-admin
+// gate when it connected, and a take-over promotes only the taker's own
+// socket — but "who could type into this terminal, and from when" has to be
+// answerable from the log alone.
+func (s *Server) announceAttachPromotion(runID uuid.UUID, promoted *attachHolder, previous string) func() {
+	if promoted == nil {
+		return nil
+	}
+	return func() {
+		// Daemon-lifetime ctx, never the departing session's: the promotion
+		// outlives the release that caused it, and the one row recording that
+		// write authority moved must not be dropped with a cancelled context —
+		// the same fix the detach and take-over audits carry.
+		ctx := s.cfg.BaseCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		s.recordAudit(ctx, s.auditEvent(&runID, promoted.actorType, promoted.principal, "session.promote",
+			runID.String(), "success", mustJSON(map[string]any{
+				"principal":       promoted.principal,
+				"source":          promoted.source,
+				"previous_holder": previous,
+			})))
+		if promoted.notify != nil {
+			promoted.notify(false, promoted)
+		}
+	}
+}
+
+// attachHolderFor returns runID's WRITER, or nil when nobody holds it — never
+// a queued observer. It feeds GET /runs/{id}/attach-holder and the attach-mode
+// frame's holder field, and both answer one question: whose keystrokes reach
+// this terminal.
 func (s *Server) attachHolderFor(runID uuid.UUID) *attachHolder {
 	reg := s.attachRegistry()
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
-	return reg.holders[runID]
+	if ra := reg.attaches[runID]; ra != nil {
+		return ra.writer
+	}
+	return nil
 }
 
-// evictAttachHolder removes and returns runID's holder in one atomic step, so
-// two concurrent take-overs displace exactly one session between them (the
-// loser gets nil and reports "nobody is attached") instead of both auditing a
-// take-over of the same human.
-func (s *Server) evictAttachHolder(runID uuid.UUID) *attachHolder {
+// evictAttachHolderFor removes and returns runID's writer for a take-over by
+// `taker`, together with the promotion that take-over caused — in one atomic
+// step, so two concurrent take-overs displace exactly one session between them
+// (the loser gets nil and reports "nobody is attached") instead of both
+// auditing a take-over of the same human.
+//
+// Only the TAKER'S OWN observer socket is promoted. Promoting the oldest
+// bystander instead would hand the terminal — and the audited consequences of
+// an act that names the taker — to somebody who never asked for it. A taker
+// with no observer socket leaves the slot FREE and reconnects into it, exactly
+// as before; queued bystanders stay observers.
+func (s *Server) evictAttachHolderFor(runID uuid.UUID, taker string) (prev *attachHolder, announce func()) {
 	reg := s.attachRegistry()
 	reg.mu.Lock()
-	defer reg.mu.Unlock()
-	h := reg.holders[runID]
-	delete(reg.holders, runID)
-	if h != nil {
-		// Revoke write authority HERE, under the same lock that removes the
-		// entry, so it takes effect the moment the take-over is decided rather
-		// than whenever the displaced socket finishes closing. See the field's
-		// doc for the window this closes.
-		h.evicted.Store(true)
+	ra := reg.attaches[runID]
+	if ra == nil || ra.writer == nil {
+		reg.mu.Unlock()
+		return nil, nil
 	}
-	return h
+	prev, ra.writer = ra.writer, nil
+	// Revoke write authority HERE, under the same lock that removes the entry,
+	// so it takes effect the moment the take-over is decided rather than
+	// whenever the displaced socket finishes closing. See the evicted field's
+	// doc for the window this closes.
+	prev.evicted.Store(true)
+
+	var promoted *attachHolder
+	if taker != "" {
+		for i, o := range ra.observers {
+			if o.principal != taker {
+				continue
+			}
+			promoted = o
+			ra.observers = slices.Delete(ra.observers, i, i+1)
+			ra.writer = promoted
+			promoted.writable.Store(true)
+			break
+		}
+	}
+	if ra.writer == nil && len(ra.observers) == 0 {
+		delete(reg.attaches, runID)
+	}
+	reg.mu.Unlock()
+	return prev, s.announceAttachPromotion(runID, promoted, prev.principal)
+}
+
+// evictAttachHolder evicts runID's writer and promotes NOBODY. The take-over
+// path names the taking principal (evictAttachHolderFor) so it can promote that
+// principal's own observer; this is the plain eviction the probes drive
+// directly, where there is no taker to attribute a promotion to.
+func (s *Server) evictAttachHolder(runID uuid.UUID) *attachHolder {
+	prev, _ := s.evictAttachHolderFor(runID, "")
+	return prev
 }
 
 // attachTakeoverReason builds the close reason the displaced client reads,
@@ -374,12 +543,11 @@ func (s *Server) handleAttachHolder(w http.ResponseWriter, r *http.Request) {
 //
 // Same owner-or-admin gate as the read above.
 //
-// The take-over EVICTS; it does not promote. The caller's own read-only socket
-// (if it has one) stays read-only and must RECONNECT to claim the writer slot —
-// which costs the UI one reconnect it already knows how to do, and avoids
-// inventing a mid-stream "you may now type" state machine on both ends. Between
-// the eviction and that reconnect the registry reports held:false, which is
-// true: nobody holds it.
+// The take-over promotes the caller's OWN read-only socket if it has one (in
+// place, no reconnect — see evictAttachHolderFor), and otherwise frees the slot
+// for the caller to attach into. It never promotes a bystander. Between an
+// unpromoted eviction and the caller's attach the registry reports held:false,
+// which is true: nobody holds it.
 func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -394,13 +562,13 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prev := s.evictAttachHolder(id)
+	actorType, principal := actorFromRequest(r)
+
+	prev, promote := s.evictAttachHolderFor(id, principal)
 	if prev == nil {
 		writeError(w, http.StatusConflict, "nobody is attached to this run; nothing to take over")
 		return
 	}
-
-	actorType, principal := actorFromRequest(r)
 	// Audit first, displace second. The displaced session's own teardown is what
 	// makes the reverse order unsafe: see the FINDING on attach.go's
 	// session.detach audit, where recording on a context the teardown cancels
@@ -424,6 +592,12 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 		})))
 
 	prev.displace(attachTakeoverReason(principal))
+	if promote != nil {
+		// Off this goroutine and after the displacement: the notice goes to the
+		// taker's OTHER socket, whose write can block for attachWriteTimeout,
+		// and this HTTP response must not wait on it.
+		go promote()
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"taken_over":      true,
