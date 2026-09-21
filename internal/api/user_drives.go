@@ -27,8 +27,12 @@
 //     place that can tell "the client said false" from "the client said
 //     nothing" — see userDriveGrantRequest.Enabled.
 //
-// Every route is super-only, not securityOps; the tier argument is written at
-// the mountUserDriveRoutes call that decides it (routes.go).
+// Four routes stay super-only: the ones that name a host path (host_root) or
+// a cluster storage class — creating, listing, updating, and removing the
+// drive itself. The other three — granting an allocation, revoking one, and
+// previewing whose drive resolves — moved to securityOps in 0.8 (issue #168):
+// none of the three names a host path. The tier argument for each route is
+// written at the mountUserDriveRoutes call that decides it (routes.go).
 package api
 
 import (
@@ -46,26 +50,33 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// mountUserDriveRoutes registers the /drives family — SEVEN routes, all on the
-// SUPER-admin tier.
+// mountUserDriveRoutes registers the /drives family — SEVEN routes split
+// across two admin tiers. Four name a HOST PATH (host_root) or a cluster
+// storage class and stay on operatorOnly (SUPER): creating, listing,
+// updating, and removing the drive itself. The other three — granting an
+// allocation, revoking one, and previewing whose drive resolves — sit on
+// securityOps: a security admin already reaches drives through the
+// DenyUserDrive door on a governance profile, and none of the three names a
+// host path.
 //
-// The parameter is spelled `operatorOnly` because that is the group routes.go
-// hands it and the tier these were born on; the group a mount function receives
-// is decided at the call site, never by this parameter's name, and
-// authz_test.go's chi.Walk matrix is what enforces the classification.
+// The parameters are spelled `operatorOnly`/`securityOps` because those are
+// the groups routes.go hands them and the tier each route sits on; which
+// group a route lives in is decided at the call site, never by a parameter's
+// name, and authz_test.go's chi.Walk matrix is what enforces the
+// classification.
 //
 // Registered UNCONDITIONALLY, with no `if s.cfg.Store != nil` arm: a route that
 // appears only on some deployments is a route the authorization matrix has to
 // arrange for, and the every-conditional-route-mounted doctrine exists so it
 // never has to.
-func (s *Server) mountUserDriveRoutes(operatorOnly chi.Router) {
+func (s *Server) mountUserDriveRoutes(operatorOnly, securityOps chi.Router) {
 	operatorOnly.Get("/drives", s.handleGetUserDrives)
 	operatorOnly.Post("/drives", s.handleCreateUserDrive)
 	operatorOnly.Put("/drives/{id}", s.handleUpdateUserDrive)
 	operatorOnly.Delete("/drives/{id}", s.handleDeleteUserDrive)
-	operatorOnly.Post("/drives/grants", s.handleUpsertUserDriveGrant)
-	operatorOnly.Delete("/drives/grants/{id}", s.handleDeleteUserDriveGrant)
-	operatorOnly.Post("/drives/preview", s.handlePreviewUserDrive)
+	securityOps.Post("/drives/grants", s.handleUpsertUserDriveGrant)
+	securityOps.Delete("/drives/grants/{id}", s.handleDeleteUserDriveGrant)
+	securityOps.Post("/drives/preview", s.handlePreviewUserDrive)
 }
 
 // GET /drives

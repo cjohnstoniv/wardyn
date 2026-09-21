@@ -39,6 +39,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Drive grants and preview now admit `security_admin`, not just super-admin.** `POST
+  /drives/grants`, `DELETE /drives/grants/{id}`, and `POST /drives/preview` moved off the
+  super-admin-only tier onto `securityOps` (admin or `security_admin`): none of the three names a
+  host path, and a security admin already reaches drives through the `DenyUserDrive` door on a
+  governance profile. The four routes that DO name a host path or cluster storage class — creating,
+  listing, updating, and removing the drive itself — stay super-admin only (#168).
+
 - **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
   role-mapping gap, a runner failure, a confinement floor the runner can't meet) now sits under
   "Blocking"; a non-blocking fail or warn sits under "Worth a look" instead of borrowing a heading
@@ -60,6 +67,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   when the chip appears.
 
 ### Added
+
+- **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL`, `WARDYN_ORG_ENROLMENT_TOKEN` and
+  `WARDYN_ORG_DEVICE_NAME` tell a managed laptop which org control plane it belongs to. Boot is
+  refused when an org URL is set without `WARDYN_MEMBER_MODE`, when the URL is plaintext and not
+  loopback, or when an enrolment token is set with no org URL to send it to. See `docs/ENV.md`.
 
 - **The kind AWS SSO walk now runs nightly instead of only by hand.** `.github/workflows/nightly.yml`
   gained a `kind-sso-walk` job that brings up `make kind-quickstart` + `make kind-sso` on the hosted
@@ -145,6 +157,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   proxy is configured and an AWS SSO injection host has no `upstream_proxy_no_proxy` entry covering
   it, and `wardyn support-bundle` now reports the upstream proxy's host (never any embedded
   credential), its compiled bypass list, and whether a trusted CA was loaded.
+
+- **The Agents tab and member Getting Started now render a chip for the `not_applicable` model-access
+  state instead of nothing at all.** `not_applicable` — the admin-token principal's own answer under a
+  per_user row, "this caller is a mechanism, not a person" — had no entry in `MODEL_ACCESS_CHIP_LABEL`
+  and was excluded from both surfaces outright, so it read as unknown rather than as a deliberate
+  answer. It now has its own neutral label (`Model access · Not applicable`), rendered on the Agents
+  tab beside `ADMIN_OWN_CHIP_NOTE`, and beside member Getting Started's `llm_ready` fallback chip —
+  still with no action and no sign-in CTA, since there is no person here to sign in as.
 
 - **A per-user API token's group snapshot now refreshes at login, alongside its role.**
   `store.RefreshAPITokenRoles` is now `RefreshAPITokenIdentity(ctx, principal, role, groups,
