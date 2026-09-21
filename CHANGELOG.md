@@ -189,6 +189,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The webhook sink's Close test no longer reds CI at random.** `TestWebhookSink_CloseFlushesAndAwaitsDrain`
+  decided whether `Close` had awaited the drain by sampling whether the goroutine running `Run` had
+  reached the statement after `Run` returned. Nothing orders that statement before `Close` returns —
+  `Run` signals its done channel from inside `Run` — so on a loaded runner the check failed although
+  the drain had completed, reding the required `build` check on unrelated pull requests. The test now
+  holds the final delivery open inside the HTTP handler and asserts `Close` is still blocked while the
+  batch is in flight, an ordering the code actually guarantees. `Close` itself is unchanged.
+
 - **The Agents tab and member Getting Started now render a chip for the `not_applicable` model-access
   state instead of nothing at all.** `not_applicable` — the admin-token principal's own answer under a
   per_user row, "this caller is a mechanism, not a person" — had no entry in `MODEL_ACCESS_CHIP_LABEL`
