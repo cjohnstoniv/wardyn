@@ -7,8 +7,11 @@ import * as React from "react";
 import { cn } from "../ui/utils";
 import { CC_META } from "./cc-meta";
 import { APPROVAL, APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, WIRE_TO_COPY } from "./copy";
+import { POSTURE_CHIP_SUFFIX_ACKNOWLEDGED, POSTURE_CHIP_SUFFIX_UNENFORCED } from "./confinement-posture-copy";
+import { useConfinementPosture, type ConfinementPosture } from "./operator-context";
 import {
   Archive,
+  AlertTriangle,
   Bot,
   User,
   Check,
@@ -244,17 +247,36 @@ const ccMetaFallback = {
   fillClass: "bg-muted-foreground",
   ordinal: 1 as const,
 };
+// #162 — the ring color-mix percentages and the "glyph as well as the ring"
+// rule (mock-approval ruling 1: color alone is never a signal, CONSOLE-RULES
+// §2) are copied from the approved console-0.8 mock, surface 1. Only
+// "unenforced" earns the glyph — the mock's own open-question answer named
+// the unenforced chip specifically, and the ring alone already doubles as
+// "acknowledged"'s (softer) signal without a second word crowding a chip that
+// already carries an icon + a label.
+const POSTURE_RING: Partial<Record<ConfinementPosture, string>> = {
+  unenforced: "shadow-[0_0_0_2px_color-mix(in_oklab,var(--warning)_55%,transparent)]",
+  acknowledged: "shadow-[0_0_0_2px_color-mix(in_oklab,var(--warning)_28%,transparent)]",
+};
+
 export function ConfinementChip({ value }: { value: ConfinementClass }) {
   const meta = CC_META[value as ConfinementClass];
   const label = meta?.label ?? String(value);
   const mechanism = meta?.mechanism ?? String(value);
   const m = metaFor(ccMeta, value as string, ccMetaFallback);
-  const title = `${label} — ${mechanism} · internal class ${value}`;
+  const posture = useConfinementPosture();
+  const suffix =
+    posture === "unenforced"
+      ? POSTURE_CHIP_SUFFIX_UNENFORCED
+      : posture === "acknowledged"
+        ? POSTURE_CHIP_SUFFIX_ACKNOWLEDGED
+        : "";
+  const title = `${label} — ${mechanism} · internal class ${value}${suffix}`;
   return (
     <Chip
       tone="neutral"
       title={title}
-      className={cn(m.cls, "gap-1 px-1.5")}
+      className={cn(m.cls, "gap-1 px-1.5", POSTURE_RING[posture])}
     >
       <m.Icon className="size-3" />
       {label}
@@ -263,6 +285,10 @@ export function ConfinementChip({ value }: { value: ConfinementClass }) {
           that string must NEVER reach accessible content — the confinement class
           is internal (D4). The visible barrier label ("Fence"/"Wall"/"Vault") is
           the accessible name; screen-reader users hear it, not the wire code. */}
+      {/* aria-hidden: the ring already carries "unenforced" for a sighted
+          reader and `title`'s suffix carries it for a hover; this glyph is the
+          §2 "never colour alone" mark, not a second accessible name. */}
+      {posture === "unenforced" && <AlertTriangle className="size-3 text-warning" aria-hidden="true" />}
     </Chip>
   );
 }
