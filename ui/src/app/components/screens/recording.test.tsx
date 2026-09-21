@@ -17,6 +17,11 @@ import type { AgentRun, Recording } from "../../lib/types";
 // already returns (internal/types.AgentRun, projected server-side from
 // RecordingStore.StatAndTail), so the library is built from ONE call and a
 // cast is fetched (api.getRecording) only once a viewer presses play.
+// #159: the screen now calls listRuns({..., limit, offset}), which returns
+// the PAGED shape ({ runs, truncated }) rather than a bare array (see
+// runs.ts's listRuns overload). listRunsMock is asserted against directly in
+// a couple of tests below, so it stays a plain vi.fn() rather than a
+// resolved-value default — every test sets its own resolution.
 const listRunsMock = vi.fn();
 const getRecordingMock = vi.fn();
 const healthMock = vi.fn();
@@ -27,7 +32,7 @@ vi.mock("../../lib/api/recordings", () => ({
 }));
 vi.mock("../../lib/api/runs", () => ({
   runs: {
-    listRuns: () => listRunsMock(),
+    listRuns: (...a: unknown[]) => listRunsMock(...a),
   },
 }));
 // components.recording is read once (health()) to tell "this
@@ -77,6 +82,13 @@ function recording(runId: string): Recording {
   return { run_id: runId, header: { version: 2, width: 80, height: 24 }, events: [], cast: "x" };
 }
 
+// #159: wraps a plain run array into the paged shape listRuns({limit,offset})
+// now resolves — truncated defaults to false (nothing more past this page),
+// same as a real deployment with fewer than PAGE_SIZE runs.
+function page(runs: AgentRun[], truncated = false): { runs: AgentRun[]; truncated: boolean } {
+  return { runs, truncated };
+}
+
 function renderScreen() {
   return render(
     <MemoryRouter>
@@ -105,7 +117,7 @@ describe("RecordingScreen", () => {
   });
 
   it("shows the true-empty state (no runs at all) with a 'Go to Runs' CTA", async () => {
-    listRunsMock.mockResolvedValue([]);
+    listRunsMock.mockResolvedValue(page([]));
     renderScreen();
 
     await screen.findByText(/recordings appear once a run's terminal session is captured/i);
@@ -117,11 +129,13 @@ describe("RecordingScreen", () => {
   // has_recording alone decides which runs get a card, straight off the one
   // listRuns() response.
   it("builds the library from listRuns()'s fields alone — rendering it fetches no cast", async () => {
-    listRunsMock.mockResolvedValue([
-      recorded("run_1", { task: "fix the leak" }),
-      run("run_2", { task: "add retries", has_recording: false }),
-      run("run_3", { task: "bump deps" }), // has_recording absent entirely
-    ]);
+    listRunsMock.mockResolvedValue(
+      page([
+        recorded("run_1", { task: "fix the leak" }),
+        run("run_2", { task: "add retries", has_recording: false }),
+        run("run_3", { task: "bump deps" }), // has_recording absent entirely
+      ]),
+    );
     renderScreen();
 
     await screen.findByText("fix the leak");
@@ -132,7 +146,7 @@ describe("RecordingScreen", () => {
   });
 
   it("shows the 'none recorded' empty state when every run's has_recording is false", async () => {
-    listRunsMock.mockResolvedValue([run("run_1"), run("run_2")]);
+    listRunsMock.mockResolvedValue(page([run("run_1"), run("run_2")]));
     renderScreen();
 
     await screen.findByText(/none of your runs have a recording yet/i);
@@ -146,7 +160,7 @@ describe("RecordingScreen", () => {
   // runs would eventually produce one.
   it("both empty states name the disabled deployment, not 'not yet', when components.recording is 'none'", async () => {
     healthMock.mockResolvedValue({ components: { recording: { selected: "none", source: "disabled" } } });
-    listRunsMock.mockResolvedValue([]);
+    listRunsMock.mockResolvedValue(page([]));
     renderScreen();
 
     await screen.findByText(/session recording is disabled on this deployment/i);
@@ -156,7 +170,7 @@ describe("RecordingScreen", () => {
 
   it("the 'none recorded' state also names the disabled deployment when components.recording is 'none'", async () => {
     healthMock.mockResolvedValue({ components: { recording: { selected: "none", source: "disabled" } } });
-    listRunsMock.mockResolvedValue([run("run_1"), run("run_2")]);
+    listRunsMock.mockResolvedValue(page([run("run_1"), run("run_2")]));
     renderScreen();
 
     await screen.findByText(/session recording is disabled on this deployment/i);
@@ -165,7 +179,7 @@ describe("RecordingScreen", () => {
 
   it("filters down to a 'no recordings match' empty state, and Clear filters restores the library", async () => {
     const runs = Array.from({ length: 5 }, (_, i) => recorded(`run_${i}`, { task: `task number ${i}` }));
-    listRunsMock.mockResolvedValue(runs);
+    listRunsMock.mockResolvedValue(page(runs));
     renderScreen();
 
     await screen.findByText("task number 0");
@@ -180,7 +194,7 @@ describe("RecordingScreen", () => {
   });
 
   it("opens the replay dialog with that run's recording when its card is clicked", async () => {
-    listRunsMock.mockResolvedValue([recorded("run_1", { task: "ship the fix" })]);
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "ship the fix" })]));
     getRecordingMock.mockResolvedValue(recording("run_1"));
     renderScreen();
 
@@ -192,10 +206,9 @@ describe("RecordingScreen", () => {
   // The other half of the F077 pin: a cast is fetched exactly once, exactly
   // when a card is played — never for a card that stays unclicked.
   it("fetches a cast only when its card is played, and only that one run's", async () => {
-    listRunsMock.mockResolvedValue([
-      recorded("run_1", { task: "ship the fix" }),
-      recorded("run_2", { task: "second one" }),
-    ]);
+    listRunsMock.mockResolvedValue(
+      page([recorded("run_1", { task: "ship the fix" }), recorded("run_2", { task: "second one" })]),
+    );
     getRecordingMock.mockImplementation((id: string) => Promise.resolve(recording(id)));
     renderScreen();
 
@@ -210,7 +223,7 @@ describe("RecordingScreen", () => {
   });
 
   it("shows a retryable error inside the dialog when the cast fetch fails", async () => {
-    listRunsMock.mockResolvedValue([recorded("run_1", { task: "ship the fix" })]);
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "ship the fix" })]));
     getRecordingMock.mockRejectedValue(new Error("HTTP 500"));
     renderScreen();
 
@@ -221,7 +234,7 @@ describe("RecordingScreen", () => {
   });
 
   it("gives a KILLED run the same enforcement badge (RunStateBadge) runs.tsx/run-detail.tsx use", async () => {
-    listRunsMock.mockResolvedValue([recorded("run_1", { task: "escape attempt", state: "KILLED" })]);
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "escape attempt", state: "KILLED" })]));
     renderScreen();
 
     await screen.findByText("escape attempt");
@@ -235,7 +248,7 @@ describe("RecordingScreen", () => {
   // users without role="button" + tabIndex + a key handler. getByRole("button")
   // only resolves the card at all once role="button" is present.
   it("is keyboard-reachable: getByRole('button') resolves the card, and Enter fires onPlay", async () => {
-    listRunsMock.mockResolvedValue([recorded("run_1", { task: "ship the fix" })]);
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "ship the fix" })]));
     getRecordingMock.mockResolvedValue(recording("run_1"));
     renderScreen();
 
@@ -249,7 +262,7 @@ describe("RecordingScreen", () => {
   });
 
   it("is keyboard-reachable: Space also fires onPlay", async () => {
-    listRunsMock.mockResolvedValue([recorded("run_1", { task: "ship the fix" })]);
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "ship the fix" })]));
     getRecordingMock.mockResolvedValue(recording("run_1"));
     renderScreen();
 
@@ -265,7 +278,7 @@ describe("RecordingScreen", () => {
   // the anchor's own activation, so without a keydown guard on the link the
   // keyboard path silently yields the wrong screen (replay dialog, not the run).
   it("Enter on 'Open run →' is left to the link — it does not open the replay dialog", async () => {
-    listRunsMock.mockResolvedValue([recorded("run_1", { task: "ship the fix" })]);
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "ship the fix" })]));
     renderScreen();
 
     await screen.findByText("ship the fix");
@@ -283,7 +296,7 @@ describe("RecordingScreen", () => {
   // focusable/clickable element). "Open run" must now be its own row,
   // outside the button's subtree, not merely reachable despite the nesting.
   it("'Open run' is NOT nested inside the role=button card (no nested-interactive anti-pattern)", async () => {
-    listRunsMock.mockResolvedValue([recorded("run_1", { task: "ship the fix" })]);
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "ship the fix" })]));
     renderScreen();
 
     await screen.findByText("ship the fix");
@@ -295,5 +308,96 @@ describe("RecordingScreen", () => {
     // card's OUTER container (the button div's parent), and it isn't inside
     // the button div itself.
     expect(card.querySelector("a")).toBeNull();
+  });
+});
+
+// #159: server-side paging (PAGE_SIZE=100) replaces the client-side cap —
+// listRuns() is now called with explicit limit/offset and the screen reads
+// X-Wardyn-Truncated (surfaced here as `truncated`) off the response.
+describe("RecordingScreen — paging (#159)", () => {
+  beforeEach(() => {
+    listRunsMock.mockReset();
+    getRecordingMock.mockReset();
+    healthMock.mockReset().mockResolvedValue({});
+  });
+
+  it("asks for the first page at limit=100, offset=0", async () => {
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "fix the leak" })]));
+    renderScreen();
+
+    await screen.findByText("fix the leak");
+    expect(listRunsMock).toHaveBeenCalledWith({ includeRecordingMeta: true, limit: 100, offset: 0 });
+  });
+
+  it("truncated:true shows the more-available note and a text-link Load more control, never a total", async () => {
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "fix the leak" })], true));
+    renderScreen();
+
+    await screen.findByText("fix the leak");
+    expect(screen.getByText("1 recordings loaded so far — there are more on the server.")).toBeInTheDocument();
+    const loadMore = screen.getByRole("button", { name: "Load 100 more" });
+    expect(loadMore).toHaveClass("text-info");
+    expect(screen.queryByText(/of 1,000|100 of/i)).not.toBeInTheDocument();
+  });
+
+  it("truncated:false shows 'All N recordings are loaded' and no Load more control", async () => {
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "fix the leak" })], false));
+    renderScreen();
+
+    await screen.findByText("fix the leak");
+    expect(screen.getByText("All 1 recordings are loaded.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /load .* more/i })).not.toBeInTheDocument();
+  });
+
+  it("Load more asks for the next page at offset=runs.length and appends the result", async () => {
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_2", { task: "bump deps" })], false));
+    renderScreen();
+
+    await screen.findByText("fix the leak");
+    fireEvent.click(screen.getByRole("button", { name: "Load 100 more" }));
+
+    await screen.findByText("bump deps");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 1 });
+    expect(screen.getByText("fix the leak")).toBeInTheDocument();
+    expect(screen.getByText("All 2 recordings are loaded.")).toBeInTheDocument();
+  });
+
+  it("a failed Load more keeps what already loaded, names the count, and Retry resumes from the same offset", async () => {
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    listRunsMock.mockRejectedValueOnce(new Error("boom"));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_2", { task: "bump deps" })], false));
+    renderScreen();
+
+    await screen.findByText("fix the leak");
+    fireEvent.click(screen.getByRole("button", { name: "Load 100 more" }));
+
+    await screen.findByText("Couldn't load more recordings");
+    expect(
+      screen.getByText(
+        "Wardyn stopped answering partway through. The 1 already loaded are still here — retry to continue from where it stopped.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("fix the leak")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await screen.findByText("bump deps");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 1 });
+    expect(screen.queryByText("Couldn't load more recordings")).not.toBeInTheDocument();
+  });
+
+  it("filters note the load-more caveat only once there is genuinely more past the loaded pages", async () => {
+    const runs = Array.from({ length: 5 }, (_, i) => recorded(`run_${i}`, { task: `task number ${i}` }));
+    listRunsMock.mockResolvedValue(page(runs, true));
+    renderScreen();
+
+    await screen.findByText("task number 0");
+    fireEvent.change(screen.getByPlaceholderText(/search tasks, repos, run ids/i), {
+      target: { value: "task number 1" },
+    });
+
+    await screen.findByText(
+      "Showing 1 of 5 recordings · Filters cover the 5 recordings loaded so far. Load more to search further back.",
+    );
   });
 });
