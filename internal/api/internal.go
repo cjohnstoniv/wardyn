@@ -643,7 +643,7 @@ func (s *Server) brokeredForgeMintKind(ctx context.Context, runID, grantID uuid.
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: could not list run grants for the single-lane mint check; REFUSING the mint (F098: the residual this check covers has no other belt)",
+		slog.WarnContext(ctx, "wardynd: could not list run grants for the single-lane mint check; REFUSING the mint (this check is the only belt covering that residual)",
 			slog.String("run_id", runID.String()), slog.String("error", err.Error()))
 		return "", "", true
 	}
