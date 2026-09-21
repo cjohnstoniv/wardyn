@@ -34,6 +34,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
   deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
   cancellation on shutdown — is unchanged.
+- **A run whose model credential is a stored AWS SSO session now says so when its confinement is
+  weaker than that credential would otherwise require.** A captured AWS SSO session is delivered to
+  the sandbox at dispatch, after the run's confinement class is already resolved, so it was never an
+  eligible grant and `RequiredConfinementFloor` never saw it — a run on a host offering only the
+  weakest confinement class received the credential with nothing said about it anywhere. A shared,
+  pure `credentialConfinementAdvisory` now runs from both the preflight and launch paths off the
+  same resolved body, and the advisory now appears on the preflight response's warnings, the create
+  response's warnings, and the `run.create` audit row's closed-vocabulary `credential_confinement`
+  field. This is a warning, never a refusal: a host that can only offer the weakest class still
+  launches.
 
 - **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
   finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
