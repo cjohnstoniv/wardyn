@@ -15,7 +15,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   closed the streak and opened a new one: a bad-token drip from ten addresses, one a second, recorded
   120 rows in two minutes, as many as the rate limiter allows (#347). A streak is now keyed on the
   refusing boundary, `reason` and path. The summary row keeps the opening peer as `SourceIP` and adds
-  `peers`, the number of distinct peer IPs it folded, which stops counting at 100. The rate limiter
+  `peers`, the number of distinct peer IPs it folded (stops counting at 100), `peer_ips`, those
+  addresses (capped at 100), and `peers_truncated`. The rate limiter
   is unchanged.
 - **A handler that builds a 5xx body's `(status, message)` pair and hands it to a helper could still
   forward driver/substrate error text into it, past the guard added for #173.** The guard only read

@@ -2353,8 +2353,9 @@ plus one **new** summary row carrying `count`/`peers`/`first_seen`/`last_seen`
 key: until 0.8 it was, and a caller that rotated its source address (or its
 ephemeral port, before that) opened a new streak and wrote a new row on every
 request, up to the rate limit. The summary carries the opening peer as
-`SourceIP` and `peers`, the number of distinct peer IPs folded (saturating at
-100, so the set a streak holds is bounded). It exists
+`SourceIP`, `peers`, the number of distinct peer IPs folded (saturating at
+100, so the set a streak holds is bounded), `peer_ips`, those addresses (capped
+at 100), and `peers_truncated`. It exists
 because a self-inflicted drip evicted everything else: one sidecar retrying a
 renew the control plane would never grant wrote one row a minute, forever, past a
 rate limiter set at 1/sec, and pushed every real security event out of the
