@@ -87,6 +87,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
   reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
   FAILED so a run reaching a successful terminal state through the same path gets no hint.
+- **A refocus that arrives while `usePoll` has a read in flight is no longer dropped.** The in-flight
+  guard correctly stops a burst of focus events from stacking requests, but the refocus it swallowed
+  was never retried, so a person returning to the tab mid-read got no refresh and kept seeing a stale
+  screen for the rest of the interval — up to five minutes on the setup gate. The hook now coalesces:
+  a refocus during an in-flight read is remembered and fires exactly one follow-up read when that read
+  settles, however many refocus events arrived while it was outstanding.
 
 ### Changed
 
