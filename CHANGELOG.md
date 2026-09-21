@@ -47,6 +47,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **An HTTP/2 answer to the egress proxy's HTTP/1.1 request is now recorded as
   `builtin:upstream-protocol-mismatch` with a plain cause, and answered with a 400 so SDKs stop
   retrying, instead of a `builtin:dial-failed` that was retried until the SDK gave up (#359).**
+- **One TLS config was shared between the sidecar's control-plane client and the proxy's forward
+  transport, and enabling HTTP/2 edited it in place (#360).** The control-plane client keeps
+  net/http's HTTP/2 support, and turning that on prepends `h2` to the transport's own
+  `TLSClientConfig.NextProtos`. Sharing the pointer meant the forward transport then OFFERED HTTP/2
+  to every TLS peer while being unable to speak it, so a peer that chose `h2` answered with frames
+  the HTTP/1.1 reader could not parse — the failure reported in #359. It only happened where
+  `trusted_ca_pem` is set, which is every estate with a corporate CA. The control-plane client now
+  takes its own copy, and a test pins that the shared config is still untouched after a
+  control-plane round trip.
 - **The MITM and plain egress lanes now work against a TLS peer that speaks HTTP/2, negotiated or
   not (#360).** A peer that picks `h2` over ALPN gets HTTP/2. A peer that speaks HTTP/2 without
   negotiating it is recognised from its first frame (a SETTINGS frame read right after the TLS
@@ -54,15 +63,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the run, and the request is resent over HTTP/2 when its body can be replayed; later requests to
   that host go straight to HTTP/2. This also catches the two shapes the #359 error-text check missed:
   a SETTINGS payload with a space byte before any newline, and SETTINGS that arrive before the
-  request goes out. A request that cannot be resent, or whose HTTP/2 resend also fails, still gets
-  #359's `builtin:upstream-protocol-mismatch` row and 400, with the cause naming both attempts.
+  request goes out. A peer caught before the request was written is resent even when its body is a
+  one-shot stream, since nothing had read it. A request that cannot be resent, or whose HTTP/2
+  resend also fails, still gets #359's `builtin:upstream-protocol-mismatch` row and 400, with the
+  cause naming both attempts. The brokered git and PAT lanes take the same path, so a forge that
+  speaks HTTP/2 is served over HTTP/2 instead of refused.
 
 ### Changed
 
-- **The egress proxy now offers HTTP/2 to TLS peers.** Its forward transport offers `h2,http/1.1`
-  over ALPN, as the control plane's own transport already does; the control-plane transport is
-  unchanged. A new connection whose handshake negotiates no ALPN protocol waits up to 250 ms for an
-  unprompted HTTP/2 SETTINGS frame before it is used for HTTP/1.1.
+- **The egress proxy now offers HTTP/2 to TLS peers, deliberately.** Its forward transport offers
+  `h2,http/1.1` over ALPN and speaks HTTP/2 when a peer chooses it; the control-plane transport
+  stays HTTP/1.1. The first connection to a host whose handshake negotiates no ALPN protocol waits
+  up to 250 ms for an unprompted HTTP/2 SETTINGS frame; what that connection learns is remembered
+  for the run, so no later connection to the same host waits again.
 - **A member may store their own Bedrock bearer key.** `PUT`/`DELETE /secrets/bedrock-api-key`
   is no longer refused to a non-operator: the BEARER is a static `Authorization` header the proxy
   injects per run, so under a `per_user` agent row a member's own key is a credential their runs

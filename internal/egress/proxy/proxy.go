@@ -475,7 +475,9 @@ func newProxy(opts Options) *Proxy {
 	}
 	mkTransport := func(dc func(context.Context, string, string) (net.Conn, error)) *http.Transport {
 		return &http.Transport{
-			DialContext:           dc,
+			DialContext: dc,
+			// HTTP/1.1 only, which is what controlTransport stays; offerHTTP2
+			// turns HTTP/2 on for the egress transport alone, a few lines below.
 			ForceAttemptHTTP2:     false,
 			MaxIdleConns:          64,
 			IdleConnTimeout:       60 * time.Second,
