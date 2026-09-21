@@ -12,12 +12,14 @@ package store
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -157,6 +159,56 @@ func (s PG) ActiveRunsByCreator(ctx context.Context, createdBy, task, agent stri
 		WHERE created_by = $1 AND task = $2 AND agent = $3 AND state = ANY($4)
 		ORDER BY created_at DESC`
 	return collect(ctx, s.Pool, "list", "active runs by creator", q, []any{createdBy, task, agent, states}, scanRun)
+}
+
+// LoginLocker serializes ONE person's sign-in launches, and the credential
+// capture that follows one, against every other replica — the piece the
+// deterministic tie-break in api.supersedeOlderLoginRuns could not supply.
+//
+// A capability interface for ActiveRunsByCreatorReader's reasons (widening
+// Store would make every double and embedding in the tree implement a lock they
+// are not about), and its ABSENCE is handled the same way that neighbour's is:
+// the call site takes NO fallback and proceeds UNLOCKED. That is deliberate
+// and it is the whole failure model — a store that cannot lock is exactly as
+// serialized as 0.7.8 was, which is to say not at all, and nobody is refused a
+// sign-in over it. PG is the production store and implements it.
+//
+// Keyed by ACTOR — the login run's creator — not by the credential scope: under
+// the `shared` roster every sign-in resolves to the same empty scope owner, so
+// a scope-keyed lock would serialize the whole deployment while serializing the
+// one thing it needs to (one person's two launches) no better.
+type LoginLocker interface {
+	LockLoginSupersede(ctx context.Context, actor string) (release func(), err error)
+}
+
+// Compile-time assertion: PG satisfies LoginLocker.
+var _ LoginLocker = PG{}
+
+// LockLoginSupersede holds db.LoginSupersedeLockClass keyed to actor for up to
+// db.LoginSupersedeLockWait. Session-scoped, not transaction-scoped: the work it
+// guards is several independent statements (two supersede passes around a run
+// insert) and, on the capture path, a read-modify-write in a LATER request.
+//
+// It borrows from THIS pool — the request-serving one — so the cost is stated
+// where an operator sizing pool_max_conns can find it: one connection for the
+// duration of one hold, at most one per process at a time, and none at all
+// when the pool cannot spare two (db.AdvisoryLockKeyed). An error means the
+// lock was not taken and the caller proceeds unlocked.
+func (s PG) LockLoginSupersede(ctx context.Context, actor string) (func(), error) {
+	return db.AdvisoryLockKeyed(ctx, s.Pool, db.LoginSupersedeLockClass, loginLockObject(actor), db.LoginSupersedeLockWait)
+}
+
+// loginLockObject folds an actor string into the objid half of the key, in ONE
+// place so the launch and the capture can never disagree about which lock a
+// person's sign-in takes.
+//
+// crc32, deliberately not a cryptographic digest: nothing here is a secret or a
+// capability, and a COLLISION is harmless by construction — two people whose
+// actor strings collide merely take the same lock and over-serialize each
+// other's sign-ins by a few statements. It is not a correctness risk, only a
+// contention one, and one nobody will ever measure.
+func loginLockObject(actor string) int32 {
+	return int32(crc32.ChecksumIEEE([]byte(actor)))
 }
 
 // ActiveRunsAtPathReader answers ONE question the create path asks on every run:
