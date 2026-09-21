@@ -274,7 +274,10 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, rows []ty
 		return DeviceIngestResult{}, nil
 	}
 
-	tx, err := s.Pool.Begin(ctx)
+	// Pinned READ COMMITTED like every other audit_events writer: at
+	// REPEATABLE READ this transaction would chain onto a stale head and the
+	// verify sweep would latch a permanent false tamper verdict.
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return DeviceIngestResult{}, fmt.Errorf("store: begin device audit ingest tx: %w", err)
 	}
