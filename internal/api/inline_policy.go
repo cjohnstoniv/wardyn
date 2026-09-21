@@ -880,12 +880,12 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 						"policy uses %s LLM auth, but no %s token provider is configured", source, source)
 				}
 				// Host pin (write-time defense): the sentinel resolves to a LIVE
-				// OAuth token and may only ever target Anthropic. Reject an authored
-				// grant that points it elsewhere (the inject sink also enforces this,
-				// fail-closed).
-				if !hostEqual(rule.Host, subscriptionInjectionHost) {
+				// OAuth token and may only ever target Anthropic (or the operator's
+				// own configured gateway). Reject an authored grant that points it
+				// elsewhere (the inject sink also enforces this, fail-closed).
+				if !s.subscriptionInjectionHostAllowed(rule.Host) {
 					return http.StatusUnprocessableEntity, fmt.Errorf(
-						"%s LLM auth may only target %s, not %q", source, subscriptionInjectionHost, rule.Host)
+						"%s LLM auth may only target %s, not %q", source, s.subscriptionInjectionHostDesc(), rule.Host)
 				}
 				continue
 			}
