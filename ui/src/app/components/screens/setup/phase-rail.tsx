@@ -10,8 +10,10 @@
 import { Check } from "lucide-react";
 import { cn } from "../../ui/utils";
 import {
-  OPTIONAL_STEPS,
-  PHASES,
+  CONFIG_STEPS,
+  DEMO_EGRESS_IDS,
+  DEMO_SECRETS_IDS,
+  REQUIRED_STEPS,
   STEP_LABEL,
   STEP_ORDER,
   type SetupStepId,
@@ -24,6 +26,75 @@ const TONE_DOT: Record<StepBadge["tone"], string> = {
   neutral: "text-muted-foreground",
   info: "text-info",
 };
+
+// One item's dot + label + badge — shared by every group below (and by the
+// icon-only compact rail's own render, separately). `num` prints a small
+// ordinal ahead of the dot for the Required group only (1-4); every other
+// group's items carry none, matching the prototype's own railItem (a step
+// off the required walk "is not on the way anywhere"). aria-hidden: the
+// ordinal is decorative sequencing, not part of the button's accessible name
+// — e2e clicks `getByRole("button", { name: /^People/ })`, and a leading "2"
+// text node would break that anchor.
+function RailItem({
+  stepId,
+  active,
+  isDone,
+  isVisited,
+  badge,
+  num,
+  onSelect,
+  refusal,
+}: {
+  stepId: SetupStepId;
+  active: boolean;
+  isDone: boolean;
+  isVisited: boolean;
+  badge: StepBadge;
+  num?: number;
+  onSelect: (step: SetupStepId) => void;
+  refusal?: string;
+}) {
+  return (
+    <li>
+      <button
+        onClick={() => onSelect(stepId)}
+        aria-current={active ? "step" : undefined}
+        disabled={!!refusal}
+        title={refusal}
+        className={cn(
+          "group flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
+          active ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-muted",
+          refusal && "opacity-50",
+        )}
+      >
+        {num !== undefined && (
+          <span aria-hidden className="mt-0.5 w-3.5 shrink-0 text-center text-xs text-muted-foreground">
+            {num}
+          </span>
+        )}
+        <span
+          data-visited={isVisited || undefined}
+          className={cn(
+            "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+            isDone
+              ? "border-success bg-success text-success-foreground"
+              : isVisited
+                ? "border-border-strong bg-muted-foreground/40 text-muted-foreground"
+                : cn("border-border-strong", TONE_DOT[badge.tone]),
+          )}
+        >
+          {isDone && <Check className="size-3" aria-hidden />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className={cn("block text-sm", active ? "text-foreground" : "text-foreground/90")}>
+            {STEP_LABEL[stepId]}
+          </span>
+          <span className={cn("block text-xs", TONE_DOT[badge.tone])}>{badge.text}</span>
+        </span>
+      </button>
+    </li>
+  );
+}
 
 export function PhaseRail({
   current,
@@ -97,89 +168,93 @@ export function PhaseRail({
       </nav>
 
       {/* Full rail — stacked above content on mobile, hidden at lg (the icon-rail
-          band), back at xl+. */}
+          band), back at xl+. #213 — three categories, not the old five phases:
+          Required (numbered, what blocks a run), Optional setup (real
+          configuration, unnumbered), Demos (unnumbered, split into its two
+          existing sections so egress and secrets stay visually apart). Each
+          list is only the walkable members of `order` — a phase left with
+          none (Secrets demos on a host with no demo secret stored) renders
+          nothing at all rather than an empty group heading over a 0. */}
       <nav aria-label="Setup steps" className="flex flex-col gap-5 lg:hidden xl:flex">
-        {PHASES.map((phase) => {
-          // Only the walkable members (see `order`). A phase left with none —
-          // Secrets demos on a host with no demo secret stored — renders
-          // nothing at all rather than an empty group heading with a 0/0.
-          const steps = phase.steps.filter((id) => order.includes(id));
-          if (steps.length === 0) return null;
-          // A phase made only of optional steps reads "all optional" instead of a
-          // progress counter: credentials is done-pinned false (honesty law in
-          // steps.ts), so "Your work" would show a counter that structurally can
-          // never reach N/N. Per-step dots still track real progress inside it.
-          const allOptional = steps.every((id) => OPTIONAL_STEPS.has(id));
-          const doneCount = steps.filter((id) => done[id]).length;
+        {(() => {
+          const item = (stepId: SetupStepId, num?: number) => {
+            const badge = badges[stepId];
+            const isDone = done[stepId];
+            // A4: see the compact rail above for what this means.
+            const isVisited = !isDone && badge.text === "Skipped";
+            return (
+              <RailItem
+                key={stepId}
+                stepId={stepId}
+                num={num}
+                active={current === stepId}
+                isDone={isDone}
+                isVisited={isVisited}
+                badge={badge}
+                onSelect={onSelect}
+                refusal={refuseNext?.(stepId)}
+              />
+            );
+          };
+          const required = REQUIRED_STEPS.filter((id) => order.includes(id));
+          const configSteps = CONFIG_STEPS.filter((id) => order.includes(id));
+          const egressDemos = DEMO_EGRESS_IDS.filter((id) => order.includes(id));
+          const secretsDemos = DEMO_SECRETS_IDS.filter((id) => order.includes(id));
+          const demoCount = egressDemos.length + secretsDemos.length;
 
           return (
-            <div key={phase.id}>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                  {phase.label}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {allOptional ? "all optional" : `${doneCount}/${steps.length}`}
-                </span>
-              </div>
+            <>
+              {required.length > 0 && (
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">Required</span>
+                    <span className="text-xs text-muted-foreground">· {required.length}</span>
+                  </div>
+                  <ul className="flex flex-col gap-1">
+                    {required.map((stepId, i) => item(stepId, i + 1))}
+                  </ul>
+                </div>
+              )}
 
-              <ul className="flex flex-col gap-1">
-                {steps.map((stepId) => {
-                  const badge = badges[stepId];
-                  const isDone = done[stepId];
-                  // A4: see the compact rail above for what this means.
-                  const isVisited = !isDone && badge.text === "Skipped";
-                  const active = current === stepId;
-                  const refusal = refuseNext?.(stepId);
-                  return (
-                    <li key={stepId}>
-                      <button
-                        onClick={() => onSelect(stepId)}
-                        aria-current={active ? "step" : undefined}
-                        disabled={!!refusal}
-                        title={refusal}
-                        className={cn(
-                          "group flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
-                          active
-                            ? "border-primary/50 bg-primary/10"
-                            : "border-transparent hover:bg-muted",
-                          refusal && "opacity-50",
-                        )}
-                      >
-                        <span
-                          data-visited={isVisited || undefined}
-                          className={cn(
-                            "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
-                            isDone
-                              ? "border-success bg-success text-success-foreground"
-                              : isVisited
-                                ? "border-border-strong bg-muted-foreground/40 text-muted-foreground"
-                                : cn("border-border-strong", TONE_DOT[badge.tone]),
-                          )}
-                        >
-                          {isDone && <Check className="size-3" aria-hidden />}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span
-                            className={cn(
-                              "block text-sm",
-                              active ? "text-foreground" : "text-foreground/90",
-                            )}
-                          >
-                            {STEP_LABEL[stepId]}
-                          </span>
-                          <span className={cn("block text-xs", TONE_DOT[badge.tone])}>
-                            {badge.text}
-                          </span>
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+              {configSteps.length > 0 && (
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Optional setup
+                    </span>
+                    <span className="text-xs text-muted-foreground">· {configSteps.length}</span>
+                  </div>
+                  <ul className="flex flex-col gap-1">{configSteps.map((stepId) => item(stepId))}</ul>
+                </div>
+              )}
+
+              {demoCount > 0 && (
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">Demos</span>
+                    <span className="text-xs text-muted-foreground">· {demoCount}</span>
+                  </div>
+                  {egressDemos.length > 0 && (
+                    <>
+                      <div className="label-eyebrow mb-1">
+                        Egress
+                      </div>
+                      <ul className="mb-2 flex flex-col gap-1">{egressDemos.map((stepId) => item(stepId))}</ul>
+                    </>
+                  )}
+                  {secretsDemos.length > 0 && (
+                    <>
+                      <div className="label-eyebrow mb-1">
+                        Secrets
+                      </div>
+                      <ul className="flex flex-col gap-1">{secretsDemos.map((stepId) => item(stepId))}</ul>
+                    </>
+                  )}
+                </div>
+              )}
+            </>
           );
-        })}
+        })()}
       </nav>
     </>
   );
