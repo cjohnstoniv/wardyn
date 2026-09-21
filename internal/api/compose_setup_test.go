@@ -340,6 +340,32 @@ func TestDeriveSetupItems_EgressWorkspaceInfoAlwaysSatisfiedAndCopiesDomains(t *
 	}
 }
 
+// A workspace's scanned egress domain already present in the proposal's
+// AllowedDomains (preflight.go widens the spec with it before grading/
+// checklisting, matching launch's own unionRunEgress) must union to ZERO new
+// domains — the row's Detail must read the "nothing more needed" default
+// rather than re-describing a domain the proposal already allows.
+func TestDeriveSetupItems_EgressWorkspaceInfoNoDeltaWhenAlreadyAllowed(t *testing.T) {
+	ws := workspaceWithProfile(t, "registry.npmjs.org")
+	srv := newSetupTestServer(ws)
+	ro := true
+	spec := types.RunPolicySpec{
+		AllowedDomains:  []string{"registry.npmjs.org"},
+		WorkspaceMounts: []types.WorkspaceMount{{Source: workspaceWithProfilePath, Target: "/home/agent/work", ReadOnly: &ro}},
+	}
+	run := composer.RunInput{Agent: "claude-code", Repo: "local:proj"}
+
+	items := srv.deriveSetupItems(context.Background(), "", run, spec, secretsWith(), nil)
+	got, ok := findItem(items, "egress:workspace")
+	if !ok || got.Status != "satisfied" {
+		t.Fatalf("egress:workspace row = %+v (ok=%v), want satisfied", got, ok)
+	}
+	if !strings.Contains(got.Detail, "no additional egress needed") {
+		t.Errorf("egress:workspace Detail = %q, want \"no additional egress needed\" — "+
+			"the workspace's scanned host is already in AllowedDomains, so nothing new unions in", got.Detail)
+	}
+}
+
 // No referenced workspaces => no informational row at all (nothing to union).
 func TestDeriveSetupItems_EgressWorkspaceInfoAbsentWithNoWorkspaces(t *testing.T) {
 	srv := newSetupTestServer()
