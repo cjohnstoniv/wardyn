@@ -294,6 +294,18 @@ re-running the PATCH, or that image merges unscanned.
 `scripts/test-claims-match-code.sh` (C6) fails if this list and that matrix drift
 apart.
 
+**#141 (`agent-vscode`/`agent-novnc` join the publish matrix) is exactly this
+case, and it is not yet done.** This document names `trivy (agent-vscode)` and
+`trivy (agent-novnc)` as required contexts, but the live branch protection
+still lists only the prior five — the PATCH above has to be re-run by the
+owner (never by an agent) before either context is actually required, or both
+merge unscanned in the meantime. Two more owner steps belong with it, both
+after the FIRST real tag that runs `images-ui-sandbox`: confirm
+`ghcr.io/cjohnstoniv/agent-vscode` and `ghcr.io/cjohnstoniv/agent-novnc` are
+PUBLIC packages (a newly-created GHCR package can default to private, which
+silently breaks every documented pull), and re-check this section's PATCH
+body still matches `ci.yml`'s actual `trivy` matrix at that point.
+
 Read it back with
 `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`.
 A matrix job reports one context per cell as `<job-id> (<matrix-value>)`, which is why

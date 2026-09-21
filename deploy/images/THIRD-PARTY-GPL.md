@@ -9,9 +9,10 @@ corresponding-source obligation to whoever conveys them — including you, if yo
 mirror these images into a registry other people pull from. This file is that
 offer, and it is what you would pass on.
 
-None of these packages are modified by Wardyn. Every one is the unmodified
-distribution package, so the corresponding source is the distribution's own,
-obtainable from:
+None of these packages are modified by Wardyn. Most are the unmodified
+distribution package; a few are an unmodified upstream release tarball or an
+npm package bundled by the vendor tool that ships it, named per-entry where
+that applies. The corresponding source is the applicable one below:
 
 - **Debian** (`debian:bookworm-slim`, `node:24-bookworm-slim`, and the
   `gcr.io/distroless/static-debian12` base): `https://snapshot.debian.org`
@@ -22,6 +23,15 @@ obtainable from:
   at the matching aport version.
 - **asciinema** (installed by Wardyn's own Dockerfile, not inherited):
   `https://github.com/asciinema/asciinema` at the version below.
+- **npm packages bundled inside a vendor tool's own release tarball**
+  (`agent-vscode`'s code-server bundles `jschardet`, for example): the
+  package's own entry at `https://registry.npmjs.org/<name>`, or the
+  upstream repository linked from that page. Wardyn's Dockerfile installs
+  the vendor tarball whole; it does not install these individually.
+- **Source tarballs a Dockerfile installs directly, outside any package
+  manager** (`agent-novnc`'s `websockify`, for instance): syft cannot see
+  these, so they are listed by hand per image below, with the exact tagged
+  archive URL Wardyn's own Dockerfile pins.
 
 This offer stands while an image remains pullable and for three years after
 the last copy of it is conveyed (GPLv3 s6(b)); withdrawing a tag starts that
@@ -332,13 +342,15 @@ image digests. Regenerate whenever a base image changes.
 | `util-linux` | 2.38.1-5+deb12u3 | BSD-3-clause, BSD-4-clause, BSLA, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, MIT, public-domain | deb |
 | `util-linux-extra` | 2.38.1-5+deb12u3 | BSD-3-clause, BSD-4-clause, BSLA, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, MIT, public-domain | deb |
 
-## `ghcr.io/cjohnstoniv/agent-novnc:0.7.8`
+## `ghcr.io/cjohnstoniv/agent-novnc` (not yet published)
 
-_Scanned before publication, from `wardyn/agent-novnc:local` — the identical build
-recipe this image publishes from. No published digest exists yet to scan; this
-row will be re-scanned from the pushed digest once one does._
+_Scanned before publication, from `wardyn/agent-novnc:local` built at commit
+`a124597d` — the same recipe this image will publish from once it
+lands, though apt package versions can float between rebuilds of that
+recipe. No published digest exists yet to scan; this section will be
+replaced by a digest scan of the real tag once one exists._
 
-153 package(s) carrying a GPL or LGPL term.
+154 package(s) carrying a GPL or LGPL term.
 
 | package | version | licence | type |
 |---|---|---|---|
@@ -496,11 +508,21 @@ row will be re-scanned from the pushed digest once one does._
 | `util-linux-extra` | 2.38.1-5+deb12u3 | BSD-3-clause, BSD-4-clause, BSLA, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, MIT, public-domain | deb |
 | `x11vnc` | 0.9.16-9 | GPL-2, GPL-2.0 | deb |
 
-## `ghcr.io/cjohnstoniv/agent-vscode:0.7.8`
+_Also conveyed, not visible to the SBOM scan (installed from a source
+tarball with no package manifest for syft to read — see this script's
+MANUAL_ENTRIES):_
 
-_Scanned before publication, from `wardyn/agent-vscode:local` — the identical build
-recipe this image publishes from. No published digest exists yet to scan; this
-row will be re-scanned from the pushed digest once one does._
+| package | version | licence | source |
+|---|---|---|---|
+| `websockify` | 0.13.0 | LGPL-3.0 | `https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz` |
+
+## `ghcr.io/cjohnstoniv/agent-vscode` (not yet published)
+
+_Scanned before publication, from `wardyn/agent-vscode:local` built at commit
+`a124597d` — the same recipe this image will publish from once it
+lands, though apt package versions can float between rebuilds of that
+recipe. No published digest exists yet to scan; this section will be
+replaced by a digest scan of the real tag once one exists._
 
 97 package(s) carrying a GPL or LGPL term.
 
@@ -629,6 +651,26 @@ pullable. Conveyance has ceased for all of them; each offer stands for three
 years after the last conveyance. This section is frozen text — the artifacts it
 covers no longer exist to re-scan — and must be retained until every window
 below has lapsed.
+
+### Intermediate tags 0.6.6 through 0.7.7, not individually re-scanned (added 2026-09-21)
+
+`wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli` and `agent-aws-sso`
+were tagged and published at every one of 0.6.6 through 0.7.7 (all still
+pullable — `gh api .../packages/container/agent-base/versions` lists them),
+but this file was not regenerated for any of them; the last full scan before
+the one in the body above (tag 0.7.8) was 0.6.6, recorded at commit
+`9eaeca03` (`deploy/images/THIRD-PARTY-GPL.md` at that revision — `git show
+9eaeca03:deploy/images/THIRD-PARTY-GPL.md`). Comparing that 0.6.6 snapshot
+against the current 0.7.8 scan above, package-name-for-package-name, per
+image: no component was dropped between the two, and the only version-string
+changes are `libevent-core-2.1-7` (`agent-base`/`agent-codex-cli`/
+`agent-aws-sso`) gaining a `+deb12u1` point release, `ca-certificates`
+appearing in `wardynd`/`wardyn-proxy` (it was not flagged GPL/LGPL in the
+0.6.6 scan), and `agent-aws-sso` additionally carrying `libevent-core-2.1-7`
+and `libutempter0`. The corresponding-source obligation for 0.6.6 through
+0.7.7 is discharged the same way as 0.7.8's: `https://snapshot.debian.org`
+pinned to each package's own version, which this note and the 0.6.6 commit
+above are enough to reconstruct even though no per-tag table was generated.
 
 ### Withdrawn release tags of the current images (offer stands until at least 2029-08-30)
 

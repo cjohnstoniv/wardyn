@@ -342,17 +342,22 @@ jobs:
   # no way to wait on agent-base alone; wardynd/wardyn-proxy/agent-codex-cli/
   # agent-aws-sso finish alongside it).
   #
-  # BASE_IMAGE is the JUST-PUSHED ghcr ref at the SAME release tag — not
-  # `:local` (nothing `images` built is loaded into this job's runner; separate
-  # jobs are separate VMs with no shared docker daemon) and not agent-base's
-  # own `:latest` float (pinning the exact tag means a vscode/novnc pull can
-  # never silently resolve an OLDER agent-base than the one this release actually
-  # cut). The consequence: a `workflow_dispatch -f dry_run=true` run off a
-  # branch — where `images` above pushes nothing — has no agent-base at this
-  # tag to pull, and this job's build fails closed rather than quietly building
-  # against a stale `:latest`. Rehearsing this job specifically needs a ref
-  # that already exists at `ghcr.io/cjohnstoniv/agent-base:<tag>` — e.g.
-  # re-dispatching against an existing release tag, not a fresh branch name.
+  # BASE_IMAGE, on a real tag push, is the JUST-PUSHED ghcr ref at the SAME
+  # release tag — not `:local` (nothing `images` built is loaded into this
+  # job's runner; separate jobs are separate VMs with no shared docker
+  # daemon), and not agent-base's own `:latest` float there, because pinning
+  # the exact tag means a real vscode/novnc pull can never silently resolve
+  # an OLDER agent-base than the one this release actually cut.
+  #
+  # Under `workflow_dispatch -f dry_run=true`, though, `images` above pushes
+  # nothing (`push: false`), so the exact-tag ref never exists to pull — a
+  # dispatch off a branch has no `agent-base:<branch-name>` and a dispatch off
+  # an existing release tag still has no ref for a tag this job predates. The
+  # "Compute the base-image ref" step below switches to agent-base's real,
+  # always-pullable `:latest` float ONLY under dry_run, so the rehearsal
+  # actually builds these two images end to end instead of failing at the
+  # FROM pull; it does not thereby prove the exact-tag pin itself, which only
+  # a real tag push exercises.
   images-ui-sandbox:
     name: build, push, sign (${{ matrix.name }})
     needs: images
@@ -401,6 +406,19 @@ jobs:
           IMAGE_NAME: ghcr.io/cjohnstoniv/${{ matrix.name }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: echo "tags=${IMAGE_NAME}:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+      # See the job comment above: the exact release tag only exists to pull
+      # once `images` has actually pushed it, which a dry run never does.
+      - name: Compute the base-image ref
+        id: base
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "ref=ghcr.io/cjohnstoniv/agent-base:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=ghcr.io/cjohnstoniv/agent-base:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and push
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
@@ -411,7 +429,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: |
-            BASE_IMAGE=ghcr.io/cjohnstoniv/agent-base:${{ steps.tag.outputs.tag }}
+            BASE_IMAGE=${{ steps.base.outputs.ref }}
           tags: ${{ steps.tags.outputs.tags }}
       - name: Sign the pushed image (keyless, by digest)
         if: inputs.dry_run != true

@@ -31,12 +31,16 @@ cd "$(dirname "$0")/.."
 # Matched on the REF, one per line. Both entries are locally BUILT images, so no
 # upstream digest exists to pin them to — a digest would have to be recomputed on
 # every rebuild of the base, which is neither stable nor meaningful.
-#   wardyn/agent-claude-code:local  deploy/images/{full,vscode}/Dockerfile's base
-#   wardyn/agent-base:local         deploy/images/novnc/Dockerfile's base — the
-#                                   noVNC image is FROM agent-base deliberately
-#                                   (an X stack needs no language runtime), which
-#                                   is why it needs its own entry rather than
-#                                   riding the one above.
+#   wardyn/agent-claude-code:local  deploy/images/full/Dockerfile's base, and
+#                                   deploy/images/vscode/Dockerfile's OPTIONAL
+#                                   override (BASE_IMAGE=wardyn/agent-claude-code:local,
+#                                   for a developer checkout that wants `claude`
+#                                   in the vscode terminal) — never its default.
+#   wardyn/agent-base:local         deploy/images/vscode/Dockerfile's AND
+#                                   deploy/images/novnc/Dockerfile's default
+#                                   base — neither a code-server layer nor an X
+#                                   stack needs a vendor CLI, so both default
+#                                   away from it deliberately (#140).
 ALLOWLIST_REFS="wardyn/agent-claude-code:local
 wardyn/agent-base:local"
 fail=0
@@ -209,8 +213,13 @@ fi
 # coverage check above.
 GPL_OFFER=deploy/images/THIRD-PARTY-GPL.md
 if [ -f "$RELEASE_WF" ] && [ -f "$GPL_OFFER" ]; then
-  offered=$(grep -oE '^## `ghcr\.io/cjohnstoniv/[a-z0-9-]+:' "$GPL_OFFER" \
-            | sed -E 's|^## `ghcr\.io/cjohnstoniv/||; s/:$//' | sort -u)
+  # No trailing `:` or backtick anchor: a section header is either
+  # "`ghcr.io/cjohnstoniv/<img>:<tag>`" (published) or
+  # "`ghcr.io/cjohnstoniv/<img>` (not yet published)" (a bootstrap entry, see
+  # gpl-source-offer.sh) — [a-z0-9-]+ already stops at the first char outside
+  # the image-name alphabet, so it matches both without a suffix to strip.
+  offered=$(grep -oE '^## `ghcr\.io/cjohnstoniv/[a-z0-9-]+' "$GPL_OFFER" \
+            | sed -E 's|^## `ghcr\.io/cjohnstoniv/||' | sort -u)
   missing=$(comm -23 <(printf '%s\n' "$published") <(printf '%s\n' "$offered"))
   if [ -n "$missing" ]; then
     echo "FAIL: image(s) published by $RELEASE_WF have no GPL/LGPL source-offer section in $GPL_OFFER. Regenerate it with scripts/gpl-source-offer.sh (see its header for the bootstrap path a first-time publish needs):" >&2

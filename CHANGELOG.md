@@ -8,6 +8,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
+  publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
+  publishes both, each built `FROM` the `agent-base` image the same run just
+  pushed, never from the unpublished `agent-claude-code`; `ci.yml`'s `trivy`
+  matrix scans both. Both Dockerfiles gained the licence-file `COPY`s a
+  published image requires, and `deploy/images/THIRD-PARTY-GPL.md` now covers
+  both, including `agent-novnc`'s `websockify` (installed from a source
+  tarball, so no package-manager scan ever saw it). The first real publish
+  happens at the next tagged release — this lands the pipeline, not a pushed
+  image.
+
 ### Security
 
 - **A handler that builds a 5xx body's `(status, message)` pair and hands it to a helper could still
