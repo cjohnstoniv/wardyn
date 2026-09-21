@@ -148,6 +148,23 @@ export const PHASES: PhaseDef[] = [
 // (labels, headings, badges) is exhaustive over.
 export const STEP_ORDER: SetupStepId[] = PHASES.flatMap((p) => p.steps);
 
+// #213 — three categories, not two. Four steps BLOCK a run (numbered "Step N
+// of 4" in the shell); three more are real configuration that blocks nothing
+// (Secrets / Workspace providers / Workspaces); the rest are demos that teach
+// a guarantee and change nothing. Collapsing the last two into one
+// undifferentiated "optional" list is what put Secrets behind a "Start the
+// demo" button (issue #213) — the rail, Review, and the shell all key off
+// these two lists (plus DEMO_STEP_IDS above) instead of the old flat
+// OPTIONAL_STEPS alone.
+export const REQUIRED_STEPS: SetupStepId[] = ["environment", "people", "corp_network", "review"];
+export const CONFIG_STEPS: SetupStepId[] = ["integrations", "providers", "workspaces"];
+
+// The two demo sections, exported for the rail/Review to render as separate
+// subgroups (egress vs secrets) rather than one flat "Demos" list — the same
+// `Demo.section` split PHASES above already keys its two demo phases on.
+export const DEMO_EGRESS_IDS: DemoStepId[] = demoStepsIn("egress");
+export const DEMO_SECRETS_IDS: DemoStepId[] = demoStepsIn("secrets");
+
 // THE walk order for a given readiness. A demo whose precondition isn't met
 // (`needsModel` without a connected model, `needsSecret` without that secret
 // stored) is DROPPED, because its Start is closed: offering the step would put
@@ -174,29 +191,39 @@ export function stepOrder(status: SetupStatus | null): SetupStepId[] {
   return STEP_ORDER.filter((id) => !unmet.has(id));
 }
 
+const DEMO_ID_SET = new Set<string>(DEMO_STEP_IDS);
+
+// The honest "N optional setup steps and M demos follow" counts the setup
+// shell's counter and rail render (#213). `config` is a true constant
+// (CONFIG_STEPS never drops a member); `demos` is NOT — stepOrder(status)
+// drops a demo whose needsModel/needsSecret precondition is unmet, so a host
+// with more connected walks more than the ten a fresh install sees (the
+// prototype README's own open question #3). Live-derived rather than a
+// baked-in "10" so this never goes stale the way a hand-kept count would.
+export function optionalStepCounts(status: SetupStatus | null): { config: number; demos: number } {
+  return {
+    config: CONFIG_STEPS.length,
+    demos: stepOrder(status).filter((id) => DEMO_ID_SET.has(id)).length,
+  };
+}
+
 // Steps that render an "Optional" chip in the shell (everything outside the
 // three Essentials and two Finish steps). Exported so the layout and its test
 // share one list instead of each hardcoding the same membership. Keyed to the
 // FULL STEP_ORDER, not the walked one: it's only ever asked `.has(current)`
 // about a step that is on screen, so a superset costs nothing and one list
 // beats a second status-aware selector.
-export const OPTIONAL_STEPS = new Set<SetupStepId>([
-  // Corporate network is NOT optional (see corpNetworkGate below):
-  // proof of internet access gates Next, on the theory that everything after
-  // it — a model provider, a git host — looks broken when it's really the
-  // network that's blocked. Only its own honest bypasses (no_runner, not_run,
-  // timed_out) move you past it without proof.
-  // Integrations is OPTIONAL — every category it covers (model/harness, SCM
-  // host) is itself skippable; Wardyn runs with none of them connected. The
-  // barrier (Environment) is the sole hard requirement.
-  "integrations",
-  ...DEMO_STEP_IDS,
-  // Providers is optional for the SAME reason `integrations` is: legacy open
-  // mode means nothing downstream is impossible without a provider row —
-  // every host with a stored credential still clones, as today.
-  "providers",
-  "workspaces",
-]);
+// Corporate network is NOT optional (see corpNetworkGate below): proof of
+// internet access gates Next, on the theory that everything after it — a
+// model provider, a git host — looks broken when it's really the network
+// that's blocked. Only its own honest bypasses (no_runner, not_run,
+// timed_out) move you past it without proof. Integrations/Providers/
+// Workspaces are OPTIONAL — every category they cover is itself skippable;
+// Wardyn runs with none of them connected. The barrier (Environment) plus
+// People/Network/Review are the only hard requirements (REQUIRED_STEPS
+// above) — built from CONFIG_STEPS + DEMO_STEP_IDS so the two lists stay the
+// single source of truth for what's in this set.
+export const OPTIONAL_STEPS = new Set<SetupStepId>([...CONFIG_STEPS, ...DEMO_STEP_IDS]);
 
 // Honest per-step badges (B4) — reflect reality, never a false "Done".
 // stepBadges/stepDone carry one design delta (see the workspaces case below).
