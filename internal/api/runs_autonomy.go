@@ -56,16 +56,32 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	if level == "" {
 		return res, nil, true
 	}
-	name := ceiling.Profile.Name
-	// Rendered ONCE and passed down, so the refusals and the derived-hold
-	// warning cannot drift into naming different causes for one resolution.
-	bound := autonomyBoundList(boundBy)
+	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy), ceiling.Profile.Name)
+	return res, warnings, ok
+}
+
+// autonomyLadder enforces a resolved level on the request: the refusals, then
+// autonomyDerive's L1 half. Split from resolveRunAutonomy so that one owns the
+// inputs (the posture, the fold) and this one owns the decisions.
+//
+// `bound` arrives rendered ONCE (autonomyBoundList), so the refusals and the
+// derived-hold warning cannot drift into naming different causes for one
+// resolution.
+func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *createRunRequest,
+	level types.AutonomyLevel, bound, name string,
+) ([]string, bool) {
+	// requestIsInteractive, never req.Interactive: a request with no task
+	// coerces to interactive inside decodeAndValidateCreateRun, and preflight
+	// never runs that coercion at all — so the raw field would refuse runs that
+	// are in fact interactive, and would refuse them on one door only.
+	interactive := requestIsInteractive(*req)
 	// The ladder, expressed as the LOWEST level that permits each capability
 	// rather than one arm per rung. Separate arms are how a hole gets shipped:
 	// L0 is the most supervised rung, so anything L1 refuses it must refuse
 	// too, and two independently written arms drift the moment one grows a case.
 	//
 	//	task_mode=exec    L3   the door that routes around every other gate
+	//	shell boot seed   L3   exec's reach, arriving through an interactive run
 	//	seed_auto_tools   L2   the pre-attach span runs before any human is at the pane
 	//	non-interactive   L1   unattended at all
 	if level.Rank() < types.AutonomyL3.Rank() && req.TaskMode == "exec" {
@@ -73,39 +89,49 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 			"`task_mode=exec` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.",
 			name, level, bound))
-		return res, nil, false
+		return nil, false
+	}
+	// The shell boot seed ranks WITH exec, not with seed_auto_tools, because it
+	// does what exec does: with interactive_start unset or `shell`, the image
+	// runs the task as `bash -lc` at sandbox boot, as the agent user, before
+	// anyone attaches — no agent, no tool approvals. Ranked any lower, a rung
+	// that refuses `task_mode=exec` would hand the same command to anyone who
+	// added `"interactive": true`, and the exec row above would be decoration.
+	// The agent form (`claude "$seed"`) is left alone: it parks its own
+	// approval prompt until a human joins, unless seed_auto_tools says otherwise.
+	if level.Rank() < types.AutonomyL3.Rank() && req.InteractiveStart != "agent" && interactiveBootSeed(interactive, req.Task) != "" {
+		s.denyMemberField(w, r, "runs.interactive_start", "governance_profile", fmt.Sprintf(
+			"a startup command is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
+				"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — "+
+				"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.",
+			name, level, bound))
+		return nil, false
 	}
 	if level.Rank() < types.AutonomyL2.Rank() && req.SeedAutoTools {
 		s.denyMemberField(w, r, "runs.seed_auto_tools", "governance_profile", fmt.Sprintf(
 			"`seed_auto_tools` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and the pre-attach seed runs before any human is at the pane. Launch without it.",
 			name, level, bound))
-		return res, nil, false
+		return nil, false
 	}
-	// requestIsInteractive, never req.Interactive: a request with no task
-	// coerces to interactive inside decodeAndValidateCreateRun, and preflight
-	// never runs that coercion at all — so the raw field would refuse runs that
-	// are in fact interactive, and would refuse them on one door only.
-	interactive := requestIsInteractive(*req)
 	if level.Rank() < types.AutonomyL1.Rank() && !interactive {
 		s.denyMemberField(w, r, "runs.interactive", "governance_profile", fmt.Sprintf(
 			"unattended runs are not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"which requires a human at the pane. Launch with `--interactive`, or narrow the run's egress, secrets or confinement.",
 			name, level, bound))
-		return res, nil, false
+		return nil, false
 	}
-	warnings, ok := s.autonomyDerive(w, r, req, level, bound, name, interactive)
-	return res, warnings, ok
+	return s.autonomyDerive(w, r, req, level, bound, name, interactive)
 }
 
 // autonomyDerive is the gate's L1 half — the rung that PERMITS an unattended
 // run but not an unsupervised one — plus the one warning that is true at every
 // rung. Split from the refusals above so each function holds one decision (and
-// so resolveRunAutonomy stays under the complexity gate).
+// so autonomyLadder stays under the complexity gate).
 //
 // Returns ok=false once it has written its 403, and otherwise the 201
 // warnings. `bound` arrives already rendered (autonomyBoundList) so this half
-// and the refusals above name the same causes by construction.
+// and autonomyLadder's refusals name the same causes by construction.
 func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *createRunRequest,
 	level types.AutonomyLevel, bound, name string, interactive bool,
 ) ([]string, bool) {

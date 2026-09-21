@@ -89,8 +89,8 @@ func autonomyCreateAudit(t *testing.T, st *govEscapeStore, audit *recRecorder) m
 // ─── the ladder table ─────────────────────────────────────────────────────────
 
 // TestRunAutonomyLadder is the gate's behaviour table: four levels against the
-// six request shapes the rungs are defined in terms of, driven end to end
-// through POST /runs as an assigned member.
+// request shapes the rungs are defined in terms of, driven end to end through
+// POST /runs as an assigned member.
 //
 // Every cell is a decision that could have gone the other way, and two
 // families of them are the reason the table is exhaustive rather than
@@ -127,12 +127,23 @@ func TestRunAutonomyLadder(t *testing.T) {
 	}{
 		{
 			name: "interactive",
-			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`,
+			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"interactive_start":"agent"}`,
 			// Permitted at every rung, and NEVER derived to hold: an
 			// interactive run refuses an explicit hold by design and dispatch
 			// writes WARDYN_TOOL_APPROVALS for non-interactive runs alone, so a
-			// derived one there is a field accepted and thrown away.
+			// derived one there is a field accepted and thrown away. The seed
+			// goes to the agent as a prompt, which parks its own approval
+			// prompt until a human attaches.
 			want: [4]want{ok(""), ok(""), ok(""), ok("")},
+		},
+		{
+			name: "shell boot seed",
+			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`,
+			// interactive_start unset: the image runs the task as `bash -lc`
+			// at boot, before anyone attaches — exec's reach, so exec's rung.
+			// Ranked with seed_auto_tools instead, L2 would refuse
+			// `task_mode=exec` and launch the same command here.
+			want: [4]want{denied("runs.interactive_start"), denied("runs.interactive_start"), denied("runs.interactive_start"), ok("")},
 		},
 		{
 			name: "hold",
@@ -150,7 +161,7 @@ func TestRunAutonomyLadder(t *testing.T) {
 		},
 		{
 			name: "seed_auto_tools",
-			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"seed_auto_tools":true}`,
+			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"interactive_start":"agent","seed_auto_tools":true}`,
 			// Interactive, so only the seed can refuse it — the pre-attach span
 			// runs skip-permissions with no toolgate and no human at the pane.
 			want: [4]want{denied("runs.seed_auto_tools"), denied("runs.seed_auto_tools"), ok(""), ok("")},
@@ -339,7 +350,7 @@ func TestAutonomyBoundByNamesEveryTiedCause(t *testing.T) {
 	// govEscapeFixture's posture is sealed / none / CC2; exec is refused at
 	// every rung below L3, which is what puts the clause in front of a member.
 	const execBody = `{"agent":"claude-code","task":"echo hi","confinement_class":"CC2","task_mode":"exec"}`
-	const okBody = `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`
+	const okBody = `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"interactive_start":"agent"}`
 	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
 
 	for _, tc := range []struct {
@@ -824,7 +835,7 @@ func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
 	// refusing what is unattended, not bricking the profile.
 	srv2, st2, audit2 := govEscapeFixture(t, autonomyCapStore(p))
 	c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t),
-		`{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`)
+		`{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"interactive_start":"agent"}`)
 	if c.Code != http.StatusCreated {
 		t.Fatalf("an interactive run = %d, want 201: %s", c.Code, c.Body.String())
 	}

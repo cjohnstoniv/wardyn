@@ -57,7 +57,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   grant; else `none`) and the ENFORCED confinement class — folds to the minimum level the rubric
   permits. `L0` refuses an unattended run and seeded auto tools; `L1` additionally refuses
   `task_mode=exec` and derives `tool_approvals=hold` on an unattended run, refusing it outright for
-  an agent with no tool-approval lane; `L2` refuses `task_mode=exec`; `L3` refuses nothing.
+  an agent with no tool-approval lane; `L2` refuses `task_mode=exec`; `L3` refuses nothing. An
+  interactive run's STARTUP COMMAND — a task with `interactive_start` unset or `shell`, which the
+  image runs as `bash -lc` at sandbox boot before anyone attaches — ranks with `task_mode=exec`
+  and is refused below `L3` (target `runs.interactive_start`); `interactive_start=agent`, which
+  hands the task to the agent as its first prompt under its own approval prompt, is unaffected.
   Refusals reuse the existing member 403 and its `governance_profile` `authz.denied` row — the
   closed reason enum is unchanged. The level is frozen on `agent_runs.autonomy_level`; the level,
   the posture and `bound_by` — EVERY rubric field that tied at that level, not the first in a
