@@ -252,7 +252,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.auditRunFilesFailure(r, id, err)
 		if errors.Is(err, runner.ErrExecStreamUnsupported) {
-			writeError(w, http.StatusNotImplemented, runFilesUnsupportedMsg+" ("+err.Error()+")")
+			writeError(w, http.StatusNotImplemented, loggedMsg(ctx, runFilesUnsupportedMsg, err))
 			return
 		}
 		writeServerError(w, r, "read workspace files", err)

@@ -6,6 +6,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import {
+  EMAIL_DOMAIN_REFUSAL,
+  UNREACHABLE_ERROR,
+} from "../src/app/components/screens/sign-in";
 
 // Auth / sign-in lane.
 //
@@ -237,6 +241,47 @@ test.describe("auth / sign-in gate", () => {
     await expect(signInToken(page)).toBeVisible();
     await expect(runsNav(page)).toHaveCount(0);
     expect(await readToken(page)).toBeNull();
+  });
+});
+
+// #212 (design/first-contact-prototype) — a sign-in refusal must not
+// advertise a working credential or hand an unauthenticated reader an
+// operator's remediation. These pin the words the person actually reads,
+// importing the constants sign-in.tsx exports rather than duplicating the
+// literal.
+test.describe("sign-in refusals name Wardyn and point this reader at what they can do (#212)", () => {
+  test("the admin-token field starts empty, with no working demo credential in the placeholder", async ({ page }) => {
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    const field = signInToken(page);
+    await expect(field).toBeVisible();
+    await expect(field).not.toHaveAttribute("placeholder");
+  });
+
+  test("an unreachable daemon names Wardyn and names the daemon to check, not a bare 'control plane' dead end", async ({ page }) => {
+    await clearTokenInit(page);
+    // Simulate a network failure on the token-probe request the same way a
+    // daemon that never answers would: the fetch itself never resolves ok.
+    await page.route("**/api/v1/runs?limit=1", (route) => route.abort());
+    await page.goto("/");
+
+    await signInToken(page).fill("sometoken");
+    await useTokenButton(page).click();
+
+    const alert = page.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveText(UNREACHABLE_ERROR);
+  });
+
+  test("the email_domain refusal points a locked-out reader at their admin, not an env var they cannot reach", async ({ page }) => {
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=email_domain");
+
+    const alert = page.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveText(EMAIL_DOMAIN_REFUSAL);
+    await expect(alert).not.toContainText("WARDYN_OIDC_EMAIL_DOMAINS");
   });
 });
 

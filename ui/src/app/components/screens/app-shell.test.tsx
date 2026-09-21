@@ -46,6 +46,8 @@ function renderMobileNav(role: Role = "admin") {
           memberMode: false,
           memberModeNoCredential: false,
           memberPreviewAvailable: false,
+          runner: "",
+          networkPolicy: "",
         }}
       />
     </MemoryRouter>,
@@ -549,6 +551,8 @@ function renderTopBar(role: Role) {
             memberMode: false,
             memberModeNoCredential: false,
             memberPreviewAvailable: false,
+            runner: "",
+            networkPolicy: "",
           }}
           pendingApprovals={0}
           attentionCount={0}
