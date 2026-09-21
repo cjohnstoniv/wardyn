@@ -329,4 +329,56 @@ describe("step-bodies.tsx — smoke", () => {
   // been onboarded, and its lede still advertised the deleted AI Run Composer.
   // Review is the funnel's last step now and launching is the top bar's job.
 
+  // #161: grade and blocking answer different questions — setup-gate.ts's
+  // setupGateActive reads only `blocking`. Partition on it first; grade stays
+  // visible as the row's own chip (CHECK_ICON/CHECK_COLOR keyed on status).
+  function reviewStatus(checks: SetupStatus["checks"]) {
+    return baseStatus({ checks });
+  }
+  function renderReview(status: SetupStatus) {
+    render(
+      <ReviewStep
+        status={status}
+        readiness={deriveReadiness(status)}
+        onRecheck={vi.fn()}
+        rechecking={false}
+        lastCheckedAt={null}
+        onJump={vi.fn()}
+      />,
+    );
+  }
+
+  it("#161: a blocking warn lands under 'Blocking'; a non-blocking fail lands under 'Worth a look'", () => {
+    renderReview(
+      reviewStatus([
+        { id: "sso_rbac", label: "SSO role mapping", status: "warn", blocking: true },
+        { id: "kvm", label: "/dev/kvm", status: "fail", detail: "missing" },
+      ]),
+    );
+    expect(screen.getByText("Blocking").closest("section")).toHaveTextContent("SSO role mapping");
+    expect(screen.getByText("Worth a look").closest("section")).toHaveTextContent("/dev/kvm");
+  });
+
+  it("#161: a blocking fail lands under 'Blocking', not by grade alone", () => {
+    renderReview(reviewStatus([{ id: "runner", label: "Sandbox runner", status: "fail", blocking: true }]));
+    expect(screen.getByText("Blocking").closest("section")).toHaveTextContent("Sandbox runner");
+    expect(screen.queryByText("Worth a look")).not.toBeInTheDocument();
+  });
+
+  it("#161: all-ready checks render only the 'Ready' group", () => {
+    renderReview(reviewStatus([{ id: "gvisor", label: "gVisor runtime", status: "ok" }]));
+    expect(screen.getByText("Ready").closest("section")).toHaveTextContent("gVisor runtime");
+    expect(screen.queryByText("Blocking")).not.toBeInTheDocument();
+    expect(screen.queryByText("Worth a look")).not.toBeInTheDocument();
+    expect(screen.queryByText("Optional — not blocking")).not.toBeInTheDocument();
+  });
+
+  it("#161: no actionable checks renders none of the four groups", () => {
+    renderReview(reviewStatus([]));
+    expect(screen.queryByText("Blocking")).not.toBeInTheDocument();
+    expect(screen.queryByText("Worth a look")).not.toBeInTheDocument();
+    expect(screen.queryByText("Optional — not blocking")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+  });
+
 });
