@@ -27,8 +27,12 @@
 //     place that can tell "the client said false" from "the client said
 //     nothing" — see userDriveGrantRequest.Enabled.
 //
-// Every route is super-only, not securityOps; the tier argument is written at
-// the mountUserDriveRoutes call that decides it (routes.go).
+// Four routes stay super-only: the ones that name a host path (host_root) or
+// a cluster storage class — creating, listing, updating, and removing the
+// drive itself. The other three — granting an allocation, revoking one, and
+// previewing whose drive resolves — moved to securityOps in 0.8 (issue #168):
+// none of the three names a host path. The tier argument for each route is
+// written at the mountUserDriveRoutes call that decides it (routes.go).
 package api
 
 import (
@@ -46,26 +50,33 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// mountUserDriveRoutes registers the /drives family — SEVEN routes, all on the
-// SUPER-admin tier.
+// mountUserDriveRoutes registers the /drives family — SEVEN routes split
+// across two admin tiers. Four name a HOST PATH (host_root) or a cluster
+// storage class and stay on operatorOnly (SUPER): creating, listing,
+// updating, and removing the drive itself. The other three — granting an
+// allocation, revoking one, and previewing whose drive resolves — sit on
+// securityOps: a security admin already reaches drives through the
+// DenyUserDrive door on a governance profile, and none of the three names a
+// host path.
 //
-// The parameter is spelled `operatorOnly` because that is the group routes.go
-// hands it and the tier these were born on; the group a mount function receives
-// is decided at the call site, never by this parameter's name, and
-// authz_test.go's chi.Walk matrix is what enforces the classification.
+// The parameters are spelled `operatorOnly`/`securityOps` because those are
+// the groups routes.go hands them and the tier each route sits on; which
+// group a route lives in is decided at the call site, never by a parameter's
+// name, and authz_test.go's chi.Walk matrix is what enforces the
+// classification.
 //
 // Registered UNCONDITIONALLY, with no `if s.cfg.Store != nil` arm: a route that
 // appears only on some deployments is a route the authorization matrix has to
 // arrange for, and the every-conditional-route-mounted doctrine exists so it
 // never has to.
-func (s *Server) mountUserDriveRoutes(operatorOnly chi.Router) {
+func (s *Server) mountUserDriveRoutes(operatorOnly, securityOps chi.Router) {
 	operatorOnly.Get("/drives", s.handleGetUserDrives)
 	operatorOnly.Post("/drives", s.handleCreateUserDrive)
 	operatorOnly.Put("/drives/{id}", s.handleUpdateUserDrive)
 	operatorOnly.Delete("/drives/{id}", s.handleDeleteUserDrive)
-	operatorOnly.Post("/drives/grants", s.handleUpsertUserDriveGrant)
-	operatorOnly.Delete("/drives/grants/{id}", s.handleDeleteUserDriveGrant)
-	operatorOnly.Post("/drives/preview", s.handlePreviewUserDrive)
+	securityOps.Post("/drives/grants", s.handleUpsertUserDriveGrant)
+	securityOps.Delete("/drives/grants/{id}", s.handleDeleteUserDriveGrant)
+	securityOps.Post("/drives/preview", s.handlePreviewUserDrive)
 }
 
 // GET /drives
@@ -161,12 +172,12 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	// screen as if the switch were on for a deployment where every write 422s.
 	provider, err := s.userDriveProvider(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list user drives: "+err.Error())
+		writeServerError(w, r, "list user drives", err)
 		return
 	}
 	total := 0
@@ -182,7 +193,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 		// SQL, so the window here starts at 0.
 		got, gerr := pg.ListUserDriveGrantsPage(r.Context(), store.Page{Limit: page.Limit + 1, Offset: page.Offset})
 		if gerr != nil {
-			writeError(w, http.StatusInternalServerError, "list user drive grants: "+gerr.Error())
+			writeServerError(w, r, "list user drive grants", gerr)
 			return
 		}
 		grants, truncated = pageWindow(got, 0, page.Limit)
@@ -191,7 +202,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 		// is. Windowed in Go so every caller sees ONE contract either way.
 		got, gerr := s.cfg.Store.ListUserDriveGrants(r.Context())
 		if gerr != nil {
-			writeError(w, http.StatusInternalServerError, "list user drive grants: "+gerr.Error())
+			writeServerError(w, r, "list user drive grants", gerr)
 			return
 		}
 		grants, truncated = pageWindow(got, page.Offset, page.Limit)
@@ -276,7 +287,7 @@ func (s *Server) userDriveProvider(ctx context.Context) (types.UserDriveProvider
 func (s *Server) userDriveWriteRefusal(ctx context.Context, sizeMiB int) (int, string) {
 	provider, err := s.userDriveProvider(ctx)
 	if err != nil {
-		return http.StatusInternalServerError, "get site config: " + err.Error()
+		return http.StatusInternalServerError, loggedMsg(ctx, "get site config", err)
 	}
 	if provider.Disabled {
 		return http.StatusUnprocessableEntity, driveDisabledMsg
@@ -426,7 +437,7 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "write user drive: "+err.Error())
+		writeServerError(w, r, "write user drive", err)
 		return
 	}
 	// The WHOLE ROW, minus nothing: a drive carries no secret (a share
@@ -583,7 +594,7 @@ const driveRehomeConfirm = "rehome"
 func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, msg string, rehome driveRehome, refuseIfAllocated bool) {
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
-		return http.StatusInternalServerError, "list user drives: " + err.Error(), driveRehome{}, false
+		return http.StatusInternalServerError, loggedMsg(r.Context(), "list user drives", err), driveRehome{}, false
 	}
 	var before *types.UserDriveListItem
 	for i := range drives {
@@ -719,7 +730,7 @@ func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete user drive: "+err.Error())
+		writeServerError(w, r, "delete user drive", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -870,7 +881,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if derr != nil {
-			writeError(w, http.StatusInternalServerError, "get user drive: "+derr.Error())
+			writeServerError(w, r, "get user drive", derr)
 			return
 		}
 		if _, herr := types.DriveHomeName(d, "", g.HomeOverride); herr != nil {
@@ -901,7 +912,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert user drive grant: "+err.Error())
+		writeServerError(w, r, "upsert user drive grant", err)
 		return
 	}
 	status := http.StatusCreated
@@ -946,7 +957,7 @@ func (s *Server) handleDeleteUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete user drive grant: "+err.Error())
+		writeServerError(w, r, "delete user drive grant", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

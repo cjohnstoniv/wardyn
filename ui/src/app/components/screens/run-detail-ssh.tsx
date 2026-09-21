@@ -28,7 +28,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { BookOpen, KeyRound } from "lucide-react";
-import type { AgentRun, SSHPublicKey, UIApp } from "../../lib/types";
+import type { RunDetail, SSHPublicKey, UIApp } from "../../lib/types";
 import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
@@ -41,7 +41,7 @@ import { cn } from "../ui/utils";
 
 // Exported for run-detail-ssh.test.tsx: standalone-testable without mounting
 // the whole screen's run/grants/egress/approvals/audit/recording fetch graph.
-export function ConnectSSHCard({ run }: { run: AgentRun }) {
+export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const principal = usePrincipal();
   const operator = useOperator();
   // Owner OR admin: the same two-armed gate every lane's server handler uses.
