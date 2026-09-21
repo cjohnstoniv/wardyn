@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha1"
@@ -15,6 +16,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -580,6 +582,49 @@ func bedrockLaneSelectable(runAgent string, modelRun, subscriptionActive, haveSe
 		region != "" && model != "" && haveSecrets
 }
 
+// bedrockBearerFor reads the Bedrock BEARER token from the namespace scope
+// names, nil when there is none to read there.
+//
+// The ZERO scope is the operator namespace — byte-for-byte the read this was
+// before a member could hold a bearer of their own, and what a `shared` row (or
+// no roster) resolves to.
+//
+// A PER-USER scope reads that principal's OWN row and NEVER the operator's, and
+// the List-then-Get shape is the whole reason this is not a one-liner:
+// Store.For(owner).Get FALLS BACK to the operator's row by contract
+// (internal/secretstore/pg), so the obvious For(owner).Get would serve the
+// ADMIN's bearer to a member who has stored nothing — the cross-principal
+// substitution per_user exists to refuse. For("").List is never consulted, so
+// the owner's own rows are all this can see. readAWSSSOBlob carries the
+// identical dance for the identical reason; a per-user scope with no owner, or
+// one read inside the no-credential member preview, is ABSENT there and here.
+//
+// An EMPTY or whitespace-only value reads as ABSENT rather than as a configured
+// credential. A blank row would otherwise win the precedence chain, author a
+// grant, and surface as an upstream 403 naming neither the lane it picked nor
+// the empty secret it picked it on.
+func (s *Server) bedrockBearerFor(ctx context.Context, scope awsSSOScope) []byte {
+	st := s.cfg.Secrets
+	if st == nil {
+		return nil
+	}
+	if scope.perUser {
+		if !scope.namespaced() || previewHidesOwnCredential(ctx) {
+			return nil
+		}
+		st = st.For(scope.owner)
+		own, err := st.List(ctx)
+		if err != nil || !slices.Contains(own, bedrockAPIKeySecret) {
+			return nil
+		}
+	}
+	raw, err := st.Get(ctx, bedrockAPIKeySecret)
+	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	return raw
+}
+
 func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun, refresh bool, ws *types.WorkspaceBedrockRef, sso awsSSOScope) bedrockAuth {
 	region, model := s.bedrockRegionModel(ws)
 	profile := s.cfg.BedrockAWSProfile
@@ -643,20 +688,16 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// Preferred: bearer-token mode. A Bedrock API key is a STATIC Authorization
 	// header, so the proxy TLS-MITMs bedrock-runtime and injects it — the sandbox
 	// holds only a placeholder, never the real token (trust parity with api-key /
-	// subscription). Selected whenever a bedrock-api-key secret exists.
-	//
-	// Skipped under per_user: the bedrock-api-key secret is an OPERATOR row, and
-	// serving it to a member is the cross-principal substitution per_user refuses.
-	// The guard is on the READ, not just on the selection, so a per-user resolve
-	// makes no operator-namespace store call at all.
-	if !sso.perUser {
-		if bearer, berr := s.cfg.Secrets.Get(ctx, bedrockAPIKeySecret); berr == nil && len(bearer) > 0 {
-			env := base()
-			// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
-			// overwrites the Authorization header with the real token on the wire.
-			env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
-			return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true})
-		}
+	// subscription). Selected whenever a bedrock-api-key secret exists in the
+	// namespace this run's scope names — the operator's under `shared`, the
+	// caller's OWN under per_user, never one standing in for the other
+	// (bedrockBearerFor).
+	if bearer := s.bedrockBearerFor(ctx, sso); len(bearer) > 0 {
+		env := base()
+		// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
+		// overwrites the Authorization header with the real token on the wire.
+		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
+		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true})
 	}
 
 	// Captured AWS SSO credential: a container-login `aws sso login` captured an

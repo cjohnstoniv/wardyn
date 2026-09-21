@@ -43,7 +43,7 @@ import (
 const (
 	agent400Unknown           = "agents: %q names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key"
 	agent400CustomMechanism   = "agents: %q is not in the agent catalog, so its mechanism must be none — Wardyn wires no model credential into a custom image (%s would show a live credential that binds nothing)"
-	agent400PerUser           = "agents: %q: credential_source per_user is available for bedrock_sso only, not %s"
+	agent400PerUser           = "agents: %q: credential_source per_user is available for %s only, not %s"
 	agent400SSOStartURL       = "agents: %q: sso_start_url is required when mechanism is bedrock_sso and credential_source is per_user"
 	agent400SSOStartURLUnused = "agents: %q: sso_start_url applies only when mechanism is bedrock_sso and credential_source is per_user"
 
@@ -294,21 +294,25 @@ func validateAgentMechanism(row types.AgentProvider, images map[string]string) e
 	return nil
 }
 
-// validateAgentCredentialSource holds the per-user half: per_user is bedrock_sso
-// only (the one mechanism with a per-principal capture path), and a
-// per-user bedrock_sso row MUST carry the admin-owned start URL every principal
-// signs in against — validated by the same gate the login request's own URL
-// passes, so the two cannot disagree about what an access-portal URL is.
+// validateAgentCredentialSource holds the per-user half: per_user is for the
+// lanes whose credential a member can hold as their own (types.PerUserMechanisms
+// — the captured AWS SSO session they sign in for, and the bedrock-api-key
+// bearer they store under their own principal), and a per-user bedrock_sso row
+// MUST carry the admin-owned start URL every principal signs in against —
+// validated by the same gate the login request's own URL passes, so the two
+// cannot disagree about what an access-portal URL is.
 //
-// The start URL is forbidden on every other row rather than ignored: a value
-// accepted and never read is how an admin comes to believe they pinned a portal
-// they did not.
+// The start URL and the pin stay bedrock_sso's ALONE, on a per-user row as much
+// as on any other: a per-user BEARER row has no portal to sign in against and no
+// sign-in identity to pin, so a value accepted there would be exactly the defect
+// this forbids elsewhere — an admin believing they pinned a portal nothing reads.
 func validateAgentCredentialSource(row types.AgentProvider, bedrockModel string) error {
 	perUser := row.CredentialSource == types.CredentialSourcePerUser
-	if perUser && row.Mechanism != types.AgentMechanismBedrockSSO {
-		return fmt.Errorf(agent400PerUser, row.ID, string(row.Mechanism))
+	if perUser && !types.PerUserMechanisms[row.Mechanism] {
+		return fmt.Errorf(agent400PerUser, row.ID,
+			strings.Join(types.PerUserMechanismList(), " and "), string(row.Mechanism))
 	}
-	if !perUser {
+	if !perUser || row.Mechanism != types.AgentMechanismBedrockSSO {
 		if row.SSOStartURL != "" {
 			return fmt.Errorf(agent400SSOStartURLUnused, row.ID)
 		}

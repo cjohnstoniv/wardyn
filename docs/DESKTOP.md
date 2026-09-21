@@ -235,12 +235,20 @@ scoped to the caller's OWN namespace — `secretOwnerFromRequest` returns `""` f
 an operator and the caller's own principal for a member, so the developer writes
 their own row and can neither read, overwrite nor delete the operator's. Three
 things stay admin-only inside that: the operator's `""` namespace itself, the
-four Bedrock/SigV4 names (`aws-access-key-id`, `aws-secret-access-key`,
-`aws-session-token`, `bedrock-api-key`), which a non-operator `PUT`/`DELETE`
-refuses with a `403` because dispatch always resolves them from the operator
+three AWS SigV4 names (`aws-access-key-id`, `aws-secret-access-key`,
+`aws-session-token`), which a non-operator `PUT`/`DELETE`
+refuses with a `403` because dispatch always signs with them out of the operator
 namespace, and `?owner=<principal>` — the cross-namespace write — which answers
 `403 ?owner= is admin-only` to a member. A run resolves its own owner's row and
 falls back to the operator's, never to another member's.
+
+The fourth Bedrock name is the exception, and it is one name: a member may store
+their own `bedrock-api-key`. The BEARER is a static `Authorization` header the
+proxy injects per run out of the run owner's own namespace, so a member's own
+key is a credential their runs really authenticate with rather than a row
+nothing reads. Under an agent row marked `per_user` it is the ONLY bearer their
+runs see — the operator's does not stand in for a member who has stored none,
+and the member's does not stand in for anyone else.
 See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
 
 **Mounting their own project directory.** The one power m′ adds that no other
@@ -482,14 +490,13 @@ What m′'s other two mechanisms still hold:
    vendor's terms prohibit. BYOK is unaffected by this: it is the api-key
    lane, never the resident-subscription mount.
 
-**Bedrock stays the MDM-managed lane — it is not a fallback BYOK replaces.**
-A member's own key is Claude/OpenAI API-key mode only; Bedrock needs its own
-AWS credential, which per-principal secrets deliberately does NOT extend to
-(`bedrock-api-key` and the AWS SigV4 pair are refused for a member's own
-`PUT /secrets` regardless of ownership — Bedrock member-BYO stays a Named
-gap). For a Bedrock-only fleet, or a member running `codex-cli` with no
-OpenAI key of their own, Bedrock is still the daemon-level, MDM-set path
-that needs no member secret write at all:
+**Bedrock is the MDM-managed lane, with one member-held key beside it.**
+A member may store their own `bedrock-api-key` bearer; the three AWS SigV4
+names (`aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`) are
+still refused for a member's own `PUT /secrets` regardless of ownership, so
+member-supplied SigV4 Bedrock stays a Named gap. For a Bedrock-only fleet, or a
+member running `codex-cli` with no OpenAI key of their own, Bedrock is still the
+daemon-level, MDM-set path that needs no member secret write at all:
 
 | Variable | Set by |
 |---|---|

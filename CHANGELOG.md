@@ -10,6 +10,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **A member may store their own Bedrock bearer key.** `PUT`/`DELETE /secrets/bedrock-api-key`
+  is no longer refused to a non-operator: the BEARER is a static `Authorization` header the proxy
+  injects per run out of the run owner's own namespace, so a member's own key is a credential
+  their runs really authenticate with. The three AWS SigV4 names — `aws-access-key-id`,
+  `aws-secret-access-key` and `aws-session-token` — are **unchanged** and still `403` for every
+  non-operator, because SigV4 is always signed out of the operator namespace; so are the reserved
+  platform and sentinel names. `credential_source: per_user` is now accepted for a
+  `bedrock_bearer` agent row beside `bedrock_sso`, and under it there is **no cross-source
+  fallback in either direction**: the resolve reads the caller's own namespace and never the
+  operator's, the injection sink refuses rather than letting its own owner-fallback substitute the
+  operator's key mid-run, and an empty or whitespace-only value reads as no credential rather than
+  as a configured one that fails upstream. `runs_bedrock.go` was split by seam first — the probe
+  and reporting half now lives in `runs_bedrock_probe.go` — because it had reached the
+  1000-line file-size gate.
+
 - **Setup counts only the steps that block a run, and recommends what the host actually has.**
   The Getting-started counter read "Step 1 of 17" with ten of those steps optional demos; it now
   reads "Step 1 of 4" (Environment, People, Network, Review), with the honest count of what

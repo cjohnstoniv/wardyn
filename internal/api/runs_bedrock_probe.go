@@ -163,7 +163,14 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sso 
 	// asks "what connections does this deployment have", and the operator's
 	// bearer key and static keys are still connections it has.
 	if sso.perUser {
-		b.CredsPresent, b.AWSMount, b.BearerPresent = false, false, false
+		b.CredsPresent, b.AWSMount = false, false
+		// The bearer is the ONE operator lane with a per-principal twin: a member
+		// may store a bedrock-api-key of their own, and resolveBedrockAuth reads it
+		// from their namespace. So this reports the CALLER's own row, never the
+		// operator's — reporting the operator's would read "ready" off a credential
+		// the resolve refuses to serve them, and reporting nothing would read "not
+		// configured" over a bearer their runs really authenticate with.
+		b.BearerPresent = len(s.bedrockBearerFor(ctx, sso)) > 0
 	}
 	b.PerUser = sso.perUser
 	b.Mechanism = awsSSOScopeIsMechanism(sso)
