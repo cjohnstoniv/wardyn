@@ -22,6 +22,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A spent AWS SSO refresh token is no longer forgotten on daemon restart.** `awssso_refresh.go`
+  marked a redeemed-and-unpersistable (or AWS-retired) refresh token spent only in an in-memory map,
+  so a restart wiped the mark and the credential graded "renewable" again — the exact credential
+  Wardyn can never redeem twice. The mark now write-through persists to a new
+  `aws_sso_spent_tokens` table (migration `0068_aws_sso_spent_tokens`, a capability interface beside
+  the existing optional seams in `internal/store/pagination.go`) keyed by the same one-way,
+  credential-derived fingerprint the map has always used, plus the credential's owner — deliberately
+  NOT the secret/blob store the mark exists because of, since that store's own write is what just
+  failed. The map stays as a read-once memoized cache in front of it, so a restart costs one
+  best-effort row read per fingerprint rather than losing the fact outright. Stale rows are pruned
+  from the existing lifecycle reaper's per-tick advisory lock (no new timer), past the AWS SSO client
+  registration's 90-day lifetime.
 - **The decision-log line printed to stdout is now written under its own mutex.** A line over
   `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
   could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
