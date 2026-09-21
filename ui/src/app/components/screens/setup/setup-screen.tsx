@@ -56,8 +56,10 @@ import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   DEMO_STEP_IDS,
   OPTIONAL_STEPS,
+  REQUIRED_STEPS,
   STEP_ORDER,
   corpNetworkGate,
+  optionalStepCounts,
   stepBadges,
   stepDone,
   stepOrder,
@@ -760,7 +762,12 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     <>
       <SetupLayout
         current={stepId}
-        order={walkOrder}
+        // #213 — the counter/footer walk only the four steps that BLOCK a
+        // run; PhaseRail below keeps the old full walkOrder, since its three
+        // groups (Required/Optional setup/Demos) still need to know which
+        // conditional demos survived stepOrder(status).
+        order={REQUIRED_STEPS}
+        requiredSummary={optionalStepCounts(status)}
         refuseNext={refuseSelect}
         rail={
           <PhaseRail

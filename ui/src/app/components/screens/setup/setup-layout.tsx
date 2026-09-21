@@ -41,6 +41,7 @@ export function SetupLayout({
   order = STEP_ORDER,
   refuseNext,
   operator,
+  requiredSummary,
   children,
 }: {
   current: SetupStepId;
@@ -103,19 +104,31 @@ export function SetupLayout({
   // (corp-network-egress.tsx), which are already `disabled={!operator}`. This
   // shell has no idea of the role otherwise, so the caller passes it once.
   operator: boolean;
+  // #213 — the counter's honest "N optional setup steps and M demos follow"
+  // subline, live-derived by the caller (steps.ts's optionalStepCounts) so it
+  // never goes stale the way a hand-kept count would. Absent renders the
+  // number alone, for callers (and tests) that don't need the subline.
+  requiredSummary?: { config: number; demos: number };
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
-  // F3-F12: reachable via a `?step=<conditional demo>` deep link at mount,
-  // before the status-driven correction effect (setup-screen.tsx) has run one
-  // tick — indexOf(-1) rendered "Step 0 of M" for that one frame. Clamped for
-  // DISPLAY only; prev/next stay keyed off the raw index (there's no sensible
-  // prev/next for a step that isn't in the walkable order at all).
+  // #213 — `order` is now the REQUIRED walk only (steps.ts's REQUIRED_STEPS,
+  // 4 long): `current` not being in it means an OPTIONAL step, reached via
+  // the rail or Review rather than by walking Next through it. That is the
+  // steady state for any of the ~19 optional/demo steps now, not a transient
+  // mount-time race — see the `isOptional` branch below for both the counter
+  // and the footer it drives.
   const idx = order.indexOf(current);
-  const displayIdx = Math.max(0, idx);
+  const isOptional = idx === -1;
   const prev = idx > 0 ? order[idx - 1] : null;
   const next = idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null;
   const refusal = next ? refuseNext?.(next) : undefined;
+  // An optional step's footer returns to the required walk rather than
+  // stepping deeper (decision #3): the LAST member of `order` — Review, when
+  // `order` is REQUIRED_STEPS — not wherever this step would sit if it were
+  // spliced into some other sequence.
+  const returnTo = order[order.length - 1];
+  const returnRefusal = isOptional && returnTo ? refuseNext?.(returnTo) : undefined;
 
   return (
     <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
@@ -175,7 +188,24 @@ export function SetupLayout({
             className="mb-6"
           />
           <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
-            Step {displayIdx + 1} of {order.length}
+            {isOptional ? (
+              <>
+                <div>Optional</div>
+                <div className="mt-0.5 normal-case">Not required before a run can launch.</div>
+              </>
+            ) : (
+              <>
+                <div>
+                  Step {idx + 1} of {order.length}
+                </div>
+                {requiredSummary && (
+                  <div className="mt-0.5 normal-case">
+                    Required before a run can launch. {requiredSummary.config} optional setup steps and{" "}
+                    {requiredSummary.demos} demos follow.
+                  </div>
+                )}
+              </>
+            )}
           </div>
           <div className="mb-4 flex items-baseline gap-3">
             <h2>{STEP_HEADING[current]}</h2>
@@ -188,6 +218,22 @@ export function SetupLayout({
               first-run gate keeps the operator in setup until the flow's end, where
               "Finish setup" completes it (barrier is the only requirement; launching
               a run is offered but optional). */}
+          {isOptional ? (
+            <footer className="mt-10 flex flex-wrap items-center justify-end gap-2 border-t pt-5">
+              <Button variant="outline" onClick={() => returnTo && onSelect(returnTo)}>
+                <ArrowLeft className="size-4" aria-hidden />
+                Back to required steps
+              </Button>
+              <Button
+                onClick={() => returnTo && onSelect(returnTo)}
+                disabled={!!returnRefusal}
+                title={returnRefusal}
+              >
+                Done with this one
+                <ArrowRight className="size-4" aria-hidden />
+              </Button>
+            </footer>
+          ) : (
           <footer className="mt-10 flex flex-wrap items-center justify-end gap-2 border-t pt-5">
             <Button
               variant="outline"
@@ -267,6 +313,7 @@ export function SetupLayout({
               </>
             )}
           </footer>
+          )}
         </div>
       </div>
     </div>
