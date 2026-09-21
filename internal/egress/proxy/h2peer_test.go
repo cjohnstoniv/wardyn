@@ -413,10 +413,8 @@ func noALPNConfig(t *testing.T) *tls.Config {
 // no ALPN: the operator's peer, minus the frames it sent because it was spoken
 // to in HTTP/1.1. x/net's server queues its SETTINGS before reading anything.
 func serveH2Unasked(c *h2Counts) func(*tls.Conn) {
-	//lint:ignore SA1019 net/http's server, like its client, speaks HTTP/2 over TLS only after ALPN selected h2
 	srv := &http2.Server{}
 	return func(tc *tls.Conn) {
-		//lint:ignore SA1019 see above
 		srv.ServeConn(tc, &http2.ServeConnOpts{Handler: c.handler()})
 	}
 }
