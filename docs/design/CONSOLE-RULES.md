@@ -53,7 +53,7 @@ Known violations, cited as what the rule forbids:
 | `run-context-row.tsx#RunContextRow` | `text-primary` on "Open run" | Teal on a disclosure control. It is a link: `--info`, or a `ghost` Button |
 
 `runs.tsx`'s two former violations at this same class ("Show all N" and "Load N more")
-are fixed: both now render `text-info` (`runs.tsx#TitleGroup`, `runs.tsx#RunsTable`).
+are fixed: both now render `text-info` (`title-group.tsx#TitleGroup`, `runs.tsx#RunsTable`).
 
 ## 3. Type scale
 

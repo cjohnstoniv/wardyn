@@ -40,6 +40,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
   reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
   FAILED so a run reaching a successful terminal state through the same path gets no hint.
+- **The Runs board's group header now says what its runs are waiting on, and a run opens from a
+  real link.** `TitleGroup` gets a second chip row — one counted chip per reason a group's runs are
+  waiting (held approval, AWS sign-in, waiting to start), an uncounted "Nothing waiting" once the
+  group is clean, and a pinned "Checking…" before the approvals fetch resolves so an empty result
+  can't read as "nothing is held". A `tool_call`/`credential_reauth` hold older than 60 minutes
+  degrades to a neutral "was held" claim instead of continuing to claim it's live — `isHeld` gained
+  that ceiling, shared by the board and the run cockpit's command bar. Separately, a run's title is
+  now a real `<a href>` on both the board and the table (previously a `div` with an `onClick`, not
+  reachable by keyboard or middle-click); a failed run's card now offers "Open" rather than "Review",
+  since a failure is a report and a held run is a request; the workspace facet/column reads
+  "Workspace", not "Repo"; the live-board chip reads "Live" without narrating its poll interval; and
+  the board's loose section reads "Other runs" instead of "Ungrouped".
 
 ### Changed
 

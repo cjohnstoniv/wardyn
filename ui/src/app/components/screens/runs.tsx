@@ -14,8 +14,8 @@
 // Every card / row navigates to the addressable /runs/:id detail page.
 // "New run" lives in the app shell top bar.
 import * as React from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { FilterX, LayoutGrid, RotateCw, Rows3, Search, TriangleAlert } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { FilterX, LayoutGrid, RotateCw, Rows3, Search } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, ApprovalRequest, SetupStatus } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
@@ -39,6 +39,7 @@ import { PageHeader } from "../wardyn/page-header";
 import { useRole } from "../wardyn/operator-context";
 import { cn } from "../ui/utils";
 import { BoardSkeleton, CardGrid, RunActions, RunCard, SectionHeading } from "./runs/run-card";
+import { TitleGroup } from "./runs/title-group";
 import { statusDetailSentence } from "./run-status-detail";
 import { AttentionLane } from "./runs/attention-lane";
 import {
@@ -46,7 +47,6 @@ import {
   needsAttention,
   needsYou,
   rowHeadline,
-  runAttention,
   titleGroups,
   type RunSignals,
 } from "./runs/board-groups";
@@ -62,9 +62,6 @@ const POLL_MS = 3000;
 
 // How often the first-run checklist / no-barrier blocker re-checks setup status.
 const SETUP_POLL_MS = 5000;
-
-// Per-group collapsed preview before "Show all N".
-const GROUP_PREVIEW = 3;
 
 // Table display cap (client-side; listRuns returns the full set) + load-more step.
 const TABLE_STEP = 25;
@@ -114,25 +111,41 @@ export function RunsScreen() {
   // and the sidebar's amber badge cannot end up a tick out of step about the
   // same run.
   const [signals, setSignals] = React.useState<RunSignals>(new Map());
+  // #160 — whether the approvals fetch behind `signals` has resolved at least
+  // once. Before it has, the empty-Map default reads as "nothing is held"
+  // rather than "not known yet" — TitleGroup's wait row pins a "Checking…"
+  // chip instead of trusting the default until this flips true. Stays true
+  // for the life of the screen once it first resolves — a later poll's
+  // approvals lagging behind its own runs half by a tick is not a reason to
+  // make the whole board flash back to Checking.
+  const [signalsResolved, setSignalsResolved] = React.useState(false);
   const fetchRuns = React.useCallback(() => {
-    return Promise.all([
-      api.listRuns(),
-      // The approvals half is best-effort: an operator who cannot list
-      // approvals still gets a board, just without the held join. Losing the
-      // whole run list to it would be much the worse failure.
-      approvalsApi.listApprovals("PENDING").catch((): ApprovalRequest[] => []),
-    ]).then(([r, pending]) => {
+    // The approvals half is best-effort: an operator who cannot list
+    // approvals still gets a board, just without the held join. Losing the
+    // whole run list to it would be much the worse failure — caught here so
+    // it never rejects the combined fetch below.
+    const pending = approvalsApi.listApprovals("PENDING").catch((): ApprovalRequest[] => []);
+    // Started together (both above), but runs resolve the BOARD on their own
+    // — the approvals join runs independently once it is back. A combined
+    // Promise.all here would hold the whole screen on the loading skeleton
+    // until the slower of the two returns, which is exactly the window
+    // "Checking…" exists to cover: without this split, `signalsResolved`
+    // could never observably be false while a group is actually on screen.
+    return api.listRuns().then((r) => {
       setRuns(r);
-      const nextSignals = approvalSignals(pending);
-      setSignals(nextSignals);
       setStatus("ready");
-      // R-1: publish the two nav-badge counts up, off the SAME unfiltered
-      // fetch App.tsx's own (paused-while-here) refreshBadges would have
-      // used — a no-op when nothing is listening (usePublishAttention's
-      // default).
-      publishAttention({
-        pendingApprovals: pending.length,
-        attentionCount: r.filter((run) => needsAttention(run, nextSignals)).length,
+      return pending.then((p) => {
+        const nextSignals = approvalSignals(p);
+        setSignals(nextSignals);
+        setSignalsResolved(true);
+        // R-1: publish the two nav-badge counts up, off the SAME unfiltered
+        // fetch App.tsx's own (paused-while-here) refreshBadges would have
+        // used — a no-op when nothing is listening (usePublishAttention's
+        // default).
+        publishAttention({
+          pendingApprovals: p.length,
+          attentionCount: r.filter((run) => needsAttention(run, nextSignals)).length,
+        });
       });
     });
   }, [publishAttention]);
@@ -349,12 +362,15 @@ export function RunsScreen() {
             </SelectContent>
           </Select>
 
+          {/* #215 — "Workspace" everywhere this facet appears (trigger,
+              aria-label, "All" option, and the table's column header below):
+              the product's own word, not the wire field's ("Repo"). */}
           <Select value={repoFacet} onValueChange={setRepoFacet}>
-            <SelectTrigger size="sm" className="w-[170px]" aria-label="Repo">
+            <SelectTrigger size="sm" className="w-[170px]" aria-label="Workspace">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Repo · All</SelectItem>
+              <SelectItem value="all">Workspace · All</SelectItem>
               {repos.map((r) => (
                 <SelectItem key={r} value={r}>
                   {r}
@@ -364,10 +380,11 @@ export function RunsScreen() {
           </Select>
 
           {/* Same shared primitive Audit uses for the "live" concept — a Chip
-              pill with the "Live · …" copy template, not a separate visual
-              treatment. */}
-          <Chip tone="success" dot pulse className="ml-auto" title="Polling for new runs">
-            Live · refreshes every {POLL_MS / 1000}s
+              pill. #215: "Live" alone — "refreshes every 3s" narrated the
+              polling implementation to a person who does not need to know it;
+              the title says the same thing without the number. */}
+          <Chip tone="success" dot pulse className="ml-auto" title="Refreshing on its own">
+            Live
           </Chip>
           <Button
             variant="outline"
@@ -453,6 +470,7 @@ export function RunsScreen() {
               title={g.title}
               runs={g.runs}
               signals={signals}
+              signalsResolved={signalsResolved}
               open={!!expanded[g.title]}
               onToggle={() => setExpanded((s) => ({ ...s, [g.title]: !s[g.title] }))}
               onOpen={openRun}
@@ -461,12 +479,13 @@ export function RunsScreen() {
           ))}
 
           {loose.length > 0 && (
-            <section aria-label="Ungrouped">
+            <section aria-label="Other runs">
               {/* Only labelled when there is something to distinguish it FROM —
-                  on a board with no shared titles, "Ungrouped" describes every
-                  run on the page and says nothing. */}
+                  on a board with no shared titles, "Other runs" describes
+                  every run on the page and says nothing. #215: "Other runs"
+                  replaces "Ungrouped" — a data-model word on a user's screen. */}
               {(titled.length > 0 || lane.length > 0) && (
-                <SectionHeading title="Ungrouped" count={loose.length} />
+                <SectionHeading title="Other runs" count={loose.length} />
               )}
               <CardGrid>
                 {loose.map((run) => (
@@ -518,86 +537,9 @@ function DensityButton({
   );
 }
 
-// One title's runs: the board's grouping unit now that runs are named.
-//
-// The header carries per-state counts, which is what makes replacing the old
-// Needs-attention / Active / Done sections honest — the triage those sections
-// provided is still legible here, per group, instead of splitting one piece of
-// work across three places on the page.
-function TitleGroup({
-  title,
-  runs,
-  signals,
-  open,
-  onToggle,
-  onOpen,
-  onKill,
-}: {
-  title: string;
-  runs: AgentRun[];
-  signals: RunSignals;
-  open: boolean;
-  onToggle: () => void;
-  onOpen: (id: string) => void;
-  onKill: (id: string) => void;
-}) {
-  // Distinct states in the order they appear — which is triage order, since
-  // `visible` arrives attention → active → done (see its comment).
-  const states: string[] = [];
-  for (const r of runs) if (!states.includes(r.state as string)) states.push(r.state as string);
-  // Runs that are asking for something are pinned to the lane above, so what
-  // is left to flag here is a report — the group carries the danger tint its
-  // cards do, not the amber the lane owns. The predicate is the CARD RAIL's,
-  // not needsAttention's: that one includes "monitoring" (a passive
-  // deny_with_review pending, which no card paints), so a group of two healthy
-  // RUNNING runs got a red header over cards with nothing red on them.
-  const needsEyes = runs.some((r) => runAttention(r, signals) === "interrupted");
-  const shown = open ? runs : runs.slice(0, GROUP_PREVIEW);
-
-  return (
-    <section aria-label={title}>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        {needsEyes && <TriangleAlert className="size-3.5 text-danger" aria-hidden="true" />}
-        <h2
-          className={cn(
-            "max-w-[420px] truncate text-body font-semibold",
-            needsEyes ? "text-danger" : "text-foreground",
-          )}
-          title={title}
-        >
-          {title}
-        </h2>
-        <span className="rounded-full bg-muted px-1.5 text-meta font-semibold text-muted-foreground">
-          {runs.length}
-        </span>
-        <span className="flex flex-wrap items-center gap-1.5">
-          {states.map((st) => {
-            const n = runs.filter((r) => (r.state as string) === st).length;
-            return (
-              <span key={st} className="flex items-center gap-1">
-                <RunStateBadge state={st} />
-                {n > 1 && <span className="text-meta text-muted-foreground">×{n}</span>}
-              </span>
-            );
-          })}
-        </span>
-        {/* A disclosure control is a link, not the surface's action —
-            CONSOLE-RULES §2 names this exact site: --info, never teal. The
-            approvals strip renders the identical string the same way. */}
-        {runs.length > GROUP_PREVIEW && (
-          <button onClick={onToggle} className="ml-1 text-xs font-medium text-info hover:underline">
-            {open ? "Show fewer" : `Show all ${runs.length}`}
-          </button>
-        )}
-      </div>
-      <CardGrid>
-        {shown.map((run) => (
-          <RunCard key={run.id} run={run} signals={signals} grouped onOpen={onOpen} onKill={onKill} />
-        ))}
-      </CardGrid>
-    </section>
-  );
-}
+// TitleGroup (one title's runs, plus #160's wait-row) lives in
+// runs/title-group.tsx — extracted so this file and its test stay under the
+// size gate (scripts/check-file-size.sh) instead of growing past it.
 
 function RunsTable({
   groups,
@@ -646,7 +588,7 @@ function RunsTable({
             <TableHead>Run</TableHead>
             <TableHead className="w-[180px]">State</TableHead>
             <TableHead className="w-[130px]">Barrier</TableHead>
-            <TableHead className="w-[180px]">Repo</TableHead>
+            <TableHead className="w-[180px]">Workspace</TableHead>
             <TableHead className="w-[220px]">Run ID</TableHead>
             <TableHead className="w-[110px]">Created</TableHead>
             <TableHead className="w-[44px]" />
@@ -680,9 +622,19 @@ function RunsTable({
                 <TableCell>
                   <div className="flex min-w-0 items-center gap-2.5">
                     <AgentBadge agent={run.agent} withLabel={false} />
-                    <span className="block max-w-[320px] truncate text-sm font-medium text-foreground">
+                    {/* #215 — a real <a href>, not the row's onClick alone:
+                        runs.tsx had the same click-handler-on-a-div defect as
+                        the board's card (no anchor, no keyboard path). The
+                        row's own onClick above still opens it by mouse
+                        anywhere else in the row; stopPropagation here just
+                        keeps the click from firing twice. */}
+                    <Link
+                      to={`/runs/${encodeURIComponent(run.id)}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="block max-w-[320px] truncate text-sm font-medium text-foreground hover:underline"
+                    >
                       {rowHeadline(run, groupedIds.has(run.id))}
-                    </span>
+                    </Link>
                   </div>
                 </TableCell>
                 <TableCell>
