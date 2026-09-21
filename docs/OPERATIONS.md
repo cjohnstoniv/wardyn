@@ -2943,6 +2943,12 @@ the estate needs both.
 ]
 ```
 
+Suffix entries match names; CIDR entries match only a destination written as
+an IP literal, never a hostname that resolves into the range — the same rule as
+Go's `NO_PROXY` (`bypassUpstream`, `internal/egress/proxy/egress_target.go`).
+So on an estate where AWS resolves into CGNAT, `100.64.0.0/10` bypasses
+nothing for `portal.sso.<region>.amazonaws.com`; list the name or its suffix.
+
 Wildcards are refused at write time: "bypass everything" is spelled by clearing
 `upstream_proxy_url`, not by one character in a list. An entry that is neither a
 CIDR nor a host is a 400 too, because the proxy drops what it cannot compile and
