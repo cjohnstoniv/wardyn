@@ -6,6 +6,38 @@
 import type { Page } from "@playwright/test";
 import { test, expect, mockMemberRole } from "./fixtures";
 
+/**
+ * Count the /setup/status reads the page has actually made. The console
+ * coalesces a refocus that arrives while a read is in flight, so "I dispatched
+ * an event" and "the app read the status" are different facts, and a test that
+ * conflates them can pass because nothing happened.
+ */
+function countReads(page: Page): () => Promise<number> {
+  let n = 0;
+  page.on("response", (r) => {
+    if (r.url().includes("/api/v1/setup/status")) n += 1;
+  });
+  return async () => n;
+}
+
+/**
+ * Dispatch visibilitychange until `done` holds. One nudge is not enough: the
+ * poll's in-flight guard drops a refocus that lands during a read, and clears
+ * that guard a tick after the response, so whether any single dispatch causes a
+ * read depends on timing this test does not control.
+ */
+async function nudgeUntil(page: Page, done: () => Promise<boolean>, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    for (let i = 0; i < 8; i++) {
+      if (await done()) return;
+      await page.waitForTimeout(125);
+    }
+    if (Date.now() > deadline) throw new Error("the console never answered the refocus nudge");
+  }
+}
+
 // The setup gate, exercised as a USER experiences it — routed, rendered,
 // clicked. Every case here was found manually on a live multi-user walk before
 // any test covered it (the suite's own backend seeds its install as onboarded
@@ -168,6 +200,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
   }) => {
     let blocking = false;
     await page.route("**/api/v1/setup/status*", async (route) => {
+      await new Promise((r) => setTimeout(r, 600));
       const response = await route.fetch();
       const json = await response.json();
       json.onboarding_complete = false;
@@ -199,28 +232,28 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await page.goto("/runs/new");
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
 
+    // usePoll drops a refocus while a read is already in flight
+    // (`if (pausedRef.current || inFlight.current) return`), and it clears that
+    // flag a tick AFTER the response lands. So a single dispatch is not a
+    // guarantee of a read, and a waiter registered around one dispatch can
+    // match a read that some earlier nudge started. Both halves below therefore
+    // nudge until the app has actually answered, rather than assuming one
+    // dispatch produces one read.
+    const reads = countReads(page);
+
     // FIRST, the fix itself: a warn the daemon did not mark blocking — the very
     // row that used to throw this admin onto Getting started — survives a
-    // background refresh with the person still on New Run.
-    // The waiter is created BEFORE the event that triggers the refetch: the
-    // refocus tick refetches immediately, so registering the waiter afterwards
-    // races it and waits out the full timeout whenever the response wins.
-    const refreshed = page.waitForResponse((r) => r.url().includes("/setup/status"));
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await refreshed;
+    // background refresh with the person still on New Run. The read has to be
+    // observed, or "still on New Run" would also be true of a nudge that was
+    // swallowed and never read anything at all.
+    await nudgeUntil(page, async () => (await reads()) >= 1);
     await expect(page).toHaveURL(/\/runs\/new$/);
 
     // THEN the positive: the install now fails a genuinely blocking check — as
     // it would seconds after the owner clicked Launch — and the NEXT read gates.
     blocking = true;
-    // Same reason as above, one step further: waitForURL polls, so it cannot
-    // race a waiter — but nothing here waited for the second refetch to happen
-    // at all, so the assertion jumped to the navigation that refetch is meant
-    // to cause. Wait for the read, then assert what it did.
-    const gated = page.waitForResponse((r) => r.url().includes("/setup/status"));
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await gated;
-    await page.waitForURL(/\/setup/);
+    await nudgeUntil(page, async () => /\/setup/.test(page.url()));
+    await expect(page).toHaveURL(/\/setup/);
   });
 
   // Re-check means "look at the HOST again", and only the daemon can do that:
