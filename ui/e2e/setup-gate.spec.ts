@@ -50,7 +50,7 @@ async function nudgeUntil(page: Page, done: () => Promise<boolean>, timeoutMs = 
 
 async function mockGatedStatus(
   page: Page,
-  overrides: { onboarded?: boolean; sso?: boolean } = {},
+  overrides: { onboarded?: boolean; sso?: boolean; nonBlockingFail?: boolean } = {},
 ): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
     const response = await route.fetch();
@@ -79,6 +79,11 @@ async function mockGatedStatus(
         // exists to cover.
         blocking: true,
       },
+      // #161: a non-blocking fail, for the Review-step grouping case below —
+      // it must never land under "Blocking" alongside the probe.
+      ...(overrides.nonBlockingFail
+        ? [{ id: "e2e_nonblocking_fail", label: "e2e non-blocking fail", status: "fail", detail: "forced by setup-gate.spec.ts" }]
+        : []),
     ];
     await route.fulfill({ response, json });
   });
@@ -382,6 +387,34 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await expect(
       page.getByText(/^Required before a run can launch\. 3 optional setup steps and \d+ demos follow\.$/),
     ).toBeVisible();
+  });
+
+  // #161: the Review step partitions on `blocking` first, not on grade — a
+  // blocking warn must not read as optional, and a non-blocking fail must not
+  // read as a wall. mockGatedStatus's probe (warn, blocking: true) plus the
+  // nonBlockingFail addition (fail, no blocking) prove both sides at once.
+  test("Review groups a blocking warn under Blocking, and a non-blocking fail under Worth a look", async ({
+    page,
+  }) => {
+    await mockGatedStatus(page, { nonBlockingFail: true });
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    // Review sits behind the Corporate network gate (steps.ts: "no click-past
+    // corp_network"), so it has to be cleared first — same proof the rail test
+    // above uses (the e2e backend's `-runner none` answers `no_runner`, which
+    // clears the gate on this host).
+    const rail = page.getByRole("navigation", { name: /setup steps/i }).last();
+    await rail.getByRole("button", { name: /^Network/ }).click();
+    await page.getByRole("button", { name: /^Test connectivity$/i }).click();
+    await expect(page.getByRole("button", { name: /^Next:/i })).toBeEnabled();
+    await rail.getByRole("button", { name: /^Review/ }).click();
+    await expect(page.getByRole("heading", { name: /review readiness/i })).toBeVisible();
+    const blocking = page.locator("section").filter({ has: page.getByText("Blocking", { exact: true }) });
+    await expect(blocking.getByText("e2e gate probe")).toBeVisible();
+    const worthALook = page.locator("section").filter({ has: page.getByText("Worth a look", { exact: true }) });
+    await expect(worthALook.getByText("e2e non-blocking fail")).toBeVisible();
+    await expect(blocking.getByText("e2e non-blocking fail")).toHaveCount(0);
   });
 
   test("the rail keeps Required / Optional setup / Demos apart, and Secrets (not required) is still reachable with the optional-step footer", async ({

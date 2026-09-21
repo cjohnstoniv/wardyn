@@ -55,6 +55,14 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
   }, [paused]);
 
   const inFlight = React.useRef(false);
+  // Set when a refocus arrives while a read is already in flight. The
+  // in-flight guard above is deliberate — it stops a burst of focus events
+  // from stacking requests — but the refocus it swallowed still wanted fresh
+  // data, and the flag only clears once the outstanding read lands. Coalesce
+  // rather than drop: remember the request and fire exactly ONE follow-up
+  // when that read settles, no matter how many refocus events arrived while
+  // it was outstanding.
+  const refocusPending = React.useRef(false);
 
   // One tick. Kept in a ref so the visibility listener and the interval invoke
   // the SAME guarded call rather than two copies of the rule.
@@ -74,16 +82,32 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
     }
     if (!result || typeof (result as Promise<unknown>).then !== "function") return;
     inFlight.current = true;
-    void (result as Promise<unknown>).then(
-      () => {
-        inFlight.current = false;
-      },
-      () => {
-        // A REJECTED poll clears the guard too: a failing endpoint must not
-        // freeze this view on its last-good data forever.
-        inFlight.current = false;
-      },
-    );
+    const settle = () => {
+      inFlight.current = false;
+      // A refocus landed while this read was outstanding: run the coalesced
+      // follow-up now that the guard has cleared, instead of leaving the
+      // screen on the answer that was already stale when the person looked
+      // back.
+      if (refocusPending.current) {
+        refocusPending.current = false;
+        tick.current();
+      }
+    };
+    // A REJECTED poll clears the guard too: a failing endpoint must not
+    // freeze this view on its last-good data forever.
+    void (result as Promise<unknown>).then(settle, settle);
+  };
+
+  // A refocus is handled separately from a plain interval tick: a stacked
+  // INTERVAL tick during a slow read is still dropped (unchanged), but a
+  // refocus that arrives on top of one is remembered instead.
+  const onRefocus = React.useRef(() => {});
+  onRefocus.current = () => {
+    if (inFlight.current) {
+      refocusPending.current = true;
+      return;
+    }
+    tick.current();
   };
 
   React.useEffect(() => {
@@ -93,7 +117,7 @@ export function usePoll(fn: () => void | Promise<unknown>, intervalMs: number, p
     // Coming back to the tab refreshes NOW: the alternative is a human staring
     // at up to intervalMs of state that was frozen while they were away.
     const onVisible = () => {
-      if (!document.hidden) tick.current();
+      if (!document.hidden) onRefocus.current();
     };
     document.addEventListener("visibilitychange", onVisible);
     // The hook's ONLY leak guard, and every screen that polls depends on it:
