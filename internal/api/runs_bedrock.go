@@ -197,6 +197,12 @@ type bedrockAuth struct {
 	// so the sandbox holds only a placeholder. When false (resident path), AWS SigV4
 	// creds are placed in env (SigV4 can't be proxy-injected).
 	bearer bool
+	// bearerNamespace is the namespace the bearer was READ from (set only when
+	// bearer is): the operator's under shared, the run owner's own under
+	// per_user. authorBedrockBearerInjection records it on the grant, and the
+	// injection sink resolves the key from exactly that namespace — see
+	// resolveBedrockBearerInjection.
+	bearerNamespace awsSSOScope
 	// runtimeHost is the EFFECTIVE Bedrock data-plane host this run resolved
 	// (bedrockDataPlaneHost: the WARDYN_BEDROCK_BASE_URL override's host when
 	// set, else the regional public one). Audited by applyBedrockTransport in
@@ -703,7 +709,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
 		// overwrites the Authorization header with the real token on the wire.
 		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
-		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true})
+		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true, bearerNamespace: sso})
 	}
 
 	// Captured AWS SSO credential: a container-login `aws sso login` captured an

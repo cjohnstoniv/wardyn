@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -549,13 +550,18 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 // leaf and the operator's Bearer injected onto whatever answered there.
 // The injection SCOPE below stays a bare host — buildInjector requires that —
 // only the MITM-eligibility set carries the port.
+//
+// The scope's snapshot records WHOSE key the resolve read (bedrockAuth's
+// bearerNamespace): the sink resolves the key from exactly that namespace and
+// refuses a grant without one — see resolveBedrockBearerInjection.
 func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.AgentRun, t llmTransport, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
 	mitmHosts := []string{net.JoinHostPort(t.bedrock.runtimeHost, strconv.Itoa(t.bedrock.runtimePort))}
-	beScope, _ := json.Marshal(map[string]string{
+	beScope, _ := json.Marshal(map[string]any{
 		"host":        t.bedrock.runtimeHost,
 		"header":      "Authorization",
 		"format":      "Bearer %s",
 		"secret_name": bedrockAPIKeySecret,
+		"snapshot":    bedrockBearerSnapshotOf(t.bedrock.bearerNamespace),
 	})
 	beGrantID := uuid.New()
 	if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
@@ -735,6 +741,15 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 			return dispatchLLMPlan{}, false
 		}
 	}
+
+	// bedrock-api-key has ONE author: the block below, whose grant records the
+	// namespace the key was read from. Any other injection naming it — a stored
+	// policy, a recorded profile that captured an earlier run's grant — carries
+	// no record of THIS run's choice, and the sink refuses it, which would fail
+	// the proxy's startup. The run's own bearer, if it has one, is authored below.
+	injections = slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
+		return ig.Rule.SecretName == bedrockAPIKeySecret
+	})
 
 	// Bedrock BEARER injection + its per-run MITM host (see
 	// authorBedrockBearerInjection). Same stop-on-failure contract.

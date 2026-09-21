@@ -7,10 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/egress"
-	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -235,9 +232,10 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	}
 
 	// bedrock-api-key is the ONE stored name whose namespace the ROSTER decides,
-	// so the generic fallback below is not allowed to decide it — see
-	// bedrockBearerNamespaceOK.
-	if !s.bedrockBearerNamespaceOK(w, r, claims, minted.Injection.SecretName, grantID) {
+	// so the owner-fallback read below never resolves it: it resolves from the
+	// namespace dispatch recorded on its own grant, or not at all — see
+	// resolveBedrockBearerInjection.
+	if s.resolveBedrockBearerInjection(w, r, claims, minted, grantID) {
 		return
 	}
 
@@ -283,67 +281,4 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		Value:  formattedValue,
 		JTI:    minted.JTI,
 	})
-}
-
-// bedrockBearerNamespaceNotOwn is the sink's refusal when a per-user Bedrock
-// bearer run asks for a key its own principal no longer holds. It names the
-// namespace rather than the secret's existence: the generic sink's own
-// not-in-the-store sentence would tell the reader to set the secret, which is
-// right, but not that the operator's key is deliberately not standing in.
-//
-// DRAFT (M2 canon pending)
-const bedrockBearerNamespaceNotOwn = "this agent's model credential is one per person and your own Bedrock API key is not in the store " +
-	"(set it with `wardyn secret set bedrock-api-key`); the operator's key does not stand in for it"
-
-// bedrockBearerNamespaceOK gates the generic stored-secret read for the ONE name
-// whose namespace a roster row decides: bedrock-api-key.
-//
-// Everywhere else the generic read is exactly right — Store.For(claims.Sub).Get
-// resolves the run owner's own row and falls back to the operator's, which is
-// what a `shared` deployment means by a deployment-wide credential. Under a
-// per_user row it is wrong in the one direction that matters: a member who had a
-// bearer at dispatch and does not at this resolve (they deleted it, an admin
-// deleted it with ?owner=, the store lost it) would be injected the OPERATOR's
-// key by that fallback, billed to the org and never named anywhere — the
-// cross-principal substitution per_user exists to refuse, arriving through the
-// back door after resolveBedrockAuth refused it at the front.
-//
-// So under per_user this asks the SAME question the resolve asked
-// (bedrockBearerFor, which reads the caller's own namespace and never falls
-// back) and refuses when the answer is gone. On a pass the generic read runs
-// unchanged and resolves that same row; under `shared`, and for every other
-// secret name, this is a no-op and nothing is read twice.
-//
-// Fail CLOSED on an unreadable run or roster, for enforceReadableRosterForCredential's
-// reason: the zero SiteConfig is indistinguishable from "a roster with no row",
-// whose scope is the OPERATOR namespace — the exact substitution this refuses.
-// A daemon with no store at all is legacy open mode, which has no roster to
-// declare per_user and is passed through byte-for-byte.
-func (s *Server) bedrockBearerNamespaceOK(w http.ResponseWriter, r *http.Request,
-	claims *identity.Claims, secretName string, grantID uuid.UUID,
-) bool {
-	if secretName != bedrockAPIKeySecret || s.cfg.Store == nil {
-		return true
-	}
-	ctx := r.Context()
-	fail := func(status int, reason, body string) bool {
-		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", secretName, "failure",
-			mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
-		writeError(w, status, body)
-		return false
-	}
-	run, rerr := s.cfg.Store.GetRun(ctx, claims.RunID)
-	if rerr != nil {
-		return fail(http.StatusServiceUnavailable, "run_unreadable", credentialReauthRunUnreadableBody)
-	}
-	siteCfg, scErr := s.cfg.Store.GetSiteConfig(ctx)
-	if scErr != nil {
-		return fail(http.StatusServiceUnavailable, "roster_unreadable", credentialReauthStoreErrorBody)
-	}
-	scope := awsSSOScopeFor(siteCfg, run.Agent, claims.Sub)
-	if !scope.perUser || len(s.bedrockBearerFor(ctx, scope)) > 0 {
-		return true
-	}
-	return fail(http.StatusFailedDependency, "per_user_bearer_absent", bedrockBearerNamespaceNotOwn)
 }

@@ -1016,8 +1016,12 @@ migration `0050`)** are the second and third owned nouns after runs.
   refused (403) for every non-operator PUT: SigV4 is always signed out of the
   operator namespace, so a member row under one of those names would read as
   configured in setup while dispatch never uses it. `bedrock-api-key` is NOT one
-  of them — the bearer is injected per run from the run owner's own namespace,
-  so a member may store their own.
+  of them, so a member may store their own: under a `per_user` agent row the
+  bearer is injected from the run owner's own namespace, under `shared` from the
+  operator's. Dispatch records that choice on the grant it authors, and the
+  injection sink resolves the key from exactly that record
+  (`resolveBedrockBearerInjection`) — a member's own key never stands in for
+  the operator's, nor the operator's for a member's.
 - **`GET /secrets` returns `{names, mine}`.** `mine` is always the queried
   namespace's own rows (reserved names filtered out). `names` keeps its pre-0.7
   meaning for an admin — the operator namespace, or one member's own rows with
