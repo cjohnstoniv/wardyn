@@ -51,19 +51,32 @@ func TestPublishedImageListsAgree(t *testing.T) {
 		t.Errorf("release.yml no longer publishes agent-base; if that is deliberate, this guard and the consumers below need re-deriving")
 	}
 
-	// scripts/gpl-source-offer.sh's IMAGES=(...) array.
+	// scripts/gpl-source-offer.sh no longer carries a hand-written list: it
+	// derives the set from release.yml's publish matrix with the same `- name:`
+	// idiom parsed above, so the two cannot disagree by construction. What this
+	// guard checks is that the derivation is still there — a future edit that
+	// reintroduces a literal array reintroduces the drift this test exists to
+	// catch, and it would otherwise pass while the array rotted.
 	sh, err := os.ReadFile(filepath.Join(root, "scripts", "gpl-source-offer.sh"))
 	if err != nil {
 		t.Fatalf("read gpl-source-offer.sh: %v", err)
 	}
-	arrRe := regexp.MustCompile(`(?m)^IMAGES=\(([^)]*)\)`)
-	m := arrRe.FindStringSubmatch(string(sh))
-	if m == nil {
-		t.Fatal("could not find IMAGES=(...) in scripts/gpl-source-offer.sh — this guard can no longer see the list it exists to check")
+	if regexp.MustCompile(`(?m)^IMAGES=\(`).MatchString(string(sh)) {
+		t.Error("scripts/gpl-source-offer.sh carries a literal IMAGES=(...) array again; derive the list from .github/workflows/release.yml instead — a hand-copy drifted once already and silently stopped scanning a published image")
 	}
+	deriveRe := regexp.MustCompile(`(?m)^mapfile -t IMAGES < <\(.*- name:.*\)`)
+	if !deriveRe.MatchString(string(sh)) {
+		t.Fatal("scripts/gpl-source-offer.sh no longer derives IMAGES from release.yml's `- name:` matrix — this guard can no longer see the list it exists to check")
+	}
+	if !strings.Contains(string(sh), "release.yml") {
+		t.Error("scripts/gpl-source-offer.sh does not read release.yml; the derivation must come from the workflow that actually pushes the images")
+	}
+	// The offer therefore covers exactly what release.yml publishes. The
+	// remaining comparisons below still run against RELEASING.md, which IS a
+	// hand-copy and does still drift.
 	offer := map[string]bool{}
-	for _, f := range strings.Fields(m[1]) {
-		offer[f] = true
+	for img := range published {
+		offer[img] = true
 	}
 
 	// RELEASING.md's manual multi-arch cosign verification: the SECOND

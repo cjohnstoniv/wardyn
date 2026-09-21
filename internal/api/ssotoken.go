@@ -114,7 +114,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	stamp, aerr := s.loginRunStamp(r.Context(), claims.RunID)
 	if aerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStampUnreadable,
-			"verify sso token against login run: "+aerr.Error(), nil)
+			loggedMsg(r.Context(), "verify sso token against login run", aerr), nil)
 		return
 	}
 	if msg, reason := s.bindSSOBlob(blob, stamp); msg != "" {
@@ -147,6 +147,18 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The SAME per-person lock a sign-in launch takes (lockLoginSupersede), keyed
+	// on this login run's CREATOR off the GetRun at the top of this handler —
+	// because the read-modify-write below is the other half of the race: this
+	// capture and the person's next sign-in's supersede pass are two requests
+	// minutes apart, and unserialized they interleave into the stored credential.
+	// Taken FIRST, before the per-scope mutex below, and that order is fixed:
+	// creator key, then scope key, everywhere both are held. Inverting it here
+	// would be the only place in the tree that did, which is how a deadlock gets
+	// written. Fails open exactly as the launch's does.
+	releaseLoginLock := s.lockLoginSupersede(r.Context(), run.CreatedBy)
+	defer releaseLoginLock()
+
 	// Serialised per scope, because the once-only guard below is a read-then-put
 	// (a read-then-put race): two concurrent PUTs from the same login sandbox both read
 	// "not captured yet" and both stored, last write winning, so the guard held
@@ -174,7 +186,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// reading the wrong namespace.
 	if prev, found, rerr := s.readAWSSSOBlob(r.Context(), scope); rerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
-			"read existing aws sso credential: "+rerr.Error(), &scope)
+			loggedMsg(r.Context(), "read existing aws sso credential", rerr), &scope)
 		return
 	} else if found && prev.SourceRunID == claims.RunID.String() {
 		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonAlreadyCaptured,
@@ -202,7 +214,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// again) is the same either way.
 	if live, rerr := s.cfg.Store.GetRun(r.Context(), claims.RunID); rerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
-			"re-read login run before storing aws sso credential: "+rerr.Error(), &scope)
+			loggedMsg(r.Context(), "re-read login run before storing aws sso credential", rerr), &scope)
 		return
 	} else if live.State == types.RunKilled {
 		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonRunKilled, ssoTokenRunKilledRefusal, &scope)
@@ -219,7 +231,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		// land" is the honest reading, and a failed persist is exactly the
 		// event an operator wants beside the rest rather than only in a 500.
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
-			"store aws sso credential: "+err.Error(), &scope)
+			loggedMsg(r.Context(), "store aws sso credential", err), &scope)
 		return
 	}
 

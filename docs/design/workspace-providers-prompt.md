@@ -866,6 +866,7 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `MODEL_ACCESS_NOT_CONFIGURED` | Model access · Not signed in |
 | `MODEL_ACCESS_SHARED_EXPIRED` | Model access · Your admin's credential expired |
 | `MODEL_ACCESS_SHARED_EXPIRED_ACTION` | Your admin's model credential expired — ask them to reconnect it |
+| `MODEL_ACCESS_NOT_APPLICABLE` | Model access · Not applicable |
 | `SIGN_IN_AWS` | Sign in to AWS |
 | `FLOOR_UNPARSEABLE(value)` | "{value}" isn't a barrier class, so this policy sets no floor — the barrier above is what launches. |
 | `EFFECTIVE_TITLE` | Effective policy |
@@ -875,14 +876,16 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `OPEN_RUN_CTA` | Open run |
 | `AGENT_ROW_DISABLED_CHIP` | Off |
 
-The six lifecycle states and what each renders: `live` → `MODEL_ACCESS_LIVE`, success, no action
+The seven lifecycle states and what each renders: `live` → `MODEL_ACCESS_LIVE`, success, no action
 (`expired_renewable` folds in — dispatch renews it); `expiring` → `MODEL_ACCESS_EXPIRING` +
 `_ACTION(ts)`, warning, `SIGN_IN_AWS`; `expired_signin` → `MODEL_ACCESS_EXPIRED`, warning,
 `SIGN_IN_AWS`; `not_configured` → `MODEL_ACCESS_NOT_CONFIGURED`, warning, `SIGN_IN_AWS`; `shared`
 live → `MEMBER_GETTING_STARTED.MODEL_ACCESS_PROVIDED_CHIP` (reused), success; `shared_expired` →
-`MODEL_ACCESS_SHARED_EXPIRED` + `_ACTION`, warning, no button (nothing the member can do). The
-action line renders under the chip row, in the member's own words, and `SIGN_IN_AWS` opens
-`HarnessLoginPane` in place. The admin's own chip on the Agents tab renders the same six.
+`MODEL_ACCESS_SHARED_EXPIRED` + `_ACTION`, warning, no button (nothing the member can do);
+`not_applicable` → `MODEL_ACCESS_NOT_APPLICABLE`, neutral, no action — the caller is a mechanism
+(the shared admin token under a per_user row), not a person, so there is no sign-in for it to
+complete. The action line renders under the chip row, in the member's own words, and `SIGN_IN_AWS`
+opens `HarnessLoginPane` in place. The admin's own chip on the Agents tab renders the same seven.
 `MECHANISM_*` labels name Bedrock's four sub-lanes under the card's "AWS Bedrock" lane title; the
 Anthropic and OpenAI lanes reuse the model card's titles (§7.1). `UNAVAILABLE` is the picker item's
 sub-line (the plan's fragment, sentence-cased). `FLOOR_UNPARSEABLE` renders under the JSON policy

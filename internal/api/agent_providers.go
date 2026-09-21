@@ -385,7 +385,7 @@ func validateAgentSSOPin(row types.AgentProvider, bedrockModel string) error {
 func (s *Server) handleGetAgentProviders(w http.ResponseWriter, r *http.Request) {
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	block := storedAgentProviders(sc)
@@ -423,7 +423,7 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	if !ifMatchSatisfied(r, computeETag(storedAgentProviders(existing))) {
@@ -437,7 +437,7 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 	candidate.EffectiveScmHosts = nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		writeServerError(w, r, "put site config", err)
 		return
 	}
 	savedBlock := storedAgentProviders(saved)
