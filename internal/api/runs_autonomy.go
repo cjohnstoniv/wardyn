@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"slices"
@@ -45,7 +46,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	if ceiling.Profile == nil || ceiling.Limits.AutonomyRubric == nil {
 		return types.AutonomyResolution{}, nil, true
 	}
-	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs), enforced)
+	posture := composer.AutonomyPostureOf(s.autonomyPostureSpec(r.Context(), spec, wsRefs, req.Repo), enforced)
 	level, boundBy := composer.FoldAutonomy(*ceiling.Limits.AutonomyRubric, posture)
 	res := types.AutonomyResolution{Level: level, Posture: posture, BoundBy: boundBy}
 	// An all-unset rubric — or one that leaves this posture's three fields
@@ -197,36 +198,57 @@ func autonomyAgentLabel(agent string) string {
 }
 
 // autonomyPostureSpec returns the spec the posture is graded on: the FOLDED
-// spec widened by the WORKSPACE egress lanes.
+// spec widened by every egress lane unionRunEgress adds that BOTH doors can
+// compute.
 //
 // The widening is what makes the two doors agree, and it is not optional.
 // Launch's unionRunEgress runs AFTER the create audit row is written, so
-// launch's spec at the gate is pre-union; preflight, which has no run id and
-// no grants, unions the two lanes it CAN compute (unionWorkspaceEgress plus
-// each workspace's clone hosts) before it folds anything. Grading each door's
-// spec as it stands would therefore have an enterprise-forge clone host read
-// "sealed" at launch and "open" on Review — the disagreement this gate exists
-// to prevent. Unioning here instead is a no-op on preflight's spec (those
-// hosts are already in it) and set-identical on launch's, so both doors grade
-// the same envelope whatever order the unions ran in.
+// launch's spec at the gate is pre-union; preflight, which has no run id,
+// unions the workspace lanes before it folds anything. Grading each door's
+// spec as it stands would therefore have an enterprise-forge host read
+// "sealed" at launch and "open" on Review. Unioning here instead is a no-op on
+// preflight's spec for the lanes it already ran and set-identical on launch's,
+// so both doors grade the same envelope whatever order the unions ran in.
 //
-// KNOWN GAP, named in the changelog: the three GRANT-DEPENDENT lanes
-// unionRunEgress adds after this point — an ssh_key's SSH-over-443 endpoint, a
-// git_pat's Azure DevOps hosts, and the site-config enterprise SCM hosts — are
-// NOT in the posture. They cannot be: no grant has been minted at preflight
-// time, so including them would re-open the divergence from the other side. A
-// run whose only beyond-baseline reach comes from one of those lanes grades
-// sealed or reviewed rather than open.
+// Three lanes, and the third is the one a narrower reading of "pre-union"
+// would have left out at real cost. The site-config SCM hosts are NOT
+// grant-dependent: unionRunEgress gates them on `declaresRepo`, which is true
+// from `spec.WorkspaceRepos` or the legacy free-text `repo` field alone
+// (runs_create.go), and unionSiteConfigScmHosts reads nothing but site config.
+// So `--repo https://ghes.corp.example/team/app` reaches an operator-declared
+// internal forge with no grant, no workspace and no approval — and a posture
+// blind to it grades that run `sealed`, handing it the rubric's most
+// permissive egress rung. The same Server method launch calls is called here,
+// so the two cannot drift about which hosts those are.
+//
+// KNOWN GAP, named in the changelog: the two GRANT-DERIVED lanes — an
+// ssh_key's SSH-over-443 endpoint and a git_pat's Azure DevOps bundle — are
+// still outside the posture, along with the grant-only path into
+// `declaresRepo`. Those hosts come out of persistRunGrants, past a per-host
+// provider-lane veto that runs only on the launch side, and re-deriving that
+// decision here is how the two doors start disagreeing again. The residual is
+// BOUNDED rather than merely accepted: every grant that opens one of those
+// lanes is an ssh_key or a git_pat, which autonomySecrets grades `powerful` at
+// both doors, so such a run is never graded as carrying nothing.
 //
 // Works on a copy with both domain slices cloned: spec is the one the caller
 // goes on to persist and dispatch, and unionDomains appends in place.
-func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace) types.RunPolicySpec {
+func (s *Server) autonomyPostureSpec(ctx context.Context, spec types.RunPolicySpec,
+	wsRefs []types.Workspace, legacyRepo string,
+) types.RunPolicySpec {
 	out := spec
 	out.AllowedDomains = slices.Clone(spec.AllowedDomains)
 	out.DeniedDomains = slices.Clone(spec.DeniedDomains)
 	unionWorkspaceEgress(&out, wsRefs)
 	for _, ws := range wsRefs {
 		unionAllowedDomains(&out, workspaceCloneEgress(ws))
+	}
+	// unionRunEgress's declaresRepo, restricted to the two disjuncts that need
+	// no grant. A run that declares no repo at all inherits no SCM lane there
+	// and must inherit none here either, or a sealed local-dir run would grade
+	// open on hosts it can never reach.
+	if len(spec.WorkspaceRepos) > 0 || strings.TrimSpace(legacyRepo) != "" {
+		s.unionSiteConfigScmHosts(ctx, &out)
 	}
 	return out
 }

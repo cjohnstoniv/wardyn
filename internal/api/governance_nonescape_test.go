@@ -627,6 +627,45 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 			t.Errorf("the refused codex-cli run left %d row(s) behind", runs)
 		}
 	})
+
+	// Row 22 — BUYING AN AUTONOMY RUNG WITH THE `repo` FIELD. The posture is
+	// graded before unionRunEgress, so every host that union adds is a candidate
+	// escape; the SITE-CONFIG SCM lane is the reachable one, because it needs no
+	// grant at all. `declaresRepo` is true from the free-text `repo` field alone
+	// (runs_create.go) and unionSiteConfigScmHosts reads nothing but site config,
+	// so one request field buys reach to an operator-declared internal forge.
+	//
+	// Counterfactual: grade the pre-union spec and this run reads `sealed`, takes
+	// the rubric's sealed rung — the permissive one, since a sealed run is the
+	// safe one to leave alone — and launches unsupervised WITH the forge in its
+	// allowlist. Both doors agree on that answer, so the Review/launch parity
+	// test cannot see it.
+	//
+	// Asserted on WARDYN_TOOL_APPROVALS, not the resolution: the level is only
+	// worth grading if the supervision it implies reaches the container.
+	t.Run("row 22: the repo field cannot buy a rung the run's real egress forbids", func(t *testing.T) {
+		const ghes = "ghes.corp.example"
+		p := govProfile("autonomy-scm")
+		p.Limits = types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{
+			EgressOpen: types.AutonomyL1, EgressSealed: types.AutonomyL3,
+		}}
+		srv, st, _ := govEscapeFixture(t, autonomyCapStore(p))
+		st.siteConfig = types.SiteConfig{ScmHosts: []string{ghes}}
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+			`{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto",`+
+				`"repo":"https://`+ghes+`/team/app"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+		}
+		fr, ok := srv.cfg.Runner.(*fakeRunner)
+		if !ok {
+			t.Fatal("the fixture's runner is no longer the recording double")
+		}
+		env := fr.lastSandboxEnv()
+		if got := env["WARDYN_TOOL_APPROVALS"]; got != "hold" {
+			t.Errorf("WARDYN_TOOL_APPROVALS = %q, want hold — the run reaches %q and was graded as if sealed", got, ghes)
+		}
+	})
 }
 
 // TestGovernanceProfileNonEscape_Dispatch is the escape table's DISPATCH half —

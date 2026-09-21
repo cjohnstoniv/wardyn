@@ -136,6 +136,16 @@ func TestFoldAutonomyMinimum(t *testing.T) {
 		{"a tie found after a higher cap replaces it, never appends to it",
 			types.AutonomyRubric{EgressSealed: types.AutonomyL2, SecretsNone: types.AutonomyL1, ConfinementCC2: types.AutonomyL1},
 			sealedNoneCC2, types.AutonomyL1, []string{"secrets_none", "confinement_cc2"}},
+		// A value no AutonomyLevel defines. Unreachable through the API —
+		// governanceLimitsRefusal calls AutonomyRubric.Validate at write — so
+		// this is the hand-edited column, and it must fail CLOSED: Rank() is -1
+		// for an unrecognised value, which is below L0, so it wins the min() and
+		// every threshold in the api ladder refuses. It is carried through
+		// verbatim rather than clamped to a real rung, because inventing a level
+		// nobody authored is how a corrupted row becomes a permitted one.
+		{"an undefined level wins the minimum and is carried through verbatim",
+			types.AutonomyRubric{EgressSealed: "L9", SecretsNone: types.AutonomyL0},
+			sealedNoneCC2, types.AutonomyLevel("L9"), []string{"egress_sealed"}},
 		// The zero posture is what the api gate holds for a run under no
 		// profile. It must select NO cap, or a rubric would bind a run nothing
 		// was meant to bind.

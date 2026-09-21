@@ -514,6 +514,89 @@ func TestAutonomyPostureIncludesWorkspaceEgressAtBothDoors(t *testing.T) {
 	}
 }
 
+// TestAutonomyPostureIncludesSiteConfigScmHostsAtBothDoors is the OTHER lane
+// unionRunEgress adds after the gate, and the one that is not grant-dependent
+// at all — which is what makes it an escape rather than a rounding error.
+//
+// `declaresRepo` (runs_create.go) is true from the legacy free-text `repo`
+// field alone, and unionSiteConfigScmHosts reads nothing but site config. So a
+// member reaches an operator-declared internal forge with no grant, no
+// workspace and no approval; a posture blind to that host grades the run
+// `sealed`, and the rubric below hands `sealed` the rung that runs tool calls
+// unsupervised. The two doors AGREE on that wrong answer, so the parity test
+// cannot see it — only grading the host can.
+//
+// The second row is the scope: a run that declares no repo inherits no SCM
+// lane at launch either, so grading it `open` would cap runs on reach they can
+// never have.
+func TestAutonomyPostureIncludesSiteConfigScmHostsAtBothDoors(t *testing.T) {
+	const ghes = "ghes.corp.example"
+	profile := govProfile("scm-egress")
+	profile.Limits = types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{
+		EgressOpen: types.AutonomyL1, EgressSealed: types.AutonomyL3,
+	}}
+	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
+
+	for _, tc := range []struct {
+		name       string
+		body       string
+		wantEgress types.AutonomyEgressPosture
+		wantLevel  types.AutonomyLevel
+	}{
+		{
+			name:       "a declared repo inherits the operator's SCM host, so the run is open",
+			body:       `{"agent":"claude-code","task":"t","confinement_class":"CC2","repo":"https://` + ghes + `/team/app"}`,
+			wantEgress: types.AutonomyEgressOpen,
+			wantLevel:  types.AutonomyL1,
+		},
+		{
+			name:       "a run that declares no repo inherits no SCM lane and stays sealed",
+			body:       `{"agent":"claude-code","task":"t","confinement_class":"CC2"}`,
+			wantEgress: types.AutonomyEgressSealed,
+			wantLevel:  types.AutonomyL3,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _ := govEscapeFixture(t, autonomyCapStore(profile))
+			st.siteConfig = types.SiteConfig{ScmHosts: []string{ghes}}
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member(t), tc.body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("preflight = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			var resp struct {
+				Autonomy map[string]any `json:"autonomy"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode preflight: %v", err)
+			}
+
+			srv2, st2, audit2 := govEscapeFixture(t, autonomyCapStore(profile))
+			st2.siteConfig = types.SiteConfig{ScmHosts: []string{ghes}}
+			if c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), tc.body); c.Code != http.StatusCreated {
+				t.Fatalf("create = %d, want 201: %s", c.Code, c.Body.String())
+			}
+			launched, _ := autonomyCreateAudit(t, st2, audit2)["autonomy"].(map[string]any)
+
+			for _, side := range []struct {
+				name string
+				got  map[string]any
+			}{{"review", resp.Autonomy}, {"launch", launched}} {
+				if side.got == nil {
+					t.Fatalf("%s published no autonomy object", side.name)
+				}
+				posture, _ := side.got["posture"].(map[string]any)
+				if got, _ := posture["egress"].(string); got != string(tc.wantEgress) {
+					t.Errorf("%s: posture.egress = %q, want %q (the operator's SCM host is %q)",
+						side.name, got, tc.wantEgress, ghes)
+				}
+				if got, _ := side.got["level"].(string); got != string(tc.wantLevel) {
+					t.Errorf("%s: level = %q, want %q", side.name, got, tc.wantLevel)
+				}
+			}
+		})
+	}
+}
+
 // ─── the absent-row rule ──────────────────────────────────────────────────────
 
 // TestAutonomyAbsentRowChangesNothing pins the promise every GovernanceLimits
@@ -703,5 +786,50 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAutonomyUndefinedLevelFailsClosed is the corrupted-column case: a stored
+// rubric carrying a level no AutonomyLevel defines.
+//
+// Unreachable through the API — governanceLimitsRefusal validates the nine
+// fields at write — so the only way in is a hand-edited column or a future
+// level a downgraded binary does not know. Either way the gate must fail
+// CLOSED. It does so structurally rather than by a special case:
+// AutonomyLevel.Rank() is -1 for an unrecognised value, which is below L0, so
+// the undefined cap wins the minimum and every threshold in the ladder refuses.
+//
+// The resolution still reports the stored value verbatim. Clamping it to a real
+// rung would be inventing a level nobody authored, and an operator reading the
+// audit row needs to see the string that is actually in their column.
+func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
+	p := govProfile("autonomy-corrupt")
+	p.Limits = types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{EgressSealed: "L9"}}
+	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
+
+	srv, st, _ := govEscapeFixture(t, autonomyCapStore(p))
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+		`{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto"}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("an unattended run under an undefined level = %d, want 403: %s", w.Code, w.Body.String())
+	}
+	st.mu.Lock()
+	runs := len(st.runs)
+	st.mu.Unlock()
+	if runs != 0 {
+		t.Errorf("the refused run left %d row(s) behind", runs)
+	}
+
+	// The most supervised shape there is still launches: failing closed means
+	// refusing what is unattended, not bricking the profile.
+	srv2, st2, audit2 := govEscapeFixture(t, autonomyCapStore(p))
+	c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t),
+		`{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`)
+	if c.Code != http.StatusCreated {
+		t.Fatalf("an interactive run = %d, want 201: %s", c.Code, c.Body.String())
+	}
+	launched, _ := autonomyCreateAudit(t, st2, audit2)["autonomy"].(map[string]any)
+	if got, _ := launched["level"].(string); got != "L9" {
+		t.Errorf("audited level = %q, want the stored value %q carried through verbatim", got, "L9")
 	}
 }

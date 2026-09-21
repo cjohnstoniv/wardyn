@@ -55,12 +55,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `internal/composer/autonomy.go`). A member with no assigned profile — and a profile with no
   rubric, or one that caps nothing at this posture — is unchanged: no refusal, no derived field and
   no `autonomy` key on either surface.
-  **Known gap:** the posture is graded BEFORE the three grant-dependent egress unions — an
-  `ssh_key`'s SSH-over-443 endpoint, a `git_pat`'s Azure DevOps hosts, and the site-config
-  enterprise SCM hosts, all of which `unionRunEgress` adds after the resolution. They cannot be
-  graded on both doors, because no grant is minted at Review time, so a run whose only
-  beyond-baseline reach comes from one of those lanes grades `sealed` or `reviewed` rather than
-  `open`. The workspace egress lanes, which both doors can compute, ARE included.
+  The posture is graded on the run's real egress envelope, not on the spec as each handler
+  happens to hold it: the workspace lanes and the site-config enterprise SCM hosts are unioned in
+  before grading, through the same helpers launch uses. The SCM lane matters most — it is reached
+  from the free-text `repo` field with no grant, no workspace and no approval, so a posture blind
+  to it would grade a run that reaches an internal forge as `sealed` and hand it the rubric's most
+  permissive egress rung.
+  **Known gap:** the two GRANT-DERIVED egress lanes `unionRunEgress` adds after the resolution —
+  an `ssh_key`'s SSH-over-443 endpoint and a `git_pat`'s Azure DevOps bundle — are outside the
+  posture, along with the grant-only path into that union's `declaresRepo`. Those hosts are
+  produced by `persistRunGrants` past a per-host provider-lane veto that runs on the launch side
+  only, and re-deriving that decision at Review is how the two doors start disagreeing again. The
+  residual is bounded: every grant that opens one of those lanes is an `ssh_key` or a `git_pat`,
+  which the secrets axis grades `powerful` at both doors, so such a run is never graded as
+  carrying nothing.
 - **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
   profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
   secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`
