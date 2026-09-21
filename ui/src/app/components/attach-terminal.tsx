@@ -50,6 +50,7 @@ import { Eye, Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "luc
 import { cn } from "./ui/utils";
 import { Button } from "./ui/button";
 import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
+import { TerminalConnectionStatus } from "./attach-terminal-status";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
@@ -213,6 +214,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const [geom, setGeom] = React.useState<{ cols: number; rows: number } | null>(null);
   const [confirmTakeover, setConfirmTakeover] = React.useState(false);
   const [takeoverErr, setTakeoverErr] = React.useState("");
+  // #216 — mirrors the connect effect's `reconnectAttempts` var for render.
+  const [reconnectAttempt, setReconnectAttempt] = React.useState(0);
+  const [reconnectExhausted, setReconnectExhausted] = React.useState(false);
 
   // Keep onClose in a ref so a fresh closure on every parent render does NOT
   // re-run the connect effect (which would tear down + reconnect the terminal
@@ -254,6 +258,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // the reconnect budget) and called by the take-over flow — see doTakeover for
   // why a take-over needs a reconnect at all.
   const reclaimRef = React.useRef<() => void>(() => {});
+  // #216 — Reconnect button's handler; assigned by the connect effect below.
+  const manualReconnectRef = React.useRef<() => void>(() => {});
 
   // Token-only mode routes the WS handshake through a minted attach ticket
   // (the browser cannot put the bearer on the handshake itself).
@@ -474,10 +480,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
 
       ws.onopen = () => {
         clearConnectTimer();
-        if (reconnectAttempts > 0) {
-          term.writeln("\r\n\x1b[2m[reconnected]\x1b[0m");
-        }
+        // #216 — was `term.writeln([reconnected])`; the open dot below says so.
         reconnectAttempts = 0; // a successful attach resets the budget
+        setReconnectAttempt(0);
+        setReconnectExhausted(false);
         setConnState("open");
         // Fit + send the real size once the PTY is attached. Forced, so an
         // attach that lands while another client has the window clamped starts
@@ -550,7 +556,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           setTakenOverBy(reason.startsWith(TAKEN_OVER_REASON_PREFIX) ? reason.slice(TAKEN_OVER_REASON_PREFIX.length) : "");
           setMode(null); // we hold nothing now; the header must not still say "driving"
           setConnState("closed");
-          term.writeln(`\r\n\x1b[2m[${reason || "taken over"} — not reconnecting]\x1b[0m`);
+          // #216 — was a writeln; the holder footer's displacedHint says this.
           return;
         }
         // Clean, intentional close (1000) => the run finished / we unmounted.
@@ -578,28 +584,27 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
             RECONNECT_BASE_DELAY_MS * 2 ** (reconnectAttempts - 1),
           );
           setConnState("reconnecting");
-          term.writeln(
-            `\r\n\x1b[2m[connection lost — reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})…]\x1b[0m`,
-          );
+          // #216 — was a writeln; TerminalConnectionStatus below the grid
+          // renders the same count, outside the buffer.
+          setReconnectAttempt(reconnectAttempts);
           reconnectTimer = setTimeout(connect, delay);
           return;
         }
         // Budget exhausted: give up and surface the closed state.
+        // #216 — was a writeln; TerminalConnectionStatus below now carries it,
+        // with Reconnect, instead of scrolling out of view.
+        setReconnectExhausted(true);
         setConnState("closed");
-        term.writeln(
-          `\r\n\x1b[2m[connection closed after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts]\x1b[0m`,
-        );
         onCloseRef.current?.();
       };
 
       ws.onerror = () => {
         clearConnectTimer();
-        // An error is always followed by a close event, and onclose's
-        // own "budget exhausted" arm unconditionally sets "closed" right
-        // after — so a setConnState("error") here is dead, never observable
-        // (attach-terminal.test.tsx pins the [closed] text that arm renders,
-        // R4-F143 — deliberate, untouched). connState "error" is reached
-        // elsewhere, from the caller's own refusal to attach at all.
+        // An error is always followed by a close event, and onclose's own
+        // "budget exhausted" arm unconditionally sets "closed" right after —
+        // so a setConnState("error") here is dead, never observable (R4-F143
+        // — deliberate, untouched). "error" is reached only from the
+        // caller's own refusal to attach at all.
       };
     };
 
@@ -627,6 +632,16 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       }
       wsRef.current = null;
       reconnectAttempts = 0; // a deliberate re-attach starts from a full budget
+      connect();
+    };
+
+    // #216 — Reconnect: the spent socket is already closed (the browser did
+    // that), so just reset the count and attach again, like a fresh mount.
+    manualReconnectRef.current = () => {
+      if (disposed) return;
+      reconnectAttempts = 0;
+      setReconnectAttempt(0);
+      setReconnectExhausted(false);
       connect();
     };
 
@@ -806,8 +821,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           {connState === "connecting" && "Connecting…"}
           {connState === "reconnecting" && "Reconnecting…"}
           {connState === "open" && `attach — ${runId}`}
-          {connState === "closed" && `[closed] ${runId}`}
-          {connState === "error" && `[error] ${runId}`}
+          {/* #216 — was `[closed] {runId}` / `[error] {runId}`; state now
+              lives in TerminalConnectionStatus below, so the bar just names
+              the run. */}
+          {(connState === "closed" || connState === "error") && runId}
         </span>
         {/* State chip (design board 2d). Only ever rendered from what the
             SERVER said: "driving" needs an attach-mode frame with
@@ -917,6 +934,26 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           </div>
         )}
       </div>
+
+      {/* #216 — connection state, outside the scrollback, so it can't scroll
+          away. `displaced` is excluded: it has its own footer below, with its
+          own action (Take over, not Reconnect). */}
+      {connState === "reconnecting" && (
+        <TerminalConnectionStatus
+          state="reconnecting"
+          attempt={reconnectAttempt}
+          maxAttempts={MAX_RECONNECT_ATTEMPTS}
+          onReconnect={() => manualReconnectRef.current()}
+        />
+      )}
+      {connState === "closed" && reconnectExhausted && !displaced && (
+        <TerminalConnectionStatus
+          state="closed"
+          attempt={reconnectAttempt}
+          maxAttempts={MAX_RECONNECT_ATTEMPTS}
+          onReconnect={() => manualReconnectRef.current()}
+        />
+      )}
 
       {/* Holder footer — only in the two states that have an action. A driving
           terminal keeps its existing chrome (every dialog embed depends on the

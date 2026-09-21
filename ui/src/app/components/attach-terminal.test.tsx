@@ -208,6 +208,26 @@ describe("AttachTerminal reconnect", () => {
     expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
   });
 
+  // #216 — the live retry now renders OUTSIDE xterm's scrollback (never a
+  // `term.writeln`), and clears the moment the reconnect lands.
+  it("shows the live reconnect attempt outside the scrollback, and clears it on reconnect", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    const first = FakeWebSocket.instances[0];
+    act(() => first.open());
+
+    act(() => first.drop(1006, "abnormal"));
+
+    expect(screen.getByText("Reconnecting — attempt 1 of 4.")).toBeInTheDocument();
+    expect(writeln).not.toHaveBeenCalledWith(expect.stringContaining("[connection lost"));
+    expect(writeln).not.toHaveBeenCalledWith(expect.stringContaining("[reconnected]"));
+
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    act(() => FakeWebSocket.instances[FakeWebSocket.instances.length - 1].open());
+
+    expect(screen.queryByText(/Reconnecting — attempt/)).toBeNull();
+    expect(writeln).not.toHaveBeenCalledWith(expect.stringContaining("[reconnected]"));
+  });
+
   it("does NOT reconnect after a CLEAN close (code 1000)", async () => {
     const onClose = vi.fn();
     render(<AttachTerminal runId="run_1" onClose={onClose} />);
@@ -525,6 +545,18 @@ describe("AttachTerminal — attach mode, displacement, take-over", () => {
     expect(screen.getByRole("button", { name: RUN_COCKPIT.takeOver })).toBeInTheDocument();
   });
 
+  // #216 — was `term.writeln([reason — not reconnecting])`; the holder footer
+  // above already says it, outside the scrollback.
+  it("a close with code 1008 does not write into the scrollback", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+
+    act(() => ws.drop(1008, "taken over by bob@example.com"));
+
+    expect(writeln).not.toHaveBeenCalledWith(expect.stringContaining("not reconnecting"));
+  });
+
   // Only the reason survived (a proxy rewrote the code): still a displacement,
   // still no reconnect.
   it("the `taken over by ` reason alone is enough to stop the reconnect", async () => {
@@ -655,7 +687,41 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
     await act(() => vi.advanceTimersByTimeAsync(120_000));
     expect(FakeWebSocket.instances.length).toBeLessThanOrEqual(5);
     expect(screen.queryByText("Connecting…")).toBeNull();
-    expect(screen.getByText("[closed] run_1")).toBeInTheDocument();
+    // #216 — the bar goes back to just naming the run (no more `[closed]`);
+    // TERMINAL.CLOSED_TITLE / CLOSED_BODY and a Reconnect button, OUTSIDE the
+    // scrollback, carry the state and the way back in.
+    expect(screen.getByText("run_1")).toBeInTheDocument();
+    expect(screen.queryByText("[closed] run_1")).toBeNull();
+    expect(screen.getByText(TERMINAL.CLOSED_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(TERMINAL.CLOSED_BODY)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: TERMINAL.RECONNECT })).toBeInTheDocument();
+    // Never written into xterm's own buffer — the writeln mock proves it.
+    expect(writeln).not.toHaveBeenCalledWith(expect.stringContaining("[connection closed after"));
+  });
+
+  // #216 — the whole point: a spent budget must not be a dead end. Reconnect
+  // drops the exhausted state and attaches again, keeping the same xterm
+  // instance (and its scrollback) rather than tearing the panel down.
+  it("Reconnect, after the budget is spent, attaches again", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    let idx = 0;
+    act(() => FakeWebSocket.instances[0].open());
+    for (let i = 0; i < 8; i++) {
+      const sock = FakeWebSocket.instances[idx];
+      if (!sock) break;
+      act(() => sock.drop(1006, "abnormal"));
+      await act(() => vi.advanceTimersByTimeAsync(6000));
+      idx = FakeWebSocket.instances.length - 1;
+    }
+    const reconnectButton = screen.getByRole("button", { name: TERMINAL.RECONNECT });
+    const socketsBefore = FakeWebSocket.instances.length;
+
+    act(() => reconnectButton.click());
+
+    expect(FakeWebSocket.instances.length).toBe(socketsBefore + 1);
+    expect(screen.queryByText(TERMINAL.CLOSED_TITLE)).toBeNull();
+    act(() => FakeWebSocket.instances[FakeWebSocket.instances.length - 1].open());
+    expect(screen.getByText("attach — run_1")).toBeInTheDocument();
   });
 
   it("leaves a handshake that DOES complete alone — no deadline fires on a live socket", async () => {
