@@ -89,8 +89,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Failure rows are coalesced like `auth.failed`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
   (failures) and `device.audit.chain_reset`.
 
-- **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL`, `WARDYN_ORG_ENROLMENT_TOKEN` and
-  `WARDYN_ORG_DEVICE_NAME` tell a managed laptop which org control plane it belongs to. Boot is
+- **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL` and `WARDYN_ORG_ENROLMENT_TOKEN`
+  tell a managed laptop which org control plane it belongs to (the device's name at the org is the one
+  its enrolment token was minted for). Boot is
   refused when an org URL is set without `WARDYN_MEMBER_MODE`, when the URL is plaintext and not
   loopback, or when an enrolment token is set with no org URL to send it to. See `docs/ENV.md`.
 

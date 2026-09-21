@@ -503,7 +503,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 		AutoStopAfterSec: int(harnessLoginIdleCap.Seconds()),
 	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
-	created, err := s.cfg.Store.CreateRun(ctx, run)
+	created, err := s.createRun(ctx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(ctx, runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("create harness login run: %w", err)

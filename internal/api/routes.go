@@ -179,7 +179,7 @@ func (s *Server) routes() chi.Router {
 			// author a policy pairing an operator secret with attacker egress and
 			// then simply select it. Profile authoring lives at /governance below.
 			securityOps := r.With(s.requireSecurityOperator)
-			r.With(s.refuseWhenOrgRevoked).Post("/runs", s.handleCreateRun)
+			r.Post("/runs", s.handleCreateRun)
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
 			// chokepoint (real 4xx errors), the enforced confinement class, and the
 			// deterministic setup checklist — mints/persists/dispatches nothing. The

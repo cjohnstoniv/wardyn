@@ -514,13 +514,13 @@ func TestStoreCreateRunCallerCensus(t *testing.T) {
 		if rerr != nil {
 			t.Fatalf("read %s: %v", name, rerr)
 		}
-		if strings.Contains(string(src), "Store.CreateRun(") {
+		if strings.Contains(string(src), "s.createRun(") {
 			got = append(got, name)
 		}
 	}
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
-		t.Errorf("Store.CreateRun callers = %v, want %v\n"+
+		t.Errorf("createRun callers = %v, want %v\n"+
 			"a NEW lane that creates a run must admit the repository it is about to clone "+
 			"(admitRepoSources at a request door, or admitLauncherRepo at its own clone-URL "+
 			"derivation) — then add it here with a note saying which", got, want)

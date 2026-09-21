@@ -5,15 +5,25 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
@@ -77,18 +87,128 @@ func TestHealthzOrgFederation_BlockNeverNamesTheDevice(t *testing.T) {
 	}
 }
 
-// TestCreateRunRefusedWhenRevoked: once the organisation has revoked this
-// device, POST /runs answers 503 naming re-enrolment before it reads the body.
+// TestCreateRunRefusedWhenRevoked drives the real POST /runs to its store
+// write: enrolled, the run is created; revoked, the answer is 503 naming
+// re-enrolment and no row is written.
 func TestCreateRunRefusedWhenRevoked(t *testing.T) {
 	h := newHarness(t)
+	st := &runWarnStore{capStore: &capStore{}}
+	cfg := baseTestConfig(h, st)
+	cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
 	revoked := false
-	h.srv.cfg.OrgFederation = func() federation.Status { return federation.Status{Revoked: revoked} }
-	if w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, `{`); w.Code != http.StatusBadRequest {
-		t.Fatalf("enrolled: code = %d, want the ordinary 400 for a bad body: %s", w.Code, w.Body)
+	cfg.OrgFederation = func() federation.Status { return federation.Status{Revoked: revoked} }
+	srv := New(cfg)
+	const body = `{"agent":"claude-code","task":"t"}`
+	if w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body); w.Code != http.StatusCreated || st.created.ID == uuid.Nil {
+		t.Fatalf("enrolled: code = %d, want 201 with a row: %s", w.Code, w.Body)
 	}
+	st.created = types.AgentRun{}
 	revoked = true
-	w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, `{"agent":"claude-code","task":"x"}`)
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "re-enrolled") {
 		t.Fatalf("revoked: code = %d body = %s, want 503 naming re-enrolment", w.Code, w.Body)
+	}
+	if st.created.ID != uuid.Nil {
+		t.Fatal("revoked: a run row was written")
+	}
+}
+
+// TestCreateRunGateRefusesBeforeTheStore: the shared gate answers errOrgRevoked
+// without touching the store, and writeServerError — where every launcher sends
+// a creation failure — turns it into the 503 naming re-enrolment.
+func TestCreateRunGateRefusesBeforeTheStore(t *testing.T) {
+	st := &runWarnStore{capStore: &capStore{}}
+	srv := New(Config{Store: st, OrgFederation: func() federation.Status { return federation.Status{Revoked: true} }})
+	if _, err := srv.createRun(context.Background(), types.AgentRun{ID: uuid.New()}); !errors.Is(err, errOrgRevoked) || st.created.ID != uuid.Nil {
+		t.Fatalf("err = %v, row written = %v", err, st.created.ID != uuid.Nil)
+	}
+	w := httptest.NewRecorder()
+	writeServerError(w, httptest.NewRequest(http.MethodPost, "/", nil), "launch scan run", fmt.Errorf("create scan run: %w", errOrgRevoked))
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "re-enrolled") {
+		t.Fatalf("writeServerError: code = %d body = %s", w.Code, w.Body)
+	}
+}
+
+// TestRunCreationRoutesThroughTheRevocationGate enumerates every run-creating
+// path in this package and fails if one skips createRun's revocation gate: the
+// store's CreateRun may be called only from createRun, each launcher below must
+// call createRun, and a sandbox is created only by the dispatch chain, which
+// runs for a row createRun wrote. A new launcher that calls the store directly,
+// or a listed one that stops calling the gate, fails here.
+func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
+	wantGated := []string{
+		"harnesscred.go:launchHarnessLoginRun",
+		"runs.go:handleCreateRun",
+		"site_config_probe.go:runSiteConfigProbe",
+		"source_scan.go:launchSourceScanRun",
+		"workspace_run_launch.go:launchRecordRun",
+	}
+	// Each dispatches a row one of the gated launchers above just created.
+	wantDispatchers := []string{
+		"harnesscred_launch.go:finishHarnessLoginLaunch",
+		"runs.go:handleCreateRun",
+		"site_config_probe.go:runSiteConfigProbe",
+		"workspace_run_launch.go:dispatchAndSettle",
+	}
+	var gated, direct, sandboxes, dispatchers []string
+	fset := token.NewFileSet()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			where := name + ":" + fn.Name.Name
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				recv := ""
+				if inner, ok := sel.X.(*ast.SelectorExpr); ok {
+					recv = inner.Sel.Name
+				}
+				switch {
+				case sel.Sel.Name == "CreateRun" && recv == "Store":
+					direct = append(direct, where)
+				case sel.Sel.Name == "createRun":
+					gated = append(gated, where)
+				case sel.Sel.Name == "CreateSandbox" && recv == "Runner":
+					sandboxes = append(sandboxes, where)
+				case sel.Sel.Name == "dispatchRun":
+					dispatchers = append(dispatchers, where)
+				}
+				return true
+			})
+		}
+	}
+	slices.Sort(gated)
+	slices.Sort(dispatchers)
+	if !slices.Equal(direct, []string{"org_revocation.go:createRun"}) {
+		t.Errorf("Store.CreateRun is called from %v; only org_revocation.go:createRun may call it — route the launcher through s.createRun", direct)
+	}
+	if !slices.Equal(gated, wantGated) {
+		t.Errorf("launchers calling the revocation gate = %v, want %v", gated, wantGated)
+	}
+	if !slices.Equal(sandboxes, []string{"runs_dispatch.go:dispatchRun"}) {
+		t.Errorf("Runner.CreateSandbox is called from %v; a sandbox must only ever be created by dispatchRun, for a run createRun wrote", sandboxes)
+	}
+	if !slices.Equal(dispatchers, wantDispatchers) {
+		t.Errorf("dispatchRun callers = %v, want %v — a new dispatch path must dispatch a row createRun wrote, then be listed here", dispatchers, wantDispatchers)
 	}
 }

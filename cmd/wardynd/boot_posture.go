@@ -60,15 +60,14 @@ func validateMemberModePosture(memberMode, localMode, oidcConfigured bool) error
 }
 
 // validateHybridPosture enforces the org control-plane settings' preconditions
-// (issue #100, docs/design/0.8/PLAN.md): WARDYN_ORG_URL, WARDYN_ORG_ENROLMENT_TOKEN
-// and WARDYN_ORG_DEVICE_NAME. Kept as its OWN function rather than folded into
+// (issue #100, docs/design/0.8/PLAN.md): WARDYN_ORG_URL and
+// WARDYN_ORG_ENROLMENT_TOKEN. Kept as its OWN function rather than folded into
 // validateMemberModePosture above: that one owns the local-mode/OIDC
 // preconditions, and duplicating them here is exactly how the two would drift
 // apart — this one owns hybrid's preconditions instead, and calls neither.
 //
-// nil when orgURL is empty: no hybrid posture is asserted, nothing to check
-// (orgDeviceName carries no posture of its own and never reaches this
-// function). Otherwise, in order:
+// nil when orgURL is empty: no hybrid posture is asserted, nothing to check.
+// Otherwise, in order:
 //
 //  1. memberMode must be on. An org URL with no member-mode assertion is a
 //     laptop that claims to report to an org control plane while still

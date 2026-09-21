@@ -578,7 +578,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if werr != nil {
 		return types.AgentRun{}, false, abort(werr)
 	}
-	created, err := s.cfg.Store.CreateRun(ctx, run)
+	created, err := s.createRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, false, abort(fmt.Errorf("create record run: %w", err))
 	}

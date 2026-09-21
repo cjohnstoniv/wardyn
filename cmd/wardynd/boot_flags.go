@@ -63,13 +63,12 @@ type bootFlags struct {
 	// control plane a managed laptop belongs to — the missing half of
 	// member-mode desktop, which asserts the human is a member but never said
 	// WHICH org. Unset (the default) means no hybrid posture at all, and
-	// validateHybridPosture (boot_posture.go) is a no-op. orgEnrolToken and
-	// orgDeviceName are meaningless without it.
+	// validateHybridPosture (boot_posture.go) is a no-op. orgEnrolToken is
+	// meaningless without it.
 	orgURL *string
 	// orgEnrolToken is WARDYN_ORG_ENROLMENT_TOKEN — a secret, so never logged
 	// and never echoed in a boot refusal.
 	orgEnrolToken *string
-	orgDeviceName *string
 	// userDriveHostRoots is the SAME class of knob one level up: where an ADMIN
 	// may point a host_path user drive, whose per-person subdirectories Wardyn
 	// then binds into OTHER PEOPLE's sandboxes. Parsed by
@@ -290,7 +289,6 @@ func parseBootFlags() *bootFlags {
 		memberWritableDeny:      flagEnv("member-writable-deny", "WARDYN_MEMBER_WRITABLE_DENY", "", "comma-separated absolute host directories carved OUT of -member-writable-roots. Deny WINS over allow, so a subtree inside a writable root can be pinned read-only for members."),
 		orgURL:                  flagEnv("org-url", "WARDYN_ORG_URL", "", "the org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Unset (the default) = no hybrid posture at all. Set, it is REFUSED at boot unless -member-mode is also on (see validateHybridPosture, boot_posture.go)."),
 		orgEnrolToken:           flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url. Setting it with no -org-url is REFUSED at boot — a token with nowhere to send it is a misconfiguration, not a no-op."),
-		orgDeviceName:           flagEnv("org-device-name", "WARDYN_ORG_DEVICE_NAME", "", "human-readable name this device registers under at -org-url (e.g. a hostname or asset tag). Empty is fine while -org-url is unset; it carries no posture of its own."),
 		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a USER DRIVE of backend host_path may be registered inside — typically the mount point of an NFS/SMB share the operator mounted host-side. A drive's host_root is allowed only if its CANONICALIZED real path is inside one of these (symlink-resolved, the bind-mount deny-list applied, must exist on this host), and only that person's SUBDIRECTORY is ever bound into a run. Empty (the default) = no host_path drive may be registered at all; Wardyn-managed volume drives are unaffected. Point it at the share's mount point, NEVER $HOME or /."),
 		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),

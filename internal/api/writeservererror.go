@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 )
@@ -35,6 +36,12 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		slog.String("path", r.URL.Path),
 		slog.Any("err", err),
 	)
+	// A revoked hybrid laptop's run refusal (createRun) is not a fault: it is
+	// the one 5xx whose sentence is the remedy, whichever launcher reached it.
+	if errors.Is(err, errOrgRevoked) {
+		writeError(w, http.StatusServiceUnavailable, orgRevokedMsg)
+		return
+	}
 	writeError(w, http.StatusInternalServerError, msg)
 }
 
