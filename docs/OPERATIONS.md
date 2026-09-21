@@ -1549,6 +1549,57 @@ an XFS project quota needs `CAP_SYS_ADMIN` the control plane must not hold. A
 `host_path` drive reports `enforcement: external`: the NAS's own quota binds it,
 and Wardyn displays the allocation.
 
+**A real byte cap on Docker: an XFS project quota, run by the operator, on the
+host, never inside the control plane.** `CAP_SYS_ADMIN` is what WARDYN must not
+hold, not a statement that nothing can enforce a `docker_volume` drive's size —
+the recipe below is exactly the case `types.StorageEnforcementFilesystem` was
+named and reserved for (`internal/types/user_drive.go`: "NOTHING in v1 reports
+this — it is the value the documented operator recipe earns"). Wardyn still
+reports `enforcement: none` on the wire; this is an operator ceiling underneath
+it, invisible to the product and unaffected by a `wardynd` restart.
+
+1. **The Docker data root must be XFS, mounted with project quotas.** Find it
+   with `docker info -f '{{.DockerRootDir}}'`, then confirm with
+   `xfs_info <that path>` — the output must list `pquota` or `prjquota`. A
+   filesystem created without it needs a remount (`mount -o remount,prjquota
+   <mountpoint>`, persisted in `/etc/fstab`) — a host operation, unrelated to
+   Wardyn, that does not require restarting the daemon.
+
+2. **Assign a project to the volume's own directory, one per drive per
+   person.** Resolve the real path rather than guessing the data root, and
+   resolve the XFS mount point rather than assuming it is the data root itself
+   (a bind-mounted or LVM-backed data root is not always its own filesystem
+   root):
+
+   ```
+   VOL=wardyn-drive-<drive-slug>-<home>                    # from the reclaim recipe above
+   DIR=$(docker volume inspect -f '{{.Mountpoint}}' "$VOL")
+   MOUNT=$(findmnt -T "$DIR" -no TARGET)                    # the XFS filesystem's own mount point
+   PROJID=$(( 0x$(echo -n "$VOL" | sha256sum | cut -c1-7) )) # any stable project id, unique per volume
+   echo "${PROJID}:${DIR}" >> /etc/projects
+   echo "${VOL}:${PROJID}" >> /etc/projid
+   xfs_quota -x -c "project -s ${VOL}" "$MOUNT"
+   ```
+
+3. **Set the hard limit, and confirm it actually refuses a write:**
+
+   ```
+   xfs_quota -x -c "limit -p bhard=20g ${VOL}" "$MOUNT"
+   xfs_quota -x -c "report -p" "$MOUNT"
+   ```
+
+   A run whose agent then writes past the limit meets the filesystem's own
+   `ENOSPC` — the identical error path a genuinely full disk already takes.
+   Wardyn adds nothing to it and catches nothing from it; that is the whole
+   point of a ceiling that lives below the product rather than in it.
+
+Recreating the volume — a restore, or Wardyn re-minting one after a delete —
+does not carry the quota forward: step 2 keys on the volume's directory, which
+changes, so re-run it (or script it as a step your own restore/create tooling
+runs after Wardyn's). A `host_path` share on an XFS-backed NAS can be capped
+the identical way, against the directory the NAS exports; that quota is the
+NAS's own, which is already what `enforcement: external` reports.
+
 **And a ceiling bounds what you may ALLOCATE, not what the volume will hold.**
 Two numbers can cap a drive, and they are refused and applied in different
 places. `storage.user_drive.max_size_mib` on the **Workspace providers** screen
@@ -1853,6 +1904,10 @@ Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
 revokes every unrevoked token that principal holds — a token is their session in
 another form. The `all` arm is deployment-wide for tokens too: EVERY live token
 goes, the calling admin's own included — plan to re-mint after a global revoke.
+
+**No `role` parameter on `POST /me/tokens`.** A token always mints at the
+caller's own current role; there is no deliberately-downgraded mint. Still
+open at 0.8.
 
 **Registered SSH keys are separate.** An API token can register one through
 `wardyn ssh-key ensure`. Neither deleting the token nor revoking sessions
@@ -3446,9 +3501,9 @@ button come back, which an expiry-only grading hid), and the setup checklist's
 precise than the row it comes back with: it is keyed on state alone, so it
 reads "Model access · Signed out" for a session that is actually live and
 renewable — the Action line right beneath it is the one that names the pin
-and tells the truth. What is still missing in 0.7.4:
+and tells the truth. **Still open at 0.8:**
 invalidate-on-write, and an admin "revoke this person's captured session" route
-— both need owner enumeration in the secret store (0.8).
+— both still need owner enumeration in the secret store, which does not exist.
 
 **Changing the model's account later does not invalidate an existing pin.** Since
 0.7.3 the disagreement is a warning — the console's Bedrock row, plus a line in
@@ -3524,7 +3579,7 @@ says which captures were turned away and why.
 **caller's own** stored session: under `per_user` every capture, an admin's
 included, lives in that person's own namespace, so this is the admin revoking
 themselves. There is **no** admin route that deletes a named member's stored
-session, and no member-facing Disconnect — both are 0.8 items.
+session, and no member-facing Disconnect — both are still open at 0.8.
 
 What ends a member's session today, honestly:
 
@@ -3577,7 +3632,8 @@ Consequences worth knowing:
   NOT finish is the rest of the launch: a client that gives up (a closed tab, a proxy timeout) can
   leave the old sign-in already gone and no new one created. Nothing is lost and nothing is stuck —
   start the sign-in again. This is also why a sign-in that hangs is worth waiting out once rather
-  than clicking twice.
+  than clicking twice. **This synchronous kill cascade is still open at 0.8** — moving the teardown
+  to after the response is tracked separately from the rest of this section.
 - **Two sign-ins started at once almost always leave one.** A double-click, or the console and a
   `wdn_` token driving the route for the same person, used to leave BOTH sandboxes alive: each
   launch checks for live sign-ins before its own run row exists, so neither could see the other. The
@@ -3587,7 +3643,7 @@ Consequences worth knowing:
   multi-replica install with clock skew (or after a stall between the two) the run carrying the
   EARLIER timestamp can be written after the other's re-check, and both stay alive. Neither is
   killed, so the upload refusal below does not separate them either. The next sign-in clears it.
-  Closing the last case needs a per-person lock around the write and is a 0.7.6 follow-up.
+  Closing the last case needs a per-person lock around the write. **Still open at 0.8.**
 - **A sandbox superseded mid-upload almost never wins.** The upload door
   re-reads the run's state immediately before it stores, so a capture that was uploading when the
   person's next sign-in replaced its sandbox is ordinarily refused (`harness.credential.refused` /
@@ -4037,12 +4093,16 @@ browser bundle or an old CLI, so:
 ### Internal model gateway
 
 Point every run's model calls at an internal endpoint instead of
-`api.anthropic.com`/`api.openai.com`. **Shipped for the api-key lane**:
-`WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL` ([ENV.md](ENV.md)) re-point
-the proxy's own brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at
-the gateway — validated once at boot (`https://` only, RFC1918/CGNAT literal
-allowed, loopback/link-local/metadata/multicast/NAT64 refused, must not equal the
-public host) and forwarded to the proxy sidecar per run. No
+`api.anthropic.com`/`api.openai.com`. `WARDYN_ANTHROPIC_BASE_URL` /
+`WARDYN_OPENAI_BASE_URL` ([ENV.md](ENV.md)) re-point the proxy's own brokered
+`/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway for the
+api-key lane, and — for Anthropic — also the subscription and Wardyn-managed
+lanes' `ANTHROPIC_BASE_URL` (dispatch sets it via `(*Server).anthropicBaseURL`,
+`runs_dispatch_llm.go`, and the subscription-injection sink's host allowlist
+widens to match, `injection.go`) — validated once at boot (`https://` only,
+RFC1918/CGNAT literal allowed, loopback/link-local/metadata/multicast/NAT64
+refused, must not equal the public host) and forwarded to the proxy sidecar per
+run. No
 `SiteConfig.InternalHosts` declaration is needed for the gateway itself **on that
 brokered route**: only the proxy's own `/wardyn/llm/*` handler resolves and dials
 it, per request, with its own refusal for the same disallowed address kinds
@@ -4070,12 +4130,16 @@ typically — is what `upstream_proxy_no_proxy` is for: list its host there and 
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
 other internal address.
 
-**Scope: the api-key lane only.** A subscription or Wardyn-managed-token run
-still talks to `api.anthropic.com` directly — the published agent images
-unconditionally `unset ANTHROPIC_BASE_URL` whenever a resident/managed credential
-is detected, and the harness-login (`claude setup-token`) lane is public too.
-Routing those lanes through a gateway needs an image change (teaching `agent-run`
-to honor an explicit operator-set base URL) — a named gap, tracked in ROADMAP.md.
+**A subscription or Wardyn-managed-token run honors a configured Anthropic
+gateway too** — the published `agent-claude-code` image's `agent-run` only
+`unset`s `ANTHROPIC_BASE_URL` when it is still the vendor default, so an
+operator-configured gateway survives the in-image launcher. **This is a trust
+decision**: turning it on sends the operator's live subscription/managed OAuth
+token to the configured gateway proxy-side (TLS-MITM, exactly as it is sent to
+`api.anthropic.com` today) instead of only ever the public host — see
+[CHANGELOG.md](../CHANGELOG.md). The harness-login (`claude setup-token`) lane
+is exempt and always stays on the public host: that flow mints the OAuth token
+itself and must not be redirected.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`
