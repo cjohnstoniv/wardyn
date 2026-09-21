@@ -31,6 +31,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
+- **A refocus that arrives while `usePoll` has a read in flight is no longer dropped.** The in-flight
+  guard correctly stops a burst of focus events from stacking requests, but the refocus it swallowed
+  was never retried, so a person returning to the tab mid-read got no refresh and kept seeing a stale
+  screen for the rest of the interval — up to five minutes on the setup gate. The hook now coalesces:
+  a refocus during an in-flight read is remembered and fires exactly one follow-up read when that read
+  settles, however many refocus events arrived while it was outstanding (#314).
 
 ### Changed
 
