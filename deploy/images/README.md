@@ -108,6 +108,24 @@ which the control plane must never do.  `cmd/wardynd`'s
 `TestAgentImagesPreCreateDriveDir` holds every image here to this, tracing
 `FROM wardyn/agent-…` chains so a derived image inherits rather than repeats it.
 
+**Managed files depend on this user and on `/etc`, on Docker.** A run can carry a
+managed file: an operator-authored file the agent must not modify, placed in
+`/etc/claude-code` (where Claude Code reads its managed settings). On the Docker
+substrate the workload runs as the image's `USER` over the image's own `/etc`,
+and an agent that is root, or that can write `/etc`, can rename
+`/etc/claude-code` aside and put its own file there. So Docker refuses such a run
+unless:
+
+- the image's `USER` resolves to a **non-root uid**: a number, or a name the
+  image's own `/etc/passwd` maps to one (no `USER` at all means root); and
+- `/etc` is a **directory owned by root and not writable by group or others**.
+
+Kubernetes has neither requirement: it runs the agent as uid 1000 whatever the
+image says, and mounts `/etc/claude-code` read-only. The two substrates also
+differ on an image that already ships `/etc/claude-code`: Kubernetes mounts
+over it, and Docker refuses the run rather than deliver into a directory it did
+not create.
+
 ### 6. System gitconfig
 
 Set during the image build, verbatim:
@@ -388,7 +406,8 @@ What the wrap does NOT add — your base must still provide:
   `claude-code` task. Interactive/BYOI login boxes don't need it. Wardyn installs
   nothing at runtime.
 - Non-root is recommended (Claude Code refuses `--dangerously-skip-permissions`
-  as root); the wrap does not remap USER/HOME.
+  as root), and **required** on Docker for a run that carries managed files —
+  see §5. The wrap does not remap USER/HOME.
 - **`/home/agent/drive`, owned by your agent uid**, if the deployment allocates
   user drives. The wrap creates no directories, so a base without it gets a
   root-owned mount root from the daemon and a writable drive is unwritable for
@@ -429,12 +448,16 @@ CA-bundle path loses public trust in every **replaces** row once that knob is se
 wrap clears the base's ENTRYPOINT and overwrites its runner tools from the
 trusted host copies, and egress allow-listing, confinement, mounts, and
 capability drops are applied by the runner at container-create — none of it
-depends on image contents, so a hostile base cannot escape the sandbox. Two
+depends on image contents, so a hostile base cannot escape the sandbox. Managed
+files are the exception: on Docker, whether the agent can replace one depends on
+the image's `USER` and `/etc`, so the driver checks both and refuses a run whose
+image fails (§5) rather than deliver a file the agent could replace. Two
 image-controlled surfaces remain, both bounded by the egress allowlist and
 neither an escape: (1) a base with `USER root` runs the workload as
 root-in-container — primary confinement (cap-drop, no-new-privileges, seccomp,
 apparmor, userns-remap) still holds, but the non-root defense-in-depth the
-convention images provide is waived; prefer a non-root base. (2) The combined CA
+convention images provide is waived, and a run carrying managed files is refused
+on Docker; prefer a non-root base. (2) The combined CA
 bundle concatenates the base's own system trust store, so an interactive
 `wardyn attach` shell trusts whatever CAs the base ships — only relevant if you
 attach a shell to an untrusted image on a non-MITM'd allowed host.

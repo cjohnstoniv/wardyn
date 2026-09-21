@@ -69,9 +69,9 @@ const (
 	AgentMechanismOpenAIAPIKey AgentMechanism = "openai_api_key"
 	// AgentMechanismBedrockBearer is the stored bedrock-api-key bearer lane.
 	AgentMechanismBedrockBearer AgentMechanism = "bedrock_bearer"
-	// AgentMechanismBedrockSSO is a captured AWS SSO session — the ONE lane with
-	// a per-principal capture path, so the only one CredentialSourcePerUser may
-	// name.
+	// AgentMechanismBedrockSSO is a captured AWS SSO session — the lane whose
+	// per-principal credential the member captures by signing in, rather than by
+	// storing it. See PerUserMechanisms.
 	AgentMechanismBedrockSSO AgentMechanism = "bedrock_sso"
 	// AgentMechanismBedrockEnv is the daemon's own AWS environment.
 	AgentMechanismBedrockEnv AgentMechanism = "bedrock_env"
@@ -136,12 +136,35 @@ const (
 	// CredentialSourceShared is today: one credential, captured by an admin,
 	// backs every run. The zero value, so an unset field is 0.7.1's behaviour.
 	CredentialSourceShared CredentialSource = "shared"
-	// CredentialSourcePerUser is one credential per principal, captured by that
-	// person through the same device-code login sandbox an admin uses. Permitted
-	// for AgentMechanismBedrockSSO only in 0.7.2 — it is the one mechanism with a
-	// per-principal capture path.
+	// CredentialSourcePerUser is one credential per principal: the person either
+	// captures it (the device-code login sandbox an admin uses) or stores it in
+	// their own secret namespace. Permitted for PerUserMechanisms only.
 	CredentialSourcePerUser CredentialSource = "per_user"
 )
+
+// PerUserMechanisms is the closed set of lanes a per_user row may name: the ones
+// whose credential a member can actually hold as their OWN. bedrock_sso is the
+// captured AWS SSO session (the member signs in for it); bedrock_bearer is the
+// stored bedrock-api-key (the member writes it under their own principal — the
+// three AWS SigV4 names stay admin-only, so no other Bedrock lane joins).
+//
+// Every other lane is an operator-namespace read, so declaring it per_user would
+// promise one credential per person and serve the admin's — the substitution
+// per_user exists to refuse.
+var PerUserMechanisms = map[AgentMechanism]bool{
+	AgentMechanismBedrockSSO: true, AgentMechanismBedrockBearer: true,
+}
+
+// PerUserMechanismList is PerUserMechanisms in a stable order, for the "available
+// for …" half of a rejected write's error — see ClosedAgentMechanismList.
+func PerUserMechanismList() []string {
+	ms := slices.Sorted(maps.Keys(PerUserMechanisms))
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = string(m)
+	}
+	return out
+}
 
 // ClosedCredentialSources is the closed source set — see ClosedAgentMechanisms.
 var ClosedCredentialSources = map[CredentialSource]bool{
