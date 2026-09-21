@@ -166,7 +166,7 @@ func TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring(t *testing.T) {
 		t.Fatalf("before: model_access.state = %q, want live", before.ModelAccess.State)
 	}
 
-	srv.markAWSSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken))
+	srv.markAWSSSOTokenSpent(context.Background(), awsSSOTokenFingerprint(blob.RefreshToken), "")
 
 	code, after := decodeSetupSSO(t, srv, member)
 	if code != http.StatusOK {
