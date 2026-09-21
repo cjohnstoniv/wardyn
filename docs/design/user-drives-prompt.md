@@ -278,9 +278,12 @@ unchanged.
 - **Editor open** — the allocation form collapses to its disabled `ADD_TITLE` row (one teal at
   a time, the governance shape).
 - **Write refusals** — the 400s post-attempt, the 409 pre-filled and post-attempt (§2.4).
-- **Backend unavailable** — Docker with no roots: the option disabled with its reason.
-  Kubernetes with a cluster that refuses claim creation: a **422 at first run**, nothing earlier
-  (see Adjudication — the preview payload carries no warning field).
+- **Backend unavailable** — Docker with no roots: the option disabled with its reason. A
+  backend/runner mismatch or a `host_path` share whose home is missing answers **422 on the
+  preview itself** (`handlePreviewUserDrive` runs `driveBindFailureHere`, `internal/api/
+  user_drives_preview.go`; see Adjudication). What still cannot be previewed is a Kubernetes
+  cluster refusing the claim CREATE — the preview never creates a PVC, so that one failure mode
+  stays a **422 at first run**, nothing earlier.
 - **Preview answered / no allocation / couldn't preview.**
 - **Member: granted writable · granted read-only · no allocation · paused · denied · refused at
   launch.**
@@ -767,7 +770,13 @@ object no run will ever mount, so copying it into the reclaim command reclaims n
 also the promise `docs/OPERATIONS.md`'s offboarding step sends an operator here to collect, so
 the caveat belongs on both ends of it. The remedy is the admin's and takes no new copy: paste
 the sign-in subject first and preview again. `PREVIEW_LEAD`'s *"which drive and directory they
-would mount"* is answered for the claims **as typed**, never for the person behind them.
+would mount"* is answered for the claims **as typed**, never for the person behind them — but
+"as typed" bounds MATCHING, not the printed names: `FIELD_HOME` and `PREVIEW_OBJECT_LABEL` are
+**derived**, never echoed. `driveHomeSubject` picks one submitted claim positionally
+(`home_subject` names which), and the template then transforms it — `hash` renders `d-` + 20 hex
+of a digest, `sub`/`email_local` lowercase and validate it — before `types.DriveObjectName`
+(`internal/types/user_drive.go`) folds the drive's slug onto the result. A `hash` drive's object
+name is therefore a digest string that appears nowhere in what was pasted.
 
 **The Overrides column** renders zero or more chips: `OVERRIDE_SIZE`, `MODE_RO` / `MODE_RW`
 (a writable override, in the mode's own chip vocabulary), `OVERRIDE_HOME`, and `PAUSED_CHIP` for
@@ -1073,10 +1082,16 @@ Departures from `DESIGN.md` §4.3's draft tables, each with the reason; the mode
    ships the profile name only; the door is knowable client-side only with a `/me` field — a
    sibling `user_drive_denied_by_profile` so `user_drive` stays nil-means-no-allocation (Q6 a′). Drawn pre-filled on that assumption, and post-attempt
    from the 403 regardless.
-4. **Backend-unavailable on Kubernetes is post-attempt only.** `DESIGN.md` §4.2 says "previewed
-   as a warning", but `POST /drives/preview`'s payload (§2.5) has no warning field and the
-   console cannot ask the apiserver. Not drawn on the preview; drawn as the member's
-   `REFUSED_BACKEND` 422 and named here so P2 either adds the field or drops the sentence.
+4. **Backend-unavailable on Kubernetes was post-attempt only when this was written; P2 wired it
+   into the preview instead of adding a field.** `DESIGN.md` §4.2 said "previewed as a
+   warning" — the shipped answer is a **422**, never a warning:
+   `handlePreviewUserDrive` (`internal/api/user_drives_preview.go`) now runs
+   `driveBindFailureHere` and writes its 422 straight from the preview for a backend/runner
+   mismatch or an unreachable `host_path` share (`TestPreviewUserDriveAnswersTheSameRefusalAsLaunch`,
+   `internal/api/user_drives_resolve_test.go`), the launch door's own
+   `REFUSED_BACKEND` bytes, not a paraphrase. What the console still cannot ask is the apiserver
+   itself: a Kubernetes cluster refusing the claim CREATE is still the member's `REFUSED_BACKEND`
+   422 at first run, because the preview never creates a PVC.
 5. **`k8s_pvc` with `size_mib = 0` has no request to make.** `DESIGN.md` allows 0 everywhere;
    a zero PVC request is invalid. Listed as a server 400 in §7.1's second table and raised as
    **Q7** (a new refusal the owner did not accept in `DESIGN.md` §2.6); the editor renders
