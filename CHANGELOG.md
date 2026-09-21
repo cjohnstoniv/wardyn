@@ -39,6 +39,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Drive grants and preview now admit `security_admin`, not just super-admin.** `POST
+  /drives/grants`, `DELETE /drives/grants/{id}`, and `POST /drives/preview` moved off the
+  super-admin-only tier onto `securityOps` (admin or `security_admin`): none of the three names a
+  host path, and a security admin already reaches drives through the `DenyUserDrive` door on a
+  governance profile. The four routes that DO name a host path or cluster storage class — creating,
+  listing, updating, and removing the drive itself — stay super-admin only (#168).
+
 - **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
   role-mapping gap, a runner failure, a confinement floor the runner can't meet) now sits under
   "Blocking"; a non-blocking fail or warn sits under "Worth a look" instead of borrowing a heading
