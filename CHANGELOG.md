@@ -149,6 +149,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `push_rules` while the run's only git-capable grant is `ssh_key` (which the broker cannot inspect)
   grades a medium-risk warning on the Review rail rather than a write-time refusal.
 
+- **The runner contract can now place a file inside a sandbox that the agent cannot modify.**
+  `SandboxSpec.ManagedFiles` carries operator-authored `{Path, Mode, Content}` entries, and
+  `Capabilities.ManagedFiles` (a conjunction across substrates, like `UserDrives`) says whether a
+  deployment can deliver them. Docker extracts a uid/gid-0 archive of file entries only between
+  `ContainerCreate` and `ContainerStart`, into a directory it creates, and refuses a directory that
+  already exists rather than re-owning it; Kubernetes projects each file out of the per-run Secret
+  as a read-only volume with explicit `items`. Both land the file root-owned, at the requested mode,
+  inside a directory the agent can neither write nor replace, and both do it before the agent's
+  first instruction runs — materialising it as the sandbox user leaves it writable by the thing it
+  is meant to constrain, and a one-shot root exec after start races the main process. A managed file
+  must sit directly in `/etc/claude-code`, where Claude Code reads its managed settings: a directory
+  under an agent-owned parent can be renamed aside, a tmpfs mounted at start hides the file, and
+  recording setup loosens `/var/log/wardyn`. A group- or other-writable mode is refused. On Docker
+  the run is also refused unless the image's `USER` resolves to a non-root uid and its `/etc` is a
+  root-owned directory not writable by group or others, because the agent runs as that user over
+  that `/etc`; Kubernetes runs the agent as uid 1000 on a read-only mount whatever the image says.
+  Conformance case 8 (`ManagedFiles`) holds both substrates to it, and its load-bearing assertion is
+  that a write is REFUSED, not that the file reads back. Nothing populates the field yet.
+
 - **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL`, `WARDYN_ORG_ENROLMENT_TOKEN` and
   `WARDYN_ORG_DEVICE_NAME` tell a managed laptop which org control plane it belongs to. Boot is
   refused when an org URL is set without `WARDYN_MEMBER_MODE`, when the URL is plaintext and not
@@ -226,6 +245,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Unset is byte-identical to today.
 
 ### Fixed
+
+- **The webhook sink's Close test no longer reds CI at random.** `TestWebhookSink_CloseFlushesAndAwaitsDrain`
+  decided whether `Close` had awaited the drain by sampling whether the goroutine running `Run` had
+  reached the statement after `Run` returned. Nothing orders that statement before `Close` returns —
+  `Run` signals its done channel from inside `Run` — so on a loaded runner the check failed although
+  the drain had completed, reding the required `build` check on unrelated pull requests. The test now
+  holds the final delivery open inside the HTTP handler and asserts `Close` is still blocked while the
+  batch is in flight, an ordering the code actually guarantees. `Close` itself is unchanged.
 
 - **The Agents tab and member Getting Started now render a chip for the `not_applicable` model-access
   state instead of nothing at all.** `not_applicable` — the admin-token principal's own answer under a
