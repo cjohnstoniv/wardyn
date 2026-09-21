@@ -167,7 +167,10 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		summary == nil && hasScannableBody(r) {
 		p.emitLLMBlindOnce(host)
 	}
-	outReq := r.Clone(context.WithValue(r.Context(), vettedIPKey{}, target))
+	// traceCtx/alpnState: the ONLY reason to attach a ClientTrace here is to
+	// name the ALPN outcome in an isH2Preface refusal's Cause below.
+	traceCtx, alpnState := alpnCapture(context.WithValue(r.Context(), vettedIPKey{}, target))
+	outReq := r.Clone(traceCtx)
 	// RequestURI must be empty for client requests.
 	outReq.RequestURI = ""
 	if bodyOverride != nil {
@@ -187,6 +190,9 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// host is never re-resolved. Invoked only post-allow+vet.
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
+		if p.refuseH2Mismatch(w, log, host, "upstream error", alpnState, err) {
+			return
+		}
 		// The allow decision is emitted only AFTER a successful round-trip (same
 		// accuracy fix as handleConnect, E3): a failed upstream dial must NOT
 		// over-report an allow. Emit a dial-failed deny (carrying any scan

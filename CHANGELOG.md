@@ -57,6 +57,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
   status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
   while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
+- **An HTTP/2 answer to the egress proxy's HTTP/1.1 request is now recorded as
+  `builtin:upstream-protocol-mismatch` with a plain cause, and answered with a 400 so SDKs stop
+  retrying, instead of a `builtin:dial-failed` that was retried until the SDK gave up (#359).**
 
 ### Changed
 
