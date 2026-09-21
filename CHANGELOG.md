@@ -137,6 +137,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   mount's `read_only` pointee included, though the clamp replaces or drops those before they can
   reach a caller). What the clamp permits is unchanged — no allowed-or-denied outcome moves.
 
+### Known gaps
+
+- **An AWS SSO account/role pin does not invalidate a capture already in flight.** A roster edit
+  made while a sign-in is running cannot re-point it — the capture binds to the pin as it read at
+  launch, never the live roster. Still open at 0.8.
+- **No `role` parameter on `POST /me/tokens`.** A token always mints at the caller's own current
+  role. Still open at 0.8.
+- **No admin route to revoke a named member's captured AWS SSO session.** Disconnect
+  (`DELETE /setup/harness-credential/aws`) deletes only the caller's own; both it and a
+  member-facing Disconnect still need owner enumeration in the secret store. Still open at 0.8.
+- **The synchronous kill cascade inside the sign-in launch POST.** Superseding a person's older
+  sign-in tears the old sandbox down inside the new launch request rather than after the response —
+  tracked separately from this list. Still open at 0.8.
+
 ## [0.7.8] — 2026-09-19
 
 ### Added
