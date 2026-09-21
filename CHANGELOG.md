@@ -125,6 +125,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
   which are already caller-facing by design, are unchanged.
 
+- **A read-only terminal observer is now promoted in place when the writer leaves, instead of
+  having to reconnect.** The registry keeps one writer and the observers queued behind it in
+  arrival order; an ordinary release promotes the oldest of them on the socket it already has,
+  and a take-over promotes the taking principal's own observer — never a bystander, whose typing
+  would otherwise be attributed to an act somebody else was audited for. The promoted client
+  receives a second `attach-mode` frame (web) or its geometry plus a notice (SSH), the change is
+  recorded as `session.promote`, and a `session.detach` row now reports the mode the session
+  ENDED in rather than the one it connected with. Known residual: a promoted observer whose
+  socket is already dead holds the slot until the attach ping probe notices, up to about twice
+  the ping interval.
+
 - **The compose file's writable-member-mount comment was wrong; `/srv/src` genuinely had no bind.**
   0.7.2 documented (and repeated in its own CHANGELOG entry) that
   `WARDYN_WORKSPACES_ROOT`'s `:ro` compose bind was what refused a writable member mount. It is
@@ -190,6 +201,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
   reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
   FAILED so a run reaching a successful terminal state through the same path gets no hint.
+- **The Runs board's group header now says what its runs are waiting on, and a run opens from a
+  real link.** `TitleGroup` gets a second chip row — one counted chip per reason a group's runs are
+  waiting (held approval, AWS sign-in, waiting to start), an uncounted "Nothing waiting" once the
+  group is clean, and a pinned "Checking…" before the approvals fetch resolves so an empty result
+  can't read as "nothing is held". A `tool_call`/`credential_reauth` hold older than 60 minutes
+  degrades to a neutral "was held" claim instead of continuing to claim it's live — `isHeld` gained
+  that ceiling, shared by the board and the run cockpit's command bar. Separately, a run's title is
+  now a real `<a href>` on both the board and the table (previously a `div` with an `onClick`, not
+  reachable by keyboard or middle-click); a failed run's card now offers "Open" rather than "Review",
+  since a failure is a report and a held run is a request; the workspace facet/column reads
+  "Workspace", not "Repo"; the live-board chip reads "Live" without narrating its poll interval; and
+  the board's loose section reads "Other runs" instead of "Ungrouped".
+
 - **A refocus that arrives while `usePoll` has a read in flight is no longer dropped.** The in-flight
   guard correctly stops a burst of focus events from stacking requests, but the refocus it swallowed
   was never retried, so a person returning to the tab mid-read got no refresh and kept seeing a stale
@@ -249,6 +273,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   required-check failure, and the re-point-at-rebase step for those two documents is retired. The
   tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
   too.
+
+### Security
+
+- **`composer.Clamp` hands back a spec that owns its memory.** The clamped spec began as a shallow
+  copy of the proposal, so every field the operator ceiling had no opinion on reached the caller as
+  the caller's own backing array or pointee: `allowed_domains`, `denied_domains`, `allowed_methods`,
+  `ui_apps`, `workspace_repos`, `tool_rules`, `workspace_mounts`, each eligible grant's `scope`
+  bytes, and — whenever the proposal's sizes already sat inside the ceiling — the very
+  `*ResourceLimits` the clamp exists to bound. A later in-place write through either side would
+  have moved a ceiling the clamp had already enforced, in the widening direction, with nothing to
+  notice; no caller mutates one today, which is a property of today's callers rather than of the
+  function. `Clamp` now reallocates every reference field on the way out (`llm_inspection` and each
+  mount's `read_only` pointee included, though the clamp replaces or drops those before they can
+  reach a caller). What the clamp permits is unchanged — no allowed-or-denied outcome moves.
 
 ### Known gaps
 
