@@ -38,6 +38,9 @@ type fakeRunner struct {
 	// matrix tests need a runner that advertises less than all three classes, e.g.
 	// a Kata-only [CC1, CC3]); nil keeps every existing caller's [CC1, CC2, CC3].
 	capsClasses []types.ConfinementClass
+	// noManagedFiles makes Capabilities withhold ManagedFiles: a substrate
+	// without the root-owned delivery contract.
+	noManagedFiles bool
 }
 
 func (f *fakeRunner) Name() string { return "fake" }
@@ -57,6 +60,8 @@ func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) 
 		// double that under-declares would refuse runs its own CreateSandbox
 		// would have served.
 		UserDrives: true,
+		// Same reason: CreateSandbox accepts a spec carrying managed files.
+		ManagedFiles: !f.noManagedFiles,
 	}, nil
 }
 

@@ -263,10 +263,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	applyUserDriveEnv(sandboxEnv, p.Drive)
-	// The agent-side half of this run's autonomy level: generated here and
-	// recorded, delivered once #94's ManagedFiles contract lands. Nothing below
-	// branches on it — see applyRunAgentPolicy.
-	s.applyRunAgentPolicy(ctx, run)
+	// The agent-side half of this run's autonomy level — see agentPolicyFor.
+	agentPolicy := s.agentPolicyFor(ctx, run)
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
 	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
 	// settings — the same "only a discriminator + non-secret payload changes;
@@ -425,6 +423,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		SecretEnv: secretEnv,
 		Mounts:    mounts,
 		Drive:     p.Drive,
+		// The managed settings this run's autonomy level generates; nil for a
+		// run with none, or on a runner that cannot deliver them root-owned.
+		ManagedFiles: agentPolicy.files,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
@@ -568,6 +569,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
 	s.auditDriveMount(ctx, run.ID, p.Drive)
+	s.auditAgentPolicy(ctx, run, agentPolicy, spec)
 
 	// HOLD the run's watcher lease for the rest of dispatch — starting the moment
 	// there is a sandbox to watch and BEFORE SetSandboxRef publishes its ref, so a

@@ -450,15 +450,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   was exercised against the Claude Code version this tree pins (`CLAUDE_CODE_VERSION=2.1.231`,
   `deploy/images/claude-code/Dockerfile`), with the verified documents kept as golden files, and the
   checks must be re-run on every version bump. The level rides the sandbox as
-  `WARDYN_AUTONOMY_LEVEL`, and a new `run.agent_policy` audit row records which document was
-  generated for which run.
+  `WARDYN_AUTONOMY_LEVEL`, and the document is delivered root-owned at
+  `/etc/claude-code/managed-settings.json` through the runner's managed-files contract. A new
+  `run.agent_policy` audit row records which document was generated for which run and whether it was
+  `delivered`. On Docker, such a run fails with the driver's reason as its hint when the image runs as
+  root or leaves `/etc` writable, since either would let the agent replace the file.
   **Known gap, unchanged by this:** a run launched with *"Let it use tools before I attach"* still
   parks on Claude Code's own Bypass Permissions confirmation until a person attaches and answers it
   (`threatmodel/THREAT-MODEL.md` §4.7). Whether ticking that box in the console counts as consent to
   the CLI's own prompt is still an open owner decision, and these managed settings do not answer it.
-  **Not yet delivered:** placing the generated file root-owned inside the sandbox is the runner
-  contract's job and is not in this change — until it lands the row records `delivered:false`, which
-  is the difference between a ceiling the agent runs under and one only the control plane knows about.
 - **A run's autonomy level is now resolved once and enforced at launch and on Review.** With an
   `autonomy_rubric` on the assigned governance profile, a run's posture — egress reach (`open` with
   allow-all or any allowlisted host beyond the safe baseline, `reviewed` when first-use approval
@@ -785,6 +785,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Known gaps
 
+- **A runner without managed-file delivery runs a gated claude-code run without its managed
+  settings.** When the runner does not advertise `Capabilities.ManagedFiles`, an `L0`–`L2`
+  claude-code run is not refused: it launches under its CLI-flag levers alone, gets no file, and its
+  `run.agent_policy` row records `delivered:false` with the reason. Handing that runner the file
+  anyway would place a ceiling the agent could rewrite.
 - **An AWS SSO account/role pin does not invalidate a capture already in flight.** A roster edit
   made while a sign-in is running cannot re-point it — the capture binds to the pin as it read at
   launch, never the live roster. Still open at 0.8.
