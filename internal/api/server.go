@@ -233,6 +233,17 @@ type Config struct {
 	// (`claude setup-token`) lane never consults it and always stays on the
 	// public host — that flow mints the OAuth token itself.
 	LLMGateways map[string]string
+	// LLMGatewayAuth maps the same public model-provider host key as
+	// LLMGateways to an operator-configured injection header/format override
+	// (WARDYN_<VENDOR>_GATEWAY_HEADER / _GATEWAY_FORMAT, validated by
+	// ValidateLLMGateways) — independent of whether that provider also has an
+	// LLMGateways entry. nil/empty (the default) => every provider keeps the
+	// harness catalog's compile-time convention (harness.go's Gateway field),
+	// byte-identical to today. Consulted by (*Server).llmProviderFor, which
+	// applies Header/Format field-by-field onto the InjectionRule it builds —
+	// never onto the mint path directly, so a stored/proposed grant always
+	// reflects the resolved convention at proposal time.
+	LLMGatewayAuth map[string]LLMGatewayAuth
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".

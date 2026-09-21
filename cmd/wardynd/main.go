@@ -298,7 +298,7 @@ func run() error {
 	// policy's allowed_domains does not list a configured gateway's host — the
 	// operator must add it, or every run under that policy 404s on its first
 	// model call once ensureLLMGrant/reconcileLLMAccess point at the gateway.
-	llmGateways, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
+	llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
 	if err != nil {
 		return err
 	}
@@ -377,6 +377,7 @@ func run() error {
 		DefaultPolicy:             defaultPolicy,
 		TrustedCAPEM:              trustedCAPEM,
 		LLMGateways:               llmGateways,
+		LLMGatewayAuth:            llmGatewayAuth,
 		RunnerTarget:              runnerTarget,
 		UIDir:                     *f.uiDir,
 		ControlPlaneURL:           *f.controlURL,

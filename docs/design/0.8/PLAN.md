@@ -315,9 +315,9 @@ the existing chord kept as an undocumented alias. Does a take-over promote the t
 ### Deployment gaps — [#82](https://github.com/cjohnstoniv/wardyn/issues/82)
 
 **Delivers.** The UI sandbox images become publishable and published, with their licence files and
-SBOM coverage; the model gateway carries subscription and Wardyn-managed runs; a gateway may
-declare its own auth header; the direct-dial bypass gets documentation and a boot lint; three
-corp-proxy instruments; a credentialed daemon proxy; an air-gapped video mirror.
+SBOM coverage; the model gateway carries subscription and Wardyn-managed runs; the direct-dial
+bypass gets documentation and a boot lint; three corp-proxy instruments; a credentialed daemon
+proxy; an air-gapped video mirror.
 
 **Decisions.**
 
