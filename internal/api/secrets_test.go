@@ -223,37 +223,81 @@ func TestListSecrets_AdminOwnerParam_Member403(t *testing.T) {
 	}
 }
 
-// TestPutSecret_MemberBedrockNames_403: all FOUR Bedrock/SigV4 credential
-// names are refused for a non-operator PUT, even though sinkReservedSecret
-// itself deliberately excludes bedrock-api-key (that exclusion is for the
-// operator's own legitimate write). The negative control proves the refusal
-// is member-specific, not a blanket name ban: an operator may still PUT it.
+// memberRefusedAWSNames is the AWS SigV4 name set a non-operator PUT/DELETE is
+// still refused, written out ONE PER NAME rather than as a loop over a slice
+// the production code also builds: the widening these tests guard
+// (writableSecretName dropping bedrockAPIKeySecret) is one clause away from
+// widening all four, and a list derived from the predicate under test would
+// follow it silently. bedrockAPIKeySecret is deliberately absent — see
+// TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace.
+var memberRefusedAWSNames = []string{
+	bedrockAccessKeyIDSecret,
+	bedrockSecretAccessKeySecret,
+	bedrockSessionTokenSecret,
+}
+
+// TestPutSecret_MemberBedrockNames_403: the three resident AWS SigV4 names are
+// refused for a non-operator PUT — they are ALWAYS signed out of the operator
+// namespace, so a member row under one would read as "Bedrock is configured"
+// over a credential dispatch never uses. The negative control proves the
+// refusal is member-specific, not a blanket name ban: an operator may still
+// PUT them.
 func TestPutSecret_MemberBedrockNames_403(t *testing.T) {
-	names := []string{
-		bedrockAccessKeyIDSecret,
-		bedrockSecretAccessKeySecret,
-		bedrockSessionTokenSecret,
-		bedrockAPIKeySecret,
-	}
-	for _, name := range names {
+	for _, name := range memberRefusedAWSNames {
 		t.Run(name, func(t *testing.T) {
-			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
+			sec := &memSecrets{m: map[string][]byte{}}
+			_, srv := secretsRBACServer(t, sec)
 			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
 			w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+name, alice, `{"value":"some-long-enough-value-000000"}`)
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("member PUT %s = %d, want 403: %s", name, w.Code, w.Body.String())
 			}
+			if len(sec.m) != 0 || len(sec.owned) != 0 {
+				t.Fatalf("a refused PUT of %s wrote a row; it must write none", name)
+			}
 		})
 	}
-	t.Run("negative control: an operator may still PUT it", func(t *testing.T) {
-		sec := &memSecrets{m: map[string][]byte{}}
-		_, srv := secretsRBACServer(t, sec)
-		admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
-		w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+bedrockAPIKeySecret, admin, `{"value":"some-long-enough-value-000000"}`)
-		if w.Code != http.StatusNoContent {
-			t.Fatalf("operator PUT %s = %d, want 204: %s", bedrockAPIKeySecret, w.Code, w.Body.String())
-		}
-	})
+	for _, name := range memberRefusedAWSNames {
+		t.Run("negative control: an operator may still PUT "+name, func(t *testing.T) {
+			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
+			admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+			w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+name, admin, `{"value":"some-long-enough-value-000000"}`)
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("operator PUT %s = %d, want 204: %s", name, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace is the one name #153
+// widened, and the assertion is not merely "204": the row has to land in the
+// MEMBER's namespace and leave the operator's alone. A widening that wrote a
+// member's bearer to the operator row would also answer 204, and would hand
+// every other member's runs one person's key.
+func TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	_, srv := secretsRBACServer(t, sec)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+bedrockAPIKeySecret, alice, `{"value":"alice-own-bedrock-bearer-000000"}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("member PUT %s = %d, want 204: %s", bedrockAPIKeySecret, w.Code, w.Body.String())
+	}
+	if _, inOperator := sec.m[bedrockAPIKeySecret]; inOperator {
+		t.Fatalf("a member's bearer landed in the OPERATOR namespace — every member's runs would read it")
+	}
+	got := string(sec.owned["alice"][bedrockAPIKeySecret])
+	if got != "alice-own-bedrock-bearer-000000" {
+		t.Fatalf("alice's own namespace holds %q, want her bearer", got)
+	}
+
+	// And she can delete her own row, which is the other half of the door.
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+bedrockAPIKeySecret, alice, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("member DELETE %s = %d, want 204: %s", bedrockAPIKeySecret, w.Code, w.Body.String())
+	}
+	if _, still := sec.owned["alice"][bedrockAPIKeySecret]; still {
+		t.Fatalf("alice's bearer survived her own DELETE")
+	}
 }
 
 // TestSecretsAPI_OperatorByteIdenticalPre0050 is the negative control for the
@@ -345,11 +389,14 @@ func TestPutSecret_AdminOwnerParam_LandsInMemberNamespace(t *testing.T) {
 	})
 }
 
-// TestDeleteSecret_MemberBedrockNames_403: the four Bedrock/SigV4 names are
+// TestDeleteSecret_MemberBedrockNames_403: the three AWS SigV4 names are
 // refused for a non-operator on DELETE as well as PUT (the guard lives in the
 // shared writableSecretName), while an operator may still delete them.
+// bedrock-api-key is absent here for the same reason it is absent from PUT —
+// its member DELETE is asserted to SUCCEED in
+// TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace.
 func TestDeleteSecret_MemberBedrockNames_403(t *testing.T) {
-	for _, name := range []string{bedrockAccessKeyIDSecret, bedrockSecretAccessKeySecret, bedrockSessionTokenSecret, bedrockAPIKeySecret} {
+	for _, name := range memberRefusedAWSNames {
 		t.Run(name, func(t *testing.T) {
 			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
 			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
@@ -358,13 +405,15 @@ func TestDeleteSecret_MemberBedrockNames_403(t *testing.T) {
 			}
 		})
 	}
-	t.Run("negative control: an operator may still DELETE it", func(t *testing.T) {
-		_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
-		admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
-		if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+bedrockAPIKeySecret, admin, ""); w.Code != http.StatusNoContent {
-			t.Fatalf("operator DELETE = %d, want 204: %s", w.Code, w.Body.String())
-		}
-	})
+	for _, name := range memberRefusedAWSNames {
+		t.Run("negative control: an operator may still DELETE "+name, func(t *testing.T) {
+			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
+			admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+			if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+name, admin, ""); w.Code != http.StatusNoContent {
+				t.Fatalf("operator DELETE %s = %d, want 204: %s", name, w.Code, w.Body.String())
+			}
+		})
+	}
 }
 
 // TestSecretCountCap is secretsMaxPerOwner (PF-38): one namespace holds at most

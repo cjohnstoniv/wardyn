@@ -365,6 +365,25 @@ func TestResolveAWSSSOInjection_RosterDriftIsRefusedNotSubstituted(t *testing.T)
 	}
 }
 
+// I3 on the declared lane: a per_user row flipped from bedrock_sso to
+// bedrock_bearer mid-run no longer names the session this run was dispatched
+// with, so the resolve refuses — the same rule the bearer sink applies when a
+// per_user row stops declaring the bearer.
+func TestResolveAWSSSOInjection_RowFlippedToTheBearerIsRefused(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.putBlob(t, "alice@example.com", liveSSOBlob())
+	f.st.site = agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer,
+		CredentialSource: types.CredentialSourcePerUser})
+
+	w := f.resolve(t)
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), reauthToken) {
+		t.Fatalf("resolve: code = %d, want 403 with no token; body=%s", w.Code, w.Body.String())
+	}
+	if !f.audit.hasReason("secret.read", "scope_changed") {
+		t.Error("no secret.read failure naming scope_changed")
+	}
+}
+
 // I3, the other direction: the roster row's account/role PIN is admin-asserted
 // identity. Re-pinning it mid-run must not silently re-point a held run.
 func TestResolveAWSSSOInjection_AccountPinDriftIsRefused(t *testing.T) {
