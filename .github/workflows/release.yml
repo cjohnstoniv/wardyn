@@ -207,8 +207,7 @@ jobs:
       # Bare semver (v-prefix stripped), matching Chart.yaml's appVersion —
       # same convention publish-image.yml uses for its own tag-triggered
       # publish. Via env, not `${{ }}` inside the script body (this repo's own
-      # precedent — ci.yml's screenshots-fresh job, publish-image.yml's
-      # "Compute image tags" step).
+      # precedent — publish-image.yml's "Compute image tags" step).
       - name: Compute the release tag
         id: tag
         env:

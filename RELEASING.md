@@ -14,9 +14,9 @@ document is that process, written down.
 - The full CI gate is green on the commit you intend to tag. The gate is the
   `.github/workflows/ci.yml` job list: `build`, `diagrams`, `ui`, `ui-e2e`,
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
-  `envbuild-integration`, `test-pg`, `screenshots-fresh` (PR-only), `gates`
+  `envbuild-integration`, `test-pg`, `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
-  `license-headers`, `gitleaks`), `dco`, `desktop-envelope`, `buildx-smoke`,
+  `license-headers`, `gitleaks`), `dco`, `desktop-envelope`,
   `trivy`, and **`notices`** — the copyleft / unreviewed-dependency gate, which
   was missing from this list entirely. `sbom-stub` used to be named here and is
   **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*), so a
@@ -26,6 +26,11 @@ document is that process, written down.
   below): `publish-image` (`.github/workflows/publish-image.yml`, push to
   `main` only) and `release` (`.github/workflows/release.yml`, triggered by
   step 5's tag push itself, so it cannot be a prerequisite of tagging).
+- The multi-arch build is green on that commit too. It is `nightly.yml`'s
+  `buildx-smoke` (checks named `multi-arch build (…)`), not a `ci.yml` job, so
+  a pull request never runs it: read the latest nightly, or run it on the
+  branch you tag with `gh workflow run nightly.yml --ref release/X.Y`. It is
+  the only build of the arm64 half before `release.yml` publishes it.
 
 Run the local gate first:
 
@@ -40,19 +45,19 @@ The live-service jobs are outside `make release-check`: `conformance`
 from that CI job), `envbuild-integration` (`make test-envbuild-integration`),
 `helm-install-test` (`make helm-install-test`, also needs a local `kind`
 cluster), the Playwright `ui-e2e` job, `desktop-envelope` (compose build +
-up), `buildx-smoke`, and `trivy` (both docker builds). Their checks can run
+up), `trivy` (docker builds) and nightly's `buildx-smoke`. Their checks can run
 locally with the required services; follow `.github/workflows/ci.yml` for
 image builds, cluster setup, and environment variables. Run the Playwright
 lane with `scripts/run-ui-e2e.sh`. Without `WARDYN_TEST_PG` the Postgres
 suite prints a loud SKIPPED line.
 
-Screenshot freshness is CI-only for a different reason: `ci.yml`'s
-`screenshots-fresh` job compares the PR diff, so it can tell "you changed the
-console (anything under `ui/src/app` or `ui/src/styles`) without re-shooting
-`docs/img`" — a local commit-timestamp test cannot, and cannot be cleared at all
-once `make screenshots` re-renders the PNGs byte-identically. Re-shoot with
-`make screenshots` when you touch the console, or apply the `no-screenshots`
-label (and push again) when the change is provably invisible in the two shots.
+Screenshot freshness is advisory and CI-only. On a pull request, `ci.yml`'s
+`diagrams` job compares the PR diff and adds a warning annotation when the
+console (anything under `ui/src/app` or `ui/src/styles`) changed and `docs/img`
+did not. It never fails a check, because many console changes rightly leave
+both shots alone; a local commit-timestamp test could not tell the difference,
+and could not be cleared once `make screenshots` re-renders the PNGs
+byte-identically. Re-shoot with `make screenshots` when a shot shows the change.
 
 `release-check` pushes nothing and tags nothing. A green local run means "no local
 reason not to tag", not "CI is green" — check the actual CI run on the commit
@@ -301,8 +306,10 @@ the five supply-chain gates are `gates (...)` rather than bare names.
 A job conditional on `push`, a schedule, or a path filter must **not** be a required
 context: GitHub does not treat a never-reported required context as passing, so
 the PR sits at "Expected — waiting for status to be reported" and cannot be
-merged. `screenshots-fresh` (PR-only) is the live example. This paragraph used
-to cite `sbom-stub`, which no longer exists.
+merged. Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch
+build) included. A job's check name is its `name:` when it sets one, otherwise
+its job id, so renaming either is the same protection change as deleting the
+job.
 
 ## Container images
 
