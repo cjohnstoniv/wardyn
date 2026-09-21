@@ -31,6 +31,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -120,6 +121,13 @@ type Driver struct {
 	// must never overclaim (see its doc). Surfaced as
 	// ClassSupport.NetworkPolicyAcknowledged instead.
 	netPolAcked bool
+
+	// execFactory is the test seam newExecutor (session.go) defers to when
+	// set: it replaces the real SPDY/WebSocket-fallback executor build (which
+	// dials the apiserver over HTTP and cannot run against a fake clientset)
+	// with a caller-supplied remotecommand.Executor. Nil in production and in
+	// newWithClient's default construction — only tests ever set it.
+	execFactory func(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error)
 }
 
 var _ substrate.Substrate = (*Driver)(nil)
