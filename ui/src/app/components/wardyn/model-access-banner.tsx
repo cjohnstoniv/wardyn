@@ -20,9 +20,11 @@
 // hiding in focus mode — Finding 4's mid-run re-auth needs exactly this surface
 // on the cockpit.
 //
-// It renders last in the shell's banner stack: a dead control plane or an
-// unknown identity is the better explanation of what you are looking at, and is
-// read first.
+// It rendered last in the shell's banner stack until #162 added
+// ConfinementPostureBanner after it: a dead control plane or an unknown
+// identity is the better explanation of what you are looking at, and is read
+// first, but a per-person credential block outranks a cluster-wide posture
+// note nobody but an admin can act on.
 
 import * as React from "react";
 import { AlertTriangle, Clock, Loader2 } from "lucide-react";
