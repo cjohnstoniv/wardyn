@@ -169,7 +169,7 @@ func TestCreateSandbox_NoMountCarriesASubPath(t *testing.T) {
 	// they are Secret volumes rather than emptyDirs — the shape most likely to
 	// be written with a subPath, since one file in an existing directory is
 	// exactly what subPath is for.
-	spec.ManagedFiles = []runner.ManagedFile{{Path: "/etc/wardyn/agent/settings.json", Content: []byte("{}")}}
+	spec.ManagedFiles = []runner.ManagedFile{{Path: runner.ManagedFileDir + "/managed-settings.json", Content: []byte("{}")}}
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)

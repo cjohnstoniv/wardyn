@@ -10,29 +10,41 @@ import (
 )
 
 func TestValidateManagedFiles(t *testing.T) {
-	ok := ManagedFile{Path: "/etc/wardyn/agent/settings.json", Content: []byte("{}")}
+	ok := ManagedFile{Path: "/etc/claude-code/managed-settings.json", Content: []byte("{}")}
+	const outside = "must sit directly in /etc/claude-code"
 
 	cases := []struct {
 		name  string
 		files []ManagedFile
 		want  string // substring of the refusal; "" means accept
 	}{
-		{name: "accepts a two-deep path", files: []ManagedFile{ok}},
+		{name: "accepts the consumer's path", files: []ManagedFile{ok}},
 		{name: "accepts nothing at all", files: nil},
-		{name: "relative path", files: []ManagedFile{{Path: "etc/wardyn/x"}}, want: "must be absolute"},
-		{name: "traversal", files: []ManagedFile{{Path: "/etc/wardyn/../../x"}}, want: "must be clean"},
-		{name: "trailing separator", files: []ManagedFile{{Path: "/etc/wardyn/x/"}}, want: "must be clean"},
-		{name: "top-level parent", files: []ManagedFile{{Path: "/etc/settings.json"}}, want: "at least two directories deep"},
-		{name: "root", files: []ManagedFile{{Path: "/x"}}, want: "at least two directories deep"},
+		{name: "relative path", files: []ManagedFile{{Path: "etc/claude-code/x"}}, want: "must be absolute"},
+		{name: "traversal", files: []ManagedFile{{Path: "/etc/claude-code/../../x"}}, want: "must be clean"},
+		{name: "trailing separator", files: []ManagedFile{{Path: "/etc/claude-code/x/"}}, want: "must be clean"},
+		{name: "the directory itself", files: []ManagedFile{{Path: "/etc/claude-code"}}, want: outside},
+		{name: "a subdirectory", files: []ManagedFile{{Path: "/etc/claude-code/sub/x"}}, want: outside},
+		{name: "a sibling sharing the prefix", files: []ManagedFile{{Path: "/etc/claude-codex/x"}}, want: outside},
+		{name: "elsewhere under /etc", files: []ManagedFile{{Path: "/etc/wardyn/agent/settings.json"}}, want: outside},
+		{name: "root", files: []ManagedFile{{Path: "/x"}}, want: outside},
+		// Each of these was accepted once and shown on a real daemon to be
+		// replaceable by the agent, hidden from it, or host-mutating.
+		{name: "agent-owned top level", files: []ManagedFile{{Path: "/work/.claude/settings.json"}}, want: outside},
+		{name: "tmpfs mounted at start", files: []ManagedFile{{Path: "/tmp/wardyn/policy.json"}}, want: outside},
+		{name: "workspace bind mount", files: []ManagedFile{{Path: "/home/agent/work/.claude/settings.json"}}, want: outside},
+		{name: "recording cast dir", files: []ManagedFile{{Path: "/var/log/wardyn/p.json"}}, want: outside},
+		{name: "recording mount", files: []ManagedFile{{Path: "/wardyn/recordings/p.json"}}, want: outside},
+		{name: "user drive", files: []ManagedFile{{Path: "/home/agent/drive/x/p.json"}}, want: outside},
 		{name: "empty", files: []ManagedFile{{}}, want: "empty path"},
 		{name: "duplicate", files: []ManagedFile{ok, ok}, want: "duplicate path"},
-		{name: "group-writable", files: []ManagedFile{{Path: "/etc/wardyn/a/f", Mode: 0o664}}, want: "group- or other-writable"},
-		{name: "other-writable", files: []ManagedFile{{Path: "/etc/wardyn/a/f", Mode: 0o646}}, want: "group- or other-writable"},
-		{name: "world-writable", files: []ManagedFile{{Path: "/etc/wardyn/a/f", Mode: 0o666}}, want: "group- or other-writable"},
-		{name: "non-permission bits", files: []ManagedFile{{Path: "/etc/wardyn/a/f", Mode: fs.ModeSetuid | 0o644}}, want: "outside the permission bits"},
-		{name: "read-only is fine", files: []ManagedFile{{Path: "/etc/wardyn/a/f", Mode: 0o444}}},
-		{name: "over the ceiling", files: []ManagedFile{{Path: "/etc/wardyn/a/f", Content: make([]byte, ManagedFilesMaxBytes+1)}}, want: "exceeds the"},
-		{name: "at the ceiling", files: []ManagedFile{{Path: "/etc/wardyn/a/f", Content: make([]byte, ManagedFilesMaxBytes)}}},
+		{name: "group-writable", files: []ManagedFile{{Path: "/etc/claude-code/f", Mode: 0o664}}, want: "group- or other-writable"},
+		{name: "other-writable", files: []ManagedFile{{Path: "/etc/claude-code/f", Mode: 0o646}}, want: "group- or other-writable"},
+		{name: "world-writable", files: []ManagedFile{{Path: "/etc/claude-code/f", Mode: 0o666}}, want: "group- or other-writable"},
+		{name: "non-permission bits", files: []ManagedFile{{Path: "/etc/claude-code/f", Mode: fs.ModeSetuid | 0o644}}, want: "outside the permission bits"},
+		{name: "read-only is fine", files: []ManagedFile{{Path: "/etc/claude-code/f", Mode: 0o444}}},
+		{name: "over the ceiling", files: []ManagedFile{{Path: "/etc/claude-code/f", Content: make([]byte, ManagedFilesMaxBytes+1)}}, want: "exceeds the"},
+		{name: "at the ceiling", files: []ManagedFile{{Path: "/etc/claude-code/f", Content: make([]byte, ManagedFilesMaxBytes)}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,7 +67,7 @@ func TestValidateManagedFiles(t *testing.T) {
 // validation rule whose absence would pass every other test in the tree.
 func TestValidateManagedFilesRefusesEveryAgentWritableMode(t *testing.T) {
 	for mode := fs.FileMode(0); mode <= 0o777; mode++ {
-		err := ValidateManagedFiles([]ManagedFile{{Path: "/etc/wardyn/a/f", Mode: mode}})
+		err := ValidateManagedFiles([]ManagedFile{{Path: "/etc/claude-code/f", Mode: mode}})
 		writable := mode&0o022 != 0
 		if writable && err == nil {
 			t.Fatalf("mode %04o is group- or other-writable and was accepted", mode)
@@ -88,6 +100,17 @@ func TestManagedFileDirs(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("ManagedFileDirs = %v, want %v (sorted, deduplicated)", got, want)
+		}
+	}
+}
+
+// No mount may land on ManagedFileDir, above it, or inside it: a bind there is
+// a host directory the delivery would write into, and one above it lets the
+// agent rename the directory aside.
+func TestManagedFileDirIsNoMountTarget(t *testing.T) {
+	for _, tgt := range []string{"/", "/etc", ManagedFileDir, ManagedFileDir + "/x"} {
+		if ValidateTarget(tgt) == nil {
+			t.Errorf("ValidateTarget(%q) accepted a mount target that covers %s", tgt, ManagedFileDir)
 		}
 	}
 }

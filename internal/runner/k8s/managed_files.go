@@ -59,8 +59,8 @@ func managedFileSecretData(files []runner.ManagedFile) map[string][]byte {
 // mount makes the whole tree refuse a write with EROFS whatever the mode says.
 // The DIRECTORY is a mount point, so the agent cannot rename it away and put
 // its own there instead — which is the half a root-owned file alone does not
-// give you. runner.ValidateManagedFiles' two-deep path rule is what keeps that
-// mount point off a top-level directory the image needs.
+// give you. runner.ValidateManagedFiles confines that mount point to
+// runner.ManagedFileDir, so it never hides a directory the image needs.
 func managedFileVolumes(runID uuid.UUID, files []runner.ManagedFile) ([]corev1.Volume, []corev1.VolumeMount) {
 	if len(files) == 0 {
 		return nil, nil

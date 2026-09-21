@@ -26,8 +26,8 @@ import (
 )
 
 const (
-	testManagedDir      = "/etc/wardyn/agent"
-	testManagedSettings = testManagedDir + "/settings.json"
+	testManagedDir      = runner.ManagedFileDir
+	testManagedSettings = testManagedDir + "/managed-settings.json"
 	testManagedLocked   = testManagedDir + "/locked"
 )
 
@@ -111,7 +111,7 @@ func TestCreateSandbox_DeliversManagedFiles(t *testing.T) {
 	if len(vol.Secret.Items) != 2 {
 		t.Fatalf("volume projects %d items, want exactly the 2 managed files: %+v", len(vol.Secret.Items), vol.Secret.Items)
 	}
-	wantModes := map[string]int32{"settings.json": 0o644, "locked": 0o444}
+	wantModes := map[string]int32{"managed-settings.json": 0o644, "locked": 0o444}
 	for _, it := range vol.Secret.Items {
 		want, known := wantModes[it.Path]
 		if !known {
@@ -233,7 +233,7 @@ func TestCreateSandbox_RefusesAnInvalidManagedFile(t *testing.T) {
 	cs.ClearActions()
 
 	spec := testSandboxSpec()
-	spec.ManagedFiles = []runner.ManagedFile{{Path: "/etc/wardyn/agent/settings.json", Mode: 0o666, Content: []byte("{}")}}
+	spec.ManagedFiles = []runner.ManagedFile{{Path: testManagedSettings, Mode: 0o666, Content: []byte("{}")}}
 	_, err := d.CreateSandbox(context.Background(), spec)
 	if err == nil {
 		t.Fatal("CreateSandbox accepted a world-writable managed file")

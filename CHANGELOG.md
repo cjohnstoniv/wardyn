@@ -29,15 +29,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The runner contract can now place a file inside a sandbox that the agent cannot modify.**
   `SandboxSpec.ManagedFiles` carries operator-authored `{Path, Mode, Content}` entries, and
   `Capabilities.ManagedFiles` (a conjunction across substrates, like `UserDrives`) says whether a
-  deployment can deliver them. Docker extracts a uid/gid-0 archive between `ContainerCreate` and
-  `ContainerStart`; Kubernetes projects each file out of the per-run Secret as a read-only volume
-  with explicit `items`. Both land the file root-owned, at the requested mode, inside a directory
-  the agent can neither write nor replace, and both do it before the agent's first instruction
-  runs — materialising it as the sandbox user leaves it writable by the thing it is meant to
-  constrain, and a one-shot root exec after start races the main process. A path must be at least
-  two directories deep and a group- or other-writable mode is refused. Conformance case 8
-  (`ManagedFiles`) holds both substrates to it, and its load-bearing assertion is that a write is
-  REFUSED, not that the file reads back. Nothing populates the field yet.
+  deployment can deliver them. Docker extracts a uid/gid-0 archive of file entries only between
+  `ContainerCreate` and `ContainerStart`, into a directory it creates, and refuses a directory that
+  already exists rather than re-owning it; Kubernetes projects each file out of the per-run Secret
+  as a read-only volume with explicit `items`. Both land the file root-owned, at the requested mode,
+  inside a directory the agent can neither write nor replace, and both do it before the agent's
+  first instruction runs — materialising it as the sandbox user leaves it writable by the thing it
+  is meant to constrain, and a one-shot root exec after start races the main process. A managed file
+  must sit directly in `/etc/claude-code`, where Claude Code reads its managed settings: a directory
+  under an agent-owned parent can be renamed aside, a tmpfs mounted at start hides the file, and
+  recording setup loosens `/var/log/wardyn`. A group- or other-writable mode is refused. Conformance
+  case 8 (`ManagedFiles`) holds both substrates to it, and its load-bearing assertion is that a
+  write is REFUSED, not that the file reads back. Nothing populates the field yet.
 
 - **A user drive's minted object name can no longer be forged by a crafted `home_override`.**
   `types.DriveObjectName` built a managed drive's storage-object name from the drive's

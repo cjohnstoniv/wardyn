@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moby/moby/api/types/system"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -56,9 +58,9 @@ func readTar(t *testing.T, b []byte) []tarEntry {
 // re-owned a host bind-mount source to root.
 func TestManagedFilesTar(t *testing.T) {
 	buf, err := managedFilesTar([]runner.ManagedFile{
-		{Path: "/etc/wardyn/agent/settings.json", Mode: 0o644, Content: []byte(`{"a":1}`)},
-		{Path: "/etc/wardyn/agent/locked", Mode: 0o444, Content: []byte("x")},
-		{Path: "/opt/wardyn/policy/rules", Content: []byte("r")},
+		{Path: "/etc/claude-code/managed-settings.json", Mode: 0o644, Content: []byte(`{"a":1}`)},
+		{Path: "/etc/claude-code/locked", Mode: 0o444, Content: []byte("x")},
+		{Path: "/etc/claude-code/rules", Content: []byte("r")},
 	})
 	if err != nil {
 		t.Fatalf("managedFilesTar: %v", err)
@@ -66,9 +68,9 @@ func TestManagedFilesTar(t *testing.T) {
 	got := readTar(t, buf.Bytes())
 
 	want := []tarEntry{
-		{name: "etc/wardyn/agent/settings.json", typ: tar.TypeReg, mode: 0o644, body: `{"a":1}`},
-		{name: "etc/wardyn/agent/locked", typ: tar.TypeReg, mode: 0o444, body: "x"},
-		{name: "opt/wardyn/policy/rules", typ: tar.TypeReg, mode: 0o644, body: "r"},
+		{name: "etc/claude-code/managed-settings.json", typ: tar.TypeReg, mode: 0o644, body: `{"a":1}`},
+		{name: "etc/claude-code/locked", typ: tar.TypeReg, mode: 0o444, body: "x"},
+		{name: "etc/claude-code/rules", typ: tar.TypeReg, mode: 0o644, body: "r"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("archive has %d entries %v, want %d %v — a directory entry re-owns a directory that already exists", len(got), got, len(want), want)
@@ -88,7 +90,7 @@ func TestManagedFilesTar(t *testing.T) {
 // come from the clock cannot be diffed, and a copy is the one step here with no
 // substrate-side verification.
 func TestManagedFilesTarIsDeterministic(t *testing.T) {
-	files := []runner.ManagedFile{{Path: "/etc/wardyn/a/f", Content: []byte("body")}}
+	files := []runner.ManagedFile{{Path: "/etc/claude-code/f", Content: []byte("body")}}
 	a, err := managedFilesTar(files)
 	if err != nil {
 		t.Fatalf("managedFilesTar: %v", err)
@@ -104,7 +106,7 @@ func TestManagedFilesTarIsDeterministic(t *testing.T) {
 
 func TestManagedFilesTarRefusesAnInvalidSpec(t *testing.T) {
 	if _, err := managedFilesTar([]runner.ManagedFile{{Path: "/etc/f", Content: []byte("x")}}); err == nil {
-		t.Fatal("managedFilesTar accepted a top-level path; it must run the shared contract check")
+		t.Fatal("managedFilesTar accepted a path outside runner.ManagedFileDir; it must run the shared contract check")
 	}
 }
 
@@ -112,8 +114,8 @@ func TestManagedFilesTarRefusesAnInvalidSpec(t *testing.T) {
 func managedSpec() runner.SandboxSpec {
 	spec := testSpec()
 	spec.ManagedFiles = []runner.ManagedFile{
-		{Path: "/etc/wardyn/agent/settings.json", Mode: 0o644, Content: []byte(`{"managed":true}`)},
-		{Path: "/etc/wardyn/agent/locked", Mode: 0o444, Content: []byte("locked")},
+		{Path: "/etc/claude-code/managed-settings.json", Mode: 0o644, Content: []byte(`{"managed":true}`)},
+		{Path: "/etc/claude-code/locked", Mode: 0o444, Content: []byte("locked")},
 	}
 	return spec
 }
@@ -207,7 +209,7 @@ func TestCreateSandbox_FailsClosedWhenDeliveryFails(t *testing.T) {
 func TestCreateSandbox_RefusesAManagedFileDirectoryThatAlreadyExists(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
-	f.existingPaths = map[string]bool{"/etc/wardyn/agent": true}
+	f.existingPaths = map[string]bool{runner.ManagedFileDir: true}
 	d := newTestDriver(f)
 
 	spec := managedSpec()
@@ -237,7 +239,7 @@ func TestCreateSandbox_RefusesAnInvalidManagedFileBeforeCreatingAnything(t *test
 	d := newTestDriver(f)
 
 	spec := testSpec()
-	spec.ManagedFiles = []runner.ManagedFile{{Path: "/etc/wardyn/agent/settings.json", Mode: 0o666, Content: []byte("{}")}}
+	spec.ManagedFiles = []runner.ManagedFile{{Path: "/etc/claude-code/managed-settings.json", Mode: 0o666, Content: []byte("{}")}}
 	_, err := d.CreateSandbox(context.Background(), spec)
 	if err == nil {
 		t.Fatal("CreateSandbox accepted a world-writable managed file")
@@ -276,5 +278,25 @@ func TestExecLessPath_DeliversManagedFilesBeforeStart(t *testing.T) {
 	}
 	if f.copies[0].afterStart {
 		t.Error("the exec-less path copied managed files AFTER start; its main process IS the agent workload, so there is no later window at all")
+	}
+}
+
+// Nothing the driver does after start may cover or loosen runner.ManagedFileDir:
+// a tmpfs over it hides the delivered file (and lets the agent create its own),
+// and recording setup's root chmod 0777 would hand the directory to the agent.
+func TestManagedFileDirIsNeitherCoveredNorLoosenedAfterStart(t *testing.T) {
+	covers := func(p string) bool {
+		return p == "/" || p == runner.ManagedFileDir ||
+			strings.HasPrefix(runner.ManagedFileDir, p+"/") || strings.HasPrefix(p, runner.ManagedFileDir+"/")
+	}
+	for tgt := range hardenedHostConfig("none", "", runner.Resources{}, system.Info{}).Tmpfs {
+		if covers(tgt) {
+			t.Errorf("the agent's tmpfs at %s covers %s", tgt, runner.ManagedFileDir)
+		}
+	}
+	for _, dir := range recordingChmodDirs(Config{Record: true, RecordingMount: "wardyn-recordings"}) {
+		if covers(dir) {
+			t.Errorf("recording setup chmods %s 0777, which covers %s", dir, runner.ManagedFileDir)
+		}
 	}
 }

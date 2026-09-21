@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"path"
 	"sort"
-	"strings"
 )
 
 // ManagedFile is one operator-authored file placed inside the sandbox that the
@@ -47,6 +46,24 @@ type ManagedFile struct {
 // with: readable by the agent, writable only by root.
 const DefaultManagedFileMode fs.FileMode = 0o644
 
+// ManagedFileDir is the one directory a managed file may be delivered into,
+// and every managed file sits directly in it. It is where Claude Code reads its
+// managed settings on Linux, the only consumer. It is an allowlist rather than
+// a rule about path shape because each property that makes a managed file a
+// ceiling depends on where the file is:
+//
+//   - its parent, /etc, is root-owned in any image that keeps the image
+//     contract, so the agent cannot rename this directory aside and put its own
+//     in its place (a rename within one parent needs write on the parent only);
+//   - nothing covers or loosens /etc after delivery: mount targets are confined
+//     to allowedTargetPrefixes, the sandbox's tmpfs is /tmp, and recording
+//     setup chmods only its own directories;
+//   - no Wardyn image ships it, so the Docker driver creates it rather than
+//     delivering into a directory it did not make.
+//
+// A second location joins only once it has been checked against each of those.
+const ManagedFileDir = "/etc/claude-code"
+
 // ManagedFilesMaxBytes caps the total content one spec may carry. The binding
 // constraint is the Kubernetes substrate: every managed file rides the same
 // per-run Secret as the proxy config and each SecretEnv value, and a Secret is
@@ -59,14 +76,11 @@ const ManagedFilesMaxBytes = 256 << 10
 // substrate. Drivers call it before they create anything, so an impossible
 // request is refused rather than half-applied.
 //
-// The path shape is the Kubernetes substrate's constraint made explicit rather
-// than left to be discovered. There, a managed file's PARENT DIRECTORY is the
-// mount point of a read-only Secret volume — it cannot be a subPath mount,
-// because the apiserver forbids subPath on the ephemeral container the agent
-// actually runs in (see internal/runner/k8s/exec.go). Mounting over a
-// top-level directory would therefore hide the image's own /etc (or /usr, or
-// /bin) and the sandbox would not come up at all, so a managed path must be at
-// least two directories deep.
+// Every path must sit directly in ManagedFileDir; the refusal for any other
+// says why. On the Kubernetes substrate that directory becomes the mount point
+// of a read-only Secret volume — not a subPath mount, which the apiserver
+// forbids on the ephemeral container the agent actually runs in (see
+// internal/runner/k8s/exec.go).
 func ValidateManagedFiles(files []ManagedFile) error {
 	total := 0
 	seen := make(map[string]bool, len(files))
@@ -78,8 +92,8 @@ func ValidateManagedFiles(files []ManagedFile) error {
 			return fmt.Errorf("managed file %q: path must be absolute", f.Path)
 		case path.Clean(f.Path) != f.Path:
 			return fmt.Errorf("managed file %q: path must be clean (no %q, %q or trailing separator)", f.Path, "..", "//")
-		case strings.Count(f.Path, "/") < 3:
-			return fmt.Errorf("managed file %q: path must be at least two directories deep (e.g. /etc/wardyn/file); its parent directory becomes a read-only mount point on the Kubernetes substrate, and mounting over a top-level directory would hide the image's own contents there", f.Path)
+		case path.Dir(f.Path) != ManagedFileDir:
+			return fmt.Errorf("managed file %q: a managed file must sit directly in %s; anywhere else the agent could rename its directory aside, a mount could hide it, or delivery could write into a directory it did not create", f.Path, ManagedFileDir)
 		case seen[f.Path]:
 			return fmt.Errorf("managed file %q: duplicate path", f.Path)
 		}
