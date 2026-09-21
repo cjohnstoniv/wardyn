@@ -34,6 +34,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   own closing `PASS` line, rather than trusting a bare exit code — an unset `WARDYN_TEST_K8S` makes the
   walk self-skip and exit 0, which would otherwise be a permanently green job proving nothing.
 
+- **A user drive's minted object name can no longer be forged by a crafted `home_override`.**
+  `types.DriveObjectName` built a managed drive's storage-object name from the drive's
+  variable-width slug and its home segment (`wardyn-drive-<drive-slug>-<home>`), so the
+  boundary between the two was not at a fixed offset and a crafted home could produce a name
+  that reads as belonging to a different drive. Migration `0067_user_drives_object_scheme` adds
+  `user_drives.object_scheme` (`slug` | `id`); every drive registered from now on is minted
+  `wardyn-drive-<drive-id-hex>-<home>` instead, putting `<home>` at a fixed offset no drive
+  name or override can move. Existing rows keep the slug scheme permanently — neither substrate
+  can rename a storage object, so an already-allocated drive's members keep binding the object
+  they always did. `object_scheme` joins the identity fields a `PUT /drives/{id}` on an
+  allocated drive is refused 409 over unless `?confirm=rehome` is sent.
+
 - **Device and audit-federation storage** (migration `0066_devices_and_federation`, part of hybrid
   enrolment and audit federation). Three tables: `devices` (organisation-side inventory of enrolled
   laptops, credential hashed at rest, soft-revocable), `device_enrolment_tokens` (single-use
