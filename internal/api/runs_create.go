@@ -587,8 +587,13 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 // wsRefs is the run's referenced onboarded workspaces, resolved by the caller
 // (it also feeds the workspace cred binding + image resolution). legacyRepo is
 // the request's single `repo` field, which the declaresRepo gate below needs
-// and grantWiring cannot supply. Extracted verbatim from handleCreateRun.
-func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string) {
+// and grantWiring cannot supply. scmSite is the site-config snapshot the
+// autonomy gate graded the SCM-host lane from (resolveRunAutonomy), so the
+// hosts dispatched here are the hosts that were graded. Extracted verbatim
+// from handleCreateRun.
+func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string,
+	scmSite types.SiteConfig,
+) {
 	if added := unionWorkspaceEgress(spec, wsRefs); len(added) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.egress",
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
@@ -629,7 +634,7 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 		gw.firstGitHubGrantID != nil ||
 		len(gw.gitGrants) > 0 || len(gw.gitPATGrants) > 0 || len(gw.sshGrants) > 0
 	if declaresRepo {
-		if added := s.unionSiteConfigScmHosts(ctx, spec); len(added) > 0 {
+		if added := unionSiteConfigScmHosts(spec, scmSite); len(added) > 0 {
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.site_config.egress",
 				runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
 		}

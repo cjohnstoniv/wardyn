@@ -34,19 +34,36 @@ import (
 //
 // Returns ok=false once it has written its own 403 (denyMemberField, the
 // existing member-refusal shape carrying the existing `governance_profile`
-// reason — the closed reason enum stays closed). The warnings ride the 201.
+// reason — the closed reason enum stays closed), or its own 500 when the site
+// config could not be read. The warnings ride the 201.
+//
+// It also returns the site-config snapshot the SCM-host lane was graded from
+// (scmLaneSiteConfig), and launch hands that same value to unionRunEgress. One
+// read, two consumers: a gate that read site config and a union that read it
+// again could disagree — a dropped connection or an admin's edit between the
+// two would grade a run `sealed` and dispatch it to a forge. Review discards
+// it, as it discards the derived field.
 func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req *createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace, enforced types.ConfinementClass,
 	ceiling governanceCeiling,
-) (types.AutonomyResolution, []string, bool) {
+) (types.AutonomyResolution, []string, types.SiteConfig, bool) {
+	// Read for EVERY run that declares a repo, bound or not, because launch
+	// dispatches from this snapshot whether or not a rubric graded it. Fail
+	// closed, as admitRepoSources and siteConfigForLaneVeto do on the same
+	// read: a posture graded on a site config nobody could read is a guess.
+	scmSite, err := s.scmLaneSiteConfig(r.Context(), spec, req.Repo)
+	if err != nil {
+		writeServerError(w, r, "get site config", err)
+		return types.AutonomyResolution{}, nil, types.SiteConfig{}, false
+	}
 	// No profile, or a profile with no rubric: the zero value and no bound. An
 	// UNASSIGNED member — and every operator — is byte-for-byte what they were
 	// before this gate existed, the same absent-row rule every other
 	// GovernanceLimits field follows. Nothing below runs.
 	if ceiling.Profile == nil || ceiling.Limits.AutonomyRubric == nil {
-		return types.AutonomyResolution{}, nil, true
+		return types.AutonomyResolution{}, nil, scmSite, true
 	}
-	posture := composer.AutonomyPostureOf(s.autonomyPostureSpec(r.Context(), spec, wsRefs, req.Repo), enforced)
+	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite), enforced)
 	level, boundBy := composer.FoldAutonomy(*ceiling.Limits.AutonomyRubric, posture)
 	res := types.AutonomyResolution{Level: level, Posture: posture, BoundBy: boundBy}
 	// An all-unset rubric — or one that leaves this posture's three fields
@@ -54,15 +71,15 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// doc). The posture still travels, so the audit row and Review record what
 	// was graded even when nothing bound it.
 	if level == "" {
-		return res, nil, true
+		return res, nil, scmSite, true
 	}
 	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy), ceiling.Profile.Name)
-	return res, warnings, ok
+	return res, warnings, scmSite, ok
 }
 
 // autonomyLadder enforces a resolved level on the request: the refusals, then
 // autonomyDerive's L1 half. Split from resolveRunAutonomy so that one owns the
-// inputs (the posture, the fold) and this one owns the decisions.
+// inputs (the snapshot, the posture, the fold) and this one owns the decisions.
 //
 // `bound` arrives rendered ONCE (autonomyBoundList), so the refusals and the
 // derived-hold warning cannot drift into naming different causes for one
@@ -235,8 +252,8 @@ func autonomyAgentLabel(agent string) string {
 // preflight's spec for the lanes it already ran and set-identical on launch's,
 // so both doors grade the same envelope whatever order the unions ran in.
 //
-// Every input below comes from the spec, the workspaces or site config, so
-// Review and launch compute it identically:
+// Every input below is the spec, the workspaces and the one site-config
+// snapshot, so Review and launch compute it identically:
 //
 //   - the workspace registries and clone hosts;
 //   - the site-config SCM hosts, whenever specDeclaresRepo — which counts a
@@ -261,8 +278,8 @@ func autonomyAgentLabel(agent string) string {
 //
 // Works on a copy with both domain slices cloned: spec is the one the caller
 // goes on to persist and dispatch, and unionDomains appends in place.
-func (s *Server) autonomyPostureSpec(ctx context.Context, spec types.RunPolicySpec,
-	wsRefs []types.Workspace, legacyRepo string,
+func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, legacyRepo string,
+	scmSite types.SiteConfig,
 ) types.RunPolicySpec {
 	out := spec
 	out.AllowedDomains = slices.Clone(spec.AllowedDomains)
@@ -275,7 +292,7 @@ func (s *Server) autonomyPostureSpec(ctx context.Context, spec types.RunPolicySp
 	// must inherit none here either, or a sealed local-dir run would grade
 	// open on hosts it can never reach.
 	if specDeclaresRepo(spec, legacyRepo) {
-		s.unionSiteConfigScmHosts(ctx, &out)
+		unionSiteConfigScmHosts(&out, scmSite)
 	}
 	for _, g := range spec.EligibleGrants {
 		unionAllowedDomains(&out, grantLaneEgress(g))
@@ -300,4 +317,16 @@ func specDeclaresRepo(spec types.RunPolicySpec, legacyRepo string) bool {
 		}
 		return false
 	})
+}
+
+// scmLaneSiteConfig is the one site-config read the SCM-host lane is decided
+// from, per request (see resolveRunAutonomy for why one). Skipped — a zero
+// value, no store round trip — when the spec declares no repo, since neither
+// the posture nor unionRunEgress unions the lane then; specDeclaresRepo is a
+// superset of launch's test, so every run launch unions the lane for was read.
+func (s *Server) scmLaneSiteConfig(ctx context.Context, spec types.RunPolicySpec, legacyRepo string) (types.SiteConfig, error) {
+	if s.cfg.Store == nil || !specDeclaresRepo(spec, legacyRepo) {
+		return types.SiteConfig{}, nil
+	}
+	return s.cfg.Store.GetSiteConfig(ctx)
 }

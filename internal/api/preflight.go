@@ -285,8 +285,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// refusals with real authz.denied rows, the same way the drive door's are.
 	// The derived tool_approvals write lands on this handler's own request
 	// copy and is discarded with it (preflight dispatches nothing); the 201
-	// warnings belong to the launch channel, so they are dropped here too.
-	autonomy, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	// warnings belong to the launch channel, and the site-config snapshot to
+	// launch's egress union, so both are dropped here too.
+	autonomy, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
 	if !ok {
 		return
 	}

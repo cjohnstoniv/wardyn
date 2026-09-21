@@ -226,7 +226,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// createRunAuditData and the dispatchParams literal below, which both read
 	// the req.ToolApprovals this gate may derive to `hold`. Writes its own 403
 	// and stops on false; its warnings join the 201 list further down.
-	autonomy, autonomyWarns, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	// scmSite is the one site-config snapshot the gate graded the SCM-host lane
+	// from; unionRunEgress below dispatches from the same value.
+	autonomy, autonomyWarns, scmSite, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
 	if !ok {
 		return
 	}
@@ -365,7 +367,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
-	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo)
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, scmSite)
 
 	// …and say so when one of those operator-approved workspace hosts is walled
 	// off by the caller's own governance profile. The union above still happened

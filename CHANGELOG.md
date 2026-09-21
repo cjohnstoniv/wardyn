@@ -80,7 +80,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   grant lanes are graded BEFORE the launch-side provider-lane veto and codex-cli's missing SSH
   lane, so the graded allowlist is a superset of the one `unionRunEgress` builds: a run that
   reaches beyond the safe baseline through any of those lanes is always graded `open`, and a run
-  whose lane is later vetoed may be graded `open` on reach it will not get.
+  whose lane is later vetoed may be graded `open` on reach it will not get. The site config
+  those hosts come from is read ONCE per request and handed to both the resolution and the
+  union, so the level and the dispatched hosts cannot come from two reads; a read that fails
+  refuses the run with a 500, as provider admission and the grant-lane veto already do on theirs.
   **Not in the posture:** the egress dispatch adds later still — the model-provider hosts it
   resolves from global configuration, and the artifact-redirect substitution. A Bedrock run
   whose region comes from global configuration therefore grades its egress without the Bedrock

@@ -120,3 +120,65 @@ func TestAutonomyShellBootSeedRanksWithExec(t *testing.T) {
 		})
 	}
 }
+
+// TestAutonomySiteConfigIsReadOnceForGateAndUnion pins that the level and the
+// SCM hosts dispatched come from ONE site-config read. With two, a dropped
+// connection at the gate or an admin's edit between the reads makes them
+// disagree the dangerous way round: graded `sealed` on what the gate saw,
+// dispatched to the forge a later read saw.
+//
+// CreateRun is the store call between the gate and launch's egress union, so
+// the first row changes what site config answers there. The second row drops
+// the snapshot's own read and nothing else: with the snapshot shared that
+// cannot put the two out of step, but a posture graded on a site config
+// nobody could read is still a guess, on Review and at launch alike.
+func TestAutonomySiteConfigIsReadOnceForGateAndUnion(t *testing.T) {
+	const ghes = "ghes.corp.example"
+	grant := types.GrantSpec{Kind: types.GrantGitHubToken, Scope: mustJSON(map[string]any{"repos": []string{"acme/widgets"}})}
+	body := `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto","inline_policy":{"min_confinement_class":"CC2",` +
+		`"allowed_domains":["api.anthropic.com"],"eligible_grants":[` + string(mustJSON(grant)) + `]}}`
+	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
+	fixture := func(t *testing.T) (*Server, *govEscapeStore, *recRecorder) {
+		p := govProfile("site-config-once")
+		p.Limits = types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{
+			EgressOpen: types.AutonomyL1, EgressSealed: types.AutonomyL3,
+		}}
+		p.Ceiling.EligibleGrants = []types.GrantSpec{grant}
+		srv, st, audit := govEscapeFixture(t, autonomyCapStore(p))
+		srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{grant}
+		return srv, st, audit
+	}
+
+	t.Run("an scm_hosts edit after the gate does not reach the run", func(t *testing.T) {
+		srv, st, audit := fixture(t)
+		st.onCreateRun = func() { st.siteConfig = types.SiteConfig{ScmHosts: []string{ghes}} }
+		if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), body); w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+		}
+		data := autonomyCreateAudit(t, st, audit)
+		eff := autonomyDispatchedSpec(t, st, audit)
+		if slices.Contains(eff.AllowedDomains, ghes) && data["tool_approvals"] != "hold" {
+			t.Errorf("graded %v, dispatched %v: the SCM host came from a read the gate never saw", data["autonomy"], eff.AllowedDomains)
+		}
+	})
+
+	t.Run("a failed read refuses the run at both doors", func(t *testing.T) {
+		for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+			srv, st, _ := fixture(t)
+			// Every other read this request makes succeeds and names the forge;
+			// only the snapshot's read drops.
+			st.siteConfig = types.SiteConfig{ScmHosts: []string{ghes}}
+			st.failSiteConfigReadFrom = "scmLaneSiteConfig"
+			w := doSSO(t, srv, http.MethodPost, path, member(t), body)
+			if w.Code != http.StatusInternalServerError {
+				t.Errorf("%s = %d, want 500 — a posture graded on a site config nobody could read: %s", path, w.Code, w.Body.String())
+			}
+			st.mu.Lock()
+			runs := len(st.runs)
+			st.mu.Unlock()
+			if runs != 0 {
+				t.Errorf("%s left %d run row(s) behind", path, runs)
+			}
+		}
+	})
+}
