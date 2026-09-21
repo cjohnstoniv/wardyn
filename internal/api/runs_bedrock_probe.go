@@ -147,9 +147,12 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sc t
 	// (a refresh token is PRESENT and the registration has not lapsed) even
 	// though redeeming it will fail every time — awsSSOTokenSpentFor is the
 	// same spent-set consult setupModelAccess grades against.
+	//
+	// readsSSO: under a per_user row that declares the bearer lane a session the
+	// caller also holds is not what dispatch selects, so it is not reported.
 	ssoLive, ssoDead := false, false
 	ssoAccount, ssoRole := "", ""
-	if blob, found, err := s.readAWSSSOBlob(ctx, sso); err == nil && found {
+	if blob, found, err := s.readAWSSSOBlob(ctx, sso); sso.readsSSO() && err == nil && found {
 		now := s.cfg.Now()
 		ssoLive = (blob.renewable(now) && !s.awsSSOTokenSpentFor(blob)) || !blob.expired(now)
 		ssoDead = !ssoLive
@@ -185,7 +188,9 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sc t
 		// from their namespace. So this reports the CALLER's own row, never the
 		// operator's — reporting the operator's would read "ready" off a credential
 		// the resolve refuses to serve them, and reporting nothing would read "not
-		// configured" over a bearer their runs really authenticate with.
+		// configured" over a bearer their runs really authenticate with. Under a
+		// row that declares the SSO lane bedrockBearerFor reads nothing, for the
+		// same reason the SSO read above is skipped under a bearer row.
 		b.BearerPresent = len(s.bedrockBearerFor(ctx, sso)) > 0
 	}
 	b.PerUser = sso.perUser

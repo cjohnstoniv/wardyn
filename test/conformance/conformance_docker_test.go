@@ -23,9 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
 	dockerclient "github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
 	"github.com/cjohnstoniv/wardyn/test/conformance"
@@ -68,7 +71,48 @@ func TestConformanceDocker(t *testing.T) {
 		ExitArgv: func(code int) []string {
 			return []string{"sh", "-c", "exit " + strconv.Itoa(code)}
 		},
+		// busybox runs as root, and a root probe can chmod or rename a
+		// root-owned file without any capability; the managed-files case runs
+		// as the uid every agent image uses instead.
+		AgentUserImage: agentUserImage(t, "busybox:latest"),
 	})
+}
+
+// agentUserImage commits base with USER 1000:1000 — the image contract's
+// agent identity — under a unique tag removed at cleanup.
+func agentUserImage(t *testing.T, base string) string {
+	t.Helper()
+	cli, err := dockerclient.New(dockerclient.FromEnv)
+	if err != nil {
+		t.Fatalf("agentUserImage: create client: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if _, err := cli.ImageInspect(ctx, base); err != nil {
+		if err := dockerutil.PullImage(ctx, cli, base, "agentUserImage"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	suffix := uuid.NewString()[:8]
+	created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
+		Name:   "wardyn-conformance-uid1000-" + suffix,
+		Config: &container.Config{Image: base, Cmd: []string{"true"}},
+	})
+	if err != nil {
+		t.Fatalf("agentUserImage: create: %v", err)
+	}
+	defer func() {
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, dockerclient.ContainerRemoveOptions{Force: true})
+	}()
+	ref := "wardyn-conformance-uid1000:" + suffix
+	if _, err := cli.ContainerCommit(ctx, created.ID, dockerclient.ContainerCommitOptions{Reference: ref, Changes: []string{"USER 1000:1000"}}); err != nil {
+		t.Fatalf("agentUserImage: commit: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = cli.ImageRemove(context.Background(), ref, dockerclient.ImageRemoveOptions{Force: true, PruneChildren: true})
+	})
+	return ref
 }
 
 // dockerRouteProbe is the L0 DefaultRouteProbe for the docker driver.

@@ -197,6 +197,12 @@ type bedrockAuth struct {
 	// so the sandbox holds only a placeholder. When false (resident path), AWS SigV4
 	// creds are placed in env (SigV4 can't be proxy-injected).
 	bearer bool
+	// bearerNamespace is the namespace the bearer was READ from (set only when
+	// bearer is): the operator's under shared, the run owner's own under
+	// per_user. authorBedrockBearerInjection records it on the grant, and the
+	// injection sink resolves the key from exactly that namespace — see
+	// resolveBedrockBearerInjection.
+	bearerNamespace awsSSOScope
 	// runtimeHost is the EFFECTIVE Bedrock data-plane host this run resolved
 	// (bedrockDataPlaneHost: the WARDYN_BEDROCK_BASE_URL override's host when
 	// set, else the regional public one). Audited by applyBedrockTransport in
@@ -548,13 +554,15 @@ func awsSSOCacheFileContents(b awsSSOBlob, proxyInjected bool) string {
 //
 // sso.perUser INVERTS that for the whole function, which is why it is a
 // parameter and not a lookup: the org declared that this agent's model
-// credential is one per person, so the ONLY admissible lane is that principal's
-// own captured session. The bearer, ~/.aws-mount and static-key arms are all
-// bare operator-namespace reads, so under per_user they are SKIPPED ENTIRELY —
-// a member with no session of their own is not-configured, never silently
-// served the operator's keys. That is also why the skip is a hard return rather
-// than a per-arm condition: a lane added below later must not quietly become
-// reachable for a member.
+// credential is one per person, so the ONLY admissible lane is the one the row
+// declares, read from that principal's own namespace — their captured session
+// (bedrock_sso) or their own stored bearer (bedrock_bearer), never the other
+// (awsSSOScope.readsBearer / readsSSO). The ~/.aws-mount and static-key arms
+// are bare operator-namespace reads, so under per_user they are SKIPPED
+// ENTIRELY — a member with no credential of their own is not-configured, never
+// silently served the operator's keys. That is also why the skip is a hard
+// return rather than a per-arm condition: a lane added below later must not
+// quietly become reachable for a member.
 //
 // refresh authorizes SIDE EFFECTS: only with refresh=true may the captured-SSO
 // lane redeem its rotating refresh token and persist the rotated pair. The REAL
@@ -599,13 +607,17 @@ func bedrockLaneSelectable(runAgent string, modelRun, subscriptionActive, haveSe
 // identical dance for the identical reason; a per-user scope with no owner, or
 // one read inside the no-credential member preview, is ABSENT there and here.
 //
+// A per-user scope whose row declares the SSO lane reads NO bearer at all
+// (awsSSOScope.readsBearer): the member's own key must not win the precedence
+// chain over the session the row names and have every run refused for it.
+//
 // An EMPTY or whitespace-only value reads as ABSENT rather than as a configured
 // credential. A blank row would otherwise win the precedence chain, author a
 // grant, and surface as an upstream 403 naming neither the lane it picked nor
 // the empty secret it picked it on.
 func (s *Server) bedrockBearerFor(ctx context.Context, scope awsSSOScope) []byte {
 	st := s.cfg.Secrets
-	if st == nil {
+	if st == nil || !scope.readsBearer() {
 		return nil
 	}
 	if scope.perUser {
@@ -697,7 +709,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
 		// overwrites the Authorization header with the real token on the wire.
 		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
-		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true})
+		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true, bearerNamespace: sso})
 	}
 
 	// Captured AWS SSO credential: a container-login `aws sso login` captured an
@@ -737,7 +749,12 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// chain is one mechanism), but no reader may read that as permission to
 	// substitute a DIFFERENT mechanism — a credential must never silently change
 	// source, which is what ssoRefreshFailure exists to let the dispatch gate say.
-	if blob, found, berr := s.readAWSSSOBlob(ctx, sso); berr == nil && found {
+	//
+	// Under a per_user row that declares the bearer lane a session the member
+	// also holds is never selected (awsSSOScope.readsSSO): it is not the
+	// credential the row names, and renewing it would spend a refresh token for
+	// a run the mechanism gate then refuses.
+	if blob, found, berr := s.readAWSSSOBlob(ctx, sso); sso.readsSSO() && berr == nil && found {
 		if refresh {
 			blob, ssoRefreshFailure = s.refreshAWSSSOBlob(ctx, sso, blob)
 		}
