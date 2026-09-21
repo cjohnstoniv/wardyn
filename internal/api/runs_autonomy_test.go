@@ -611,3 +611,97 @@ func bytesContainsKey(body []byte, key string) bool {
 	_, ok := m[key]
 	return ok
 }
+
+// ─── the two sentences on the 201 ─────────────────────────────────────────────
+
+// TestAutonomyWarningsOnTheCreatedRun pins the gate's advisory half, which the
+// audit row cannot speak for: the run was CREATED, so the only thing that
+// reaches the person who launched it is the 201's warnings list.
+//
+// Two sentences, each with its own silence condition, and the silences are the
+// half worth testing. A derived hold is reported because the member asked for
+// `auto` and did not get it — but a member who ASKED for hold was told nothing
+// new, and a warning there would train people to ignore the channel. The
+// missing-lane sentence is the honest one: at any rung, an agent with no
+// in-sandbox tool-approval half means the level is enforced at this door and at
+// the proxy and by nothing inside the container — and it is skipped for an exec
+// run, which has no agent process to say it about.
+func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
+	const derived = "tool_approvals was set to hold"
+	const noLane = "has no Wardyn tool-approval lane"
+	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
+
+	for _, tc := range []struct {
+		name   string
+		level  types.AutonomyLevel
+		body   string
+		want   []string
+		absent []string
+	}{
+		{
+			name:   "an overridden auto is reported, with the profile and every tied cause",
+			level:  types.AutonomyL1,
+			body:   `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto"}`,
+			want:   []string{derived, `governance profile "autonomy-warnings"`, "L1", "bound by egress_sealed, secrets_none and confinement_cc2"},
+			absent: []string{noLane},
+		},
+		{
+			// Nothing was derived: the caller already asked for the supervision
+			// the rung requires.
+			name:   "an explicit hold is not reported back as a derivation",
+			level:  types.AutonomyL1,
+			body:   `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			absent: []string{derived, noLane},
+		},
+		{
+			// Permitted at L2 (nothing is derived, so nothing is refused), and
+			// the level is still enforced by nothing inside that container.
+			name:   "an agent with no agent-side layer is named at a rung that permits it",
+			level:  types.AutonomyL2,
+			body:   `{"agent":"codex-cli","task":"t","confinement_class":"CC2"}`,
+			want:   []string{noLane, "codex-cli", "L2"},
+			absent: []string{derived},
+		},
+		{
+			// No agent process to say it about, and an exec run may legitimately
+			// name no agent at all.
+			name:   "an exec run is not told about an agent-side layer it has no agent for",
+			level:  types.AutonomyL3,
+			body:   `{"agent":"claude-code","task":"echo hi","confinement_class":"CC2","task_mode":"exec"}`,
+			absent: []string{derived, noLane},
+		},
+		{
+			// The absent row owes the caller no sentence at all.
+			name:   "a rubric that caps nothing says nothing",
+			body:   `{"agent":"codex-cli","task":"t","confinement_class":"CC2"}`,
+			absent: []string{derived, noLane},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := govProfile("autonomy-warnings")
+			if tc.level != "" {
+				p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(tc.level)}
+			}
+			srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), tc.body)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+			}
+			var resp createRunResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode create: %v", err)
+			}
+			all := strings.Join(resp.Warnings, "\n")
+			for _, want := range tc.want {
+				if !strings.Contains(all, want) {
+					t.Errorf("the 201 does not say %q; warnings were:\n%s", want, all)
+				}
+			}
+			for _, no := range tc.absent {
+				if strings.Contains(all, no) {
+					t.Errorf("the 201 says %q and should not; warnings were:\n%s", no, all)
+				}
+			}
+		})
+	}
+}
