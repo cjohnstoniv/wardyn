@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -786,5 +787,69 @@ func TestGovernanceLimitsWireRoundTrip(t *testing.T) {
 	}
 	if back != full {
 		t.Errorf("round trip = %+v, want %+v", back, full)
+	}
+}
+
+// TestGovernanceLimitsAutonomyRubricRoundTrip pins AutonomyRubric's wire shape
+// (0.8 #99): absent on a GovernanceLimits with no rubric — limits: {} must
+// still hold, the same zero-value rule TestGovernanceLimitsWireRoundTrip pins
+// for every other field — and byte-for-byte on a rubric carrying real caps.
+// It is a SEPARATE test (not folded into the one above) because AutonomyRubric
+// is a pointer: comparing two GovernanceLimits with `!=` compares pointer
+// identity, not the pointed-to value, so a populated rubric has to be compared
+// by its dereferenced fields instead.
+func TestGovernanceLimitsAutonomyRubricRoundTrip(t *testing.T) {
+	empty, err := json.Marshal(GovernanceLimits{})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(empty) != "{}" {
+		t.Errorf("a limits object with no rubric serializes as %s, want {}", empty)
+	}
+
+	rubric := AutonomyRubric{
+		EgressOpen:      AutonomyL2,
+		EgressReviewed:  AutonomyL1,
+		EgressSealed:    AutonomyL0,
+		SecretsPowerful: AutonomyL1,
+		SecretsBaseline: AutonomyL2,
+		SecretsNone:     AutonomyL3,
+		ConfinementCC1:  AutonomyL0,
+		ConfinementCC2:  AutonomyL2,
+		ConfinementCC3:  AutonomyL3,
+	}
+	if err := rubric.Validate(); err != nil {
+		t.Fatalf("Validate() on a fully-populated valid rubric: %v", err)
+	}
+
+	b, err := json.Marshal(GovernanceLimits{AutonomyRubric: &rubric})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !bytes.Contains(b, []byte(`"autonomy_rubric":{`)) {
+		t.Errorf("wire = %s, missing autonomy_rubric — the console mirrors this tag by hand "+
+			"(ui/src/app/lib/api/governance.ts), so a renamed tag is a runtime-only break", b)
+	}
+	var back GovernanceLimits
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.AutonomyRubric == nil || *back.AutonomyRubric != rubric {
+		t.Errorf("round trip = %+v, want %+v", back.AutonomyRubric, rubric)
+	}
+
+	// Rank orders the four rungs strictly L0 (most supervised) < L3 (least) —
+	// #97's resolution folds several rubric caps to their MINIMUM level, and
+	// this ordering is what "minimum" compares on.
+	if !(AutonomyL0.Rank() < AutonomyL1.Rank() && AutonomyL1.Rank() < AutonomyL2.Rank() && AutonomyL2.Rank() < AutonomyL3.Rank()) {
+		t.Errorf("AutonomyLevel.Rank() is not strictly increasing L0<L1<L2<L3 (%d,%d,%d,%d)",
+			AutonomyL0.Rank(), AutonomyL1.Rank(), AutonomyL2.Rank(), AutonomyL3.Rank())
+	}
+	if AutonomyLevel("bogus").Valid() {
+		t.Errorf(`AutonomyLevel("bogus").Valid() = true, want false`)
+	}
+
+	if err := (AutonomyRubric{EgressOpen: "bogus"}).Validate(); err == nil || !strings.Contains(err.Error(), "egress_open") {
+		t.Errorf("Validate() on a bad egress_open = %v, want an error naming egress_open", err)
 	}
 }
