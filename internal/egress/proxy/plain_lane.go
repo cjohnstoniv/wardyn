@@ -190,12 +190,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// host is never re-resolved. Invoked only post-allow+vet.
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
-		if isH2Preface(err) {
-			proto, hadTLS := alpnState()
-			if log != nil {
-				p.emitH2Mismatch(ruleSourceUpstreamProtocolMismatch, log.Request, host, proto, hadTLS, log.Scan)
-			}
-			p.writeUpstreamProtocolMismatch(w, host, "upstream error", p.upstreamProtocolMismatchCause(proto, hadTLS), err)
+		if p.refuseH2Mismatch(w, log, host, "upstream error", alpnState, err) {
 			return
 		}
 		// The allow decision is emitted only AFTER a successful round-trip (same

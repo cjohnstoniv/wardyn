@@ -156,6 +156,22 @@ func (p *Proxy) emitH2Mismatch(ruleSource string, req egress.Request, host, alpn
 	}
 }
 
+// refuseH2Mismatch is the whole answer to an HTTP/2 answer on a forward round
+// trip, so each lane spends one branch on it rather than four: it reports
+// whether err was that mismatch and, when it was, emits the deny (when the
+// lane has a decision to emit) and writes the sandbox's 400.
+func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, log *egress.DecisionLog, host, msg string, alpnState func() (string, bool), err error) bool {
+	if !isH2Preface(err) {
+		return false
+	}
+	proto, hadTLS := alpnState()
+	if log != nil {
+		p.emitH2Mismatch(ruleSourceUpstreamProtocolMismatch, log.Request, host, proto, hadTLS, log.Scan)
+	}
+	p.writeUpstreamProtocolMismatch(w, host, msg, p.upstreamProtocolMismatchCause(proto, hadTLS), err)
+	return true
+}
+
 // writeUpstreamProtocolMismatch answers isH2Preface's refusal to the sandbox
 // with cause — never the raw wrapped net/http error, which is the HTTP/2 frame
 // bytes themselves (mostly control characters), not a readable diagnosis, the
