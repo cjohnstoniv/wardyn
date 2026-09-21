@@ -93,7 +93,8 @@ func (s *Server) routes() chi.Router {
 			//   mountAccessRoutes      (access.go)  operatorOnly
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
 			//       despite naming its parameter operatorOnly; read the call site
-			//   mountUserDriveRoutes   (user_drives.go) operatorOnly
+			//   mountUserDriveRoutes   (user_drives.go) split: 4 operatorOnly,
+			//       3 securityOps (issue #168)
 			//   mountWorkspaceProviderRoutes        operatorOnly
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
@@ -579,20 +580,20 @@ func (s *Server) routes() chi.Router {
 
 			// User drives (migration 0054): the storage an admin registers
 			// and allocates, and the per-run flag a member mounts theirs with.
-			// Seven routes, all operatorOnly — SUPER, NOT the securityOps tier
-			// the /governance family right above sits on, and the contrast is
-			// the tier line itself. A drive names a HOST PATH (host_root) or a
-			// cluster storage class, and "never the host" is exactly what
-			// separates the two admin tiers; a security admin's authority over
-			// drives is the DenyUserDrive door in the profile editor, which is
-			// already theirs through /governance. Widening the grant + preview
-			// routes to securityOps is a one-line move plus matrix rows once the
-			// tier's own review settles — the safe direction, taken later.
+			// Seven routes SPLIT across both tiers (issue #168, 0.8): the four
+			// that name a HOST PATH (host_root) or a cluster storage class —
+			// creating, listing, updating, and removing the drive itself — stay
+			// operatorOnly, because "never the host" is exactly what separates
+			// the two admin tiers. The other three — granting an allocation,
+			// revoking one, and previewing whose drive resolves — moved to
+			// securityOps: a security admin's authority over drives was already
+			// the DenyUserDrive door in the profile editor (/governance above),
+			// and none of the three names a host path.
 			//
 			// Registered UNCONDITIONALLY (mountUserDriveRoutes' own doc), so
 			// TestAuthzMatrix's every-conditional-route-mounted doctrine has
 			// nothing to arrange.
-			s.mountUserDriveRoutes(operatorOnly)
+			s.mountUserDriveRoutes(operatorOnly, securityOps)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
 			// recordingAuthorizer is the SAME ownership rule

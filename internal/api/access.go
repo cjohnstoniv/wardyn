@@ -55,24 +55,28 @@ const accessEmailKeyRefused = "Email mappings are disabled on this install. Map 
 const accessStaleSnapshot = "your sign-in is too old to verify this change — sign in again before changing role mappings"
 
 // accessStaleSnapshotToken is the SAME refusal for the API-TOKEN lane, and it
-// exists because the sentence above names a remedy that lane provably cannot
-// perform.
+// exists because oidcGroupsFromContext resolves to the token's STAMPED
+// snapshot for a wdn_-token caller, never a claim freshly re-derived from the
+// IdP on this request — so a demonstrably-admin token can still fail
+// roleBefore against a snapshot that has not caught up yet.
 //
-// This guard fires on ANY caller whose frozen claim snapshot cannot reproduce
+// This guard fires on ANY caller whose stamped claim snapshot cannot reproduce
 // the admin role they hold — and apiTokenAuth installs exactly such a snapshot:
-// api_tokens.groups is stamped at MINT and read verbatim on every request, and a
+// api_tokens.groups is stamped on MINT and on every OnLogin
+// (store.RefreshAPITokenIdentity) and read verbatim on every request, and a
 // NULL groups_truncated (a pre-0.7 token) reads as truncated. So a
-// wdn_-token admin is refused every POST/DELETE /access/mappings and told to
-// sign in again — which changes nothing they hold. RefreshAPITokenRoles
-// re-stamps the ROLE column and provably does not touch groups, so there is no
-// sign-in, no refresh and no re-login that clears it. The token has to be
-// re-minted.
+// wdn_-token admin is refused every POST/DELETE /access/mappings until the
+// stamp catches up: the token owner's own NEXT sign-in re-stamps role AND
+// the group snapshot together on every unrevoked token they hold, this one
+// included, so retrying the write after that sign-in succeeds. The residual
+// is a token whose owner never signs in again — for them, re-minting from the
+// console (Account → API tokens) is still the only way to force a fresh stamp.
 //
 // The guard already distinguishes lanes once (the admin-token/local-mode
 // exemption above), so this is the same distinction applied to the sentence
 // rather than to the decision: the refusal is unchanged, only the remedy is the
 // caller's own.
-const accessStaleSnapshotToken = "your API token's sign-in snapshot is too old to verify this change — re-mint the token from the console (Account → API tokens) before changing role mappings; a token's group snapshot is frozen at mint and signing in again does not refresh it"
+const accessStaleSnapshotToken = "your API token's sign-in snapshot is too old to verify this change — the token owner's next sign-in re-stamps it; sign in again, then retry, or re-mint the token from the console (Account → API tokens) if you cannot sign in again"
 
 // mountAccessRoutes registers the People-step access surface. ALL FOUR routes
 // are operatorOnly, including the two reads: unlike /permissions (a member
@@ -234,7 +238,7 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := s.cfg.Store.ListRoleMappings(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list role mappings: "+err.Error())
+		writeServerError(w, r, "list role mappings", err)
 		return
 	}
 	chart := s.cfg.OIDC.ChartRoleMap()
@@ -424,13 +428,14 @@ func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping,
 	groups, email := oidcGroupsFromContext(r.Context()), oidcEmailFromContext(r.Context())
 	roleBefore, ok := s.cfg.OIDC.PreviewRoleAgainst(toOIDCRoleMappings(existing), nil, groups, email)
 	if !ok || roleBefore != oidc.RoleAdmin {
-		// Same refusal, the caller's own REMEDY. The two lanes reach this arm
-		// for the same reason — a frozen snapshot that cannot reproduce the
-		// admin they hold — but only the cookie lane can fix it by signing in
-		// again; a token's GROUP snapshot is stamped at mint and no login
-		// refreshes that half (RefreshAPITokenRoles re-stamps the role column
-		// and provably does not touch groups — see accessStaleSnapshotToken).
-		// Telling the token lane to sign in again is a refusal with no exit.
+		// Same refusal, the caller's own REMEDY. Both lanes now clear this the
+		// same way — the owner's own next sign-in re-stamps role AND the group
+		// snapshot together (store.RefreshAPITokenIdentity, fired from
+		// OnLogin) — but the token lane's caller cannot sign in FROM this
+		// request: it is the token's owner, not this API call, who has to go
+		// sign in, after which retrying the write succeeds. See
+		// accessStaleSnapshotToken. The residual for either lane is the same:
+		// an owner who never signs in again keeps whatever snapshot they had.
 		if apiTokenIDFromContext(r.Context()) != uuid.Nil {
 			return errors.New(accessStaleSnapshotToken)
 		}
@@ -519,7 +524,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 
 	existing, err := s.cfg.Store.ListRoleMappings(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list role mappings: "+err.Error())
+		writeServerError(w, r, "list role mappings", err)
 		return
 	}
 	candidate := accessCandidateRows(existing, "", value, req.Role)
@@ -551,7 +556,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	m := types.RoleMapping{ID: uuid.New(), Value: value, Role: req.Role, CreatedBy: principalFromRequest(r)}
 	saved, err := s.cfg.Store.UpsertRoleMapping(r.Context(), m)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert role mapping: "+err.Error())
+		writeServerError(w, r, "upsert role mapping", err)
 		return
 	}
 	action, status := "access.role_mapping.write", http.StatusCreated
@@ -606,7 +611,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 	existing, err := s.cfg.Store.ListRoleMappings(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list role mappings: "+err.Error())
+		writeServerError(w, r, "list role mappings", err)
 		return
 	}
 	// The matched row, kept for the audit event below — once deleted,
@@ -642,7 +647,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		if notFoundIf(w, err, "role mapping") {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "delete role mapping: "+err.Error())
+		writeServerError(w, r, "delete role mapping", err)
 		return
 	}
 	// The delete side of the same act, and the sharper one: removing a mapping

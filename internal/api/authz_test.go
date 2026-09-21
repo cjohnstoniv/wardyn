@@ -367,26 +367,26 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/governance/assignments":        {class: classSecurity},
 	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
 	"POST /api/v1/governance/preview":            {class: classSecurity},
-	// User drives (migration 0054) — classAdmin, and the contrast with the
-	// seven /governance rows directly above is the tier line in one pair. A
-	// drive names a HOST PATH (host_root) or a cluster storage class, and
-	// "never the host" is precisely what separates SUPER from securityOps; a
-	// security admin's authority over drives is the DenyUserDrive door in the
-	// profile editor, which they already reach through /governance. A member is
-	// refused on all seven and learns about their OWN drive from /me.user_drive
-	// instead — the same "your own answer, never the whole table" split the
-	// governance rows draw against /policies/default.
-	//
-	// The preview route is SUPER for the same reason its family is: it answers
-	// with an OBJECT NAME on a host path or a cluster, which is the offboarding
-	// runbook's input and not a member's business.
+	// User drives (migration 0054) — SPLIT (issue #168, 0.8). The four routes
+	// that NAME A HOST PATH (host_root) or a cluster storage class — creating,
+	// listing, updating, and removing the drive itself — stay classAdmin, and
+	// the contrast with the seven /governance rows directly above is the tier
+	// line in one pair: "never the host" is precisely what separates SUPER
+	// from securityOps. The other three — granting an allocation, revoking
+	// one, and previewing whose drive resolves — are classSecurity: none of
+	// the three names a host path, and a security admin's authority over
+	// drives was already the DenyUserDrive door in the profile editor, which
+	// they reach through /governance. A member is refused on all seven and
+	// learns about their OWN drive from /me.user_drive instead — the same
+	// "your own answer, never the whole table" split the governance rows draw
+	// against /policies/default.
 	"GET /api/v1/drives":                {class: classAdmin},
 	"POST /api/v1/drives":               {class: classAdmin},
 	"PUT /api/v1/drives/{id}":           {class: classAdmin},
 	"DELETE /api/v1/drives/{id}":        {class: classAdmin},
-	"POST /api/v1/drives/grants":        {class: classAdmin},
-	"DELETE /api/v1/drives/grants/{id}": {class: classAdmin},
-	"POST /api/v1/drives/preview":       {class: classAdmin},
+	"POST /api/v1/drives/grants":        {class: classSecurity},
+	"DELETE /api/v1/drives/grants/{id}": {class: classSecurity},
+	"POST /api/v1/drives/preview":       {class: classSecurity},
 	// Directory autocomplete (§I) — classSecurity, and the contrast with the
 	// four classAdmin /access routes above is the whole tier argument in one
 	// pair: those decide who DERIVES admin, this one only READS the directory
@@ -1130,14 +1130,18 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// with no route to model access at all, so the tier moved and the predicate
 	// went inside the handler. Its two sibling credential verbs (the token paste
 	// and the disconnect) did NOT move: they write the deployment's shared
-	// credential. = 41 SUPER. 0.8's hybrid enrolment then added three: minting a
-	// device enrolment token creates a credential, so it is born SUPER (= 42),
-	// while the device inventory and revoke are the /tokens pair's twins and
-	// land on the security tier (= 23 SEC). A route silently reclassified in the
-	// table above would still pass every probe — it would just be enforcing the
-	// WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 23 || super != 42 {
-		t.Errorf("tier split = %d security / %d admin, want 23 / 42 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login)", sec, super)
+	// credential. = 41 SUPER. Issue #168 (0.8) then moved THREE /drives routes
+	// OUT of SUPER and into SEC — POST /drives/grants, DELETE
+	// /drives/grants/{id}, POST /drives/preview — because none of the three
+	// names a host path, unlike the four /drives routes that stayed = 24 SEC /
+	// 38 SUPER. 0.8's hybrid enrolment then added three: minting a device
+	// enrolment token creates a credential, so it is born SUPER (= 39), while
+	// the device inventory and revoke are the /tokens pair's twins and land on
+	// the security tier (= 26 SEC). A route silently reclassified in the table
+	// above would still pass every probe — it would just be enforcing the WRONG
+	// tier, exactly the drift the per-route loop cannot see.
+	if sec != 26 || super != 39 {
+		t.Errorf("tier split = %d security / %d admin, want 26 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 
@@ -1619,7 +1623,7 @@ func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { retur
 func (s *authzStore) RefreshSSHKeyRoles(context.Context, string, string, time.Time) error {
 	return nil
 }
-func (s *authzStore) RefreshAPITokenRoles(context.Context, string, string) error {
+func (s *authzStore) RefreshAPITokenIdentity(context.Context, string, string, []string, bool) error {
 	return nil
 }
 

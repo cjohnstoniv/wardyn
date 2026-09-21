@@ -8,6 +8,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **A handler that builds a 5xx body's `(status, message)` pair and hands it to a helper could still
+  forward driver/substrate error text into it, past the guard added for #173.** The guard only read
+  direct `writeError` call sites, so a helper's own call site — where the message had already
+  collapsed into one opaque string argument — reported clean. Seven sites did this: `refuseCapture`'s
+  four callers in `ssotoken.go` (the AWS SSO capture path — the door the sandbox itself talks to),
+  `driveBindFailureHere`'s runner-capabilities-unavailable arm (`user_drives_run.go`), and `uiFail`'s
+  two callers in `uigateway.go`, which forwarded `sshExecStreamErrorMessage`'s own raw-error fallback.
+  All seven now log the error and send a fixed sentence; their `reason` codes are unchanged, since the
+  SDK reads them as a wire contract. The guard (`TestNoDriverTextInServerErrorBody`) now follows one
+  hop into a known forwarder (`refuseCapture`, `uiFail`, and the `*driveBindFailure` composite-literal
+  shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
+  `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
+  handler written in this indirect style no longer passes CI clean.
+
 ### Fixed
 
 - **Four console DTOs closed against their Go wire types.** `AgentRun` was missing `agent_exec_id`,
@@ -22,6 +38,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
 
 ### Changed
+
+- **Drive grants and preview now admit `security_admin`, not just super-admin.** `POST
+  /drives/grants`, `DELETE /drives/grants/{id}`, and `POST /drives/preview` moved off the
+  super-admin-only tier onto `securityOps` (admin or `security_admin`): none of the three names a
+  host path, and a security admin already reaches drives through the `DenyUserDrive` door on a
+  governance profile. The four routes that DO name a host path or cluster storage class — creating,
+  listing, updating, and removing the drive itself — stay super-admin only (#168).
 
 - **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
   role-mapping gap, a runner failure, a confinement floor the runner can't meet) now sits under
@@ -65,6 +88,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a value Postgres cannot store is a 400 the forwarder stops on rather than a 500 it retries.
   Failure rows are coalesced like `auth.failed`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
   (failures) and `device.audit.chain_reset`.
+
+- **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL`, `WARDYN_ORG_ENROLMENT_TOKEN` and
+  `WARDYN_ORG_DEVICE_NAME` tell a managed laptop which org control plane it belongs to. Boot is
+  refused when an org URL is set without `WARDYN_MEMBER_MODE`, when the URL is plaintext and not
+  loopback, or when an enrolment token is set with no org URL to send it to. See `docs/ENV.md`.
+
+- **The kind AWS SSO walk now runs nightly instead of only by hand.** `.github/workflows/nightly.yml`
+  gained a `kind-sso-walk` job that brings up `make kind-quickstart` + `make kind-sso` on the hosted
+  runner and drives `scripts/kind-sso-walk.sh`, excluding `sso-reauth-hold.spec.ts` (its case K holds a
+  credential for about ten minutes by design, which a new `WARDYN_KIND_SSO_SKIP_REAUTH_HOLD` knob on
+  the walk now lets a caller drop). The job asserts the walk actually executed specs and reached its
+  own closing `PASS` line, rather than trusting a bare exit code — an unset `WARDYN_TEST_K8S` makes the
+  walk self-skip and exit 0, which would otherwise be a permanently green job proving nothing.
 
 - **`scripts/gpl-source-offer.sh` covers a first-time image publish before it ships.** The image list
   is now read straight out of `release.yml`'s publish matrix instead of a hand-maintained array that
@@ -131,6 +167,32 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The Agents tab and member Getting Started now render a chip for the `not_applicable` model-access
+  state instead of nothing at all.** `not_applicable` — the admin-token principal's own answer under a
+  per_user row, "this caller is a mechanism, not a person" — had no entry in `MODEL_ACCESS_CHIP_LABEL`
+  and was excluded from both surfaces outright, so it read as unknown rather than as a deliberate
+  answer. It now has its own neutral label (`Model access · Not applicable`), rendered on the Agents
+  tab beside `ADMIN_OWN_CHIP_NOTE`, and beside member Getting Started's `llm_ready` fallback chip —
+  still with no action and no sign-in CTA, since there is no person here to sign in as.
+
+- **A per-user API token's group snapshot now refreshes at login, alongside its role.**
+  `store.RefreshAPITokenRoles` is now `RefreshAPITokenIdentity(ctx, principal, role, groups,
+  truncated)`: the `OnLogin` hook re-stamps `role`, `groups` and `groups_truncated` together, so a
+  human whose group memberships changed no longer authorizes forever against the snapshot their
+  token was minted with. `truncated` is bound exactly from the login's own session-completeness
+  signal, never defaulted — a snapshot this build could not fully enumerate still reads as
+  incomplete downstream. The residual narrows to the same shape the SSH-key analogue already has: a
+  human who never signs in again.
+
+- **5xx responses no longer echo driver/substrate error text to the caller.** ~90 handlers across
+  `internal/api` built a 500 (or other 5xx) body by concatenating `err.Error()` onto an action
+  string, so a transient Postgres or runner failure could hand an unprivileged-adjacent caller the
+  database host, port, SQLSTATE and constraint name, or similar substrate detail. Every such site
+  now goes through `writeServerError`/`loggedMsg` (`internal/api/writeservererror.go`), which log
+  the error with method and path and answer the caller with the action alone; a source-walking guard
+  test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
+  which are already caller-facing by design, are unchanged.
+
 - **A read-only terminal observer is now promoted in place when the writer leaves, instead of
   having to reconnect.** The registry keeps one writer and the observers queued behind it in
   arrival order; an ordinary release promotes the oldest of them on the socket it already has,
@@ -182,6 +244,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
   deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
   cancellation on shutdown — is unchanged.
+
+
 - **A run whose model credential is a stored AWS SSO session now says so when its confinement is
   weaker than that credential would otherwise require.** A captured AWS SSO session is delivered to
   the sandbox at dispatch, after the run's confinement class is already resolved, so it was never an
@@ -201,7 +265,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   state now renders in a persistent strip below the terminal, outside the scrollback, and a spent
   budget leaves a Reconnect button behind. Reconnecting keeps the existing scrollback and appends
   to it rather than clearing it.
-
 - **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
   finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
@@ -249,6 +312,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   than queueing sign-ins behind a connection it cannot spare.
 
 ### Changed
+
+- **`vscode/` and `novnc/` now default `FROM wardyn/agent-base:local`, not `wardyn/agent-claude-code:local`.**
+  Both Dockerfiles take a `BASE_IMAGE` build arg (`deploy/images/{vscode,novnc}/Dockerfile`); their
+  launchers only exec `code-server`/the X stack and never call a coding-agent CLI, so the vendor base
+  was never actually needed. `deploy/images/vscode/Dockerfile` also drops the
+  `LicenseRef-Anthropic-Terms` OCI licence label it no longer carries. `agent-image-vscode` and
+  `agent-image-novnc` now depend on a new `agent-image-base` target instead of `agent-images-core`, so
+  neither build touches the vendor CLI image at all. **Upgrading:** a developer checkout that wants
+  `claude` available in the vscode terminal restores the vendor base explicitly — build it first with
+  `make agent-images-core`, then `make agent-image-vscode BASE_IMAGE=wardyn/agent-claude-code:local`
+  (same knob for `agent-image-novnc`).
 
 - **The sign-in screen stops advertising the demo admin token.** The admin-token field's
   placeholder no longer carries `demo-admin-token`, and its hint no longer names
