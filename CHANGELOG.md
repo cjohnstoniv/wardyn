@@ -82,6 +82,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **CLI help and an operator-facing log line no longer print internal campaign IDs.**
+  `wardyn policy default --help`, `wardyn-tetragon-ingest --help`, and the mint-refusal WARN log in
+  `internal/api/internal.go` cited review-package coordinates (`W14-S1-6`, `W24-S1-1`, `F098`) that
+  resolve to nothing outside this repository. Each now says the thing the coordinate stood for
+  instead.
+
 - **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
   `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
   failure, so it can be called from a background worker. `internal/api/runs.go`'s
