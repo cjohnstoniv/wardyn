@@ -162,6 +162,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
   too.
 
+### Security
+
+- **`limits.deny_task_mode_exec` also refuses an interactive run's shell startup command.** A
+  member under that profile could send the exec command as an interactive run's task with
+  `interactive_start` unset or `shell`; the image runs it as `bash -lc` at sandbox boot, before
+  anyone attaches — unattended, exactly what the limit exists to close. The request is now
+  refused `403` (`authz.denied`, reason `governance_profile`, target `runs.interactive_start`),
+  at launch and at Review alike. `interactive_start=agent` with a task, or a run with no task,
+  still launches.
+
 ## [0.7.8] — 2026-09-19
 
 ### Added
