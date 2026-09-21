@@ -78,8 +78,9 @@ type Options struct {
 	// on it and then requires the probe to report uid 1000, because a root
 	// probe can rename, chmod and rewrite a root-owned file without any
 	// capability and so proves nothing about immutability. Empty ⇒ the case
-	// runs on SandboxImage and logs, rather than asserts, what only a non-root
-	// identity can show.
+	// runs on SandboxImage, asserting those refusals only when the probe is not
+	// root (the Kubernetes substrate runs the agent as uid 1000 whatever the
+	// image's USER) and logging them otherwise.
 	AgentUserImage string
 }
 

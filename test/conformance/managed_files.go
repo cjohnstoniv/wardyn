@@ -48,6 +48,10 @@ func managedFilesFixture() []runner.ManagedFile {
 // exec with the recorder (kubernetes), ten execs are ten recordings and ten
 // chances for a transport hiccup to look like a contract failure.
 //
+// The file checks stat with -L: a Kubernetes Secret volume projects each item
+// as a symlink into its timestamped data directory, and the symlink's own
+// 0777 says nothing about the file the agent reads.
+//
 // Each attempt runs in a subshell with stderr discarded so the shell's own
 // diagnostic never lands in the parsed stream; the WORD is the verdict. The
 // two replacement routes come last, because either one that succeeds changes
@@ -61,8 +65,8 @@ func managedFilesFixture() []runner.ManagedFile {
 var managedFileProbeScript = fmt.Sprintf(`echo uid=$(id -u)
 printf 'body='; cat %[1]s; echo
 echo bytes=$(wc -c < %[1]s)
-echo own_readable=$(stat -c '%%u:%%g:%%a' %[1]s)
-echo own_locked=$(stat -c '%%u:%%g:%%a' %[2]s)
+echo own_readable=$(stat -L -c '%%u:%%g:%%a' %[1]s)
+echo own_locked=$(stat -L -c '%%u:%%g:%%a' %[2]s)
 echo own_dir=$(stat -c '%%u:%%g' %[3]s)
 if (echo x > %[1]s) 2>/dev/null; then echo w_readable=WROTE; else echo w_readable=REFUSED; fi
 if (echo x > %[2]s) 2>/dev/null; then echo w_locked=WROTE; else echo w_locked=REFUSED; fi
