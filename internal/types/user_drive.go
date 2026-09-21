@@ -168,6 +168,55 @@ func (t HomeTemplate) Valid() bool {
 	}
 }
 
+// DriveObjectScheme names which half of DriveObjectName's minted form carries
+// the drive — the variable-width slug (migration 0054, `wardyn-drive-<drive-slug>-<home>`)
+// or the drive's own fixed-width id (migration 0067, `wardyn-drive-<drive-id-hex>-<home>`).
+// Closed; pinned against user_drives.object_scheme's CHECK.
+//
+// IT IS NOT CLIENT-AUTHORED. store.UpsertUserDrive derives it entirely — 'id'
+// on every INSERT, the row's own stored value carried through unchanged on
+// every UPDATE — and never reads this field off the request. A row therefore
+// keeps whatever scheme it was created under for as long as it exists: neither
+// substrate can rename a storage object (there is no `docker volume rename` and
+// a PVC name is immutable), so moving a drive from one scheme to the other
+// would either orphan every allocated member's object or require wardynd to
+// copy bytes between two objects — exactly the capability this package refuses
+// everywhere else a rename is possible (see UpsertUserDrive's own doc on
+// renaming). It exists on the wire (json:"object_scheme") purely so a GET and
+// the PUT that echoes it back agree, and so a client that tries to CLAIM a
+// different scheme in a PUT body is caught: driveIdentityFields compares it
+// like every other identity field, so a forged flip answers 409 rather than
+// being silently ignored by the write it could never actually perform.
+type DriveObjectScheme string
+
+const (
+	// DriveObjectSchemeSlug is the original form: the drive's name, folded to a
+	// DNS-1123 fragment (DriveSlug), at a variable offset before <home>. The
+	// column's own DEFAULT, so every row that predates 0067 reads as this
+	// without a backfill — and stays this permanently, because DriveSlug is not
+	// injective (0061's own doctrine) and only a rewrite of the object itself
+	// could change what a stored row's members already bind.
+	DriveObjectSchemeSlug DriveObjectScheme = "slug"
+	// DriveObjectSchemeID is the drive's own UUID, dashless (DriveObjectID), at
+	// a FIXED offset before <home>: driveObjectPrefix is constant-width and the
+	// id is always 32 hex characters, so nothing about the drive's own name can
+	// shift the boundary a home starts at. Every row created from 0067 onward
+	// gets this, unconditionally — the one write UpsertUserDrive's INSERT arm
+	// performs regardless of what a create request carries.
+	DriveObjectSchemeID DriveObjectScheme = "id"
+)
+
+// DriveObjectSchemes is the closed set, in the order a row can only ever move
+// through (a legacy row stays slug forever; a new row is always id) — not an
+// admin-surface order, because there is no admin surface that authors this
+// field.
+var DriveObjectSchemes = []DriveObjectScheme{DriveObjectSchemeSlug, DriveObjectSchemeID}
+
+// Valid reports whether s is one of the two schemes.
+func (s DriveObjectScheme) Valid() bool {
+	return s == DriveObjectSchemeSlug || s == DriveObjectSchemeID
+}
+
 // DriveReclaim is the DECLARED INTENT for a drive's objects when a grant goes
 // away. v1 executes it by documented operator command, not by code: nothing in
 // the control plane deletes a volume or a PVC, and the RBAC the k8s runner asks
@@ -281,6 +330,12 @@ type UserDrive struct {
 	// provisioned by someone else, and Docker has no such concept).
 	StorageClass string       `json:"storage_class,omitempty"`
 	HomeTemplate HomeTemplate `json:"home_template"`
+	// ObjectScheme names which half of a minted object name carries the drive —
+	// see DriveObjectScheme. NOT client-authored: the store derives it (see
+	// that type's doc) and this field exists on the wire only so a GET and a
+	// round-tripped PUT agree, and so a PUT that tries to claim a different
+	// value is caught as an identity change rather than silently dropped.
+	ObjectScheme DriveObjectScheme `json:"object_scheme,omitempty"`
 	// SizeMiB is the ALLOCATION, not a guarantee — see StorageEnforcement. 0
 	// means "no allocation shown" on every backend but k8s_pvc, where the value
 	// IS the PVC's resources.requests.storage and 0 is therefore refused at the
@@ -671,11 +726,37 @@ func DriveSlug(name string) string {
 // A SHARE keeps its own shape: <host_root> already scopes it, and the directory
 // under it was named by whoever owns the tree, not by Wardyn — a slug there
 // would name a directory that does not exist.
+//
+// THE DRIVE HALF IS d.ObjectScheme, beside DriveSlug rather than replacing it
+// (migration 0061's unique index still keys on the slug, and DriveSlug stays
+// what UpsertUserDrive writes into name_slug for every row regardless of
+// scheme). DriveObjectSchemeID puts DriveObjectID(d.ID) there instead —
+// 32 hex characters, always, so <home> starts at a FIXED offset and no
+// crafted drive name or home_override can shift the boundary the way a
+// variable-width slug could (issue #163: a fabricated home reading as though
+// it carried the next field's start). The empty scheme (a struct built by a
+// caller that never set it, e.g. every fixture that predates 0067) reads as
+// slug, matching the column's own DEFAULT — so a legacy row and a zero-value
+// UserDrive derive identically, and this function never has a third case.
 func DriveObjectName(d UserDrive, home string) string {
 	if !DriveObjectNamedByWardyn(d.Backend) {
 		return filepath.Join(filepath.Clean(d.HostRoot), home)
 	}
+	if d.ObjectScheme == DriveObjectSchemeID {
+		return driveObjectPrefix + DriveObjectID(d.ID) + "-" + home
+	}
 	return driveObjectPrefix + DriveSlug(d.Name) + "-" + home
+}
+
+// DriveObjectID is the drive's own id, dashless — the fixed-width fragment
+// DriveObjectSchemeID puts where DriveSlug used to go. 32 lowercase hex
+// characters always: uuid.UUID.String() is fixed-format (8-4-4-4-12 hex,
+// lowercase), so stripping its four hyphens leaves a length and character
+// class that can never vary with what an admin typed into the drive's name or
+// a member's home_override — the whole point, since DriveSlug's length and
+// content both depend on caller input.
+func DriveObjectID(id uuid.UUID) string {
+	return strings.ReplaceAll(id.String(), "-", "")
 }
 
 // DriveObjectNamedByWardyn reports whether WARDYN MINTS this backend's storage
