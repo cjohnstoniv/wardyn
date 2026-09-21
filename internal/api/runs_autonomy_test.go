@@ -89,8 +89,8 @@ func autonomyCreateAudit(t *testing.T, st *govEscapeStore, audit *recRecorder) m
 // ─── the ladder table ─────────────────────────────────────────────────────────
 
 // TestRunAutonomyLadder is the gate's behaviour table: four levels against the
-// six request shapes the rungs are defined in terms of, driven end to end
-// through POST /runs as an assigned member.
+// request shapes the rungs are defined in terms of, driven end to end through
+// POST /runs as an assigned member.
 //
 // Every cell is a decision that could have gone the other way, and two
 // families of them are the reason the table is exhaustive rather than
@@ -127,12 +127,23 @@ func TestRunAutonomyLadder(t *testing.T) {
 	}{
 		{
 			name: "interactive",
-			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`,
+			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"interactive_start":"agent"}`,
 			// Permitted at every rung, and NEVER derived to hold: an
 			// interactive run refuses an explicit hold by design and dispatch
 			// writes WARDYN_TOOL_APPROVALS for non-interactive runs alone, so a
-			// derived one there is a field accepted and thrown away.
+			// derived one there is a field accepted and thrown away. The seed
+			// goes to the agent as a prompt, which parks its own approval
+			// prompt until a human attaches.
 			want: [4]want{ok(""), ok(""), ok(""), ok("")},
+		},
+		{
+			name: "shell boot seed",
+			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`,
+			// interactive_start unset: the image runs the task as `bash -lc`
+			// at boot, before anyone attaches — exec's reach, so exec's rung.
+			// Ranked with seed_auto_tools instead, L2 would refuse
+			// `task_mode=exec` and launch the same command here.
+			want: [4]want{denied("runs.interactive_start"), denied("runs.interactive_start"), denied("runs.interactive_start"), ok("")},
 		},
 		{
 			name: "hold",
@@ -150,7 +161,7 @@ func TestRunAutonomyLadder(t *testing.T) {
 		},
 		{
 			name: "seed_auto_tools",
-			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"seed_auto_tools":true}`,
+			body: `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"interactive_start":"agent","seed_auto_tools":true}`,
 			// Interactive, so only the seed can refuse it — the pre-attach span
 			// runs skip-permissions with no toolgate and no human at the pane.
 			want: [4]want{denied("runs.seed_auto_tools"), denied("runs.seed_auto_tools"), ok(""), ok("")},
@@ -339,7 +350,7 @@ func TestAutonomyBoundByNamesEveryTiedCause(t *testing.T) {
 	// govEscapeFixture's posture is sealed / none / CC2; exec is refused at
 	// every rung below L3, which is what puts the clause in front of a member.
 	const execBody = `{"agent":"claude-code","task":"echo hi","confinement_class":"CC2","task_mode":"exec"}`
-	const okBody = `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`
+	const okBody = `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"interactive_start":"agent"}`
 	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
 
 	for _, tc := range []struct {
@@ -597,6 +608,88 @@ func TestAutonomyPostureIncludesSiteConfigScmHostsAtBothDoors(t *testing.T) {
 	}
 }
 
+// TestAutonomyPostureIncludesGrantLanesAtBothDoors is the grant-opened half of
+// the same property: three lanes unionRunEgress adds at launch because of a
+// GRANT, each graded on both doors from the spec alone.
+//
+// The secrets axis cannot stand in for them. A read-only github_token grades
+// `baseline`, not `powerful`, yet it declares a repo and so inherits the
+// operator's SCM hosts; and even a `powerful` grade bounds nothing unless an
+// admin happens to rank secrets_powerful at or below egress_open. So the
+// rubric below names the egress rows only, and every row must come back `open`
+// on reach the grant alone opened.
+func TestAutonomyPostureIncludesGrantLanesAtBothDoors(t *testing.T) {
+	const ghes = "ghes.corp.example"
+	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
+
+	for _, tc := range []struct {
+		name     string
+		grant    types.GrantSpec
+		scmHosts []string
+	}{
+		{
+			name:     "a read-only github_token declares a repo, so the operator's SCM host is reach",
+			grant:    types.GrantSpec{Kind: types.GrantGitHubToken, Scope: mustJSON(map[string]any{"repos": []string{"acme/widgets"}})},
+			scmHosts: []string{ghes},
+		},
+		{
+			name:  "a git_pat to Azure DevOps opens the ADO bundle",
+			grant: types.GrantSpec{Kind: types.GrantGitPAT, Scope: mustJSON(map[string]any{"host": "dev.azure.com", "secret_name": govCorpSecret})},
+		},
+		{
+			name:  "an ssh_key opens its SSH-over-443 endpoint",
+			grant: types.GrantSpec{Kind: types.GrantSSHKey, Scope: mustJSON(map[string]any{"host": "github.com", "key_secret_ref": govCorpSecret})},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := govProfile("grant-egress")
+			p.Limits = types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{
+				EgressOpen: types.AutonomyL1, EgressSealed: types.AutonomyL3,
+			}}
+			p.Ceiling.EligibleGrants = []types.GrantSpec{tc.grant}
+			body := `{"agent":"claude-code","task":"t","confinement_class":"CC2","inline_policy":{"min_confinement_class":"CC2",` +
+				`"allowed_domains":["api.anthropic.com"],"eligible_grants":[` + string(mustJSON(tc.grant)) + `]}}`
+			fixture := func() (*Server, *govEscapeStore, *recRecorder) {
+				srv, st, audit := govEscapeFixture(t, autonomyCapStore(p))
+				srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{tc.grant}
+				st.siteConfig = types.SiteConfig{ScmHosts: tc.scmHosts}
+				return srv, st, audit
+			}
+
+			srv, _, _ := fixture()
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member(t), body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("preflight = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			var resp struct {
+				Autonomy map[string]any `json:"autonomy"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode preflight: %v", err)
+			}
+
+			srv2, st2, audit2 := fixture()
+			if c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), body); c.Code != http.StatusCreated {
+				t.Fatalf("create = %d, want 201: %s", c.Code, c.Body.String())
+			}
+			launched, _ := autonomyCreateAudit(t, st2, audit2)["autonomy"].(map[string]any)
+
+			review, _ := json.Marshal(resp.Autonomy)
+			audited, _ := json.Marshal(launched)
+			if string(review) != string(audited) {
+				t.Errorf("Review and launch disagree:\n  review = %s\n  launch = %s", review, audited)
+			}
+			posture, _ := launched["posture"].(map[string]any)
+			if got, _ := posture["egress"].(string); got != string(types.AutonomyEgressOpen) {
+				t.Errorf("posture.egress = %q, want open: the grant alone opened a lane beyond the safe baseline", got)
+			}
+			if got, _ := launched["level"].(string); got != string(types.AutonomyL1) {
+				t.Errorf("level = %q, want L1 (the open-egress cap)", got)
+			}
+		})
+	}
+}
+
 // ─── the absent-row rule ──────────────────────────────────────────────────────
 
 // TestAutonomyAbsentRowChangesNothing pins the promise every GovernanceLimits
@@ -824,7 +917,7 @@ func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
 	// refusing what is unattended, not bricking the profile.
 	srv2, st2, audit2 := govEscapeFixture(t, autonomyCapStore(p))
 	c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t),
-		`{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true}`)
+		`{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive":true,"interactive_start":"agent"}`)
 	if c.Code != http.StatusCreated {
 		t.Fatalf("an interactive run = %d, want 201: %s", c.Code, c.Body.String())
 	}

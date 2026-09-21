@@ -9,8 +9,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -46,6 +48,16 @@ type govEscapeStore struct {
 	// deployment every pre-0.7.2 test in this file assumed — no provider rows,
 	// no agent roster — so setting it is opt-in.
 	siteConfig types.SiteConfig
+	// failSiteConfigReadFrom, when set, fails the GetSiteConfig reads made
+	// directly from the function of that name, and only those. A request reads
+	// site config many times, and the first reader already fails closed on its
+	// own, so a store that failed every read could never show what one
+	// particular reader does with a dropped connection.
+	failSiteConfigReadFrom string
+	// onCreateRun, when set, runs inside CreateRun with mu held. CreateRun is
+	// the one store write between the autonomy gate and launch's egress union,
+	// so a test can change what site config answers across that span.
+	onCreateRun func()
 }
 
 func newGovEscapeStore(cs *capStore) *govEscapeStore {
@@ -66,6 +78,11 @@ func (s *govEscapeStore) ListWorkspaces(context.Context) ([]types.Workspace, err
 func (s *govEscapeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failSiteConfigReadFrom != "" {
+		if pc, _, _, ok := runtime.Caller(1); ok && strings.HasSuffix(runtime.FuncForPC(pc).Name(), "."+s.failSiteConfigReadFrom) {
+			return types.SiteConfig{}, errors.New("conn closed by peer")
+		}
+	}
 	return s.siteConfig, nil
 }
 func (s *govEscapeStore) SetRunImage(context.Context, uuid.UUID, string) error   { return nil }
@@ -83,6 +100,9 @@ func (s *govEscapeStore) CreateRun(_ context.Context, run types.AgentRun) (types
 	defer s.mu.Unlock()
 	s.runs[run.ID] = run
 	s.states[run.ID] = run.State
+	if s.onCreateRun != nil {
+		s.onCreateRun()
+	}
 	return run, nil
 }
 

@@ -34,19 +34,36 @@ import (
 //
 // Returns ok=false once it has written its own 403 (denyMemberField, the
 // existing member-refusal shape carrying the existing `governance_profile`
-// reason — the closed reason enum stays closed). The warnings ride the 201.
+// reason — the closed reason enum stays closed), or its own 500 when the site
+// config could not be read. The warnings ride the 201.
+//
+// It also returns the site-config snapshot the SCM-host lane was graded from
+// (scmLaneSiteConfig), and launch hands that same value to unionRunEgress. One
+// read, two consumers: a gate that read site config and a union that read it
+// again could disagree — a dropped connection or an admin's edit between the
+// two would grade a run `sealed` and dispatch it to a forge. Review discards
+// it, as it discards the derived field.
 func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req *createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace, enforced types.ConfinementClass,
 	ceiling governanceCeiling,
-) (types.AutonomyResolution, []string, bool) {
+) (types.AutonomyResolution, []string, types.SiteConfig, bool) {
+	// Read for EVERY run that declares a repo, bound or not, because launch
+	// dispatches from this snapshot whether or not a rubric graded it. Fail
+	// closed, as admitRepoSources and siteConfigForLaneVeto do on the same
+	// read: a posture graded on a site config nobody could read is a guess.
+	scmSite, err := s.scmLaneSiteConfig(r.Context(), spec, req.Repo)
+	if err != nil {
+		writeServerError(w, r, "get site config", err)
+		return types.AutonomyResolution{}, nil, types.SiteConfig{}, false
+	}
 	// No profile, or a profile with no rubric: the zero value and no bound. An
 	// UNASSIGNED member — and every operator — is byte-for-byte what they were
 	// before this gate existed, the same absent-row rule every other
 	// GovernanceLimits field follows. Nothing below runs.
 	if ceiling.Profile == nil || ceiling.Limits.AutonomyRubric == nil {
-		return types.AutonomyResolution{}, nil, true
+		return types.AutonomyResolution{}, nil, scmSite, true
 	}
-	posture := composer.AutonomyPostureOf(s.autonomyPostureSpec(r.Context(), spec, wsRefs, req.Repo), enforced)
+	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite), enforced)
 	level, boundBy := composer.FoldAutonomy(*ceiling.Limits.AutonomyRubric, posture)
 	res := types.AutonomyResolution{Level: level, Posture: posture, BoundBy: boundBy}
 	// An all-unset rubric — or one that leaves this posture's three fields
@@ -54,18 +71,34 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// doc). The posture still travels, so the audit row and Review record what
 	// was graded even when nothing bound it.
 	if level == "" {
-		return res, nil, true
+		return res, nil, scmSite, true
 	}
-	name := ceiling.Profile.Name
-	// Rendered ONCE and passed down, so the refusals and the derived-hold
-	// warning cannot drift into naming different causes for one resolution.
-	bound := autonomyBoundList(boundBy)
+	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy), ceiling.Profile.Name)
+	return res, warnings, scmSite, ok
+}
+
+// autonomyLadder enforces a resolved level on the request: the refusals, then
+// autonomyDerive's L1 half. Split from resolveRunAutonomy so that one owns the
+// inputs (the snapshot, the posture, the fold) and this one owns the decisions.
+//
+// `bound` arrives rendered ONCE (autonomyBoundList), so the refusals and the
+// derived-hold warning cannot drift into naming different causes for one
+// resolution.
+func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *createRunRequest,
+	level types.AutonomyLevel, bound, name string,
+) ([]string, bool) {
+	// requestIsInteractive, never req.Interactive: a request with no task
+	// coerces to interactive inside decodeAndValidateCreateRun, and preflight
+	// never runs that coercion at all — so the raw field would refuse runs that
+	// are in fact interactive, and would refuse them on one door only.
+	interactive := requestIsInteractive(*req)
 	// The ladder, expressed as the LOWEST level that permits each capability
 	// rather than one arm per rung. Separate arms are how a hole gets shipped:
 	// L0 is the most supervised rung, so anything L1 refuses it must refuse
 	// too, and two independently written arms drift the moment one grows a case.
 	//
 	//	task_mode=exec    L3   the door that routes around every other gate
+	//	shell boot seed   L3   exec's reach, arriving through an interactive run
 	//	seed_auto_tools   L2   the pre-attach span runs before any human is at the pane
 	//	non-interactive   L1   unattended at all
 	if level.Rank() < types.AutonomyL3.Rank() && req.TaskMode == "exec" {
@@ -73,39 +106,49 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 			"`task_mode=exec` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.",
 			name, level, bound))
-		return res, nil, false
+		return nil, false
+	}
+	// The shell boot seed ranks WITH exec, not with seed_auto_tools, because it
+	// does what exec does: with interactive_start unset or `shell`, the image
+	// runs the task as `bash -lc` at sandbox boot, as the agent user, before
+	// anyone attaches — no agent, no tool approvals. Ranked any lower, a rung
+	// that refuses `task_mode=exec` would hand the same command to anyone who
+	// added `"interactive": true`, and the exec row above would be decoration.
+	// The agent form (`claude "$seed"`) is left alone: it parks its own
+	// approval prompt until a human joins, unless seed_auto_tools says otherwise.
+	if level.Rank() < types.AutonomyL3.Rank() && req.InteractiveStart != "agent" && interactiveBootSeed(interactive, req.Task) != "" {
+		s.denyMemberField(w, r, "runs.interactive_start", "governance_profile", fmt.Sprintf(
+			"a startup command is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
+				"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — "+
+				"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.",
+			name, level, bound))
+		return nil, false
 	}
 	if level.Rank() < types.AutonomyL2.Rank() && req.SeedAutoTools {
 		s.denyMemberField(w, r, "runs.seed_auto_tools", "governance_profile", fmt.Sprintf(
 			"`seed_auto_tools` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and the pre-attach seed runs before any human is at the pane. Launch without it.",
 			name, level, bound))
-		return res, nil, false
+		return nil, false
 	}
-	// requestIsInteractive, never req.Interactive: a request with no task
-	// coerces to interactive inside decodeAndValidateCreateRun, and preflight
-	// never runs that coercion at all — so the raw field would refuse runs that
-	// are in fact interactive, and would refuse them on one door only.
-	interactive := requestIsInteractive(*req)
 	if level.Rank() < types.AutonomyL1.Rank() && !interactive {
 		s.denyMemberField(w, r, "runs.interactive", "governance_profile", fmt.Sprintf(
 			"unattended runs are not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"which requires a human at the pane. Launch with `--interactive`, or narrow the run's egress, secrets or confinement.",
 			name, level, bound))
-		return res, nil, false
+		return nil, false
 	}
-	warnings, ok := s.autonomyDerive(w, r, req, level, bound, name, interactive)
-	return res, warnings, ok
+	return s.autonomyDerive(w, r, req, level, bound, name, interactive)
 }
 
 // autonomyDerive is the gate's L1 half — the rung that PERMITS an unattended
 // run but not an unsupervised one — plus the one warning that is true at every
 // rung. Split from the refusals above so each function holds one decision (and
-// so resolveRunAutonomy stays under the complexity gate).
+// so autonomyLadder stays under the complexity gate).
 //
 // Returns ok=false once it has written its 403, and otherwise the 201
 // warnings. `bound` arrives already rendered (autonomyBoundList) so this half
-// and the refusals above name the same causes by construction.
+// and autonomyLadder's refusals name the same causes by construction.
 func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *createRunRequest,
 	level types.AutonomyLevel, bound, name string, interactive bool,
 ) ([]string, bool) {
@@ -198,8 +241,7 @@ func autonomyAgentLabel(agent string) string {
 }
 
 // autonomyPostureSpec returns the spec the posture is graded on: the FOLDED
-// spec widened by every egress lane unionRunEgress adds that BOTH doors can
-// compute.
+// spec widened by every egress lane unionRunEgress adds.
 //
 // The widening is what makes the two doors agree, and it is not optional.
 // Launch's unionRunEgress runs AFTER the create audit row is written, so
@@ -210,31 +252,34 @@ func autonomyAgentLabel(agent string) string {
 // preflight's spec for the lanes it already ran and set-identical on launch's,
 // so both doors grade the same envelope whatever order the unions ran in.
 //
-// Three lanes, and the third is the one a narrower reading of "pre-union"
-// would have left out at real cost. The site-config SCM hosts are NOT
-// grant-dependent: unionRunEgress gates them on `declaresRepo`, which is true
-// from `spec.WorkspaceRepos` or the legacy free-text `repo` field alone
-// (runs_create.go), and unionSiteConfigScmHosts reads nothing but site config.
-// So `--repo https://ghes.corp.example/team/app` reaches an operator-declared
-// internal forge with no grant, no workspace and no approval — and a posture
-// blind to it grades that run `sealed`, handing it the rubric's most
-// permissive egress rung. The same Server method launch calls is called here,
-// so the two cannot drift about which hosts those are.
+// Every input below is the spec, the workspaces and the one site-config
+// snapshot, so Review and launch compute it identically:
 //
-// KNOWN GAP, named in the changelog: the two GRANT-DERIVED lanes — an
-// ssh_key's SSH-over-443 endpoint and a git_pat's Azure DevOps bundle — are
-// still outside the posture, along with the grant-only path into
-// `declaresRepo`. Those hosts come out of persistRunGrants, past a per-host
-// provider-lane veto that runs only on the launch side, and re-deriving that
-// decision here is how the two doors start disagreeing again. The residual is
-// BOUNDED rather than merely accepted: every grant that opens one of those
-// lanes is an ssh_key or a git_pat, which autonomySecrets grades `powerful` at
-// both doors, so such a run is never graded as carrying nothing.
+//   - the workspace registries and clone hosts;
+//   - the site-config SCM hosts, whenever specDeclaresRepo — which counts a
+//     github_token, git_pat or ssh_key grant as declaring a repo, as launch's
+//     declaresRepo does. A read-only github_token alone opens this lane at
+//     launch and grades only `baseline` on the secrets axis, so leaving the
+//     grant-only path out handed a run that reaches an internal forge the
+//     rubric's `sealed` row;
+//   - a git_pat's Azure DevOps bundle and an ssh_key's SSH-over-443 endpoint,
+//     from grantLaneEgress — the helper persistRunGrants itself builds those
+//     lanes with, so the two cannot drift about which hosts they are.
+//
+// Graded BEFORE the launch-side decisions that can drop a lane — the provider
+// row's per-host veto in persistRunGrants and codex-cli's missing SSH lane —
+// because those exist on one door only, and re-deriving them here is how the
+// two doors start disagreeing. So the allowlist graded here is a superset of
+// the one unionRunEgress builds: a run whose unioned envelope is `open` is
+// always graded `open`, and a run whose lane was vetoed may be graded `open`
+// on reach it will not get. Lanes added later still, at dispatch, are not
+// here: the model-provider hosts resolved from global configuration and the
+// artifact-redirect substitution.
 //
 // Works on a copy with both domain slices cloned: spec is the one the caller
 // goes on to persist and dispatch, and unionDomains appends in place.
-func (s *Server) autonomyPostureSpec(ctx context.Context, spec types.RunPolicySpec,
-	wsRefs []types.Workspace, legacyRepo string,
+func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, legacyRepo string,
+	scmSite types.SiteConfig,
 ) types.RunPolicySpec {
 	out := spec
 	out.AllowedDomains = slices.Clone(spec.AllowedDomains)
@@ -243,12 +288,45 @@ func (s *Server) autonomyPostureSpec(ctx context.Context, spec types.RunPolicySp
 	for _, ws := range wsRefs {
 		unionAllowedDomains(&out, workspaceCloneEgress(ws))
 	}
-	// unionRunEgress's declaresRepo, restricted to the two disjuncts that need
-	// no grant. A run that declares no repo at all inherits no SCM lane there
-	// and must inherit none here either, or a sealed local-dir run would grade
+	// A run that declares no repo at all inherits no SCM lane at launch and
+	// must inherit none here either, or a sealed local-dir run would grade
 	// open on hosts it can never reach.
-	if len(spec.WorkspaceRepos) > 0 || strings.TrimSpace(legacyRepo) != "" {
-		s.unionSiteConfigScmHosts(ctx, &out)
+	if specDeclaresRepo(spec, legacyRepo) {
+		unionSiteConfigScmHosts(&out, scmSite)
+	}
+	for _, g := range spec.EligibleGrants {
+		unionAllowedDomains(&out, grantLaneEgress(g))
 	}
 	return out
+}
+
+// specDeclaresRepo is unionRunEgress's `declaresRepo` computed from the spec
+// alone: a workspace repo, the legacy free-text `repo` field, or any grant of a
+// kind that opens a git credential lane. Launch's own test reads grantWiring,
+// which exists only after persistRunGrants has applied the provider-lane veto;
+// this one counts the grant before the veto, so it is true whenever launch's
+// is and possibly when a veto later makes launch's false.
+func specDeclaresRepo(spec types.RunPolicySpec, legacyRepo string) bool {
+	if len(spec.WorkspaceRepos) > 0 || strings.TrimSpace(legacyRepo) != "" {
+		return true
+	}
+	return slices.ContainsFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
+		switch g.Kind {
+		case types.GrantGitHubToken, types.GrantGitPAT, types.GrantSSHKey:
+			return true
+		}
+		return false
+	})
+}
+
+// scmLaneSiteConfig is the one site-config read the SCM-host lane is decided
+// from, per request (see resolveRunAutonomy for why one). Skipped — a zero
+// value, no store round trip — when the spec declares no repo, since neither
+// the posture nor unionRunEgress unions the lane then; specDeclaresRepo is a
+// superset of launch's test, so every run launch unions the lane for was read.
+func (s *Server) scmLaneSiteConfig(ctx context.Context, spec types.RunPolicySpec, legacyRepo string) (types.SiteConfig, error) {
+	if s.cfg.Store == nil || !specDeclaresRepo(spec, legacyRepo) {
+		return types.SiteConfig{}, nil
+	}
+	return s.cfg.Store.GetSiteConfig(ctx)
 }

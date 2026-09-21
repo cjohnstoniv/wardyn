@@ -254,6 +254,61 @@ func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass,
 	return enforced, nil
 }
 
+// credentialConfinementBelowFloor is the ONE value the run.create audit row's
+// credential_confinement field carries today — a closed vocabulary, like
+// confinement_source's requested/defaulted, so an incident review can GROUP on
+// it instead of parsing free text. Absent (field omitted) covers everything
+// else: no SSO-delivered credential, or one whose enforced confinement already
+// meets CC3.
+const credentialConfinementBelowFloor = "below_floor"
+
+// credentialConfinementAdvisory is the WARN-never-refuse counterpart to the
+// blast-radius floor above (0.8 #150). A stored AWS SSO credential is
+// delivered to the sandbox at DISPATCH — after enforcedConfinement has already
+// resolved the class above — so it is never itself an eligible grant and
+// composer.RequiredConfinementFloor never sees it: folding it in there would
+// change ENFORCEMENT, which is explicitly out of scope here. Silence would
+// leave a run holding a captured AWS identity under a confinement class
+// nothing chose for that reason; this says so instead of raising the floor for
+// it, because a host that can only ever offer the weakest class must still be
+// able to launch — adding a refusal here would break every single-class
+// deployment.
+//
+// ssoDelivered is the caller's own answer to "did this run's model credential
+// resolve to the captured-AWS-SSO lane" (selectedMechanism ==
+// types.AgentMechanismBedrockSSO, i.e. resolveBedrockAuth's ssoInject arm) —
+// resolved once by the caller from the SAME lane resolution the
+// model-credential grade already ran (modelCredentialFacts.Mechanism), never
+// re-derived here. Pure, with the same purity contract as enforcedConfinement,
+// so it is called from both the launch path and the preflight path off the
+// same resolved body — the two can never disagree about whether a run carries
+// the advisory.
+//
+// spec is currently unread: it rides along for the same reason
+// enforcedConfinement takes the whole spec rather than just the fields it
+// needs today — a future policy-level exception would have somewhere to read
+// from without a signature change.
+func credentialConfinementAdvisory(spec types.RunPolicySpec, enforced types.ConfinementClass, ssoDelivered bool) string {
+	if !ssoDelivered || confinementGE(enforced, types.CC3) {
+		return ""
+	}
+	return fmt.Sprintf(credentialConfinementAdvisorySentence, enforced)
+}
+
+// appendCredentialConfinementAdvisory is the two call sites' shared plumbing
+// around credentialConfinementAdvisory (runs.go's handleCreateRun and
+// preflight.go's handlePreflightRun): append the sentence to warnings when it
+// fires, and report whether it did, since the create path's audit row needs
+// that same answer for credential_confinement. mechanism is the resolved
+// modelCredentialFacts.Mechanism both callers already have in hand.
+func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicySpec, enforced types.ConfinementClass, mechanism string) ([]string, bool) {
+	advisory := credentialConfinementAdvisory(spec, enforced, mechanism == string(types.AgentMechanismBedrockSSO))
+	if advisory == "" {
+		return warnings, false
+	}
+	return append(warnings, advisory), true
+}
+
 // resolveEnforcedConfinement resolves the run's confinement class and gates it
 // against what the runner and identity provider can actually deliver (invariant
 // 5, fail closed). The request value wins when set (never WEAKER than the
@@ -442,7 +497,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 					continue
 				}
 				gw.gitPATGrants[host] = grantID.String()
-				gw.gitPATEgress = append(gw.gitPATEgress, adoEgressDomains(host)...)
+				gw.gitPATEgress = append(gw.gitPATEgress, grantLaneEgress(g)...)
 			}
 		}
 		if g.Kind == types.GrantSSHKey {
@@ -457,9 +512,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 					continue
 				}
 				gw.sshGrants[host] = grantID.String()
-				if ep, ok := sshOver443Endpoint(host); ok {
-					gw.sshEgress = append(gw.sshEgress, ep)
-				}
+				gw.sshEgress = append(gw.sshEgress, grantLaneEgress(g)...)
 			}
 		}
 		// Approval-gated api_key grants are deliberately excluded: an unmet
@@ -477,6 +530,32 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 		}
 	}
 	return gw, true
+}
+
+// grantLaneEgress is the egress one grant's SCM lane needs beyond its own
+// host: a git_pat to an Azure DevOps host needs the dev.azure.com /
+// *.visualstudio.com bundle (adoEgressDomains), an ssh_key its PORT-QUALIFIED
+// SSH-over-443 endpoint (sshOver443Endpoint). Every other kind, and a scope
+// that does not parse, needs nothing.
+//
+// A function of the grant alone, BEFORE any veto, because two callers need
+// the same answer at different times: persistRunGrants builds the lanes from
+// it at launch, and the autonomy posture grades them on both doors before any
+// lane exists (autonomyPostureSpec).
+func grantLaneEgress(g types.GrantSpec) []string {
+	switch g.Kind {
+	case types.GrantGitPAT:
+		if host, _, _, err := gitPATScopeFields(g.Scope); err == nil {
+			return adoEgressDomains(host)
+		}
+	case types.GrantSSHKey:
+		if host, _, _, _, err := sshKeyScopeFields(g.Scope); err == nil {
+			if ep, ok := sshOver443Endpoint(host); ok {
+				return []string{ep}
+			}
+		}
+	}
+	return nil
 }
 
 // augmentGitBrokerGrants maps the run's DECLARED GitHub clone set (legacy run.Repo +
@@ -563,8 +642,13 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 // wsRefs is the run's referenced onboarded workspaces, resolved by the caller
 // (it also feeds the workspace cred binding + image resolution). legacyRepo is
 // the request's single `repo` field, which the declaresRepo gate below needs
-// and grantWiring cannot supply. Extracted verbatim from handleCreateRun.
-func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string) {
+// and grantWiring cannot supply. scmSite is the site-config snapshot the
+// autonomy gate graded the SCM-host lane from (resolveRunAutonomy), so the
+// hosts dispatched here are the hosts that were graded. Extracted verbatim
+// from handleCreateRun.
+func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string,
+	scmSite types.SiteConfig,
+) {
 	if added := unionWorkspaceEgress(spec, wsRefs); len(added) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.egress",
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
@@ -605,7 +689,7 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 		gw.firstGitHubGrantID != nil ||
 		len(gw.gitGrants) > 0 || len(gw.gitPATGrants) > 0 || len(gw.sshGrants) > 0
 	if declaresRepo {
-		if added := s.unionSiteConfigScmHosts(ctx, spec); len(added) > 0 {
+		if added := unionSiteConfigScmHosts(spec, scmSite); len(added) > 0 {
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.site_config.egress",
 				runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
 		}

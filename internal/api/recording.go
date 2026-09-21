@@ -129,7 +129,7 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds size limit")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "save recording: "+saveErr.Error())
+		writeServerError(w, r, "save recording", saveErr)
 		return
 	}
 

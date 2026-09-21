@@ -226,7 +226,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// createRunAuditData and the dispatchParams literal below, which both read
 	// the req.ToolApprovals this gate may derive to `hold`. Writes its own 403
 	// and stops on false; its warnings join the 201 list further down.
-	autonomy, autonomyWarns, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	// scmSite is the one site-config snapshot the gate graded the SCM-host lane
+	// from; unionRunEgress below dispatches from the same value.
+	autonomy, autonomyWarns, scmSite, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
 	if !ok {
 		return
 	}
@@ -245,7 +247,15 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
 	// refresh=true: the real launch redeems an expired-but-renewable session
 	// here, so a spent one is refused before any run exists.
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, nil, true) {
+	//
+	// out is non-nil (unlike before #150): the SAME resolved lanes preflight
+	// already grades from (modelCred.Mechanism) is what
+	// credentialConfinementAdvisory below reads to know whether THIS run's
+	// model credential is the captured-AWS-SSO lane — resolving it a second
+	// way here would risk the two surfaces disagreeing about whether a run
+	// carries the advisory.
+	var modelCred modelCredentialFacts
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
 		return
 	}
 
@@ -356,8 +366,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// from egress; an un-granted github repo is denied).
 	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
 
+	// credentialConfinementAdvisory (#150): a run whose model credential just
+	// graded as the captured-AWS-SSO lane (modelCred.Mechanism, above) but
+	// whose enforced confinement is weaker than CC3 gets that said on every
+	// surface a person or an incident review reads — the 201, and (below) the
+	// audit row's closed-vocabulary credential_confinement field. WARN, never
+	// refuse: RequiredConfinementFloor above is untouched, on purpose.
+	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Mechanism)
+
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy))))
+		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
 	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject)...)
@@ -365,7 +383,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
-	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo)
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, scmSite)
 
 	// …and say so when one of those operator-approved workspace hosts is walled
 	// off by the caller's own governance profile. The union above still happened
@@ -594,8 +612,14 @@ func (s *Server) noModelAccessWarning(ctx context.Context, req createRunRequest,
 // floor), so the SAME enforced value can mean "the caller asked for this" one
 // day and "this is what today's runner offered" the next if a runtime
 // disappears — the row is the one place that distinction survives.
+//
+// belowFloor (#150): the caller's own answer to whether
+// credentialConfinementAdvisory fired for this run — a stored AWS SSO
+// credential is delivered to the sandbox at DISPATCH, after `enforced` is
+// already resolved, so it is never an eligible grant and never on the run row
+// either; this event is its only provenance record too.
 func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced types.ConfinementClass, reqCC types.ConfinementClass, jti string,
-	clampWarnings []string, autonomy types.AutonomyResolution,
+	clampWarnings []string, autonomy types.AutonomyResolution, belowFloor bool,
 ) map[string]any {
 	confinementSource := "defaulted"
 	if reqCC != "" {
@@ -649,6 +673,14 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		// run under no profile or no rubric, which keeps the payload
 		// byte-for-byte what it was for every deployment that authors neither.
 		data["autonomy"] = autonomy
+	}
+	if belowFloor {
+		// Closed vocabulary (like confinement_source's requested/defaulted): an
+		// incident review filtering "which runs carried an under-confined SSO
+		// credential" needs to GROUP, which free text cannot do. Absent covers
+		// everything else — no SSO-delivered credential, or one whose enforced
+		// confinement already meets CC3.
+		data["credential_confinement"] = credentialConfinementBelowFloor
 	}
 	return data
 }

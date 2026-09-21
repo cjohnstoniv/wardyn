@@ -285,8 +285,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// refusals with real authz.denied rows, the same way the drive door's are.
 	// The derived tool_approvals write lands on this handler's own request
 	// copy and is discarded with it (preflight dispatches nothing); the 201
-	// warnings belong to the launch channel, so they are dropped here too.
-	autonomy, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	// warnings belong to the launch channel, and the site-config snapshot to
+	// launch's egress union, so both are dropped here too.
+	autonomy, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
 	if !ok {
 		return
 	}
@@ -358,6 +359,14 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)
+
+	// credentialConfinementAdvisory (#150): the SAME shared helper the create
+	// path calls (appendCredentialConfinementAdvisory, runs_create.go), off the
+	// SAME modelCred.Mechanism the gate above just graded — so Review can never
+	// show a rosier picture than the launch it previews. WARN, never refuse:
+	// nothing above this line changed.
+	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Mechanism)
+
 	// A zero residency means nothing was graded (no store, an unreadable roster,
 	// a non-model run) — omitted rather than published as a guess, which leaves
 	// the rail on the /setup/status row it already had.
@@ -366,7 +375,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		EnforcedConfinementClass: enforced,
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
-		Warnings:                 clampWarnings,
+		Warnings:                 warnings,
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
