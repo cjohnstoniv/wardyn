@@ -67,6 +67,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The compose file's writable-member-mount comment was wrong; `/srv/src` genuinely had no bind.**
+  0.7.2 documented (and repeated in its own CHANGELOG entry) that
+  `WARDYN_WORKSPACES_ROOT`'s `:ro` compose bind was what refused a writable member mount. It is
+  not: that bind only bounds what wardynd's own container can see (a read), while
+  `internal/runner/member_mount.go`'s writable check is pure root/deny-list matching, and the
+  sandbox bind itself is created by the HOST dockerd straight from the source path — never through
+  wardynd's mount namespace at all. A new test,
+  `TestCreateSandbox_MemberMountWritable_ReadOnlySourcePermissionIrrelevant`
+  (`internal/runner/docker/driver_member_mount_test.go`), proves it by binding writable against an
+  unwritable source. The compose comment and the 0.7.2 entry are corrected in place rather than
+  adding the `WARDYN_MEMBER_WRITABLE_ROOTS` volume the false claim implied was missing. Separately,
+  `/srv/src` — the Linux member root `deploy/desktop/wardyn.env.m-prime.example` names alongside
+  the macOS `/Users/Shared/src` — really had no bind: compose cannot expand a CSV into volume
+  lines, so only whichever one path `WARDYN_WORKSPACES_ROOT` is set to gets bound. A commented
+  example line now sits beside the existing bind, and `docs/ENV.md` states the limit. (#135)
+
 - **A spent AWS SSO refresh token is no longer forgotten on daemon restart.** `awssso_refresh.go`
   marked a redeemed-and-unpersistable (or AWS-retired) refresh token spent only in an in-memory map,
   so a restart wiped the mark and the credential graded "renewable" again — the exact credential
@@ -3341,10 +3357,14 @@ debt, owner-hardware debt, or a decision deliberately not taken.
   either `shared` or `per_user`. 0.7.2 narrows the blast radius to one person
   under `per_user`; it does not floor the class. That is a 0.7.3/0.8 call.
 - **Two Compose residuals remain beside the envelope fix above.** The
-  `WARDYN_WORKSPACES_ROOT` bind is mounted `:ro`, so a member root that is
-  supposed to be writable needs its own read-write volume; and the m′ envelope's
-  `/srv/src` root has no bind at all. Both are written down in
-  `docker-compose.yaml` at the forwards that this release added.
+  `WARDYN_WORKSPACES_ROOT` bind is mounted `:ro`
+  ([corrected by #135](https://github.com/cjohnstoniv/wardyn/issues/135): that
+  `:ro` bind is wardynd's own container-local view and has no bearing on a
+  member mount's writability, which `internal/runner/member_mount.go` decides
+  entirely by root/deny-list match — this bullet's writable-mount claim was
+  wrong); and the m′ envelope's `/srv/src` root has no bind at all. Both are
+  written down in `docker-compose.yaml` at the forwards that this release
+  added.
 - **Every user-facing string this release adds ships as a frozen DRAFT.** Said
   once at the top of this section and repeated here because it is the largest
   single caveat: the `400`/`412`/`422` bodies and the new console copy are
