@@ -6,8 +6,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -34,18 +37,41 @@ const (
 // agent), the roster, and the run's grants (for the recorded namespace).
 // store.Store is embedded so any OTHER method the sink starts reading panics in
 // test rather than silently reading a zero value.
+//
+// GetRun is called from TWO places on this request path: refuseTerminalRun (the
+// /internal/* liveness middleware, internal_live_run.go) reads it once before
+// the handler runs at all, and the sink reads it again itself.
+// failRunFromCall lets a test make the SECOND read fail while the first
+// succeeds — the middleware already fails closed (503/403) on a first-read
+// error, so a run_unreadable case that failed on call 1 would never reach the
+// sink at all and would be proving the middleware, not this arm.
 type bearerGuardStore struct {
 	store.Store
-	run    types.AgentRun
-	site   types.SiteConfig
-	grants []types.CredentialGrant
+	mu              sync.Mutex
+	run             types.AgentRun
+	runCalls        int
+	failRunFromCall int // GetRun returns runErr starting at this 1-indexed call; 0 = never fail
+	runErr          error
+	site            types.SiteConfig
+	siteErr         error
+	grants          []types.CredentialGrant
 }
 
 func (s *bearerGuardStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	s.mu.Lock()
+	s.runCalls++
+	n := s.runCalls
+	s.mu.Unlock()
+	if s.failRunFromCall > 0 && n >= s.failRunFromCall {
+		return types.AgentRun{}, s.runErr
+	}
 	return s.run, nil
 }
 
 func (s *bearerGuardStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	if s.siteErr != nil {
+		return types.SiteConfig{}, s.siteErr
+	}
 	return s.site, nil
 }
 
@@ -314,4 +340,108 @@ func TestBedrockBearerSink_RecordNotMatchingTheRosterIsRefused(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The sink's three REFUSAL arms behind a valid dispatch record — run_unreadable,
+// roster_unreadable and per_user_bearer_absent. Each seeds the OPERATOR's row
+// with a distinguishable value and asserts three things together: a non-200
+// status, that value absent from the response body, and no successful
+// secret.read audit event — "refused", not merely "errored".
+
+// errTransientStoreFailure is a generic (non-ErrNotFound) read failure: the
+// shape a Postgres blip takes, as opposed to a genuinely missing row.
+var errTransientStoreFailure = errors.New("store: transient failure")
+
+// assertBedrockBearerRefused is the shared assertion: the credential was
+// REFUSED, not merely errored — the operator's bearer never appears in the
+// body, and no secret.read success was audited.
+func assertBedrockBearerRefused(t *testing.T, rr *httptest.ResponseRecorder, h *harness, wantStatus int, wantBody, wantReason string) {
+	t.Helper()
+	if rr.Code != wantStatus {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, wantStatus, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), wantBody) {
+		t.Fatalf("body = %q, want it to contain %q", rr.Body.String(), wantBody)
+	}
+	if strings.Contains(rr.Body.String(), bedrockGuardOperatorBearer) {
+		t.Fatalf("the operator's bearer leaked into the refusal body: %s", rr.Body.String())
+	}
+	for _, ev := range h.audit.events {
+		if ev.Action == "secret.read" && ev.Outcome == "success" {
+			t.Fatalf("a successful secret.read was recorded despite the refusal: %+v", ev)
+		}
+	}
+	ev := lastAuditEvent(t, h.audit.events, "secret.read")
+	if !strings.Contains(string(ev.Data), wantReason) {
+		t.Fatalf("audit data = %s, want reason %q", ev.Data, wantReason)
+	}
+}
+
+// resolveRecordedBearerGrant asks the sink for a grant recording (owner,
+// source) on st's run, as the proxy would.
+func resolveRecordedBearerGrant(t *testing.T, h *harness, st *bearerGuardStore, owner, source string) *httptest.ResponseRecorder {
+	t.Helper()
+	grantID := st.recordBearerGrant(owner, source)
+	h.broker.minted = bedrockBearerGrant("jti-" + grantID.String())
+	return do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+grantID.String(), h.mintRunToken(t, st.run.ID), "")
+}
+
+// TestBedrockBearerSink_RefusesUnreadableRun pins the run_unreadable arm: the
+// sink cannot check a record against a roster row without first knowing the
+// run's agent, so a store that cannot read the run must fail CLOSED rather than
+// let awsSSOScopeFor treat a zero-value run (empty Agent) as "no per_user row
+// for this agent" and fall through to the operator's row.
+//
+// The run's FIRST read (by refuseTerminalRun, the /internal/* liveness
+// middleware) succeeds — a run that middleware itself could not read never
+// reaches this handler, so that is a different refusal, not this arm. Only the
+// sink's OWN read (the second GetRun on this path) fails, the shape a
+// transient store blip between the two takes.
+func TestBedrockBearerSink_RefusesUnreadableRun(t *testing.T) {
+	st := &bearerGuardStore{
+		run:             types.AgentRun{ID: uuid.New(), Agent: "claude-code", State: types.RunRunning},
+		failRunFromCall: 2,
+		runErr:          errTransientStoreFailure,
+	}
+	h, _ := bearerGuardHarness(t, st)
+
+	rr := resolveRecordedBearerGrant(t, h, st, "", "shared")
+	assertBedrockBearerRefused(t, rr, h, http.StatusServiceUnavailable, credentialReauthRunUnreadableBody, "run_unreadable")
+	if st.runCalls < 2 {
+		t.Fatalf("GetRun called %d times, want >=2 (middleware + sink) — the sink's own read was never reached", st.runCalls)
+	}
+}
+
+// TestBedrockBearerSink_RefusesUnreadableRoster pins the roster_unreadable arm:
+// the run reads fine (agent = claude-code), but the roster does not, so the
+// sink cannot tell "no per_user row" from "the row that says per_user could not
+// be read" — both share the zero SiteConfig — and must refuse rather than
+// treat the read failure as the former.
+func TestBedrockBearerSink_RefusesUnreadableRoster(t *testing.T) {
+	st := &bearerGuardStore{
+		run:     types.AgentRun{ID: uuid.New(), Agent: "claude-code"},
+		siteErr: errStoreNotFound,
+	}
+	h, _ := bearerGuardHarness(t, st)
+
+	rr := resolveRecordedBearerGrant(t, h, st, "", "shared")
+	assertBedrockBearerRefused(t, rr, h, http.StatusServiceUnavailable, credentialReauthStoreErrorBody, "roster_unreadable")
+}
+
+// TestBedrockBearerSink_RefusesAbsentPerUserBearer pins the
+// per_user_bearer_absent arm: both reads succeed, the roster genuinely says
+// per_user bearer for this agent, the grant records alice's own namespace, and
+// alice (mintRunToken's subject) has no bedrock-api-key row of her own — she
+// had one at dispatch and does not now, or never did. The owner-fallback read
+// would serve the OPERATOR's row, billed to the org and attributed to nobody;
+// the sink refuses that substitution.
+func TestBedrockBearerSink_RefusesAbsentPerUserBearer(t *testing.T) {
+	st := &bearerGuardStore{
+		run:  types.AgentRun{ID: uuid.New(), Agent: "claude-code"},
+		site: bearerRow(types.CredentialSourcePerUser),
+	}
+	h, _ := bearerGuardHarness(t, st)
+
+	rr := resolveRecordedBearerGrant(t, h, st, bedrockGuardMember, "per_user")
+	assertBedrockBearerRefused(t, rr, h, http.StatusFailedDependency, bedrockBearerNamespaceNotOwn, "per_user_bearer_absent")
 }
