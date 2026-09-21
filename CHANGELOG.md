@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
+  role-mapping gap, a runner failure, a confinement floor the runner can't meet) now sits under
+  "Blocking"; a non-blocking fail or warn sits under "Worth a look" instead of borrowing a heading
+  that promised it was fatal. Grade still shows on the row's own chip — partitioning on `blocking`
+  first just stops the heading from answering the wrong question.
+
 - **Setup counts only the steps that block a run, and recommends what the host actually has.**
   The Getting-started counter read "Step 1 of 17" with ten of those steps optional demos; it now
   reads "Step 1 of 4" (Environment, People, Network, Review), with the honest count of what
@@ -47,6 +53,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Failure rows are coalesced like `auth.failed`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
   (failures) and `device.audit.chain_reset`.
 
+- **The console now says when network confinement is unenforced, acknowledged-not-proven, or unconfirmed.**
+  A Kubernetes deployment's boot-time NetworkPolicy canary verdict (`/healthz`'s `network_policy`) now
+  drives a shell-level banner and a ring + glyph on every `ConfinementChip` — mounted last in the banner
+  stack, after the model-access strip. Enforced (or Docker, where the check does not apply) stays silent;
+  acknowledged and unenforced each get their own strip and chip ring, with `unenforced` also carrying a
+  warning glyph (a ring alone is never the only signal). A Kubernetes daemon that reports a runner but
+  omits the verdict now warns too, rather than reading identically to Docker's "not applicable" — the
+  shell resolves posture from `runner` together with `network_policy`, since one absent field covered
+  two opposite meanings.
+
 - **A user drive's minted object name can no longer be forged by a crafted `home_override`.**
   `types.DriveObjectName` built a managed drive's storage-object name from the drive's
   variable-width slug and its home segment (`wardyn-drive-<drive-slug>-<home>`), so the
@@ -79,8 +95,34 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **The configured Anthropic gateway (`WARDYN_ANTHROPIC_BASE_URL`) now also carries subscription
+  and Wardyn-managed runs, not just the api-key lane.** Dispatch points those two lanes'
+  `ANTHROPIC_BASE_URL` at the gateway when one is configured; the in-image `agent-run` launcher no
+  longer unconditionally clobbers it back to the vendor default; and the subscription-injection sink
+  accepts the configured gateway host — taken from configuration, never from a run's own request —
+  alongside `api.anthropic.com`. **Turning this on is an operator trust decision: it sends the
+  operator's live subscription/managed OAuth token to the configured gateway proxy-side**, exactly
+  as it is sent to `api.anthropic.com` today. The harness-login (`claude setup-token`) lane is
+  unaffected and always stays on the public host, since that flow mints the OAuth token itself.
+  Unset is byte-identical to today.
 
 ### Fixed
+
+- **The compose file's writable-member-mount comment was wrong; `/srv/src` genuinely had no bind.**
+  0.7.2 documented (and repeated in its own CHANGELOG entry) that
+  `WARDYN_WORKSPACES_ROOT`'s `:ro` compose bind was what refused a writable member mount. It is
+  not: that bind only bounds what wardynd's own container can see (a read), while
+  `internal/runner/member_mount.go`'s writable check is pure root/deny-list matching, and the
+  sandbox bind itself is created by the HOST dockerd straight from the source path — never through
+  wardynd's mount namespace at all. A new test,
+  `TestCreateSandbox_MemberMountWritable_ReadOnlySourcePermissionIrrelevant`
+  (`internal/runner/docker/driver_member_mount_test.go`), proves it by binding writable against an
+  unwritable source. The compose comment and the 0.7.2 entry are corrected in place rather than
+  adding the `WARDYN_MEMBER_WRITABLE_ROOTS` volume the false claim implied was missing. Separately,
+  `/srv/src` — the Linux member root `deploy/desktop/wardyn.env.m-prime.example` names alongside
+  the macOS `/Users/Shared/src` — really had no bind: compose cannot expand a CSV into volume
+  lines, so only whichever one path `WARDYN_WORKSPACES_ROOT` is set to gets bound. A commented
+  example line now sits beside the existing bind, and `docs/ENV.md` states the limit. (#135)
 
 - **A spent AWS SSO refresh token is no longer forgotten on daemon restart.** `awssso_refresh.go`
   marked a redeemed-and-unpersistable (or AWS-retired) refresh token spent only in an in-memory map,
@@ -106,6 +148,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
   deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
   cancellation on shutdown — is unchanged.
+- **A run whose model credential is a stored AWS SSO session now says so when its confinement is
+  weaker than that credential would otherwise require.** A captured AWS SSO session is delivered to
+  the sandbox at dispatch, after the run's confinement class is already resolved, so it was never an
+  eligible grant and `RequiredConfinementFloor` never saw it — a run on a host offering only the
+  weakest confinement class received the credential with nothing said about it anywhere. A shared,
+  pure `credentialConfinementAdvisory` now runs from both the preflight and launch paths off the
+  same resolved body, and the advisory now appears on the preflight response's warnings, the create
+  response's warnings, and the `run.create` audit row's closed-vocabulary `credential_confinement`
+  field. This is a warning, never a refusal: a host that can only offer the weakest class still
+  launches.
+
 - **A spent terminal reconnect budget now offers Reconnect instead of a `[closed]` line that
   could scroll out of view.** The attach terminal used to write connection state — `[closed]`,
   `[reconnected]`, `[connection lost — reconnecting…]`, `[taken over — not reconnecting]` — into
@@ -120,15 +173,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
   reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
   FAILED so a run reaching a successful terminal state through the same path gets no hint.
+- **A refocus that arrives while `usePoll` has a read in flight is no longer dropped.** The in-flight
+  guard correctly stops a burst of focus events from stacking requests, but the refocus it swallowed
+  was never retried, so a person returning to the tab mid-read got no refresh and kept seeing a stale
+  screen for the rest of the interval — up to five minutes on the setup gate. The hook now coalesces:
+  a refocus during an in-flight read is remembered and fires exactly one follow-up read when that read
+  settles, however many refocus events arrived while it was outstanding.
 
 ### Changed
+
+- **The Recordings screen pages instead of stopping at 1,000.** It fetched the whole run list in one
+  shot (capped at `LIST_LIMIT`), so an install past 1,000 runs silently lost every recording beyond
+  that window, with only a passive "truncated" note and nothing to press. `listRuns()` now takes an
+  optional `limit`/`offset` and, when both are given, returns `{ runs, truncated }` off the server's
+  own `?limit=&offset=` paging and its `X-Wardyn-Truncated` header — every other caller is unchanged.
+  The screen fetches 100 runs at a time; a "Load 100 more" text link (matching the Runs board's own
+  "Load N more") appears while more is known to exist, and a failed page keeps what already loaded
+  with a Retry that resumes from the same offset. No total is ever shown — the server doesn't send
+  one.
 
 - **CLI help and an operator-facing log line no longer print internal campaign IDs.**
   `wardyn policy default --help`, `wardyn-tetragon-ingest --help`, and the mint-refusal WARN log in
   `internal/api/internal.go` cited review-package coordinates (`W14-S1-6`, `W24-S1-1`, `F098`) that
   resolve to nothing outside this repository. Each now says the thing the coordinate stood for
   instead.
-
 - **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
   `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
   failure, so it can be called from a background worker. `internal/api/runs.go`'s
@@ -143,6 +211,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   required-check failure, and the re-point-at-rebase step for those two documents is retired. The
   tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
   too.
+
+### Known gaps
+
+- **An AWS SSO account/role pin does not invalidate a capture already in flight.** A roster edit
+  made while a sign-in is running cannot re-point it — the capture binds to the pin as it read at
+  launch, never the live roster. Still open at 0.8.
+- **No `role` parameter on `POST /me/tokens`.** A token always mints at the caller's own current
+  role. Still open at 0.8.
+- **No admin route to revoke a named member's captured AWS SSO session.** Disconnect
+  (`DELETE /setup/harness-credential/aws`) deletes only the caller's own; both it and a
+  member-facing Disconnect still need owner enumeration in the secret store. Still open at 0.8.
+- **The synchronous kill cascade inside the sign-in launch POST.** Superseding a person's older
+  sign-in tears the old sandbox down inside the new launch request rather than after the response —
+  tracked separately from this list. Still open at 0.8.
 
 ## [0.7.8] — 2026-09-19
 
@@ -3325,10 +3407,14 @@ debt, owner-hardware debt, or a decision deliberately not taken.
   either `shared` or `per_user`. 0.7.2 narrows the blast radius to one person
   under `per_user`; it does not floor the class. That is a 0.7.3/0.8 call.
 - **Two Compose residuals remain beside the envelope fix above.** The
-  `WARDYN_WORKSPACES_ROOT` bind is mounted `:ro`, so a member root that is
-  supposed to be writable needs its own read-write volume; and the m′ envelope's
-  `/srv/src` root has no bind at all. Both are written down in
-  `docker-compose.yaml` at the forwards that this release added.
+  `WARDYN_WORKSPACES_ROOT` bind is mounted `:ro`
+  ([corrected by #135](https://github.com/cjohnstoniv/wardyn/issues/135): that
+  `:ro` bind is wardynd's own container-local view and has no bearing on a
+  member mount's writability, which `internal/runner/member_mount.go` decides
+  entirely by root/deny-list match — this bullet's writable-mount claim was
+  wrong); and the m′ envelope's `/srv/src` root has no bind at all. Both are
+  written down in `docker-compose.yaml` at the forwards that this release
+  added.
 - **Every user-facing string this release adds ships as a frozen DRAFT.** Said
   once at the top of this section and repeated here because it is the largest
   single caveat: the `400`/`412`/`422` bodies and the new console copy are
