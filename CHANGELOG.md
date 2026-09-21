@@ -24,6 +24,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
   handler written in this indirect style no longer passes CI clean.
 
+### Fixed
+
+- **Four console DTOs closed against their Go wire types.** `AgentRun` was missing `agent_exec_id`,
+  `auto_stop_after_sec` and `source_id`; `AuditEvent` was missing `prev_hash` and `row_hash` — the two
+  fields the audit screen's own integrity story rests on. `ui_apps` — sent only by `GET /runs/{id}` —
+  moved off the shared `AgentRun` onto a new `RunDetail` type, so a list consumer (the board, the
+  table) is no longer typed for a field it never receives. `runs.wire.fields.test.ts`'s parity pattern
+  now also covers `AuditEvent`, closing the gap the hand-maintained TypeScript mirror had opened
+  against the Go structs it mirrors.
+- **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
+  status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
+  while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
+
 ### Changed
 
 - **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
@@ -183,6 +196,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   screen for the rest of the interval — up to five minutes on the setup gate. The hook now coalesces:
   a refocus during an in-flight read is remembered and fires exactly one follow-up read when that read
   settles, however many refocus events arrived while it was outstanding.
+
+- **Two concurrent sign-ins can no longer leave two live credential-bearing sandboxes.** A sign-in
+  supersedes the caller's older ones across several independent statements — the first supersede
+  pass, the run insert, the second pass — and because `created_at` is stamped in-process BEFORE the
+  insert, two launches that interleave there could each decide the other did not precede it: both
+  sandboxes stayed live, neither KILLED, each able to capture a ~1yr AWS SSO session, and the
+  credential capture's own read-modify-write arrives minutes later in a different request. Both
+  spans now hold a per-person Postgres **session-level** advisory lock keyed on the login run's
+  CREATOR (`store.LoginLocker`, `db.AdvisoryLockKeyed`) — not on the credential scope, which is
+  empty for every `shared` sign-in and would serialize a whole deployment while serializing nothing
+  that matters. The capture takes it before the existing per-scope mutex, in that fixed order. It
+  **fails open** on every arm, and every arm is bounded — a store without the seam, a pool that
+  cannot spare a connection (checked before one is borrowed, then bounded again at 250ms on the
+  borrow), a wait past `db.LoginSupersedeLockWait` (5s across the in-process slot and the lock) —
+  proceeding exactly as 0.7.8 did with one warning line and no new refusal.
+
+  **What it costs a deployment:** one pool connection for the duration of one hold, and at most one
+  per wardynd process at a time, so it does not grow with how many people sign in at once. None at
+  all when the pool cannot spare two — an install at the `pool_max_conns` floor `docs/ENV.md`
+  permits (2, or 4 with the ground-truth rotator) simply goes unserialized, as it was before, rather
+  than queueing sign-ins behind a connection it cannot spare.
 
 ### Changed
 
