@@ -235,6 +235,15 @@ type AgentRun struct {
 	// the console owns the sentence; the raw StatusDetail stays on the wire
 	// because only it carries the registry's or the scheduler's own message.
 	StatusReason string `json:"status_reason,omitempty"`
+	// AutonomyLevel freezes the AutonomyLevel resolveRunAutonomy (0.8 #97)
+	// resolved this run to at create time — the level, not the profile or the
+	// posture that produced it (AutonomyResolution carries those, on the
+	// create audit row only). Empty for a run under no profile, a profile with
+	// no rubric, or any run created before this field existed; this is types,
+	// validation, storage and mirrors only (#99) — nothing writes it yet, so
+	// every run is empty until #97 lands. Migration 0065 adds the column NOT
+	// NULL DEFAULT ''.
+	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the

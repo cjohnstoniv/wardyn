@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -459,4 +460,68 @@ func (s PG) QueryRecentAuditEventsPage(ctx context.Context, p Page) ([]types.Aud
 		SELECT `+auditCols+`
 		FROM audit_events ORDER BY seq DESC`, nil)
 	return collect(ctx, s.Pool, "query", "recent audit events", q, args, scanAuditEvent)
+}
+
+// AWSSSOSpentTokenStore persists the AWS SSO refresh-token "spent" mark
+// (internal/api/awssso_refresh.go's ssoRefreshSpent map) so it survives a
+// daemon restart. A capability interface for the usual reason (widening Store
+// would silently route a test double's embedded-but-not-overridden methods to
+// the wrong behavior), and for a second one specific to this seam: the mark is
+// written precisely BECAUSE the secret/blob store (storeAWSSSOBlob) failed, so
+// its own persistence must not depend on that same store — it goes through
+// Store/PG (Postgres) instead, a store the blob write's own failure says
+// nothing about.
+type AWSSSOSpentTokenStore interface {
+	// MarkAWSSSOTokenSpent upserts one spent-token row. Idempotent: marking an
+	// already-spent fingerprint again touches nothing (the ON CONFLICT is a
+	// no-op, not a marked_at bump) — the row's age is "since first spent", which
+	// is what the reaper-tick prune below measures against.
+	MarkAWSSSOTokenSpent(ctx context.Context, fingerprint, owner string, markedAt time.Time) error
+	// AWSSSOTokenSpent reports whether fingerprint has a row — i.e. whether this
+	// refresh token is already known dead. Read-once by its one caller
+	// (Server.awsSSOTokenSpent memoizes the answer into the in-memory map after
+	// the first read of a given fingerprint), so a cache miss costs at most one
+	// query per fingerprint per process lifetime.
+	AWSSSOTokenSpent(ctx context.Context, fingerprint string) (bool, error)
+	// PruneAWSSSOSpentTokens deletes rows marked before cutoff and reports how
+	// many it removed. Called from the lifecycle reaper's existing per-tick
+	// advisory lock (cmd/wardynd's reapTickLock) rather than a new timer.
+	PruneAWSSSOSpentTokens(ctx context.Context, cutoff time.Time) (int, error)
+}
+
+// Compile-time assertion: PG satisfies AWSSSOSpentTokenStore.
+var _ AWSSSOSpentTokenStore = PG{}
+
+// MarkAWSSSOTokenSpent upserts the spent-token row. ON CONFLICT DO NOTHING: a
+// fingerprint already marked spent stays marked from its FIRST sighting, so a
+// second failed persist (or a second AWS invalid_grant on the same token)
+// never resets the clock the prune measures age against.
+func (s PG) MarkAWSSSOTokenSpent(ctx context.Context, fingerprint, owner string, markedAt time.Time) error {
+	const q = `INSERT INTO aws_sso_spent_tokens (fingerprint, owner, marked_at) VALUES ($1, $2, $3)
+		ON CONFLICT (fingerprint) DO NOTHING`
+	if _, err := s.Pool.Exec(ctx, q, fingerprint, owner, markedAt); err != nil {
+		return fmt.Errorf("store: mark aws sso token spent: %w", err)
+	}
+	return nil
+}
+
+// AWSSSOTokenSpent reports whether fingerprint has a persisted spent-token row.
+func (s PG) AWSSSOTokenSpent(ctx context.Context, fingerprint string) (bool, error) {
+	const q = `SELECT EXISTS(SELECT 1 FROM aws_sso_spent_tokens WHERE fingerprint = $1)`
+	var spent bool
+	if err := s.Pool.QueryRow(ctx, q, fingerprint).Scan(&spent); err != nil {
+		return false, fmt.Errorf("store: read aws sso token spent: %w", err)
+	}
+	return spent, nil
+}
+
+// PruneAWSSSOSpentTokens deletes spent-token rows older than cutoff.
+// aws_sso_spent_tokens_marked_at_idx (0068) backs the WHERE clause.
+func (s PG) PruneAWSSSOSpentTokens(ctx context.Context, cutoff time.Time) (int, error) {
+	const q = `DELETE FROM aws_sso_spent_tokens WHERE marked_at < $1`
+	tag, err := s.Pool.Exec(ctx, q, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("store: prune aws sso spent tokens: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
