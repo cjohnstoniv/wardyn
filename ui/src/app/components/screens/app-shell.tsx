@@ -34,6 +34,7 @@ import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
 import { MemberModeBanner } from "../wardyn/member-mode-banner";
+import { resolveConfinementPosture } from "../../lib/confinement-posture";
 import { ErrorBoundary } from "../wardyn/error-boundary";
 import {
   OperatorProvider,
@@ -119,6 +120,14 @@ export interface ShellMeta {
   /** 0.7.5 — whether this deployment's roster makes the no-credential preview
    *  mean anything. False hides the second account-menu entry entirely. */
   memberPreviewAvailable: boolean;
+  /** #162 — /healthz's `runner` ("docker" / "k8s" / "" on a pre-mount default
+   *  or an older daemon) and `network_policy` ("enforced" / "acknowledged" /
+   *  "unenforced", absent as ""). Neither is read directly by a screen — both
+   *  feed resolveConfinementPosture (confinement-posture.tsx), which is the
+   *  only place that may tell "not applicable" (Docker) from "could not
+   *  confirm" (a k8s daemon that omitted the verdict) apart. */
+  runner: string;
+  networkPolicy: string;
 }
 
 /** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
@@ -147,6 +156,8 @@ function useMeta(): [ShellMeta, () => void] {
     memberMode: false,
     memberModeNoCredential: false,
     memberPreviewAvailable: false,
+    runner: "",
+    networkPolicy: "",
   });
   React.useEffect(() => {
     let alive = true;
@@ -179,6 +190,8 @@ function useMeta(): [ShellMeta, () => void] {
           memberMode: me?.member_mode ?? false,
           memberModeNoCredential: me?.member_mode_no_credential ?? false,
           memberPreviewAvailable: me?.member_preview_available ?? false,
+          runner: h.runner ?? "",
+          networkPolicy: h.network_policy ?? "",
         });
       })
       .catch(() => {
@@ -349,6 +362,14 @@ const ModelAccessBanner = React.lazy(() =>
   import("../wardyn/model-access-banner").then((m) => ({ default: m.ModelAccessBanner })),
 );
 
+// #162 — same lazy rationale as ModelAccessBanner above (this file is in the
+// entry chunk), and the same "renders nothing when there is nothing to say"
+// shape: mounted LAST in the banner stack, after ModelAccessBanner, per the
+// mock approval's third ruling.
+const ConfinementPostureBanner = React.lazy(() =>
+  import("../wardyn/confinement-posture").then((m) => ({ default: m.ConfinementPostureBanner })),
+);
+
 const navLinkClass = (isActive: boolean) =>
   cn(
     "relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
@@ -489,6 +510,8 @@ export function AppShell({
   // an ordinary first paint and says nothing to anybody.
   const identityUnknown = meta.resolved && !meta.identityResolved;
   const sessionExpiry = useSessionExpiry(meta.sessionExpiresAt);
+  // #162 — see lib/confinement-posture.ts for the runner+network_policy table.
+  const confinementPosture = resolveConfinementPosture(meta.runner, meta.networkPolicy);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -515,6 +538,7 @@ export function AppShell({
       userDrive={meta.userDrive}
       userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
       userDriveUnavailable={meta.userDriveUnavailable}
+      confinementPosture={confinementPosture}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
         <FocusContext.Provider value={focusValue}>
@@ -618,6 +642,13 @@ export function AppShell({
             <div role="status">
               <React.Suspense fallback={null}>
                 <ModelAccessBanner />
+              </React.Suspense>
+              {/* #162 — last in the stack (mock-approval ruling 3): the four
+              bands above are each the better explanation of what you are
+              looking at, or block the very thing a run needs to start, and
+              this one has no per-person urgency. */}
+              <React.Suspense fallback={null}>
+                <ConfinementPostureBanner />
               </React.Suspense>
             </div>
             <div className="flex min-h-0 flex-1">
