@@ -26,4 +26,16 @@ export const TERMINAL = {
   // This is the M2 sitting sheet's §2 wording; the chord is that sheet's ruled
   // alternative to the filed Ctrl+Shift+Esc.
   ESCAPE_CHORD_HINT: `${ESCAPE_CHORD} leaves the terminal`,
+
+  // #216 — connection state moves OUT of xterm's own scrollback (where `[closed]`,
+  // `[reconnected]` and friends used to be written) into
+  // attach-terminal-status.tsx's persistent strip below the grid, so a spent
+  // reconnect budget always offers a way back in instead of scrolling away.
+  RECONNECT: "Reconnect",
+  RECONNECTING_LINE: (attempt: number, maxAttempts: number) =>
+    `Reconnecting — attempt ${attempt} of ${maxAttempts}.`,
+  RECONNECTING_HINT: "Keystrokes are held until the terminal is back.",
+  CLOSED_TITLE: "The terminal disconnected.",
+  CLOSED_BODY:
+    "Wardyn stopped retrying after 4 attempts. This ends the terminal session only — the run itself is unaffected. Reconnect to watch it again.",
 } as const;
