@@ -64,6 +64,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The per-user Bedrock remedy no longer tells a bearer caller the opposite of the truth.**
+  Under a `per_user` row whose roster mechanism is `bedrock_bearer` (#153), the setup-check
+  credential sentence still read "a credential — your own AWS sign-in ...; this deployment gives
+  each person their own, so ... a bedrock-api-key bearer secret ... cannot carry your runs" — the
+  bearer is exactly what carries a bearer-row caller's runs, and storing one is the remedy, not
+  something the sentence should warn away from. `bedrockProviderRow` (`setup_checks.go`) now reads
+  the row's own mechanism, threaded through a new `SetupBedrock.PerUserBearer` field
+  (`runs_bedrock_probe.go`), and branches: an SSO row keeps the sign-in sentence unchanged, and a
+  bearer row now reads "a credential — your own Bedrock API key bearer (set it with `wardyn secret
+  set bedrock-api-key`); this deployment gives each person their own, so storing one is what
+  carries your runs — an AWS sign-in, a read-only ~/.aws mount and aws-access-key-id +
+  aws-secret-access-key cannot".
 - **A spent AWS SSO refresh token is no longer forgotten on daemon restart.** `awssso_refresh.go`
   marked a redeemed-and-unpersistable (or AWS-retired) refresh token spent only in an in-memory map,
   so a restart wiped the mark and the credential graded "renewable" again — the exact credential

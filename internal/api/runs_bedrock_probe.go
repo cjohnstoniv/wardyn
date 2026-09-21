@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"os"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // SetupBedrock is the Amazon Bedrock Anthropic-transport readiness snapshot the
@@ -57,6 +59,14 @@ type SetupBedrock struct {
 	// Mechanism: this caller IS the shared admin bearer token under a per_user
 	// row — see awsSSOScopeIsMechanism. Always false when PerUser is false.
 	Mechanism bool `json:"-"`
+	// PerUserBearer: the roster row's own MECHANISM (types.AgentMechanism) is
+	// bedrock_bearer rather than bedrock_sso, under a per_user row. Meaningless
+	// (always false) when PerUser is false. IN-PROCESS only (json:"-"), for the
+	// same reason PerUser/Mechanism are: it exists so bedrockProviderRow can
+	// tell an SSO caller from a bearer caller and pick the sentence that names
+	// the ACTUAL remedy — signing in to AWS is not it for a bearer row; storing
+	// a bedrock-api-key of their own is (#153, #320).
+	PerUserBearer bool `json:"-"`
 	// Ready is the server-computed readiness (region+model+any credential source),
 	// echoed so the UI doesn't re-derive — and drift from — this gate.
 	Ready bool `json:"ready"`
@@ -113,7 +123,13 @@ func (b SetupBedrock) credSourceDesc() string {
 // reading it here would report a member's Bedrock lane ready off somebody else's
 // session — the wizard/launch-gate drift this function's doc opens with, in its
 // per-principal form.
-func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sso awsSSOScope) SetupBedrock {
+//
+// sc is the site config the caller already read (setupStatusSSOScope's own
+// callers all hold one) — read ONLY to name the roster row's own MECHANISM
+// (bedrock_sso vs bedrock_bearer) for PerUserBearer below; every other field
+// here is unchanged by it. A caller under the operator scope (sso.perUser ==
+// false) never consults sc, so passing its zero value costs it nothing.
+func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sc types.SiteConfig, sso awsSSOScope) SetupBedrock {
 	awsMount := false
 	if s.cfg.BedrockAWSConfigDir != "" {
 		st, err := os.Stat(s.cfg.BedrockAWSConfigDir)
@@ -174,6 +190,11 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sso 
 	}
 	b.PerUser = sso.perUser
 	b.Mechanism = awsSSOScopeIsMechanism(sso)
+	if sso.perUser {
+		if row, ok := agentProviderFor(sc, modelAccessAgent); ok {
+			b.PerUserBearer = row.Mechanism == types.AgentMechanismBedrockBearer
+		}
+	}
 	b.Ready = b.ready()
 	return b
 }

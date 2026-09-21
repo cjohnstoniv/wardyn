@@ -101,7 +101,7 @@ func (si *SetupIntegration) UnmarshalJSON(b []byte) error {
 // the moment they declared per_user, which is not what that page is about.
 func (s *Server) integrationsWithCapabilities(ctx context.Context, present map[string]bool) []SetupIntegration {
 	providers, _ := s.setupProviders()
-	return s.integrationsWithCapabilitiesUsing(ctx, present, providers, s.setupBedrock(ctx, present, awsSSOScope{}))
+	return s.integrationsWithCapabilitiesUsing(ctx, present, providers, s.setupBedrock(ctx, present, types.SiteConfig{}, awsSSOScope{}))
 }
 
 // integrationsWithCapabilitiesUsing is integrationsWithCapabilities' pure-ish
@@ -310,7 +310,7 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 		row := integrationRow{Integration: in, Source: "stored"}
 		present := s.presentSecretNames(ctx)
 		providers, _ := s.setupProviders()
-		bedrock := s.setupBedrock(ctx, present, awsSSOScope{})
+		bedrock := s.setupBedrock(ctx, present, sc, awsSSOScope{})
 		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, s.liveCapEnv(ctx, present, providers, bedrock))}
 	}
 	return SetupIntegration{}

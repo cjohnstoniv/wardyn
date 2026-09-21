@@ -72,7 +72,7 @@ func TestBedrockProviderCheck_UnenforcedPinWarns(t *testing.T) {
 		BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Secrets: &memSecrets{m: map[string][]byte{}},
 	})
-	base := srv.setupBedrock(context.Background(), map[string]bool{}, awsSSOScope{})
+	base := srv.setupBedrock(context.Background(), map[string]bool{}, types.SiteConfig{}, awsSSOScope{})
 
 	for name, ready := range map[string]bool{
 		"this caller has already captured": true,
@@ -132,7 +132,7 @@ func TestBedrockProviderCheck_PinDisagreeingWithTheModelWarns(t *testing.T) {
 		BedrockRegion: "us-east-1", BedrockModel: arnModel,
 		Secrets: &memSecrets{m: map[string][]byte{}},
 	})
-	bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, awsSSOScope{})
+	bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, types.SiteConfig{}, awsSSOScope{})
 	bedrock.SSOPresent, bedrock.Ready = true, true
 
 	// The disagreement the save door now accepts.
