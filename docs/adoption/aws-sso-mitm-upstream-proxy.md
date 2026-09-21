@@ -167,3 +167,41 @@ Ask 2 leads the fix:
    dispatch, so it changes **new dispatches only**; a run already dispatched keeps the lane it was
    authored with. The trade-off to record: the SSO access token becomes resident in the sandbox
    again. The derived role credentials were resident either way.
+
+## Follow-up after 0.7.8: the re-origination meets an HTTP/2 peer
+
+With 0.7.8's `cause` and `via` fields the same operator traced the failure in one run. Every deny row
+carried `via: "upstream-proxy"`, which settles the question above: the MITM lane does traverse
+`upstream_proxy_url`. The `cause` held three well-formed HTTP/2 frames: SETTINGS, WINDOW_UPDATE, and
+GOAWAY with `PROTOCOL_ERROR` and `last-stream-id = 0`. They arrived where the proxy's HTTP/1.1
+transport expected a response. `trusted_ca_certs: 4` and the absence of any x509 error rule out
+the CA hypothesis. Their table of paths on the same cluster, proxy and bundle shows the single
+variable: every path where the client negotiates its own protocol works, including the control
+plane's Go `http.DefaultTransport`, which offers h2. Only the proxy's re-origination fails.
+
+They asked two questions the code answers:
+
+- **Is the re-origination TLS or cleartext?** TLS. `upstreamSchemeFor`
+  (`internal/egress/proxy/mitm_hosts.go`) returns `https` for this host, and HTTP/2 bytes ahead of
+  the handshake would have failed it with a TLS error instead. So the frames came from inside a
+  completed TLS session. The peer is whatever terminates TLS on that path. The proxy offered no
+  ALPN at all, and that peer spoke HTTP/2 anyway.
+- **Is `ForceAttemptHTTP2: false` a deliberate invariant?** No. It has been on the egress
+  transport since the first public release, and nothing records a reason for it.
+
+What 0.7.9 changes:
+
+- The egress transport offers `h2,http/1.1` over ALPN and speaks HTTP/2 when the peer chooses it,
+  as the control plane's transport already does (#360).
+- A peer that speaks HTTP/2 without negotiating it is detected. The proxy remembers that host
+  for the run and resends over HTTP/2 when the request body can be replayed (#360).
+- When that still fails, the row is `builtin:upstream-protocol-mismatch` with the cause
+  `peer answered HTTP/2 to an HTTP/1.1 request (ALPN: …)`, not `builtin:dial-failed`. It is
+  answered with a 400, so the SDK stops retrying (#359).
+- `upstream_proxy_no_proxy` CIDR entries match IP literals only. OPERATIONS.md now says so (#361).
+
+What it cannot prove from here: nothing outside that estate reproduces its TLS peer. The fix is
+tested against a peer built to behave the same way (HTTP/2 regardless of ALPN) and against a
+peer that negotiates normally. If the lane still fails, the new cause names the negotiated
+protocol, which is the next fact needed. `WARDYN_AWS_SSO_PROXY_INJECT=off` stays available as the
+stopgap they have chosen not to take.

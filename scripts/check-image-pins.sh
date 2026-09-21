@@ -31,12 +31,16 @@ cd "$(dirname "$0")/.."
 # Matched on the REF, one per line. Both entries are locally BUILT images, so no
 # upstream digest exists to pin them to — a digest would have to be recomputed on
 # every rebuild of the base, which is neither stable nor meaningful.
-#   wardyn/agent-claude-code:local  deploy/images/{full,vscode}/Dockerfile's base
-#   wardyn/agent-base:local         deploy/images/novnc/Dockerfile's base — the
-#                                   noVNC image is FROM agent-base deliberately
-#                                   (an X stack needs no language runtime), which
-#                                   is why it needs its own entry rather than
-#                                   riding the one above.
+#   wardyn/agent-claude-code:local  deploy/images/full/Dockerfile's base, and
+#                                   deploy/images/vscode/Dockerfile's OPTIONAL
+#                                   override (BASE_IMAGE=wardyn/agent-claude-code:local,
+#                                   for a developer checkout that wants `claude`
+#                                   in the vscode terminal) — never its default.
+#   wardyn/agent-base:local         deploy/images/vscode/Dockerfile's AND
+#                                   deploy/images/novnc/Dockerfile's default
+#                                   base — neither a code-server layer nor an X
+#                                   stack needs a vendor CLI, so both default
+#                                   away from it deliberately (#140).
 ALLOWLIST_REFS="wardyn/agent-claude-code:local
 wardyn/agent-base:local"
 fail=0
@@ -140,24 +144,29 @@ done
 
 # ── local-only recipes stay local ───────────────────────────────────────────
 #
-# claude-code/oracle/vscode/novnc/full are build recipes (`make agent-images`),
-# deliberately NOT published, each for its own reason:
+# claude-code/oracle/full are build recipes (`make agent-images`), deliberately
+# NOT published, each for its own reason:
 #   claude-code  bundles @anthropic-ai/claude-code, which is NOT open source
 #                ("SEE LICENSE IN README.md", Anthropic's Commercial ToS) and
 #                which Wardyn does not distribute — this is the claim
 #                LICENSING.md makes to every evaluator ("No published image
 #                bundles a proprietary AI coding CLI"), so it needs a gate and
 #                not just a comment in release.yml's matrix.
-#   vscode/full  layer ON the claude-code base, so they convey the same CLI, and
-#                neither carries the licence-file COPYs the loop above requires.
-#   novnc        same missing COPYs.
+#   full         layers ON the claude-code base (deploy/images/full/Dockerfile),
+#                so it conveys the same CLI.
 #   oracle       an e2e fixture that runs each task's scripted solution; it is
 #                not an agent and has never been reviewed as a distributed
 #                artifact.
+# vscode/novnc used to live in this list too: #140 rebased both onto agent-base
+# by default (never agent-claude-code) and #141 gave both Dockerfiles the
+# licence-file COPYs the loop above requires, so they are PUBLISHED now
+# (release.yml's images-ui-sandbox job) and must NOT be matched here — a
+# broader pattern would silently re-exclude them the next time this line is
+# touched.
 # They would enter the matrix as agent-<name> (the Makefile's naming), so the
 # prefixed form must be matched too — a bare-name pattern is vacuous.
-if [ -f "$RELEASE_WF" ] && grep -qE '^[[:space:]]+- name: (agent-)?(claude-code|oracle|vscode|novnc|full)[[:space:]]*$' "$RELEASE_WF"; then
-  echo "FAIL: $RELEASE_WF publishes a local-only image (claude-code/oracle/vscode/novnc/full). These are build recipes carrying vendor-licensed or unreviewed content; they must not enter the publish matrix." >&2
+if [ -f "$RELEASE_WF" ] && grep -qE '^[[:space:]]+- name: (agent-)?(claude-code|oracle|full)[[:space:]]*$' "$RELEASE_WF"; then
+  echo "FAIL: $RELEASE_WF publishes a local-only image (claude-code/oracle/full). These are build recipes carrying vendor-licensed or unreviewed content; they must not enter the publish matrix." >&2
   fail=1
 fi
 
@@ -204,8 +213,13 @@ fi
 # coverage check above.
 GPL_OFFER=deploy/images/THIRD-PARTY-GPL.md
 if [ -f "$RELEASE_WF" ] && [ -f "$GPL_OFFER" ]; then
-  offered=$(grep -oE '^## `ghcr\.io/cjohnstoniv/[a-z0-9-]+:' "$GPL_OFFER" \
-            | sed -E 's|^## `ghcr\.io/cjohnstoniv/||; s/:$//' | sort -u)
+  # No trailing `:` or backtick anchor: a section header is either
+  # "`ghcr.io/cjohnstoniv/<img>:<tag>`" (published) or
+  # "`ghcr.io/cjohnstoniv/<img>` (not yet published)" (a bootstrap entry, see
+  # gpl-source-offer.sh) — [a-z0-9-]+ already stops at the first char outside
+  # the image-name alphabet, so it matches both without a suffix to strip.
+  offered=$(grep -oE '^## `ghcr\.io/cjohnstoniv/[a-z0-9-]+' "$GPL_OFFER" \
+            | sed -E 's|^## `ghcr\.io/cjohnstoniv/||' | sort -u)
   missing=$(comm -23 <(printf '%s\n' "$published") <(printf '%s\n' "$offered"))
   if [ -n "$missing" ]; then
     echo "FAIL: image(s) published by $RELEASE_WF have no GPL/LGPL source-offer section in $GPL_OFFER. Regenerate it with scripts/gpl-source-offer.sh (see its header for the bootstrap path a first-time publish needs):" >&2

@@ -30,10 +30,39 @@ const adminToken = "test-admin-token"
 
 // ─── fakes ─────────────────────────────────────────────────────────────────
 
-type recRecorder struct{ events []types.AuditEvent }
+// recRecorder's mutex exists for the detached create-run launch: it records
+// audit rows after the 201, while the test is already reading.
+type recRecorder struct {
+	mu     sync.Mutex
+	events []types.AuditEvent
+}
 
 func (r *recRecorder) Record(_ context.Context, ev types.AuditEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.events = append(r.events, ev)
+	return nil
+}
+
+// snapshot is the locked read of events a launch may still be appending to.
+func (r *recRecorder) snapshot() []types.AuditEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]types.AuditEvent(nil), r.events...)
+}
+
+// waitForRecAudit polls for the run's action/outcome row, which POST /runs'
+// detached launch writes after the response.
+func waitForRecAudit(t *testing.T, r *recRecorder, runID uuid.UUID, action, outcome string) *types.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ev := findAudit(r.snapshot(), runID, action, outcome); ev != nil {
+			return ev
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("no %s/%s row for run %s after 5s; events=%s", action, outcome, runID, auditDump(r.snapshot(), runID))
 	return nil
 }
 

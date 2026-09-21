@@ -242,10 +242,12 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   HTTP-client e2e lane (`make test-e2e-ui-sandbox`) and a browser e2e lane
   (`make test-e2e-ui`). A browser desktop (noVNC) **shipped in 0.7**
   (`deploy/images/novnc/`, `make agent-image-novnc`) — and, as predicted, it is
-  an image variant on this same primitive with **no server change**. Local-build
-  only, like `agent-vscode`: publishing an X stack drags in the trivy matrix,
-  a per-image SBOM and a GPL source offer for a whole desktop, which is a
-  supply-chain workstream rather than an image. A general
+  an image variant on this same primitive with **no server change**. Both
+  `agent-vscode` and `agent-novnc` publish from the next tagged release (#141):
+  the trivy matrix, a per-image SBOM and a GPL source offer for a whole desktop
+  turned out to be exactly the supply-chain workstream predicted, now landed in
+  `release.yml`'s `images-ui-sandbox` job rather than deferred indefinitely. A
+  general
   native lane stays **exploratory** — the four candidates are costed in
   UI-SANDBOXES.md rather than promised, and natively on the user's own machine
   remains VS Code Remote-SSH over the SSH gateway.
@@ -799,8 +801,8 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   an unauthorized caller) · **R1-F289** (a DB-clock cookie `iat`; the shipped
   comparison-time fix is recorded as safe to leave standing).
 - **Deployment.** Subscription/managed runs through the internal model gateway ·
-  publishing the UI-sandbox images (`vscode`/`novnc`) · direct-dial bypass per
-  target · BYO-Bedrock for members · an air-gapped video mirror + config-driven CSP
+  direct-dial bypass per target · BYO-Bedrock for members · an air-gapped video
+  mirror + config-driven CSP
   · the gateway auth-scheme seam · `ssh_key` clone-only vs bind-mounted workspaces
   (F11) · age-key rotation (F12) · react-router 8 (F13) · the Kata/TPROXY/io_uring
   quick-hits (F14) · the k8s parity list (F23, on the v1.0 row below) · ADO
@@ -869,17 +871,6 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
 
 These are known, documented ceilings. They are listed so they are not mistaken for
 shipped behavior; none is scheduled.
-
-- **The UI-sandbox images are not published.** The relay ships and works, and
-  0.7 added a second app (`novnc`) alongside `vscode` — but neither image is in
-  `release.yml`'s publish matrix, and `deploy/images/vscode/` builds `FROM` a
-  locally-built base. Consequences: the browser lane is **unavailable on the
-  desktop tier** (a managed laptop has no repo and no build path) and on Helm (a
-  cluster pulling only published images gets a gateway with nothing to serve).
-  It works today on a developer checkout. Publishing them means taking on the
-  trivy matrix, a per-image SBOM assertion, and a GPL source offer for a whole X
-  stack — a supply-chain workstream rather than an image build. **Deferred to
-  0.8.**
 
 - **Seventeen of the 23 catalogued demo episodes are still unrecorded stubs**
   (`ui/src/app/lib/demo-videos.ts`'s `EPISODES`; `cmd/wardynd/demo_videos_guard_test.go`

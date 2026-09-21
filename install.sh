@@ -297,8 +297,10 @@ WARDYN_UI_SANDBOX_PORT=${WARDYN_UI_SANDBOX_PORT:-8081}
 # every connection, which is what this installer shipped in 0.6.3.
 WARDYN_SSH_LISTEN=:2222
 WARDYN_SSH_ADVERTISE=127.0.0.1:${WARDYN_SSH_PORT:-2222}
-# The UI-sandbox relay stays OFF: no agent-vscode or noVNC image is published,
-# so the listener would have nothing to serve. See docs/UI-SANDBOXES.md.
+# The UI-sandbox relay stays OFF by default: WARDYN_AGENT_IMAGES below does
+# not register agent-vscode or agent-novnc (opt-in only, not part of the
+# installer's default catalog), so the listener would have nothing to serve
+# until you add one yourself. See docs/UI-SANDBOXES.md.
 # WARDYN_UI_SANDBOX_LISTEN=:8081
 # Published images — this install pulls, it never builds.
 WARDYN_WARDYND_IMAGE=${IMG}
