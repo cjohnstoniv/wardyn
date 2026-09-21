@@ -15,7 +15,7 @@
 // does not get its own strip on row 2 — the chip already names the tier, and
 // the run detail page is where the ladder is worth drawing.
 import * as React from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Eye, MoreHorizontal, GitBranch, RotateCcw, Skull, TerminalSquare } from "lucide-react";
 import type { AgentRun } from "../../../lib/types";
@@ -34,7 +34,7 @@ import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primiti
 import { usePrincipal } from "../../wardyn/operator-context";
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
-import { RUN, RUN_COCKPIT } from "../../wardyn/copy";
+import { RUN, RUN_COCKPIT, RUNS_WAIT } from "../../wardyn/copy";
 // THE LEAF, not wardyn/model-access-copy: this card is on the eager graph and
 // that module is lazy-side (see lib/reauth-waiting-copy.ts).
 import { waitingReauth } from "../../../lib/reauth-waiting-copy";
@@ -126,6 +126,11 @@ export function RunCard({
   const asks = attention === "permission";
   const interrupted = attention === "interrupted";
   const repo = repoLabel(run);
+  // #160 — a hold isHeld no longer counts as live (the stale-hold ceiling).
+  // Only degrades the DERIVED claim: this card's own sentence and action —
+  // never RunStateBadge/RunStateGlyph, which still show the wire state
+  // exactly as it is (still WAITING_FOR_CONFIRMATION, unchanged).
+  const stale = !!s.staleHeld;
 
   // This container is a plain <div>, not role="button" tabIndex={0}: that
   // would be a widget role directly nesting the real Attach/Review/kebab
@@ -160,12 +165,27 @@ export function RunCard({
       <div className="flex items-center gap-2">
         <AgentBadge agent={run.agent} withLabel={false} />
         <RunStateGlyph state={run.state} signals={s} />
-        <p className="min-w-0 flex-1 truncate text-body font-medium leading-snug text-foreground">
+        {/* #215 — a real <a href>, not a div with onClick: no anchor, no
+            role, no tabIndex meant this could not be reached by keyboard,
+            middle-clicked, opened in a new tab, or copied as a link. The
+            card's own onClick below still opens it by mouse anywhere else on
+            the card; stopPropagation here just keeps the click from firing
+            twice. */}
+        <Link
+          to={`/runs/${encodeURIComponent(run.id)}`}
+          onClick={(e) => e.stopPropagation()}
+          className="min-w-0 flex-1 truncate text-body font-medium leading-snug text-foreground hover:underline"
+        >
           {rowHeadline(run, !!grouped)}
-        </p>
-        {/* Review is the point of a card that needs you, so it never hides.
-            Attach is a convenience on a healthy run — revealed on hover, and
-            on focus-within so it is reachable by keyboard, never hover-only. */}
+        </Link>
+        {/* Review/Open is the point of a card that needs you, so it never
+            hides. Attach is a convenience on a healthy run — revealed on
+            hover, and on focus-within so it is reachable by keyboard, never
+            hover-only. #215: a failed run's "Review" becomes "Open" — it is
+            a report, not a request, and the two no longer share one word.
+            #160: a held run's own "Review" degrades to "Open" too, once its
+            hold has gone stale — it can no longer promise there is something
+            to decide. */}
         {(asks || interrupted) && (
           <Button
             size="sm"
@@ -181,7 +201,7 @@ export function RunCard({
               onOpen(run.id);
             }}
           >
-            Review
+            {interrupted || stale ? "Open" : "Review"}
           </Button>
         )}
         {attachable && (
@@ -220,18 +240,22 @@ export function RunCard({
         )}
         {/* A held approval says what is waiting; a failure says nothing extra —
             the glyph and Review already carry it, and a sentence repeating the
-            state was three words of noise on every attention card. */}
+            state was three words of noise on every attention card. #160: once
+            the hold has gone stale, this is the one sentence that says so —
+            neutral, not the warning tone a still-live hold gets. */}
         {s.pending > 0 && (
-          <span className="whitespace-nowrap text-warning">
-            {s.reauth
-              ? /* Whose sign-in — the board shows an admin every run, and a
-                   member the shared-lane rows their own runs raised (W6-U
-                   SHOULD-1). An unresolved /me reads as "not mine", the same
-                   fail-closed direction the cockpit's door takes. */
-                waitingReauth(s.pending, !!principal && run.created_by === principal)
-              : s.held
-                ? RUN_COCKPIT.waitingHeld(s.pending)
-                : RUN_COCKPIT.waiting(s.pending)}
+          <span className={cn("whitespace-nowrap", stale ? "text-muted-foreground" : "text-warning")}>
+            {stale
+              ? RUNS_WAIT.STALE_CARD
+              : s.reauth
+                ? /* Whose sign-in — the board shows an admin every run, and a
+                     member the shared-lane rows their own runs raised (W6-U
+                     SHOULD-1). An unresolved /me reads as "not mine", the same
+                     fail-closed direction the cockpit's door takes. */
+                  waitingReauth(s.pending, !!principal && run.created_by === principal)
+                : s.held
+                  ? RUN_COCKPIT.waitingHeld(s.pending)
+                  : RUN_COCKPIT.waiting(s.pending)}
           </span>
         )}
         <span className="ml-auto flex items-center gap-2.5">
