@@ -83,6 +83,11 @@ jobs:
       # suite, via cover-check) and union/ (the coverage floor's merged profile).
       - name: Upload Go test reports
         if: always()
+        # A storage-side error on the report upload must not fail a job whose
+        # tests passed: a 403 from the artifact service reddened a REQUIRED
+        # check with all 175 UI test files green, and only a manual re-run
+        # cleared it (#372).
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: go-test-reports
@@ -187,6 +192,11 @@ jobs:
         run: make ui
       - name: Upload UI test reports
         if: always()
+        # A storage-side error on the report upload must not fail a job whose
+        # tests passed: a 403 from the artifact service reddened a REQUIRED
+        # check with all 175 UI test files green, and only a manual re-run
+        # cleared it (#372).
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ui-test-reports
@@ -232,6 +242,11 @@ jobs:
         run: make test-e2e-ui
       - name: Upload Playwright report
         if: always()
+        # A storage-side error on the report upload must not fail a job whose
+        # tests passed: a 403 from the artifact service reddened a REQUIRED
+        # check with all 175 UI test files green, and only a manual re-run
+        # cleared it (#372).
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: playwright-report
@@ -613,6 +628,11 @@ jobs:
         run: make test-race-pg
       - name: Upload PG test reports
         if: always()
+        # A storage-side error on the report upload must not fail a job whose
+        # tests passed: a 403 from the artifact service reddened a REQUIRED
+        # check with all 175 UI test files green, and only a manual re-run
+        # cleared it (#372).
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pg-test-reports
