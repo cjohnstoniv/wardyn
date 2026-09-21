@@ -263,14 +263,81 @@ describe("order — the walked steps, not the whole contract", () => {
     expect(onSelect).toHaveBeenCalledWith("integrations");
   });
 
-  // F3-F12: reachable via a `?step=<conditional demo>` deep link at mount,
-  // before the status-driven correction effect (setup-screen.tsx) has run —
-  // `current` not being IN `order` at all used to render "Step 0 of M".
-  it("F3-F12: a current step not in order clamps the display to Step 1, never Step 0", () => {
+  // #213 — the honest "N optional setup steps and M demos follow" subline,
+  // live-derived by the caller (steps.ts's optionalStepCounts) rather than
+  // hand-kept here — absent renders the bare Step-number line, so callers
+  // that don't pass it (most of this file's other tests) are unaffected.
+  it("renders the requiredSummary subline on a required (in-order) step, and omits it when absent", () => {
+    const order: SetupStepId[] = ["environment", "corp_network", "integrations", "review"];
+    const { rerender } = renderLayout({ current: "environment", order });
+    expect(
+      screen.queryByText(/Required before a run can launch\./),
+    ).not.toBeInTheDocument();
+    rerender(
+      <SetupLayout
+        current="environment"
+        rail={<div>rail</div>}
+        checking={false}
+        lastCheckedLabel="just now"
+        onRecheck={vi.fn()}
+        onSelect={vi.fn()}
+        onFinish={vi.fn()}
+        operator
+        order={order}
+        requiredSummary={{ config: 3, demos: 10 }}
+      >
+        <div>step body</div>
+      </SetupLayout>,
+    );
+    expect(
+      screen.getByText("Required before a run can launch. 3 optional setup steps and 10 demos follow."),
+    ).toBeInTheDocument();
+  });
+
+  // #213: `current` not being in `order` at all is now the STEADY state for
+  // any of the ~19 optional/demo steps (order is REQUIRED_STEPS in real
+  // usage) — it renders "Optional", never "Step 0 of M" or a clamped "Step 1".
+  it("a current step not in order renders 'Optional', never a Step-number line", () => {
     const order: SetupStepId[] = ["environment", "corp_network", "integrations", "review"];
     renderLayout({ current: "sealed-box", order });
-    expect(screen.getByText("Step 1 of 4")).toBeInTheDocument();
+    // Two "Optional" texts now: the eyebrow line this test is pinning, and
+    // the unrelated heading's StatusChip badge (sealed-box is itself an
+    // OPTIONAL_STEPS member) — the subline underneath is the unique tell.
+    expect(screen.getAllByText("Optional").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Not required before a run can launch.")).toBeInTheDocument();
     expect(screen.queryByText("Step 0 of 4")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Step \d+ of 4$/)).not.toBeInTheDocument();
+  });
+
+  // The optional-step footer returns to the required walk (decision #3) —
+  // the LAST member of `order` — rather than stepping through whatever comes
+  // after it in some other sequence.
+  it("an optional step's footer offers 'Back to required steps' / 'Done with this one', both targeting the last required step", async () => {
+    const onSelect = vi.fn();
+    const order: SetupStepId[] = ["environment", "corp_network", "integrations", "review"];
+    renderLayout({ current: "sealed-box", order, onSelect });
+    expect(screen.queryByRole("button", { name: /^back$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^next:/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^back to required steps$/i }));
+    expect(onSelect).toHaveBeenCalledWith("review");
+    onSelect.mockClear();
+    await user.click(screen.getByRole("button", { name: /^done with this one$/i }));
+    expect(onSelect).toHaveBeenCalledWith("review");
+  });
+
+  it("an optional step's 'Done with this one' is disabled+titled when refuseNext refuses the return target", () => {
+    const order: SetupStepId[] = ["environment", "corp_network", "integrations", "review"];
+    renderLayout({
+      current: "sealed-box",
+      order,
+      refuseNext: (next) => (next === "review" ? "Prove network access first." : undefined),
+    });
+    const done = screen.getByRole("button", { name: /^done with this one$/i });
+    expect(done).toBeDisabled();
+    expect(done).toHaveAttribute("title", "Prove network access first.");
+    // Back stays enabled — it is never gated by refuseNext, same as every
+    // other Back button in this shell.
+    expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeEnabled();
   });
 });
 
