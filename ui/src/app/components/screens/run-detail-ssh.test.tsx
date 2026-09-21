@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import type { AgentRun } from "../../lib/types";
+import type { RunDetail } from "../../lib/types";
 
 const healthMock = vi.fn();
 vi.mock("../../lib/api/health", () => ({
@@ -33,7 +33,7 @@ import { OperatorProvider } from "../wardyn/operator-context";
 import { UI_APPS_LANE } from "../wardyn/copy";
 
 const OWNER = "alice@example.com";
-const baseRun: AgentRun = {
+const baseRun: RunDetail = {
   id: "11111111-1111-1111-1111-111111111111",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
@@ -48,7 +48,7 @@ const baseRun: AgentRun = {
   interactive: false,
 };
 
-function renderCard(run: Partial<AgentRun> = {}, principal = OWNER, operator = true) {
+function renderCard(run: Partial<RunDetail> = {}, principal = OWNER, operator = true) {
   return render(
     <MemoryRouter>
       <OperatorProvider operator={operator} principal={principal}>
