@@ -49,17 +49,23 @@ Wardyn is distributed through four channels:
 | channel | what it is |
 |---|---|
 | **Source** | this git repository |
-| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardyn-proxy,agent-base,agent-codex-cli,agent-aws-sso}` |
+| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardyn-proxy,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc}` |
 | **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release |
 | **Helm chart** | pushed to `oci://ghcr.io/cjohnstoniv/charts` on release; also installable straight from this repo |
 
-Five more agent Dockerfiles (`claude-code`, `oracle`, `vscode`, `novnc`, `full`)
-are **local build recipes only**: `make agent-images` builds them on your own
-machine, no registry publishes them, and a release gate keeps them out of the
-publish matrix. What such a build then downloads from a vendor — Anthropic's
-Claude Code, code-server, a JDK — arrives under **that vendor's** terms, direct
-from that vendor to you. Wardyn neither relicenses it nor conveys it; the
-Dockerfile is a recipe, not a distribution.
+`agent-vscode` and `agent-novnc` — the UI-sandbox relay's two apps — publish
+starting with the next tagged release; both build `FROM` `agent-base`, never
+from the unpublished `agent-claude-code` below. Unlike the vendor CLI, Wardyn
+**does** convey what these two contain — a pinned code-server and a minimal X
+stack — under those components' own licences; see the next section.
+
+Three more agent Dockerfiles (`claude-code`, `oracle`, `full`) stay **local
+build recipes only**: `make agent-images` builds them on your own machine, no
+registry publishes them, and a release gate keeps them out of the publish
+matrix. What such a build then downloads from a vendor — Anthropic's Claude
+Code, a JDK — arrives under **that vendor's** terms, direct from that vendor
+to you. Wardyn neither relicenses it nor conveys it; the Dockerfile is a
+recipe, not a distribution.
 
 **Wardyn's own code and all of its dependencies are permissively licensed.** Every
 Go module compiled into the shipped binaries and every npm package bundled into
@@ -81,6 +87,13 @@ binary:
   [`deploy/images/THIRD-PARTY-GPL.md`](deploy/images/THIRD-PARTY-GPL.md).
 - The agent images apt-install `asciinema` (GPL-3.0), executed as a subprocess and
   never linked. Covered by the same source offer.
+- `agent-vscode` conveys a pinned, sha256-verified **code-server** (MIT), plus
+  its bundled npm dependencies, including `jschardet` (LGPL-2.1+). `agent-novnc`
+  conveys a minimal X desktop stack: `x11vnc` (GPL-2.0), `openbox`
+  (GPL-2.0-or-later), `websockify` and `noVNC` (LGPL-3.0 / MPL-2.0), and
+  `Xvfb`/`xterm` (MIT/X11). Neither is modified, and the same source offer
+  covers both, including the one component (`websockify`) syft cannot see
+  because it installs from a source tarball rather than a package manager.
 - **No published image bundles a proprietary AI coding CLI.** The retired
   `agent-claude-code` image did; it left the release matrix in 0.6.2 and its
   GHCR package was removed on 2026-08-30. Its Dockerfile remains a local build

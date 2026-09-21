@@ -88,6 +88,28 @@ for b in ${BOOTSTRAP_IMAGES:-}; do
   ((skip)) || ALL_IMAGES+=("$b")
 done
 
+# Commit the bootstrap note below can point at, so "scanned before
+# publication" names something concrete instead of just asserting it.
+SCAN_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+# ── manual supplements: components syft cannot see ──────────────────────────
+#
+# syft reads package-manager metadata (dpkg/apk/npm/...). A component
+# installed straight from a source tarball, with no manifest syft recognises,
+# is conveyed but invisible to every scan — the exact gap that shipped with
+# zero rows for websockify (deploy/images/novnc/Dockerfile installs it from a
+# GitHub release tarball, not apt). Each entry here is merged into that
+# image's table on every regeneration, so it survives a rescan instead of
+# being hand-typed into a file this script overwrites wholesale.
+#
+# Fields: image|package|version|licence|source-url. Keep the version and URL
+# in sync with the Dockerfile ARG that pins them — nothing cross-checks this
+# array against the Dockerfile automatically, so a version bump there needs
+# the matching edit here.
+MANUAL_ENTRIES=(
+  "agent-novnc|websockify|0.13.0|LGPL-3.0|https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz"
+)
+
 # Frozen history: offers owed for artifacts that can no longer be re-scanned
 # (withdrawn tags, the deleted agent-claude-code package) live as static text
 # in deploy/images/third-party-gpl-historical.md, emitted verbatim below.
@@ -141,9 +163,10 @@ fi
   echo "mirror these images into a registry other people pull from. This file is that"
   echo "offer, and it is what you would pass on."
   echo
-  echo "None of these packages are modified by Wardyn. Every one is the unmodified"
-  echo "distribution package, so the corresponding source is the distribution's own,"
-  echo "obtainable from:"
+  echo "None of these packages are modified by Wardyn. Most are the unmodified"
+  echo "distribution package; a few are an unmodified upstream release tarball or an"
+  echo "npm package bundled by the vendor tool that ships it, named per-entry where"
+  echo "that applies. The corresponding source is the applicable one below:"
   echo
   echo "- **Debian** (\`debian:bookworm-slim\`, \`node:24-bookworm-slim\`, and the"
   echo "  \`gcr.io/distroless/static-debian12\` base): \`https://snapshot.debian.org\`"
@@ -154,6 +177,15 @@ fi
   echo "  at the matching aport version."
   echo "- **asciinema** (installed by Wardyn's own Dockerfile, not inherited):"
   echo "  \`https://github.com/asciinema/asciinema\` at the version below."
+  echo "- **npm packages bundled inside a vendor tool's own release tarball**"
+  echo "  (\`agent-vscode\`'s code-server bundles \`jschardet\`, for example): the"
+  echo "  package's own entry at \`https://registry.npmjs.org/<name>\`, or the"
+  echo "  upstream repository linked from that page. Wardyn's Dockerfile installs"
+  echo "  the vendor tarball whole; it does not install these individually."
+  echo "- **Source tarballs a Dockerfile installs directly, outside any package"
+  echo "  manager** (\`agent-novnc\`'s \`websockify\`, for instance): syft cannot see"
+  echo "  these, so they are listed by hand per image below, with the exact tagged"
+  echo "  archive URL Wardyn's own Dockerfile pins."
   echo
   echo "This offer stands while an image remains pullable and for three years after"
   echo "the last copy of it is conveyed (GPLv3 s6(b)); withdrawing a tag starts that"
@@ -166,18 +198,35 @@ fi
   echo
   for img in "${ALL_IMAGES[@]}"; do
     f="${SBOM_FILE[$img]}"
-    n=$(jq -r '[.artifacts[] | select(((.licenses//[])|map(.value//.spdxExpression//"")|join(" "))|test("GPL";"i"))] | length' "$f")
-    echo "## \`ghcr.io/cjohnstoniv/${img}:${TAG}\`"
-    echo
+    syft_n=$(jq -r '[.artifacts[] | select(((.licenses//[])|map(.value//.spdxExpression//"")|join(" "))|test("GPL";"i"))] | length' "$f")
+
+    # This image's manual supplements (see MANUAL_ENTRIES above), if any.
+    manual_rows=()
+    for m in "${MANUAL_ENTRIES[@]:-}"; do
+      [ -n "$m" ] || continue
+      IFS='|' read -r mimg mpkg mver mlic murl <<<"$m"
+      [ "$mimg" = "$img" ] && manual_rows+=("$mpkg|$mver|$mlic|$murl")
+    done
+    n=$((syft_n + ${#manual_rows[@]}))
+
     if [ "${IS_BOOTSTRAP[$img]}" = 1 ]; then
-      echo "_Scanned before publication, from \`wardyn/${img}:local\` — the identical build"
-      echo "recipe this image publishes from. No published digest exists yet to scan; this"
-      echo "row will be re-scanned from the pushed digest once one does._"
+      # No tag exists to name — this image has never been published, so a
+      # fabricated "${img}:${TAG}" header would claim a ref nobody can pull.
+      echo "## \`ghcr.io/cjohnstoniv/${img}\` (not yet published)"
+      echo
+      echo "_Scanned before publication, from \`wardyn/${img}:local\` built at commit"
+      echo "\`${SCAN_SHA}\` — the same recipe this image will publish from once it"
+      echo "lands, though apt package versions can float between rebuilds of that"
+      echo "recipe. No published digest exists yet to scan; this section will be"
+      echo "replaced by a digest scan of the real tag once one exists._"
+      echo
+    else
+      echo "## \`ghcr.io/cjohnstoniv/${img}:${TAG}\`"
       echo
     fi
     echo "$n package(s) carrying a GPL or LGPL term."
     echo
-    if [ "$n" -gt 0 ]; then
+    if [ "$syft_n" -gt 0 ]; then
       echo "| package | version | licence | type |"
       echo "|---|---|---|---|"
       jq -r '.artifacts[]
@@ -185,8 +234,21 @@ fi
              | [.name, .version, (((.licenses//[])|map(.value//.spdxExpression//"")|join(", "))), .type]
              | @tsv' "$f" \
         | sort -u | while IFS=$'\t' read -r n v l t; do printf '| `%s` | %s | %s | %s |\n' "$n" "$v" "$l" "$t"; done
+      echo
     fi
-    echo
+    if [ "${#manual_rows[@]}" -gt 0 ]; then
+      echo "_Also conveyed, not visible to the SBOM scan (installed from a source"
+      echo "tarball with no package manifest for syft to read — see this script's"
+      echo "MANUAL_ENTRIES):_"
+      echo
+      echo "| package | version | licence | source |"
+      echo "|---|---|---|---|"
+      for row in "${manual_rows[@]}"; do
+        IFS='|' read -r mpkg mver mlic murl <<<"$row"
+        printf '| `%s` | %s | %s | `%s` |\n' "$mpkg" "$mver" "$mlic" "$murl"
+      done
+      echo
+    fi
   done
 
   # ── frozen history (see HISTORICAL_FILE above) ────────────────────────────
