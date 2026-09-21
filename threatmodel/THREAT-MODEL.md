@@ -1589,44 +1589,54 @@ hiding them would repeat the failure mode we are designed to avoid.
     covers all four columns, so the gap that remains is the console's, not the
     API's.
 
-38. **A per-user API token's GROUP SNAPSHOT is frozen at mint, with no expiry
-    — so for a group-derived power the demoted-admin window is UNBOUNDED, where
-    the SSH analogue's (#15) is merely long.** NARROWED, NOT CLOSED, and the
-    half that moved is worth stating exactly. `0045_api_tokens.sql` stamps
+38. **A per-user API token's role AND group snapshot are bounded-stale, not
+    frozen — the residual narrows to a human who never signs in again, the
+    same shape as the SSH analogue (#15).** `0045_api_tokens.sql` stamps
     `role` and `groups` from the minting session
     (`internal/api/apitokens.go`), and every request the token authenticates
     republishes them through `withHumanIdentity`, so downstream the bearer is
-    that human as they were at mint time.
+    that human as they were at mint time, or at their most recent sign-in
+    since, whichever is later.
 
-    Since the token lane gained the login hook the key lane had since `0046`,
-    the ROLE half is now bounded the same way: `oidc.Config.OnLogin` fires
-    `store.RefreshAPITokenRoles` beside `store.RefreshSSHKeyRoles`, so the
-    demoted human's own next sign-in re-stamps `role` on every unrevoked token
-    they hold. What did NOT move: `groups` is never refreshed by that hook or
-    anything else, the table still carries `created_at`, `last_used_at` and
-    `revoked_at` and **no expiry column**, there is no TTL the way
+    The token lane gained the login hook the key lane had since `0046` in two
+    steps: first ROLE only, then #152 widened it to the group half too.
+    `oidc.Config.OnLogin` now fires `store.RefreshAPITokenIdentity` beside
+    `store.RefreshSSHKeyRoles`, and it re-stamps `role`, `groups` AND
+    `groups_truncated` together in one UPDATE — never role alone — so the
+    demoted human's own next sign-in reaches every unrevoked token they hold on
+    BOTH halves at once. `groups_truncated` is bound from the exact same
+    session-completeness signal the new session cookie carries (`sessionGroups`,
+    `internal/auth/oidc/derive.go`), never defaulted or inferred: a `NULL` or a
+    genuinely incomplete snapshot still reads as truncated downstream, never
+    silently flipped to complete by the refresh itself.
+
+    What did NOT move: the table still carries `created_at`, `last_used_at`
+    and `revoked_at` and **no expiry column**, there is no TTL the way
     `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
-    re-stamped never. So a power that derives from the frozen GROUP snapshot —
-    a capability grant or governance profile bound to a group they have left —
-    survives indefinitely, and a demotion in the IdP still never reaches the
-    row on its own. Since 0.7 stamps `security_admin` verbatim, a human
-    demoted out of that tier keeps — through any token minted while they held it
-    — profile authoring and assignment, capability-grant writes, session and
-    token revocation, escalated approval decisions on anyone's run, workspace
-    `approved_egress`/`denied_egress` writes, and audit-chain verify. It gains
-    nothing the tier itself lacks: a token is never a shell, never an attach
-    ticket on a foreign run, and no capability grant widens it to admin
-    (`TestCapabilityGrantsNeverReachTheAdminTier`).
+    re-stamped never. So a power that derives from a stale group snapshot — a
+    capability grant or governance profile bound to a group they have left, or
+    an admin/`security_admin` role they were demoted out of — survives exactly
+    until that human's next login, and for someone who has left the
+    organization and will never sign in again, that is indefinitely. Since 0.7
+    stamps `security_admin` verbatim, a human demoted out of that tier keeps —
+    through any token minted while they held it, until their next sign-in or an
+    explicit revoke — profile authoring and assignment, capability-grant
+    writes, session and token revocation, escalated approval decisions on
+    anyone's run, workspace `approved_egress`/`denied_egress` writes, and
+    audit-chain verify. It gains nothing the tier itself lacks: a token is
+    never a shell, never an attach ticket on a foreign run, and no capability
+    grant widens it to admin (`TestCapabilityGrantsNeverReachTheAdminTier`).
 
-    Since 0.7 the demotion itself also ends it: a People-page role-mapping
-    write or delete that takes a tier away from a value revokes the affected
-    principals' unrevoked tokens in the same call (`internal/api/apitokens.go`,
-    `revokeDemotedRoleSnapshots`), so the window for a demotion performed
-    through that surface closes at the edit rather than at the demoted
-    human's next sign-in. The residual that remains is a stamp that goes
-    stale for a reason no role-mapping edit expresses — a chart-map change or
-    an IdP-side group removal — which still waits for that human's next login
-    or an explicit revoke.
+    Since 0.7 the demotion itself also ends it early: a People-page
+    role-mapping write or delete that takes a tier away from a value revokes
+    the affected principals' unrevoked tokens in the same call
+    (`internal/api/apitokens.go`, `revokeDemotedRoleSnapshots`), so the window
+    for a demotion performed through that surface closes at the edit rather
+    than at the demoted human's next sign-in. The residual that remains is the
+    same shape #15 already has: a human who never signs in again, and any
+    change made outside the People page — a chart-map edit or an IdP-side
+    group removal — which still waits for that human's next login or an
+    explicit revoke.
 
     **The remediation exists, is the only one, and has to be invoked
     deliberately.** `GET /api/v1/tokens` lists every live token with its owner
@@ -1638,10 +1648,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     `session.revoke` row's `tokens_revoked` count is the receipt that the
     identifier matched a person: sessions are stateless and cannot be counted, so
     a zero there against someone you believe holds tokens means you named them
-    wrong. Nothing ages a token out, so offboarding must revoke explicitly
-    (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this means re-deriving
-    the role at auth time, or revoking a principal's live tokens from the
-    role-mapping write path; neither is built.
+    wrong. Nothing ages a token out short of a sign-in, so offboarding — or any
+    change that must take effect before that human's next login — must revoke
+    explicitly (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this fully
+    means a TTL on the stamp itself, the same open half `WARDYN_SSH_ROLE_TTL`
+    narrows for the SSH lane; none is built for tokens.
 
 39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
     a shrink-the-claim workaround loses grants silently.** Wardyn marks a group
