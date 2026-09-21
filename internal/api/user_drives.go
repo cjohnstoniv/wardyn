@@ -476,7 +476,7 @@ func (s *Server) handleUpdateUserDrive(w http.ResponseWriter, r *http.Request) {
 // driveIdentityFields lists the identity-affecting differences between a stored
 // drive and the one a PUT would replace it with.
 //
-// The four columns are the ones every allocated person's STORAGE OBJECT is
+// The five columns are the ones every allocated person's STORAGE OBJECT is
 // derived from (types.DriveObjectName over the drive and the home its template
 // yields). Changing one does not edit a drive: it points every allocation at a
 // DIFFERENT object, all at once, and leaves the old ones behind with nothing in
@@ -490,7 +490,14 @@ func (s *Server) handleUpdateUserDrive(w http.ResponseWriter, r *http.Request) {
 //     next run onward.
 //   - name — BOTH minted object names carry the drive slug
 //     (`wardyn-drive-<drive-slug>-<home>`), so a rename re-homes a Docker volume
-//     exactly as it re-homes a Kubernetes claim.
+//     exactly as it re-homes a Kubernetes claim — UNLESS the drive is on
+//     object_scheme "id", where the name plays no part in the minted object at
+//     all and a rename re-homes nobody (driveNameMovesTheObject asks
+//     DriveObjectName, so it already knows this).
+//   - object_scheme — the OTHER half of the same name (types.DriveObjectID
+//     instead of the slug), so a claimed flip is exactly as identity-affecting
+//     as a renamed slug would be. See driveObjectSchemeMoves for why this one
+//     column is compared differently from the other four.
 //
 // The name is compared through the fold, not raw. driveSlug collapses case and
 // punctuation, so "Corp NAS" and "  Corp   NAS! " are one slug and name one
@@ -509,27 +516,14 @@ func driveIdentityFields(before, after types.UserDrive) []string {
 		{"backend", string(before.Backend), string(after.Backend), before.Backend != after.Backend},
 		{"home_template", string(before.HomeTemplate), string(after.HomeTemplate), before.HomeTemplate != after.HomeTemplate},
 		{"host_root", before.HostRoot, after.HostRoot, before.HostRoot != after.HostRoot},
-		{"name", before.Name, after.Name, driveNameMovesTheObject(before.Name, after.Name)},
+		{"name", before.Name, after.Name, driveNameMovesTheObject(before.Name, after.Name, before.ObjectScheme)},
+		{"object_scheme", string(before.ObjectScheme), string(after.ObjectScheme), driveObjectSchemeMoves(before.ObjectScheme, after.ObjectScheme)},
 	} {
 		if f.moved {
 			out = append(out, fmt.Sprintf("%s %q → %q", f.name, f.old, f.updated))
 		}
 	}
 	return out
-}
-
-// driveNameMovesTheObject reports whether renaming a drive from before to after
-// changes the object its members bind — i.e. whether the two names fold to
-// different slugs. It asks types.DriveObjectName rather than re-implementing the
-// fold, over one fixed backend and one fixed home, so the ONLY thing that can
-// differ is the name's own contribution; a naming change in types is then a
-// change this gate inherits instead of one it drifts away from.
-func driveNameMovesTheObject(before, after string) bool {
-	const probeHome = "probe"
-	object := func(name string) string {
-		return types.DriveObjectName(types.UserDrive{Name: name, Backend: types.DriveBackendK8sPVC}, probeHome)
-	}
-	return object(before) != object(after)
 }
 
 // driveRehomeConfirm is the query value that means "yes, re-home them":

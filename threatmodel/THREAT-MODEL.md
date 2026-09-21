@@ -1542,6 +1542,17 @@ hiding them would repeat the failure mode we are designed to avoid.
     real mitigations are the storage class (block, not network-share), the
     share's own quota, and a namespace `ResourceQuota`.
 
+    **Accepted with a recipe, on Docker.** `CAP_SYS_ADMIN` is what the control
+    plane must not hold, not a statement that a `docker_volume` drive's bytes
+    cannot be bound at all — `docs/OPERATIONS.md` ("User drives on Docker") now
+    carries the XFS project-quota recipe an OPERATOR runs on the host, outside
+    the control plane, the case `types.StorageEnforcementFilesystem` was
+    reserved for. Wardyn still reports `enforcement: none` on the wire (v1 does
+    not detect an operator-applied quota), and the recipe is opt-in per
+    deployment, not a default — the residual is that byte enforcement remains
+    something an operator must choose to set up, never something Wardyn
+    verifies is in place.
+
 37. **Renaming a drive orphans every object already provisioned under it, on
     BOTH substrates, and the console still warns nobody at the write.** A managed claim's name folds the
     drive's slug, so a rename changes the name every FUTURE claim is created
@@ -1652,16 +1663,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     `groups_snapshot_stale`. The token carries no signal that anything was filtered,
     so there is nothing Wardyn could check.
 
-    Accepted for 0.7 because the remedy is procedural and the burden is the
-    operator's: re-key group-subject grants and group-tier assignments onto a
-    directly-assigned group or onto the user BEFORE changing the claim
-    configuration, then verify against a real login's `session_groups`
-    (`GET /me/capabilities`) rather than against the IdP's UI —
-    `docs/OPERATIONS.md`, "A third cause of a partial snapshot", carries the
-    procedure. User-subject rows are the only shape a claim-configuration change
-    cannot silently break. Closing this needs a signal the IdP does not send;
-    the nearest approximation is warning when a group-subject row stops matching
-    anyone, which is not built.
+    **STILL OPEN AT 0.8 — a stated ceiling, not a gap awaiting a fix.** The
+    remedy is procedural and the burden is the operator's: re-key group-subject
+    grants and group-tier assignments onto a directly-assigned group or onto the
+    user BEFORE changing the claim configuration, then verify against a real
+    login's `session_groups` (`GET /me/capabilities`) rather than against the
+    IdP's UI — `docs/OPERATIONS.md`, "A third cause of a partial snapshot",
+    carries the procedure. User-subject rows are the only shape a
+    claim-configuration change cannot silently break. Closing this needs a
+    signal the IdP does not send; the nearest approximation is warning when a
+    group-subject row stops matching anyone, which is not built.
 
 40. **Workspace-provider admission is URL-PREFIX matching over a clone URL, not
     a repository ACL.** 0.7.2's provider policy bounds which repositories a run
