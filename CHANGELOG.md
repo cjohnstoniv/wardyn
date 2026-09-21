@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
+  role-mapping gap, a runner failure, a confinement floor the runner can't meet) now sits under
+  "Blocking"; a non-blocking fail or warn sits under "Worth a look" instead of borrowing a heading
+  that promised it was fatal. Grade still shows on the row's own chip — partitioning on `blocking`
+  first just stops the heading from answering the wrong question.
+
 - **Setup counts only the steps that block a run, and recommends what the host actually has.**
   The Getting-started counter read "Step 1 of 17" with ten of those steps optional demos; it now
   reads "Step 1 of 4" (Environment, People, Network, Review), with the honest count of what
@@ -69,6 +75,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   holds the final delivery open inside the HTTP handler and asserts `Close` is still blocked while the
   batch is in flight, an ordering the code actually guarantees. `Close` itself is unchanged.
 
+- **The compose file's writable-member-mount comment was wrong; `/srv/src` genuinely had no bind.**
+  0.7.2 documented (and repeated in its own CHANGELOG entry) that
+  `WARDYN_WORKSPACES_ROOT`'s `:ro` compose bind was what refused a writable member mount. It is
+  not: that bind only bounds what wardynd's own container can see (a read), while
+  `internal/runner/member_mount.go`'s writable check is pure root/deny-list matching, and the
+  sandbox bind itself is created by the HOST dockerd straight from the source path — never through
+  wardynd's mount namespace at all. A new test,
+  `TestCreateSandbox_MemberMountWritable_ReadOnlySourcePermissionIrrelevant`
+  (`internal/runner/docker/driver_member_mount_test.go`), proves it by binding writable against an
+  unwritable source. The compose comment and the 0.7.2 entry are corrected in place rather than
+  adding the `WARDYN_MEMBER_WRITABLE_ROOTS` volume the false claim implied was missing. Separately,
+  `/srv/src` — the Linux member root `deploy/desktop/wardyn.env.m-prime.example` names alongside
+  the macOS `/Users/Shared/src` — really had no bind: compose cannot expand a CSV into volume
+  lines, so only whichever one path `WARDYN_WORKSPACES_ROOT` is set to gets bound. A commented
+  example line now sits beside the existing bind, and `docs/ENV.md` states the limit. (#135)
+
 - **A spent AWS SSO refresh token is no longer forgotten on daemon restart.** `awssso_refresh.go`
   marked a redeemed-and-unpersistable (or AWS-retired) refresh token spent only in an in-memory map,
   so a restart wiped the mark and the credential graded "renewable" again — the exact credential
@@ -93,6 +115,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
   deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
   cancellation on shutdown — is unchanged.
+- **A run whose model credential is a stored AWS SSO session now says so when its confinement is
+  weaker than that credential would otherwise require.** A captured AWS SSO session is delivered to
+  the sandbox at dispatch, after the run's confinement class is already resolved, so it was never an
+  eligible grant and `RequiredConfinementFloor` never saw it — a run on a host offering only the
+  weakest confinement class received the credential with nothing said about it anywhere. A shared,
+  pure `credentialConfinementAdvisory` now runs from both the preflight and launch paths off the
+  same resolved body, and the advisory now appears on the preflight response's warnings, the create
+  response's warnings, and the `run.create` audit row's closed-vocabulary `credential_confinement`
+  field. This is a warning, never a refusal: a host that can only offer the weakest class still
+  launches.
+
 - **A spent terminal reconnect budget now offers Reconnect instead of a `[closed]` line that
   could scroll out of view.** The attach terminal used to write connection state — `[closed]`,
   `[reconnected]`, `[connection lost — reconnecting…]`, `[taken over — not reconnecting]` — into
@@ -107,6 +140,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
   reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
   FAILED so a run reaching a successful terminal state through the same path gets no hint.
+- **A refocus that arrives while `usePoll` has a read in flight is no longer dropped.** The in-flight
+  guard correctly stops a burst of focus events from stacking requests, but the refocus it swallowed
+  was never retried, so a person returning to the tab mid-read got no refresh and kept seeing a stale
+  screen for the rest of the interval — up to five minutes on the setup gate. The hook now coalesces:
+  a refocus during an in-flight read is remembered and fires exactly one follow-up read when that read
+  settles, however many refocus events arrived while it was outstanding.
 
 ### Changed
 
@@ -130,6 +169,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   required-check failure, and the re-point-at-rebase step for those two documents is retired. The
   tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
   too.
+
+### Known gaps
+
+- **An AWS SSO account/role pin does not invalidate a capture already in flight.** A roster edit
+  made while a sign-in is running cannot re-point it — the capture binds to the pin as it read at
+  launch, never the live roster. Still open at 0.8.
+- **No `role` parameter on `POST /me/tokens`.** A token always mints at the caller's own current
+  role. Still open at 0.8.
+- **No admin route to revoke a named member's captured AWS SSO session.** Disconnect
+  (`DELETE /setup/harness-credential/aws`) deletes only the caller's own; both it and a
+  member-facing Disconnect still need owner enumeration in the secret store. Still open at 0.8.
+- **The synchronous kill cascade inside the sign-in launch POST.** Superseding a person's older
+  sign-in tears the old sandbox down inside the new launch request rather than after the response —
+  tracked separately from this list. Still open at 0.8.
 
 ## [0.7.8] — 2026-09-19
 
@@ -3312,10 +3365,14 @@ debt, owner-hardware debt, or a decision deliberately not taken.
   either `shared` or `per_user`. 0.7.2 narrows the blast radius to one person
   under `per_user`; it does not floor the class. That is a 0.7.3/0.8 call.
 - **Two Compose residuals remain beside the envelope fix above.** The
-  `WARDYN_WORKSPACES_ROOT` bind is mounted `:ro`, so a member root that is
-  supposed to be writable needs its own read-write volume; and the m′ envelope's
-  `/srv/src` root has no bind at all. Both are written down in
-  `docker-compose.yaml` at the forwards that this release added.
+  `WARDYN_WORKSPACES_ROOT` bind is mounted `:ro`
+  ([corrected by #135](https://github.com/cjohnstoniv/wardyn/issues/135): that
+  `:ro` bind is wardynd's own container-local view and has no bearing on a
+  member mount's writability, which `internal/runner/member_mount.go` decides
+  entirely by root/deny-list match — this bullet's writable-mount claim was
+  wrong); and the m′ envelope's `/srv/src` root has no bind at all. Both are
+  written down in `docker-compose.yaml` at the forwards that this release
+  added.
 - **Every user-facing string this release adds ships as a frozen DRAFT.** Said
   once at the top of this section and repeated here because it is the largest
   single caveat: the `400`/`412`/`422` bodies and the new console copy are
