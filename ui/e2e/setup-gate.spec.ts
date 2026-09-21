@@ -213,7 +213,13 @@ test.describe("setup gate — forced on access, never a prison", () => {
     // THEN the positive: the install now fails a genuinely blocking check — as
     // it would seconds after the owner clicked Launch — and the NEXT read gates.
     blocking = true;
+    // Same reason as above, one step further: waitForURL polls, so it cannot
+    // race a waiter — but nothing here waited for the second refetch to happen
+    // at all, so the assertion jumped to the navigation that refetch is meant
+    // to cause. Wait for the read, then assert what it did.
+    const gated = page.waitForResponse((r) => r.url().includes("/setup/status"));
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await gated;
     await page.waitForURL(/\/setup/);
   });
 
