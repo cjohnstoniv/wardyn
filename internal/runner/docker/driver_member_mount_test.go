@@ -146,6 +146,55 @@ func TestCreateSandbox_SystemMountOnMemberRunApplied(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_MemberMountWritable_ReadOnlySourcePermissionIrrelevant is
+// the proof for issue #135: the compose file's WARDYN_WORKSPACES_ROOT bind is
+// mounted :ro into WARDYND'S OWN container, and the comment above that bind
+// claims THIS is what refuses a writable member mount ("the daemon would allow
+// the writable mount and the bind would refuse it"). That is testable, because
+// the whole member-writable decision lives in this package: ValidateMemberMount
+// (authoring time) and ValidateMemberMountSource (bind time, called from
+// agentMounts above) never open, stat-for-write, or otherwise probe the
+// SOURCE's own permissions — they only EvalSymlinks (a read) and string-match
+// against WritableRoots. So a source whose real host permissions are read-only
+// to this very process must still pass and still be bound WRITABLE, because
+// nothing in this path consults them — exactly as nothing in this path could
+// ever consult wardynd's OWN container-local :ro bind either, since the
+// sandbox's bind Source is a raw host path string handed to the HOST dockerd
+// (DooD), never resolved through wardynd's mount namespace at all.
+//
+// This chmods the root 0o555 (no write bit for anyone) as the closest a
+// non-privileged test gets to "read-only to the caller," and shows
+// CreateSandbox still succeeds and still emits ReadOnly:false for the daemon.
+// A refusal here — or a silently-downgraded ReadOnly:true — would mean the
+// compose comment's claim is true and this test must fail; it does not, so the
+// comment is a documentation defect, not a description of enforced behavior.
+func TestCreateSandbox_MemberMountWritable_ReadOnlySourcePermissionIrrelevant(t *testing.T) {
+	root, project := memberSandboxRoot(t)
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatalf("chmod root read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+
+	spec := testSpec()
+	spec.Mounts = []runner.Mount{{Source: project, Target: "/home/agent/work", ReadOnly: false, MemberAuthored: true}}
+	spec.MemberMountRoots = []string{root}
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("writable member mount refused despite the source's own read-only permission bits having nothing to do with the gate: %v", err)
+	}
+
+	agent := f.containers[agentContainerName(spec.RunID)]
+	if agent == nil {
+		t.Fatal("agent container was not created for a writable member mount")
+	}
+	assertMountSet(t, agent.host.Mounts, []mountSummary{
+		{Target: "/home/agent/work", Source: project, ReadOnly: false},
+	})
+}
+
 // TestCreateSandbox_OperatorMountUnaffectedByMemberGate is matrix row 7: an
 // operator run (nil MemberMountRoots) binds a legitimate source that is OUTSIDE
 // every member root, exactly as it does today. The member gate must be purely
