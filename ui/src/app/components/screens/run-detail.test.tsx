@@ -454,6 +454,29 @@ describe("RunDetailScreen — the held approval renders inside the terminal pane
     // two can never disagree.
     expect(await screen.findByText(/sandbox held/i)).toBeInTheDocument();
   });
+
+  // #160 — isHeld's 60-minute stale-hold ceiling on tool_call/credential_reauth
+  // (lib/types/approvals.ts) is shared by TWO call sites: the runs board
+  // (board-groups.test.ts, runs/title-group.test.tsx) and this command bar,
+  // via run-detail.tsx's `sandboxHeld={pending.some(isHeld)}`. Pinned here so
+  // the cockpit degrades the same way once a tool_call has gone stale.
+  it("a stale tool_call no longer states 'sandbox held' in the command bar", async () => {
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: "run-1",
+        kind: "tool_call",
+        state: "PENDING",
+        requested_at: new Date(Date.now() - 90 * 60_000).toISOString(),
+        requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+      },
+    ]);
+    renderRun({ ...RUN, state: "WAITING_FOR_CONFIRMATION" });
+    // Still a pending approval — "1 waiting" — just no longer the "sandbox
+    // held" claim a live tool_call hold makes.
+    expect(await screen.findByText("1 waiting")).toBeInTheDocument();
+    expect(screen.queryByText(/sandbox held/i)).not.toBeInTheDocument();
+  });
 });
 
 // hasWorkspace must cover workspace_id, not just workspace_ids: a record/

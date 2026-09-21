@@ -293,6 +293,15 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// the other. Name the holder; admit a second client READ-ONLY (its input is
 	// dropped server-side in attachPump — never by asking the client to
 	// refrain); make displacing the holder an audited act (handleAttachTakeover).
+	//
+	// modeMu orders THIS socket's attach-mode frames. The library permits
+	// concurrent writes, but not concurrent truth: the opening frame below and
+	// a promotion frame from another client's release goroutine can cross, and
+	// a client whose LAST frame says read_only:true while the registry has
+	// already made it the writer greys out a terminal it is allowed to type
+	// into. Both sends take this mutex and read the mode live inside it, so
+	// whichever lands second is the one that is still true.
+	var modeMu sync.Mutex
 	holder := &attachHolder{
 		principal: principal,
 		actorType: principalType,
@@ -300,6 +309,16 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		source:    attachSourceWeb,
 		cols:      opts.Cols,
 		rows:      opts.Rows,
+		// Promotion: the SAME socket is told it may now type. attach-terminal
+		// .tsx already implements the read_only true->false transition (it
+		// force-refits, because a promoted observer inherits the departed
+		// writer's tmux geometry, and focuses the terminal); this is the frame
+		// it was written against.
+		notify: func(readOnly bool, h *attachHolder) {
+			modeMu.Lock()
+			defer modeMu.Unlock()
+			_ = writeAttachMode(ctx, c, readOnly, h)
+		},
 		displace: func(reason string) {
 			// Close, do NOT cancel: c.Read honours pumpCtx by tearing the
 			// connection down abruptly, and an abruptly-killed socket delivers no
@@ -322,23 +341,25 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// otherwise strand a phantom holder that every later attach reads as
 	// "held" forever, curable only by a restart. release is idempotent and
 	// identity-checked (attach_holder.go), so running it twice is safe.
-	defer releaseHolder()
+	defer releaseAttach(releaseHolder)
 	if !readOnly && opts.Cols > 0 {
 		// We are the registered writer — apply the client's requested geometry.
 		_ = sess.Resize(ctx, opts.Cols, opts.Rows)
 	}
-	if readOnly {
-		// Somebody else holds the PTY. nil holder is what marks this client an
-		// observer for attachPump (input AND resize dropped — see its doc).
-		holder = nil
-	}
+	// An observer KEEPS its holder object: holder.writable is the read-only
+	// marker now (attach_holder.go), and nulling it here is exactly what left a
+	// promoted observer with nothing to flip. attachPump still drops its input
+	// and its resizes — both gate on canWrite.
+	//
 	// Tell the client which mode it got, ALWAYS (read_only=false included) — see
 	// attachModeMsg for the exact shape. Written from THIS goroutine, before the
 	// pump starts, so it is the first frame the client sees and never races the
 	// pump's own writer. A write failure here means the socket is already gone;
 	// the pump below ends on its own, so there is nothing to do about it beyond
 	// not pretending it succeeded.
-	_ = writeAttachMode(ctx, c, readOnly, s.attachHolderFor(id))
+	modeMu.Lock()
+	_ = writeAttachMode(ctx, c, !holder.canWrite(), s.attachHolderFor(id))
+	modeMu.Unlock()
 
 	// Provenance: record this interactive session as a replayable
 	// asciicast so the human-in-sandbox is in the audit trail. We tee the server
@@ -397,7 +418,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// trail gains an attach slightly ahead of its own detach, never a lost or
 	// misattributed event. See TestAttachWS_RemountReleasesHolderBeforeAuditTail
 	// for the ordering this pins.
-	releaseHolder()
+	//
+	// releaseAttach, not a bare releaseHolder(): when this client was the
+	// writer, its release PROMOTES the oldest observer, and telling that
+	// observer so is a write to a FOREIGN socket — never on this goroutine.
+	releaseAttach(releaseHolder)
 
 	// Persist the recording (best-effort) and emit session.recording when one was
 	// actually written. finishRecording is a no-op when recording is disabled.
@@ -420,9 +445,12 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// even though the request context is already cancelled.
 	// read_only rides along so the trail distinguishes the human who was DRIVING
 	// this terminal from the one who was watching over their shoulder — the pair
-	// is otherwise indistinguishable after the fact.
+	// is otherwise indistinguishable after the fact. It is the LIVE flag, not
+	// the mode this socket connected with: an observer promoted mid-session
+	// ends as a writer, and recording its connect-time mode would say the human
+	// who was driving had only been watching.
 	s.recordAudit(finishCtx, s.auditEvent(&id, principalType, principal, "session.detach",
-		id.String(), "success", mustJSON(map[string]any{"reason": closeReason, "read_only": readOnly})))
+		id.String(), "success", mustJSON(map[string]any{"reason": closeReason, "read_only": !holder.writable.Load()})))
 
 	// Best-effort clean close; the deferred CloseNow is the fail-closed backstop.
 	_ = c.Close(websocket.StatusNormalClosure, "")
@@ -457,9 +485,10 @@ func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
 // asciicast sink. A castTee write error never affects the live session — the
 // recording is best-effort provenance, not part of the data path.
 //
-// holder is non-nil ONLY for the client that HOLDS this run's PTY (see
-// attach_holder.go). A nil holder marks a READ-ONLY observer, and both
-// client->server directions are dropped for it:
+// holder is this client's registry entry; canWrite (attach_holder.go) is what
+// says whether it may drive the PTY right now — false for an observer, true
+// from the instant one is promoted in place, on the same object. Both
+// client->server directions are dropped while it is false:
 //
 //   - binary frames (keystrokes), because two clients typing into one shared
 //     tmux session is the exact interleaving this registry exists to prevent;
@@ -571,7 +600,7 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 				}
 			case websocket.MessageBinary:
 				// Raw PTY input (keystrokes) — dropped entirely for a read-only
-				// observer (holder == nil), and cut short MID-FRAME the moment a
+				// observer (writable false), and cut short MID-FRAME the moment a
 				// take-over evicts this holder: writeGated re-tests authority per
 				// chunk, so a 1 MiB paste in flight when the eviction lands stops
 				// there instead of finishing into the new holder's session.

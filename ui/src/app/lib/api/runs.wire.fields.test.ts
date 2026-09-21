@@ -121,10 +121,10 @@ const expectedWire: Record<string, unknown> = {
 // this list must change in the same commit.
 const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref"]);
 
-// Keys on the TS AgentRun interface that are NOT json tags on Go's
-// types.AgentRun because they are added by a response WRAPPER:
-//   ui_apps — handleGetRun's anonymous struct (runs_policy.go:172-175), GET /runs/{id} only.
-const TS_RUN_KEYS_FROM_WRAPPERS = new Set(["ui_apps"]);
+// ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
+// json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,
+// GET /runs/{id} only) — it now lives on RunDetail instead (see the RunDetail
+// test below), so AgentRun itself needs no wrapper-key exclusion.
 
 // A. Every forwarded field reaches both doors with the value the caller set.
 describe("runWireBody — every console-settable DTO field reaches the wire (F8 probe)", () => {
@@ -307,12 +307,12 @@ describe("source parity — Go wire tags vs the TS mirror (F8 probe)", () => {
     expect(sent).toEqual(goTags);
   });
 
-  it("every TS AgentRun key is a Go types.AgentRun json tag or a known response-wrapper key", () => {
+  it("every TS AgentRun key is a Go types.AgentRun json tag", () => {
     const goTags = new Set(goJSONTags(typesGo, "AgentRun"));
     expect(goTags.size).toBeGreaterThanOrEqual(20);
     const tsKeys = tsInterfaceKeys(runsTs, "AgentRun");
     expect(tsKeys.length).toBeGreaterThanOrEqual(20);
-    const unknown = tsKeys.filter((k) => !goTags.has(k) && !TS_RUN_KEYS_FROM_WRAPPERS.has(k));
+    const unknown = tsKeys.filter((k) => !goTags.has(k));
     expect(
       unknown,
       "TS reads these off the run payload but Go never writes them — a rename on the Go side " +
@@ -320,13 +320,17 @@ describe("source parity — Go wire tags vs the TS mirror (F8 probe)", () => {
     ).toEqual([]);
   });
 
-  it("documents (does not fail on) Go AgentRun tags the TS mirror omits", () => {
+  it("every Go AgentRun tag is mirrored on the TS interface (F8: agent_exec_id/auto_stop_after_sec/source_id closed)", () => {
     const goTags = goJSONTags(typesGo, "AgentRun");
     const tsKeys = new Set(tsInterfaceKeys(runsTs, "AgentRun"));
     const omitted = goTags.filter((t) => !tsKeys.has(t));
-    // Extra server keys are ignored by TS and are NOT a defect; this pins the
-    // known set so a NEW omission shows up as a diff in the expected list.
-    expect(omitted.sort()).toEqual(["agent_exec_id", "auto_stop_after_sec", "source_id"].sort());
+    expect(omitted).toEqual([]);
+  });
+
+  it("RunDetail adds exactly ui_apps over AgentRun — the ONE field only GET /runs/{id} sends " +
+    "(handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
+    const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
+    expect(runDetailOwnKeys).toEqual(["ui_apps"]);
   });
 
   it("CreateRunInput (the wizard-facing type) declares no key the Go DTO lacks", () => {
@@ -337,14 +341,14 @@ describe("source parity — Go wire tags vs the TS mirror (F8 probe)", () => {
 });
 
 // D. F6-F14 — the same "documents the omissions" idiom (proven above for
-// AgentRun), extended to four more flat structs. Still flat-only: goJSONTags
+// AgentRun), extended to five more flat structs. Still flat-only: goJSONTags
 // does not handle nested braces, so an embedded response wrapper
 // (grantView{types.CapabilityGrant; Inert},
 // siteConfigPutResponse{types.SiteConfig;…}) is read off its own nested
 // type, never folded into the base struct's tag list — these drifts are
 // mostly embedded, which is why CapabilityGrant/RunPolicySpec below show
 // full parity on the base struct even though the response bodies carry more.
-describe("source parity — four more flat structs (F6-F14)", () => {
+describe("source parity — five more flat structs (F6-F14)", () => {
   const root = repoRoot();
   const workspaceGo = readFileSync(join(root, "internal/types/workspace.go"), "utf8");
   const typesGoFull = readFileSync(join(root, "internal/types/types.go"), "utf8");
@@ -354,6 +358,7 @@ describe("source parity — four more flat structs (F6-F14)", () => {
   const permissionsTs = readFileSync(join(root, "ui/src/app/lib/types/permissions.ts"), "utf8");
   const siteTs = readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8");
   const policyTs = readFileSync(join(root, "ui/src/app/lib/types/policy.ts"), "utf8");
+  const auditTs = readFileSync(join(root, "ui/src/app/lib/types/audit.ts"), "utf8");
 
   it("documents (does not fail on) Go Workspace tags the TS mirror omits", () => {
     const goTags = goJSONTags(workspaceGo, "Workspace");
@@ -394,5 +399,16 @@ describe("source parity — four more flat structs (F6-F14)", () => {
     expect(goTags.length).toBeGreaterThanOrEqual(17);
     const tsKeys = tsInterfaceKeys(policyTs, "RunPolicySpec");
     expect(new Set(goTags)).toEqual(new Set(tsKeys));
+  });
+
+  it("every Go AuditEvent tag is mirrored on the TS interface (prev_hash/row_hash closed)", () => {
+    const goTags = goJSONTags(typesGoFull, "AuditEvent");
+    expect(goTags.length).toBeGreaterThanOrEqual(10);
+    const tsKeys = new Set(tsInterfaceKeys(auditTs, "AuditEvent"));
+    const omitted = goTags.filter((t) => !tsKeys.has(t));
+    expect(omitted).toEqual([]);
+    // …and nothing on the TS side claims a field Go never writes.
+    const unknown = [...tsKeys].filter((k) => !goTags.includes(k));
+    expect(unknown, "TS reads these off the audit payload but Go never writes them").toEqual([]);
   });
 });
