@@ -260,9 +260,9 @@ type RunPolicySpec struct {
 	// PushRules declares CONTENT rules for this run's brokered git pushes — WHAT
 	// a push may touch, alongside GitPushAnyBranch's WHERE. Nil (the default,
 	// and every policy authored before this field existed) means no content
-	// rules at all: byte-identical to today's wire shape and behaviour, since
-	// nothing reads this field yet (see PushRulesSpec's own doc — the matcher
-	// and enforcement are #179, not this change).
+	// rules at all: byte-identical to the wire shape and behaviour of a policy
+	// authored before the field existed, because every reader keys off
+	// IsSet.
 	//
 	// A policy that sets PushRules while this run's only git-capable grant is
 	// ssh_key is legal but UNENFORCEABLE — the SSH transport has no broker
@@ -274,35 +274,30 @@ type RunPolicySpec struct {
 
 // PushRulesSpec declares content rules for a run's brokered git pushes — the
 // counterpart to GitPushAnyBranch's branch-namespace confinement: this type
-// says WHAT a push may touch, not WHERE it may land (issue #57, tracked as
-// #176/#178/#179).
+// says WHAT a push may touch, not WHERE it may land (issue #57).
 //
-// Phase one (this type, landed by #176) carries the two fields the future
-// pack inspector reads: DenyPaths and MaxInspectPackMiB. Phase two
-// (RequireReviewPaths, DenyNewExecutables, MaxFileSizeMiB, HoldSeconds) is
-// reserved for a later change — adding them here would be new fields, not
-// this one's plumbing.
+// Phase two (RequireReviewPaths, DenyNewExecutables, MaxFileSizeMiB,
+// HoldSeconds) is reserved for a later change — adding them here would be new
+// fields, not this one's plumbing.
 //
 // A closed struct, deliberately not a free-form rules map: an open map cannot
 // be policed by the strict-field JSON decoder (DisallowUnknownFields) or by
 // TestPolicyDoc_EveryFieldHasRow's reflection-based census, so a typo'd key
 // would silently do nothing instead of failing at write time.
 //
-// STORING and VALIDATING these strings is all #176 does — no matcher reads
-// them yet. internal/egress/proxy/ (the git broker) and
-// internal/api/approvals.go are untouched by this type: #179 adds the
-// `**`-capable glob matcher (filepath.Match cannot express `**`, and go.mod
-// carries no such library) and the enforcement path that actually reads
-// DenyPaths.
+// This type stores and VALIDATES; what the strings mean is the git broker's
+// (internal/egress/proxy/push_rules.go), which reads them on both brokered
+// lanes before the git credential is minted and documents the pattern
+// language, the ceilings and the residuals.
 type PushRulesSpec struct {
-	// DenyPaths are glob-shaped path patterns (e.g. ".github/workflows/**")
-	// the future pack inspector will refuse in a push. Stored and validated
-	// as OPAQUE strings only in this change — see the type doc above.
+	// DenyPaths are path patterns (e.g. ".github/workflows/**") the broker
+	// refuses in a push: "**" crosses path segments, "*" and "?" do not, and
+	// the pattern is anchored at the repository root.
 	DenyPaths []string `json:"deny_paths,omitempty"`
-	// MaxInspectPackMiB caps how much of an incoming push pack the future
-	// inspector reads before giving up. 0/absent keeps that inspector's own
-	// built-in default; this change only bounds the authored value (0..64,
-	// validatePolicySpec).
+	// MaxInspectPackMiB caps how much of an incoming push the broker buffers
+	// before refusing it as too large. 0/absent takes the broker's own default,
+	// which sits below the authored maximum so that raising this is a real
+	// remedy; the authored value is bounded 0..64 by validatePolicySpec.
 	MaxInspectPackMiB int `json:"max_inspect_pack_mib,omitempty"`
 }
 
@@ -311,9 +306,9 @@ type PushRulesSpec struct {
 // all-zero-but-non-nil *PushRulesSpec (a literal `push_rules: {}`, or the
 // struct a clamp leaves behind) says nothing about what a push may touch, and
 // must read exactly like an absent one wherever the field is consulted:
-// composer's clamp and risk grade, and the broker's no-thin advertisement
-// (internal/egress/proxy). One method so those readers cannot drift into
-// disagreeing about whether a run has content rules at all.
+// composer's clamp and risk grade, and the broker's no-thin advertisement and
+// enforcement step (internal/egress/proxy). One method so those readers cannot
+// drift into disagreeing about whether a run has content rules at all.
 func (s *PushRulesSpec) IsSet() bool {
 	return s != nil && (len(s.DenyPaths) > 0 || s.MaxInspectPackMiB > 0)
 }

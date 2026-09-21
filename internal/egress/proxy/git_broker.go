@@ -213,6 +213,19 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		}
 		reqBody = body
 	}
+	// CONTENT rules, entered independently of the block above rather than
+	// inside its else. git_push_any_branch opts out of WHERE a push may land;
+	// wiring this inside that block would let a WHERE opt-out silently switch
+	// off a WHAT control (push_rules.go). Still ahead of gitToken, so a refused
+	// push mints nothing.
+	if isPush {
+		body, ok := p.applyPushRules(w, r, reqBody, slog.String("repo", orgRepo),
+			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) })
+		if !ok {
+			return
+		}
+		reqBody = body
+	}
 
 	token, err := p.gitToken(r.Context(), grantID)
 	if err != nil {
@@ -701,11 +714,10 @@ func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog
 	// git does not gzip receive-pack bodies (remote-curl only sets
 	// gzip_request for fetch), but a compressed body must never be waved
 	// through unparsed — that would be a silent bypass.
-	if encs := r.Header.Values("Content-Encoding"); len(encs) > 1 ||
-		(len(encs) == 1 && encs[0] != "" && !strings.EqualFold(encs[0], "identity")) {
+	if enc, bad := nonIdentityEncoding(r.Header); bad {
 		deny(ruleSourceGitEnc)
 		http.Error(w, "wardyn: cannot enforce branch-namespace confinement on a "+
-			strings.Join(encs, ",")+"-encoded push body", http.StatusUnsupportedMediaType)
+			enc+"-encoded push body", http.StatusUnsupportedMediaType)
 		return nil, false
 	}
 	prefix := BranchNSPrefix(p.runID)

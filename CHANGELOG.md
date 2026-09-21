@@ -26,6 +26,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A brokered push that touches a denied path, cannot be inspected, or is too large is refused.**
+  `push_rules` is enforcement now, not storage. When a run's policy carries content rules, both
+  brokered git lanes buffer the receive-pack request up to the run's inspection ceiling, read which
+  paths the push would introduce, and answer one of three refusals — `403` for a path matching
+  `deny_paths`, `413` for a request past `max_inspect_pack_mib` (32 MiB when unset), `415` for a
+  push that cannot be read from its own bytes — or forward the buffered bytes unchanged. Every
+  refusal happens **before the git credential is minted**, so a refused push never causes a token
+  to be issued. An oversize push is refused rather than held: holding would ask a person to approve
+  a push nobody inspected. Content rules are entered independently of branch-namespace confinement
+  on both lanes, so `git_push_any_branch: true` narrows where a push may land without switching off
+  what it may contain, and the `no-thin` advertisement now goes out on the token lane too, on the
+  same trigger, so a lane that enforces the rules also asks for a pack it can read. Offending paths
+  go to the sidecar's structured log and, at most ten of them, to the refusal response (git renders
+  a receive-pack `403` without its body, so the paths are read from the run's decision stream and
+  that log); they never ride the decision log's free-text fields, which stay reserved for
+  dial-shaped refusals. The
+  matcher bounds its own work — `deny_paths` carries no count cap, so a list too long to evaluate
+  against a push refuses it rather than being ground through.
+
 - **The broker advertises `no-thin`, so a push it must inspect arrives self-contained.** When a run's
   policy sets `push_rules`, the brokered receive-pack reference advertisement relayed back to the
   sandbox gains the `no-thin` capability. The agent images clone with `--depth 1`, so a real push's

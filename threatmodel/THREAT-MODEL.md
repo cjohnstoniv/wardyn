@@ -2402,6 +2402,55 @@ residual because it means the gate's absence is not, by itself, evidence the ins
 is fine: an operator who wants that assurance still reads the checklist, not just
 whether the funnel opened.
 
+### Push content rules read the pack, and only the pack
+
+A run whose policy sets `push_rules` has its brokered git pushes inspected
+before the git credential is minted: the broker buffers the receive-pack
+request, reads which paths the push would introduce, and refuses one that
+carries a denied path, that is larger than the run's inspection ceiling, or
+that cannot be read from its own bytes. Both brokered lanes enforce it, on the
+same trigger, and independently of branch-namespace confinement — a
+`git_push_any_branch` opt-out says where a push may land and does not switch
+off what it may contain.
+
+What it does NOT catch, and why the imprecision is one-sided on purpose:
+
+- **A directory resurrected wholesale out of the forge's own history is not
+  reported.** A pack carries only the objects the receiving side lacks, so a
+  directory whose tree object is absent is one the forge already stores
+  byte for byte. The inspector skips it rather than refusing, because refusing
+  every push that leaves a directory untouched would refuse nearly every real
+  push. The residual is the narrow case where that same tree is made reachable
+  from a new ref: its paths are not matched against a deny rule. The broker
+  cannot close this without fetching base objects from the forge, which would
+  put the proxy on the network on the run's behalf — the one thing the git
+  broker exists to prevent.
+- **Removals are invisible.** These rules judge what a push introduces. A push
+  that deletes a denied path is not a rule match.
+- **The enumerated case is the normal case, and it over-reports at the root.**
+  Under branch-namespace confinement every governed push lands on the run's own
+  branch, so the forge never has the pushed commit's parent and there is no
+  pre-image to diff against. The new tree is enumerated: unchanged
+  subdirectories are absent from the pack and skipped, but every file at the
+  repository root is named whether or not the push touched it. A deny pattern
+  naming a root-level file therefore refuses every push from that repository.
+  Over-reporting is the safe direction for a deny rule, and the entries that
+  cause it are not dropped on purpose: a blob the forge already stores,
+  re-introduced at a denied path by a rename, is reported identically, so
+  dropping one would drop the other and open the hole the rule exists to close.
+- **The key lane is not covered at all.** An `ssh_key` grant is an opaque
+  tunnel with no broker seam, so a policy that sets `push_rules` while
+  `ssh_key` is the run's only git-capable grant is graded a medium-risk warning
+  (`internal/composer/risk.go`) rather than enforced. A name-based deny does
+  not bind an IP literal, the same standing caveat branch-namespace confinement
+  carries.
+- **What is unreadable is refused, not waved through.** A thin pack, a body in
+  a content-coding, a malformed pack, a pack past one of `internal/gitpack`'s
+  ceilings, and a `deny_paths` list too long to evaluate in bounded time all
+  answer the same refusal. An unevaluated rule never reads as a pass; the cost
+  is that a client which ignores the `no-thin` the broker advertises cannot
+  push at all while rules are set.
+
 ### Known latent vulnerabilities
 
 We publish known-uncalled findings here rather than let them sit in a scanner's

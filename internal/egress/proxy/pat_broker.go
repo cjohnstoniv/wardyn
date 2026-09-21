@@ -191,6 +191,22 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 			reqBody = body
 		}
 	}
+	// CONTENT rules, on the SAME terms as the App lane and entered
+	// independently of the branch-namespace block above: this lane terminates
+	// and holds the whole request either way, so gating WHAT a push may carry
+	// on a WHERE switch the operator may never have turned on would leave a
+	// policy that reads as governed enforcing nothing (push_rules.go). A run
+	// that sets no push_rules buffers nothing and behaves exactly as it did.
+	//
+	// A refusal happens BEFORE patToken, so a refused push never mints the PAT.
+	if verb == "git-receive-pack" {
+		body, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
+			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) })
+		if !ok {
+			return
+		}
+		reqBody = body
+	}
 
 	token, username, err := p.patToken(r.Context(), grant)
 	if err != nil {
@@ -238,6 +254,15 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// request beside the brokered Basic auth, so the FORGE chose which
 	// credential won while the decision row still read as brokered egress.
 	stripSandboxCredentials(outReq.Header, "")
+	// Content rules need a pack they can read, and a client only sends one when
+	// the server asks. The advertisement this lane relays gets the same no-thin
+	// rewrite the App lane's does, under the same condition, because this lane
+	// enforces the same rules — advertising on one lane only would make the
+	// rules a false-refusal machine on the other (push_advert.go).
+	noThin := p.noThinAdvert(r, verb)
+	if noThin {
+		outReq.Header.Set("Accept-Encoding", "identity")
+	}
 	outReq.SetBasicAuth(username, token)
 	outReq.Host = host
 	outReq.Header.Del("Host")
@@ -251,6 +276,10 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if noThin {
+		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
+		return
+	}
 	relay(w, resp)
 }
 
