@@ -335,6 +335,14 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)
+
+	// credentialConfinementAdvisory (#150): the SAME shared helper the create
+	// path calls (appendCredentialConfinementAdvisory, runs_create.go), off the
+	// SAME modelCred.Mechanism the gate above just graded — so Review can never
+	// show a rosier picture than the launch it previews. WARN, never refuse:
+	// nothing above this line changed.
+	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Mechanism)
+
 	// A zero residency means nothing was graded (no store, an unreadable roster,
 	// a non-model run) — omitted rather than published as a guess, which leaves
 	// the rail on the /setup/status row it already had.
@@ -343,7 +351,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		EnforcedConfinementClass: enforced,
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
-		Warnings:                 clampWarnings,
+		Warnings:                 warnings,
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
