@@ -56,12 +56,72 @@ set -euo pipefail
 
 MODULE="github.com/cjohnstoniv/wardyn/"
 # Packages whose real coverage requires a live Docker daemon (WARDYN_TEST_DOCKER).
-DOCKER_RE='^(internal/runner/docker|internal/envbuild|cmd/wardyn-runner)(/|$)'
+# test/awsssofake joined this set in #174: every one of its untested funcs
+# (RunDeviceCodeLogin, RunAWSCommand, and the Server accessors docker_test.go /
+# reauth_hold_docker_test.go drive) is reached ONLY from tests gated behind
+# this package's own SkipUnlessDocker(WARDYN_TEST_DOCKER=1) — the same shape
+# as internal/runner/docker, not a cluster-only concern.
+DOCKER_RE='^(internal/runner/docker|internal/envbuild|cmd/wardyn-runner|test/awsssofake)(/|$)'
 # Packages whose real coverage requires a real Kubernetes cluster
 # (WARDYN_TEST_K8S=1 / make test-conformance-k8s / kind-sso-walk.sh) — X1c-F13:
 # these funcs used to fall into "Untested" with nothing distinguishing "nobody
 # has ever exercised this" from "this needs a cluster no per-PR run has".
 K8S_RE='^(internal/runner/k8s)(/|$)'
+
+# PASSTHROUGH_LIST — #174's other half of the classification: exported funcs
+# that are pure interface pass-throughs or one-line delegating methods (a
+# net.Conn/net.Addr/error/Sink.Name() wrapper, an adapter forwarding straight
+# to the type it adapts). Each one is legitimately covered by whatever tests
+# its CALLER, not by a test of its own — the same judgment call this script
+# already can't make from a coverage number alone, so it is a hand-maintained
+# allowlist rather than a regex, reviewed against the source at the time it
+# was written (2026-09-21, #174).
+#
+# One "<file>\t<func>\t<ordinal>" per line: ordinal is the func's 1-based
+# position among SAME-NAMED functions in that file (matching classify()'s own
+# PG-lane cross-check below) — NOT a line number, which goes stale the moment
+# anything above it moves. A name here that stops being a trivial forward
+# (someone adds real branching/logic to it) simply stops matching once the
+# line drifts past a refactor that changes its neighbors' order, at which
+# point it falls back to "Untested" and gets re-triaged rather than silently
+# staying hidden — re-verify a name here still just forwards before trusting
+# the label again.
+PASSTHROUGH_LIST='
+cmd/wardyn-toolgate/main.go	Error	1
+cmd/wardynd/adapters.go	Request	1
+cmd/wardynd/adapters.go	Decide	1
+cmd/wardynd/adapters.go	Get	1
+cmd/wardynd/adapters.go	CancelForRun	1
+cmd/wardynd/adapters.go	CountForRun	1
+cmd/wardynd/adapters.go	ListApprovalsPage	1
+cmd/wardynd/adapters.go	ListApprovalsPageByRunCreator	1
+cmd/wardynd/adapters.go	ListApprovalsPageByRun	1
+cmd/wardynd/envbuild_docker.go	BuildDevcontainer	1
+cmd/wardynd/envbuild_docker.go	BuildFromDevcontainerFiles	1
+cmd/wardynd/envbuild_docker.go	FinalizeBase	1
+cmd/wardynd/envbuild_docker.go	SweepOrphanedBuilds	1
+internal/api/execconn.go	Network	1
+internal/api/execconn.go	String	1
+internal/api/execconn.go	LocalAddr	1
+internal/api/execconn.go	RemoteAddr	1
+internal/api/harnesscred.go	Peek	1
+internal/api/uigateway.go	Error	1
+internal/broker/broker.go	Error	1
+internal/broker/broker.go	Error	2
+internal/directory/directory.go	Error	1
+internal/identity/identity.go	Error	1
+internal/audit/sinks/fanout.go	Name	1
+internal/audit/sinks/file.go	Name	1
+internal/audit/sinks/webhook.go	Name	1
+internal/audit/sinks/syslog.go	Name	1
+internal/egress/evaluatortest/conformance.go	Name	1
+internal/egress/evaluatortest/conformance.go	MethodAllowed	1
+internal/egress/proxy/policy.go	Name	1
+internal/egress/proxy/server.go	Addr	1
+internal/egress/proxy/mitm.go	Addr	1
+internal/egress/proxy/upstream.go	Read	1
+internal/secretstore/pg/pg.go	Name	1
+'
 
 # classify emits: <category>\t<pkg>\t<func>\t<file:line>
 # args: <union-func.txt> <pg-func.txt-or-empty>
@@ -73,7 +133,18 @@ classify() {
   # every classify() caller (including a future one) gets the same honest
   # downgrade instead of a crash.
   [ -n "$pg" ] && [ -f "$pg" ] || pg=/dev/null
-  awk -v mod="$MODULE" -v dockerre="$DOCKER_RE" -v k8sre="$K8S_RE" -v pgfile="$pg" -v unionfile="$union" '
+  awk -v mod="$MODULE" -v dockerre="$DOCKER_RE" -v k8sre="$K8S_RE" -v pgfile="$pg" -v unionfile="$union" -v ptlist="$PASSTHROUGH_LIST" '
+    # Phase 0: load the hand-maintained pass-through allowlist into pt[key],
+    # key = "file\tfunc\tordinal" — identical key shape to Phase 2 below, so
+    # membership there is a single lookup.
+    BEGIN {
+      n = split(ptlist, ptlines, "\n")
+      for (i = 1; i <= n; i++) {
+        if (ptlines[i] == "") continue
+        split(ptlines[i], ptf, "\t")
+        pt[ptf[1] "\t" ptf[2] "\t" ptf[3]] = 1
+      }
+    }
     # Phase 1: keys (file<TAB>func) COVERED (>0%) by the PG lane.
     #
     # FOUND LIVE (this script silently produced an all-zero report whenever
@@ -119,6 +190,7 @@ classify() {
       if (key in pgcov && pgcov[key]) cat="PG"
       else if (pkg ~ dockerre)        cat="DOCKER"
       else if (pkg ~ k8sre)           cat="K8S"
+      else if (key in pt)             cat="PASSTHROUGH"
       else                            cat="UNTESTED"
       print cat "\t" pkg "\t" $2 "\t" loc
     }
@@ -136,6 +208,11 @@ self_test() {
   printf '%sinternal/api/runs.go:9:\tComposeRun\t0.0%%\n' "$MODULE" >> "$d/u"
   printf '%sinternal/api/runs.go:9:\thelperFn\t0.0%%\n' "$MODULE" >> "$d/u"
   printf '%sinternal/api/runs.go:9:\tAlreadyCovered\t80.0%%\n' "$MODULE" >> "$d/u"
+  # A real PASSTHROUGH_LIST entry (internal/audit/sinks/fanout.go Name ordinal
+  # 1) at 0.0% with no PG data at all — must classify PASSTHROUGH regardless
+  # of whether the PG profile is present, unlike PG/DOCKER/K8S which read
+  # differently across the two runs below.
+  printf '%sinternal/audit/sinks/fanout.go:45:\tName\t0.0%%\n' "$MODULE" >> "$d/u"
   # THE COLLISION FIXTURE: two exported methods named Close in one file, one per
   # receiver type — legal Go, and indistinguishable in `go tool cover -func`
   # output except by line. The PG lane covers the FIRST and not the second, so a
@@ -159,6 +236,7 @@ self_test() {
     "K8S	internal/runner/k8s	Attach	internal/runner/k8s/exec.go:15" \
     "PG	internal/egress/proxy	Close	internal/egress/proxy/conn.go:20" \
     "PG	internal/store	CreateRun	internal/store/store.go:43" \
+    "PASSTHROUGH	internal/audit/sinks	Name	internal/audit/sinks/fanout.go:45" \
     "UNTESTED	internal/api	ComposeRun	internal/api/runs.go:9" \
     "UNTESTED	internal/egress/proxy	Close	internal/egress/proxy/conn.go:71" \
     "UNTESTED	internal/store	UpdateRunState	internal/store/store.go:84" | LC_ALL=C sort)"
@@ -176,6 +254,7 @@ self_test() {
   want="$(printf '%s\n' \
     "DOCKER	internal/runner/docker	CreateSandbox	internal/runner/docker/driver.go:10" \
     "K8S	internal/runner/k8s	Attach	internal/runner/k8s/exec.go:15" \
+    "PASSTHROUGH	internal/audit/sinks	Name	internal/audit/sinks/fanout.go:45" \
     "UNTESTED	internal/api	ComposeRun	internal/api/runs.go:9" \
     "UNTESTED	internal/egress/proxy	Close	internal/egress/proxy/conn.go:20" \
     "UNTESTED	internal/egress/proxy	Close	internal/egress/proxy/conn.go:71" \
@@ -211,8 +290,9 @@ EXPORTED_TOTAL="$(awk '$2 ~ /^[A-Z]/ && $1 ~ /\.go:[0-9]+:$/ {n++} END{print n+0
 n_pg="$(printf '%s\n' "$ROWS"   | grep -c '^PG'       || true)"
 n_dk="$(printf '%s\n' "$ROWS"   | grep -c '^DOCKER'   || true)"
 n_k8="$(printf '%s\n' "$ROWS"   | grep -c '^K8S'      || true)"
+n_pt="$(printf '%s\n' "$ROWS"   | grep -c '^PASSTHROUGH' || true)"
 n_ut="$(printf '%s\n' "$ROWS"   | grep -c '^UNTESTED' || true)"
-n_gap=$((n_pg + n_dk + n_k8 + n_ut))
+n_gap=$((n_pg + n_dk + n_k8 + n_pt + n_ut))
 
 # Render one "- **pkg** (N): a, b, c" line per package for a category.
 render_cat() {
@@ -252,6 +332,7 @@ render_cat() {
   echo "| **PG-gated** (proven covered by \`ci test-pg\`) | ${n_pg} |"
   echo "| **Docker-gated** (needs \`WARDYN_TEST_DOCKER=1\`) | ${n_dk} |"
   echo "| **Kubernetes-gated** (needs a real cluster) | ${n_k8} |"
+  echo "| **Pass-through** (delegating method, covered by its caller) | ${n_pt} |"
   echo "| **Untested** (no test in the tree reaches it) | ${n_ut} |"
   echo "| Total 0.0% exported | ${n_gap} |"
   echo "| _(of ${EXPORTED_TOTAL} exported funcs in the union)_ | |"
@@ -264,6 +345,17 @@ render_cat() {
   echo "Postgres lane ALSO leaves them at 0.0%."
   echo
   render_cat UNTESTED
+  echo
+  echo "## Pass-through — interface/delegating methods, covered by their caller"
+  echo
+  echo "Hand-classified (#174): a one-line \`net.Conn\`/\`net.Addr\`/\`error\`/"
+  echo "\`Sink.Name()\`-style wrapper or an adapter forwarding straight to the type"
+  echo "it adapts. 0.0% here is not a gap — the forward has no branch of its own to"
+  echo "miss, and whatever exercises the CALLER (or the interface's real"
+  echo "implementation) is what actually proves it works. See PASSTHROUGH_LIST in"
+  echo "\`scripts/test-gaps.sh\` for the reviewed list and its re-verification note."
+  echo
+  render_cat PASSTHROUGH
   echo
   echo "## PG-gated — covered by the Postgres lane, not by the per-PR run"
   echo

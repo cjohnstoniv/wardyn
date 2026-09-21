@@ -31,10 +31,11 @@ type fakeSubstrate struct {
 	diskEnf    types.StorageEnforcement
 	refPrefix  string
 
-	mu                            sync.Mutex
-	created                       []runner.SandboxSpec
-	execs, statuses, stops, kills []string
-	classesCalls                  atomic.Int64 // counts live Classes() probes
+	mu                                          sync.Mutex
+	created                                     []runner.SandboxSpec
+	execs, statuses, stops, kills               []string
+	waits, attaches, execStreams, agentStatuses []string
+	classesCalls                                atomic.Int64 // counts live Classes() probes
 }
 
 func (f *fakeSubstrate) Name() string { return f.name }
@@ -69,11 +70,16 @@ func (f *fakeSubstrate) Exec(_ context.Context, ref string, _ []string) (string,
 	f.rec(&f.execs, ref)
 	return "", nil
 }
-func (f *fakeSubstrate) Wait(context.Context, string) (int, error) { return 0, nil }
-func (f *fakeSubstrate) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
+func (f *fakeSubstrate) Wait(_ context.Context, ref string) (int, error) {
+	f.rec(&f.waits, ref)
+	return 0, nil
+}
+func (f *fakeSubstrate) Attach(_ context.Context, ref string, _ runner.AttachOptions) (runner.Session, error) {
+	f.rec(&f.attaches, ref)
 	return nil, nil
 }
-func (f *fakeSubstrate) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+func (f *fakeSubstrate) ExecStream(_ context.Context, ref string, _ runner.ExecSpec) (*runner.ExecSession, error) {
+	f.rec(&f.execStreams, ref)
 	return nil, runner.ErrExecStreamUnsupported
 }
 func (f *fakeSubstrate) Status(_ context.Context, ref string) (runner.Status, error) {
@@ -81,7 +87,7 @@ func (f *fakeSubstrate) Status(_ context.Context, ref string) (runner.Status, er
 	return runner.Status{State: types.RunRunning}, nil
 }
 func (f *fakeSubstrate) AgentStatus(_ context.Context, ref, _ string) (runner.Status, error) {
-	f.rec(&f.statuses, ref)
+	f.rec(&f.agentStatuses, ref)
 	return runner.Status{State: types.RunRunning}, nil
 }
 func (f *fakeSubstrate) StopSandbox(_ context.Context, ref string) error {
