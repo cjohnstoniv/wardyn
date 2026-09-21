@@ -73,6 +73,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
   deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
   cancellation on shutdown — is unchanged.
+- **A spent terminal reconnect budget now offers Reconnect instead of a `[closed]` line that
+  could scroll out of view.** The attach terminal used to write connection state — `[closed]`,
+  `[reconnected]`, `[connection lost — reconnecting…]`, `[taken over — not reconnecting]` — into
+  the same scrollback as the session's own output, so the only sign the connection had given up
+  could scroll away with nothing left to press; the only recovery was a full page reload. That
+  state now renders in a persistent strip below the terminal, outside the scrollback, and a spent
+  budget leaves a Reconnect button behind. Reconnecting keeps the existing scrollback and appends
+  to it rather than clearing it.
 
 - **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
   finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
