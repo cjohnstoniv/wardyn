@@ -129,9 +129,11 @@ describe("RunCard — two-row anatomy", () => {
     expect(screen.queryByText(/Waiting for your confirmation/)).toBeNull();
   });
 
-  it("Review is always reachable on a card that needs eyes; Attach is revealed, never hover-only", () => {
+  it("the action is always reachable on a card that needs eyes; Attach is revealed, never hover-only", () => {
+    // #215: a failed run is a REPORT, not a request — "Open", not "Review",
+    // the word a held run still keeps (see the held-run cases above/below).
     const { unmount } = renderCard(run({ state: "FAILED" }));
-    const review = screen.getByRole("button", { name: "Review" });
+    const review = screen.getByRole("button", { name: "Open" });
     expect(review).toBeInTheDocument();
     // …and never teal: §2 keeps the accent for the one `default` button per
     // surface, which on the board is the shell's New run.
@@ -151,6 +153,70 @@ describe("RunCard — two-row anatomy", () => {
     // and its icon should carry the tier here now.
     expect(screen.getAllByText("Vault")).toHaveLength(1);
     expect(container.querySelectorAll(".bg-vault-fg")).toHaveLength(0);
+  });
+
+  // #215 — the card was a div with onClick: no anchor, no role, no tabIndex,
+  // so a run could not be reached by keyboard, middle-clicked, or copied as a
+  // link. The title is now a real <a href>.
+  it("the run title is a real <a href>, reachable by keyboard", () => {
+    renderCard(run());
+    const link = screen.getByRole("link", { name: "Rotate the staging credentials" });
+    expect(link).toHaveAttribute("href", "/runs/run_3b7f10c4aa99");
+    link.focus();
+    expect(link).toHaveFocus();
+  });
+});
+
+// #160 — isHeld's stale-hold ceiling (lib/types/approvals.ts): a tool_call or
+// credential_reauth row older than 60 minutes stops counting as a live hold.
+// This pins the RUNS BOARD call site (approvalSignals -> RunCard); the
+// cockpit command bar's call site is pinned in run-detail.test.tsx.
+describe("RunCard — a stale hold degrades the card's own claim (#160)", () => {
+  const staleToolCall: RunSignals = approvalSignals([
+    {
+      id: "a1",
+      run_id: "run_3b7f10c4aa99",
+      kind: "tool_call",
+      requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+      state: "PENDING",
+      requested_at: new Date(Date.now() - 90 * 60_000).toISOString(),
+    },
+  ]);
+
+  it("offers Open, not Review, once the hold is stale", () => {
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), staleToolCall);
+    expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+  });
+
+  it("says a neutral 'was held', not the live warning sentence", () => {
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), staleToolCall);
+    expect(screen.getByText("Was held — check the run")).toBeInTheDocument();
+    expect(screen.queryByText(/sandbox held/)).not.toBeInTheDocument();
+  });
+
+  // The DELIBERATE LIMIT: only the derived claim degrades. The run's own
+  // wire state, via RunStateBadge, still reads exactly what it is — restyling
+  // it would invent a new tone for a state that has not changed.
+  it("leaves RunStateBadge alone — the wire state still reads Awaiting confirmation", () => {
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), staleToolCall);
+    expect(screen.getByText("Awaiting confirmation")).toBeInTheDocument();
+  });
+
+  it("a FRESH tool_call hold (same kind, well inside the ceiling) still says Review and the live sentence", () => {
+    const fresh = approvalSignals([
+      {
+        id: "a1",
+        run_id: "run_3b7f10c4aa99",
+        kind: "tool_call",
+        requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+      },
+    ]);
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), fresh);
+    expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
+    expect(screen.getByText("1 waiting · sandbox held")).toBeInTheDocument();
   });
 });
 
