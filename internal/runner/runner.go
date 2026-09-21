@@ -60,6 +60,20 @@ type Capabilities struct {
 	// omitempty: absent on a driver that predates the field reads the same as
 	// false, which is the safe half.
 	UserDrives bool `json:"user_drives,omitempty"`
+	// ManagedFiles reports whether this driver can deliver
+	// SandboxSpec.ManagedFiles — an operator-authored file the AGENT CANNOT
+	// MODIFY (root-owned, inside a directory it can neither write nor
+	// replace, in place before the agent's main process runs).
+	//
+	// False is the fail-closed default, for UserDrives' reason one field up
+	// and with the same consequence: a driver that says nothing declares no
+	// managed-file support, so the control plane withholds the file rather
+	// than shipping one the agent could rewrite — a ceiling that is not a
+	// ceiling is worse than no ceiling, because it is reported as delivered.
+	//
+	// omitempty: absent on a driver that predates the field reads as false,
+	// the safe half.
+	ManagedFiles bool `json:"managed_files,omitempty"`
 	// EphemeralDiskEnforcement names WHAT ACTUALLY BINDS a run's Resources.DiskMiB
 	// on this deployment: `filesystem` (docker, on a storage driver that can
 	// enforce a per-container size quota), `eviction` (kubernetes — the kubelet
@@ -147,6 +161,19 @@ type SandboxSpec struct {
 	// (DriveTarget) with the given mode; the Docker driver still converts it to
 	// a Mount internally so the deny matrix runs on the host path.
 	Drive *types.DriveMount
+	// ManagedFiles are operator-authored files delivered into the sandbox that
+	// the AGENT CANNOT MODIFY — root-owned, in a directory it can neither
+	// write nor replace, and present BEFORE its main process runs. Like
+	// Mounts, they are POLICY-controlled and never request-set: nothing on the
+	// create-run wire names a path or a byte of content.
+	//
+	// A driver that does not advertise Capabilities.ManagedFiles MUST refuse a
+	// spec carrying them rather than start a sandbox without them: silently
+	// dropping the ceiling is the one failure mode this field exists to
+	// prevent, and it is invisible to every test that only reads the file
+	// back. See ManagedFile (managed_files.go) for the delivery contract and
+	// ValidateManagedFiles for the path shape both substrates can honour.
+	ManagedFiles []ManagedFile
 	// OnWaiting, when non-nil, reports WHY this sandbox is not up yet, in the
 	// substrate's own `<component>: <Reason>[: <message>]` words ("agent:
 	// ImagePullBackOff: …", "pod: Unschedulable: …", "image: Pulling: <ref>"),
