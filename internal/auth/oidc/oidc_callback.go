@@ -358,20 +358,14 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		slog.Debug("oidc: role derivation matched", "sub", idToken.Subject, "role", role, "matches", matches)
 	}
 
-	// OnLogin fires once the login is APPROVED (past every denial branch
-	// above) but before the session cookie is written — a real login, not a
-	// probe. Best-effort: nil is a no-op, and the integrator's own callback is
-	// responsible for not letting a backend hiccup fail the login (see the
-	// Config.OnLogin doc).
-	if a.cfg.OnLogin != nil {
-		a.cfg.OnLogin(r.Context(), idToken.Subject, role)
-	}
-
-	// (6) Create a Wardyn session. Groups is stamped from the SAME two
-	// tolerantly-decoded claims deriveRole just consumed — a claim malformed
-	// enough to contribute nothing to the role contributes nothing here either,
-	// and never fails the login. The `_claim_names` pointer rides along so an
-	// IdP-side overage stamps the snapshot partial instead of empty.
+	// Groups is stamped from the SAME two tolerantly-decoded claims deriveRole
+	// just consumed — a claim malformed enough to contribute nothing to the
+	// role contributes nothing here either, and never fails the login. The
+	// `_claim_names` pointer rides along so an IdP-side overage stamps the
+	// snapshot partial instead of empty. Computed BEFORE the OnLogin call
+	// below (#152) so OnLogin's stamp and the session's own Groups/
+	// GroupsTruncated are the exact same values, never two derivations of the
+	// same claims that could drift apart.
 	groups, groupsTruncated := sessionGroups(cc.roles, cc.groups, cc.claimNames)
 	if len(cc.unreadable) > 0 {
 		// PF-26's third cause, stamped here rather than inside sessionGroups
@@ -386,6 +380,18 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		slog.Warn("oidc: group snapshot marked partial — the id_token carried a role/group claim in a shape this build cannot decode, so the human's real groups are not in it",
 			"sub", idToken.Subject, "unreadable_claims", cc.unreadable)
 	}
+
+	// OnLogin fires once the login is APPROVED (past every denial branch
+	// above) but before the session cookie is written — a real login, not a
+	// probe. Best-effort: nil is a no-op, and the integrator's own callback is
+	// responsible for not letting a backend hiccup fail the login (see the
+	// Config.OnLogin doc). groups/groupsTruncated are the SAME values the
+	// session below carries, never re-derived.
+	if a.cfg.OnLogin != nil {
+		a.cfg.OnLogin(r.Context(), idToken.Subject, role, groups, groupsTruncated)
+	}
+
+	// (6) Create a Wardyn session.
 	sess := Session{
 		Sub:             idToken.Subject,
 		Email:           cc.email,

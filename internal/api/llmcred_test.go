@@ -52,6 +52,51 @@ func TestReconcileLLMAccess_SubHintSurvivesGateway(t *testing.T) {
 	}
 }
 
+// TestApplyLLMCredMount_GatewayEgressPrecondition pins the egress precondition
+// applyLLMCredMount/anthropicReachable enforce: a ceiling whose egress lists
+// ONLY a configured gateway host (not api.anthropic.com/*.anthropic.com) must
+// still bless the subscription mount, because that gateway — not the vendor
+// host — is where dispatch will actually point ANTHROPIC_BASE_URL
+// (runs_dispatch_llm.go). Before this fix the check named api.anthropic.com
+// only, so a ceiling correctly scoped to the gateway would silently refuse to
+// mount the credential and the run fell back to a broken api-key path.
+func TestApplyLLMCredMount_GatewayEgressPrecondition(t *testing.T) {
+	ceiling := types.RunPolicySpec{
+		AllowedDomains: []string{"llm-gateway.corp.internal"},
+		WorkspaceMounts: []types.WorkspaceMount{
+			{Source: "/host/.claude", Target: claudeCredTarget},
+			{Source: "/host/.claude.json", Target: claudeCredJSONTarget},
+		},
+	}
+	spec := &types.RunPolicySpec{AllowedDomains: []string{"llm-gateway.corp.internal"}}
+
+	// No gateway threaded through: the check only knows api.anthropic.com, so
+	// this ceiling's egress does not satisfy it and the mount is refused.
+	if injected, warns := applyLLMCredMount(spec, ceiling, "claude-code", true, ""); injected {
+		t.Fatalf("expected refusal with no gatewayHost threaded, got injected=true warns=%v", warns)
+	} else if len(warns) == 0 || !strings.Contains(warns[0], "api.anthropic.com") {
+		t.Fatalf("expected a refusal naming api.anthropic.com, got %v", warns)
+	}
+
+	// Gateway threaded through: the same ceiling now satisfies the precondition.
+	spec2 := &types.RunPolicySpec{AllowedDomains: []string{"llm-gateway.corp.internal"}}
+	injected, warns := applyLLMCredMount(spec2, ceiling, "claude-code", true, "llm-gateway.corp.internal")
+	if !injected {
+		t.Fatalf("expected the gateway-reachable ceiling to bless the mount, got warns=%v", warns)
+	}
+	if !specHasMountTarget(spec2, claudeCredTarget) {
+		t.Fatal("expected the Claude credential mount to be injected")
+	}
+
+	// A gateway is configured but this run's OWN spec does not reach it: the
+	// refusal text must name the gateway too, not just api.anthropic.com.
+	if injected, warns := applyLLMCredMount(&types.RunPolicySpec{}, ceiling, "claude-code", true, "llm-gateway.corp.internal"); injected {
+		t.Fatalf("expected refusal, got injected=true warns=%v", warns)
+	} else if len(warns) == 0 || !strings.Contains(warns[0], "llm-gateway.corp.internal") {
+		t.Fatalf("expected the refusal to name the configured gateway, got %v", warns)
+	}
+}
+
 // TestEnsureLLMGrant_GrantEgressCoupling pins every input class the composed-run
 // author handles, and above all the SPINE-4 coupling: an api_key grant and its
 // EXACT-host allowlist entry are one unit (addAPIKeyGrant), and the entry is

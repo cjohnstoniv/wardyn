@@ -49,7 +49,7 @@ test("V02c act 1 — sign in, and the install refuses to let you wander", async 
   await page.goto("/");
   await page.bringToFront();
 
-  await chapter(page, "Now the console", "First sign-in, and a funnel that will not be skipped");
+  await chapter(page, "Now the console", "First sign-in, and a funnel that holds until it can run");
 
   // The token box is gone — this install trusts the identity provider now.
   await caption(page, "Sign in again. The sign-in page has changed — no token box; this install trusts your identity provider now.");
@@ -69,7 +69,7 @@ test("V02c act 1 — sign in, and the install refuses to let you wander", async 
   // "Every door" is pinned by ui/e2e/setup-gate.spec.ts (route-by-route); the
   // film shows one honest forced landing — a second mid-take goto proved
   // flaky under recording load and taught nothing the suite doesn't.
-  await caption(page, "And this is deliberate: until this install is set up, every door leads here.");
+  await caption(page, "And this is deliberate: until this install can run at all, every door leads here.");
   await beat(page, PACE.read);
   await caption(page, "Not a wall — a checklist. Let's clear it.");
   await beat(page, PACE.read);
@@ -200,7 +200,7 @@ test("V02c act 4 — two demos, two pods, one boundary", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  await caption(page, "Install. Identity. A funnel that will not be skipped. And a boundary that holds.");
+  await caption(page, "Install. Identity. A funnel that holds until it can run. And a boundary that holds.");
   await beat(page, PACE.read);
   await caption(page, "Next on the core path: what the boundary actually stops.");
   await beat(page, PACE.read);
