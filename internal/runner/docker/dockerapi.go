@@ -59,6 +59,17 @@ type dockerAPI interface {
 	// The v29 client folds the old (status, error) channel pair into a single
 	// ContainerWaitResult carrying both channels (.Result / .Error).
 	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
+	// CopyToContainer extracts a tar archive into a container's filesystem as
+	// ROOT. It is how SandboxSpec.ManagedFiles is delivered, and it is called
+	// between ContainerCreate and ContainerStart — the only window in which a
+	// file the agent cannot modify can be placed without racing the agent.
+	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
+	// ContainerStatPath tells deliverManagedFiles whether a managed file's
+	// directory already exists (in the image or as a mount) before the copy.
+	ContainerStatPath(ctx context.Context, containerID string, options client.ContainerStatPathOptions) (client.ContainerStatPathResult, error)
+	// CopyFromContainer reads /etc and /etc/passwd out of a created container,
+	// so checkManagedFileImage can vet the image without running anything.
+	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
 
 	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
 	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)
