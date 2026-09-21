@@ -15,6 +15,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -140,24 +141,37 @@ func startTunnel(t *testing.T, backendAddr string) *h2Peer {
 // discards this peer's own just-written frames along with it.
 func serveH2Frames(tc *tls.Conn) {
 	br := bufio.NewReader(tc)
+	if !awaitRequest(br) {
+		return
+	}
+	if _, err := tc.Write([]byte(fieldReportFrames)); err != nil {
+		return
+	}
+	drain(tc, br)
+}
+
+// awaitRequest reads the client's request and reports whether one arrived: an
+// HTTP/1.1 request, or an HTTP/2 client's preface and frames up to its first
+// HEADERS.
+func awaitRequest(br *bufio.Reader) bool {
 	if pre, err := br.Peek(len(http2.ClientPreface)); err == nil && string(pre) == http2.ClientPreface {
 		_, _ = br.Discard(len(pre))
 		fr := http2.NewFramer(io.Discard, br)
 		for {
 			f, err := fr.ReadFrame()
 			if err != nil {
-				return
+				return false
 			}
 			if _, ok := f.(*http2.HeadersFrame); ok {
-				break
+				return true
 			}
 		}
-	} else if _, err := http.ReadRequest(br); err != nil {
-		return
 	}
-	if _, err := tc.Write([]byte(fieldReportFrames)); err != nil {
-		return
-	}
+	_, err := http.ReadRequest(br)
+	return err == nil
+}
+
+func drain(tc *tls.Conn, br *bufio.Reader) {
 	_ = tc.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 	_, _ = io.Copy(io.Discard, br)
 }
@@ -381,8 +395,11 @@ func (c *h2Counts) handler() http.Handler {
 		} else {
 			c.h1.Add(1)
 		}
-		_, _ = io.Copy(io.Discard, r.Body)
-		_, _ = io.WriteString(w, "ok")
+		body, _ := io.ReadAll(r.Body)
+		if len(body) == 0 {
+			body = []byte("ok")
+		}
+		_, _ = w.Write(body)
 	})
 }
 
@@ -530,39 +547,130 @@ func TestH2Fallback_UnaskedPeer_MITM_AWSLane(t *testing.T) {
 	}
 }
 
-// TestH2Fallback_NonReplayableBody is acceptance (c): a streamed body cannot
-// be resent, so the first request gets #359's 400; the host is remembered
-// anyway, so the SDK's retry goes straight to HTTP/2 and succeeds.
-func TestH2Fallback_NonReplayableBody(t *testing.T) {
+// TestH2Fallback_StreamedBodyIsResent is acceptance (c): a streamed body has
+// no GetBody, but a peer caught by the post-handshake sniff failed the DIAL —
+// nothing was written and nothing was read — so the first request is resent
+// over HTTP/2 with that same body, intact.
+func TestH2Fallback_StreamedBodyIsResent(t *testing.T) {
 	var c h2Counts
 	peer := startTunnel(t, startTLSPeer(t, noALPNConfig(t), serveH2Unasked(&c)))
 	p, buf := newH2TestProxy(t, peer, awsHost)
-	post := func() *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPost, "https://"+awsHost+"/", io.NopCloser(strings.NewReader(`{"a":1}`)))
-		p.serveMITMRequest(rec, r, awsHost, 443)
-		return rec
-	}
 
-	rec := post()
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("first request status = %d, want 400 (body %q)", rec.Code, rec.Body.String())
-	}
-	body := decodeAWSSDKError(t, rec.Body.Bytes())
-	if body["__type"] != "UpstreamProtocolMismatchException" || !strings.Contains(body["message"], "ALPN: none") ||
-		!strings.Contains(body["message"], "cannot be replayed") {
-		t.Fatalf("first request body = %v, want #359's shape naming the skipped resend", body)
-	}
-	if d := findDecision(t, buf, ruleSourceUpstreamProtocolMismatch); d.Cause != body["message"] || d.Via != viaUpstreamProxy {
-		t.Fatalf("deny row = %+v, want cause %q via %q", d, body["message"], viaUpstreamProxy)
-	}
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "https://"+awsHost+"/", io.NopCloser(strings.NewReader(`{"a":1}`)))
+	p.serveMITMRequest(rec, r, awsHost, 443)
 
-	if rec := post(); rec.Code != http.StatusOK || rec.Body.String() != "ok" {
-		t.Fatalf("retry status = %d body %q, want 200 ok over HTTP/2", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || rec.Body.String() != `{"a":1}` {
+		t.Fatalf("status = %d body %q, want 200 with the body echoed back", rec.Code, rec.Body.String())
 	}
 	if c.h2.Load() != 1 || c.h1.Load() != 0 {
-		t.Fatalf("peer served h1=%d h2=%d, want only the retry, over HTTP/2", c.h1.Load(), c.h2.Load())
+		t.Fatalf("peer served h1=%d h2=%d, want the one request over HTTP/2", c.h1.Load(), c.h2.Load())
 	}
+	if d := lastDecision(t, buf); d.Decision != egress.Allow {
+		t.Fatalf("last decision = %+v, want an allow", d)
+	}
+}
+
+// TestUpstreamProtocolMismatch_BodyAlreadyWritten is the other half of that
+// pair: a peer that answers only once it has READ the request (the field
+// report's own order) is caught from net/http's parse error, by which point
+// the body has gone out. That one cannot be sent again, so it is #359's 400,
+// and the sentence says which of the two reasons applies.
+func TestUpstreamProtocolMismatch_BodyAlreadyWritten(t *testing.T) {
+	peer := startH2Peer(t)
+	p, buf := newH2TestProxy(t, peer, awsHost)
+
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "https://"+awsHost+"/", io.NopCloser(strings.NewReader(`{"a":1}`)))
+	p.serveMITMRequest(rec, r, awsHost, 443)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %q)", rec.Code, rec.Body.String())
+	}
+	body := decodeAWSSDKError(t, rec.Body.Bytes())
+	if !strings.Contains(body["message"], "ALPN: none") || !strings.Contains(body["message"], "cannot be replayed") {
+		t.Fatalf("message = %q, want the ALPN clause and the reason the resend was skipped", body["message"])
+	}
+	if d := findDecision(t, buf, ruleSourceUpstreamProtocolMismatch); d.Cause != body["message"] {
+		t.Fatalf("deny row cause = %q, want %q", d.Cause, body["message"])
+	}
+}
+
+// TestSniffH2 drives the post-handshake read directly, over a synchronous
+// in-memory TLS pair: what a peer writes is delivered by the read itself, so
+// each case is a fact about sniffH2 rather than a race with a scheduler.
+func TestSniffH2(t *testing.T) {
+	// A peer that speaks first is refused, so no request is ever written to it.
+	t.Run("SETTINGS frame", func(t *testing.T) {
+		client, server := tlsPipe(t)
+		go func() { _, _ = server.Write([]byte(fieldReportFrames)) }()
+		if _, err := sniffH2(client); !errors.Is(err, errPeerSpeaksH2) {
+			t.Fatalf("sniffH2 = %v, want errPeerSpeaksH2", err)
+		}
+	})
+
+	// Silence is what an HTTP/1.1 peer does; the connection is handed back
+	// usable, and the dialer remembers the host so nothing probes it again.
+	t.Run("nothing", func(t *testing.T) {
+		client, server := tlsPipe(t)
+		conn, err := sniffH2(client)
+		if !errors.Is(err, errNoUnpromptedBytes) || conn != net.Conn(client) {
+			t.Fatalf("sniffH2 = (%T, %v), want the same conn and errNoUnpromptedBytes", conn, err)
+		}
+		go func() { _, _ = server.Write([]byte("HTTP/1.1 204 No Content\r\n\r\n")) }()
+		if got := readN(t, conn, 12); got != "HTTP/1.1 204" {
+			t.Fatalf("read %q after the probe, want the peer's answer", got)
+		}
+	})
+
+	// A partial frame header is not a verdict: the bytes go back in front of
+	// the connection, in order, so the HTTP/1.1 reader sees what it would have
+	// seen without the probe.
+	t.Run("partial frame header", func(t *testing.T) {
+		client, server := tlsPipe(t)
+		go func() { _, _ = server.Write([]byte(fieldReportFrames[:4])) }()
+		conn, err := sniffH2(client)
+		if err != nil {
+			t.Fatalf("sniffH2 = %v, want the connection back", err)
+		}
+		go func() { _, _ = server.Write([]byte(fieldReportFrames[4:])) }()
+		if got := readN(t, conn, len(fieldReportFrames)); got != fieldReportFrames {
+			t.Fatalf("read %q, want the peer's bytes whole and in order", got)
+		}
+	})
+}
+
+// tlsPipe is a handshaken TLS client/server pair over net.Pipe, with no ALPN
+// negotiated. net.Pipe is synchronous and unbuffered: a write lands exactly
+// when the other side reads it.
+func tlsPipe(t *testing.T) (*tls.Conn, *tls.Conn) {
+	t.Helper()
+	c, s := net.Pipe()
+	client := tls.Client(c, testInsecureTLSConfig)
+	server := tls.Server(s, noALPNConfig(t))
+	// The RAW ends: closing a tls.Conn writes close_notify first, and on an
+	// unbuffered pipe with nobody reading that costs crypto/tls's own 5s
+	// write deadline per conn.
+	t.Cleanup(func() { _ = c.Close(); _ = s.Close() })
+	done := make(chan error, 1)
+	go func() { done <- server.Handshake() }()
+	if err := client.Handshake(); err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("server handshake: %v", err)
+	}
+	return client, server
+}
+
+func readN(t *testing.T, conn net.Conn, n int) string {
+	t.Helper()
+	buf := make([]byte, n)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("read %d bytes: %v", n, err)
+	}
+	return string(buf)
 }
 
 // TestH2Fallback_PeerWritesSettingsFirst covers the two shapes net/http's
@@ -620,6 +728,80 @@ func TestH2_HTTP1Peers(t *testing.T) {
 				t.Fatalf("elapsed %v < h2ProbeTimeout: the no-ALPN connection was not sniffed", elapsed)
 			}
 		})
+	}
+}
+
+// TestH2_NoALPNHTTP1PeerIsProbedOnce is the memo's other half: an HTTP/1.1
+// peer that negotiates nothing is remembered too, so the whole run pays the
+// probe once rather than on every new connection to it.
+func TestH2_NoALPNHTTP1PeerIsProbedOnce(t *testing.T) {
+	var c h2Counts
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", noALPNConfig(t))
+	if err != nil {
+		t.Fatalf("tls listen: %v", err)
+	}
+	srv := &http.Server{Handler: c.handler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	peer := startTunnel(t, ln.Addr().String())
+	p, buf := newH2TestProxy(t, peer, "h2.test")
+
+	forwardGet(t, p, buf)
+	if v, seen := p.h2.hosts.Load("h2.test:443"); !seen || v.(bool) {
+		t.Fatalf("memo for h2.test:443 = (%v, %v), want a recorded HTTP/1.1 peer", v, seen)
+	}
+
+	// A second CONNECTION, not just a second request: the pooled one would skip
+	// the dial altogether and prove nothing.
+	p.transport.CloseIdleConnections()
+	start := time.Now()
+	forwardGet(t, p, buf)
+	if elapsed := time.Since(start); elapsed >= h2ProbeTimeout {
+		t.Fatalf("second connection took %v (>= h2ProbeTimeout): it paid the probe again", elapsed)
+	}
+	if c.h1.Load() != 2 || c.h2.Load() != 0 || peer.connects.Load() != 2 {
+		t.Fatalf("h1=%d h2=%d connects=%d, want two HTTP/1.1 requests on two connections", c.h1.Load(), c.h2.Load(), peer.connects.Load())
+	}
+}
+
+// TestH2Fallback_PATBrokerLane is the broker lanes' share of the fallback:
+// they re-originate to a forge on the same transport, and a forge that speaks
+// HTTP/2 without negotiating it is answered over HTTP/2 rather than refused.
+// The mint (control plane, HTTP/1.1) and the forge are separate peers here,
+// told apart by port.
+func TestH2Fallback_PATBrokerLane(t *testing.T) {
+	var c h2Counts
+	mint := newPATBrokerUpstream(t, "T", "oauth2")
+	mintAddr := upstreamAddr(mint.srv)
+	forgeAddr := startTLSPeer(t, noALPNConfig(t), serveH2Unasked(&c))
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 16)},
+		Resolver:        publicResolver{},
+		ControlPlaneURL: "https://wardynd.test:8080",
+		RunToken:        newTokenSource("RUNTOK"),
+		TLSClientConfig: testInsecureTLSConfig,
+		PATGrants:       map[string]PATGrant{"dev.azure.com": {GrantID: uuid.New()}},
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			to := forgeAddr
+			if _, port, _ := net.SplitHostPort(addr); port == "8080" {
+				to = mintAddr
+			}
+			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, to)
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet,
+		"/wardyn/git/dev.azure.com/org/repo/info/refs?service=git-upload-pack", nil))
+
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
+		t.Fatalf("status = %d body %q, want 200 ok from the forge", rec.Code, rec.Body.String())
+	}
+	if c.h2.Load() != 1 || c.h1.Load() != 0 {
+		t.Fatalf("forge served h1=%d h2=%d, want the clone over HTTP/2", c.h1.Load(), c.h2.Load())
 	}
 }
 

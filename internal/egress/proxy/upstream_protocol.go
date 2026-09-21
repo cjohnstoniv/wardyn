@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -78,10 +79,11 @@ func isH2FrameHeader(b []byte) bool {
 }
 
 // h2ProbeTimeout bounds sniffH2's wait for an HTTP/2 server's unprompted
-// SETTINGS frame. It is paid only on a NEW connection whose TLS handshake
-// negotiated no ALPN protocol at all — a peer that picks h2 or http/1.1 is
-// never probed — and it has to cover one round trip through the corp proxy:
-// the peer writes its SETTINGS only after reading the client's Finished.
+// SETTINGS frame. It is paid once per host (h2Fallback.hosts remembers the
+// answer) and only when the TLS handshake negotiated no ALPN protocol at all
+// — a peer that picks h2 or http/1.1 is never probed — and it has to cover
+// one round trip through the corp proxy: the peer writes its SETTINGS only
+// after reading the client's Finished.
 const h2ProbeTimeout = 250 * time.Millisecond
 
 // tlsHandshakeTimeout mirrors the egress http.Transport's TLSHandshakeTimeout,
@@ -93,12 +95,20 @@ const tlsHandshakeTimeout = 15 * time.Second
 // byte is written, and roundTripUpstream turns it into the HTTP/2 fallback.
 var errPeerSpeaksH2 = errors.New("peer sent an HTTP/2 SETTINGS frame without negotiating h2")
 
+// errNoUnpromptedBytes is sniffH2's other verdict, for the dialer alone: the
+// peer said nothing in the probe window, which is what an HTTP/1.1 peer does.
+// The connection is returned with it and is used normally.
+var errNoUnpromptedBytes = errors.New("peer sent nothing before the request")
+
 type dialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // h2Fallback is the egress lane's HTTP/2 path for a peer that speaks HTTP/2
-// without negotiating it. hosts holds "host:port" keys and lives as long as
-// the Proxy, which is per run; no TTL, since a peer's protocol does not
-// change mid-run. It uses x/net's http2.Transport although x/net deprecates
+// without negotiating it. hosts maps a memoKey to what this run learned about
+// that peer: true, it speaks HTTP/2 unasked, so go straight to the fallback
+// transport; false, it negotiated nothing and stayed silent after the
+// handshake, so skip the sniff and its h2ProbeTimeout on every later
+// connection. It lives as long as the Proxy, which is per run; no TTL, since
+// a peer's protocol does not change mid-run. It uses x/net's http2.Transport although x/net deprecates
 // it for net/http: net/http speaks HTTP/2 over TLS only when ALPN selected
 // h2, which is exactly what these peers never do.
 type h2Fallback struct {
@@ -131,17 +141,25 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 		if err != nil {
 			return nil, err
 		}
-		if tc.ConnectionState().NegotiatedProtocol != "" {
+		key := memoKeyFromAddr(addr)
+		if v, seen := p.h2.hosts.Load(key); tc.ConnectionState().NegotiatedProtocol != "" || (seen && !v.(bool)) {
 			return tc, nil
 		}
-		return sniffH2(tc)
+		conn, err := sniffH2(tc)
+		if errors.Is(err, errNoUnpromptedBytes) {
+			// Nothing in the window: an HTTP/1.1 peer. Remember it, so no later
+			// connection to this host pays the probe again.
+			p.h2.hosts.Store(key, false)
+			return tc, nil
+		}
+		return conn, err
 	}
 	// x/net clones TLSClientConfig per dial, adds NextProtos ["h2"] and sets
 	// ServerName; the custom dialer skips its "ALPN must say h2" check, which
 	// is the point: this transport serves peers that never negotiate it.
 	//lint:ignore SA1019 see h2Fallback
 	p.h2.transport = &http2.Transport{
-		TLSClientConfig: base,
+		TLSClientConfig: base.Clone(),
 		IdleConnTimeout: 60 * time.Second,
 		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 			tc, err := handshakeOver(ctx, egressDial, network, addr, cfg)
@@ -170,8 +188,8 @@ func handshakeOver(ctx context.Context, dial dialFunc, network, addr string, cfg
 
 // sniffH2 reads, for at most h2ProbeTimeout, the first 9 bytes a no-ALPN peer
 // sends unprompted. An HTTP/1.1 server sends nothing before a request, so the
-// read times out with no bytes and tc is returned untouched (crypto/tls
-// treats a deadline as temporary; the conn stays usable). A SETTINGS frame
+// read times out with no bytes: errNoUnpromptedBytes, with tc usable and
+// untouched (crypto/tls treats a deadline as temporary). A SETTINGS frame
 // header means HTTP/2. Anything else is handed back in front of tc so the
 // HTTP/1.1 reader sees the peer's bytes exactly as it did before.
 func sniffH2(tc *tls.Conn) (net.Conn, error) {
@@ -181,12 +199,29 @@ func sniffH2(tc *tls.Conn) (net.Conn, error) {
 	_ = tc.SetReadDeadline(time.Time{})
 	switch {
 	case isH2FrameHeader(hdr[:n]):
-		_ = tc.Close()
+		// The RAW conn: a tls.Conn's Close writes close_notify first, under
+		// crypto/tls's own 5s write deadline, and this peer is being dropped
+		// mid-protocol-confusion — there is nothing to be polite about.
+		_ = tc.NetConn().Close()
 		return nil, errPeerSpeaksH2
 	case n == 0:
-		return tc, nil
+		return tc, errNoUnpromptedBytes
 	}
 	return &prefixedConn{Conn: tc, r: io.MultiReader(bytes.NewReader(hdr[:n]), tc)}, nil
+}
+
+// memoKey names a peer in h2Fallback.hosts the way every other host lookup in
+// this package does: lower-cased, with a root label's trailing dot dropped.
+func memoKey(host, port string) string {
+	return strings.TrimSuffix(strings.ToLower(host), ".") + ":" + port
+}
+
+func memoKeyFromAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return strings.ToLower(addr)
+	}
+	return memoKey(host, port)
 }
 
 type prefixedConn struct {
@@ -228,46 +263,84 @@ func (e *h2MismatchError) Unwrap() error { return e.err }
 // error, so a caller's allow decision still follows a successful round trip
 // (E3), and it stays one decision per request.
 func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
-	key := req.URL.Hostname() + ":" + cmp.Or(req.URL.Port(), "443")
+	key := memoKey(req.URL.Hostname(), cmp.Or(req.URL.Port(), "443"))
 	tlsLane := req.URL.Scheme == "https"
-	if _, known := p.h2.hosts.Load(key); known && tlsLane {
+	if v, seen := p.h2.hosts.Load(key); seen && v.(bool) && tlsLane {
 		//lint:ignore SA1019 see h2Fallback
 		return p.h2.transport.RoundTrip(req)
+	}
+	// The body is shielded for the first attempt: net/http closes a request
+	// body when a dial fails, and a sniffed peer fails the dial before a single
+	// request byte is written, so the untouched body can still be sent over
+	// HTTP/2. This owns the real Close from here on.
+	var shield *shieldedBody
+	if req.Body != nil && req.Body != http.NoBody {
+		shield = &shieldedBody{rc: req.Body}
+		req.Body = shield
+	}
+	closeBody := func() {
+		if shield != nil {
+			_ = shield.rc.Close()
+		}
 	}
 	ctx, alpnState := alpnCapture(req.Context())
 	resp, err := p.transport.RoundTrip(req.WithContext(ctx))
 	sniffed := errors.Is(err, errPeerSpeaksH2)
 	if err == nil || (!sniffed && !isH2Preface(err)) {
+		// A response's body may still be streaming out of the request body, so
+		// the lane that opened it keeps the Close, exactly as before.
 		return resp, err
 	}
-	mm := &h2MismatchError{err: err}
-	mm.alpn, mm.hadTLS = alpnState()
-	if sniffed {
-		// The dial failed inside DialTLSContext, before net/http's trace hook.
-		mm.alpn, mm.hadTLS = "", true
+	// hadTLS from the request, not from the trace: net/http records the
+	// handshake only for a *tls.Conn, and sniffH2 may have wrapped one.
+	mm := &h2MismatchError{err: err, hadTLS: tlsLane}
+	if !sniffed {
+		mm.alpn, _ = alpnState()
 	}
 	if !tlsLane {
+		closeBody()
 		return nil, mm
 	}
-	p.h2.hosts.Store(key, struct{}{})
-	retry, ok := replayable(req)
+	p.h2.hosts.Store(key, true)
+	retry, ok := resendable(req, shield, sniffed)
 	if !ok {
 		mm.notResent = true
+		closeBody()
 		return nil, mm
 	}
 	//lint:ignore SA1019 see h2Fallback
 	if resp, mm.h2Err = p.h2.transport.RoundTrip(retry); mm.h2Err != nil {
+		closeBody()
 		return nil, mm
 	}
 	return resp, nil
 }
 
-// replayable returns a copy of req that can be sent again, or false when its
-// body was a one-shot stream the first attempt may already have consumed.
-func replayable(req *http.Request) (*http.Request, bool) {
+// shieldedBody hides a request body's Close from an attempt that may have to
+// be made again, and records whether the transport read any of it.
+type shieldedBody struct {
+	rc   io.ReadCloser
+	read atomic.Bool
+}
+
+func (b *shieldedBody) Read(p []byte) (int, error) {
+	b.read.Store(true)
+	return b.rc.Read(p)
+}
+
+func (b *shieldedBody) Close() error { return nil }
+
+// resendable returns the request to send over HTTP/2, or false when this one
+// cannot be sent again. A sniffed peer failed the dial, so a body nothing has
+// read yet goes out as it is. A peer detected from its answer (isH2Preface)
+// was already written to, so only a body net/http can rebuild — absent, or
+// with GetBody — can be sent again.
+func resendable(req *http.Request, shield *shieldedBody, sniffed bool) (*http.Request, bool) {
 	out := req.Clone(req.Context())
 	switch {
-	case req.Body == nil || req.Body == http.NoBody:
+	case shield == nil: // no body, or http.NoBody
+	case sniffed && !shield.read.Load():
+		out.Body = shield
 	case req.GetBody != nil:
 		body, err := req.GetBody()
 		if err != nil {
@@ -326,7 +399,7 @@ func h2MismatchSentence(e *h2MismatchError) string {
 	case e.h2Err != nil:
 		s += "; the HTTP/2 resend also failed: " + e.h2Err.Error()
 	case e.notResent:
-		s += "; not resent over HTTP/2 because the request body cannot be replayed; later requests to this host use HTTP/2"
+		s += "; not resent over HTTP/2 because the request had already been written and its body cannot be replayed; later requests to this host use HTTP/2"
 	}
 	return s
 }
