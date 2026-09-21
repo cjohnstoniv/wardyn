@@ -19,6 +19,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **wardynd now warns at boot when a configured upstream proxy has no `upstream_proxy_no_proxy`
+  entry covering an internal model gateway host.** The per-target direct-dial bypass this warns
+  about already shipped (`Proxy.bypassUpstream` covers the gateway route too, via
+  `Proxy.gatewayTarget`) — ROADMAP.md wrongly still listed it as unbuilt, which is now corrected.
+  The new warning (`warnUpstreamProxyNoBypass`, `cmd/wardynd/trusted_ca.go`) says explicitly that
+  it is a boot-time read: `SiteConfig` is admin-editable afterwards, so the upstream proxy and its
+  bypass list can both change without a restart.
 
 ### Fixed
 

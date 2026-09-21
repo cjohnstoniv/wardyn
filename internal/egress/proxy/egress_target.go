@@ -293,6 +293,35 @@ func (p *Proxy) bypassUpstream(host string) bool {
 	return false
 }
 
+// NoProxyCovers reports whether entries — an UNCOMPILED
+// SiteConfig.UpstreamProxyNoProxy list, exactly as an admin wrote it — would
+// bypass a dial to host, the same routing question bypassUpstream answers for
+// a live Proxy's already-compiled list. Exposed as a pure function, not a
+// *Proxy method, so a caller with no running Proxy (cmd/wardynd's boot-time
+// advisory for a gateway host with no covering bypass entry) can ask it. It
+// compiles entries via compileNoProxy — the same compiler bypassUpstream's
+// caller (NewServer) feeds p.noProxy from — so a typo'd entry that would be
+// silently dropped there is silently absent here too, never a false cover.
+func NoProxyCovers(entries []string, host string) bool {
+	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if h == "" {
+		return false
+	}
+	ip := net.ParseIP(h)
+	for _, r := range compileNoProxy(entries) {
+		if r.cidr != nil {
+			if ip != nil && r.cidr.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		if h == r.suffix || strings.HasSuffix(h, "."+r.suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // noProxyRule is one compiled SiteConfig.UpstreamProxyNoProxy entry: either a
 // CIDR (matched against a literal-IP destination) or a lowercased host/domain
 // suffix (matched by label suffix, never mid-label). Exactly one is set.
