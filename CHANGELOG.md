@@ -100,6 +100,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **`wardyn drive` reads and replaces admin-registered drives from the CLI.** `wardyn drive get`
+  prints every drive and allocation as JSON; `wardyn drive apply <file>` (or stdin, `-`) upserts what
+  the file names over the existing `POST /drives`, `PUT /drives/{id}` and `POST /drives/grants`
+  routes — no new route. `wardyn drive get > f && wardyn drive apply f` is a no-op round trip. Adds
+  `Client.GetDrives`/`Client.ApplyDrives` to the public SDK.
+
 - **The runner contract can now place a file inside a sandbox that the agent cannot modify.**
   `SandboxSpec.ManagedFiles` carries operator-authored `{Path, Mode, Content}` entries, and
   `Capabilities.ManagedFiles` (a conjunction across substrates, like `UserDrives`) says whether a
@@ -174,7 +180,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   existing audit-chain advisory lock, recomputing each row's hash in SQL over the stored jsonb, refuses
   the whole batch on any mismatch, and accepts a genesis row as a recorded chain reset. Storage and the
   store seam only — no routes, CLI or forwarder yet.
-
 - **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
   profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
   secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`
