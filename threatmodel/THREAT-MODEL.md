@@ -2347,24 +2347,25 @@ why this switch is not one to turn on for a single-dev machine.
 ### Coalesced `auth.failed` rows: the peer address is not the bound
 
 Since 0.7.2 the control plane folds IDENTICAL consecutive `auth.failed` audit rows
-— same refusing boundary, same `reason`, same request path, same peer IP — into
-the first row plus one **new** summary row carrying `count`/`first_seen`/
-`last_seen` (`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off). The key
-holds the peer IP WITHOUT the ephemeral port: keying on the port meant a client
-that opens a connection per request — a scanner, or anything without keep-alive —
-folded nothing at all, which made the instrument a no-op on exactly the estates
-this section is about. It exists
+— same refusing boundary, same `reason`, same request path — into the first row
+plus one **new** summary row carrying `count`/`peers`/`first_seen`/`last_seen`
+(`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off). The peer is NOT in the
+key: until 0.8 it was, and a caller that rotated its source address (or its
+ephemeral port, before that) opened a new streak and wrote a new row on every
+request, up to the rate limit. The summary carries the opening peer as
+`SourceIP` and `peers`, the number of distinct peer IPs folded (saturating at
+100, so the set a streak holds is bounded). It exists
 because a self-inflicted drip evicted everything else: one sidecar retrying a
 renew the control plane would never grant wrote one row a minute, forever, past a
 rate limiter set at 1/sec, and pushed every real security event out of the
 console's 1000-row window mid-investigation.
 
-**`SourceIP` being in that key does NOT separate principals on a Kubernetes
-deployment.** Wardyn deliberately does not install a `RealIP` middleware (an
-`X-Forwarded-For` a client can set is not an identity), so behind an ingress or a
-load balancer `SourceIP` is the proxy's address and every caller shares it. A
-credential-stuffing run against the public lane therefore arrives under ONE
-coalescing key, and the fold is what a defender is reading.
+**`SourceIP` does not separate principals on a Kubernetes deployment either.**
+Wardyn deliberately does not install a `RealIP` middleware (an `X-Forwarded-For` a
+client can set is not an identity), so behind an ingress or a load balancer
+`SourceIP` is the proxy's address and every caller shares it. A
+credential-stuffing run against one path and reason therefore arrives as ONE
+streak on any deployment, and the fold is what a defender is reading.
 
 What bounds that is the window, the count and the rate limiter, not the key: a
 streak closes after `WARDYN_AUDIT_COALESCE_WINDOW` of silence AND at 1000 rows, so
