@@ -43,13 +43,13 @@ import (
 // shape a re-added leak is overwhelmingly likely to take: nobody accidentally
 // routes a hardcoded 500 through three layers of indirection.
 var serverErrorDriverTextAllowlist = map[string]string{
-	// injection_awssso.go:356 — the credential-reauth-raise failure is a
+	// handleInternalCredentialReauth's raise-failure arm is a
 	// DELIBERATELY MODELLED body (docs/design/0.8/PLAN.md's AWS SSO lane):
 	// credentialReauthRaiseFailedBody is a frozen operator-facing sentence and
 	// aerr here is s.cfg.Approvals.Request's own error, never driver/substrate
 	// text. #173's DO NOT TOUCH names this site explicitly.
 	"injection_awssso.go:356": "modelled AWS SSO reauth-raise body; #173 DO NOT TOUCH",
-	// run_resources.go:201 — reached only after errors.Is(err,
+	// handleRunResourcesExecStream's unsupported arm is reached only after errors.Is(err,
 	// runner.ErrExecStreamUnsupported) just matched, so err.Error() here is
 	// always that sentinel's own fixed text ("runner: ExecStream not
 	// supported"), never driver/substrate text. Converting it would also
