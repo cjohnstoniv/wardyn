@@ -180,3 +180,58 @@ func gatewayHost(base string) string {
 	}
 	return u.Hostname()
 }
+
+// anthropicGatewayBase returns the operator-configured Anthropic gateway's
+// validated base URL (s.cfg.LLMGateways["api.anthropic.com"]) and ok=true, or
+// ("", false) when none is configured. The single place every subscription/
+// managed-lane gateway consumer — dispatch's ANTHROPIC_BASE_URL, the
+// injection-host allowlist, the egress precondition, and the per-run MITM host
+// — resolves the gateway from, so they can never drift on which config key or
+// normalization they read.
+func (s *Server) anthropicGatewayBase() (string, bool) {
+	base, ok := s.cfg.LLMGateways[subscriptionInjectionHost]
+	return base, ok
+}
+
+// anthropicGatewayHost is anthropicGatewayBase's bare host (no scheme, port or
+// path), or "" when no gateway is configured.
+func (s *Server) anthropicGatewayHost() string {
+	base, ok := s.anthropicGatewayBase()
+	if !ok {
+		return ""
+	}
+	return gatewayHost(base)
+}
+
+// anthropicGatewayHostPort is anthropicGatewayHost with its port attached
+// (default 443, matching the proxy's own LLMUpstreams parsing) — the
+// "host:port" form a per-run MITM host entry needs, mirroring how
+// authorBedrockBearerInjection joins its own runtime host and port. "" when no
+// gateway is configured.
+func (s *Server) anthropicGatewayHostPort() string {
+	base, ok := s.anthropicGatewayBase()
+	if !ok {
+		return ""
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	port := "443"
+	if p := u.Port(); p != "" {
+		port = p
+	}
+	return net.JoinHostPort(u.Hostname(), port)
+}
+
+// anthropicBaseURL is the base URL subscription and Wardyn-managed runs dial:
+// the operator-configured gateway when one is set, else the vendor default —
+// unset is byte-identical to today ("https://" + subscriptionInjectionHost).
+// The harness-login (`claude setup-token`) lane never calls this: that flow
+// mints the OAuth token itself and must stay on the public host.
+func (s *Server) anthropicBaseURL() string {
+	if base, ok := s.anthropicGatewayBase(); ok {
+		return base
+	}
+	return "https://" + subscriptionInjectionHost
+}

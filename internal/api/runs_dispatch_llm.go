@@ -209,9 +209,14 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	t.injectManaged = managed
 
 	if t.harnessLogin {
+		// The harness-login (`claude setup-token`) flow mints the OAuth token
+		// itself and must never be redirected — always the public host, even
+		// when a gateway is configured for the two transports below.
 		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
 	} else if t.subscription {
-		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+		// Vendor default, or the operator-configured gateway when one is set
+		// (s.anthropicBaseURL) — unset is byte-identical to today.
+		sandboxEnv["ANTHROPIC_BASE_URL"] = s.anthropicBaseURL()
 		// The subscription creds are bind-mounted READ-ONLY at ~/.claude, but
 		// claude-code needs a WRITABLE config dir (session-env/, history) — it fails
 		// EROFS trying to mkdir under a read-only ~/.claude. Point CLAUDE_CONFIG_DIR at
@@ -221,11 +226,12 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
 	} else if managed {
 		// Managed subscription (compose, no host ~/.claude mount): same wire posture
-		// as resident subscription — talk direct to api.anthropic.com over the tunnel
-		// with a writable config dir — but the sentinel creds are DELIVERED via env
-		// (WARDYN_CLAUDE_MANAGED_B64) instead of a mount, since there is nothing to
-		// mount. agent-run materializes them; the proxy injects the live token.
-		sandboxEnv["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+		// as resident subscription — talk direct to api.anthropic.com (or the
+		// configured gateway) over the tunnel with a writable config dir — but the
+		// sentinel creds are DELIVERED via env (WARDYN_CLAUDE_MANAGED_B64) instead
+		// of a mount, since there is nothing to mount. agent-run materializes them;
+		// the proxy injects the live token.
+		sandboxEnv["ANTHROPIC_BASE_URL"] = s.anthropicBaseURL()
 		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
 		sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
 	} else if t.bedrockReady {
@@ -472,12 +478,22 @@ func installSandboxTrustedCA(corpPEM string, sandboxEnv map[string]string) {
 // Non-approval api_key grants are re-mintable by design, so the proxy
 // re-resolves the token indefinitely — this is what makes the sandbox's
 // sentinel sufficient. injectSub and injectManaged are mutually exclusive by
-// construction (managed requires !subscription). Returns the updated injections
-// slice; ok=false means the grant write failed, the run was marked FAILED
-// (CAS from STARTING), and dispatch must stop. Extracted verbatim from
-// dispatchRun.
-func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.AgentRun, t llmTransport, policy *types.RunPolicySpec, injections []runner.InjectionGrant) ([]runner.InjectionGrant, bool) {
-	const anthropicAPIHost = "api.anthropic.com"
+// construction (managed requires !subscription). Returns the updated
+// injections slice and, when an operator gateway is configured
+// (s.anthropicGatewayHostPort), that gateway as a "host:port" MITM entry for
+// the caller to fold into this run's per-run MITM host list (nil when unset —
+// the built-in api.anthropic.com/api.openai.com hosts need no such entry,
+// isMITMHost already recognizes them): without it the CONNECT to the gateway
+// stays an opaque tunnel and the sentinel is never swapped for the live token,
+// silently defeating the whole feature. ok=false means the grant write failed,
+// the run was marked FAILED (CAS from STARTING), and dispatch must stop.
+func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.AgentRun, t llmTransport, policy *types.RunPolicySpec, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
+	anthropicAPIHost := subscriptionInjectionHost
+	var mitmHosts []string
+	if h := s.anthropicGatewayHost(); h != "" {
+		anthropicAPIHost = h
+		mitmHosts = []string{s.anthropicGatewayHostPort()}
+	}
 	sentinelName := subscriptionOAuthSecret
 	injectSource := "subscription"
 	detail := "live subscription OAuth token injected proxy-side; sandbox's staged copy holds only inert sentinel tokens (access + refresh both replaced at staging)"
@@ -488,7 +504,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 	}
 	// Subscription/managed REPLACES any api-key injection for the same host. A
 	// ceiling that also lists an anthropic-api-key grant (e.g. the composer-dev
-	// ceiling) would otherwise leave TWO injections for api.anthropic.com; the
+	// ceiling) would otherwise leave TWO injections for the same host; the
 	// proxy resolves both at startup and the api-key mint fails closed when its
 	// secret is absent — crashing the sidecar. Drop it here (the direct-run
 	// equivalent of reconcileLLMAccess's removeAPIKeyGrantForHost).
@@ -516,7 +532,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not author the "+injectSource+" credential injection: "+gerr.Error())
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": injectSource + " inject grant: " + gerr.Error()})))
-		return injections, false
+		return injections, nil, false
 	}
 	if rule, derr := injectionRuleFromScope(subScope); derr == nil {
 		injections = append(injections, runner.InjectionGrant{GrantID: subGrantID, Rule: rule})
@@ -526,7 +542,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 		run.ID.String(), "success", mustJSON(map[string]any{
 			"host": anthropicAPIHost, "tls_mitm": true, "source": injectSource, "detail": detail,
 		})))
-	return injections, true
+	return injections, mitmHosts, true
 }
 
 // authorBedrockBearerInjection authors the Bedrock BEARER injection: an api_key
@@ -636,8 +652,13 @@ type dispatchLLMPlan struct {
 	// needs one. The PRIVATE key reaches ONLY the proxy sidecar.
 	mitmCACertPEM string
 	mitmCAKeyPEM  string
-	// bedrockMITMHosts is the Bedrock bearer's per-run MITM host, if any, as
-	// "host:port" (never a bare host — see authorBedrockBearerInjection).
+	// bedrockMITMHosts is this run's per-run MITM host list beyond the built-in
+	// api.anthropic.com/api.openai.com, if any, each as "host:port" (never a
+	// bare host): the Bedrock bearer's runtime host (authorBedrockBearerInjection),
+	// the captured-SSO portal host (authorBedrockSSOInjection), and the operator's
+	// configured Anthropic gateway when subscription/managed injection dials one
+	// instead of the vendor host (authorSubscriptionInjection) — all three are
+	// mutually exclusive per run, so one slice is safe.
 	bedrockMITMHosts []string
 	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
 	// 404 renders when this run reaches that route with no credential behind it
@@ -726,19 +747,22 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// SSL_CERT_FILE can never clobber the bundle this just staged.
 	installSandboxTrustedCA(s.cfg.TrustedCAPEM, sandboxEnv)
 
-	// Subscription / managed: author the proxy-side sentinel credential grant
-	// (see authorSubscriptionInjection for the re-mint + api-key-replacement
+	// Subscription / managed: author the proxy-side sentinel credential grant +
+	// its per-run MITM host when a gateway is configured (see
+	// authorSubscriptionInjection for the re-mint + api-key-replacement
 	// rationale). A failed grant write already marked the run FAILED — stop.
+	var bedrockMITMHosts []string
 	if llm.injectSub || llm.injectManaged {
 		var ok bool
-		if injections, ok = s.authorSubscriptionInjection(ctx, run, llm, policy, injections); !ok {
+		if injections, bedrockMITMHosts, ok = s.authorSubscriptionInjection(ctx, run, llm, policy, injections); !ok {
 			return dispatchLLMPlan{}, false
 		}
 	}
 
 	// Bedrock BEARER injection + its per-run MITM host (see
-	// authorBedrockBearerInjection). Same stop-on-failure contract.
-	var bedrockMITMHosts []string
+	// authorBedrockBearerInjection). Same stop-on-failure contract; appends to
+	// the SAME MITM host list as the subscription block above — the two are
+	// mutually exclusive per run.
 	if llm.injectBedrockBearer {
 		var ok bool
 		if injections, bedrockMITMHosts, ok = s.authorBedrockBearerInjection(ctx, run, llm, injections); !ok {
