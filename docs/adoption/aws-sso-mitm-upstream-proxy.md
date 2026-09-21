@@ -184,8 +184,12 @@ They asked two questions the code answers:
 - **Is the re-origination TLS or cleartext?** TLS. `upstreamSchemeFor`
   (`internal/egress/proxy/mitm_hosts.go`) returns `https` for this host, and HTTP/2 bytes ahead of
   the handshake would have failed it with a TLS error instead. So the frames came from inside a
-  completed TLS session. The peer is whatever terminates TLS on that path. The proxy offered no
-  ALPN at all, and that peer spoke HTTP/2 anyway.
+  completed TLS session. The peer is whatever terminates TLS on that path, and it was answering an
+  offer we made: on an estate with a corporate CA configured, the egress transport inherited `h2`
+  in its ALPN list from a TLS config it shares with the sidecar's own control-plane client, which
+  enables HTTP/2 and edits that config in place. So the transport offered HTTP/2 and then could
+  not speak it — the same defect the control-plane row of your table was immune to only because
+  its client can. 0.7.9 fixes that sharing as well (#360).
 - **Is `ForceAttemptHTTP2: false` a deliberate invariant?** No. It has been on the egress
   transport since the first public release, and nothing records a reason for it.
 
@@ -193,8 +197,10 @@ What 0.7.9 changes:
 
 - The egress transport offers `h2,http/1.1` over ALPN and speaks HTTP/2 when the peer chooses it,
   as the control plane's transport already does (#360).
-- A peer that speaks HTTP/2 without negotiating it is detected. The proxy remembers that host
-  for the run and resends over HTTP/2 when the request body can be replayed (#360).
+- The corporate-CA TLS config is no longer shared with the control-plane client, so the egress
+  transport's ALPN list is its own (#360). That alone should clear this estate.
+- A peer that speaks HTTP/2 without negotiating it is detected from its first bytes. The proxy
+  remembers that host for the run and resends the request over HTTP/2 (#360).
 - When that still fails, the row is `builtin:upstream-protocol-mismatch` with the cause
   `peer answered HTTP/2 to an HTTP/1.1 request (ALPN: …)`, not `builtin:dial-failed`. It is
   answered with a 400, so the SDK stops retrying (#359).
