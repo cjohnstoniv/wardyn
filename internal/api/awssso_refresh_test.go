@@ -713,7 +713,7 @@ func TestSetupHarnessCreds_RenewableHonoursTheRegistration(t *testing.T) {
 			blob.RefreshToken = tc.refreshToken
 			storeSSOBlob(t, s, blob)
 			if tc.spent {
-				s.markAWSSSOTokenSpent(awsSSOTokenFingerprint(tc.refreshToken))
+				s.markAWSSSOTokenSpent(context.Background(), awsSSOTokenFingerprint(tc.refreshToken), "")
 			}
 
 			rows, _, ma := s.setupHarnessCreds(context.Background(), types.SiteConfig{}, awsSSOScope{})

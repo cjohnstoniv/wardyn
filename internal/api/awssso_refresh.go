@@ -45,6 +45,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -305,20 +306,103 @@ func (s *Server) awsSSOOwnerMutex(owner string) *sync.Mutex {
 	return mu
 }
 
+// AWSSSOSpentTokenRetention bounds how long a persisted spent-token row is
+// kept before the reaper prunes it (store.AWSSSOSpentTokenStore's
+// PruneAWSSSOSpentTokens; the prune call site is cmd/wardynd's reapTickLock,
+// which reuses the lifecycle reaper's existing per-tick advisory lock rather
+// than adding a new timer — mirrors RunSecretGrace's exported-constant shape).
+// AWS issues an SSO-OIDC client registration valid for 90 days from creation;
+// past that the refresh token behind a spent fingerprint could never have
+// been redeemed again anyway (registrationLapsed, above, already refuses a
+// lapsed registration before this map is ever consulted), so nothing is lost
+// by forgetting the row once its registration could not still be live.
+const AWSSSOSpentTokenRetention = 90 * 24 * time.Hour
+
 // awsSSOTokenSpent / markAWSSSOTokenSpent read and write the spent-marks map.
+//
+// Write-through with a read-once memoize (#149): the map is a CACHE, not the
+// source of truth — store.AWSSSOSpentTokenStore (Postgres) is, and it is
+// deliberately NOT the secret/blob store storeAWSSSOBlob writes to, because
+// the mark exists precisely BECAUSE that store's write just failed (see
+// refreshAWSSSOBlob's persist-error arm below). A cache MISS (the first check
+// of one fingerprint since this process started) costs one best-effort row
+// read; every check after that — including every check in a process that has
+// never restarted — is answered from the map alone.
 func (s *Server) awsSSOTokenSpent(fingerprint string) bool {
 	s.ssoRefreshMu.Lock()
-	defer s.ssoRefreshMu.Unlock()
-	return s.ssoRefreshSpent[fingerprint]
+	if spent, known := s.ssoRefreshSpent[fingerprint]; known {
+		s.ssoRefreshMu.Unlock()
+		return spent
+	}
+	s.ssoRefreshMu.Unlock()
+
+	spent := s.readAWSSSOTokenSpentRow(fingerprint)
+
+	s.ssoRefreshMu.Lock()
+	if s.ssoRefreshSpent == nil {
+		s.ssoRefreshSpent = map[string]bool{}
+	}
+	s.ssoRefreshSpent[fingerprint] = spent
+	s.ssoRefreshMu.Unlock()
+	return spent
 }
 
-func (s *Server) markAWSSSOTokenSpent(fingerprint string) {
+// readAWSSSOTokenSpentRow is awsSSOTokenSpent's cache-miss path.
+//
+// s.cfg.BaseCtx, not a caller's request context: awsSSOTokenSpentFor
+// (modelaccess.go) is reached from setup.go and runs_bedrock.go with no ctx of
+// its own — both are at the file-size cap this lane keeps byte-neutral — and
+// the memoized answer must be the same fact regardless of which caller's
+// request happens to trigger the one read that fills the cache.
+//
+// Fails OPEN (not spent) on no store, no capability, or a read error — the
+// same answer an empty map already gave for every fingerprint before this
+// existed. The only cost of a false negative is one wasted CreateToken round
+// trip: a genuinely spent token still comes back invalid_grant/expired_token,
+// which re-marks it (in the map immediately, and in this table best-effort).
+func (s *Server) readAWSSSOTokenSpentRow(fingerprint string) bool {
+	st, ok := s.cfg.Store.(store.AWSSSOSpentTokenStore)
+	if !ok {
+		return false
+	}
+	ctx := s.cfg.BaseCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	spent, err := st.AWSSSOTokenSpent(ctx, fingerprint)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: reading the persisted AWS SSO spent-token mark failed; treating it as not spent for this process",
+			slog.Any("err", err))
+		return false
+	}
+	return spent
+}
+
+// markAWSSSOTokenSpent marks fingerprint spent in the in-memory map (which
+// every caller in this process consults from this point on, synchronously)
+// and best-effort persists the same mark as a row keyed to owner — the
+// secret-store namespace scope.owner the blob was read from ("" = the
+// operator-wide/shared credential). The persist failing is NOT this call's
+// failure: it is the same best-effort shape as the persist-error arm that
+// calls this in the first place (a failed row write must not turn a refresh
+// into an error), and the in-memory mark already protects this process either
+// way.
+func (s *Server) markAWSSSOTokenSpent(ctx context.Context, fingerprint, owner string) {
 	s.ssoRefreshMu.Lock()
-	defer s.ssoRefreshMu.Unlock()
 	if s.ssoRefreshSpent == nil {
 		s.ssoRefreshSpent = map[string]bool{}
 	}
 	s.ssoRefreshSpent[fingerprint] = true
+	s.ssoRefreshMu.Unlock()
+
+	st, ok := s.cfg.Store.(store.AWSSSOSpentTokenStore)
+	if !ok {
+		return
+	}
+	if perr := st.MarkAWSSSOTokenSpent(ctx, fingerprint, owner, s.cfg.Now().UTC()); perr != nil {
+		slog.WarnContext(ctx, "wardynd: persisting the AWS SSO spent-token mark failed; the in-memory mark still holds for this process",
+			slog.Any("err", perr))
+	}
 }
 
 // refreshAWSSSOBlob renews `blob` when it needs renewing and returns the blob
@@ -399,7 +483,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	if err != nil {
 		spent := errors.Is(err, errAWSSSOCredentialSpent)
 		if spent {
-			s.markAWSSSOTokenSpent(fingerprint)
+			s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
 		}
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
 			slog.Bool("credential_spent", spent), slog.Any("err", err))
@@ -468,7 +552,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		// says: mark it, so the next read of it (dispatch after a create-time
 		// redeem, or the next launch) is refused as spent at once rather than
 		// paying a token round trip to learn the same thing.
-		s.markAWSSSOTokenSpent(fingerprint)
+		s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
 		outcome = "failure"
 		data["persist_error"] = perr.Error()
 		slog.ErrorContext(ctx, "wardynd: persisting the renewed AWS SSO credential failed; serving this run from memory",
