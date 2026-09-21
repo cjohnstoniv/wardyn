@@ -672,7 +672,16 @@ export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
 # clock waiting for the injector's own re-resolve window, and every case in it
 # makes its own capture, so nothing after it should depend on which session the
 # member is holding.
-./scripts/run-ui-e2e.sh sso-member sso-member-recovery sso-reauth-hold 2>&1 | tee "${EVIDENCE_DIR}/walk.log"
+#
+# WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 drops it from the invocation entirely — for
+# a nightly job, where that ten minutes is wall clock nobody is watching and
+# every other spec already runs unattended. An interactive or release walk
+# leaves this unset and keeps all three.
+specs=(sso-member sso-member-recovery sso-reauth-hold)
+if [[ "${WARDYN_KIND_SSO_SKIP_REAUTH_HOLD:-}" == "1" ]]; then
+  specs=(sso-member sso-member-recovery)
+fi
+./scripts/run-ui-e2e.sh "${specs[@]}" 2>&1 | tee "${EVIDENCE_DIR}/walk.log"
 walk_rc="${PIPESTATUS[0]}"
 
 # /_seen is the one observation that is not Wardyn asserting about itself: it is
