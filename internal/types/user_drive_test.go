@@ -248,6 +248,7 @@ func TestDriveObjectName(t *testing.T) {
 		hostRoot string
 		drive    string
 		home     string
+		scheme   DriveObjectScheme
 		want     string
 	}{
 		{name: "a volume carries the drive slug", backend: DriveBackendDockerVolume, drive: "Corp NAS", home: "d-abc", want: "wardyn-drive-corp-nas-d-abc"},
@@ -258,14 +259,68 @@ func TestDriveObjectName(t *testing.T) {
 		{name: "a punctuated name folds to one dash", backend: DriveBackendK8sPVC, drive: "  Corp NAS (eng)! ", home: "alice", want: "wardyn-drive-corp-nas-eng-alice"},
 		{name: "host path joins the root", backend: DriveBackendHostPath, hostRoot: "/srv/homes", drive: "Corp NAS", home: "alice", want: "/srv/homes/alice"},
 		{name: "host path is cleaned", backend: DriveBackendHostPath, hostRoot: "/srv/homes/", drive: "Corp NAS", home: "alice", want: "/srv/homes/alice"},
+		// #163's compatibility pin, explicit rather than incidental: a row on
+		// the ORIGINAL scheme (every row that predates migration 0067, and the
+		// column's own DEFAULT) derives BYTE-IDENTICALLY to every case above
+		// that left scheme unset — because neither substrate can rename a
+		// storage object, a pre-migration row's members must keep binding
+		// exactly the object they always did.
+		{name: "an explicit slug-scheme row matches today's name exactly", backend: DriveBackendDockerVolume, drive: "Corp NAS", home: "d-abc", scheme: DriveObjectSchemeSlug, want: "wardyn-drive-corp-nas-d-abc"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := UserDrive{ID: uuid.New(), Name: tc.drive, Backend: tc.backend, HostRoot: tc.hostRoot}
+			d := UserDrive{ID: uuid.New(), Name: tc.drive, Backend: tc.backend, HostRoot: tc.hostRoot, ObjectScheme: tc.scheme}
 			if got := DriveObjectName(d, tc.home); got != tc.want {
 				t.Errorf("DriveObjectName = %q, want %q", got, tc.want)
 			}
 		})
 	}
+}
+
+// TestDriveObjectNameIDScheme pins #163's fix: a NEW drive (object_scheme
+// "id") mints a fixed-width fragment in place of the slug, so nothing an
+// admin types into the drive's name — or a member's home_override — can shift
+// where <home> begins.
+func TestDriveObjectNameIDScheme(t *testing.T) {
+	id, err := uuid.Parse("11111111-2222-3333-4444-555555555555")
+	if err != nil {
+		t.Fatalf("parse fixture uuid: %v", err)
+	}
+	const wantID = "11111111222233334444555555555555" // dashless, 32 hex chars, always
+	if got := DriveObjectID(id); got != wantID {
+		t.Fatalf("DriveObjectID = %q, want %q", got, wantID)
+	}
+
+	for _, backend := range []DriveBackend{DriveBackendDockerVolume, DriveBackendK8sPVC, DriveBackendK8sPVCStatic} {
+		t.Run(string(backend), func(t *testing.T) {
+			d := UserDrive{ID: id, Name: "Corp NAS", Backend: backend, ObjectScheme: DriveObjectSchemeID}
+			want := "wardyn-drive-" + wantID + "-d-abc"
+			if got := DriveObjectName(d, "d-abc"); got != want {
+				t.Errorf("DriveObjectName = %q, want %q", got, want)
+			}
+		})
+	}
+
+	// The whole point: the drive's NAME plays no part in an id-scheme object
+	// name, so renaming it — the exact act that moves a slug-scheme object —
+	// mints the identical string.
+	t.Run("renaming the drive does not move an id-scheme object", func(t *testing.T) {
+		before := UserDrive{ID: id, Name: "Corp NAS", Backend: DriveBackendK8sPVC, ObjectScheme: DriveObjectSchemeID}
+		after := UserDrive{ID: id, Name: "Corp NAS — renamed for Q3", Backend: DriveBackendK8sPVC, ObjectScheme: DriveObjectSchemeID}
+		if got, want := DriveObjectName(before, "alice"), DriveObjectName(after, "alice"); got != want {
+			t.Errorf("renaming an id-scheme drive changed its object name: %q -> %q", got, want)
+		}
+	})
+
+	// A share's object name is never minted (DriveObjectNamedByWardyn is false
+	// for host_path), so object_scheme has no effect on it at all — the same
+	// "beside DriveSlug, never replacing it on that arm" the type's own doc
+	// states.
+	t.Run("a share ignores object_scheme entirely", func(t *testing.T) {
+		d := UserDrive{ID: id, Name: "Corp NAS", Backend: DriveBackendHostPath, HostRoot: "/srv/homes", ObjectScheme: DriveObjectSchemeID}
+		if got, want := DriveObjectName(d, "alice"), "/srv/homes/alice"; got != want {
+			t.Errorf("DriveObjectName = %q, want %q", got, want)
+		}
+	})
 }
 
 // TestDriveObjectNameSeparatesTwoDrivesOnOneHome pins the invariant the volume
