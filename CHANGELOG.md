@@ -8,6 +8,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Four console DTOs closed against their Go wire types.** `AgentRun` was missing `agent_exec_id`,
+  `auto_stop_after_sec` and `source_id`; `AuditEvent` was missing `prev_hash` and `row_hash` — the two
+  fields the audit screen's own integrity story rests on. `ui_apps` — sent only by `GET /runs/{id}` —
+  moved off the shared `AgentRun` onto a new `RunDetail` type, so a list consumer (the board, the
+  table) is no longer typed for a field it never receives. `runs.wire.fields.test.ts`'s parity pattern
+  now also covers `AuditEvent`, closing the gap the hand-maintained TypeScript mirror had opened
+  against the Go structs it mirrors.
+- **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
+  status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
+  while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
+
 ### Changed
 
 - **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
@@ -74,6 +87,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **The configured Anthropic gateway (`WARDYN_ANTHROPIC_BASE_URL`) now also carries subscription
+  and Wardyn-managed runs, not just the api-key lane.** Dispatch points those two lanes'
+  `ANTHROPIC_BASE_URL` at the gateway when one is configured; the in-image `agent-run` launcher no
+  longer unconditionally clobbers it back to the vendor default; and the subscription-injection sink
+  accepts the configured gateway host — taken from configuration, never from a run's own request —
+  alongside `api.anthropic.com`. **Turning this on is an operator trust decision: it sends the
+  operator's live subscription/managed OAuth token to the configured gateway proxy-side**, exactly
+  as it is sent to `api.anthropic.com` today. The harness-login (`claude setup-token`) lane is
+  unaffected and always stays on the public host, since that flow mints the OAuth token itself.
+  Unset is byte-identical to today.
 
 ### Fixed
 
@@ -85,6 +108,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`/etc/profile.d/toolchains.sh`) was moved to the same paths so a login-shell task (`exec` mode's
   `/bin/sh -lc`) doesn't undo the relocation. `test/conformance`'s ephemeral-disk case gained a
   third fill target for the cache root.
+
+- **A read-only terminal observer is now promoted in place when the writer leaves, instead of
+  having to reconnect.** The registry keeps one writer and the observers queued behind it in
+  arrival order; an ordinary release promotes the oldest of them on the socket it already has,
+  and a take-over promotes the taking principal's own observer — never a bystander, whose typing
+  would otherwise be attributed to an act somebody else was audited for. The promoted client
+  receives a second `attach-mode` frame (web) or its geometry plus a notice (SSH), the change is
+  recorded as `session.promote`, and a `session.detach` row now reports the mode the session
+  ENDED in rather than the one it connected with. Known residual: a promoted observer whose
+  socket is already dead holds the slot until the attach ping probe notices, up to about twice
+  the ping interval.
 
 - **The compose file's writable-member-mount comment was wrong; `/srv/src` genuinely had no bind.**
   0.7.2 documented (and repeated in its own CHANGELOG entry) that
@@ -151,12 +185,46 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
   reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
   FAILED so a run reaching a successful terminal state through the same path gets no hint.
+- **The Runs board's group header now says what its runs are waiting on, and a run opens from a
+  real link.** `TitleGroup` gets a second chip row — one counted chip per reason a group's runs are
+  waiting (held approval, AWS sign-in, waiting to start), an uncounted "Nothing waiting" once the
+  group is clean, and a pinned "Checking…" before the approvals fetch resolves so an empty result
+  can't read as "nothing is held". A `tool_call`/`credential_reauth` hold older than 60 minutes
+  degrades to a neutral "was held" claim instead of continuing to claim it's live — `isHeld` gained
+  that ceiling, shared by the board and the run cockpit's command bar. Separately, a run's title is
+  now a real `<a href>` on both the board and the table (previously a `div` with an `onClick`, not
+  reachable by keyboard or middle-click); a failed run's card now offers "Open" rather than "Review",
+  since a failure is a report and a held run is a request; the workspace facet/column reads
+  "Workspace", not "Repo"; the live-board chip reads "Live" without narrating its poll interval; and
+  the board's loose section reads "Other runs" instead of "Ungrouped".
+
 - **A refocus that arrives while `usePoll` has a read in flight is no longer dropped.** The in-flight
   guard correctly stops a burst of focus events from stacking requests, but the refocus it swallowed
   was never retried, so a person returning to the tab mid-read got no refresh and kept seeing a stale
   screen for the rest of the interval — up to five minutes on the setup gate. The hook now coalesces:
   a refocus during an in-flight read is remembered and fires exactly one follow-up read when that read
   settles, however many refocus events arrived while it was outstanding.
+
+- **Two concurrent sign-ins can no longer leave two live credential-bearing sandboxes.** A sign-in
+  supersedes the caller's older ones across several independent statements — the first supersede
+  pass, the run insert, the second pass — and because `created_at` is stamped in-process BEFORE the
+  insert, two launches that interleave there could each decide the other did not precede it: both
+  sandboxes stayed live, neither KILLED, each able to capture a ~1yr AWS SSO session, and the
+  credential capture's own read-modify-write arrives minutes later in a different request. Both
+  spans now hold a per-person Postgres **session-level** advisory lock keyed on the login run's
+  CREATOR (`store.LoginLocker`, `db.AdvisoryLockKeyed`) — not on the credential scope, which is
+  empty for every `shared` sign-in and would serialize a whole deployment while serializing nothing
+  that matters. The capture takes it before the existing per-scope mutex, in that fixed order. It
+  **fails open** on every arm, and every arm is bounded — a store without the seam, a pool that
+  cannot spare a connection (checked before one is borrowed, then bounded again at 250ms on the
+  borrow), a wait past `db.LoginSupersedeLockWait` (5s across the in-process slot and the lock) —
+  proceeding exactly as 0.7.8 did with one warning line and no new refusal.
+
+  **What it costs a deployment:** one pool connection for the duration of one hold, and at most one
+  per wardynd process at a time, so it does not grow with how many people sign in at once. None at
+  all when the pool cannot spare two — an install at the `pool_max_conns` floor `docs/ENV.md`
+  permits (2, or 4 with the ground-truth rotator) simply goes unserialized, as it was before, rather
+  than queueing sign-ins behind a connection it cannot spare.
 
 ### Changed
 
@@ -189,6 +257,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   required-check failure, and the re-point-at-rebase step for those two documents is retired. The
   tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
   too.
+
+### Security
+
+- **`composer.Clamp` hands back a spec that owns its memory.** The clamped spec began as a shallow
+  copy of the proposal, so every field the operator ceiling had no opinion on reached the caller as
+  the caller's own backing array or pointee: `allowed_domains`, `denied_domains`, `allowed_methods`,
+  `ui_apps`, `workspace_repos`, `tool_rules`, `workspace_mounts`, each eligible grant's `scope`
+  bytes, and — whenever the proposal's sizes already sat inside the ceiling — the very
+  `*ResourceLimits` the clamp exists to bound. A later in-place write through either side would
+  have moved a ceiling the clamp had already enforced, in the widening direction, with nothing to
+  notice; no caller mutates one today, which is a property of today's callers rather than of the
+  function. `Clamp` now reallocates every reference field on the way out (`llm_inspection` and each
+  mount's `read_only` pointee included, though the clamp replaces or drops those before they can
+  reach a caller). What the clamp permits is unchanged — no allowed-or-denied outcome moves.
 
 ### Known gaps
 

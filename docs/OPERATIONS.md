@@ -4093,12 +4093,16 @@ browser bundle or an old CLI, so:
 ### Internal model gateway
 
 Point every run's model calls at an internal endpoint instead of
-`api.anthropic.com`/`api.openai.com`. **Shipped for the api-key lane**:
-`WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL` ([ENV.md](ENV.md)) re-point
-the proxy's own brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at
-the gateway — validated once at boot (`https://` only, RFC1918/CGNAT literal
-allowed, loopback/link-local/metadata/multicast/NAT64 refused, must not equal the
-public host) and forwarded to the proxy sidecar per run. No
+`api.anthropic.com`/`api.openai.com`. `WARDYN_ANTHROPIC_BASE_URL` /
+`WARDYN_OPENAI_BASE_URL` ([ENV.md](ENV.md)) re-point the proxy's own brokered
+`/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway for the
+api-key lane, and — for Anthropic — also the subscription and Wardyn-managed
+lanes' `ANTHROPIC_BASE_URL` (dispatch sets it via `(*Server).anthropicBaseURL`,
+`runs_dispatch_llm.go`, and the subscription-injection sink's host allowlist
+widens to match, `injection.go`) — validated once at boot (`https://` only,
+RFC1918/CGNAT literal allowed, loopback/link-local/metadata/multicast/NAT64
+refused, must not equal the public host) and forwarded to the proxy sidecar per
+run. No
 `SiteConfig.InternalHosts` declaration is needed for the gateway itself **on that
 brokered route**: only the proxy's own `/wardyn/llm/*` handler resolves and dials
 it, per request, with its own refusal for the same disallowed address kinds
@@ -4126,12 +4130,16 @@ typically — is what `upstream_proxy_no_proxy` is for: list its host there and 
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
 other internal address.
 
-**Scope: the api-key lane only.** A subscription or Wardyn-managed-token run
-still talks to `api.anthropic.com` directly — the published agent images
-unconditionally `unset ANTHROPIC_BASE_URL` whenever a resident/managed credential
-is detected, and the harness-login (`claude setup-token`) lane is public too.
-Routing those lanes through a gateway needs an image change (teaching `agent-run`
-to honor an explicit operator-set base URL) — a named gap, tracked in ROADMAP.md.
+**A subscription or Wardyn-managed-token run honors a configured Anthropic
+gateway too** — the published `agent-claude-code` image's `agent-run` only
+`unset`s `ANTHROPIC_BASE_URL` when it is still the vendor default, so an
+operator-configured gateway survives the in-image launcher. **This is a trust
+decision**: turning it on sends the operator's live subscription/managed OAuth
+token to the configured gateway proxy-side (TLS-MITM, exactly as it is sent to
+`api.anthropic.com` today) instead of only ever the public host — see
+[CHANGELOG.md](../CHANGELOG.md). The harness-login (`claude setup-token`) lane
+is exempt and always stays on the public host: that flow mints the OAuth token
+itself and must not be redirected.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`
