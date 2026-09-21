@@ -176,8 +176,16 @@ func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) 
 // newExecutor builds the exec-subresource request and wraps it in a
 // websocket-primary/SPDY-fallback Executor — the same recipe kubectl exec
 // uses (NewFallbackExecutor(websocket, spdy), falling back on an upgrade
-// failure).
+// failure). Deferring to d.execFactory when set (the test seam — see
+// Driver.execFactory's doc) lets Attach/ExecStream be driven end to end
+// against a fake remotecommand.Executor: the fake clientset backs
+// Pods().Get for container resolution, but has no HTTP server behind it for
+// the exec subresource itself, so a real SPDY/WebSocket dial from a test
+// would just fail to connect rather than exercise anything.
 func (d *Driver) newExecutor(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error) {
+	if d.execFactory != nil {
+		return d.execFactory(podName, container, cmd, stdin, tty)
+	}
 	req := d.clientset.CoreV1().RESTClient().Post().
 		Namespace(d.cfg.Namespace).
 		Resource("pods").
