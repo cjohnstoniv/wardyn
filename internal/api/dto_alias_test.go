@@ -41,6 +41,8 @@ func TestRequestDTOs_AreClientDTOAliases(t *testing.T) {
 	var _ client.WorkspaceRequest = workspaceRequest{}
 	var _ sourceRequest = client.SourceRequest{}
 	var _ client.SourceRequest = sourceRequest{}
+	var _ mintEnrolmentTokenRequest = client.DeviceEnrolmentTokenRequest{}
+	var _ client.DeviceEnrolmentTokenRequest = mintEnrolmentTokenRequest{}
 }
 
 // jsonTagNames returns the wire names of a struct's json-tagged, exported

@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,6 +60,48 @@ func TestPG_Devices_EnrolmentToken_ConsumeOnce(t *testing.T) {
 	// Consume-once: the conditional UPDATE already claimed the row.
 	if _, ok, err := st.ConsumeEnrolmentToken(ctx, tok, now); ok || err != nil {
 		t.Fatalf("second consume: ok=%v err=%v, want false/nil (single-use)", ok, err)
+	}
+}
+
+// TestPG_Devices_EnrolmentToken_ConcurrentConsume races redemptions of ONE
+// token on separate connections. The conditional UPDATE's `consumed_at IS
+// NULL` is all that stands between a leaked enrolment token and two enrolled
+// devices, so exactly one racer may win — the sequential test above cannot
+// tell a single-statement consume from a read-then-write one.
+func TestPG_Devices_EnrolmentToken_ConcurrentConsume(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+	tok := uuid.NewString()
+	if _, err := st.MintEnrolmentToken(ctx, tok, types.DeviceEnrolmentToken{
+		ID: uuid.New(), DeviceName: "raced", ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+
+	const racers = 16
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, ok, err := st.ConsumeEnrolmentToken(ctx, tok, now)
+			if err != nil {
+				t.Errorf("consume: %v", err)
+			}
+			if ok {
+				wins.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("%d concurrent redemptions of one token succeeded, want exactly 1", got)
 	}
 }
 

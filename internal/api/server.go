@@ -770,6 +770,10 @@ type Server struct {
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
 	dirLimiter principalLimiter
+	// enrolLimiter bounds the ONE anonymous device route, POST
+	// /devices/enrol, per TCP peer (devices_auth.go's peerKey), with per-entry
+	// eviction so the map cannot grow without bound. Configured in New.
+	enrolLimiter principalLimiter
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
@@ -808,7 +812,7 @@ func New(cfg Config) *Server {
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()
 	}
-	s := &Server{cfg: cfg}
+	s := &Server{cfg: cfg, enrolLimiter: principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers}}
 	s.router = s.routes()
 	// drain the durable audit-fallback spool back into the store once it
 	// recovers, so a PG outage no longer leaves spooled events permanently invisible

@@ -42,6 +42,8 @@ var (
 	_ client.DecisionOpts
 	_ []client.SSHPublicKey
 	_ client.RunFiles
+	_ []client.Device
+	_ client.DeviceEnrolmentToken
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family
@@ -64,6 +66,7 @@ func routeFamilies() map[string][]string {
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},
 		"ssh-keys":    {"ListSSHKeys", "AddSSHKey"},
+		"devices":     {"MintDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
 	}
 }
 

@@ -52,6 +52,8 @@ func TestRequestDTOs_ZeroValueOmitOptionals(t *testing.T) {
 		// "no narrowing", and posting `"read_only":null` would be a value the
 		// server has to special-case instead of an absence it can ignore.
 		{"DriveSelection", client.DriveSelection{}, []string{"enabled"}},
+		// The device name is the whole request and is required.
+		{"DeviceEnrolmentTokenRequest", client.DeviceEnrolmentTokenRequest{}, []string{"name"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := json.Marshal(tc.req)

@@ -2101,7 +2101,7 @@ func TestUnknownSubcommandUnderEveryGroupIsAnError(t *testing.T) {
 // help on stdout and exits 0. That is the half of the contract subcommandGroup
 // must not break — the compat note covers the typo path only.
 func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
-	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "subscription", "sessions", "source", "ssh-key", "site-config", "approvals"} {
+	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "subscription", "sessions", "device", "source", "ssh-key", "site-config", "approvals"} {
 		t.Run(group, func(t *testing.T) {
 			root := rootCmd()
 			var out, errOut strings.Builder

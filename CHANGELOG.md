@@ -26,6 +26,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **An organisation control plane can enrol managed laptops, list them, revoke one, and take in
+  their audit rows** (#102). An admin mints a single-use enrolment token
+  (`wardyn device enrol-token --name`, 72-hour expiry, shown once); the laptop's first boot trades
+  it at the anonymous, per-peer rate-limited `POST /api/v1/devices/enrol` for a `wdd_` device
+  credential; the device then pushes batches of up to 500 of its own chained audit rows to
+  `POST /api/v1/devices/{id}/audit` and sends a heartbeat when idle. `wardyn device list` and
+  `wardyn device revoke <id>` are the inventory-then-revoke pair, on the same tier as `/tokens`; a
+  revoked device's next push is 401. The device credential authenticates a daemon, never a person:
+  it has its own middleware that publishes a device and no human, every human route answers it
+  401, and it cannot create a run. A push that does not extend the chain the organisation recorded
+  is refused with 422; a purge on the laptop is accepted and audited as a chain reset. New audit
+  actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
+  (failures) and `device.audit.chain_reset`.
+
 - **A user drive's minted object name can no longer be forged by a crafted `home_override`.**
   `types.DriveObjectName` built a managed drive's storage-object name from the drive's
   variable-width slug and its home segment (`wardyn-drive-<drive-slug>-<home>`), so the

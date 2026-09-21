@@ -100,6 +100,11 @@ const (
 	// token (internalAuth / internalAuthGroundtruth) — NEITHER the admin
 	// token NOR an SSO session satisfies it.
 	classInternal routeClass = "internal"
+	// classDevice: gated by deviceAuth alone — a `wdd_` device bearer whose
+	// device IS the path's {id}. It authenticates a daemon, never a person, so
+	// every human credential — the admin's included — is refused with 401, and
+	// a live device token on another device's id gets 404, never 403.
+	classDevice routeClass = "device"
 )
 
 // routeEntity names which seeded fixture a classOwner route's path id(s) are
@@ -178,6 +183,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /readyz":        {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
 	"GET /auth/callback": {class: classAnonymous},
+	// Hybrid enrolment: a laptop's first boot holds no credential yet, only the
+	// single-use enrolment token in its BODY, so the route is anonymous by
+	// necessity and rate-limited per TCP peer instead (handleDeviceEnrol).
+	"POST /api/v1/devices/enrol": {class: classAnonymous},
 
 	// ── admin (SUPER only: a security_admin is refused here too) ──
 	"GET /metrics":                                       {class: classAdmin},
@@ -286,6 +295,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// ownsRunOrAdmin is isSecurityOperator, so kill admits it on any run. See
 	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
 	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
+	// Minting a device enrolment token creates a credential, so it is SUPER;
+	// the inventory and the revoke are the inventory-then-revoke pair /tokens
+	// already puts on the security tier (classSecurity below).
+	"POST /api/v1/admin/devices/enrolment-tokens": {class: classAdmin},
 
 	// ── security (0.7 §B: admin OR security_admin; a member still 403s) ──
 	// The admin twins of /me/tokens: the deployment-wide inventory names other
@@ -295,6 +308,11 @@ var routeMatrix = map[string]classifiedRoute{
 	// DELETE only subtracts.
 	"GET /api/v1/tokens":         {class: classSecurity},
 	"DELETE /api/v1/tokens/{id}": {class: classSecurity},
+	// The device twins of the two token routes above: see an enrolled laptop,
+	// cut it off. Neither hands the caller reach — the inventory carries no
+	// credential material and the revoke only subtracts.
+	"GET /api/v1/admin/devices":         {class: classSecurity},
+	"DELETE /api/v1/admin/devices/{id}": {class: classSecurity},
 	// The workspace EGRESS-DECISION lane. Deciding which hosts a workspace's
 	// runs may reach is the same authority as deciding an egress approval, and
 	// promote-egress is literally its bulk form.
@@ -535,6 +553,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/internal/recordings/{runID}":   {class: classInternal},
 	"PUT /api/v1/internal/scan-results/{runID}": {class: classInternal},
 	"PUT /api/v1/internal/sso-token/{runID}":    {class: classInternal},
+
+	// ── device (a `wdd_` device bearer on its own {id} only) ──
+	"POST /api/v1/devices/{id}/audit":     {class: classDevice},
+	"POST /api/v1/devices/{id}/heartbeat": {class: classDevice},
 }
 
 // routeParamRe matches a chi path parameter segment like "{id}" or "{runID}".
@@ -704,6 +726,15 @@ func TestAuthzMatrix(t *testing.T) {
 		return id
 	}
 
+	// A live enrolled device: classDevice's positive control, and the {id}
+	// every human credential is refused on, so a refusal there can never be
+	// read as "no such device".
+	matrixDeviceID := uuid.New()
+	const matrixDeviceToken = deviceTokenPrefix + "matrix-device"
+	if _, err := ast.CreateDevice(context.Background(), types.Device{ID: matrixDeviceID, Name: "matrix-laptop"}, matrixDeviceToken); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+
 	// ── discover every ACTUAL route via chi.Walk; classify or fail ──
 	//
 	// BOTH SHIPPED CONFIGURATIONS ARE WALKED, and the UNION is what must be
@@ -787,6 +818,32 @@ func TestAuthzMatrix(t *testing.T) {
 				// wrong audience" the admin-bearer case above already covers.
 				if w := doSSO(t, srv, method, p, adminSess, body); w.Code != http.StatusUnauthorized {
 					t.Errorf("admin SSO session (wrong auth mode entirely): status = %d, want 401; body=%s", w.Code, w.Body.String())
+				}
+
+			case classDevice:
+				own := buildPath(pattern, matrixDeviceID.String())
+				// The control first: the device's own token on its own id is
+				// admitted. Without it, every 401 below could be the routes being
+				// broken rather than the credential being refused.
+				if w := do(t, srv, method, own, matrixDeviceToken, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+					t.Errorf("device token on its own id: status = %d, want admitted; body=%s", w.Code, w.Body.String())
+				}
+				// Every HUMAN credential is refused — the admin's included: a
+				// device is not a tier above or below the human ones, it is a
+				// different kind of caller.
+				for who, w := range map[string]*httptest.ResponseRecorder{
+					"admin session":  doSSO(t, srv, method, own, adminSess, body),
+					"member session": doSSO(t, srv, method, own, memberSess, body),
+					"admin token":    do(t, srv, method, own, adminToken, body),
+					"no credential":  doSSO(t, srv, method, own, nil, body),
+				} {
+					if w.Code != http.StatusUnauthorized {
+						t.Errorf("%s: status = %d, want 401; body=%s", who, w.Code, w.Body.String())
+					}
+				}
+				// A live device token on ANOTHER device's id: 404, never 403.
+				if w := do(t, srv, method, buildPath(pattern, uuid.NewString()), matrixDeviceToken, body); w.Code != http.StatusNotFound {
+					t.Errorf("device token on a foreign id: status = %d, want 404 (no existence oracle); body=%s", w.Code, w.Body.String())
 				}
 
 			// classAdmin and classSecurity are the SAME probe here — admin
@@ -1073,11 +1130,14 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// with no route to model access at all, so the tier moved and the predicate
 	// went inside the handler. Its two sibling credential verbs (the token paste
 	// and the disconnect) did NOT move: they write the deployment's shared
-	// credential. = 41 SUPER. A route silently reclassified in the table above
-	// would still pass every probe — it would just be enforcing the WRONG tier,
-	// exactly the drift the per-route loop cannot see.
-	if sec != 21 || super != 41 {
-		t.Errorf("tier split = %d security / %d admin, want 21 / 41 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers, MINUS the reclassified POST /setup/harness-login)", sec, super)
+	// credential. = 41 SUPER. 0.8's hybrid enrolment then added three: minting a
+	// device enrolment token creates a credential, so it is born SUPER (= 42),
+	// while the device inventory and revoke are the /tokens pair's twins and
+	// land on the security tier (= 23 SEC). A route silently reclassified in the
+	// table above would still pass every probe — it would just be enforcing the
+	// WRONG tier, exactly the drift the per-route loop cannot see.
+	if sec != 23 || super != 42 {
+		t.Errorf("tier split = %d security / %d admin, want 23 / 42 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login)", sec, super)
 	}
 }
 
@@ -1165,13 +1225,19 @@ type authzStore struct {
 	// admission. Seeded by newAuthzMatrixServer; every other consumer reads the
 	// same empty document it read before.
 	siteCfg types.SiteConfig
+	// The hybrid device capability (store.DeviceStore), so the matrix walks
+	// the device routes with it PRESENT — a device-route 401 is then deviceAuth
+	// refusing the credential, not the capability being absent
+	// (devices_test.go).
+	*fakeDeviceStore
 }
 
 func newAuthzStore() *authzStore {
 	return &authzStore{
-		runs:       map[uuid.UUID]types.AgentRun{},
-		workspaces: map[uuid.UUID]types.Workspace{},
-		tickets:    map[string]store.AttachTicket{},
+		runs:            map[uuid.UUID]types.AgentRun{},
+		workspaces:      map[uuid.UUID]types.Workspace{},
+		tickets:         map[string]store.AttachTicket{},
+		fakeDeviceStore: newFakeDeviceStore(),
 	}
 }
 
