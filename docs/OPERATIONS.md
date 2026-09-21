@@ -1854,6 +1854,10 @@ revokes every unrevoked token that principal holds — a token is their session 
 another form. The `all` arm is deployment-wide for tokens too: EVERY live token
 goes, the calling admin's own included — plan to re-mint after a global revoke.
 
+**No `role` parameter on `POST /me/tokens`.** A token always mints at the
+caller's own current role; there is no deliberately-downgraded mint. Still
+open at 0.8.
+
 **Registered SSH keys are separate.** An API token can register one through
 `wardyn ssh-key ensure`. Neither deleting the token nor revoking sessions
 removes that key, and key deletion does not disconnect an established SSH
@@ -3446,9 +3450,9 @@ button come back, which an expiry-only grading hid), and the setup checklist's
 precise than the row it comes back with: it is keyed on state alone, so it
 reads "Model access · Signed out" for a session that is actually live and
 renewable — the Action line right beneath it is the one that names the pin
-and tells the truth. What is still missing in 0.7.4:
+and tells the truth. **Still open at 0.8:**
 invalidate-on-write, and an admin "revoke this person's captured session" route
-— both need owner enumeration in the secret store (0.8).
+— both still need owner enumeration in the secret store, which does not exist.
 
 **Changing the model's account later does not invalidate an existing pin.** Since
 0.7.3 the disagreement is a warning — the console's Bedrock row, plus a line in
@@ -3524,7 +3528,7 @@ says which captures were turned away and why.
 **caller's own** stored session: under `per_user` every capture, an admin's
 included, lives in that person's own namespace, so this is the admin revoking
 themselves. There is **no** admin route that deletes a named member's stored
-session, and no member-facing Disconnect — both are 0.8 items.
+session, and no member-facing Disconnect — both are still open at 0.8.
 
 What ends a member's session today, honestly:
 
@@ -3577,7 +3581,8 @@ Consequences worth knowing:
   NOT finish is the rest of the launch: a client that gives up (a closed tab, a proxy timeout) can
   leave the old sign-in already gone and no new one created. Nothing is lost and nothing is stuck —
   start the sign-in again. This is also why a sign-in that hangs is worth waiting out once rather
-  than clicking twice.
+  than clicking twice. **This synchronous kill cascade is still open at 0.8** — moving the teardown
+  to after the response is tracked separately from the rest of this section.
 - **Two sign-ins started at once almost always leave one.** A double-click, or the console and a
   `wdn_` token driving the route for the same person, used to leave BOTH sandboxes alive: each
   launch checks for live sign-ins before its own run row exists, so neither could see the other. The
@@ -3587,7 +3592,7 @@ Consequences worth knowing:
   multi-replica install with clock skew (or after a stall between the two) the run carrying the
   EARLIER timestamp can be written after the other's re-check, and both stay alive. Neither is
   killed, so the upload refusal below does not separate them either. The next sign-in clears it.
-  Closing the last case needs a per-person lock around the write and is a 0.7.6 follow-up.
+  Closing the last case needs a per-person lock around the write. **Still open at 0.8.**
 - **A sandbox superseded mid-upload almost never wins.** The upload door
   re-reads the run's state immediately before it stores, so a capture that was uploading when the
   person's next sign-in replaced its sandbox is ordinarily refused (`harness.credential.refused` /
