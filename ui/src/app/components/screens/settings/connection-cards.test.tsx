@@ -358,10 +358,32 @@ describe("ModelProviderCard — #337: a member's own bearer field under a per_us
     expect(screen.getByLabelText("Bedrock bearer key")).not.toBeDisabled();
   });
 
+  // PR #352 review, finding 1: this fixture used to carry region/model/
+  // creds_present alongside bearer_present in a MEMBER render — a shape the
+  // server's own redaction (redactSetupStatusForMember, setup.go) never
+  // sends, since those three are always dropped for a non-operator. Shaped
+  // the way a member's response actually reads now: Ready survives always,
+  // BearerPresent survives only under their own per_user bearer row.
   it("stored reflects the member's OWN bearer, not the operator-namespace secrets.present", async () => {
-    memberModel(perUserBearerStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: false, bearer_present: true } }));
+    memberModel(perUserBearerStatus({ bedrock: { ready: true, creds_present: false, bearer_present: true } }));
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     expect(screen.getByRole("button", { name: /disconnect/i })).toBeInTheDocument();
+  });
+
+  // PR #352 review, finding 6: the negative case. secrets.present is an
+  // operator-namespace fact, always redacted to empty for a member anyway —
+  // this pins that a member with no bearer of their OWN reads not-stored
+  // even were that field somehow non-empty, never borrowing anyone else's.
+  it("a member with no bearer of their own reads not-stored, even with secrets.present non-empty", async () => {
+    memberModel(
+      perUserBearerStatus({
+        bedrock: { ready: true, creds_present: false, bearer_present: false },
+        secrets: { present: ["bedrock-api-key"], github_app: false },
+      }),
+    );
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByRole("button", { name: /disconnect/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Bedrock bearer key")).toBeInTheDocument();
   });
 
   it("a member on a SHARED row still cannot edit the bearer field", async () => {
@@ -409,6 +431,64 @@ describe("ModelProviderCard — #337: a member's own bearer field under a per_us
     model(perUserBearerStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     expect(screen.getByLabelText("Bedrock bearer key")).not.toBeDisabled();
+  });
+
+  // PR #352 review, finding 2 (regression): an operator's PUT lands in the
+  // "" namespace (runs_policy.go) even under a per_user bearer row —
+  // DIFFERENT from bearer_present's per_user-scoped read (the roster owner's
+  // own subject namespace, runs_bedrock_probe.go). Reading bearer_present for
+  // an operator here showed their own just-saved key as unstored; `present`
+  // is the one that matches what their Save actually wrote.
+  it("an operator's own stored bearer shows Replace/Disconnect under a per_user bearer row", async () => {
+    model(perUserBearerStatus({ secrets: { present: ["bedrock-api-key"], github_app: false } }));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByRole("button", { name: /disconnect/i })).toBeInTheDocument();
+  });
+
+  it("an operator does not read bearer_present under a per_user bearer row", async () => {
+    model(perUserBearerStatus({ bedrock: { ready: true, creds_present: false, bearer_present: true } }));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByRole("button", { name: /disconnect/i })).not.toBeInTheDocument();
+  });
+});
+
+// PR #352 review, findings 3 + 4: the field's own explanation, instead of
+// (finding 3) a card-level "Requires the admin role." sitting directly above
+// a field the member CAN edit, or (finding 4) no explanation at all for why
+// it's disabled on a shared row.
+describe("ModelProviderCard — PR #352 review: the bearer field explains itself", () => {
+  it("a member on a per_user bearer row sees the own-key note, and not the admin hint, on the Bedrock lane", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_BEARER_OWN_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText("Requires the admin role.")).not.toBeInTheDocument();
+  });
+
+  it("that same member still sees the admin hint on the API key lane", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /API key/ }));
+    expect(screen.getByText("Requires the admin role.")).toBeInTheDocument();
+  });
+
+  it("a member on a shared row sees the shared reason, not the own-key note", async () => {
+    memberModel(sharedRowStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_BEARER_SHARED_REASON)).toBeInTheDocument();
+    expect(screen.queryByText(S.BEDROCK_BEARER_OWN_NOTE)).not.toBeInTheDocument();
+  });
+
+  it("a member on a per_user SSO row sees neither — BEDROCK_BEARER_UNUSED_PER_USER already explains it", async () => {
+    memberModel(perUserStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByText(S.BEDROCK_BEARER_SHARED_REASON)).not.toBeInTheDocument();
+    expect(screen.queryByText(S.BEDROCK_BEARER_OWN_NOTE)).not.toBeInTheDocument();
+    expect(screen.getByText(S.BEDROCK_BEARER_UNUSED_PER_USER)).toBeInTheDocument();
+  });
+
+  it("an operator on a per_user bearer row sees the own-key note too", async () => {
+    model(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_BEARER_OWN_NOTE)).toBeInTheDocument();
   });
 });
 

@@ -719,7 +719,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// setup mutation, which stays super-only. A security admin sees the same
 	// summary a member does because there is nothing here they could act on.
 	if !s.isOperator(ctx) {
-		resp = redactSetupStatusForMember(resp, ssoScope.perUser)
+		resp = redactSetupStatusForMember(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -765,7 +765,10 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // to write); TestRedactSetupStatusForMember_DropsHostCredentialPosture pins it.
 // ownAWSRow says the aws harness row is the CALLER'S OWN capture (a per_user
 // row scoped the read to their namespace). It decides one field — see Harness.
-func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
+// ownBearerRow (#337) is narrower: per_user AND bedrock_bearer specifically,
+// false under a per_user bedrock_sso row (which has no bearer lane of its
+// own to read). It decides one field too — see Bedrock.
+func redactSetupStatusForMember(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
 	// Say the strip happened, so a reader never takes [] for "nothing is wired".
 	st.ChecksRedacted = true
@@ -784,7 +787,14 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	// already the member-safe form modelaccess.go computes SetupModelAccess
 	// from — nothing here is new information a member's own ModelAccess row
 	// (kept below) does not already imply.
+	// BearerPresent is the one exception (#337): kept under ownBearerRow only,
+	// it is already scoped to the CALLER's own namespace (bedrockBearerFor),
+	// so it carries no host-credential posture — only "does MY key exist".
+	bearerPresent := st.Bedrock.BearerPresent
 	st.Bedrock = SetupBedrock{Ready: st.Bedrock.Ready}
+	if ownBearerRow {
+		st.Bedrock.BearerPresent = bearerPresent
+	}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on

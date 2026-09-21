@@ -105,6 +105,21 @@ export const S = {
   // row is per_user, so the card says so rather than implying it might be.
   BEDROCK_BEARER_UNUSED_PER_USER:
     "Not read while this lane is per person — each person's own AWS sign-in carries their runs.",
+  // DRAFT (M2 canon pending) — PR #352 review, finding 3: the bearer field's
+  // per_user twin of BEDROCK_PER_USER_NOTE. A per_user BEARER row is the one
+  // case this card offers a non-operator an editable credential at all
+  // (#337); silence there read as an operator-only field like every other
+  // one on the card. Unconditional on role (mirrors BEDROCK_PER_USER_NOTE),
+  // since the fact is true of whoever owns the row, operator included.
+  BEDROCK_BEARER_OWN_NOTE:
+    "This lane is per person: it is declared on the Agents tab, and each person stores their own bearer key. The key below is yours — it carries only your own runs, not the deployment's.",
+  // DRAFT (M2 canon pending) — PR #352 review, finding 4: the disabled field's
+  // own reason, for the row shape where it stays operator-only (a shared row,
+  // or no row at all — deriveIntegrations' default). Without this the only
+  // explanation on screen was the card-level OperatorOnlyHint, which reads
+  // identically whether the field is disabled for this reason or offered to
+  // the caller under a per_user bearer row — no explanation at all.
+  BEDROCK_BEARER_SHARED_REASON: "Shared — the operator's key carries every run on this lane.",
 } as const;
 
 // Card shell + lane rows.
@@ -475,7 +490,13 @@ export function ModelProviderCard({
   return (
     <>
       <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER}>
-        {!operator && <OperatorOnlyHint />}
+        {/* PR #352 review, finding 3: suppressed while a member sits on the
+            ONE lane/row combination this card actually hands them an
+            editable field (a per_user bearer row's AWS Bedrock lane) — the
+            hint read as "you can't touch any of this" directly above a field
+            they could. Still shown on Subscription/API key, and still shown
+            on Bedrock for every other row shape, where it remains true. */}
+        {!operator && !(perUserBearer && lane === "bedrock") && <OperatorOnlyHint />}
         {/* Roving tabindex + arrow keys
             (wardyn/use-roving-radio.ts) — one Tab stop for the group, not
             three. Each Lane's expanded form must never nest INSIDE it (an ARIA
@@ -633,16 +654,34 @@ export function ModelProviderCard({
               {mechanismPrincipal && (
                 <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_PER_USER_MECHANISM}</p>
               )}
+              {/* PR #352 review, finding 3: BEDROCK_PER_USER_NOTE's bearer
+                  twin — says the key belongs to whoever is looking at it,
+                  right beside the field that is (sometimes) theirs to edit. */}
+              {perUserBearer && (
+                <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_BEARER_OWN_NOTE}</p>
+              )}
               <SecretLane
                 label="Bedrock bearer key"
                 placeholder="Bearer token"
                 secretName="bedrock-api-key"
                 // `present` is the OPERATOR namespace only (setupSecretsSnapshot,
-                // internal/api/setup_status_secrets.go) — a member's own write
-                // never shows there. status.bedrock.bearer_present is read off
-                // the CALLER's own scope (bedrockBearerFor) instead, so a
-                // per_user-bearer member sees their own key reflected as stored.
-                stored={perUserBearer ? !!status.bedrock?.bearer_present : present.includes("bedrock-api-key")}
+                // internal/api/setup_status_secrets.go) — a MEMBER's own write
+                // never shows there, so under a per_user bearer row a member
+                // reads status.bedrock.bearer_present instead (scoped to the
+                // caller, bedrockBearerFor). An OPERATOR's own write is a
+                // DIFFERENT story even under that same row: the admin-token
+                // PUT lands in the "" namespace (runs_policy.go), while
+                // bearer_present under a per_user scope is read from the
+                // roster owner's OWN subject namespace — two different
+                // namespaces for the same operator, so reading bearer_present
+                // for an operator here would show their own just-saved key as
+                // unstored (PR #352 review, finding 2). `present` is the one
+                // that matches what an operator's Save actually wrote.
+                stored={
+                  perUserBearer && !operator
+                    ? !!status.bedrock?.bearer_present
+                    : present.includes("bedrock-api-key")
+                }
                 disabled={!operator && !perUserBearer}
                 onChanged={onChanged}
               />
@@ -652,6 +691,16 @@ export function ModelProviderCard({
                 // is per_user, beside the lane rather than inside the form so
                 // it shows whether or not a key happens to be stored.
                 <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_BEARER_UNUSED_PER_USER}</p>
+              )}
+              {/* PR #352 review, finding 4: a MEMBER's own reason for the
+                  field's disabled state on the row shape where it stays
+                  operator-only — a shared row, or no row at all
+                  (deriveIntegrations' default reads as shared). Excludes
+                  perUserSso, which already has its own true reason above
+                  (BEDROCK_BEARER_UNUSED_PER_USER) — this row is per person,
+                  just not on this mechanism, and "Shared" would be wrong. */}
+              {!operator && !perUserBearer && !perUserSso && (
+                <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_BEARER_SHARED_REASON}</p>
               )}
               {/* NOT rendered for a mechanism
                   principal. `disabled={!operator}` is no guard here — an

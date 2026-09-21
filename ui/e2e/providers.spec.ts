@@ -799,19 +799,94 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
 
 // #337: a MEMBER on a per_user Bedrock BEARER row can edit their own bearer
 // field — the console's missing half of #153/#327's server-side write door
-// (member writes to bedrock-api-key are already admitted there). mockMemberRole
-// (fixtures.ts) splices GET /me's role/operator fields; spliceBedrockRow's
-// own **/api/v1/setup/status* route runs AFTER it (registered later, so it
-// intercepts first) and reads the real backend directly via route.fetch()
-// rather than mockMemberRole's redacted body — this proves the card's RENDER
-// behavior for the tier (this file's own header note #2), which is exactly
-// what `disabled`/editable turns on; it does not prove a real per-member
-// namespaced write (that needs a genuine OIDC session, out of this harness's
-// reach, same ceiling as every other mockMemberRole spec in this repo).
+// (member writes to bedrock-api-key are already admitted there).
+//
+// PR #352 review, finding 1: the FIRST version of this block called
+// mockMemberRole (fixtures.ts, splices GET /me's role/operator fields, plus
+// its own redacting **/api/v1/setup/status* route) and then spliceBedrockRow
+// on the SAME status pattern. spliceBedrockRow runs LAST-registered-wins
+// (Playwright routes are LIFO) and its handler calls route.fetch() itself —
+// which hits the network directly rather than falling through to
+// mockMemberRole's handler — so the redaction never ran; the test read the
+// RAW ADMIN body the whole time. That hid the real bug: `st.Bedrock =
+// SetupBedrock{Ready: st.Bedrock.Ready}` (internal/api/setup.go) zeroed
+// BearerPresent for every non-operator unconditionally, so a real member's
+// Save never showed Replace/Disconnect — the field looked stored under the
+// unredacted splice and came back empty under the real one.
+//
+// mockMemberBedrockRowRedacted below is this file's own composed splice
+// instead: ONE **/api/v1/setup/status* handler that mirrors
+// redactSetupStatusForMember's structural drops (the same shape
+// mockMemberSetupStatus, fixtures.ts, mirrors for every OTHER member spec in
+// this repo) AND injects the harnesses row, so nothing here can bypass the
+// redaction the way stacking two routes on the same pattern did.
+async function mockMemberBedrockRowRedacted(
+  page: Page,
+  credentialSource: "per_user" | "shared",
+  mechanism: "bedrock_sso" | "bedrock_bearer",
+  initialBearerPresent: boolean,
+): Promise<void> {
+  await page.route("**/api/v1/me", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.role = "member";
+    json.operator = false;
+    json.security_operator = false;
+    await route.fulfill({ response, json });
+  });
+
+  // Mutable, not cached-once: a member's real Save/Disconnect below hits the
+  // real backend (this harness's bearer token is admin server-side, so the
+  // write itself always succeeds — the point being proven is only that the
+  // CONSOLE re-reads a body shaped the way redaction really answers it, not a
+  // genuine per-member namespaced write, same ceiling as every mockMemberRole
+  // spec in this file). Flipped by the secrets-endpoint splice below so the
+  // NEXT poll reflects it, the way a real member's own redacted read would.
+  let bearerPresent = initialBearerPresent;
+  await page.route("**/api/v1/setup/status*", async (route) => {
+    const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+    // Mirrors redactSetupStatusForMember (internal/api/setup.go) — the same
+    // drop list mockMemberSetupStatus (fixtures.ts) applies for every other
+    // member spec, plus the #337 BearerPresent carve-out that function now
+    // applies under the caller's own per_user bearer row.
+    body.checks = [];
+    body.checks_redacted = true;
+    body.providers = [];
+    body.secrets = { present: [] };
+    const runner = (body.runner ?? {}) as { confinement_classes?: string[] };
+    body.runner = { confinement_classes: runner.confinement_classes ?? [] };
+    const ready = !!(body.bedrock as { ready?: boolean } | undefined)?.ready;
+    body.bedrock = { ready, creds_present: false, bearer_present: bearerPresent };
+    body.scm = {};
+    body.host_proxy = {};
+    body.deployment = {};
+    body.harnesses = [
+      {
+        id: "claude-code",
+        display: "Claude Code",
+        has_gateway: true,
+        has_login: true,
+        enabled: true,
+        mechanism,
+        credential_source: credentialSource,
+      },
+    ];
+    await route.fulfill({ json: body });
+  });
+
+  await page.route("**/api/v1/secrets/bedrock-api-key", async (route) => {
+    const response = await route.fetch();
+    if (response.ok()) {
+      if (route.request().method() === "PUT") bearerPresent = true;
+      if (route.request().method() === "DELETE") bearerPresent = false;
+    }
+    await route.fulfill({ response });
+  });
+}
+
 test.describe("providers — #337: a member's own Bedrock bearer field under a per_user bearer row", () => {
   test("editable on a per_user bearer row", async ({ page }) => {
-    await mockMemberRole(page);
-    await spliceBedrockRow(page, "per_user", null, "bedrock_bearer");
+    await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
     await gotoConsole(page);
     await navToRoute(page, "/settings");
     await page.locator("#lane-bedrock").click();
@@ -819,11 +894,30 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
   });
 
   test("still disabled on a shared row", async ({ page }) => {
-    await mockMemberRole(page);
-    await spliceBedrockRow(page, "shared", null, "bedrock_bearer");
+    await mockMemberBedrockRowRedacted(page, "shared", "bedrock_bearer", false);
     await gotoConsole(page);
     await navToRoute(page, "/settings");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByLabel("Bedrock bearer key")).toBeDisabled();
+  });
+
+  // PR #352 review, finding 1's own live-browser reproduction: a member's
+  // Save must lead to Replace/Disconnect, reading the body the way the
+  // server's redaction really answers it — not the raw admin body the first
+  // version of this block accidentally read (see the block comment above).
+  test("Save leads to Replace and Disconnect for a member, reading the redacted body", async ({ page }) => {
+    await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+
+    const field = page.getByLabel("Bedrock bearer key");
+    await expect(field).toBeEditable();
+    await field.fill("e2e-member-bearer-token");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await expect(page.getByText(/Saved bedrock-api-key/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Replace" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
   });
 });
