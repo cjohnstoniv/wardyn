@@ -470,6 +470,24 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		source:    attachSourceSSH,
 		cols:      cols,
 		rows:      rows,
+		// Promotion: this channel just became the writer without reconnecting.
+		// The RESIZE is the act and the line is a courtesy, so the resize goes
+		// first — channel.Stderr() is the unbounded write that stranded the
+		// displace path (no context, no deadline, blocked on the peer's
+		// window), and a courtesy that can park forever must never sit in
+		// front of the one call that matters. An observer never resized the
+		// shared tmux window (that would clamp the writer's terminal), so the
+		// geometry it inherits is the departed writer's until it re-applies
+		// its own.
+		notify: func(readOnly bool, h *attachHolder) {
+			if readOnly {
+				return
+			}
+			if wcols, wrows := h.size(); wcols > 0 {
+				_ = sess.Resize(ctx, wcols, wrows)
+			}
+			_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: you now hold this terminal")
+		},
 		displace: func(reason string) {
 			// The SSH lane's equivalent of the WebSocket close frame: a line on
 			// the channel's stderr, which ssh(1) prints to the operator's own
@@ -503,11 +521,13 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		_ = sess.Resize(ctx, cols, rows)
 	}
 	// Deferred for the same reason as the web lane's: a panicking pump must
-	// never strand a phantom holder (see registerAttachHolder).
-	defer releaseHolder()
+	// never strand a phantom holder (see registerAttachHolder). releaseAttach
+	// also delivers the promotion this release may cause, on its own goroutine.
+	defer releaseAttach(releaseHolder)
 	if readOnly {
-		// nil holder is what marks this client an observer to sshShellPump.
-		holder = nil
+		// The holder object STAYS (holder.writable is the observer marker now);
+		// sshShellPump drops this client's keystrokes and window-changes while
+		// canWrite is false, and the same object flips on promotion.
 		msg := "wardyn: read-only — another client holds this terminal"
 		if cur := s.attachHolderFor(runID); cur != nil {
 			msg = "wardyn: read-only — " + cur.principal + " (" + cur.source + ") holds this terminal; take it over from the run page"
@@ -527,8 +547,10 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	finishCtx := s.cfg.BaseCtx
 	finishRecording(finishCtx, types.ActorHuman, principal)
 
+	// read_only is the LIVE flag (see attach.go's twin): a channel that
+	// arrived as an observer and was promoted mid-session detaches as a writer.
 	s.recordAudit(finishCtx, s.auditEvent(&runID, types.ActorHuman, principal, "session.detach",
-		runID.String(), "success", mustJSON(map[string]any{"transport": "ssh", "reason": closeReason, "read_only": readOnly})))
+		runID.String(), "success", mustJSON(map[string]any{"transport": "ssh", "reason": closeReason, "read_only": !holder.writable.Load()})))
 
 	sendExitStatus(channel, 0)
 }
@@ -540,10 +562,11 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 // is unset or the run is unrecordable) receives a copy of every chunk of PTY
 // output, exactly like the web-terminal attach.
 //
-// holder mirrors attachPump's: non-nil ONLY for the client HOLDING the PTY, nil
-// for a read-only observer whose keystrokes and window-changes are both dropped
-// here, server-side (an observer's window would otherwise clamp the holder's
-// terminal — tmux sizes a shared session to its smallest client). The channel
+// holder mirrors attachPump's: this channel's registry entry, whose canWrite
+// says whether it may drive the PTY right now. A read-only observer's
+// keystrokes and window-changes are both dropped here, server-side (an
+// observer's window would otherwise clamp the holder's terminal — tmux sizes a
+// shared session to its smallest client). The channel
 // is still READ from while read-only, because that read is how this pump learns
 // the client hung up.
 func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess runner.Session, castTee io.Writer, resizeCh <-chan sshWindowChangeMsg, holder *attachHolder) string {
