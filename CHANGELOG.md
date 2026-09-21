@@ -8,11 +8,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
-### Fixed
-
-- A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
-  so a write still finishing from the failed attempt can never interleave with the resend (#368).
-
 ### Added
 
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
@@ -62,38 +57,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
   status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
   while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
-- **An HTTP/2 answer to the egress proxy's HTTP/1.1 request is now recorded as
-  `builtin:upstream-protocol-mismatch` with a plain cause, and answered with a 400 so SDKs stop
-  retrying, instead of a `builtin:dial-failed` that was retried until the SDK gave up (#359).**
-- **One TLS config was shared between the sidecar's control-plane client and the proxy's forward
-  transport, and enabling HTTP/2 edited it in place (#360).** The control-plane client keeps
-  net/http's HTTP/2 support, and turning that on prepends `h2` to the transport's own
-  `TLSClientConfig.NextProtos`. Sharing the pointer meant the forward transport then OFFERED HTTP/2
-  to every TLS peer while being unable to speak it, so a peer that chose `h2` answered with frames
-  the HTTP/1.1 reader could not parse — the failure reported in #359. It only happened where
-  `trusted_ca_pem` is set, which is every estate with a corporate CA. The control-plane client now
-  takes its own copy, and a test pins that the shared config is still untouched after a
-  control-plane round trip.
-- **The MITM and plain egress lanes now work against a TLS peer that speaks HTTP/2, negotiated or
-  not (#360).** A peer that picks `h2` over ALPN gets HTTP/2. A peer that speaks HTTP/2 without
-  negotiating it is recognised from its first frame (a SETTINGS frame read right after the TLS
-  handshake, or net/http's parse error when it only answers a request), remembered for the rest of
-  the run, and the request is resent over HTTP/2 when its body can be replayed; later requests to
-  that host go straight to HTTP/2. This also catches the two shapes the #359 error-text check missed:
-  a SETTINGS payload with a space byte before any newline, and SETTINGS that arrive before the
-  request goes out. A peer caught before the request was written is resent even when its body is a
-  one-shot stream, since nothing had read it. A request that cannot be resent, or whose HTTP/2
-  resend also fails, still gets #359's `builtin:upstream-protocol-mismatch` row and 400, with the
-  cause naming both attempts. The brokered git and PAT lanes take the same path, so a forge that
-  speaks HTTP/2 is served over HTTP/2 instead of refused.
 
 ### Changed
 
-- **The egress proxy now offers HTTP/2 to TLS peers, deliberately.** Its forward transport offers
-  `h2,http/1.1` over ALPN and speaks HTTP/2 when a peer chooses it; the control-plane transport
-  stays HTTP/1.1. The first connection to a host whose handshake negotiates no ALPN protocol waits
-  up to 250 ms for an unprompted HTTP/2 SETTINGS frame; what that connection learns is remembered
-  for the run, so no later connection to the same host waits again.
 - **A member may store their own Bedrock bearer key.** `PUT`/`DELETE /secrets/bedrock-api-key`
   is no longer refused to a non-operator: the BEARER is a static `Authorization` header the proxy
   injects per run, so under a `per_user` agent row a member's own key is a credential their runs
@@ -117,20 +83,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refused at write): the bearer is proxy-injected only. `runs_bedrock.go` was split by seam first — the probe
   and reporting half now lives in `runs_bedrock_probe.go` — because it had reached the
   1000-line file-size gate.
-
 - **Drive grants and preview now admit `security_admin`, not just super-admin.** `POST
   /drives/grants`, `DELETE /drives/grants/{id}`, and `POST /drives/preview` moved off the
   super-admin-only tier onto `securityOps` (admin or `security_admin`): none of the three names a
   host path, and a security admin already reaches drives through the `DenyUserDrive` door on a
   governance profile. The four routes that DO name a host path or cluster storage class — creating,
   listing, updating, and removing the drive itself — stay super-admin only (#168).
-
 - **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
   role-mapping gap, a runner failure, a confinement floor the runner can't meet) now sits under
   "Blocking"; a non-blocking fail or warn sits under "Worth a look" instead of borrowing a heading
   that promised it was fatal. Grade still shows on the row's own chip — partitioning on `blocking`
   first just stops the heading from answering the wrong question.
-
 - **Setup counts only the steps that block a run, and recommends what the host actually has.**
   The Getting-started counter read "Step 1 of 17" with ten of those steps optional demos; it now
   reads "Step 1 of 4" (Environment, People, Network, Review), with the honest count of what
@@ -152,7 +115,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the file names over the existing `POST /drives`, `PUT /drives/{id}` and `POST /drives/grants`
   routes — no new route. `wardyn drive get > f && wardyn drive apply f` is a no-op round trip. Adds
   `Client.GetDrives`/`Client.ApplyDrives` to the public SDK.
-
 - **The runner contract can now place a file inside a sandbox that the agent cannot modify.**
   `SandboxSpec.ManagedFiles` carries operator-authored `{Path, Mode, Content}` entries, and
   `Capabilities.ManagedFiles` (a conjunction across substrates, like `UserDrives`) says whether a
@@ -171,12 +133,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   that `/etc`; Kubernetes runs the agent as uid 1000 on a read-only mount whatever the image says.
   Conformance case 8 (`ManagedFiles`) holds both substrates to it, and its load-bearing assertion is
   that a write is REFUSED, not that the file reads back. Nothing populates the field yet.
-
 - **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL`, `WARDYN_ORG_ENROLMENT_TOKEN` and
   `WARDYN_ORG_DEVICE_NAME` tell a managed laptop which org control plane it belongs to. Boot is
   refused when an org URL is set without `WARDYN_MEMBER_MODE`, when the URL is plaintext and not
   loopback, or when an enrolment token is set with no org URL to send it to. See `docs/ENV.md`.
-
 - **The kind AWS SSO walk now runs nightly instead of only by hand.** `.github/workflows/nightly.yml`
   gained a `kind-sso-walk` job that brings up `make kind-quickstart` + `make kind-sso` on the hosted
   runner and drives `scripts/kind-sso-walk.sh`, excluding `sso-reauth-hold.spec.ts` (its case K holds a
@@ -184,7 +144,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the walk now lets a caller drop). The job asserts the walk actually executed specs and reached its
   own closing `PASS` line, rather than trusting a bare exit code — an unset `WARDYN_TEST_K8S` makes the
   walk self-skip and exit 0, which would otherwise be a permanently green job proving nothing.
-
 - **`scripts/gpl-source-offer.sh` covers a first-time image publish before it ships.** The image list
   is now read straight out of `release.yml`'s publish matrix instead of a hand-maintained array that
   had already drifted once (the retired `agent-claude-code` name stayed listed after 0.6.2 stopped
@@ -194,7 +153,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the script loudly rather than writing a silent "_No SBOM available._" section. `scripts/check-image-
   pins.sh` gains a cross-check tying every published image to a section in `deploy/images/
   THIRD-PARTY-GPL.md`, which nothing verified before.
-
 - **The console now says when network confinement is unenforced, acknowledged-not-proven, or unconfirmed.**
   A Kubernetes deployment's boot-time NetworkPolicy canary verdict (`/healthz`'s `network_policy`) now
   drives a shell-level banner and a ring + glyph on every `ConfinementChip` — mounted last in the banner
@@ -204,7 +162,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   omits the verdict now warns too, rather than reading identically to Docker's "not applicable" — the
   shell resolves posture from `runner` together with `network_policy`, since one absent field covered
   two opposite meanings.
-
 - **A user drive's minted object name can no longer be forged by a crafted `home_override`.**
   `types.DriveObjectName` built a managed drive's storage-object name from the drive's
   variable-width slug and its home segment (`wardyn-drive-<drive-slug>-<home>`), so the
@@ -216,7 +173,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   can rename a storage object, so an already-allocated drive's members keep binding the object
   they always did. `object_scheme` joins the identity fields a `PUT /drives/{id}` on an
   allocated drive is refused 409 over unless `?confirm=rehome` is sent.
-
 - **Device and audit-federation storage** (migration `0066_devices_and_federation`, part of hybrid
   enrolment and audit federation). Three tables: `devices` (organisation-side inventory of enrolled
   laptops, credential hashed at rest, soft-revocable), `device_enrolment_tokens` (single-use
@@ -257,7 +213,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`/etc/profile.d/toolchains.sh`) was moved to the same paths so a login-shell task (`exec` mode's
   `/bin/sh -lc`) doesn't undo the relocation. `test/conformance`'s ephemeral-disk case gained a
   third fill target for the cache root.
-
 - **The webhook sink's Close test no longer reds CI at random.** `TestWebhookSink_CloseFlushesAndAwaitsDrain`
   decided whether `Close` had awaited the drain by sampling whether the goroutine running `Run` had
   reached the statement after `Run` returned. Nothing orders that statement before `Close` returns —
@@ -265,7 +220,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the drain had completed, reding the required `build` check on unrelated pull requests. The test now
   holds the final delivery open inside the HTTP handler and asserts `Close` is still blocked while the
   batch is in flight, an ordering the code actually guarantees. `Close` itself is unchanged.
-
 - **The Agents tab and member Getting Started now render a chip for the `not_applicable` model-access
   state instead of nothing at all.** `not_applicable` — the admin-token principal's own answer under a
   per_user row, "this caller is a mechanism, not a person" — had no entry in `MODEL_ACCESS_CHIP_LABEL`
@@ -273,7 +227,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   answer. It now has its own neutral label (`Model access · Not applicable`), rendered on the Agents
   tab beside `ADMIN_OWN_CHIP_NOTE`, and beside member Getting Started's `llm_ready` fallback chip —
   still with no action and no sign-in CTA, since there is no person here to sign in as.
-
 - **A per-user API token's group snapshot now refreshes at login, alongside its role.**
   `store.RefreshAPITokenRoles` is now `RefreshAPITokenIdentity(ctx, principal, role, groups,
   truncated)`: the `OnLogin` hook re-stamps `role`, `groups` and `groups_truncated` together, so a
@@ -282,7 +235,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   signal, never defaulted — a snapshot this build could not fully enumerate still reads as
   incomplete downstream. The residual narrows to the same shape the SSH-key analogue already has: a
   human who never signs in again.
-
 - **5xx responses no longer echo driver/substrate error text to the caller.** ~90 handlers across
   `internal/api` built a 500 (or other 5xx) body by concatenating `err.Error()` onto an action
   string, so a transient Postgres or runner failure could hand an unprivileged-adjacent caller the
@@ -291,7 +243,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the error with method and path and answer the caller with the action alone; a source-walking guard
   test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
   which are already caller-facing by design, are unchanged.
-
 - **A read-only terminal observer is now promoted in place when the writer leaves, instead of
   having to reconnect.** The registry keeps one writer and the observers queued behind it in
   arrival order; an ordinary release promotes the oldest of them on the socket it already has,
@@ -302,7 +253,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   ENDED in rather than the one it connected with. Known residual: a promoted observer whose
   socket is already dead holds the slot until the attach ping probe notices, up to about twice
   the ping interval.
-
 - **The compose file's writable-member-mount comment was wrong; `/srv/src` genuinely had no bind.**
   0.7.2 documented (and repeated in its own CHANGELOG entry) that
   `WARDYN_WORKSPACES_ROOT`'s `:ro` compose bind was what refused a writable member mount. It is
@@ -318,7 +268,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the macOS `/Users/Shared/src` — really had no bind: compose cannot expand a CSV into volume
   lines, so only whichever one path `WARDYN_WORKSPACES_ROOT` is set to gets bound. A commented
   example line now sits beside the existing bind, and `docs/ENV.md` states the limit. (#135)
-
 - **A spent AWS SSO refresh token is no longer forgotten on daemon restart.** `awssso_refresh.go`
   marked a redeemed-and-unpersistable (or AWS-retired) refresh token spent only in an in-memory map,
   so a restart wiped the mark and the credential graded "renewable" again — the exact credential
@@ -343,8 +292,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
   deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
   cancellation on shutdown — is unchanged.
-
-
 - **A run whose model credential is a stored AWS SSO session now says so when its confinement is
   weaker than that credential would otherwise require.** A captured AWS SSO session is delivered to
   the sandbox at dispatch, after the run's confinement class is already resolved, so it was never an
@@ -355,7 +302,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   response's warnings, and the `run.create` audit row's closed-vocabulary `credential_confinement`
   field. This is a warning, never a refusal: a host that can only offer the weakest class still
   launches.
-
 - **A spent terminal reconnect budget now offers Reconnect instead of a `[closed]` line that
   could scroll out of view.** The attach terminal used to write connection state — `[closed]`,
   `[reconnected]`, `[connection lost — reconnecting…]`, `[taken over — not reconnecting]` — into
@@ -381,14 +327,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   since a failure is a report and a held run is a request; the workspace facet/column reads
   "Workspace", not "Repo"; the live-board chip reads "Live" without narrating its poll interval; and
   the board's loose section reads "Other runs" instead of "Ungrouped".
-
 - **A refocus that arrives while `usePoll` has a read in flight is no longer dropped.** The in-flight
   guard correctly stops a burst of focus events from stacking requests, but the refocus it swallowed
   was never retried, so a person returning to the tab mid-read got no refresh and kept seeing a stale
   screen for the rest of the interval — up to five minutes on the setup gate. The hook now coalesces:
   a refocus during an in-flight read is remembered and fires exactly one follow-up read when that read
   settles, however many refocus events arrived while it was outstanding.
-
 - **Two concurrent sign-ins can no longer leave two live credential-bearing sandboxes.** A sign-in
   supersedes the caller's older ones across several independent statements — the first supersede
   pass, the run insert, the second pass — and because `created_at` is stamped in-process BEFORE the
@@ -422,7 +366,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `claude` available in the vscode terminal restores the vendor base explicitly — build it first with
   `make agent-images-core`, then `make agent-image-vscode BASE_IMAGE=wardyn/agent-claude-code:local`
   (same knob for `agent-image-novnc`).
-
 - **The sign-in screen stops advertising the demo admin token.** The admin-token field's
   placeholder no longer carries `demo-admin-token`, and its hint no longer names
   `WARDYN_ADMIN_TOKEN` or the compose demo token — it says what belongs in the field and where the
@@ -430,7 +373,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   check, instead of a bare "Could not reach the control plane." with no next step. The email-domain
   refusal no longer tells a locked-out, unauthenticated reader to go set `WARDYN_OIDC_EMAIL_DOMAINS`
   themselves — it points them at their Wardyn admin instead. `sign-in.tsx` (Closes #212).
-
 - **The Recordings screen pages instead of stopping at 1,000.** It fetched the whole run list in one
   shot (capped at `LIST_LIMIT`), so an install past 1,000 runs silently lost every recording beyond
   that window, with only a passive "truncated" note and nothing to press. `listRuns()` now takes an
@@ -440,7 +382,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Load N more") appears while more is known to exist, and a failed page keeps what already loaded
   with a Retry that resumes from the same offset. No total is ever shown — the server doesn't send
   one.
-
 - **CLI help and an operator-facing log line no longer print internal campaign IDs.**
   `wardyn policy default --help`, `wardyn-tetragon-ingest --help`, and the mint-refusal WARN log in
   `internal/api/internal.go` cited review-package coordinates (`W14-S1-6`, `W24-S1-1`, `F098`) that
@@ -488,6 +429,45 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The synchronous kill cascade inside the sign-in launch POST.** Superseding a person's older
   sign-in tears the old sandbox down inside the new launch request rather than after the response —
   tracked separately from this list. Still open at 0.8.
+
+## [0.7.9] — 2026-09-21
+
+### Fixed
+
+- A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
+  so a write still finishing from the failed attempt can never interleave with the resend (#368).
+- **An HTTP/2 answer to the egress proxy's HTTP/1.1 request is now recorded as
+  `builtin:upstream-protocol-mismatch` with a plain cause, and answered with a 400 so SDKs stop
+  retrying, instead of a `builtin:dial-failed` that was retried until the SDK gave up (#359).**
+- **One TLS config was shared between the sidecar's control-plane client and the proxy's forward
+  transport, and enabling HTTP/2 edited it in place (#360).** The control-plane client keeps
+  net/http's HTTP/2 support, and turning that on prepends `h2` to the transport's own
+  `TLSClientConfig.NextProtos`. Sharing the pointer meant the forward transport then OFFERED HTTP/2
+  to every TLS peer while being unable to speak it, so a peer that chose `h2` answered with frames
+  the HTTP/1.1 reader could not parse — the failure reported in #359. It only happened where
+  `trusted_ca_pem` is set, which is every estate with a corporate CA. The control-plane client now
+  takes its own copy, and a test pins that the shared config is still untouched after a
+  control-plane round trip.
+- **The MITM and plain egress lanes now work against a TLS peer that speaks HTTP/2, negotiated or
+  not (#360).** A peer that picks `h2` over ALPN gets HTTP/2. A peer that speaks HTTP/2 without
+  negotiating it is recognised from its first frame (a SETTINGS frame read right after the TLS
+  handshake, or net/http's parse error when it only answers a request), remembered for the rest of
+  the run, and the request is resent over HTTP/2 when its body can be replayed; later requests to
+  that host go straight to HTTP/2. This also catches the two shapes the #359 error-text check missed:
+  a SETTINGS payload with a space byte before any newline, and SETTINGS that arrive before the
+  request goes out. A peer caught before the request was written is resent even when its body is a
+  one-shot stream, since nothing had read it. A request that cannot be resent, or whose HTTP/2
+  resend also fails, still gets #359's `builtin:upstream-protocol-mismatch` row and 400, with the
+  cause naming both attempts. The brokered git and PAT lanes take the same path, so a forge that
+  speaks HTTP/2 is served over HTTP/2 instead of refused.
+
+### Changed
+
+- **The egress proxy now offers HTTP/2 to TLS peers, deliberately.** Its forward transport offers
+  `h2,http/1.1` over ALPN and speaks HTTP/2 when a peer chooses it; the control-plane transport
+  stays HTTP/1.1. The first connection to a host whose handshake negotiates no ALPN protocol waits
+  up to 250 ms for an unprompted HTTP/2 SETTINGS frame; what that connection learns is remembered
+  for the run, so no later connection to the same host waits again.
 
 ## [0.7.8] — 2026-09-19
 
