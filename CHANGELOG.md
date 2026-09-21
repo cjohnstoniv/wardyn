@@ -10,6 +10,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [0.7.9] — 2026-09-21
 
+### Added
+
+- **`scripts/gpl-source-offer.sh` covers a first-time image publish before it ships.** The image list
+  is now read straight out of `release.yml`'s publish matrix instead of a hand-maintained array that
+  had already drifted once (the retired `agent-claude-code` name stayed listed after 0.6.2 stopped
+  publishing it). For an image with no prior published digest to scan, a documented local-build path
+  (`BOOTSTRAP_IMAGES=`, or an automatic fallback once the image is in the matrix) scans the identical
+  build recipe instead, and the generated section says so in plain prose. A missing SBOM now fails
+  the script loudly rather than writing a silent "_No SBOM available._" section. `scripts/check-image-
+  pins.sh` gains a cross-check tying every published image to a section in `deploy/images/
+  THIRD-PARTY-GPL.md`, which nothing verified before (#284).
+
 ### Fixed
 
 - **The egress proxy offered HTTP/2 it could not speak, on every install with a corporate CA.**
