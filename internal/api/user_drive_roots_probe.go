@@ -163,6 +163,7 @@ func driveWriteAuditData(saved types.UserDrive, rehome driveRehome) map[string]a
 		"host_root":     saved.HostRoot,
 		"storage_class": saved.StorageClass,
 		"home_template": saved.HomeTemplate,
+		"object_scheme": saved.ObjectScheme,
 		"size_mib":      saved.SizeMiB,
 		"writable":      saved.Writable,
 		"reclaim":       saved.Reclaim,
@@ -176,4 +177,48 @@ func driveWriteAuditData(saved types.UserDrive, rehome driveRehome) map[string]a
 		data["rehomed_subjects"] = rehome.subjects
 	}
 	return data
+}
+
+// driveNameMovesTheObject reports whether renaming a drive from before to after
+// changes the object its members bind — i.e. whether the two names fold to
+// different slugs. It asks types.DriveObjectName rather than re-implementing the
+// fold, over one fixed backend and one fixed home, so the ONLY thing that can
+// differ is the name's own contribution; a naming change in types is then a
+// change this gate inherits instead of one it drifts away from.
+//
+// scheme is the row's STORED object_scheme (before.ObjectScheme at the one call
+// site, in user_drives.go's driveIdentityFields — never the request's, which
+// driveObjectSchemeMoves polices separately and which the store ignores either
+// way): on DriveObjectSchemeID the minted name is `wardyn-drive-<id>-<home>`
+// and the drive's NAME plays no part in it at all, so a rename on an id-scheme
+// drive must probe as unchanged rather than reporting the slug it no longer
+// mints.
+//
+// Lives here rather than beside driveIdentityFields for user_drives.go's own
+// file-size ceiling, the same reason driveWriteAuditData does.
+func driveNameMovesTheObject(before, after string, scheme types.DriveObjectScheme) bool {
+	const probeHome = "probe"
+	object := func(name string) string {
+		return types.DriveObjectName(types.UserDrive{Name: name, Backend: types.DriveBackendK8sPVC, ObjectScheme: scheme}, probeHome)
+	}
+	return object(before) != object(after)
+}
+
+// driveObjectSchemeMoves reports whether a PUT's object_scheme differs from the
+// stored drive's — but ONLY when the request actually STATES one.
+//
+// The field is not client-authored (types.DriveObjectScheme's own doc: the
+// store derives it unconditionally — 'id' on every INSERT, the stored value
+// carried through on every UPDATE — and never reads this one off the request),
+// so an ordinary client that omits it, which is every console and API caller
+// that predates this field, must not trip the confirmation gate on every edit
+// of every allocated drive; comparing raw would make ?confirm=rehome mandatory
+// for a plain size change the moment any field went missing from a request.
+// What this catches instead is a request that actively CLAIMS a different
+// scheme from the one stored: the write could never perform it (the store
+// ignores the value either way, in both directions), but a forged claim is
+// refused with the same 409 every other identity field answers with, rather
+// than being silently swallowed by a write that was always going to ignore it.
+func driveObjectSchemeMoves(before, after types.DriveObjectScheme) bool {
+	return after != "" && after != before
 }
