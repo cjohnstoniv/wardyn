@@ -39,8 +39,8 @@ admin actions is that it arrives on a different browser origin. See
 `make agent-image-novnc`, declared as `"name": "novnc"`. It changed no server
 code, which was the whole prediction: an app rides the image, not a seam.
 
-**Base:** `agent-base`, deliberately not the `agent-claude-code` the code-server
-image uses. agent-base is the image contract with no vendor CLI and is what this
+**Base:** `agent-base` — the same default the code-server (`vscode/`) image
+uses. agent-base is the image contract with no vendor CLI and is what this
 project publishes; an X stack layered on node + npm + a vendor CLI is surface
 for nothing.
 
@@ -408,7 +408,7 @@ with the work it implies, not with a plan:
 | JetBrains Gateway | Gateway's normal flow has the **remote** host download a multi-gigabyte IDE backend; the sandbox's only egress is wardyn-proxy under the run's allowlist, so that download has nothing to reach — the same problem `remote.SSH.localServerDownload` solves for VS Code, but with a much larger artifact and no equally simple client switch. A backend baked into an image, or pushed over the existing SSH transport, is the shape it would take | Nothing built. No Wardyn image carries an IDE backend, and no one has run the client against a sandbox to find out where it stops |
 | RDP (xrdp) | An X session plus `xrdp` inside the image, and a TCP path for the native client. That path may already exist: [`ssh -L`](SSH.md#4--l-port-forwarding) carries arbitrary **loopback** TCP into the sandbox, so this is plausibly an image question, not a server one. X11 forwarding is refused outright by the SSH gateway, so `-X` is not the route | Nothing built. No image ships an X session, and the desktop's audit/recording story is unwritten |
 | Xpra | Same image problem, smaller: a rootless X server and per-app windows instead of a whole desktop, reached the same way (`-L`, or xpra's own ssh transport) | Nothing built |
-| Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It was the cheapest of the four for that reason | **Built in 0.7**: `deploy/images/novnc/`, `make agent-image-novnc`, declared as `"name": "novnc"`. FROM `agent-base` (not the vscode image's `agent-claude-code`) — an X stack does not need a language runtime. Local-build only. Measured: ~565 MB over the base, listening ~1s into the 20s budget |
+| Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It was the cheapest of the four for that reason | **Built in 0.7**: `deploy/images/novnc/`, `make agent-image-novnc`, declared as `"name": "novnc"`. FROM `agent-base`, the same default the vscode image now uses — an X stack does not need a language runtime. Local-build only. Measured: ~565 MB over the base, listening ~1s into the 20s budget |
 
 **Decision criteria.** Before any of these becomes work, all of the following
 have to hold — they are the same properties that made the browser relay
