@@ -29,6 +29,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -481,6 +482,11 @@ type Config struct {
 	AuditCoalesceWindow time.Duration
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
+	// OrgFederation is the hybrid audit forwarder's status (cmd/wardynd's
+	// bootHybrid), nil when WARDYN_ORG_URL is unset. It feeds /healthz's
+	// org_federation block, the wardyn_org_federation_lag gauge and the
+	// create-run refusal once the organisation has revoked this device.
+	OrgFederation func() federation.Status
 	// BaseCtx is the process-lifetime base context used for detached background
 	// work that MUST outlive the request that started it — specifically the
 	// completion watcher dispatch starts after Exec. The request/dispatch ctx is

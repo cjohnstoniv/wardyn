@@ -202,7 +202,7 @@ func TestDevices_SecretsNeverReachLogsOrAuditRows(t *testing.T) {
 	srv, ast, rec := newDeviceTestServer(t, false)
 	enrolTok := mintEnrolmentToken(t, srv, "laptop")
 	w := doPeer(t, srv, http.MethodPost, "/api/v1/devices/enrol", "", `{"token":"`+enrolTok+`"}`, "203.0.113.10:4000")
-	var got deviceEnrolResponse
+	var got types.DeviceEnrolResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusCreated {
 		t.Fatalf("enrol: %d %s", w.Code, w.Body.String())
 	}

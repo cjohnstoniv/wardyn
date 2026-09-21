@@ -146,6 +146,21 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 		workspacePath, len(visible), strings.Join(visible, ", "))}
 }
 
+// refuseWhenOrgRevoked fronts POST /runs: a hybrid laptop the organisation
+// revoked starts nothing new, before the body is read. Runs already going
+// continue, and one created between the revocation and the forwarder's next
+// call is legitimately local — the gate is only as fresh as that call.
+func (s *Server) refuseWhenOrgRevoked(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.OrgFederation != nil && s.cfg.OrgFederation().Revoked {
+			writeError(w, http.StatusServiceUnavailable, "this device's enrolment with its organisation was revoked; "+
+				"new runs are refused until it is re-enrolled (deliver a fresh WARDYN_ORG_ENROLMENT_TOKEN and restart wardynd)")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // handleCreateRun validates policy, gates on confinement class against what the
 // runner can actually enforce (fail closed), persists the run + its grants,
 // mints the run identity, and (if a runner is wired) dispatches the sandbox.

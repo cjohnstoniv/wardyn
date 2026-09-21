@@ -133,6 +133,14 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
 	}
+	// org_federation is present ONLY on a hybrid laptop (WARDYN_ORG_URL set),
+	// so every other deployment's body is byte-for-byte what it was
+	// (TestHealthzOrgFederation_GoldenWhenOff). Two facts and no more: this
+	// endpoint is anonymous, so the device id and the org URL never appear.
+	if s.cfg.OrgFederation != nil {
+		st := s.cfg.OrgFederation()
+		body["org_federation"] = map[string]any{"enrolled": !st.Revoked, "lag": st.Lag()}
+	}
 	writeJSON(w, http.StatusOK, body)
 }
 

@@ -69,3 +69,22 @@ type FederatedAuditEvent struct {
 	AuditEvent
 	Seq int64 `json:"seq"`
 }
+
+// DeviceEnrolRequest / DeviceEnrolResponse are POST /api/v1/devices/enrol's
+// wire shapes, shared by the organisation's handler and the laptop's
+// federation client. DeviceAck is what the ingest and heartbeat routes answer:
+// the organisation's recorded cursor for the device, which the forwarder
+// advances to.
+type DeviceEnrolRequest struct {
+	Token string `json:"token"`
+}
+
+type DeviceEnrolResponse struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	Name     string    `json:"name"`
+	Token    string    `json:"token"`
+}
+
+type DeviceAck struct {
+	AckedSeq int64 `json:"acked_seq"`
+}

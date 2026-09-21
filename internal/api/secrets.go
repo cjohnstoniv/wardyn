@@ -45,6 +45,9 @@ var reservedSecretNames = map[string]bool{
 	"wardyn-session-key":    true,
 	"wardyn-ssh-host-key":   true,
 	"wardyn-ui-session-key": true,
+	// The hybrid device credential (cmd/wardynd's bootHybrid): overwriting it
+	// would swap which organisation identity this laptop pushes its audit as.
+	"wardyn-org-device-credential": true,
 }
 
 // reservedSecret reports whether name is a platform-internal / managed-credential

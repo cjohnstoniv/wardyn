@@ -858,6 +858,8 @@ var reservedBrokerSecretNames = map[string]bool{
 	"github-app-key":        true,
 	"wardyn-ssh-host-key":   true,
 	"bedrock-api-key":       true,
+	// The hybrid device credential: no grant may hand it into a sandbox.
+	"wardyn-org-device-credential": true,
 }
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the

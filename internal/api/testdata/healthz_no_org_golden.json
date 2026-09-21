@@ -1,0 +1,1 @@
+{"components":null,"confinement_classes":null,"confinement_names":{"CC1":"Fence","CC2":"Wall","CC3":"Vault"},"confinement_substrates":null,"ebpf_groundtruth":{"state":"unavailable"},"identity_provider":"embedded","llm_egress_inspection":"available","runner":"","ssh":null,"sso":false,"status":"ok","trust_domain":"wardyn.local","ui_sandbox":null,"version":"<version>"}

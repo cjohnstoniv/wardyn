@@ -249,7 +249,7 @@ func enrolTestDevice(t *testing.T, srv *Server, name string) (uuid.UUID, string)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("enrol: %d %s", w.Code, w.Body.String())
 	}
-	var got deviceEnrolResponse
+	var got types.DeviceEnrolResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func ackedSeq(t *testing.T, w *httptest.ResponseRecorder) int64 {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
 	}
-	var ack deviceAck
+	var ack types.DeviceAck
 	if err := json.Unmarshal(w.Body.Bytes(), &ack); err != nil {
 		t.Fatal(err)
 	}

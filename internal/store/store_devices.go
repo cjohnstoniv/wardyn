@@ -564,6 +564,19 @@ func (s PG) ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) (
 	return collect(ctx, s.Pool, "list", "federated audit events", q, []any{seq, limit}, scanFederatedAuditEvent)
 }
 
+// AuditHeadSeq is THIS deployment's newest audit_events seq, 0 on an empty
+// table: the head the laptop-side forwarder measures its lag against, read on
+// every tick whether or not a push succeeds, so an unreachable organisation
+// shows as growing lag rather than a frozen one. max(seq) walks the primary
+// key's index backwards.
+func (s PG) AuditHeadSeq(ctx context.Context) (int64, error) {
+	var seq int64
+	if err := s.Pool.QueryRow(ctx, `SELECT COALESCE(max(seq), 0) FROM audit_events`).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("store: audit head seq: %w", err)
+	}
+	return seq, nil
+}
+
 func scanFederatedAuditEvent(row pgx.Row) (types.FederatedAuditEvent, error) {
 	var e types.FederatedAuditEvent
 	var actorType string
