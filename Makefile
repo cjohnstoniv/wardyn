@@ -230,17 +230,28 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # -tags k8s), not the tagless subset alone — measuring only the tagless build
 # reported a number for code that is not what ships. Pulling the excluded
 # packages in moved the honest total from 67.1% (tagless-only) to 66.1%
-# (docker union); the floor sits just under that with a small margin for
-# routine churn. Raise it as coverage climbs.
+# (docker union); the floor sits under that measurement with a margin for
+# routine churn, per the RE-SET RULE below.
 # scripts/cover-union.sh documents exactly what is and is not counted.
-# RATCHET (W6-01, v0.7.4 blind-verify lane): the coordinator's W5 final-tree
-# `make ci` measured the union at 78.3% at tree 532ca5d4 (see
-# local/v074/evidence/w5-ci2/make-ci.log:199) — 3.3 points above the old 75
-# floor, slack wide enough that a real coverage regression could land and
-# still pass. Raised to 78, a margin below that measurement rather than the
-# measurement itself. Never lower it without a coverage regression forcing
-# the call; re-measure at the next release.
-COVER_MIN ?= 78
+#
+# RE-SET RULE (#174): a floor set AT the fresh measurement fails on noise —
+# routine churn (a test reordered, a build-tag combination that shifts a few
+# statements) trips CI for no real regression. A floor set far below it gates
+# nothing — a real regression has room to land and still pass. The rule: run
+# `make cover-check`, read the union total, and set COVER_MIN to the GREATEST
+# INTEGER AT LEAST 1.0 BELOW that measurement (e.g. a 78.5% measurement sets
+# COVER_MIN=77, never 78). Re-run this at every future re-set — do not
+# rediscover the rule, and do not just bump the number up as coverage climbs;
+# recompute it from the fresh measurement, which can also lower the floor when
+# the old one had drifted to too thin a margin (that drift — 78 against a
+# 78.3% measurement, 0.3 points of margin — is what made #174 necessary).
+#
+# HISTORY: W6-01 (v0.7.4 blind-verify lane) set 78 against a 78.3% measurement
+# at tree 532ca5d4 (local/v074/evidence/w5-ci2/make-ci.log:199). #174 measured
+# 78.5% freshly (test/reports/go/{unit,docker,k8s}/coverage-func.txt: 78.8% /
+# 78.4% / 79.0%, union via scripts/cover-union.sh) and re-set to 77 per the
+# rule above.
+COVER_MIN ?= 77
 cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER_MIN floor over ALL THREE shipped builds, unioned
 	@./scripts/cover-union.sh --self-test
 	@./scripts/cover-union.sh $(COVER_MIN) test/reports/go/union \
