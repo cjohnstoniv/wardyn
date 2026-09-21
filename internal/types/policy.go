@@ -6,6 +6,8 @@ package types
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -285,14 +287,16 @@ type RunPolicySpec struct {
 // TestPolicyDoc_EveryFieldHasRow's reflection-based census, so a typo'd key
 // would silently do nothing instead of failing at write time.
 //
-// This type stores and VALIDATES; what the strings mean is the git broker's
+// This type stores and VALIDATES, and DenyPathSegments is the one reading of a
+// deny_paths entry; how the segments match is the git broker's
 // (internal/egress/proxy/push_rules.go), which reads them on both brokered
-// lanes before the git credential is minted and documents the pattern
-// language, the ceilings and the residuals.
+// lanes and documents the pattern language, the ceilings and what a pack
+// cannot show.
 type PushRulesSpec struct {
 	// DenyPaths are path patterns (e.g. ".github/workflows/**") the broker
 	// refuses in a push: "**" crosses path segments, "*" and "?" do not, and
-	// the pattern is anchored at the repository root.
+	// the pattern is anchored at the repository root. A trailing "/" means
+	// everything beneath the directory (DenyPathSegments).
 	DenyPaths []string `json:"deny_paths,omitempty"`
 	// MaxInspectPackMiB caps how much of an incoming push the broker buffers
 	// before refusing it as too large. 0/absent takes the broker's own default,
@@ -311,6 +315,30 @@ type PushRulesSpec struct {
 // drift into disagreeing about whether a run has content rules at all.
 func (s *PushRulesSpec) IsSet() bool {
 	return s != nil && (len(s.DenyPaths) > 0 || s.MaxInspectPackMiB > 0)
+}
+
+// DenyPathSegments is the one reading of a push_rules.deny_paths entry, shared
+// by write-time validation and the broker's matcher so the two cannot disagree
+// about what an entry means.
+//
+// A leading "/" is dropped: patterns are anchored at the repository root
+// either way. A trailing "/" means everything beneath that directory — the
+// .gitignore and CODEOWNERS spelling — so "infra/" reads as "infra/**". An
+// empty, "." or ".." segment is refused: git never stores a path containing
+// one, so "./infra/**" or "infra//**" would match nothing, and a deny rule that
+// silently matches nothing reads as enforcement that is not there.
+func DenyPathSegments(pattern string) ([]string, error) {
+	p := strings.TrimPrefix(pattern, "/")
+	if strings.HasSuffix(p, "/") {
+		p += "**"
+	}
+	segs := strings.Split(p, "/")
+	for _, seg := range segs {
+		if seg == "" || seg == "." || seg == ".." {
+			return nil, fmt.Errorf("%q has an empty, \".\" or \"..\" path segment, which no git path contains", pattern)
+		}
+	}
+	return segs, nil
 }
 
 // ToolEffect is what a matching ToolRule does with the call.

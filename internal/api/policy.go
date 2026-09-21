@@ -332,7 +332,8 @@ const (
 )
 
 // validatePushRules enforces push_rules' structural invariants at write time.
-// It bounds the STRINGS only; what they mean is the broker's
+// It bounds the STRINGS and refuses an entry types.DenyPathSegments cannot
+// read — one that would match nothing; what they match is the broker's
 // (internal/egress/proxy/push_rules.go), which is also where the list's own
 // evaluation cost is bounded — deliberately not here, for the no-count-cap
 // reason above. nil is legal and validates as a no-op, keeping the field's
@@ -350,6 +351,9 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 		}
 		if !controlCharFree(p) {
 			return fmt.Errorf("push_rules.deny_paths[%d]: control character not allowed", i)
+		}
+		if _, err := types.DenyPathSegments(p); err != nil {
+			return fmt.Errorf("push_rules.deny_paths[%d]: %w", i, err)
 		}
 	}
 	if pr.MaxInspectPackMiB < 0 || pr.MaxInspectPackMiB > maxPushRulesInspectPackMiB {

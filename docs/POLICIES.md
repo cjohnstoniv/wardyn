@@ -62,7 +62,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes — since 0.7.2, one field governs BOTH brokers: the GitHub-App lane and the `git_pat` lane — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
-| `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on both brokered lanes before the git credential is minted: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
+| `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on both brokered lanes before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -793,13 +793,19 @@ unchanged:
 |---|---|---|---|
 | A path the push introduces matched `deny_paths` | `403` | `brokered:git:push-rules` | Take those paths out of the push, or have an operator widen `deny_paths`. The refusal names up to ten of them. |
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
-| The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. A body in a non-identity `Content-Encoding`, a malformed pack, and a `deny_paths` list too long to evaluate land here too. |
+| The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
+| The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
 
-Every one of those happens **before the git credential is minted**, so a
-refused push never causes a token to be issued. The offending paths go to the
-sidecar's structured log and to the response git shows the person; they never
-ride the decision log, whose free-text fields are reserved for dial-shaped
-refusals.
+A refused push is **never forwarded**, and the refused request mints nothing
+itself — but it does not prevent a credential being issued. git sends
+`GET info/refs?service=git-receive-pack` before every push, the forge will not
+advertise refs to that request without the credential, and the broker mints (or
+reuses) it there. So an approval-gated, single-use grant is spent at that
+discovery request even when the push that follows is refused; the cached
+credential then serves the corrected retry until it expires. The offending
+paths go to the sidecar's structured log and to the response git shows the
+person; they never ride the decision log, whose free-text fields are reserved
+for dial-shaped refusals.
 
 **Both brokered lanes, and not behind a branch switch.** `github_token` and
 `git_pat` enforce these rules on exactly the same trigger — the run's policy
@@ -813,33 +819,52 @@ rules are set, because a lane that enforces rules must ask for a pack it can
 read — the agent images clone shallow, and without it the rules would refuse
 nearly every legitimate push.
 
-**What the rules see, and what they do not.** The inspector answers from the
-pushed pack alone — the broker never fetches base objects from the forge, which
-is the one thing it exists not to do — and a pack carries only the objects the
-forge does not already have. Under branch-namespace confinement every governed
-push lands on the run's own branch, so the forge never has the pushed commit's
-parent and there is no pre-image to diff against: the new tree is enumerated
-instead. Both consequences are worth knowing **before** authoring a pattern:
+**What the rules see, and what they do not.** Read this before authoring a
+pattern: it decides whether a rule is usable on your repository at all.
 
-- A path inside a directory this push did not change **is not seen**. That
-  directory's tree object is byte for byte one the forge already stores, so it
-  is not in the pack and the walk skips it. `deny_paths: [".github/workflows/**"]`
-  therefore fires when the push edits a workflow and not otherwise — which is
-  the intent — but it also means a directory resurrected wholesale out of the
-  forge's own history is not matched. That residual is published in
-  `threatmodel/THREAT-MODEL.md`.
+The inspector answers from the pushed pack alone — the broker never fetches
+objects from the forge — and a pack carries only the objects the forge does not
+already have, **wherever the new tree puts them**. Under branch-namespace
+confinement every governed push lands on the run's own branch, so the pushed
+commit's parent stays on the forge and there is no pre-image to diff against:
+the new tree is enumerated instead. Three consequences:
+
+- **A directory the push did not change is opaque, and a pattern that could
+  match beneath it refuses the push.** Its tree is one the forge already stores,
+  so it is not in the pack — and nothing in the pack distinguishes a directory
+  left alone from one a push moved there, copied there from an earlier push of
+  the same run, or restored whole from an older revision. Each of those used to
+  go through unread, which let a run place anything at any path; see
+  `threatmodel/THREAT-MODEL.md`. So `deny_paths: [".github/workflows/**"]`
+  refuses **every push from a repository that already has a `.github/`
+  directory**, whether or not the push touches it, and `deny_paths: ["**/*.pem"]`
+  refuses every push that leaves any directory unchanged. There is no
+  client-side remedy: a push cannot be made to carry a directory the forge
+  already stores. In practice a pattern works as "must not exist, and must not
+  be reachable through anything the pack does not show" — which fits a path
+  your repository does not have (`.github/workflows/**` on a repository with no
+  `.github/`, `secrets/**`) and refuses everything on one that does.
 - A file at the repository **root is always seen**, changed or not, because the
   root tree itself is always in the pack. `deny_paths: ["Makefile"]` refuses
   every push from a run whose repository has a `Makefile`, not only the pushes
-  that edit it. Prefer a pattern naming what should not change (`infra/**`,
-  `.github/**`) over one naming a root-level file that always exists.
+  that edit it.
 - **Removals are invisible.** These rules judge what a push *introduces*.
+
+A **symlink or submodule** is opaque the same way: a checkout resolves paths
+beneath it to content no tree entry in the push names — `infra -> stage` turns
+`stage/prod/main.tf` into `infra/prod/main.tf` — so one standing at or above a
+path a pattern could match refuses the push. A commit whose whole tree is one
+the forge already stores (`git commit --allow-empty`, or a commit built from an
+older revision's tree) refuses under any pattern. In the refusal, a path ending
+in `/` names such an unread directory, and `/` alone names the whole tree.
 
 Over-reporting is the safe direction for a deny rule and under-reporting is
 not, which is why entries the pack cannot measure are matched rather than
 dropped: a blob the forge already stores, re-introduced at a denied path — a
 plain `git mv` — looks exactly like an unchanged root-level file, and dropping
-one would drop the other.
+one would drop the other. Restoring the "an untouched directory is not
+refused" behaviour needs the parent commit's trees, which only the forge has;
+the broker does not fetch them.
 
 **What the person pushing sees.** git renders a receive-pack `403` as
 `error: RPC failed; HTTP 403` without the response body, so the paths are read
@@ -852,9 +877,14 @@ forwarded.
 `?` match within one segment and never cross `/`, and everything else is
 literal. Patterns are anchored at the repository root (a leading `/` is
 trimmed), so `*.pem` matches `server.pem` and not `certs/server.pem`, while
-`**/*.pem` matches both. A pattern that is not a valid Go pattern — an
-unterminated `[`, say — is compared literally rather than silently matching
-nothing.
+`**/*.pem` matches both. A trailing `/` means everything beneath the directory,
+as in `.gitignore` and `CODEOWNERS`: `infra/` reads as `infra/**`. An entry
+with an empty, `.` or `..` segment — `./infra/**`, `infra//**`, `a/../b` — is
+**refused at write time**, because no git path contains one and the rule would
+silently match nothing; a policy that reaches the broker carrying one anyway
+has every push refused rather than the entry ignored. A pattern that is not a
+valid Go pattern — an unterminated `[`, say — is compared literally rather than
+silently matching nothing.
 
 **Phase two** (`require_review_paths`, `deny_new_executables`,
 `max_file_size_mib`, `hold_seconds`, and the held `push_content` approval this

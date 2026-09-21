@@ -25,9 +25,14 @@ package proxy
 // inside that block instead, a policy carrying deny_paths and
 // git_push_any_branch: true would read as governed and enforce nothing.
 //
-// REFUSED BEFORE THE CREDENTIAL IS MINTED. Both call sites run this ahead of
-// their token mint, so a refused push never causes a credential to be issued —
-// the same ordering confinePush already relies on.
+// A REFUSED PUSH IS NEVER FORWARDED; ITS CREDENTIAL MAY ALREADY EXIST. Both
+// call sites run this ahead of their token lookup, so the refused request
+// itself mints nothing. But it is never a push's first request: git sends GET
+// info/refs?service=git-receive-pack before every push, the forge will not
+// advertise refs to it without the credential, and that discovery mints (or
+// reuses) it. So these rules decide what reaches the forge, not whether a
+// credential is issued — an approval-gated single-use grant is spent at
+// discovery, and its cached credential serves the corrected retry.
 //
 // OFFENDING PATHS DO NOT RIDE THE DECISION LOG. They go to the structured log
 // and, at most ten of them, to the refusal body. The decision log's free-text
@@ -42,16 +47,20 @@ package proxy
 //
 // WHAT THE RULES SEE is the pack and nothing else (internal/gitpack's package
 // comment, docs/POLICIES.md and threatmodel/THREAT-MODEL.md carry this in
-// full). Two consequences shape how a deny pattern behaves: a directory the
-// push did not change is not in the pack and is skipped, so a pattern inside
-// it does not fire — including for a directory resurrected wholesale out of
-// the forge's own history; and, because a governed push always lands on the
-// run's own branch and so has no pre-image to diff against, the new tree is
-// enumerated and every file at the repository ROOT is reported whether the
-// push touched it or not. Entries the pack cannot measure are matched rather
-// than dropped: a blob the forge already stores, re-introduced at a denied
-// path by a rename, is reported identically to an untouched root-level file,
-// so dropping one would drop the other.
+// full). A pack leaves out every object the forge already stores, wherever
+// the new tree puts it, and the broker never has the pre-image — a governed
+// push lands on the run's own branch, so its parent stays on the forge — so
+// the new tree is enumerated. Every file at the repository ROOT is reported
+// whether the push touched it or not, and every directory the pack does not
+// carry is reported as one OPAQUE entry: nothing distinguishes a directory
+// left alone from one moved, copied or restored onto that path, so what is
+// beneath it is unknown. Symlinks and submodules are opaque the same way — a
+// checkout resolves paths beneath them to content no tree entry here names.
+// An opaque entry is denied when a pattern could match anything beneath it
+// (matchesBeneath). So a pattern reaching into a directory the repository
+// already has refuses every push whose tree still contains that directory —
+// the price of the rule meaning anything at all: skipping those directories
+// let a forge-held tree be placed at any path unread.
 //
 // Phase one has no size rule, so nothing here compares gitpack.Change.Size.
 // Whoever adds max_file_size_mib must DECIDE what Size == -1 means rather than
@@ -60,13 +69,17 @@ package proxy
 
 import (
 	"bytes"
+	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"path"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -119,16 +132,20 @@ var errGlobBudget = errors.New("the deny_paths list is too large to evaluate aga
 type pushRuleSet struct {
 	// deny holds each deny_paths entry split into segments.
 	deny [][]string
+	// unreadable is the first deny_paths entry types.DenyPathSegments refused.
+	// Write-time validation refuses the same entries, so this is reached only
+	// by a policy that bypassed it — and then every push is refused, because
+	// compiling the entry to a pattern that matches nothing is the silent
+	// non-enforcement the check exists to prevent.
+	unreadable string
 	// inspectMax is how many bytes of the request are buffered before the push
 	// is refused as too large.
 	inspectMax int64
 }
 
 // compilePushRules builds the compiled form, or nil when the spec carries no
-// actual rule. A leading "/" is trimmed because gitpack reports paths relative
-// to the repository root with no leading separator, and an operator who writes
-// "/infra/**" means the same thing as "infra/**" rather than a pattern that
-// can never match.
+// actual rule. Each entry is read through types.DenyPathSegments, the reading
+// write-time validation uses too.
 func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 	if !s.IsSet() {
 		return nil
@@ -138,33 +155,103 @@ func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 		rs.inspectMax = int64(s.MaxInspectPackMiB) << 20
 	}
 	for _, pat := range s.DenyPaths {
-		rs.deny = append(rs.deny, strings.Split(strings.TrimPrefix(pat, "/"), "/"))
+		segs, err := types.DenyPathSegments(pat)
+		if err != nil {
+			rs.unreadable = cmp.Or(rs.unreadable, pat)
+			continue
+		}
+		rs.deny = append(rs.deny, segs)
 	}
 	return rs
 }
 
 // match reports the paths a deny rule claims: a capped SAMPLE for the log and
-// the exact total. It stops at the first pattern that matches a path — the
+// the exact total. It stops at the first pattern that claims a path — the
 // answer is per path, not per rule.
+//
+// An opaque entry (gitpack.Change.Opaque: a directory the pack does not carry,
+// a symlink, a submodule) is claimed when a pattern could match anything
+// beneath it, not only the entry itself: what is beneath it is unknown, and a
+// deny rule has to treat unknown as matched.
 func (rs *pushRuleSet) match(changes []gitpack.Change) (sample []string, total int, err error) {
 	budget := maxGlobOps
 	for _, c := range changes {
-		segs := strings.Split(c.Path, "/")
+		var segs []string // the root is zero segments, not one empty one
+		if c.Path != "" {
+			segs = strings.Split(c.Path, "/")
+		}
+		opaque := c.Opaque()
 		for _, pat := range rs.deny {
 			ok, err := matchSegments(pat, segs, &budget)
+			if err == nil && !ok && opaque {
+				ok, err = matchesBeneath(pat, segs, &budget)
+			}
 			if err != nil {
 				return nil, 0, err
 			}
 			if ok {
 				total++
 				if len(sample) < maxDeniedPathsLogged {
-					sample = append(sample, c.Path)
+					sample = append(sample, shownPath(c))
 				}
 				break
 			}
 		}
 	}
 	return sample, total, nil
+}
+
+// shownPath is how a claimed entry is named to the person: an uncarried
+// directory ends in "/" (the whole tree is "/"), so a refusal naming ".github/"
+// reads as the directory it is rather than as a file.
+func shownPath(c gitpack.Change) string {
+	if c.Mode == gitpack.ModeUncarried {
+		return c.Path + "/"
+	}
+	return c.Path
+}
+
+// matchesBeneath reports whether pat could match some path strictly beneath
+// name: whether the pattern can consume every segment of name and still have a
+// segment left for what lies under it. at[i] is true when pat[:i] can match
+// the segments read so far; "**" may stand for none of them, and stays in
+// place to consume another.
+//
+// A remaining segment is assumed to match some name — the conservative answer
+// for a deny rule, and the true one for every pattern an operator would write.
+func matchesBeneath(pat, name []string, budget *int) (bool, error) {
+	at := make([]bool, len(pat)+1)
+	at[0] = true
+	spreadStars(pat, at)
+	for _, seg := range name {
+		next := make([]bool, len(pat)+1)
+		for i := range pat {
+			if !at[i] {
+				continue
+			}
+			if pat[i] == "**" {
+				next[i] = true
+				continue
+			}
+			ok, err := matchSegment(pat, i, seg, budget)
+			if err != nil {
+				return false, err
+			}
+			next[i+1] = next[i+1] || ok
+		}
+		at = next
+		spreadStars(pat, at)
+	}
+	return slices.Contains(at[:len(pat)], true), nil
+}
+
+// spreadStars lets each reachable "**" match zero segments.
+func spreadStars(pat []string, at []bool) {
+	for i, p := range pat {
+		if at[i] && p == "**" {
+			at[i+1] = true
+		}
+	}
 }
 
 // matchSegments matches a pre-split deny pattern against a pre-split path.
@@ -260,16 +347,49 @@ func nonIdentityEncoding(h http.Header) (string, bool) {
 // A run whose policy carries no content rules is returned its body untouched
 // and nothing is buffered, so a nil push_rules behaves exactly as it does
 // today.
+//
+// The returned release MUST be deferred by the caller, as scanBufferedBody's
+// is: the buffer stays charged to scanRetained until the forwarded request is
+// done with it. It is always non-nil and safe to call more than once.
 func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.Reader,
-	subject slog.Attr, deny func(ruleSource string)) (io.Reader, bool) {
+	subject slog.Attr, deny func(ruleSource string)) (io.Reader, func(), bool) {
+	noRelease := func() {}
 	rules := p.policy.contentRules()
 	if rules == nil {
-		return body, true
+		return body, noRelease, true
+	}
+	if rules.unreadable != "" {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+			fmt.Sprintf("wardyn: cannot enforce push content rules: push_rules.deny_paths entry %q is not a"+
+				" pattern the broker can read\nask an operator to correct it", rules.unreadable))
+		return nil, noRelease, false
 	}
 	if enc, bad := nonIdentityEncoding(r.Header); bad {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on a "+enc+"-encoded push body")
-		return nil, false
+		return nil, noRelease, false
+	}
+	// The same slot and byte budget the LLM inspection path takes
+	// (scanBufferedBody), for the same reason: the sidecar runs under a hard
+	// 256 MiB cgroup cap, and a push is a small body the agent chooses that
+	// inflates to what gitpack's ceilings allow — four compressed 31 MiB blobs
+	// are a 34 KB request and 124 MiB of heap, and three at once OOM-kill the
+	// run's only network path. Sharing scanSlots rather than keeping a slot of
+	// its own is the point: the cap belongs to the process, so a push inflating
+	// beside an LLM extraction is the same overrun as two of either. A wait
+	// that expires fails CLOSED: the push is refused, never forwarded unread.
+	ctx, cancel := context.WithTimeout(r.Context(), scanQueueWait)
+	defer cancel()
+	busy := func() {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusServiceUnavailable,
+			"wardyn: cannot enforce push content rules: timed out waiting to inspect this push\nretry it")
+	}
+	select {
+	case scanSlots <- struct{}{}:
+		defer func() { <-scanSlots }()
+	case <-ctx.Done():
+		busy()
+		return nil, noRelease, false
 	}
 	// One byte past the ceiling is how "over it" is known without reading what
 	// is past it.
@@ -277,14 +397,14 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules: the push body could not be read")
-		return nil, false
+		return nil, noRelease, false
 	}
 	if int64(len(buf)) > rules.inspectMax {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBig, http.StatusRequestEntityTooLarge,
 			fmt.Sprintf("wardyn: this push is larger than the %d MiB its content rules can inspect"+
 				"\npush fewer commits, or ask an operator to raise push_rules.max_inspect_pack_mib",
 				rules.inspectMax>>20))
-		return nil, false
+		return nil, noRelease, false
 	}
 	res, err := gitpack.Inspect(buf)
 	if err != nil {
@@ -292,14 +412,14 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
 				"\npush from a complete clone (git fetch --unshallow) so the pack carries"+
 				" every object it deltifies against")
-		return nil, false
+		return nil, noRelease, false
 	}
 	sample, total, err := rules.match(res.Changes)
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
 				"\nask an operator to shorten push_rules.deny_paths")
-		return nil, false
+		return nil, noRelease, false
 	}
 	if total > 0 {
 		deny(ruleSourceGitRules)
@@ -309,9 +429,17 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 			slog.Int("denied_paths", total),
 			slog.Any("paths", sample))
 		http.Error(w, deniedPathsBody(sample, total), http.StatusForbidden)
-		return nil, false
+		return nil, noRelease, false
 	}
-	return bytes.NewReader(buf), true
+	// The buffer outlives the slot: it is forwarded from here. Charged while the
+	// slot is still held, so scanRetained keeps its single acquirer.
+	if !scanRetained.acquire(ctx, len(buf)) {
+		busy()
+		return nil, noRelease, false
+	}
+	var once sync.Once
+	n := len(buf)
+	return bytes.NewReader(buf), func() { once.Do(func() { scanRetained.release(n) }) }, true
 }
 
 // refusePush records, logs and answers one content-rule refusal that names no
@@ -339,6 +467,10 @@ func deniedPathsBody(sample []string, total int) string {
 	}
 	if total > shown {
 		fmt.Fprintf(&b, "  ... and %d more denied path(s)\n", total-shown)
+	}
+	if slices.ContainsFunc(sample, func(s string) bool { return strings.HasSuffix(s, "/") }) {
+		b.WriteString("a path ending in / is a directory this push carries only by reference to what the" +
+			" forge already stores, so what is beneath it cannot be checked\n")
 	}
 	b.WriteString("remove these paths from the push, or ask an operator to widen push_rules.deny_paths")
 	return b.String()

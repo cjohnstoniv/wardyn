@@ -2405,39 +2405,66 @@ whether the funnel opened.
 ### Push content rules read the pack, and only the pack
 
 A run whose policy sets `push_rules` has its brokered git pushes inspected
-before the git credential is minted: the broker buffers the receive-pack
-request, reads which paths the push would introduce, and refuses one that
-carries a denied path, that is larger than the run's inspection ceiling, or
-that cannot be read from its own bytes. Both brokered lanes enforce it, on the
-same trigger, and independently of branch-namespace confinement — a
-`git_push_any_branch` opt-out says where a push may land and does not switch
-off what it may contain.
+before they are forwarded: the broker buffers the receive-pack request, reads
+which paths the push would introduce, and refuses one that carries a denied
+path, that is larger than the run's inspection ceiling, or that cannot be read
+from its own bytes. Both brokered lanes enforce it, on the same trigger, and
+independently of branch-namespace confinement — a `git_push_any_branch`
+opt-out says where a push may land and does not switch off what it may
+contain. It governs what reaches the forge, not whether a credential is
+issued: git's `GET info/refs?service=git-receive-pack` precedes every push and
+mints (or reuses) the lane's credential, so an approval-gated single-use grant
+is spent there even when the push that follows is refused.
 
-What it does NOT catch, and why the imprecision is one-sided on purpose:
+What the pack can and cannot show, and why every gap is closed toward refusal:
 
-- **A directory resurrected wholesale out of the forge's own history is not
-  reported.** A pack carries only the objects the receiving side lacks, so a
-  directory whose tree object is absent is one the forge already stores
-  byte for byte. The inspector skips it rather than refusing, because refusing
-  every push that leaves a directory untouched would refuse nearly every real
-  push. The residual is the narrow case where that same tree is made reachable
-  from a new ref: its paths are not matched against a deny rule. The broker
-  cannot close this without fetching base objects from the forge, which would
-  put the proxy on the network on the run's behalf — the one thing the git
-  broker exists to prevent.
+- **A pack does not say where a tree it leaves out used to stand.** It carries
+  only the objects the forge lacks, wherever the new tree puts them, and under
+  branch-namespace confinement the pushed commit's parent stays on the forge,
+  so there is no pre-image to diff against. A directory the forge already
+  stores therefore looks the same whether the push left it alone, moved it
+  there (`git mv docs/ci infra` with `pack.useSparse=false`), staged it under an
+  allowed name in an earlier push of the same run and renamed it onto a denied
+  one, or restored it — or the whole root tree — from an older revision. Until
+  this was closed, the inspector skipped such a directory, so each of those
+  placed arbitrary content at a denied path unread; all three were reproduced
+  with a stock git client. Now a directory the pack does not carry is reported
+  as one opaque entry, and a deny pattern that could match beneath it refuses
+  the push (`internal/gitpack`'s `Change.Opaque`,
+  `internal/egress/proxy/push_rules.go`'s `matchesBeneath`). The cost is
+  large and deliberate: a pattern that reaches into a directory the repository
+  already has refuses every push whose tree still contains that directory —
+  `.github/workflows/**` refuses every push from a repository with a
+  `.github/` directory — and a leading `**` refuses nearly every push. The
+  rules are precise only for paths the repository does not yet have. Restoring
+  precision needs the parent commit's trees, which only the forge holds; the
+  broker does not fetch them.
+- **A symlink or submodule is opaque the same way.** It is a leaf in the pushed
+  tree, but a checkout resolves paths beneath it to content no tree entry
+  names — `infra -> stage` makes `stage/prod/main.tf` readable as
+  `infra/prod/main.tf`, and a submodule's contents come from another
+  repository. One at or above a path a deny pattern could match refuses the
+  push. Every mode git does not check out as a regular file counts.
 - **Removals are invisible.** These rules judge what a push introduces. A push
   that deletes a denied path is not a rule match.
-- **The enumerated case is the normal case, and it over-reports at the root.**
-  Under branch-namespace confinement every governed push lands on the run's own
-  branch, so the forge never has the pushed commit's parent and there is no
-  pre-image to diff against. The new tree is enumerated: unchanged
-  subdirectories are absent from the pack and skipped, but every file at the
-  repository root is named whether or not the push touched it. A deny pattern
-  naming a root-level file therefore refuses every push from that repository.
-  Over-reporting is the safe direction for a deny rule, and the entries that
-  cause it are not dropped on purpose: a blob the forge already stores,
-  re-introduced at a denied path by a rename, is reported identically, so
-  dropping one would drop the other and open the hole the rule exists to close.
+- **Root-level files are always reported.** The root tree is always in the
+  pack, so every file at the repository root is named whether or not the push
+  touched it, and a deny pattern naming a root-level file refuses every push
+  from that repository. Over-reporting is the safe direction for a deny rule,
+  and the entries that cause it are not dropped on purpose: a blob the forge
+  already stores, re-introduced at a denied path by a rename, is reported
+  identically, so dropping one would drop the other.
+- **A pattern that would match nothing is refused, not stored.** An entry with
+  an empty, `.` or `..` segment is refused at write time, a trailing `/` reads
+  as `/**`, and an entry that reaches the broker unvalidated refuses every push
+  rather than being ignored (`types.DenyPathSegments` is the one reading both
+  sides use).
+- **Inspection is memory-bounded as well as size-bounded.** A push is a small
+  body the agent chooses that inflates to what `internal/gitpack`'s ceilings
+  allow — four compressed 31 MiB blobs are a 34 KB request — and the proxy
+  sidecar has a hard 256 MiB cap. Inspection takes the same process-wide slot
+  and retained-bytes budget as LLM request scanning, and a push that cannot get
+  them in time is refused, never forwarded unread.
 - **The key lane is not covered at all.** An `ssh_key` grant is an opaque
   tunnel with no broker seam, so a policy that sets `push_rules` while
   `ssh_key` is the run's only git-capable grant is graded a medium-risk warning

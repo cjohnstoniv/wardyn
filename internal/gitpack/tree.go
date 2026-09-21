@@ -25,9 +25,28 @@ import (
 // downstream covers the gap either — receive.fsckObjects rejects "040000" as
 // zeroPaddedFilemode but lets "40001" through with a badFilemode warning.
 const (
-	modeTree   = 0o040000
-	modeFormat = 0o170000
+	modeTree    = 0o040000
+	modeRegular = 0o100000
+	modeFormat  = 0o170000
 )
+
+// ModeUncarried is the Mode of a Change that stands for a directory whose tree
+// object the pack does not hold. No other Change carries a directory mode: a
+// directory the pack does carry is reported as the entries beneath it.
+const ModeUncarried = "40000"
+
+// Opaque reports whether a checkout may hold paths beneath c.Path that no
+// Change names: a directory whose tree the pack does not carry, a symlink, or a
+// submodule. Anything that is not a regular file counts — git checks out every
+// mode it cannot classify as a submodule pointer — and so does a mode that does
+// not parse, because the safe answer to "what is under this?" is "anything".
+//
+// A rule about a path beneath an opaque entry cannot be decided from the pack,
+// so a deny rule must treat one as matched rather than as absent.
+func (c Change) Opaque() bool {
+	m, err := strconv.ParseUint(c.Mode, 8, 32)
+	return err != nil || m&modeFormat != modeRegular
+}
 
 // treeEntry is one entry of a tree object: a mode, a name and the object id of
 // what the name points at.
@@ -298,6 +317,10 @@ func (w *walker) introduced(c commitInfo) error {
 // reported: the enumerated case has no pre-image to notice them in, and one
 // answer that is sometimes richer than the other is worse than one that always
 // means the same thing.
+//
+// An entry whose object id matches the pre-image's at the same name is skipped,
+// and that skip is exact: this is the one place the pack proves a directory it
+// does not carry is the one that stood there before.
 func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 	if oldOID == newOID {
 		return nil
@@ -306,8 +329,11 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 		return fmt.Errorf("gitpack: trees nested deeper than %d", maxTreeDepth)
 	}
 	next, ok, err := w.idx.tree(newOID)
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return w.uncarried(prefix)
 	}
 	prev, ok, err := w.idx.tree(oldOID)
 	if err != nil {
@@ -345,15 +371,18 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 }
 
 // walk reports every entry under one tree. A subtree the pack does not carry is
-// skipped, not refused: see the package comment.
+// reported as one opaque entry at its own path: see the package comment.
 func (w *walker) walk(prefix, oid string, depth int) error {
 	key := prefix + "\x00" + oid
 	if w.walked[key] {
 		return nil
 	}
 	entries, ok, err := w.idx.tree(oid)
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return w.uncarried(prefix)
 	}
 	w.walked[key] = true
 	return w.walkEntries(prefix, entries, depth)
@@ -382,7 +411,20 @@ func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) erro
 }
 
 func (w *walker) leaf(path string, e treeEntry) error {
-	c := Change{Path: path, Mode: e.mode, Size: w.idx.blobSize(e.oid)}
+	return w.record(Change{Path: path, Mode: e.mode, Size: w.idx.blobSize(e.oid)})
+}
+
+// uncarried reports a directory whose tree object the pack does not hold. Its
+// contents are a tree the receiving side already stores, but nothing in the
+// pack says it stood at THIS path before: a directory moved or copied onto a
+// new path, or a commit whose whole root is an older tree, looks exactly like
+// one left untouched. So it is reported, at its own path — the root is "" —
+// as an opaque entry, never skipped.
+func (w *walker) uncarried(prefix string) error {
+	return w.record(Change{Path: strings.TrimSuffix(prefix, "/"), Mode: ModeUncarried, Size: -1})
+}
+
+func (w *walker) record(c Change) error {
 	if w.seen[c] {
 		return nil
 	}

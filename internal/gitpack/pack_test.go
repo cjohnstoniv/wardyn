@@ -154,10 +154,11 @@ func wantChanges(t *testing.T, got []Change, want ...string) {
 // ─── the change set ─────────────────────────────────────────────────────────
 
 // TestPackInspect_SelfContainedPackReportsChangedPaths pins the whole answer for
-// an ordinary second push, INCLUDING both documented ceilings: dir/unchanged.txt
-// is over-reported because its parent directory changed and the pre-image tree is
-// not in the pack, and keep/u.txt is absent because its directory is byte for
-// byte one the receiving side already stores.
+// an ordinary second push, INCLUDING both documented over-reports:
+// dir/unchanged.txt is reported because its parent directory changed and the
+// pre-image tree is not in the pack, and keep/ is reported as ONE uncarried
+// directory — the receiving side stores its tree, but nothing in the pack says
+// that tree stood at keep/ before this push.
 func TestPackInspect_SelfContainedPackReportsChangedPaths(t *testing.T) {
 	r := newRepo(t)
 	r.write("a.txt", "a\n", 0o644)
@@ -188,6 +189,7 @@ func TestPackInspect_SelfContainedPackReportsChangedPaths(t *testing.T) {
 		"c.txt 100644 2",
 		"dir/b.txt 100644 6",
 		"dir/unchanged.txt 100644 -1",
+		"keep "+ModeUncarried+" -1",
 	)
 }
 
@@ -660,6 +662,75 @@ func TestPackTree_DiffReportsOnlyWhatChanged(t *testing.T) {
 	wantChanges(t, w.out, "dir/y.txt 100644 6")
 }
 
+// TestPackTree_UncarriedDirectoryIsReportedNotSkipped pins what a subtree the
+// pack does not carry becomes. A pack leaves out whatever the receiving side
+// stores, wherever the new tree puts it, so an absent tree is the same bytes
+// whether it was left alone, moved onto a denied path, or restored whole from
+// an older revision. Skipping it let any of those carry anything anywhere;
+// it is reported as one opaque entry at its own path instead. The one exact
+// skip is a diff against a parent the pack carries, where the same object id
+// at the same name proves the directory untouched.
+func TestPackTree_UncarriedDirectoryIsReportedNotSkipped(t *testing.T) {
+	forgeHeld := strings.Repeat("ab", 20) // a tree the pack does not carry
+	elsewhere := strings.Repeat("cd", 20)
+
+	t.Run("enumerated: an absent subtree is one uncarried directory", func(t *testing.T) {
+		idx := newIndex(sha1Format)
+		root := idx.put(objTree, mkTree(treeLine{"40000", "infra", forgeHeld}))
+		w := newWalker(idx)
+		if err := w.walk("", root, 0); err != nil {
+			t.Fatalf("walk: %v", err)
+		}
+		wantChanges(t, w.out, "infra "+ModeUncarried+" -1")
+	})
+	t.Run("enumerated: a whole root tree the pack does not carry", func(t *testing.T) {
+		w := newWalker(newIndex(sha1Format))
+		if err := w.walk("", forgeHeld, 0); err != nil {
+			t.Fatalf("walk: %v", err)
+		}
+		if len(w.out) != 1 || w.out[0].Path != "" || w.out[0].Mode != ModeUncarried {
+			t.Fatalf("Changes = %+v, want the root reported as one uncarried directory", w.out)
+		}
+	})
+	t.Run("diffed: a subtree swapped for one the pack does not carry", func(t *testing.T) {
+		idx := newIndex(sha1Format)
+		oldRoot := idx.put(objTree, mkTree(treeLine{"40000", "infra", elsewhere}))
+		newRoot := idx.put(objTree, mkTree(treeLine{"40000", "infra", forgeHeld}))
+		w := newWalker(idx)
+		if err := w.diff("", oldRoot, newRoot, 0); err != nil {
+			t.Fatalf("diff: %v", err)
+		}
+		wantChanges(t, w.out, "infra "+ModeUncarried+" -1")
+	})
+	t.Run("diffed: an unchanged subtree is skipped exactly", func(t *testing.T) {
+		blob := []byte("x\n")
+		idx := newIndex(sha1Format)
+		idx.put(objBlob, blob)
+		oldRoot := idx.put(objTree, mkTree(treeLine{"40000", "infra", forgeHeld}))
+		newRoot := idx.put(objTree, mkTree(treeLine{"100644", "a.txt", hashObject("blob", blob)},
+			treeLine{"40000", "infra", forgeHeld}))
+		w := newWalker(idx)
+		if err := w.diff("", oldRoot, newRoot, 0); err != nil {
+			t.Fatalf("diff: %v", err)
+		}
+		wantChanges(t, w.out, "a.txt 100644 2")
+	})
+}
+
+// TestPackChange_OpaqueIsEverythingButARegularFile: git checks out a mode it
+// cannot classify as a submodule pointer, so anything that is not a regular
+// file — and anything that does not parse — may stand for paths beneath it.
+func TestPackChange_OpaqueIsEverythingButARegularFile(t *testing.T) {
+	for mode, want := range map[string]bool{
+		"100644": false, "100755": false, "100664": false,
+		"120000": true, "160000": true, ModeUncarried: true, "10644": true, "": true, "x": true,
+	} {
+		if got := (Change{Mode: mode}).Opaque(); got != want {
+			t.Errorf("Change{Mode: %q}.Opaque() = %v, want %v", mode, got, want)
+		}
+	}
+}
+
 // ─── the walk's ceilings ────────────────────────────────────────────────────
 //
 // Real git cannot build these: every one is a tree object naming another tree
@@ -681,8 +752,7 @@ func fanOut(idx *index, bottom []byte, levels int, names ...string) string {
 }
 
 // absentSubtrees is a tree whose every entry names a subtree the pack does not
-// carry: a fan-out that bottoms out here resolves to no leaves, so maxChanges
-// is never reached and only the node ceiling can stop the walk.
+// carry, so each is reported as one uncarried directory.
 func absentSubtrees(n int) []byte {
 	absent := strings.Repeat("0", 40)
 	lines := make([]treeLine, 0, n)
@@ -692,8 +762,21 @@ func absentSubtrees(n int) []byte {
 	return mkTree(lines...)
 }
 
+// emptySubtrees is a tree whose every entry names the empty tree, which the
+// pack carries: a fan-out that bottoms out here resolves to no Change at all,
+// so maxChanges is never reached and only the node ceiling can stop the walk.
+// It returns the tree and the empty tree's object id.
+func emptySubtrees(idx *index, n int) (tree []byte, emptyOID string) {
+	emptyOID = idx.put(objTree, mkTree())
+	lines := make([]treeLine, 0, n)
+	for i := range n {
+		lines = append(lines, treeLine{"40000", fmt.Sprintf("s%04d", i), emptyOID})
+	}
+	return mkTree(lines...), emptyOID
+}
+
 // TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes is the cheapest denial of
-// service the format allows: 65 tree objects, 3 KB, and 2^65 expansions if the
+// service the format allows: 65 tree objects, 3 KB, and 2^64 expansions if the
 // walk follows every path. maxTreeDepth is satisfied the whole way down,
 // because depth is not what is unbounded here.
 //
@@ -708,7 +791,10 @@ func TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes(t *testing.T) {
 	for _, width := range []int{2, 256} {
 		t.Run(fmt.Sprintf("bottom of %d", width), func(t *testing.T) {
 			idx := newIndex(sha1Format)
-			root := fanOut(idx, absentSubtrees(width), maxTreeDepth, "a", "b")
+			bottom, emptyOID := emptySubtrees(idx, width)
+			// One level short of the depth ceiling: the empty trees sit a level
+			// below the bottom, and depth is not what this test is about.
+			root := fanOut(idx, bottom, maxTreeDepth-1, "a", "b")
 
 			w := newWalker(idx)
 			err := w.walk("", root, 0)
@@ -720,11 +806,18 @@ func TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes(t *testing.T) {
 			if w.nodes > maxTreeNodes+width {
 				t.Errorf("walked %d entries, want the walk stopped at %d", w.nodes, maxTreeNodes)
 			}
-			// Every tree here holds at least two entries, so a ceiling that
-			// bounds WORK cannot have admitted more than half its budget in
-			// expansions. Charging a flat unit per expansion satisfies the count
-			// above while doing `width` times the lookups underneath it.
-			if trees := len(w.walked); 2*trees > w.nodes {
+			// Every tree here but the empty one holds at least two entries, so a
+			// ceiling that bounds WORK cannot have admitted more than half its
+			// budget in expansions of them. Charging a flat unit per expansion
+			// satisfies the count above while doing `width` times the lookups
+			// underneath it.
+			trees := 0
+			for key := range w.walked {
+				if !strings.HasSuffix(key, emptyOID) {
+					trees++
+				}
+			}
+			if 2*trees > w.nodes {
 				t.Errorf("expanded %d trees of >=2 entries each but charged %d: width is not charged",
 					trees, w.nodes)
 			}
@@ -751,8 +844,9 @@ func TestPackTree_WidthIsChargedNotJustDepth(t *testing.T) {
 	if w.nodes != width {
 		t.Errorf("walked %d entries, want %d — the tree's width", w.nodes, width)
 	}
-	if len(w.out) != 0 {
-		t.Errorf("Changes = %v, want none", paths(w.out))
+	// Each absent subtree is one uncarried directory, never a silent skip.
+	if len(w.out) != width || !w.out[0].Opaque() || w.out[0].Mode != ModeUncarried {
+		t.Errorf("Changes = %d, first %+v; want %d uncarried directories", len(w.out), w.out[0], width)
 	}
 }
 

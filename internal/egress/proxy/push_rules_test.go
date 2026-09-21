@@ -316,7 +316,9 @@ func TestPushRulesRefuseWhatCannotBeInspected(t *testing.T) {
 }
 
 // TestPushRulesForwardAnAllowedPushUnchanged: the buffered bytes go onward
-// byte for byte, and the credential is minted only once the push has passed.
+// byte for byte, and this POST mints only once the push has passed. A real
+// push's discovery request mints before it (see
+// TestPushRulesDiscoveryMintsBeforeAnyRefusal).
 func TestPushRulesForwardAnAllowedPushUnchanged(t *testing.T) {
 	up := newGitBrokerUpstream(t, "gh-inst-token")
 	p, _ := newGitBrokerProxyWithSpec(t,
@@ -506,11 +508,14 @@ func TestPushRulesGlobMatching(t *testing.T) {
 		{"a/**/z", "a/b/c/z", true},
 		{"a/**/z", "a/b/c", false},
 		{"co[nfig.yml", "co[nfig.yml", true}, // not a Go pattern: compared literally
+		{"infra/", "infra/main.tf", true},    // a trailing separator means everything beneath
+		{"infra/", "infra/prod/main.tf", true},
+		{"infra/", "infrastructure/main.tf", false},
 	}
 	for _, c := range cases {
 		t.Run(c.pattern+" vs "+c.path, func(t *testing.T) {
 			rs := compilePushRules(&types.PushRulesSpec{DenyPaths: []string{c.pattern}})
-			_, total, err := rs.match([]gitpack.Change{{Path: c.path}})
+			_, total, err := rs.match([]gitpack.Change{{Path: c.path, Mode: "100644"}})
 			if err != nil {
 				t.Fatalf("match: %v", err)
 			}
@@ -531,21 +536,26 @@ func TestPushRulesBoundTheirOwnWork(t *testing.T) {
 	for i := range deny {
 		deny[i] = fmt.Sprintf("vendor/pkg%06d/**", i)
 	}
-	changes := make([]gitpack.Change, 200_000)
-	for i := range changes {
-		changes[i] = gitpack.Change{Path: fmt.Sprintf("src/mod%06d/file.go", i)}
-	}
 	rs := compilePushRules(&types.PushRulesSpec{DenyPaths: deny})
+	// An opaque entry is matched twice over — itself, then what could lie
+	// beneath it — so it is bounded on the same budget or not at all.
+	for _, mode := range []string{"100644", gitpack.ModeUncarried} {
+		t.Run(mode, func(t *testing.T) {
+			changes := make([]gitpack.Change, 200_000)
+			for i := range changes {
+				changes[i] = gitpack.Change{Path: fmt.Sprintf("src/mod%06d/file.go", i), Mode: mode}
+			}
+			start := time.Now()
+			_, _, err := rs.match(changes)
+			elapsed := time.Since(start)
 
-	start := time.Now()
-	_, _, err := rs.match(changes)
-	elapsed := time.Since(start)
-
-	if !errors.Is(err, errGlobBudget) {
-		t.Fatalf("match = %v after %s, want the work ceiling to refuse", err, elapsed)
-	}
-	if elapsed > 60*time.Second {
-		t.Errorf("the bounded matcher took %s, which is not a bound anyone would call one", elapsed)
+			if !errors.Is(err, errGlobBudget) {
+				t.Fatalf("match = %v after %s, want the work ceiling to refuse", err, elapsed)
+			}
+			if elapsed > 60*time.Second {
+				t.Errorf("the bounded matcher took %s, which is not a bound anyone would call one", elapsed)
+			}
+		})
 	}
 }
 
@@ -622,20 +632,21 @@ func pushThroughBroker(t *testing.T, deny ...string) (string, error) {
 // load-bearing and neither is obvious.
 //
 // Under branch-namespace confinement every governed push lands on the run's
-// own branch, so the receiving side never has the pushed commit's parent and
-// the inspector has no pre-image to diff against: it enumerates the new tree
+// own branch, so the pushed commit's parent stays on the forge and the
+// inspector has no pre-image to diff against: it enumerates the new tree
 // instead. A pack carries only objects the forge lacks, so that enumeration
-// descends into changed directories and skips unchanged ones — but it still
-// names every file at the ROOT, changed or not, because the root tree itself
-// is always in the pack.
+// descends into changed directories and names every file at the ROOT, changed
+// or not — and every directory the push did not change arrives as a tree the
+// forge already stores, which is exactly what a directory moved or restored
+// onto that path looks like. It is reported as one opaque entry, and a pattern
+// that could match beneath it refuses the push.
 //
 // The consequence an operator has to know before authoring a rule: a pattern
-// naming a path inside an untouched directory will not fire, and a pattern
-// naming a file at the repository root fires on every push. Both are refusals
-// erring toward the safe side of a deny rule; neither is a bug to be quietly
-// fixed by dropping entries, which is what would open the real hole — a blob
-// the forge already stores, re-introduced at a denied path, is reported
-// exactly the same way.
+// reaching into a directory the repository already has refuses every push
+// whose tree still contains that directory, and a pattern naming a file at the
+// repository root fires on every push. Both err toward the safe side of a
+// deny rule; the only directory the rules can leave alone is one whose
+// pattern could not match beneath it.
 func TestPushRulesSeeWhatThePackCarriesAndNoMore(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -644,7 +655,10 @@ func TestPushRulesSeeWhatThePackCarriesAndNoMore(t *testing.T) {
 	}{
 		{"the edited path is matched", "src/**", true},
 		{"a file at the root is matched even though this push did not touch it", "Makefile", true},
-		{"a path inside an untouched directory is not seen", ".github/workflows/**", false},
+		{"a directory this push did not carry is refused, since what is beneath it is unknown",
+			".github/workflows/**", true},
+		{"a pattern that cannot reach into an uncarried directory lets the push through",
+			"docs/**", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

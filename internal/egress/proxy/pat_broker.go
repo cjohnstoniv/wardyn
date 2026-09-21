@@ -176,7 +176,9 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// git_push_any_branch still opts out, and then the allow row says so
 	// (brokered:git:branch-ns-off) rather than reading like a confined push.
 	//
-	// A refusal happens BEFORE patToken, so a refused push never mints the PAT.
+	// A refusal happens BEFORE patToken, so the refused request mints nothing
+	// itself — but the push's own discovery (GET info/refs) came first and
+	// already did (push_rules.go).
 	var reqBody io.Reader = r.Body
 	allowSrc := ruleSourcePAT
 	if verb == "git-receive-pack" && PATBranchNSEnforced() {
@@ -197,11 +199,11 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// on a WHERE switch the operator may never have turned on would leave a
 	// policy that reads as governed enforcing nothing (push_rules.go). A run
 	// that sets no push_rules buffers nothing and behaves exactly as it did.
-	//
-	// A refusal happens BEFORE patToken, so a refused push never mints the PAT.
+	// A refused push is never forwarded.
 	if verb == "git-receive-pack" {
-		body, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
+		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
 			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) })
+		defer release()
 		if !ok {
 			return
 		}

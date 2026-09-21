@@ -106,3 +106,31 @@ func TestRunPolicySpecClone_DeepCopiesPushRules(t *testing.T) {
 		t.Errorf("Clone of a nil PushRules = %+v, want nil", got)
 	}
 }
+
+// TestDenyPathSegments pins the one reading of a deny_paths entry that
+// write-time validation and the broker's matcher share: a leading "/" is
+// dropped, a trailing "/" means everything beneath the directory, and an
+// empty, "." or ".." segment — which no git path contains, so the entry could
+// never match — is refused.
+func TestDenyPathSegments(t *testing.T) {
+	for pattern, want := range map[string]string{
+		"infra/**":  "infra|**",
+		"/infra/**": "infra|**",
+		"infra/":    "infra|**",
+		"/infra/":   "infra|**",
+		"infra":     "infra",
+		"**/*.pem":  "**|*.pem",
+		".github/":  ".github|**",
+	} {
+		got, err := DenyPathSegments(pattern)
+		if err != nil || strings.Join(got, "|") != want {
+			t.Errorf("DenyPathSegments(%q) = %q, %v; want %q", pattern, strings.Join(got, "|"), err, want)
+		}
+	}
+	for _, pattern := range []string{"", "/", "//infra", "./infra/**", "infra//**", "infra/./x",
+		"infra/../x", "..", ".", "infra//"} {
+		if got, err := DenyPathSegments(pattern); err == nil {
+			t.Errorf("DenyPathSegments(%q) = %q, want a refusal", pattern, got)
+		}
+	}
+}

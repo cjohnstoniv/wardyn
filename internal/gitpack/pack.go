@@ -14,8 +14,11 @@
 // # What the answer is worth
 //
 // A pack carries exactly the objects the receiving side does not already have,
-// so an object missing from it is one the receiving side already stores. Three
-// consequences, all of them deliberate, and two of them one-sided the safe way:
+// so an object missing from it is one the receiving side already stores —
+// somewhere. Which path it stood at is exactly what the pack does not say: the
+// sender chooses what to leave out, and an object the receiving side holds is
+// left out whatever path the new tree gives it. Three consequences, all of them
+// deliberate, and all of them one-sided the safe way:
 //
 //   - When a new commit's parent is not in the pack — the normal shape of a push
 //     to a new branch — there is no pre-image to diff against, so the whole tree
@@ -24,13 +27,17 @@
 //     directory reports that directory's other files too. Over-reporting is safe
 //     for a deny rule and under-reporting is not, which is why it is the
 //     fallback.
-//   - A directory whose tree object is not in the pack is skipped rather than
-//     refused. Its contents are byte for byte a tree the receiving side already
-//     stores, so the push introduces nothing under it, and refusing every push
-//     that leaves a directory untouched would refuse nearly every real push. The
-//     residual: a push that resurrects a directory wholesale from the receiving
-//     side's own history — the same tree object, made reachable from a new ref —
-//     is not reported as changing those paths.
+//   - A directory whose tree object is not in the pack is reported as ONE
+//     opaque entry at its own path (Change.Opaque), never skipped. Its contents
+//     are a tree the receiving side stores, but without the pre-image nothing
+//     distinguishes a directory the push left alone from one it moved onto that
+//     path, copied there from an earlier push, or restored from an older
+//     revision — and skipping it let any of those place anything at any path
+//     unread. The cost is that, in the enumerated case, every directory a push
+//     did not change is reported this way, so a caller's deny rule that could
+//     match beneath one refuses the push. Only a diff against a parent the pack
+//     carries skips a subtree, because only there does an unchanged object id
+//     at the same name prove it untouched.
 //   - A removal is invisible. The enumerated case has no pre-image to compare
 //     against, so this package reports what a push INTRODUCES, not what it takes
 //     away.
@@ -110,14 +117,18 @@ var ErrUninspectable = errors.New("gitpack: the push cannot be inspected from it
 // Change is one path a push introduces, at the mode and size the pushed tree
 // gives it.
 type Change struct {
-	// Path is slash-separated and relative to the repository root.
+	// Path is slash-separated and relative to the repository root. It is ""
+	// only for an uncarried root tree: a commit whose whole tree the receiving
+	// side already stores.
 	Path string
 	// Mode is the tree entry's mode verbatim — "100644", "100755" for an
 	// executable, "120000" for a symlink, "160000" for a submodule pointer — so a
-	// caller can act on the difference.
+	// caller can act on the difference. A directory the pack does not carry is
+	// reported as ModeUncarried; see Opaque.
 	Mode string
 	// Size is the blob's size in bytes, or -1 when the pack does not carry the
-	// blob: a submodule pointer, or content the receiving side already stores.
+	// blob: a submodule pointer, an uncarried directory, or content the
+	// receiving side already stores.
 	// A size rule must DECIDE what -1 means rather than compare it, because -1
 	// passes every "is this under the limit" test by accident.
 	Size int64

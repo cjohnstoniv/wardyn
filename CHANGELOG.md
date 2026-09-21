@@ -31,10 +31,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   brokered git lanes buffer the receive-pack request up to the run's inspection ceiling, read which
   paths the push would introduce, and answer one of three refusals — `403` for a path matching
   `deny_paths`, `413` for a request past `max_inspect_pack_mib` (32 MiB when unset), `415` for a
-  push that cannot be read from its own bytes — or forward the buffered bytes unchanged. Every
-  refusal happens **before the git credential is minted**, so a refused push never causes a token
-  to be issued. An oversize push is refused rather than held: holding would ask a person to approve
-  a push nobody inspected. Content rules are entered independently of branch-namespace confinement
+  push that cannot be read from its own bytes — or forward the buffered bytes unchanged. A refused
+  push is never forwarded; it does not stop a credential being issued, because git's
+  `GET info/refs?service=git-receive-pack` discovery precedes every push and mints it. An oversize
+  push is refused rather than held: holding would ask a person to approve a push nobody inspected.
+  **A directory the pack does not carry is opaque, and so is a symlink or submodule:** a pack omits
+  every tree the forge already stores wherever the new tree puts it, so a directory moved, staged
+  by an earlier push, or restored from an older revision onto a denied path looked exactly like one
+  left alone — and was skipped. Such an entry now refuses the push when a deny pattern could match
+  anything beneath it. The cost is stated in `docs/POLICIES.md`: a pattern reaching into a directory
+  the repository already has (`.github/workflows/**` on a repository with a `.github/`) refuses
+  every push whose tree still contains that directory. A `deny_paths` entry with an empty, `.` or `..`
+  segment is refused at write time, a trailing `/` reads as `/**`, and inspection shares the proxy
+  sidecar's one inspection slot and retained-bytes budget with LLM request scanning, so concurrent
+  small pushes cannot inflate past its 256 MiB cap. Content rules are entered independently of branch-namespace confinement
   on both lanes, so `git_push_any_branch: true` narrows where a push may land without switching off
   what it may contain, and the `no-thin` advertisement now goes out on the token lane too, on the
   same trigger, so a lane that enforces the rules also asks for a pack it can read. Offending paths
