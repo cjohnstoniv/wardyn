@@ -275,17 +275,18 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "gates (licenses)", "gates (license-headers)",
     "notices",
     "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
-    "trivy (agent-codex-cli)", "trivy (agent-aws-sso)"
+    "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",
+    "trivy (agent-vscode)", "trivy (agent-novnc)"
   ]
 }
 JSON
 ```
 
-`notices` and the five `trivy` cells are in that list because the Prerequisites
+`notices` and the seven `trivy` cells are in that list because the Prerequisites
 section above already calls them gates and they are **not** conditional — both
 report on every pull request, so both are eligible contexts. Until the PATCH
 above is applied they are advisory only: `notices` is the copyleft /
-unreviewed-dependency gate, and `trivy` is the only CVE scan of the five images
+unreviewed-dependency gate, and `trivy` is the only CVE scan of the seven images
 a release publishes, so with either red a PR still merges. `trivy` is a matrix
 job, so it reports one context per image cell — adding an image to
 `.github/workflows/ci.yml`'s `trivy` matrix means adding its context here **and**
@@ -320,11 +321,13 @@ the other:
   can. The compose stack still always builds from source (see
   [docs/CI.md](docs/CI.md)).
 - **Release (every `vX.Y.Z` tag).** `.github/workflows/release.yml` builds and
-  pushes all FIVE images a release ships —
+  pushes all SEVEN images a release ships —
   `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
   `GO_BUILD_TAGS=docker,k8s`), `ghcr.io/cjohnstoniv/wardyn-proxy`,
   `ghcr.io/cjohnstoniv/agent-base`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
-  `ghcr.io/cjohnstoniv/agent-aws-sso`
+  `ghcr.io/cjohnstoniv/agent-aws-sso`, `ghcr.io/cjohnstoniv/agent-vscode`,
+  `ghcr.io/cjohnstoniv/agent-novnc` (the last two built from the `agent-base`
+  ref this same run pushed — see `release.yml`'s `images-ui-sandbox` job)
   — each tagged with the bare semver (e.g. `0.6.0`, matching `Chart.yaml`'s
   `appVersion`) and **cosign-signed (keyless)** by digest. Step 5's tag push
   is what triggers it. It also attests a per-digest CycloneDX SBOM and build
@@ -356,7 +359,7 @@ the other:
   # 0.6.2 and this loop errored on it every release (an interactive paste with
   # no `set -e` just carries on), while agent-base — the image that IS published
   # — went unverified.
-  for img in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso; do
+  for img in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc; do
     ref="ghcr.io/cjohnstoniv/$img:$TAG"
     # 1. the tag resolves to an index listing BOTH platforms
     docker buildx imagetools inspect "$ref"

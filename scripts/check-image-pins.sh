@@ -140,24 +140,29 @@ done
 
 # ── local-only recipes stay local ───────────────────────────────────────────
 #
-# claude-code/oracle/vscode/novnc/full are build recipes (`make agent-images`),
-# deliberately NOT published, each for its own reason:
+# claude-code/oracle/full are build recipes (`make agent-images`), deliberately
+# NOT published, each for its own reason:
 #   claude-code  bundles @anthropic-ai/claude-code, which is NOT open source
 #                ("SEE LICENSE IN README.md", Anthropic's Commercial ToS) and
 #                which Wardyn does not distribute — this is the claim
 #                LICENSING.md makes to every evaluator ("No published image
 #                bundles a proprietary AI coding CLI"), so it needs a gate and
 #                not just a comment in release.yml's matrix.
-#   vscode/full  layer ON the claude-code base, so they convey the same CLI, and
-#                neither carries the licence-file COPYs the loop above requires.
-#   novnc        same missing COPYs.
+#   full         layers ON the claude-code base (deploy/images/full/Dockerfile),
+#                so it conveys the same CLI.
 #   oracle       an e2e fixture that runs each task's scripted solution; it is
 #                not an agent and has never been reviewed as a distributed
 #                artifact.
+# vscode/novnc used to live in this list too: #140 rebased both onto agent-base
+# by default (never agent-claude-code) and #141 gave both Dockerfiles the
+# licence-file COPYs the loop above requires, so they are PUBLISHED now
+# (release.yml's images-ui-sandbox job) and must NOT be matched here — a
+# broader pattern would silently re-exclude them the next time this line is
+# touched.
 # They would enter the matrix as agent-<name> (the Makefile's naming), so the
 # prefixed form must be matched too — a bare-name pattern is vacuous.
-if [ -f "$RELEASE_WF" ] && grep -qE '^[[:space:]]+- name: (agent-)?(claude-code|oracle|vscode|novnc|full)[[:space:]]*$' "$RELEASE_WF"; then
-  echo "FAIL: $RELEASE_WF publishes a local-only image (claude-code/oracle/vscode/novnc/full). These are build recipes carrying vendor-licensed or unreviewed content; they must not enter the publish matrix." >&2
+if [ -f "$RELEASE_WF" ] && grep -qE '^[[:space:]]+- name: (agent-)?(claude-code|oracle|full)[[:space:]]*$' "$RELEASE_WF"; then
+  echo "FAIL: $RELEASE_WF publishes a local-only image (claude-code/oracle/full). These are build recipes carrying vendor-licensed or unreviewed content; they must not enter the publish matrix." >&2
   fail=1
 fi
 

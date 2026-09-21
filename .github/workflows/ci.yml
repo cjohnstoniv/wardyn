@@ -704,10 +704,22 @@ jobs:
             dockerfile: deploy/images/codex-cli/Dockerfile
           - name: agent-aws-sso
             dockerfile: deploy/images/aws-sso/Dockerfile
+          - name: agent-vscode
+            dockerfile: deploy/images/vscode/Dockerfile
+          - name: agent-novnc
+            dockerfile: deploy/images/novnc/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build the image locally (scan target — never pushed)
-        run: docker build -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
+        run: |
+          # agent-vscode/agent-novnc default FROM wardyn/agent-base:local (never
+          # a registry pull) — build that first when this row needs it. Every
+          # other row's Dockerfile stands alone.
+          case "${{ matrix.name }}" in
+            agent-vscode|agent-novnc)
+              docker build -f deploy/images/base/Dockerfile -t wardyn/agent-base:local . ;;
+          esac
+          docker build -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
       # The aws-sso image's --selftest, against the image that was actually
       # BUILT. Everything it checks (tmux present; both coding-agent shims
       # present AND refusing) is otherwise exercised only by source-level Go
