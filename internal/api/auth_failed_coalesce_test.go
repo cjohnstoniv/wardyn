@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -181,6 +182,9 @@ func TestAuthFailedCoalesce_DistinctPeersFoldIntoOneCountedStreak(t *testing.T) 
 	if peers := coalescePeers(t, rows[1]); peers != maxAuthFailedPeers {
 		t.Errorf("summary peers = %d for %d distinct peers, want it saturated at %d", peers, principals, maxAuthFailedPeers)
 	}
+	if !strings.Contains(string(rows[1].Data), `"peers_truncated":true`) {
+		t.Errorf("summary data = %s, want peers_truncated:true past the cap", rows[1].Data)
+	}
 }
 
 // coalescePeers reads a summary row's distinct-peer count.
@@ -266,6 +270,19 @@ func TestAuthFailedCoalesce_BurstFromANewPeerDuringADripIsCounted(t *testing.T) 
 	}
 	if got := coalescePeers(t, rows[1]); got != 2 {
 		t.Errorf("summary peers = %d, want 2 — the burst's peer must show in the summary", got)
+	}
+	var d struct {
+		PeerIPs        []string `json:"peer_ips"`
+		PeersTruncated bool     `json:"peers_truncated"`
+	}
+	if err := json.Unmarshal(rows[1].Data, &d); err != nil {
+		t.Fatalf("decode auth.failed data: %v", err)
+	}
+	if !slices.Equal(d.PeerIPs, []string{"10.0.0.9", "203.0.113.50"}) {
+		t.Errorf("summary peer_ips = %v, want [10.0.0.9 203.0.113.50] — the burst's address must be in the list", d.PeerIPs)
+	}
+	if d.PeersTruncated {
+		t.Error("summary peers_truncated = true for 2 peers, far under the cap")
 	}
 }
 

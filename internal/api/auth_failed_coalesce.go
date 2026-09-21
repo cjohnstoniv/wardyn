@@ -13,7 +13,9 @@ package api
 
 import (
 	"context"
+	"maps"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -56,8 +58,8 @@ const maxAuthFailedStreak = 1000
 
 // maxAuthFailedPeers caps how many distinct peer IPs one streak remembers, so a
 // caller rotating through a large address pool cannot grow the set without
-// bound. The summary's peers field saturates here: at the cap it reads "at
-// least this many".
+// bound. The summary's peers and peer_ips fields stop growing here, and
+// peers_truncated says a further peer was seen.
 const maxAuthFailedPeers = 100
 
 // authFailedStreak is the ONE open run of identical consecutive refusals.
@@ -76,6 +78,9 @@ type authFailedStreak struct {
 	firstSeen time.Time
 	lastSeen  time.Time
 	timer     *time.Timer
+
+	// peersTruncated records that a peer arrived after the set was full.
+	peersTruncated bool
 }
 
 // coalesceAuthFailed folds identical consecutive refusals together.
@@ -108,8 +113,12 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, remoteAddr string) (b
 	if open != nil && open.key == key {
 		open.count++
 		open.lastSeen = now
-		if len(open.peers) < maxAuthFailedPeers {
-			open.peers[peer] = struct{}{}
+		if _, seen := open.peers[peer]; !seen {
+			if len(open.peers) < maxAuthFailedPeers {
+				open.peers[peer] = struct{}{}
+			} else {
+				open.peersTruncated = true
+			}
 		}
 		if open.count >= maxAuthFailedStreak {
 			return true, s.closeAuthFailedStreakLocked()
@@ -220,13 +229,17 @@ func (s *Server) closeAuthFailedStreakLocked() *types.AuditEvent {
 	if open.count < 2 {
 		return nil
 	}
+	// peer_ips carries the addresses themselves, so an operator can see who, not
+	// just how many; sorted, so the row is deterministic.
 	ev := s.auditEvent(nil, types.ActorSystem, open.key.actor, "auth.failed", open.key.target,
 		"failure", mustJSON(map[string]any{
-			"reason":     open.key.reason,
-			"count":      open.count,
-			"peers":      len(open.peers),
-			"first_seen": open.firstSeen.UTC().Format(time.RFC3339),
-			"last_seen":  open.lastSeen.UTC().Format(time.RFC3339),
+			"reason":          open.key.reason,
+			"count":           open.count,
+			"peers":           len(open.peers),
+			"peer_ips":        slices.Sorted(maps.Keys(open.peers)),
+			"peers_truncated": open.peersTruncated,
+			"first_seen":      open.firstSeen.UTC().Format(time.RFC3339),
+			"last_seen":       open.lastSeen.UTC().Format(time.RFC3339),
 		}))
 	ev.SourceIP = open.sourceAddr
 	return &ev
