@@ -12,6 +12,7 @@ import (
 	"iter"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,14 @@ type fakeDocker struct {
 	// (unlike containers, which a rollback removes). Lets a test prove a container
 	// was never started, not merely started-then-reaped.
 	startedNames []string
+	// copies records every CopyToContainer, in order and interleaved with
+	// startedNames by way of copiedBeforeStart: the managed-file contract is
+	// not "the archive was sent" but "the archive was sent BEFORE the agent
+	// could run", and only the ordering proves that.
+	copies []fakeCopy
+	// failCopyToContainer makes every CopyToContainer fail, so a test can prove
+	// the sandbox is torn down rather than started without its ceiling.
+	failCopyToContainer bool
 
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
@@ -319,6 +328,34 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	// createWarnings simulates a daemon that discarded a requested limit (e.g. a
 	// cgroup-v1-rootless host) — surfaced in the create response like real Moby.
 	return client.ContainerCreateResult{ID: id, Warnings: f.createWarnings}, nil
+}
+
+// fakeCopy records one CopyToContainer: which container, where, the raw
+// archive bytes, and whether that container had already been started.
+type fakeCopy struct {
+	id         string
+	dest       string
+	archive    []byte
+	copyUIDGID bool
+	afterStart bool
+}
+
+func (f *fakeDocker) CopyToContainer(ctx context.Context, id string, opts client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
+	body, err := io.ReadAll(opts.Content)
+	if err != nil {
+		return client.CopyToContainerResult{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failCopyToContainer {
+		return client.CopyToContainerResult{}, fmt.Errorf("boom: copy to %s", id)
+	}
+	if f.containers[id] == nil {
+		return client.CopyToContainerResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	started := slices.Contains(f.startedNames, id)
+	f.copies = append(f.copies, fakeCopy{id: id, dest: opts.DestinationPath, archive: body, copyUIDGID: opts.CopyUIDGID, afterStart: started})
+	return client.CopyToContainerResult{}, nil
 }
 
 func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {

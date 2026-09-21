@@ -102,6 +102,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("ExecStream", func(t *testing.T) { testExecStream(t, r, opts) })
 	t.Run("ExecStreamLoopbackRelay", func(t *testing.T) { testExecStreamLoopbackRelay(t, r, opts) })
 	t.Run("EphemeralDiskLimit", func(t *testing.T) { testEphemeralDiskLimit(t, r, opts) })
+	t.Run("ManagedFiles", func(t *testing.T) { testManagedFiles(t, r, opts) })
 }
 
 // testCapabilities asserts Capabilities invariants.
@@ -592,8 +593,20 @@ func CheckRecordingCapability(t *testing.T, r runner.Runner, opts RecordingOptio
 // and is intentionally left to each caller rather than folded in here.
 func createStrongestSandbox(t *testing.T, ctx context.Context, r runner.Runner, caps runner.Capabilities, opts Options, caseName string) runner.Sandbox {
 	t.Helper()
+	return createStrongestSandboxWith(t, ctx, r, caps, opts, caseName, nil)
+}
+
+// createStrongestSandboxWith is createStrongestSandbox with one hook: mutate,
+// when non-nil, edits the spec after the class is pinned and before the
+// create. Exactly one case needs it — the managed-file case has to put
+// something IN the spec rather than only read the sandbox back.
+func createStrongestSandboxWith(t *testing.T, ctx context.Context, r runner.Runner, caps runner.Capabilities, opts Options, caseName string, mutate func(*runner.SandboxSpec)) runner.Sandbox {
+	t.Helper()
 	spec := minimalSpec(opts.image())
 	spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
+	if mutate != nil {
+		mutate(&spec)
+	}
 
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {

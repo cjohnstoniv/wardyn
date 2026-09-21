@@ -20,6 +20,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // wantScratch is the mount path each scratch volume must land on. Spelled here
@@ -163,6 +165,11 @@ func TestCreateSandbox_NoMountCarriesASubPath(t *testing.T) {
 	spec := testSandboxSpec()
 	spec.Resources.DiskMiB = 64
 	spec.Drive = testDriveMount()
+	// The managed-file mounts are the third source that reaches this walk, and
+	// they are Secret volumes rather than emptyDirs — the shape most likely to
+	// be written with a subPath, since one file in an existing directory is
+	// exactly what subPath is for.
+	spec.ManagedFiles = []runner.ManagedFile{{Path: "/etc/wardyn/agent/settings.json", Content: []byte("{}")}}
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -192,8 +199,8 @@ func TestCreateSandbox_NoMountCarriesASubPath(t *testing.T) {
 		check("ephemeral container "+c.Name, c.VolumeMounts)
 	}
 	// Vacuity guard: a walk over zero mounts would pass forever.
-	if walked < len(wantScratch)+1 {
-		t.Errorf("walked only %d mounts; want at least the %d scratch mounts plus the drive — the walk found nothing to check", walked, len(wantScratch))
+	if walked < len(wantScratch)+2 {
+		t.Errorf("walked only %d mounts; want at least the %d scratch mounts plus the drive and the managed file — the walk found nothing to check", walked, len(wantScratch))
 	}
 }
 

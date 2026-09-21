@@ -265,6 +265,12 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// and fails at dispatch, and TestCreateSandbox_MountsAUserDrive pins
 		// the two together.
 		UserDrives: true,
+		// This substrate delivers a root-owned managed file: managedFileVolumes
+		// (managed_files.go) projects each one out of the per-run Secret as a
+		// read-only kubelet tmpfs whose directory is a mount point, so the file
+		// is in place, root-owned and unreplaceable, before any container in the
+		// pod starts. True only while that path exists, for UserDrives' reason.
+		ManagedFiles: true,
 		// A run's disk_mib becomes the agent container's
 		// resources.limits[ephemeral-storage] (naming.go's resourceRequirements),
 		// where the kubelet enforces it by EVICTING the pod — measured
