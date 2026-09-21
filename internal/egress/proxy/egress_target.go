@@ -396,6 +396,17 @@ const (
 	// see isPolicyDeny (internal/api/metrics.go), now closed rather than
 	// accepted as a residual.
 	ruleSourceGatewayVetFailed = "builtin:gateway-vet-failed"
+	// ruleSourceUpstreamProtocolMismatch marks a round trip that GOT AN ANSWER
+	// — an HTTP/2 frame — where this proxy's HTTP/1.1-only transport
+	// (mkTransport, ForceAttemptHTTP2 false — issue #360) expected an
+	// HTTP/1.1 response: a TLS-terminating peer that speaks HTTP/2
+	// unconditionally (isH2Preface, upstream_protocol.go). Kept separate from
+	// "builtin:dial-failed" for the same reason as above, but the opposite
+	// direction of unfairness: a protocol mismatch never succeeds on retry,
+	// so it counts as a denial (isPolicyDeny does not exclude it) rather than
+	// hiding behind the network-fault series an operator might reasonably
+	// expect to clear on its own.
+	ruleSourceUpstreamProtocolMismatch = "builtin:upstream-protocol-mismatch"
 )
 
 // gatewayTarget resolves the dial target for the BROKERED LLM route only
