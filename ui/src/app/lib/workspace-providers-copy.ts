@@ -249,6 +249,10 @@ export const AGENTS = {
   MODEL_ACCESS_NOT_CONFIGURED: "Model access · Not signed in",
   MODEL_ACCESS_SHARED_EXPIRED: "Model access · Your admin's credential expired",
   MODEL_ACCESS_SHARED_EXPIRED_ACTION: "Your admin's model credential expired — ask them to reconnect it",
+  // #158: the admin-token principal's own answer ("this caller is a
+  // mechanism, not a person") — neutral tone, no action, since there is
+  // nothing for a mechanism to sign in as.
+  MODEL_ACCESS_NOT_APPLICABLE: "Model access · Not applicable",
   SIGN_IN_AWS: "Sign in to AWS",
   // Renders under the JSON policy field only when a parse succeeds and
   // min_confinement_class names no class; precedence is unchanged.
@@ -270,26 +274,29 @@ export const AGENTS = {
   AGENT_ROW_DISABLED_CHIP: "Off",
 } as const;
 
-// SetupModelAccess.state -> the AGENTS chip label. FIVE keys, not the six
+// SetupModelAccess.state -> the AGENTS chip label. SIX keys, not the seven
 // lifecycle states §7.7 names: `expired_renewable` folds into `live`
 // server-side (dispatch renews it) and never reaches a console surface.
 //
 // A lookup over frozen keys, not new copy — and ONE table rather than two,
 // because the two surfaces that render this chip (the member's Getting Started
 // and the Agents tab's admin-own chip) each fell back to
-// MODEL_ACCESS_NOT_CONFIGURED for a state outside the five, which paints
+// MODEL_ACCESS_NOT_CONFIGURED for a state outside the six, which paints
 // "Not signed in" over a credential nobody has any reading of. An ABSENT entry
 // is the honest answer: no chip, no CTA. Callers must treat a miss as "no
-// chip", never as a default label.
+// chip", never as a default label. `not_applicable` (#158) is the one entry
+// with no action either way — it is real, just never a claim about a
+// credential that has anything to sign in to.
 export const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
   live: AGENTS.MODEL_ACCESS_LIVE,
   expiring: AGENTS.MODEL_ACCESS_EXPIRING,
   expired_signin: AGENTS.MODEL_ACCESS_EXPIRED,
   not_configured: AGENTS.MODEL_ACCESS_NOT_CONFIGURED,
   shared_expired: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
+  not_applicable: AGENTS.MODEL_ACCESS_NOT_APPLICABLE,
 };
 
-// The same five labels WITHOUT the "Model access · " qualifier, for a chip
+// The same six labels WITHOUT the "Model access · " qualifier, for a chip
 // rendered INSIDE the "Your model key" card (U-15): the card's own heading
 // already says which credential is being described, so the qualifier read as a
 // second subject — "Model access · Your admin's credential expired" under a

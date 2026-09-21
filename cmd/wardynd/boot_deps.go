@@ -377,16 +377,17 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// Wired unconditionally the same way Revocations is — pool is
 			// already required whenever OIDC boots at all.
 			RoleMappings: roleMappingsFor(pool),
-			// OnLogin (migration 0046): every successful login re-stamps
-			// role+role_checked_at on every ssh_public_keys row this principal
-			// owns — the bounded-stale re-check sshAuth's admin-override path
-			// reads (WARDYN_SSH_ROLE_TTL). store.NewPG(pool) is a cheap value
+			// OnLogin (migration 0046, widened by #152): every successful login
+			// re-stamps role+role_checked_at on every ssh_public_keys row this
+			// principal owns — the bounded-stale re-check sshAuth's admin-override
+			// path reads (WARDYN_SSH_ROLE_TTL) — and role+groups+groups_truncated
+			// on every api_tokens row they hold. store.NewPG(pool) is a cheap value
 			// wrapper (constructed the same way elsewhere in this file), not a
 			// connection of its own. Best-effort: a store hiccup here logs and
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
-			OnLogin: func(ctx context.Context, sub, role string) {
-				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, time.Now().UTC())
+			OnLogin: func(ctx context.Context, sub, role string, groups []string, groupsTruncated bool) {
+				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, groups, groupsTruncated, time.Now().UTC())
 			},
 		}, sessKey)
 		if err != nil {
@@ -739,41 +740,43 @@ func buildDirectoryConnector(f *bootFlags) (directory.Directory, error) {
 // asserted by grepping this file for a method name.
 type loginStampStore interface {
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
-	RefreshAPITokenRoles(ctx context.Context, principal, role string) error
+	RefreshAPITokenIdentity(ctx context.Context, principal, role string, groups []string, truncated bool) error
 }
 
-// refreshLoginStamps re-stamps the role a login just derived onto both frozen-role
-// credential lanes this principal owns: their ssh_public_keys rows (migration
-// 0046, the bounded-stale re-check sshAuth's admin-override path reads under
-// WARDYN_SSH_ROLE_TTL) and their api_tokens rows (the twin — both credentials
-// freeze a role at issue time and neither can learn about a demotion on its own,
-// so a demoted human's outstanding wdn_ tokens kept authenticating as an admin
-// until someone remembered to revoke them by hand). One login bounds both.
+// refreshLoginStamps re-stamps the identity a login just derived onto both
+// frozen-role credential lanes this principal owns: their ssh_public_keys rows
+// (migration 0046, the bounded-stale re-check sshAuth's admin-override path
+// reads under WARDYN_SSH_ROLE_TTL) and their api_tokens rows (the twin — both
+// credentials freeze an identity at issue time and neither can learn about a
+// demotion or a group change on its own, so a demoted human's outstanding
+// wdn_ tokens kept authenticating as an admin, and a human whose groups moved
+// on kept authorizing against the snapshot they had at mint, until someone
+// remembered to revoke or re-mint by hand). One login bounds both.
 //
 // It is a NAMED FUNCTION over an INTERFACE, so a grep for its method name can
 // see the call site but not argument order. The only thing guarding this bound
 // was apitoken_stamp_doc_test.go's strings.Contains(boot_deps.go,
-// "RefreshAPITokenRoles") — a grep for the method NAME. Transposing the two
-// string arguments (`st.RefreshAPITokenRoles(ctx, role, sub)`) silently stamps
-// the role column of whatever principal is literally named "member" and leaves
-// every demoted admin's tokens untouched, and cmd/wardynd, internal/auth/oidc and
-// internal/store all stayed green. A name a guard can see is not a behaviour a
-// guard can check. login_stamp_test.go now drives this function with a recording
-// fake and asserts each call got the principal in the principal position and the
-// role in the role position; the grep guard stays, because it catches DELETION,
-// which the driven test cannot.
+// "RefreshAPITokenIdentity") — a grep for the method NAME. Transposing two
+// same-typed arguments (e.g. `st.RefreshAPITokenIdentity(ctx, role, sub, ...)`)
+// silently stamps the role column of whatever principal is literally named
+// "member" and leaves every demoted admin's tokens untouched, and cmd/wardynd,
+// internal/auth/oidc and internal/store all stayed green. A name a guard can
+// see is not a behaviour a guard can check. login_stamp_test.go now drives this
+// function with a recording fake and asserts each call got every argument in
+// its named position; the grep guard stays, because it catches DELETION, which
+// the driven test cannot.
 //
 // BEST-EFFORT, deliberately, and in BOTH directions: a store hiccup logs and the
 // login still succeeds (oidc.Config.OnLogin's own doc carries why that contract
 // lives on the callback side), and a failure of the FIRST stamp must not skip the
 // SECOND — they bound two independent credential lanes and one being unreachable
 // is no reason to leave the other stale.
-func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role string, now time.Time) {
+func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role string, groups []string, groupsTruncated bool, now time.Time) {
 	if err := st.RefreshSSHKeyRoles(ctx, sub, role, now); err != nil {
 		slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
 	}
-	if err := st.RefreshAPITokenRoles(ctx, sub, role); err != nil {
-		slog.Warn("wardynd: api token role refresh at login failed", slog.String("err", err.Error()))
+	if err := st.RefreshAPITokenIdentity(ctx, sub, role, groups, groupsTruncated); err != nil {
+		slog.Warn("wardynd: api token identity refresh at login failed", slog.String("err", err.Error()))
 	}
 }
 

@@ -877,7 +877,8 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
-| the `/drives` routes — registering a **user drive**, allocating it to people or groups, previewing whose drive resolves (`mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| the `/drives` routes that NAME A HOST PATH — creating, listing, updating, and removing the **user drive** itself (`GET`/`POST /drives`, `PUT`/`DELETE /drives/{id}`, `mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| allocating a drive to people or groups, revoking that allocation, or previewing whose drive resolves — `POST /drives/grants`, `DELETE /drives/grants/{id}`, `POST /drives/preview` (0.8, issue #168) | ⛔ admin or `security_admin`: none of the three names a host path — a security admin's authority over drives is the `DenyUserDrive` door on a governance profile, reached through `/governance` above |
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | signing in to YOUR OWN model provider (`POST /setup/harness-login`) — the container-login sandbox that captures an AWS SSO session | 🟡 any signed-in human, but ONLY under a `per_user` agent row: the agent roster must declare that each person signs in themselves, and the caller must hold the `agent` capability for that row's agent. Otherwise ⛔ admin only. An admin always reaches it, and under a `per_user` row captures their OWN session like anyone else. The start URL is the ADMIN'S — a sign-in can never choose another portal |
@@ -1944,22 +1945,22 @@ recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` i
 a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
 effort and is the signal for "which of these are dead"; revoke those.
 
-**The role is a stamp re-checked at login; the GROUP SNAPSHOT is not checked at
-all.** A token carries the role AND the group snapshot its owner held when they
-minted it, and every request it authenticates republishes them, so downstream it
-is that human as they were at mint time.
+**Both halves are stamps re-checked at login.** A token carries the role AND
+the group snapshot its owner held when they minted it, and every request it
+authenticates republishes them, so downstream it is that human as they were at
+mint time, or at their most recent sign-in since — whichever is later.
 
-The two halves age differently, and only one of them ages. Their next successful
-sign-in **re-stamps the role** on every unrevoked token they hold — the same
-`OnLogin` hook that has re-stamped their SSH keys since 0.6 — so a demotion does
-reach outstanding tokens, at that human's own next login rather than
-immediately. **The group snapshot is never refreshed**, by that hook or anything
-else. And nothing ages either half out on its own: `api_tokens` has
+Their next successful sign-in **re-stamps the role, the group snapshot, and the
+snapshot's own completeness bit** on every unrevoked token they hold — the same
+`OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to
+carry groups too — so a demotion, or a group membership change, reaches
+outstanding tokens at that human's own next login rather than immediately. And
+nothing ages either half out on its own short of that sign-in: `api_tokens` has
 `created_at`, `last_used_at` and `revoked_at` and **no expiry column**, there is
 no TTL on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human
-who is demoted and never signs in again keeps the role their tokens were minted
-with indefinitely. **Explicit revocation is the only thing that ends it on your
-schedule.**
+who is demoted and never signs in again keeps the role and groups their tokens
+were minted with indefinitely. **Explicit revocation is the only thing that
+ends it on your schedule** rather than waiting for that next login.
 
 A demotion made on the People page is now one of those explicit revocations:
 when a role-mapping write or delete takes a tier away from a value, Wardyn
@@ -2005,10 +2006,11 @@ matched nobody, not that there was nothing to revoke — sessions are stateless,
 that half cannot be counted, and only this half can tell you. Both
 `token.create` and `token.revoke` are audited
 ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
-owner. Offboarding a person means revoking their tokens explicitly — the row
-outlives their access to your IdP, and it is published as a residual
-(`threatmodel/THREAT-MODEL.md` §5, "A per-user API token's role and group
-snapshot are frozen at mint").
+owner. Offboarding a person means revoking their tokens explicitly — a demoted
+or departed human who never signs in again is not caught by the login-time
+re-stamp, and the row outlives their access to your IdP either way. It is
+published as a residual (`threatmodel/THREAT-MODEL.md` §5, "A per-user API
+token's role AND group snapshot are bounded-stale, not frozen").
 
 ### Three roles, and who sets the walls
 
