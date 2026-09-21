@@ -28,6 +28,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   request cannot be completed over HTTP/2 either, it now carries its own
   `builtin:upstream-protocol-mismatch` rule source with a cause that names the mismatch instead of
   raw frame bytes, and it is answered with a 400 so SDKs stop retrying (#359).
+- **The Agents tab and member Getting Started now render a chip for the `not_applicable` model-access
+  state instead of nothing at all.** `not_applicable` — the admin-token principal's own answer under a
+  per_user row, "this caller is a mechanism, not a person" — had no entry in `MODEL_ACCESS_CHIP_LABEL`
+  and was excluded from both surfaces outright, so it read as unknown rather than as a deliberate
+  answer. It now has its own neutral label (`Model access · Not applicable`), rendered on the Agents
+  tab beside `ADMIN_OWN_CHIP_NOTE`, and beside member Getting Started's `llm_ready` fallback chip —
+  still with no action and no sign-in CTA, since there is no person here to sign in as (#292).
 
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
