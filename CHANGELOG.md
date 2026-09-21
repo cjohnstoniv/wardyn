@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Drive grants and preview now admit `security_admin`, not just super-admin.** `POST
+  /drives/grants`, `DELETE /drives/grants/{id}`, and `POST /drives/preview` moved off the
+  super-admin-only tier onto `securityOps` (admin or `security_admin`): none of the three names a
+  host path, and a security admin already reaches drives through the `DenyUserDrive` door on a
+  governance profile. The four routes that DO name a host path or cluster storage class — creating,
+  listing, updating, and removing the drive itself — stay super-admin only (#168).
+
 - **Setup counts only the steps that block a run, and recommends what the host actually has.**
   The Getting-started counter read "Step 1 of 17" with ten of those steps optional demos; it now
   reads "Step 1 of 4" (Environment, People, Network, Review), with the honest count of what
