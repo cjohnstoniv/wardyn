@@ -12,16 +12,26 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // pingStore is a minimal store.Store double whose only interesting method is
 // Ping — everything else panics if called, which /readyz must never do.
+// LatestAuditEventByAction is the one exception: TestMetricsHealthGaugesSeeAnOutage
+// (metrics_test.go) drives this SAME double at /metrics, whose writeHealthGauges
+// reads it unconditionally on every scrape regardless of Ping's own answer, so
+// leaving it on the nil embed panicked there (#338) rather than reporting the
+// "unavailable" a deployment with no eBPF sensor should.
 type pingStore struct {
 	store.Store
 	err error
 }
 
 func (p *pingStore) Ping(context.Context) error { return p.err }
+
+func (p *pingStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+	return types.AuditEvent{}, store.ErrNotFound
+}
 
 // TestReadyzPingsStore covers the actual logic /readyz adds over /healthz: a
 // failing Store.Ping must produce 503, a healthy one 200. Without this test a

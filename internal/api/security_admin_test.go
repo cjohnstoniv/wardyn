@@ -340,6 +340,13 @@ func (s *recordTierStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.W
 	return s.ws, nil
 }
 
+// GetSiteConfig answers the zero document: TestRecordWorkspaceIsSuperAdminOnly's
+// widened GET /api/v1/workspaces/{id} check (F015) reaches admissionStamper,
+// which reads it on every request — the nil embed panicked here (#338).
+func (s *recordTierStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // TestRecordWorkspaceIsSuperAdminOnly is the tier decision for
 // POST /workspaces/{id}/record, and it is a TIER decision rather than a guard.
 //

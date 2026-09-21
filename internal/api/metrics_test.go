@@ -231,3 +231,11 @@ func (s *apiTokenErrStore) GetAPITokenByRaw(context.Context, string) (types.APIT
 	return types.APIToken{}, s.err
 }
 func (s *apiTokenErrStore) Ping(context.Context) error { return nil }
+
+// LatestAuditEventByAction: TestAPITokenStoreErrorIsCounted's own /metrics call
+// (below) reaches this on every scrape via writeHealthGauges regardless of
+// Ping's answer; the nil embed panicked here (#338) instead of reporting the
+// "unavailable" ground-truth state a deployment with no eBPF sensor gets.
+func (s *apiTokenErrStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+	return types.AuditEvent{}, store.ErrNotFound
+}

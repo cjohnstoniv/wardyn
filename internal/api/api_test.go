@@ -311,6 +311,9 @@ func do(t *testing.T, srv *Server, method, path, bearer, body string) *httptest.
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, r)
+	if p, ok := srv.takeRecoveredPanic(); ok {
+		t.Fatalf("%s %s recovered a panic instead of answering it — a recovered panic must fail its test (#338):\n%s", method, path, p)
+	}
 	return w
 }
 

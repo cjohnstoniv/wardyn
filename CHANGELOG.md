@@ -36,6 +36,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
   status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
   while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
+- **Fourteen recovered nil-pointer panics in `internal/api`'s test suite were reported as passing
+  tests.** #323 fixed ten on the `/metrics` scrape path; the rest were the same class elsewhere — a
+  test double embeds `store.Store` as a nil interface to satisfy the wide type, a request reaches a
+  method the double never implemented, and chi's `Recoverer` turns the dereference into an
+  unremarkable 500 every assertion still matched. `rbacStore`, `tokenMemStore`, `pingStore`,
+  `apiTokenErrStore`, `driveStore`, `wsReadStore` and `recordTierStore` now answer `Ping`,
+  `LatestAuditEventByAction`, `GetSiteConfig`, `PutSiteConfig` and `ListRuns` where a request
+  legitimately reaches them instead of leaving them on the nil embed; `noGovernanceStore` — already
+  the shared "empty deployment" answer several of them embed — gained the store reads several
+  request paths (a scrape, a capability check) make regardless of what the test means to exercise.
+  The five `handleCreateRun` panics were a deliberate no-Store harness design ("a request accepted
+  past validation panics inside `CreateRun`, which chi turns into the 500 that proves it got there")
+  that the same class caught: `createRunUnconfiguredStore` now answers that same "accepted past
+  validation" 500 from a real `CreateRun` error instead of a crash. The durable half: every test
+  server's router now records a recovered panic onto the `Server` (`recordPanic`, mounted just
+  inside `middleware.Recoverer`), and `do`/`doSSO` — the two request drivers nearly every test in the
+  package uses — fail the test if one ran, so the next incomplete double fails loudly instead of
+  passing quietly (#338).
 
 ### Changed
 

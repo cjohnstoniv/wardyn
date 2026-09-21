@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -20,14 +21,45 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The no-Pool newHarness panics inside store.CreateRun when a create-run request
-// gets PAST all validation (the harness has no Pool). The chi Recoverer turns
-// that panic into a 500. So for these inline-policy tests:
+// The no-Pool newHarness leaves Config.Store nil, so a create-run request that
+// gets PAST all validation used to dereference it inside store.CreateRun — a
+// recovered nil-pointer panic the chi Recoverer turned into an unremarkable
+// 500. That made "the store write was reached" indistinguishable from a real
+// bug on the exact same status code (#338), so the tests below that need to
+// PROVE a request got past validation (rather than just check a 4xx never
+// happened) set Store to createRunUnconfiguredStore instead of leaving it nil:
 //   - a request REJECTED by validation returns its 4xx (400/422) and never
 //     reaches the store;
-//   - a request ACCEPTED past the validation boundary returns 500 (the recovered
-//     nil-Pool panic), proving validation let it through.
-// Status 500 is the "accepted past validation" sentinel in the no-Pool harness.
+//   - a request ACCEPTED past the validation boundary reaches CreateRun, which
+//     answers errCreateRunNoStoreConfigured, and handleCreateRun's ordinary
+//     writeServerError path turns that into the SAME 500 as before — now a
+//     controlled response instead of a crash, and a request that reaches any
+//     OTHER store method still panics loudly rather than quietly matching this
+//     double's intent.
+// Status 500 is still the "accepted past validation" sentinel in this harness.
+//
+// createRunUnconfiguredStore embeds noGovernanceStore rather than a bare
+// store.Store: decodeAndValidateCreateRun reads GetSiteConfig for the agent
+// roster (agentRosterRefusal) on EVERY request with a non-nil Store, ahead of
+// the point these tests actually mean to stop at, so a bare nil embed there
+// panicked exactly where GetSiteConfig's own doc comment already warns it
+// would. noGovernanceStore's "empty deployment" answers are what a Store this
+// unconfigured actually models: no agent roster, no governance, no drives.
+var errCreateRunNoStoreConfigured = errors.New("no store configured (test harness)")
+
+type createRunUnconfiguredStore struct{ noGovernanceStore }
+
+func (createRunUnconfiguredStore) CreateRun(context.Context, types.AgentRun) (types.AgentRun, error) {
+	return types.AgentRun{}, errCreateRunNoStoreConfigured
+}
+
+// ListWorkspaces answers no onboarded workspaces: handleCreateRun's
+// referencedWorkspaces resolves them on EVERY create (workspace_run_launch.go),
+// not only a request that names a mount, ahead of the CreateRun call these
+// tests mean to stop at.
+func (createRunUnconfiguredStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return nil, nil
+}
 
 // TestCreateRun_InlineAndPolicyIDBothSet asserts the XOR: supplying both
 // inline_policy and policy_id is a 400 before any store write.
@@ -132,6 +164,7 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.OIDC = &oidc.Authenticator{}
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+	h.srv.cfg.Store = createRunUnconfiguredStore{}
 	h.srv.router = h.srv.routes()
 
 	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC1"}}`
@@ -298,6 +331,7 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 		AllowedDomains:      []string{"attacker.example"},
 		EligibleGrants:      []types.GrantSpec{{Kind: types.GrantAPIKey}},
 	}
+	h.srv.cfg.Store = createRunUnconfiguredStore{}
 	h.srv.router = h.srv.routes()
 
 	// Pair a REAL operator secret (seeded) with an attacker-controlled but

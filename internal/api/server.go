@@ -794,6 +794,31 @@ type Server struct {
 	ssoRefreshMu    sync.Mutex
 	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool
+	// panicMu/recoveredPanic record the last panic this server's router
+	// recovered from (recordPanic, routes.go): a nil-pointer panic inside a
+	// handler used to become an unremarkable 500 via chi's Recoverer, which let
+	// an incomplete test double's panic pass as a green test (#338). Set on
+	// every request (nil cost outside a panic — the same recover() cost
+	// middleware.Recoverer already pays); read and cleared by do/doSSO
+	// (api_test.go, rbac_test.go) after every request they drive, so a test
+	// that triggers one fails loudly instead of reading back a quietly
+	// truncated response. Nothing outside a test reads it — it lives on Server
+	// because routes() is the one router-construction path every test harness
+	// and wardynd itself share.
+	panicMu        sync.Mutex
+	recoveredPanic string
+}
+
+// takeRecoveredPanic returns the last panic this server's router recovered
+// from, if any, and clears it. A test calls this after every request so one
+// recovered panic cannot masquerade as several clean ones, and a later clean
+// request on the same *Server does not inherit a stale failure.
+func (s *Server) takeRecoveredPanic() (string, bool) {
+	s.panicMu.Lock()
+	defer s.panicMu.Unlock()
+	p := s.recoveredPanic
+	s.recoveredPanic = ""
+	return p, p != ""
 }
 
 // New constructs a Server and builds its router. It does not start listening.

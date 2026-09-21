@@ -28,9 +28,13 @@ const (
 )
 
 // rbacStore serves the READ routes the viewer must keep. Every other store
-// method is nil (embedded interface), which is fine: the gated write handlers
-// all validate the body/params before they touch the store, so an operator
-// request in these tests stops at a 4xx without ever dereferencing it.
+// method is nil (embedded interface, via noGovernanceStore), which is fine for
+// most of gatedRoutes below: the gated write handlers all validate the
+// body/params before they touch the store, so an operator request in these
+// tests stops at a 4xx without ever dereferencing it. PUT /api/v1/site-config
+// is the one exception — handlePutSiteConfig carries the existing document
+// forward and always writes, even for an empty "{}" body — so it needs its own
+// stub rather than relying on that pattern (#338).
 type rbacStore struct{ noGovernanceStore }
 
 func (rbacStore) ListPolicies(context.Context) ([]types.RunPolicy, error) {
@@ -41,6 +45,9 @@ func (rbacStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 }
 func (rbacStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
+}
+func (rbacStore) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	return cfg, nil
 }
 
 // ListRoleMappings: GET /api/v1/access is in gatedRoutes below and — unlike
@@ -115,6 +122,9 @@ func doSSO(t *testing.T, srv *Server, method, path string, cookie *http.Cookie, 
 	}
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, r)
+	if p, ok := srv.takeRecoveredPanic(); ok {
+		t.Fatalf("%s %s recovered a panic instead of answering it — a recovered panic must fail its test (#338):\n%s", method, path, p)
+	}
 	return w
 }
 
