@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EpisodeRow, StepEpisodes, EpisodeList, catalogSummary } from "./episode-card";
 import { EPISODES, type Episode } from "../../../lib/demo-videos";
+import * as useDemoVideoBaseUrlModule from "../../../lib/hooks/use-demo-video-base-url";
 
 const shipped: Episode = {
   id: "01",
@@ -64,6 +65,24 @@ describe("EpisodeRow", () => {
     expect(video).not.toHaveAttribute("poster");
   });
 
+  it("an operator-configured mirror (/healthz's demo_video_base_url) re-points the video src", async () => {
+    const spy = vi
+      .spyOn(useDemoVideoBaseUrlModule, "useDemoVideoBaseUrl")
+      .mockReturnValue("https://videos.airgapped.example/wardyn-demos");
+    try {
+      const user = userEvent.setup();
+      const { container } = render(<EpisodeRow episode={shipped} />);
+      await user.click(screen.getByRole("button", { name: "Watch" }));
+      const video = container.querySelector("video");
+      expect(video).toHaveAttribute(
+        "src",
+        "https://videos.airgapped.example/wardyn-demos/v0.6.0/wardyn-01-why-govern-agents.mp4",
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("a reserved (unrecorded) episode shows a neutral chip and no button or link", () => {
     render(<EpisodeRow episode={reserved} />);
     expect(screen.getByText("Not recorded yet")).toBeInTheDocument();
@@ -84,7 +103,7 @@ describe("EpisodeRow", () => {
     fireEvent.error(container.querySelector("video")!);
 
     expect(container.querySelector("video")).toBeNull();
-    expect(screen.getByText(/Couldn't load this episode from GitHub/)).toBeInTheDocument();
+    expect(screen.getByText(/This deployment's media policy blocked this episode/)).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "Open the release page" });
     expect(link).toHaveAttribute("href", "https://github.com/cjohnstoniv/wardyn/releases/tag/v0.6.0");
     expect(link).toHaveAttribute("target", "_blank");

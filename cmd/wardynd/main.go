@@ -304,6 +304,16 @@ func run() error {
 	}
 	warnMissingGatewayHosts(defaultPolicy, llmGateways)
 
+	// WARDYN_DEMO_VIDEO_BASE_URL: same fail-closed-at-boot posture as the
+	// model gateways above, but answers a different question (where the
+	// Getting Started demo episodes stream from, not where a model call
+	// goes) — so it is validated on its own rather than folded into
+	// validateModelEndpoints.
+	demoVideoBaseURL, err := api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL)
+	if err != nil {
+		return err
+	}
+
 	if *f.adminToken == "" && !lm.enabled {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
@@ -377,6 +387,7 @@ func run() error {
 		DefaultPolicy:             defaultPolicy,
 		TrustedCAPEM:              trustedCAPEM,
 		LLMGateways:               llmGateways,
+		DemoVideoBaseURL:          demoVideoBaseURL,
 		RunnerTarget:              runnerTarget,
 		UIDir:                     *f.uiDir,
 		ControlPlaneURL:           *f.controlURL,

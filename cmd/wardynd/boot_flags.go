@@ -113,6 +113,15 @@ type bootFlags struct {
 	// above — never a SiteConfig field, never agent-reachable.
 	anthropicBaseURL *string
 	openaiBaseURL    *string
+	// demoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL (see
+	// internal/api/llm_gateway.go's ValidateDemoVideoBaseURL): an
+	// operator-run mirror re-pointing the Getting Started demo episodes for
+	// an air-gapped deployment, where github.com is unreachable. Empty
+	// (default) = the two hardcoded GitHub hosts, byte-identical to today.
+	// Same posture class as anthropicBaseURL/openaiBaseURL above —
+	// control-plane-authored, never a SiteConfig field, never
+	// agent-reachable.
+	demoVideoBaseURL *string
 	ageKey           *string
 	proxyImage       *string
 
@@ -293,6 +302,7 @@ func parseBootFlags() *bootFlags {
 		daemonNoProxy:           flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-spelled bypass list for WARDYN_DAEMON_PROXY_URL (host, .suffix, CIDR, *). wardynd auto-appends three hosts: KUBERNETES_SERVICE_HOST, the WARDYN_AWS_SSO_ENDPOINT_OVERRIDE host, and the WARDYN_OIDC_INTERNAL_ISSUER host. Ignored when the proxy URL is unset"),
 		anthropicBaseURL:        flagEnv("anthropic-base-url", "WARDYN_ANTHROPIC_BASE_URL", "", "operator-set internal model gateway base URL (https://, RFC1918/CGNAT literal allowed) re-pointing the api-key lane's brokered upstream for Anthropic instead of api.anthropic.com. Empty (default) = the public host, byte-identical to today. Subscription/managed runs are unaffected — they still reach api.anthropic.com directly"),
 		openaiBaseURL:           flagEnv("openai-base-url", "WARDYN_OPENAI_BASE_URL", "", "same as -anthropic-base-url, for OpenAI's api-key lane (api.openai.com)"),
+		demoVideoBaseURL:        flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "operator-run mirror base URL (https://, no userinfo, no query/fragment) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) = the two hardcoded GitHub hosts, byte-identical to today. Published on /healthz; the console reads it to build each episode's download URL and the CSP's media-src names its origin"),
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 

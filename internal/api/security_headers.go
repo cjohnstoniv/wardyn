@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -33,12 +34,21 @@ import (
 //     the host form then names the upstream rather than the browser's origin,
 //     and the same-origin case rides on 'self' alone — which is exactly the
 //     modern-browser path, so the console still attaches.
-//   - media-src names github.com and release-assets.githubusercontent.com: the
+//   - media-src is built at BOOT (cspMediaSrc, not per request like connect-src
+//     — s.cfg.DemoVideoBaseURL is operator-set once and validated at boot by
+//     ValidateDemoVideoBaseURL, never sandbox- or request-controlled). Unset,
+//     it names github.com and release-assets.githubusercontent.com: the
 //     Getting Started demo episodes (ui/src/app/lib/demo-videos.ts) are GitHub
 //     release assets, loaded only on explicit click (no autoplay, no
 //     prefetch). The download link 302s from the first host to the second —
 //     CSP checks the redirect target, not just the link — and GitHub has moved
 //     that host before, so RELEASING.md's re-shoot step re-verifies it live.
+//     WARDYN_DEMO_VIDEO_BASE_URL re-points this at an operator-run mirror for
+//     an air-gapped deployment where github.com is unreachable; the value
+//     still runs through cspSafeHost before it is interpolated, the same
+//     filter cspConnectSrc's per-request host does, even though it is already
+//     boot-validated — this is a security response header, so an unfiltered
+//     value here would be a header-injection hole regardless of the source.
 //   - script-src is 'self' plus 'wasm-unsafe-eval' — the RECORDING replay player
 //     (asciinema-player, a WASM VT core) calls WebAssembly.instantiate(), which
 //     browsers refuse under a bare default-src 'self'. 'wasm-unsafe-eval' permits
@@ -50,15 +60,16 @@ import (
 //
 // No HSTS: the default posture is plain http on loopback, where an HSTS header
 // would poison every other localhost port.
-func securityHeaders(next http.Handler) http.Handler {
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	const csp = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; " +
 		"object-src 'none'; connect-src %s; " +
-		"media-src 'self' https://github.com https://release-assets.githubusercontent.com; " +
+		"%s; " +
 		"script-src 'self' 'wasm-unsafe-eval'; " +
 		"style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+	mediaSrc := cspMediaSrc(s.cfg.DemoVideoBaseURL)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", fmt.Sprintf(csp, cspConnectSrc(r.Host)))
+		h.Set("Content-Security-Policy", fmt.Sprintf(csp, cspConnectSrc(r.Host), mediaSrc))
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
@@ -100,6 +111,38 @@ func cspConnectSrc(host string) string {
 		return "'self'"
 	}
 	return "'self' ws://" + host + " wss://" + host
+}
+
+// cspMediaSrc builds the media-src directive (without the trailing "; ") for
+// the demo episode player. base is api.Config.DemoVideoBaseURL — already
+// validated at boot by ValidateDemoVideoBaseURL (https://, no userinfo, no
+// query/fragment) — but this function re-derives and re-filters the host
+// through cspSafeHost anyway rather than trusting that upstream check alone:
+// it is the same discipline cspConnectSrc applies to the per-request Host,
+// and the two functions share the one helper so "safe to put in a CSP
+// source" is decided in exactly one place. A base that fails to parse or
+// whose host fails cspSafeHost collapses to 'self' alone, never to the
+// GitHub fallback — a config that already passed boot validation should
+// never reach either branch, so this is defense in depth, not a real path.
+//
+// Empty base (the default, unset WARDYN_DEMO_VIDEO_BASE_URL) reproduces
+// today's two hardcoded GitHub hosts byte-for-byte — the download link 302s
+// from github.com to release-assets.githubusercontent.com, so both must be
+// granted. A configured base names ONLY its own origin: the operator's
+// mirror is the one place those episodes can come from once it is set.
+func cspMediaSrc(base string) string {
+	if base == "" {
+		return "media-src 'self' https://github.com https://release-assets.githubusercontent.com"
+	}
+	// ValidateDemoVideoBaseURL's rule 1 already refuses anything but https://,
+	// so the scheme is hardcoded here rather than echoed from u.Scheme —
+	// cspSafeHost filters the host, not the scheme, and there is no reason to
+	// give this interpolation a second field to get wrong.
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme != "https" || !cspSafeHost(u.Host) {
+		return "media-src 'self'"
+	}
+	return "media-src 'self' https://" + u.Host
 }
 
 // cspSafeHost reports whether host is safe to interpolate into a CSP source.

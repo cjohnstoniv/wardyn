@@ -125,6 +125,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// (JSON null) when the gateway is off, the same "a deployment without
 		// it simply omits the block" shape as ssh above.
 		"ui_sandbox": s.uiSandboxHealthz(),
+		// demo_video_base_url is WARDYN_DEMO_VIDEO_BASE_URL — already validated
+		// at boot by ValidateDemoVideoBaseURL — beside the ui_sandbox advisory
+		// block above: the console's episodeUrl (demo-videos.ts) reads it off
+		// this same /healthz poll to build the Getting Started episode
+		// download URL, instead of the hardcoded github.com it falls back to.
+		// "" (the default, unset) is the honest "no mirror configured" answer,
+		// not an omitted key — unlike ssh/ui_sandbox, there is no second field
+		// this one would need to appear alongside, so there is nothing an
+		// absent key would need to hide.
+		"demo_video_base_url": s.cfg.DemoVideoBaseURL,
 	}
 	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"
 	// grade, present ONLY on a k8s substrate — omitted from the map entirely

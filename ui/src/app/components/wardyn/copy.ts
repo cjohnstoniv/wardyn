@@ -720,7 +720,11 @@ export const EPISODES_COPY = {
   CLOSE: "Close",
   NOT_RECORDED: "Not recorded yet",
   STREAM_NOTE: "Streams from the Wardyn release on GitHub only after you press Watch. Nothing is prefetched.",
-  LOAD_ERROR: "Couldn't load this episode from GitHub.",
+  // A redirecting mirror (or a GitHub host move) fails CLOSED at the CSP's
+  // media-src with no server error at all — the browser just refuses the
+  // <video> load. "Couldn't load … from GitHub" would misdiagnose that as a
+  // missing file; it's a policy block, and the copy says so.
+  LOAD_ERROR: "This deployment's media policy blocked this episode.",
   OPEN_RELEASE_PAGE: "Open the release page",
   ALL_EPISODES_TITLE: "All episodes",
   // Derived from EPISODES (recorded count, summed minutes) — never hand-typed,

@@ -17,11 +17,15 @@ import { Button } from "../../ui/button";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { EPISODES_COPY as T } from "../../wardyn/copy";
 import { EPISODES, episodeUrl, episodesFor, releasePageUrl, type Episode } from "../../../lib/demo-videos";
+import { useDemoVideoBaseUrl } from "../../../lib/hooks/use-demo-video-base-url";
 
 export function EpisodeRow({ episode, chip }: { episode: Episode; chip?: string }) {
   const [open, setOpen] = React.useState(false);
   const [errored, setErrored] = React.useState(false);
-  const url = episodeUrl(episode);
+  // undefined (no /healthz answer yet, or no mirror configured) falls through
+  // to episodeUrl's own default parameter — the hardcoded GitHub base.
+  const demoVideoBaseUrl = useDemoVideoBaseUrl();
+  const url = episodeUrl(episode, demoVideoBaseUrl);
 
   return (
     <div className="flex flex-col gap-2 border-b border-border py-3 last:border-b-0">

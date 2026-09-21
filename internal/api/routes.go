@@ -29,7 +29,7 @@ func (s *Server) routes() chi.Router {
 	// reintroduce X-Forwarded-For parsing ONLY behind an explicit allowlist of
 	// trusted proxy addresses.
 	r.Use(middleware.Recoverer)
-	r.Use(securityHeaders)
+	r.Use(s.securityHeaders)
 
 	r.Get("/healthz", s.handleHealthz)
 	// Readiness: proves Postgres is reachable, not just that the process is up
