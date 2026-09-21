@@ -661,13 +661,15 @@ eight are unconditional below; the eighth ships behind a kill switch.
   (`TestDocker_TheSameRunResumesWhenTheHoldReleases`) has run green on this
   release's tip (22 s).
 
-What did **not** close this release, and what was deliberately deferred to
-0.7.7 — see the CHANGELOG's "Known gaps" for the full statement of each: the
-§7.4 frozen copy table's admin-only remedy clause, a credentialed-proxy form
-of the daemon proxy knob, the spent-token mark's in-memory (unpersisted)
-posture, the Runs board's group header, and the three items already promised
-after 0.7.5 (the per-person supersede lock, a third Kubernetes cache volume,
-the admin-tier 5xx driver-text sweep) — none bundled into this release (O-1).
+What did **not** close this release, and was not bundled into 0.7.7 either —
+0.7.7 answered a different field report instead — see the CHANGELOG's "Known
+gaps" for the full statement of each: the §7.4 frozen copy table's
+admin-only remedy clause, a credentialed-proxy form of the daemon proxy
+knob, the spent-token mark's in-memory (unpersisted) posture, the Runs
+board's group header, and the three items already promised after 0.7.5 (the
+per-person supersede lock, a third Kubernetes cache volume, the admin-tier
+5xx driver-text sweep, O-1) — all seven now sit on the 0.8 plan
+([docs/design/0.8/PLAN.md](docs/design/0.8/PLAN.md)).
 
 ### What v0.7.7 shipped
 
