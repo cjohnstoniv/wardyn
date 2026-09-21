@@ -57,7 +57,7 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	}
 	skipped, werr := writeEnvAsCode(localDirs[0].Path, files)
 	if werr != nil {
-		writeError(w, http.StatusInternalServerError, "write env-as-code: "+werr.Error())
+		writeServerError(w, r, "write env-as-code", werr)
 		return
 	}
 	// written_files must name only what was actually written — a skipped key
@@ -102,7 +102,7 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 	}
 	files, gerr := workspacescan.EmitEnvAsCode(profile, artifactBases, baseRef)
 	if gerr != nil {
-		writeError(w, http.StatusInternalServerError, "generate env-as-code: "+gerr.Error())
+		writeServerError(w, r, "generate env-as-code", gerr)
 		return nil, false
 	}
 	return files, true

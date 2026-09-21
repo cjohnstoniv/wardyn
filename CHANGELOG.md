@@ -99,6 +99,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
   answer. It now has its own neutral label (`Model access · Not applicable`), rendered on the Agents
   tab beside `ADMIN_OWN_CHIP_NOTE`, and beside member Getting Started's `llm_ready` fallback chip —
   still with no action and no sign-in CTA, since there is no person here to sign in as (#292).
+- **5xx responses no longer echo driver/substrate error text to the caller.** ~90 handlers across
+  `internal/api` built a 500 (or other 5xx) body by concatenating `err.Error()` onto an action
+  string, so a transient Postgres or runner failure could hand an unprivileged-adjacent caller the
+  database host, port, SQLSTATE and constraint name, or similar substrate detail. Every such site
+  now goes through `writeServerError`/`loggedMsg` (`internal/api/writeservererror.go`), which log
+  the error with method and path and answer the caller with the action alone; a source-walking guard
+  test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
+  which are already caller-facing by design, are unchanged.
+- **The decision-log line printed to stdout is now written under its own mutex.** A line over
+  `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
+  could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
+  with a dedicated `outMu`, held only around the write itself.
+- **The first-use "approval pending" refusal body now spells it the same way as the header.** The
+  JSON body wrote `approval_pending`; `X-Wardyn-Egress` wrote `approval-pending`. The body now
+  matches the header's spelling, which is the wire contract `attach-bashrc` reads.
+- **A panic in the audit webhook flush loop no longer takes the control plane down.** The one
+  detached `go` statement that skipped the panic-safe wrapper (`buildAuditFanout`'s sink `Run`
+  loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
+  deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
+  cancellation on shutdown — is unchanged.
 
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
