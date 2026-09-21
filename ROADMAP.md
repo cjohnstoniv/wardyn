@@ -760,8 +760,11 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   persistence (UD-collision / D3) · widening `/drives/grants` and `/preview` to
   the security-admin tier (UD-tier) · the share readability probe as uid 1000
   (UD-readprobe) · **byte enforcement on Docker volumes and shares (TM #36)** —
-  untouched by 0.7.2, whose storage work bounds only the ephemeral writable layer,
-  so a drive's size stays an allocation on every substrate · **team-shared drives**
+  never built into the product, and 0.8 closes it as a documented ceiling instead:
+  an XFS project-quota recipe for operators (`docs/OPERATIONS.md`, "User drives on
+  Docker") and `threatmodel/THREAT-MODEL.md` #36 updated to "accepted with a
+  recipe" — the case `types.StorageEnforcementFilesystem` reserved a value for ·
+  **team-shared drives**
   (one object, many principals — it breaks the `UNIQUE(subject_type, subject)` +
   LIMIT-1 resolver invariant and needs its own design round) · multiple drives per
   principal · drive as a workspace-library source · a top-level nav item · per-user
@@ -772,11 +775,16 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   separator collision: 0.7.1's migration `0061` closed the slug-uniqueness half,
   and the fixed-width drive id that closes the rest re-homes everyone who already
   has storage under a minted name. Documentation debt on the same feature, by its
-  own `FOLLOWUPS.md` ids: `:3` (the preview resolves claims as typed while the
-  object name is hashed), `:7` (the `disk_mib` text-to-speech trap in a demo
-  script), `:8` (a stale "previewed as a warning" sentence in the design doc),
-  `:11` (a fourth copy of `withMono`), and the three demo-track lines `:4`, `:5`
-  and `:6`, which ride the demo bullet below.
+  own `FOLLOWUPS.md` ids: `:3` and `:8` fixed in `docs/design/user-drives-prompt.md`
+  (the object name is now documented as derived, never taken as typed; the
+  preview's backend-unavailable answer is now documented as the shipped 422, not
+  "previewed as a warning"). `:11` was a miscall, not a defect: `code-block.tsx`'s
+  `makeMono` is one factory, and `drives/display.tsx`, `governance/display.tsx`,
+  `setup/access-panel.tsx` and `new-run/workspace-card.tsx` are four configured
+  bindings of it, never copies — nothing to deduplicate. Still open: `:7` (the
+  `disk_mib` text-to-speech trap in a demo script — not locatable anywhere in the
+  tree) and the three demo-track lines `:4`, `:5` and `:6`, which ride the demo
+  bullet below.
 - **Identity and authz.** Other people's subjects on records (`known_principals`)
   · PF-48 resident credential lanes above a re-asserted ceiling (architectural) ·
   **TM #38** (a per-user API token's group snapshot never refreshes — the

@@ -1549,6 +1549,57 @@ an XFS project quota needs `CAP_SYS_ADMIN` the control plane must not hold. A
 `host_path` drive reports `enforcement: external`: the NAS's own quota binds it,
 and Wardyn displays the allocation.
 
+**A real byte cap on Docker: an XFS project quota, run by the operator, on the
+host, never inside the control plane.** `CAP_SYS_ADMIN` is what WARDYN must not
+hold, not a statement that nothing can enforce a `docker_volume` drive's size —
+the recipe below is exactly the case `types.StorageEnforcementFilesystem` was
+named and reserved for (`internal/types/user_drive.go`: "NOTHING in v1 reports
+this — it is the value the documented operator recipe earns"). Wardyn still
+reports `enforcement: none` on the wire; this is an operator ceiling underneath
+it, invisible to the product and unaffected by a `wardynd` restart.
+
+1. **The Docker data root must be XFS, mounted with project quotas.** Find it
+   with `docker info -f '{{.DockerRootDir}}'`, then confirm with
+   `xfs_info <that path>` — the output must list `pquota` or `prjquota`. A
+   filesystem created without it needs a remount (`mount -o remount,prjquota
+   <mountpoint>`, persisted in `/etc/fstab`) — a host operation, unrelated to
+   Wardyn, that does not require restarting the daemon.
+
+2. **Assign a project to the volume's own directory, one per drive per
+   person.** Resolve the real path rather than guessing the data root, and
+   resolve the XFS mount point rather than assuming it is the data root itself
+   (a bind-mounted or LVM-backed data root is not always its own filesystem
+   root):
+
+   ```
+   VOL=wardyn-drive-<drive-slug>-<home>                    # from the reclaim recipe above
+   DIR=$(docker volume inspect -f '{{.Mountpoint}}' "$VOL")
+   MOUNT=$(findmnt -T "$DIR" -no TARGET)                    # the XFS filesystem's own mount point
+   PROJID=$(( 0x$(echo -n "$VOL" | sha256sum | cut -c1-7) )) # any stable project id, unique per volume
+   echo "${PROJID}:${DIR}" >> /etc/projects
+   echo "${VOL}:${PROJID}" >> /etc/projid
+   xfs_quota -x -c "project -s ${VOL}" "$MOUNT"
+   ```
+
+3. **Set the hard limit, and confirm it actually refuses a write:**
+
+   ```
+   xfs_quota -x -c "limit -p bhard=20g ${VOL}" "$MOUNT"
+   xfs_quota -x -c "report -p" "$MOUNT"
+   ```
+
+   A run whose agent then writes past the limit meets the filesystem's own
+   `ENOSPC` — the identical error path a genuinely full disk already takes.
+   Wardyn adds nothing to it and catches nothing from it; that is the whole
+   point of a ceiling that lives below the product rather than in it.
+
+Recreating the volume — a restore, or Wardyn re-minting one after a delete —
+does not carry the quota forward: step 2 keys on the volume's directory, which
+changes, so re-run it (or script it as a step your own restore/create tooling
+runs after Wardyn's). A `host_path` share on an XFS-backed NAS can be capped
+the identical way, against the directory the NAS exports; that quota is the
+NAS's own, which is already what `enforcement: external` reports.
+
 **And a ceiling bounds what you may ALLOCATE, not what the volume will hold.**
 Two numbers can cap a drive, and they are refused and applied in different
 places. `storage.user_drive.max_size_mib` on the **Workspace providers** screen
