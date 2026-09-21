@@ -154,9 +154,10 @@ type Driver struct {
 // an exec-less runtime; Exec sets its Cmd to the (recorder-wrapped) workload and
 // creates the container.
 type pendingAgent struct {
-	cfg    *container.Config
-	host   *container.HostConfig
-	netcfg *network.NetworkingConfig
+	cfg     *container.Config
+	host    *container.HostConfig
+	netcfg  *network.NetworkingConfig
+	managed []runner.ManagedFile // delivered by runAsMainProcess, between ITS create and start
 }
 
 // agentImageHome is the home directory of the Wardyn agent-image user (USER
@@ -235,7 +236,8 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// preflight, so it is true only while that path exists: declaring it
 		// without the mount is a run that previews green and fails at dispatch,
 		// and TestCreateSandbox_MountsAUserDrive pins the two together.
-		UserDrives: true,
+		UserDrives:   true,
+		ManagedFiles: true, // deliverManagedFiles, between create and start (managed_files.go)
 		// What a run's disk_mib actually binds on this daemon: `filesystem` when
 		// the storage driver can enforce a per-container size quota, `none` when
 		// it cannot — which is EITHER warn-and-run-uncapped (vfs, fuse-overlayfs)
@@ -272,8 +274,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		enforced = types.CC1
 	}
 
-	if d.cfg.ProxyImage == "" {
-		return runner.Sandbox{}, errProxyImageUnset
+	if err := d.preflightSpec(spec); err != nil {
+		return runner.Sandbox{}, err
 	}
 
 	// Best-effort image presence: pull the agent image if absent.
@@ -508,7 +510,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		ensureEnv(&agentCfg.Env, "HOME", agentImageHome)
 		name := agentContainerName(spec.RunID)
 		d.mu.Lock()
-		d.pending[name] = &pendingAgent{cfg: agentCfg, host: agentHost, netcfg: agentNetCfg}
+		d.pending[name] = &pendingAgent{cfg: agentCfg, host: agentHost, netcfg: agentNetCfg, managed: spec.ManagedFiles}
 		d.mu.Unlock()
 		return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: enforced}, nil
 	}
@@ -546,8 +548,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		}
 	}
 
-	if _, err := d.cli.ContainerStart(ctx, agentResp.ID, client.ContainerStartOptions{}); err != nil {
-		return fail(fmt.Errorf("docker: start agent: %w", err))
+	if err := d.deliverManagedFilesAndStart(ctx, agentResp.ID, spec.ManagedFiles); err != nil {
+		return fail(err)
 	}
 
 	// Recording requires two agent-writable directories that do NOT exist
@@ -790,6 +792,9 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 			}
 			return capErr
 		}
+	}
+	if err := d.deliverManagedFilesOrReap(ctx, ref, created.ID, p.managed); err != nil {
+		return err
 	}
 	_, startErr := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{})
 	// The container now exists on the daemon, so re-check the claim: a teardown
