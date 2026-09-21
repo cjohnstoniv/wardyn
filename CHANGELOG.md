@@ -8,6 +8,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
+  so a write still finishing from the failed attempt can never interleave with the resend (#368).
+
 ### Added
 
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the

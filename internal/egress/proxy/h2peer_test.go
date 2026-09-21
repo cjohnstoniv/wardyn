@@ -836,3 +836,48 @@ func TestH2Fallback_NoProxyBypass(t *testing.T) {
 		t.Fatalf("dials = %v, want the vetted address twice (the sniffed attempt, then HTTP/2)", got)
 	}
 }
+
+// A request net/http can rebuild is rebuilt rather than resent through the
+// shield: a failed attempt's write goroutine outlives RoundTrip for exactly
+// those requests, and it still holds the shield.
+func TestResendableRebuildsBeforeReusingTheShield(t *testing.T) {
+	t.Parallel()
+	rebuildable, err := http.NewRequest(http.MethodPost, "https://example.test/v1", bytes.NewReader([]byte("payload")))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if rebuildable.GetBody == nil {
+		t.Fatal("precondition: a bytes.Reader body should carry GetBody")
+	}
+	shield := &shieldedBody{rc: io.NopCloser(bytes.NewReader([]byte("payload")))}
+	out, ok := resendable(rebuildable, shield, true)
+	if !ok {
+		t.Fatal("a rebuildable body should be resendable")
+	}
+	if out.Body == io.ReadCloser(shield) {
+		t.Error("the resend reused the shield although GetBody could rebuild the body")
+	}
+
+	// No GetBody: the shield is the only way to send those bytes again, and a
+	// sniffed peer never read them.
+	streamed, err := http.NewRequest(http.MethodPost, "https://example.test/v1", struct{ io.Reader }{bytes.NewReader([]byte("payload"))})
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if streamed.GetBody != nil {
+		t.Fatal("precondition: a bare io.Reader body should not carry GetBody")
+	}
+	shield2 := &shieldedBody{rc: io.NopCloser(bytes.NewReader([]byte("payload")))}
+	out, ok = resendable(streamed, shield2, true)
+	if !ok {
+		t.Fatal("an unread body on a sniffed peer should be resendable")
+	}
+	if out.Body != io.ReadCloser(shield2) {
+		t.Error("the resend did not carry the shielded body")
+	}
+	shield2.read.Store(true)
+	if _, ok := resendable(streamed, shield2, true); ok {
+		t.Error("a body already read must not be resent")
+	}
+}
+
