@@ -11,6 +11,7 @@
 package types
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -127,6 +128,176 @@ type GovernanceLimits struct {
 	// so launch, /me and POST /drives/preview cannot disagree about a drive's
 	// size.
 	MaxDriveSizeMiB int `json:"max_drive_size_mib,omitempty"`
+	// AutonomyRubric maps a run's posture to a permitted AutonomyLevel for a
+	// member under this profile (0.8, #77). A POINTER: `omitempty` never omits a
+	// struct value, so a plain (non-pointer) field would put
+	// `"autonomy_rubric":{}` on every profile's wire body, including one
+	// authored before this field existed — TestGovernanceLimitsWireRoundTrip
+	// pins that an unrestricted profile still marshals `limits: {}` byte for
+	// byte, the same zero-value rule every field above follows. Nil means "no
+	// rubric": resolveRunAutonomy (#97) treats it exactly like a member with no
+	// assigned profile at all.
+	AutonomyRubric *AutonomyRubric `json:"autonomy_rubric,omitempty"`
+}
+
+// AutonomyLevel is one rung on the autonomy ladder a governance profile's
+// AutonomyRubric caps against, L0 (most supervised) through L3 (least). The
+// codes stay internal — the console renders plain labels — the same way
+// ConfinementClass's CC1/CC2/CC3 do (0.8 #77):
+//
+//   - AutonomyL0 "attended": interactive only, supervised seeding.
+//   - AutonomyL1 "gated": adds non-interactive runs, but tool approvals are
+//     derived to `hold`.
+//   - AutonomyL2 "unattended": adds auto-approval and seeded auto tools.
+//   - AutonomyL3: adds `task_mode=exec`, the door that routes around every
+//     other gate, so it is the top rung.
+type AutonomyLevel string
+
+const (
+	AutonomyL0 AutonomyLevel = "L0"
+	AutonomyL1 AutonomyLevel = "L1"
+	AutonomyL2 AutonomyLevel = "L2"
+	AutonomyL3 AutonomyLevel = "L3"
+)
+
+// Valid reports whether l is one of the four defined rungs. Unlike
+// ConfinementClass (which has no such gate — every caller of Rank already
+// tolerates rank 0), AutonomyRubric needs one: an author-facing field, so a
+// typo must 400 rather than silently rank as "below L0".
+func (l AutonomyLevel) Valid() bool {
+	switch l {
+	case AutonomyL0, AutonomyL1, AutonomyL2, AutonomyL3:
+		return true
+	}
+	return false
+}
+
+// Rank orders AutonomyLevel weakest (most supervised) -> strongest (least),
+// mirroring ConfinementClass.Rank(): resolving a rubric folds several
+// applicable caps to their MINIMUM level (#97), and Rank is what "minimum"
+// compares on. An unrecognised value ranks below L0 so it never wins a min()
+// against a real level.
+func (l AutonomyLevel) Rank() int {
+	switch l {
+	case AutonomyL0:
+		return 0
+	case AutonomyL1:
+		return 1
+	case AutonomyL2:
+		return 2
+	case AutonomyL3:
+		return 3
+	default:
+		return -1
+	}
+}
+
+// AutonomyRubric maps a run's posture to a permitted AutonomyLevel. Nine
+// closed fields — three egress postures, three secret postures, three
+// confinement classes — each unset (that posture caps nothing) or one of the
+// four levels (0.8 #77's design: "nine closed fields ... each unset or a
+// level"). The level a run resolves to is the MINIMUM over every field whose
+// posture applies (internal/composer/autonomy.go, #97); an all-unset rubric
+// caps nothing, identically to a nil rubric.
+//
+// A closed struct with `omitempty` on every field, not a map — the same
+// GovernanceLimits doctrine this type lives inside of: the set is small,
+// complete, and validated by the Go type itself (Validate), so no DDL CHECK
+// backs the stored JSON column at all.
+type AutonomyRubric struct {
+	// EgressOpen caps the level when the run's egress is OPEN: allow-all, or
+	// any allowlisted host beyond baseline.
+	EgressOpen AutonomyLevel `json:"egress_open,omitempty"`
+	// EgressReviewed caps the level when egress is REVIEWED: first-use approval
+	// raises approvals, but nothing is wide open.
+	EgressReviewed AutonomyLevel `json:"egress_reviewed,omitempty"`
+	// EgressSealed caps the level when egress is SEALED: neither of the above.
+	EgressSealed AutonomyLevel `json:"egress_sealed,omitempty"`
+	// SecretsPowerful caps the level when the run holds a POWERFUL secret: any
+	// write-capable grant, an api_key to a non-baseline host, or a
+	// git_pat/ssh_key/env_secret grant.
+	SecretsPowerful AutonomyLevel `json:"secrets_powerful,omitempty"`
+	// SecretsBaseline caps the level when the run holds any grant, none of them
+	// powerful.
+	SecretsBaseline AutonomyLevel `json:"secrets_baseline,omitempty"`
+	// SecretsNone caps the level when the run holds no grant at all.
+	SecretsNone AutonomyLevel `json:"secrets_none,omitempty"`
+	// ConfinementCC1/CC2/CC3 cap the level by the run's ENFORCED confinement
+	// class (an empty enforced class reads as CC1 — see AutonomyPosture).
+	ConfinementCC1 AutonomyLevel `json:"confinement_cc1,omitempty"`
+	ConfinementCC2 AutonomyLevel `json:"confinement_cc2,omitempty"`
+	ConfinementCC3 AutonomyLevel `json:"confinement_cc3,omitempty"`
+}
+
+// Validate reports the first field carrying a value that is not a defined
+// AutonomyLevel, NAMING that field — governanceLimitsRefusal
+// (internal/api/governance.go) prefixes the field name onto its "limits."
+// 400 so an admin is told which of the nine to fix, not just "invalid". An
+// empty field is always valid: unset means "this posture caps nothing".
+func (a AutonomyRubric) Validate() error {
+	for _, f := range []struct {
+		field string
+		level AutonomyLevel
+	}{
+		{"egress_open", a.EgressOpen},
+		{"egress_reviewed", a.EgressReviewed},
+		{"egress_sealed", a.EgressSealed},
+		{"secrets_powerful", a.SecretsPowerful},
+		{"secrets_baseline", a.SecretsBaseline},
+		{"secrets_none", a.SecretsNone},
+		{"confinement_cc1", a.ConfinementCC1},
+		{"confinement_cc2", a.ConfinementCC2},
+		{"confinement_cc3", a.ConfinementCC3},
+	} {
+		if f.level != "" && !f.level.Valid() {
+			return fmt.Errorf("%s: %q is not a valid autonomy level", f.field, f.level)
+		}
+	}
+	return nil
+}
+
+// AutonomyEgressPosture is one of the three egress states an AutonomyRubric
+// caps against (internal/composer/autonomy.go's posture arithmetic, #97).
+type AutonomyEgressPosture string
+
+const (
+	AutonomyEgressOpen     AutonomyEgressPosture = "open"
+	AutonomyEgressReviewed AutonomyEgressPosture = "reviewed"
+	AutonomyEgressSealed   AutonomyEgressPosture = "sealed"
+)
+
+// AutonomySecretsPosture is one of the three secret-power states an
+// AutonomyRubric caps against.
+type AutonomySecretsPosture string
+
+const (
+	AutonomySecretsPowerful AutonomySecretsPosture = "powerful"
+	AutonomySecretsBaseline AutonomySecretsPosture = "baseline"
+	AutonomySecretsNone     AutonomySecretsPosture = "none"
+)
+
+// AutonomyPosture is a run's three-axis shape — egress reach, secret power,
+// enforced confinement class — the input #97's resolveRunAutonomy folds
+// against a profile's AutonomyRubric to pick an AutonomyLevel. Computed, never
+// stored on its own; it travels inside AutonomyResolution.
+type AutonomyPosture struct {
+	Egress      AutonomyEgressPosture  `json:"egress"`
+	Secrets     AutonomySecretsPosture `json:"secrets"`
+	Confinement ConfinementClass       `json:"confinement"`
+}
+
+// AutonomyResolution is what resolveRunAutonomy (#97) decides for one run: the
+// level, the posture that produced it, and which rubric field bound the
+// result — the "level, the posture and what bound it" #77 asks to be
+// provenance on the create audit row, the frozen AgentRun.AutonomyLevel, and
+// the preflight response. Bound is empty when nothing capped the level (no
+// profile, no rubric, or a posture the rubric left unset) — the zero value
+// throughout, matching every other GovernanceLimits field's "empty means
+// unrestricted" rule.
+type AutonomyResolution struct {
+	Level   AutonomyLevel   `json:"level"`
+	Posture AutonomyPosture `json:"posture"`
+	Bound   string          `json:"bound,omitempty"`
 }
 
 // GovernanceProfile is one named, assignable ceiling (migration 0052's

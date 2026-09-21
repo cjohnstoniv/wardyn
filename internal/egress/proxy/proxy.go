@@ -927,8 +927,8 @@ func writeApprovalPending(w http.ResponseWriter, log *egress.DecisionLog) {
 	if log != nil && log.ApprovalID != nil {
 		id = log.ApprovalID.String()
 	}
-	// {"wardyn":"approval_pending","approval_id":...}
-	_, _ = fmt.Fprintf(w, `{"wardyn":"approval_pending","approval_id":%q}`, id)
+	// {"wardyn":"approval-pending","approval_id":...}
+	_, _ = fmt.Fprintf(w, `{"wardyn":"approval-pending","approval_id":%q}`, id)
 }
 
 // hopByHopHeaders are stripped before forwarding (RFC 7230 §6.1).
