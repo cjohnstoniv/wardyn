@@ -72,19 +72,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   rubric, or one that caps nothing at this posture — is unchanged: no refusal, no derived field and
   no `autonomy` key on either surface.
   The posture is graded on the run's real egress envelope, not on the spec as each handler
-  happens to hold it: the workspace lanes and the site-config enterprise SCM hosts are unioned in
-  before grading, through the same helpers launch uses. The SCM lane matters most — it is reached
-  from the free-text `repo` field with no grant, no workspace and no approval, so a posture blind
-  to it would grade a run that reaches an internal forge as `sealed` and hand it the rubric's most
-  permissive egress rung.
-  **Known gap:** the two GRANT-DERIVED egress lanes `unionRunEgress` adds after the resolution —
-  an `ssh_key`'s SSH-over-443 endpoint and a `git_pat`'s Azure DevOps bundle — are outside the
-  posture, along with the grant-only path into that union's `declaresRepo`. Those hosts are
-  produced by `persistRunGrants` past a per-host provider-lane veto that runs on the launch side
-  only, and re-deriving that decision at Review is how the two doors start disagreeing again. The
-  residual is bounded: every grant that opens one of those lanes is an `ssh_key` or a `git_pat`,
-  which the secrets axis grades `powerful` at both doors, so such a run is never graded as
-  carrying nothing.
+  happens to hold it: every lane `unionRunEgress` adds after the resolution is unioned in before
+  grading — the workspace registries and clone hosts; the site-config enterprise SCM hosts,
+  whenever the run declares a repo through `repo`, `workspace_repos` OR any `github_token`,
+  `git_pat` or `ssh_key` grant; a `git_pat`'s Azure DevOps bundle; and an `ssh_key`'s
+  SSH-over-443 endpoint — from the spec alone, so Review and launch compute it identically. The
+  grant lanes are graded BEFORE the launch-side provider-lane veto and codex-cli's missing SSH
+  lane, so the graded allowlist is a superset of the one `unionRunEgress` builds: a run that
+  reaches beyond the safe baseline through any of those lanes is always graded `open`, and a run
+  whose lane is later vetoed may be graded `open` on reach it will not get.
+  **Not in the posture:** the egress dispatch adds later still — the model-provider hosts it
+  resolves from global configuration, and the artifact-redirect substitution. A Bedrock run
+  whose region comes from global configuration therefore grades its egress without the Bedrock
+  hosts, where the same run with an integration row grades them.
 - **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
   profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
   secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`

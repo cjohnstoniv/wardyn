@@ -224,8 +224,7 @@ func autonomyAgentLabel(agent string) string {
 }
 
 // autonomyPostureSpec returns the spec the posture is graded on: the FOLDED
-// spec widened by every egress lane unionRunEgress adds that BOTH doors can
-// compute.
+// spec widened by every egress lane unionRunEgress adds.
 //
 // The widening is what makes the two doors agree, and it is not optional.
 // Launch's unionRunEgress runs AFTER the create audit row is written, so
@@ -236,26 +235,29 @@ func autonomyAgentLabel(agent string) string {
 // preflight's spec for the lanes it already ran and set-identical on launch's,
 // so both doors grade the same envelope whatever order the unions ran in.
 //
-// Three lanes, and the third is the one a narrower reading of "pre-union"
-// would have left out at real cost. The site-config SCM hosts are NOT
-// grant-dependent: unionRunEgress gates them on `declaresRepo`, which is true
-// from `spec.WorkspaceRepos` or the legacy free-text `repo` field alone
-// (runs_create.go), and unionSiteConfigScmHosts reads nothing but site config.
-// So `--repo https://ghes.corp.example/team/app` reaches an operator-declared
-// internal forge with no grant, no workspace and no approval — and a posture
-// blind to it grades that run `sealed`, handing it the rubric's most
-// permissive egress rung. The same Server method launch calls is called here,
-// so the two cannot drift about which hosts those are.
+// Every input below comes from the spec, the workspaces or site config, so
+// Review and launch compute it identically:
 //
-// KNOWN GAP, named in the changelog: the two GRANT-DERIVED lanes — an
-// ssh_key's SSH-over-443 endpoint and a git_pat's Azure DevOps bundle — are
-// still outside the posture, along with the grant-only path into
-// `declaresRepo`. Those hosts come out of persistRunGrants, past a per-host
-// provider-lane veto that runs only on the launch side, and re-deriving that
-// decision here is how the two doors start disagreeing again. The residual is
-// BOUNDED rather than merely accepted: every grant that opens one of those
-// lanes is an ssh_key or a git_pat, which autonomySecrets grades `powerful` at
-// both doors, so such a run is never graded as carrying nothing.
+//   - the workspace registries and clone hosts;
+//   - the site-config SCM hosts, whenever specDeclaresRepo — which counts a
+//     github_token, git_pat or ssh_key grant as declaring a repo, as launch's
+//     declaresRepo does. A read-only github_token alone opens this lane at
+//     launch and grades only `baseline` on the secrets axis, so leaving the
+//     grant-only path out handed a run that reaches an internal forge the
+//     rubric's `sealed` row;
+//   - a git_pat's Azure DevOps bundle and an ssh_key's SSH-over-443 endpoint,
+//     from grantLaneEgress — the helper persistRunGrants itself builds those
+//     lanes with, so the two cannot drift about which hosts they are.
+//
+// Graded BEFORE the launch-side decisions that can drop a lane — the provider
+// row's per-host veto in persistRunGrants and codex-cli's missing SSH lane —
+// because those exist on one door only, and re-deriving them here is how the
+// two doors start disagreeing. So the allowlist graded here is a superset of
+// the one unionRunEgress builds: a run whose unioned envelope is `open` is
+// always graded `open`, and a run whose lane was vetoed may be graded `open`
+// on reach it will not get. Lanes added later still, at dispatch, are not
+// here: the model-provider hosts resolved from global configuration and the
+// artifact-redirect substitution.
 //
 // Works on a copy with both domain slices cloned: spec is the one the caller
 // goes on to persist and dispatch, and unionDomains appends in place.
@@ -269,12 +271,33 @@ func (s *Server) autonomyPostureSpec(ctx context.Context, spec types.RunPolicySp
 	for _, ws := range wsRefs {
 		unionAllowedDomains(&out, workspaceCloneEgress(ws))
 	}
-	// unionRunEgress's declaresRepo, restricted to the two disjuncts that need
-	// no grant. A run that declares no repo at all inherits no SCM lane there
-	// and must inherit none here either, or a sealed local-dir run would grade
+	// A run that declares no repo at all inherits no SCM lane at launch and
+	// must inherit none here either, or a sealed local-dir run would grade
 	// open on hosts it can never reach.
-	if len(spec.WorkspaceRepos) > 0 || strings.TrimSpace(legacyRepo) != "" {
+	if specDeclaresRepo(spec, legacyRepo) {
 		s.unionSiteConfigScmHosts(ctx, &out)
 	}
+	for _, g := range spec.EligibleGrants {
+		unionAllowedDomains(&out, grantLaneEgress(g))
+	}
 	return out
+}
+
+// specDeclaresRepo is unionRunEgress's `declaresRepo` computed from the spec
+// alone: a workspace repo, the legacy free-text `repo` field, or any grant of a
+// kind that opens a git credential lane. Launch's own test reads grantWiring,
+// which exists only after persistRunGrants has applied the provider-lane veto;
+// this one counts the grant before the veto, so it is true whenever launch's
+// is and possibly when a veto later makes launch's false.
+func specDeclaresRepo(spec types.RunPolicySpec, legacyRepo string) bool {
+	if len(spec.WorkspaceRepos) > 0 || strings.TrimSpace(legacyRepo) != "" {
+		return true
+	}
+	return slices.ContainsFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
+		switch g.Kind {
+		case types.GrantGitHubToken, types.GrantGitPAT, types.GrantSSHKey:
+			return true
+		}
+		return false
+	})
 }

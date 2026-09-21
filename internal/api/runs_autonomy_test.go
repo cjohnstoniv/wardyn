@@ -608,6 +608,88 @@ func TestAutonomyPostureIncludesSiteConfigScmHostsAtBothDoors(t *testing.T) {
 	}
 }
 
+// TestAutonomyPostureIncludesGrantLanesAtBothDoors is the grant-opened half of
+// the same property: three lanes unionRunEgress adds at launch because of a
+// GRANT, each graded on both doors from the spec alone.
+//
+// The secrets axis cannot stand in for them. A read-only github_token grades
+// `baseline`, not `powerful`, yet it declares a repo and so inherits the
+// operator's SCM hosts; and even a `powerful` grade bounds nothing unless an
+// admin happens to rank secrets_powerful at or below egress_open. So the
+// rubric below names the egress rows only, and every row must come back `open`
+// on reach the grant alone opened.
+func TestAutonomyPostureIncludesGrantLanesAtBothDoors(t *testing.T) {
+	const ghes = "ghes.corp.example"
+	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
+
+	for _, tc := range []struct {
+		name     string
+		grant    types.GrantSpec
+		scmHosts []string
+	}{
+		{
+			name:     "a read-only github_token declares a repo, so the operator's SCM host is reach",
+			grant:    types.GrantSpec{Kind: types.GrantGitHubToken, Scope: mustJSON(map[string]any{"repos": []string{"acme/widgets"}})},
+			scmHosts: []string{ghes},
+		},
+		{
+			name:  "a git_pat to Azure DevOps opens the ADO bundle",
+			grant: types.GrantSpec{Kind: types.GrantGitPAT, Scope: mustJSON(map[string]any{"host": "dev.azure.com", "secret_name": govCorpSecret})},
+		},
+		{
+			name:  "an ssh_key opens its SSH-over-443 endpoint",
+			grant: types.GrantSpec{Kind: types.GrantSSHKey, Scope: mustJSON(map[string]any{"host": "github.com", "key_secret_ref": govCorpSecret})},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := govProfile("grant-egress")
+			p.Limits = types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{
+				EgressOpen: types.AutonomyL1, EgressSealed: types.AutonomyL3,
+			}}
+			p.Ceiling.EligibleGrants = []types.GrantSpec{tc.grant}
+			body := `{"agent":"claude-code","task":"t","confinement_class":"CC2","inline_policy":{"min_confinement_class":"CC2",` +
+				`"allowed_domains":["api.anthropic.com"],"eligible_grants":[` + string(mustJSON(tc.grant)) + `]}}`
+			fixture := func() (*Server, *govEscapeStore, *recRecorder) {
+				srv, st, audit := govEscapeFixture(t, autonomyCapStore(p))
+				srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{tc.grant}
+				st.siteConfig = types.SiteConfig{ScmHosts: tc.scmHosts}
+				return srv, st, audit
+			}
+
+			srv, _, _ := fixture()
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member(t), body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("preflight = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			var resp struct {
+				Autonomy map[string]any `json:"autonomy"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode preflight: %v", err)
+			}
+
+			srv2, st2, audit2 := fixture()
+			if c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), body); c.Code != http.StatusCreated {
+				t.Fatalf("create = %d, want 201: %s", c.Code, c.Body.String())
+			}
+			launched, _ := autonomyCreateAudit(t, st2, audit2)["autonomy"].(map[string]any)
+
+			review, _ := json.Marshal(resp.Autonomy)
+			audited, _ := json.Marshal(launched)
+			if string(review) != string(audited) {
+				t.Errorf("Review and launch disagree:\n  review = %s\n  launch = %s", review, audited)
+			}
+			posture, _ := launched["posture"].(map[string]any)
+			if got, _ := posture["egress"].(string); got != string(types.AutonomyEgressOpen) {
+				t.Errorf("posture.egress = %q, want open: the grant alone opened a lane beyond the safe baseline", got)
+			}
+			if got, _ := launched["level"].(string); got != string(types.AutonomyL1) {
+				t.Errorf("level = %q, want L1 (the open-egress cap)", got)
+			}
+		})
+	}
+}
+
 // ─── the absent-row rule ──────────────────────────────────────────────────────
 
 // TestAutonomyAbsentRowChangesNothing pins the promise every GovernanceLimits

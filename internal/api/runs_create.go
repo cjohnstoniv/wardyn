@@ -442,7 +442,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 					continue
 				}
 				gw.gitPATGrants[host] = grantID.String()
-				gw.gitPATEgress = append(gw.gitPATEgress, adoEgressDomains(host)...)
+				gw.gitPATEgress = append(gw.gitPATEgress, grantLaneEgress(g)...)
 			}
 		}
 		if g.Kind == types.GrantSSHKey {
@@ -457,9 +457,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 					continue
 				}
 				gw.sshGrants[host] = grantID.String()
-				if ep, ok := sshOver443Endpoint(host); ok {
-					gw.sshEgress = append(gw.sshEgress, ep)
-				}
+				gw.sshEgress = append(gw.sshEgress, grantLaneEgress(g)...)
 			}
 		}
 		// Approval-gated api_key grants are deliberately excluded: an unmet
@@ -477,6 +475,32 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 		}
 	}
 	return gw, true
+}
+
+// grantLaneEgress is the egress one grant's SCM lane needs beyond its own
+// host: a git_pat to an Azure DevOps host needs the dev.azure.com /
+// *.visualstudio.com bundle (adoEgressDomains), an ssh_key its PORT-QUALIFIED
+// SSH-over-443 endpoint (sshOver443Endpoint). Every other kind, and a scope
+// that does not parse, needs nothing.
+//
+// A function of the grant alone, BEFORE any veto, because two callers need
+// the same answer at different times: persistRunGrants builds the lanes from
+// it at launch, and the autonomy posture grades them on both doors before any
+// lane exists (autonomyPostureSpec).
+func grantLaneEgress(g types.GrantSpec) []string {
+	switch g.Kind {
+	case types.GrantGitPAT:
+		if host, _, _, err := gitPATScopeFields(g.Scope); err == nil {
+			return adoEgressDomains(host)
+		}
+	case types.GrantSSHKey:
+		if host, _, _, _, err := sshKeyScopeFields(g.Scope); err == nil {
+			if ep, ok := sshOver443Endpoint(host); ok {
+				return []string{ep}
+			}
+		}
+	}
+	return nil
 }
 
 // augmentGitBrokerGrants maps the run's DECLARED GitHub clone set (legacy run.Repo +
