@@ -22,6 +22,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A corporate CA staged for `deploy/compose/Dockerfile.proxy`'s build now actually reaches the
+  running proxy.** The builder stage trusted it for `go mod download`; the distroless runtime stage
+  was COPY-only and never carried it, so wardyn-proxy's own outbound TLS never saw it. The runtime
+  stage now copies the builder's regenerated `/etc/ssl/certs/ca-certificates.crt` (system roots
+  **plus** the corporate CA, never the CA alone), and the builder refuses to build if that bundle
+  isn't actually larger than the bare CA — a bare CA there would replace public trust and take
+  every vendor dial down, indistinguishable from a network fault. An install with no corporate CA
+  staged is unaffected. `wardyn-proxy`'s config validation now also warns at boot when an upstream
+  proxy is configured and an AWS SSO injection host has no `upstream_proxy_no_proxy` entry covering
+  it, and `wardyn support-bundle` now reports the upstream proxy's host (never any embedded
+  credential), its compiled bypass list, and whether a trusted CA was loaded.
 - **The decision-log line printed to stdout is now written under its own mutex.** A line over
   `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
   could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
