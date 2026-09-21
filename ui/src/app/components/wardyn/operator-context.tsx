@@ -143,6 +143,7 @@ export function OperatorProvider({
   userDrive = null,
   userDriveDeniedByProfile = "",
   userDriveUnavailable = "",
+  confinementPosture = "",
   children,
 }: {
   operator: boolean;
@@ -162,6 +163,10 @@ export function OperatorProvider({
    *  Defaults to "" ("nothing is wrong") so every existing caller that passes
    *  only the first two keeps today's behaviour. */
   userDriveUnavailable?: string;
+  /** #162 — see ConfinementPostureContext above. Optional, defaulting "" (no
+   *  posture reported), so every existing caller keeps today's silent
+   *  behaviour. */
+  confinementPosture?: ConfinementPosture;
   children: React.ReactNode;
 }) {
   // Memoised: the two /me fields are a fresh object literal on every shell
@@ -181,7 +186,11 @@ export function OperatorProvider({
       <SecurityOperatorContext.Provider value={securityOperator}>
         <PrincipalContext.Provider value={principal}>
           <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>
-            <UserDriveContext.Provider value={drive}>{children}</UserDriveContext.Provider>
+            <UserDriveContext.Provider value={drive}>
+              <ConfinementPostureContext.Provider value={confinementPosture}>
+                {children}
+              </ConfinementPostureContext.Provider>
+            </UserDriveContext.Provider>
           </MemberLocalDirRootContext.Provider>
         </PrincipalContext.Provider>
       </SecurityOperatorContext.Provider>
@@ -313,4 +322,30 @@ export function useRole(): Role {
 
 export function useRoleResolved(): boolean {
   return React.useContext(RoleResolvedContext);
+}
+
+// #162 — the network-confinement posture ConfinementChip (primitives.tsx) and
+// ConfinementPostureBanner (confinement-posture.tsx) both read. A context
+// rather than a prop: ConfinementChip has a dozen call sites across the
+// console, and threading one more prop through every one of them for a value
+// that is the SAME for the whole page load is exactly the case a context
+// exists for.
+//
+// "" (not "unknown") is the default and the Docker/not-applicable case both —
+// see confinement-posture.tsx's resolveConfinementPosture for the runner +
+// network_policy table this value comes from. Fail-quiet, unlike the
+// fail-OPEN tiers above: an unresolved /me or a component mounted with no
+// <OperatorProvider> (every existing test) must never invent a posture
+// warning nothing has actually reported.
+export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "unknown" | "";
+export const ConfinementPostureContext = React.createContext<ConfinementPosture>("");
+
+// The resolved posture — see ConfinementPostureContext above. A plain string,
+// so passing it straight to the Provider's `value` is already the
+// memoisation a dozen ConfinementChip consumers need: React compares a
+// primitive context value with Object.is, which is a same-string check, not a
+// same-object check, so a render that recomputes the identical posture never
+// re-renders a consumer that already has it.
+export function useConfinementPosture(): ConfinementPosture {
+  return React.useContext(ConfinementPostureContext);
 }
