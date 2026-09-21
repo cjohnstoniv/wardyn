@@ -36,6 +36,32 @@ export interface GovernanceLimits {
   // drive ceiling, folded with the deployment's own in one min(). 0/absent is
   // unlimited.
   max_drive_size_mib?: number;
+  // types.GovernanceLimits.AutonomyRubric (0.8, #77/#99) — maps a run's
+  // posture to a permitted autonomy level. Absent means no rubric, same as
+  // every field above: the Go side is a pointer so an unrestricted profile
+  // still marshals `limits: {}`. Resolution/enforcement land in #97; this
+  // mirror exists so the type is in step from the day the field appears.
+  autonomy_rubric?: AutonomyRubric;
+}
+
+// types.AutonomyLevel — L0 (most supervised) through L3 (least). The codes
+// stay internal; the console renders plain labels (#93), not spelled here yet.
+export type AutonomyLevel = "L0" | "L1" | "L2" | "L3";
+
+// types.AutonomyRubric — nine closed fields, three egress postures, three
+// secret postures, three confinement classes, each absent (caps nothing) or
+// one of the four levels. See internal/types/governance.go for what each
+// posture means.
+export interface AutonomyRubric {
+  egress_open?: AutonomyLevel;
+  egress_reviewed?: AutonomyLevel;
+  egress_sealed?: AutonomyLevel;
+  secrets_powerful?: AutonomyLevel;
+  secrets_baseline?: AutonomyLevel;
+  secrets_none?: AutonomyLevel;
+  confinement_cc1?: AutonomyLevel;
+  confinement_cc2?: AutonomyLevel;
+  confinement_cc3?: AutonomyLevel;
 }
 
 // types.GovernanceProfile — one named, assignable ceiling.
