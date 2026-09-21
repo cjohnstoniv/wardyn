@@ -168,6 +168,12 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			skip = "scope invalid: " + err.Error()
 		case sinkReservedSecret(secretName):
 			skip = "references a reserved platform-internal secret name"
+		case secretName == bedrockAPIKeySecret:
+			// The bearer is proxy-injected and never resident, and its namespace
+			// is the one dispatch records on its own grant
+			// (resolveBedrockBearerInjection) — which this owner-fallback read
+			// cannot honour.
+			skip = "the Bedrock API key is injected proxy-side only and never written into the sandbox"
 		case s.cfg.Secrets == nil:
 			skip = "no secret store configured"
 		case sandboxEnv[name] != "":

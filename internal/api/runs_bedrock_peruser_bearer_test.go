@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -305,3 +307,39 @@ func TestSetupBedrock_PerUserReportsOnlyTheDeclaredLane(t *testing.T) {
 	}
 }
 
+// TestResolveEnvSecretGrants_NeverWritesTheBedrockBearerIntoTheSandbox: the
+// bearer is proxy-injected and never resident, and the env_secret read falls
+// back to the operator's row — so an env_secret naming bedrock-api-key would put
+// the OPERATOR's raw key into a member's sandbox environment.
+func TestResolveEnvSecretGrants_NeverWritesTheBedrockBearerIntoTheSandbox(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	sec.m[bedrockAPIKeySecret] = []byte(bedrockGuardOperatorBearer)
+	scope := []byte(`{"name":"BEDROCK_KEY","secret_name":"bedrock-api-key"}`)
+	pol := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantEnvSecret, Scope: scope}}}
+	env := map[string]string{}
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: "alice@example.com"}
+	h.srv.resolveEnvSecretGrants(context.Background(), run, pol, env)
+	t.Logf("env=%v", env)
+	if env["BEDROCK_KEY"] == bedrockGuardOperatorBearer {
+		t.Errorf("operator bearer delivered RAW into a member's sandbox env via env_secret (no per_user guard on this sink)")
+	}
+}
+
+// TestFilterMemberGrants_DropsAMemberAuthoredBedrockBearerGrant: owning the
+// bedrock-api-key row must not let a member author a grant naming it — the
+// own-key arm would admit it to any model-provider host in the run's egress
+// under a header of their choosing. The run's bearer comes from dispatch.
+func TestFilterMemberGrants_DropsAMemberAuthoredBedrockBearerGrant(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{bedrockAPIKeySecret: []byte("op")},
+		owned: map[string]map[string][]byte{"bob": {bedrockAPIKeySecret: []byte("bob-own-bearer-123")}}}
+	g := types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{
+		"host": "api.openai.com", "secret_name": bedrockAPIKeySecret, "header": "X-Member-Chosen", "format": "%s"})}
+	kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "bob", []string{"api.openai.com"}, []types.GrantSpec{g})
+	t.Logf("kept=%d warns=%v code=%d err=%v", len(kept), warns, code, err)
+	if len(kept) == 1 {
+		t.Errorf("member-authored bedrock-api-key grant to api.openai.com with a custom header was admitted")
+	}
+	code2, verr := h.srv.validateInlineSecretRefs(context.Background(), "bob", types.RunPolicySpec{EligibleGrants: []types.GrantSpec{g}})
+	t.Logf("validateInlineSecretRefs code=%d err=%v", code2, verr)
+}

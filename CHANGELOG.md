@@ -26,7 +26,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   grant it authors whose key it read (the operator's under `shared`, the run owner's under
   `per_user`), and the injection sink resolves `bedrock-api-key` from exactly that record and
   refuses a grant that carries none — it no longer goes through the owner-then-operator fallback
-  read, which could hand a run a different key from the one dispatch chose. `runs_bedrock.go` was split by seam first — the probe
+  read, which could hand a run a different key from the one dispatch chose. For the same reason a
+  member's inline grant naming `bedrock-api-key` is dropped, and an `env_secret` naming it is never
+  resolved: the bearer is proxy-injected only. `runs_bedrock.go` was split by seam first — the probe
   and reporting half now lives in `runs_bedrock_probe.go` — because it had reached the
   1000-line file-size gate.
 
