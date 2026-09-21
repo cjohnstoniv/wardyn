@@ -101,13 +101,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   push is never forwarded; it does not stop a credential being issued, because git's
   `GET info/refs?service=git-receive-pack` discovery precedes every push and mints it. An oversize
   push is refused rather than held: holding would ask a person to approve a push nobody inspected.
-  **A directory the pack does not carry is opaque, and so is a symlink or submodule:** a pack omits
-  every tree the forge already stores wherever the new tree puts it, so a directory moved, staged
-  by an earlier push, or restored from an older revision onto a denied path looked exactly like one
-  left alone — and was skipped. Such an entry now refuses the push when a deny pattern could match
-  anything beneath it. The cost is stated in `docs/POLICIES.md`: a pattern reaching into a directory
-  the repository already has (`.github/workflows/**` on a repository with a `.github/`) refuses
-  every push whose tree still contains that directory. A `deny_paths` entry with an empty, `.` or `..`
+  **What the pack leaves out is compared with the commit the push builds on:** a pack omits every
+  tree the forge already stores wherever the new tree puts it, so a directory moved, staged by an
+  earlier push, or restored from an older revision onto a denied path looked exactly like one left
+  alone — and was skipped. Such a directory, and a symlink or submodule, is now matched when a deny
+  pattern could match anything beneath it, and compared with the same path in the commit the push
+  builds on, read from GitHub's REST API with the run's own credential (trees only, never file
+  contents): the same mode and object id passes, anything else refuses. So
+  `.github/workflows/**` on a repository that already has workflows refuses a push that changes,
+  adds, moves or restores one, and passes an edit to `src/`. A parent counts only when GitHub
+  places it in the current history of the default branch or of a branch the push updates, because
+  GitHub serves a fork network's objects through every repository in it; history a clone re-sends
+  after the default branch moved on is taken out the same way. A forge other than GitHub, or a read
+  that fails, is truncated, or runs past 64 requests or 20 seconds, keeps the refusal and says why.
+  Building on an older commit of the default branch keeps what that commit held at a denied path;
+  `docs/POLICIES.md` states it. A `deny_paths` entry with an empty, `.` or `..`
   segment is refused at write time, a trailing `/` reads as `/**`, and inspection shares the proxy
   sidecar's one inspection slot and retained-bytes budget with LLM request scanning, so concurrent
   small pushes cannot inflate past its 256 MiB cap. Content rules are entered independently of branch-namespace confinement

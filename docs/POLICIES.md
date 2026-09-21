@@ -791,7 +791,7 @@ unchanged:
 
 | Refusal | Status | `rule_source` | Remedy |
 |---|---|---|---|
-| A path the push introduces matched `deny_paths` | `403` | `brokered:git:push-rules` | Take those paths out of the push, or have an operator widen `deny_paths`. The refusal names up to ten of them. |
+| A path the push introduces matched `deny_paths` | `403` | `brokered:git:push-rules` | Take those paths out of the push, or have an operator widen `deny_paths`. The refusal names up to ten of them and, for a path the broker compared with the forge, why it could not clear it. |
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
@@ -820,51 +820,72 @@ read — the agent images clone shallow, and without it the rules would refuse
 nearly every legitimate push.
 
 **What the rules see, and what they do not.** Read this before authoring a
-pattern: it decides whether a rule is usable on your repository at all.
+pattern.
 
-The inspector answers from the pushed pack alone — the broker never fetches
-objects from the forge — and a pack carries only the objects the forge does not
-already have, **wherever the new tree puts them**. Under branch-namespace
-confinement every governed push lands on the run's own branch, so the pushed
-commit's parent stays on the forge and there is no pre-image to diff against:
-the new tree is enumerated instead. Three consequences:
-
-- **A directory the push did not change is opaque, and a pattern that could
-  match beneath it refuses the push.** Its tree is one the forge already stores,
-  so it is not in the pack — and nothing in the pack distinguishes a directory
-  left alone from one a push moved there, copied there from an earlier push of
-  the same run, or restored whole from an older revision. Each of those used to
-  go through unread, which let a run place anything at any path; see
-  `threatmodel/THREAT-MODEL.md`. So `deny_paths: [".github/workflows/**"]`
-  refuses **every push from a repository that already has a `.github/`
-  directory**, whether or not the push touches it, and `deny_paths: ["**/*.pem"]`
-  refuses every push that leaves any directory unchanged. There is no
-  client-side remedy: a push cannot be made to carry a directory the forge
-  already stores. In practice a pattern works as "must not exist, and must not
-  be reachable through anything the pack does not show" — which fits a path
-  your repository does not have (`.github/workflows/**` on a repository with no
-  `.github/`, `secrets/**`) and refuses everything on one that does.
-- A file at the repository **root is always seen**, changed or not, because the
-  root tree itself is always in the pack. `deny_paths: ["Makefile"]` refuses
-  every push from a run whose repository has a `Makefile`, not only the pushes
-  that edit it.
-- **Removals are invisible.** These rules judge what a push *introduces*.
-
+A pack carries only the objects the forge does not already have, **wherever
+the new tree puts them**. Under branch-namespace confinement every governed
+push lands on the run's own branch, so the pushed commit's parent stays on the
+forge and the pack holds nothing to diff against: the new tree is enumerated
+instead. Every file at the repository root is named, changed or not, and every
+directory the push did not change arrives as a tree the forge already stores —
+which is exactly what a directory moved there, staged under another name by an
+earlier push and renamed, or restored whole from an older revision looks like.
 A **symlink or submodule** is opaque the same way: a checkout resolves paths
 beneath it to content no tree entry in the push names — `infra -> stage` turns
-`stage/prod/main.tf` into `infra/prod/main.tf` — so one standing at or above a
-path a pattern could match refuses the push. A commit whose whole tree is one
-the forge already stores (`git commit --allow-empty`, or a commit built from an
-older revision's tree) refuses under any pattern. In the refusal, a path ending
-in `/` names such an unread directory, and `/` alone names the whole tree.
+`stage/prod/main.tf` into `infra/prod/main.tf`. An opaque entry is matched when
+a pattern could match anything beneath it.
 
-Over-reporting is the safe direction for a deny rule and under-reporting is
-not, which is why entries the pack cannot measure are matched rather than
-dropped: a blob the forge already stores, re-introduced at a denied path — a
-plain `git mv` — looks exactly like an unchanged root-level file, and dropping
-one would drop the other. Restoring the "an untouched directory is not
-refused" behaviour needs the parent commit's trees, which only the forge has;
-the broker does not fetch them.
+So an entry a pattern matches is judged one of two ways:
+
+- **An entry the pack carries is refused from the pack alone.** It is content
+  the push adds or changes.
+- **An entry the pack does not carry is compared with the commit the push
+  builds on.** The broker reads that commit's trees from GitHub's REST API —
+  trees only, never file contents — with the run's own credential for the
+  lane, and compares the mode and object id at the same path. Object ids are
+  content addresses, so a match means the push left that path, and everything
+  beneath it, exactly as that commit held it, and the entry passes. With
+  `deny_paths: [".github/workflows/**"]`, a repository that already has
+  workflows can push an edit to `src/`; a push that adds, changes, moves or
+  restores anything under `.github/workflows/` is refused. `Makefile` and
+  `**/*.pem` work the same way.
+
+**Which commit counts.** A commit may name any object as its parent, and GitHub
+serves every fork's objects through the repository itself, so "GitHub holds
+it" proves nothing. A parent counts only when GitHub's compare API places it in
+the **current** history of the repository's default branch, or of a branch the
+push updates (for the run's own branch, that is the run's earlier pushes). A
+merge passes an entry that matches any counted parent, so merging the default
+branch in after it changed a workflow is not refused.
+
+**History the push re-sends.** git leaves out of a pack only what is reachable
+from the tips the forge advertises that the client also has. A clone taken
+before the default branch moved on has none of them, so it re-sends its
+history — its shallow boundary commit, or everything — and the first commit of
+that history would read as though the push added every file the repository
+has. Those commits are put to the same question: the ones GitHub places in the
+current history of the default branch or an updated branch are taken out, and
+the push is judged against them.
+
+**When the comparison cannot be made, the entry refuses the push, and the
+refusal says why:** the forge is not GitHub (a `git_pat` grant for another
+host); no parent counts; or a read fails, answers other than `200`, comes back
+truncated, needs more than 64 reads, or takes longer than 20 seconds. The
+reads happen only for a push the pack alone would refuse, while it holds the
+sidecar's inspection slot, and the credential is normally the one the push's
+own discovery request already minted. In the refusal, a path ending in `/`
+names a directory the push does not carry, and `/` alone names the whole tree.
+
+**What these rules do not stop.**
+
+- **Building on an older commit of the default branch keeps what that commit
+  held at a denied path.** A run that checks out an older commit, or never
+  pulls after a workflow changed on the default branch, can push a branch whose
+  workflows are the older ones — including one the default branch has since
+  fixed. The rule is that a push does not *change* a
+  denied path relative to the commit it builds on — not that every branch
+  carries the newest version of it.
+- **Removals are invisible.** These rules judge what a push *introduces*.
 
 **What the person pushing sees.** git renders a receive-pack `403` as
 `error: RPC failed; HTTP 403` without the response body, so the paths are read

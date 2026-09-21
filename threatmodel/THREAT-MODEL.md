@@ -2424,7 +2424,7 @@ residual because it means the gate's absence is not, by itself, evidence the ins
 is fine: an operator who wants that assurance still reads the checklist, not just
 whether the funnel opened.
 
-### Push content rules read the pack, and only the pack
+### Push content rules read the pack, and the forge for what it leaves out
 
 A run whose policy sets `push_rules` has its brokered git pushes inspected
 before they are forwarded: the broker buffers the receive-pack request, reads
@@ -2443,7 +2443,7 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
 - **A pack does not say where a tree it leaves out used to stand.** It carries
   only the objects the forge lacks, wherever the new tree puts them, and under
   branch-namespace confinement the pushed commit's parent stays on the forge,
-  so there is no pre-image to diff against. A directory the forge already
+  so the pack holds no pre-image to diff against. A directory the forge already
   stores therefore looks the same whether the push left it alone, moved it
   there (`git mv docs/ci infra` with `pack.useSparse=false`), staged it under an
   allowed name in an earlier push of the same run and renamed it onto a denied
@@ -2451,16 +2451,46 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   this was closed, the inspector skipped such a directory, so each of those
   placed arbitrary content at a denied path unread; all three were reproduced
   with a stock git client. Now a directory the pack does not carry is reported
-  as one opaque entry, and a deny pattern that could match beneath it refuses
-  the push (`internal/gitpack`'s `Change.Opaque`,
-  `internal/egress/proxy/push_rules.go`'s `matchesBeneath`). The cost is
-  large and deliberate: a pattern that reaches into a directory the repository
-  already has refuses every push whose tree still contains that directory —
-  `.github/workflows/**` refuses every push from a repository with a
-  `.github/` directory — and a leading `**` refuses nearly every push. The
-  rules are precise only for paths the repository does not yet have. Restoring
-  precision needs the parent commit's trees, which only the forge holds; the
-  broker does not fetch them.
+  as one opaque entry (`internal/gitpack`'s `Change.Opaque`), matched when a
+  deny pattern could match beneath it (`internal/egress/proxy/push_rules.go`'s
+  `matchesBeneath`), and compared with the same path in the commit the push
+  builds on, read from GitHub's REST API with the run's own credential
+  (`internal/egress/proxy/push_forge.go`): trees only, one level per request,
+  never file contents. The same mode and object id there — a content address —
+  means the push left it unchanged, and it passes; anything else refuses. A
+  moved, staged-and-renamed or restored directory is not what the commit the
+  push builds on held at that path, so all three reproductions stay refused.
+- **The forge holding an object is not the repository vouching for it.** A
+  commit may name any object id as its parent, and GitHub serves every fork's
+  objects through each repository in the network, so a commit pushed only to a
+  fork could otherwise vouch for its own content at a denied path. A parent
+  counts only when GitHub's compare API reports it inside the current history
+  of the default branch or of a branch the push updates; the forge resolves
+  those names, so nothing the pack asserts is taken on trust. A merge passes an
+  entry that matches any counted parent: demanding all would refuse merging the
+  default branch in after it changed a denied path, and closes nothing a
+  single-parent commit on the same base could not already do.
+- **History a push re-sends is taken out the same way.** A clone whose base is
+  no longer a tip the forge advertises re-sends its history, and the first
+  commit of that history reads as though the push added every file the
+  repository has. The carried commits GitHub places in that same current
+  history are taken out (`internal/gitpack`'s `Result.Settle`) and the push is
+  judged against them; a commit once found new is never taken as held.
+- **Building on an older commit of the default branch keeps what that commit
+  held at a denied path.** This is the stated residual of comparing with the
+  commit a push builds on: a run that checks out an older commit of the default
+  branch, or never pulls after a workflow changed there, can push a branch
+  whose workflows are the older ones. The rule is that a push does not change a
+  denied path relative to the commit it builds on, not that every branch
+  carries the newest version of it. That includes a workflow the default branch
+  has since changed or fixed, and GitHub runs an `on: push` workflow from the
+  pushed commit's own copy.
+- **When the comparison cannot be made, the strict reading stands.** A forge
+  other than GitHub, a push that builds on no counted commit, a read that fails,
+  answers other than `200` or comes back truncated, and a comparison needing
+  more than 64 reads or 20 seconds all refuse the push, and the refusal names
+  the reason. The reads happen only for a push the pack alone would refuse,
+  while it holds the sidecar's inspection slot.
 - **A symlink or submodule is opaque the same way.** It is a leaf in the pushed
   tree, but a checkout resolves paths beneath it to content no tree entry
   names — `infra -> stage` makes `stage/prod/main.tf` readable as
@@ -2471,11 +2501,10 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   that deletes a denied path is not a rule match.
 - **Root-level files are always reported.** The root tree is always in the
   pack, so every file at the repository root is named whether or not the push
-  touched it, and a deny pattern naming a root-level file refuses every push
-  from that repository. Over-reporting is the safe direction for a deny rule,
-  and the entries that cause it are not dropped on purpose: a blob the forge
-  already stores, re-introduced at a denied path by a rename, is reported
-  identically, so dropping one would drop the other.
+  touched it. One the pack does not carry is compared with the commit the push
+  builds on like any other entry, so a pattern naming a root-level file refuses
+  only a push that changes it — including a blob the forge already stores,
+  re-introduced at that path by a rename, which is not what the base held there.
 - **A pattern that would match nothing is refused, not stored.** An entry with
   an empty, `.` or `..` segment is refused at write time, a trailing `/` reads
   as `/**`, and an entry that reaches the broker unvalidated refuses every push
