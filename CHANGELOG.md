@@ -113,10 +113,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Failure rows are coalesced like `auth.failed`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
   (failures) and `device.audit.chain_reset`.
 
-- **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL` and `WARDYN_ORG_ENROLMENT_TOKEN`
-  tell a managed laptop which org control plane it belongs to (the device's name at the org is the one
-  its enrolment token was minted for). Boot is
-
 - **The runner contract can now place a file inside a sandbox that the agent cannot modify.**
   `SandboxSpec.ManagedFiles` carries operator-authored `{Path, Mode, Content}` entries, and
   `Capabilities.ManagedFiles` (a conjunction across substrates, like `UserDrives`) says whether a
@@ -136,10 +132,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Conformance case 8 (`ManagedFiles`) holds both substrates to it, and its load-bearing assertion is
   that a write is REFUSED, not that the file reads back. Nothing populates the field yet.
 
-- **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL`, `WARDYN_ORG_ENROLMENT_TOKEN` and
-  `WARDYN_ORG_DEVICE_NAME` tell a managed laptop which org control plane it belongs to. Boot is
+- **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL` and `WARDYN_ORG_ENROLMENT_TOKEN`
+  tell a managed laptop which org control plane it belongs to (the device's name at the org is the one
+  its enrolment token was minted for). Boot is
   refused when an org URL is set without `WARDYN_MEMBER_MODE`, when the URL is plaintext and not
   loopback, or when an enrolment token is set with no org URL to send it to. See `docs/ENV.md`.
+
+- **A managed laptop enrols at boot and forwards its audit rows to its organisation** (#103). With
+  `WARDYN_ORG_URL` set, wardynd enrols once with `WARDYN_ORG_ENROLMENT_TOKEN`, keeps the device
+  credential in its secret store under the reserved name `wardyn-org-device-credential`, and pushes its
+  own chained audit rows upward from a durable cursor. A revocation (the organisation answering
+  401/410) is recorded in `org_federation.revoked_at` (migration `0069_org_federation_revoked`), so a
+  restart comes back still refusing every run-creating path with a 503 until the laptop is re-enrolled
+  with a fresh token. `/healthz` gains `org_federation {enrolled, lag}` on a hybrid laptop only, and
+  `/metrics` gains `wardyn_org_federation_lag`. New audit actions: `device.local.enrol`,
+  `device.local.revoke`.
 
 - **The kind AWS SSO walk now runs nightly instead of only by hand.** `.github/workflows/nightly.yml`
   gained a `kind-sso-walk` job that brings up `make kind-quickstart` + `make kind-sso` on the hosted

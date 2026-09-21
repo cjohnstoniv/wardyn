@@ -10,8 +10,7 @@
 --                                 first boot exchanges for a device credential.
 --   * org_federation           — the LAPTOP side's single-row durable cursor:
 --                                 how far its forwarder has pushed its own
---                                 local audit_events upward, and whether the
---                                 organisation revoked it. Present in every
+--                                 local audit_events upward. Present in every
 --                                 deployment's schema (the same wardynd binary
 --                                 runs both roles), but only a laptop daemon
 --                                 ever writes it.
@@ -65,10 +64,6 @@ CREATE TABLE IF NOT EXISTS device_enrolment_tokens (
 CREATE TABLE IF NOT EXISTS org_federation (
     singleton          BOOLEAN     NOT NULL DEFAULT true CHECK (singleton),
     last_forwarded_seq BIGINT      NOT NULL DEFAULT 0,
-    -- Set when the organisation answered the forwarder 401/410: the device
-    -- credential is dead, and a restart with the organisation unreachable must
-    -- not forget it. Cleared only by a re-enrolment (ResetFederation).
-    revoked_at         TIMESTAMPTZ,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (singleton)
 );
