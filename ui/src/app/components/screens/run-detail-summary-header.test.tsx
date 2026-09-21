@@ -19,6 +19,7 @@ import { waitingReauth } from "../wardyn/model-access-copy";
 import type { AgentRun, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
+import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import {
   CHIP_SETTING_UP,
   CHIP_WAITING_FOR_MACHINE,
@@ -413,5 +414,33 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
     );
     expect(screen.queryByText(CHIP_SETTING_UP)).toBeNull();
     expect(screen.queryByText(STARTING_CONTAINER_CREATING)).toBeNull();
+  });
+});
+
+// #93/#96 — the run header's autonomy chip, beside ConfinementChip.
+// run.autonomy_level freezes the level resolveRunAutonomy capped this run at,
+// at create time (0.8 #97).
+describe("SummaryHeader — the autonomy chip beside the barrier chip", () => {
+  it("renders the level's friendly label when the run carries one", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={{ ...runningInteractive, autonomy_level: "L1" }} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(AUTONOMY_META.L1.label)).toBeInTheDocument();
+    // The wire code stays out of accessible content — same D4 rule
+    // ConfinementChip follows.
+    expect(screen.queryByText("L1")).toBeNull();
+  });
+
+  it("renders no autonomy chip at all for a run with an empty autonomy_level", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    for (const meta of Object.values(AUTONOMY_META)) {
+      expect(screen.queryByText(meta.label)).toBeNull();
+    }
   });
 });

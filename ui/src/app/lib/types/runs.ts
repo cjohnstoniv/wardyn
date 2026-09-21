@@ -7,7 +7,7 @@
 // All wire fields are snake_case (see lib/types.ts's barrel comment for the
 // one documented exception, in a different domain module).
 
-import type { AutonomyLevel } from "../api/governance";
+import type { AutonomyLevel, AutonomyResolution } from "../api/governance";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
@@ -478,6 +478,12 @@ export interface PreflightResult {
   // refusal has no verdict to publish). The status row is the default path for
   // exactly that reason.
   model_credential?: ModelCredential;
+  // Autonomy is what resolveRunAutonomy decided for THIS body (0.8 #97/#93) —
+  // internal/api/preflight.go's preflightResponse.Autonomy. ABSENT (never a
+  // zero value) when nothing bound the run: no assigned profile, no rubric on
+  // it, or a rubric that leaves this posture's three fields unset — the same
+  // condition under which the create audit row omits its own field.
+  autonomy?: AutonomyResolution;
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

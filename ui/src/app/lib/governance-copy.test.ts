@@ -6,8 +6,20 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DIRECTORY, GOVERNANCE, MEMBER, POSITIONING } from "./governance-copy";
+import {
+  AUTONOMY_BOUND,
+  AUTONOMY_RAIL,
+  autonomyBoundSentence,
+  DIRECTORY,
+  foldAutonomyRubric,
+  GOVERNANCE,
+  LIMITS_CHIP,
+  MEMBER,
+  POSITIONING,
+  RUBRIC,
+} from "./governance-copy";
 import { PEOPLE } from "./people-access-copy";
+import { AUTONOMY_RUBRIC_ROW_KEYS, type AutonomyRubricRowKey } from "./api/governance";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
@@ -273,5 +285,100 @@ describe("governance-copy — the reuse rules §7 spells out", () => {
     }
     expect(GOVERNANCE).not.toHaveProperty("OMISSION_BODY");
     expect(GOVERNANCE).not.toHaveProperty("GRANT_BOUND_BODY");
+  });
+});
+
+// #93/#96 — the autonomy rubric. These strings live outside GOVERNANCE/MEMBER
+// (never parsed from governance-prompt.md — the mock they were transcribed
+// from is a scratchpad, not docs/), so they get their own direct pins rather
+// than a doc-table comparison.
+describe("RUBRIC — the profile editor's rubric section", () => {
+  it("has one [label, why] row for every one of the nine AutonomyRubric fields, in the fixed order", () => {
+    expect(Object.keys(RUBRIC.ROWS).sort()).toEqual([...AUTONOMY_RUBRIC_ROW_KEYS].sort());
+    for (const k of AUTONOMY_RUBRIC_ROW_KEYS) {
+      const [label, why] = RUBRIC.ROWS[k];
+      expect(label.length).toBeGreaterThan(0);
+      expect(why.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("SET_NOTE and EMPTY_NOTE match the mock round's frozen wording", () => {
+    expect(RUBRIC.SET_NOTE(3, "Gated")).toBe("3 of 9 rows set a cap. The lowest is Gated.");
+    expect(RUBRIC.EMPTY_NOTE).toBe("No row sets a cap, so this profile leaves autonomy exactly as it is today.");
+  });
+});
+
+describe("foldAutonomyRubric", () => {
+  it("nil/undefined rubric folds to no set rows and no lowest level", () => {
+    expect(foldAutonomyRubric(undefined)).toEqual({ setKeys: [], lowest: null });
+    expect(foldAutonomyRubric(null)).toEqual({ setKeys: [], lowest: null });
+    expect(foldAutonomyRubric({})).toEqual({ setKeys: [], lowest: null });
+  });
+
+  it("the lowest level wins over every OTHER set row, whatever order they were set in", () => {
+    expect(
+      foldAutonomyRubric({ egress_open: "L3", secrets_powerful: "L0", confinement_cc1: "L2" }),
+    ).toEqual({ setKeys: ["egress_open", "secrets_powerful", "confinement_cc1"], lowest: "L0" });
+  });
+
+  it("setKeys carries every set row, unset rows excluded", () => {
+    expect(foldAutonomyRubric({ egress_open: "L1", egress_reviewed: undefined }).setKeys).toEqual(["egress_open"]);
+  });
+});
+
+describe("LIMITS_CHIP.AUTONOMY — ruling 2 (#96 review)", () => {
+  it("names the strictest cap on the chip face itself, not merely that a rubric exists", () => {
+    expect(LIMITS_CHIP.AUTONOMY("Attended")).toBe("Autonomy: Attended at the strictest");
+  });
+});
+
+describe("AUTONOMY_BOUND / autonomyBoundSentence — ruling 1 (#96 review)", () => {
+  it("every row has its own frozen one-cause sentence, in the 'Bound by...' shape", () => {
+    for (const k of AUTONOMY_RUBRIC_ROW_KEYS) {
+      expect(AUTONOMY_BOUND[k]).toMatch(/^Bound by this run's /);
+      expect(AUTONOMY_BOUND[k].endsWith(".")).toBe(true);
+    }
+    expect(AUTONOMY_BOUND.secrets_powerful).toBe("Bound by this run's secrets: it carries a credential that can write.");
+    expect(AUTONOMY_BOUND.confinement_cc1).toBe("Bound by this run's barrier: Fence, confinement class CC1.");
+  });
+
+  it("a single cause renders the SAME sentence AUTONOMY_BOUND carries, unchanged", () => {
+    for (const k of AUTONOMY_RUBRIC_ROW_KEYS) {
+      expect(autonomyBoundSentence([k])).toBe(AUTONOMY_BOUND[k]);
+    }
+  });
+
+  it("no bound_by at all falls back to the no-cap sentence rather than an empty claim", () => {
+    expect(autonomyBoundSentence([])).toBe(AUTONOMY_RAIL.NO_CAP);
+  });
+
+  // Ruling 1's own example (governance.spec.ts issue #96, the review comment):
+  // "Bound by this run's secrets and its barrier: it carries a credential
+  // that can write, behind a Fence (confinement class CC1)." is the mock's
+  // scaffold illustration, not a frozen sentence (it lives in the mock's
+  // .qblock, which the mock's own header marks as review material that ships
+  // nowhere) — this pins the SHAPE the ruling requires instead: every tied
+  // cause named, never just the first.
+  it("a two-way tie names BOTH causes, not just the first", () => {
+    const s = autonomyBoundSentence(["secrets_powerful", "confinement_cc1"]);
+    expect(s).toContain("secrets");
+    expect(s).toContain("barrier");
+    expect(s).toContain("it carries a credential that can write");
+    expect(s).toContain("Fence, confinement class CC1");
+    // NOT the single-cause sentence for either cause alone — this is the
+    // regression ruling 1 exists to prevent (bound_by[0] only).
+    expect(s).not.toBe(AUTONOMY_BOUND.secrets_powerful);
+    expect(s).not.toBe(AUTONOMY_BOUND.confinement_cc1);
+  });
+
+  it("a three-way tie names all three causes", () => {
+    const causes: AutonomyRubricRowKey[] = ["egress_open", "secrets_none", "confinement_cc3"];
+    const s = autonomyBoundSentence(causes);
+    expect(s).toContain("network reach");
+    expect(s).toContain("secrets");
+    expect(s).toContain("barrier");
+    expect(s).toContain("it can reach hosts beyond the baseline");
+    expect(s).toContain("it carries none");
+    expect(s).toContain("Vault, confinement class CC3");
   });
 });

@@ -28,6 +28,13 @@
 // it is rendered inside.
 
 import { PEOPLE } from "./people-access-copy";
+import {
+  AUTONOMY_LEVEL_ORDER,
+  AUTONOMY_RUBRIC_ROW_KEYS,
+  type AutonomyLevel,
+  type AutonomyRubric,
+  type AutonomyRubricRowKey,
+} from "./api/governance";
 
 // §7.1 — reused canon, referenced never re-frozen
 //
@@ -352,3 +359,130 @@ export const DIRECTORY = {
   NO_MATCHES: "No matches in your directory. Type the value yourself if you know it.",
   LOOKUP_FAILED: "Couldn't check your directory — type the value yourself.",
 } as const;
+
+// #96/#93 — the autonomy rubric (0.8, #77). The mock round's frozen strings
+// table (autonomy-launch.html surface 1), transcribed verbatim — not parsed
+// back out of a doc like §7.2-§7.9 above, because the mock lives in a
+// scratchpad rather than in this repo's docs/. Two rulings from #96's review
+// (recorded on #96, applied here rather than in the mock, which froze before
+// they were made):
+//
+//   1. bound_by is a LIST. A tie at the resolved level names EVERY cause, not
+//      the first — autonomyBoundSentence below composes it.
+//   2. The profiles-list chip (LIMITS_CHIP.AUTONOMY) names the STRICTEST cap,
+//      not merely that a rubric exists — the detail is unreadable in a
+//      tooltip on a phone or by keyboard, so it goes on screen.
+
+// ---- the profile editor's Rubric section (profile-rubric.tsx) ----
+export const RUBRIC = {
+  HEADING: "Autonomy rubric",
+  INTRO:
+    "Cap how much a run may do on its own, by the posture it launches with. A run gets the lowest level any matching row sets. Rows left at No cap restrict nothing.",
+  EMPTY_NOTE: "No row sets a cap, so this profile leaves autonomy exactly as it is today.",
+  NOCAP: "No cap",
+  GROUP_EGRESS: "Network reach",
+  GROUP_SECRETS: "Secrets",
+  GROUP_BARRIER: "Barrier",
+  GROUP_BARRIER_HINT: "The enforced barrier — “confinement class” in the API and the docs.",
+  // key -> [row label, why]. Iterate AUTONOMY_RUBRIC_ROW_KEYS for a stable,
+  // Go-matching order rather than Object.keys.
+  ROWS: {
+    egress_open: ["Open", "The run can reach hosts beyond the baseline, or everything."],
+    egress_reviewed: ["Reviewed", "New hosts are approved on first use."],
+    egress_sealed: ["Sealed", "Baseline hosts only."],
+    secrets_powerful: ["Powerful", "The run carries a credential that can write."],
+    secrets_baseline: ["Baseline", "The run carries credentials, none of them write-capable."],
+    secrets_none: ["None", "The run carries no credential."],
+    confinement_cc1: ["Fence (CC1)", "Shared kernel."],
+    confinement_cc2: ["Wall (CC2)", "gVisor userspace kernel."],
+    confinement_cc3: ["Vault (CC3)", "Kata microVM."],
+  } as Record<AutonomyRubricRowKey, [label: string, why: string]>,
+  SET_NOTE: (n: number, level: string) => `${n} of 9 rows set a cap. The lowest is ${level}.`,
+} as const;
+
+// foldAutonomyRubric summarizes a WHOLE rubric for display — every row that
+// sets a cap, and the lowest level among them — the same fold the profile
+// editor's footer note and the profiles-list chip both need. Distinct from
+// the SERVER's per-run FoldAutonomy (internal/composer/autonomy.go): that one
+// folds the three rows ONE run's posture selects; this one is an
+// admin-facing "what is the strictest this profile could ever cap at", over
+// every row that is set, which is exactly what the mock's editor footer and
+// list chip compute.
+export function foldAutonomyRubric(rubric: AutonomyRubric | null | undefined): {
+  setKeys: AutonomyRubricRowKey[];
+  lowest: AutonomyLevel | null;
+} {
+  const setKeys = AUTONOMY_RUBRIC_ROW_KEYS.filter((k) => !!rubric?.[k]);
+  let lowest: AutonomyLevel | null = null;
+  for (const k of setKeys) {
+    const level = rubric![k]!;
+    if (lowest === null || AUTONOMY_LEVEL_ORDER.indexOf(level) < AUTONOMY_LEVEL_ORDER.indexOf(lowest)) {
+      lowest = level;
+    }
+  }
+  return { setKeys, lowest };
+}
+
+// ---- the profiles list chip (governance-screen.tsx) ----
+export const LIMITS_CHIP = {
+  // Ruling 2 (#96 review): the STRICTEST cap, on the chip face — not merely
+  // that a rubric exists, and not behind a tooltip. `label` is the strictest
+  // level's AUTONOMY_META label (e.g. "Attended"), looked up by the caller.
+  AUTONOMY: (label: string) => `Autonomy: ${label} at the strictest`,
+} as const;
+
+// ---- the New Run rail's Autonomy section + the run header (new-run-rail.tsx
+// / run-detail-summary-header.tsx) ----
+export const AUTONOMY_RAIL = {
+  HEADING: "Autonomy",
+  NO_CAP: "Your organization's profile sets no autonomy rubric, so nothing caps this run.",
+  NO_PROFILE: "No governance profile applies to you, so nothing caps this run.",
+  DERIVED_HOLD_NOTE: "Every tool call in this run will wait for your confirmation.",
+  PROFILE_LINE: (p: string) => `From the ${p} governance profile.`,
+} as const;
+
+// Per-cause fragments — the single source both AUTONOMY_BOUND's one-cause
+// sentences and autonomyBoundSentence's tied-cause composition read from, so
+// the two can never say something different about the same row.
+const AUTONOMY_BOUND_DETAIL: Record<AutonomyRubricRowKey, { dimension: string; detail: string }> = {
+  egress_open: { dimension: "network reach", detail: "it can reach hosts beyond the baseline" },
+  egress_reviewed: { dimension: "network reach", detail: "new hosts are approved on first use" },
+  egress_sealed: { dimension: "network reach", detail: "baseline hosts only" },
+  secrets_powerful: { dimension: "secrets", detail: "it carries a credential that can write" },
+  secrets_baseline: { dimension: "secrets", detail: "it carries credentials, none of them write-capable" },
+  secrets_none: { dimension: "secrets", detail: "it carries none" },
+  confinement_cc1: { dimension: "barrier", detail: "Fence, confinement class CC1" },
+  confinement_cc2: { dimension: "barrier", detail: "Wall, confinement class CC2" },
+  confinement_cc3: { dimension: "barrier", detail: "Vault, confinement class CC3" },
+};
+
+// One sentence per cause — frozen, byte for byte, from the mock round's
+// strings table. What the rail renders when bound_by carries exactly one
+// cause (the common case: only one axis actually bound the level).
+export const AUTONOMY_BOUND: Record<AutonomyRubricRowKey, string> = Object.fromEntries(
+  AUTONOMY_RUBRIC_ROW_KEYS.map((k) => [
+    k,
+    `Bound by this run's ${AUTONOMY_BOUND_DETAIL[k].dimension}: ${AUTONOMY_BOUND_DETAIL[k].detail}.`,
+  ]),
+) as Record<AutonomyRubricRowKey, string>;
+
+function joinAnd(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+// autonomyBoundSentence composes AutonomyResolution.bound_by into the rail's
+// one sentence — ruling 1 (#96 review): every tied cause is named, never just
+// bound_by[0]. A single cause renders AUTONOMY_BOUND's frozen sentence
+// unchanged; a tie composes across the fragments so the dimensions and their
+// details each read as their own list rather than retyping a sentence per
+// combination (nine rows tie in at most 2^3 - 1 = 7 shapes — a table would
+// have to enumerate all of them and would still drift from AUTONOMY_BOUND the
+// day a fragment's wording changes).
+export function autonomyBoundSentence(causes: AutonomyRubricRowKey[]): string {
+  if (causes.length === 0) return AUTONOMY_RAIL.NO_CAP;
+  if (causes.length === 1) return AUTONOMY_BOUND[causes[0]];
+  const dims = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].dimension);
+  const details = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].detail);
+  return `Bound by this run's ${joinAnd(dims)}: ${details.join(", ")}.`;
+}

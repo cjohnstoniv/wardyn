@@ -50,6 +50,9 @@ import { ModelAccessProvider, useModelAccessDoor } from "../../wardyn/model-acce
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
+import { AUTONOMY_RAIL, autonomyBoundSentence } from "../../../lib/governance-copy";
+import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
+import type { AutonomyResolution } from "../../../lib/api/governance";
 import type {
   ModelCredential,
   PreflightResult,
@@ -79,6 +82,10 @@ function preflightWith(cred: ModelCredential): PreflightResult {
   return { setup_items: [], enforced_confinement_class: "CC1", model_credential: cred };
 }
 
+function preflightWithAutonomy(autonomy?: AutonomyResolution): PreflightResult {
+  return { setup_items: [], enforced_confinement_class: "CC1", autonomy };
+}
+
 type RailProps = Parameters<typeof railTree>[0];
 function renderRail(props: RailProps) {
   const result = render(railTree(props));
@@ -89,6 +96,8 @@ function railTree(props: {
   agentRow?: SetupHarnessTool;
   preflightResult?: PreflightResult;
   showModelWarning?: boolean;
+  governanceProfile?: string;
+  showHoldNote?: boolean;
   /** Undefined (the default) mounts NO <ModelAccessProvider> at all — the
    *  fail-open contract every one of the ~15 pre-existing cases below relies
    *  on. Pass a value to grade a door for the rail's own tests. */
@@ -115,9 +124,10 @@ function railTree(props: {
   const rail = (
     <RunRail
       cc="CC1"
+      governanceProfile={props.governanceProfile}
       showModelWarning={props.showModelWarning ?? false}
       startup="It starts."
-      showHoldNote={false}
+      showHoldNote={props.showHoldNote ?? false}
       toolRules={null}
       launch={{
         onLaunch: props.onLaunch ?? (() => {}),
@@ -721,5 +731,92 @@ describe("the launch door — the server's credential refusal opens the sign-in,
     // re-open it with a relaunch armed.
     await afterFocusSettles();
     expect(dialog()).toBeNull();
+  });
+});
+
+// #93/#96 — the New Run rail's Autonomy section: what resolveRunAutonomy would
+// cap this run at, once a preflight verdict is on screen.
+describe("New run rail — the Autonomy section", () => {
+  it("renders nothing before a preflight verdict is on screen", () => {
+    renderRail({});
+    expect(screen.queryByText(AUTONOMY_RAIL.HEADING)).toBeNull();
+  });
+
+  it("with no profile at all: the no-profile sentence and the no-limit chip", async () => {
+    renderRail({ preflightResult: preflightWithAutonomy(undefined) });
+    expect(await screen.findByText(AUTONOMY_RAIL.HEADING)).toBeInTheDocument();
+    expect(screen.getByText(AUTONOMY_RAIL.NO_PROFILE)).toBeInTheDocument();
+    expect(screen.queryByText(AUTONOMY_RAIL.NO_CAP)).toBeNull();
+  });
+
+  it("a profile with no rubric: the no-cap sentence, not the no-profile one", async () => {
+    renderRail({ preflightResult: preflightWithAutonomy(undefined), governanceProfile: "Engineering" });
+    expect(await screen.findByText(AUTONOMY_RAIL.HEADING)).toBeInTheDocument();
+    expect(screen.getByText(AUTONOMY_RAIL.NO_CAP)).toBeInTheDocument();
+    expect(screen.queryByText(AUTONOMY_RAIL.NO_PROFILE)).toBeNull();
+  });
+
+  it("a resolved level renders the level's friendly label and its one-cause sentence", async () => {
+    renderRail({
+      preflightResult: preflightWithAutonomy({
+        level: "L1",
+        posture: { egress: "sealed", secrets: "powerful", confinement: "CC1" },
+        bound_by: ["secrets_powerful"],
+      }),
+    });
+    expect(await screen.findByText(AUTONOMY_META.L1.label)).toBeInTheDocument();
+    expect(screen.getByText(autonomyBoundSentence(["secrets_powerful"]))).toBeInTheDocument();
+  });
+
+  // Ruling 1 (#96 review): bound_by is a LIST, and a tie names EVERY cause —
+  // the regression this pin exists to prevent is the rail reading bound_by[0]
+  // alone and dropping the second (or third) tied row.
+  it("a tie at the resolved level names EVERY bound_by cause, not just the first", async () => {
+    const boundBy = ["secrets_powerful", "confinement_cc1"] as const;
+    renderRail({
+      preflightResult: preflightWithAutonomy({
+        level: "L1",
+        posture: { egress: "sealed", secrets: "powerful", confinement: "CC1" },
+        bound_by: [...boundBy],
+      }),
+    });
+    const sentence = autonomyBoundSentence([...boundBy]);
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
+    expect(sentence).toContain("secrets");
+    expect(sentence).toContain("barrier");
+  });
+
+  it("names the assigned governance profile beside a resolved level", async () => {
+    renderRail({
+      preflightResult: preflightWithAutonomy({
+        level: "L2",
+        posture: { egress: "open", secrets: "baseline", confinement: "CC1" },
+        bound_by: ["egress_open"],
+      }),
+      governanceProfile: "Engineering",
+    });
+    expect(await screen.findByText(AUTONOMY_RAIL.PROFILE_LINE("Engineering"))).toBeInTheDocument();
+  });
+
+  it("a derived hold at L1 states the derived-hold note; a non-L1 level does not", async () => {
+    const r = renderRail({
+      preflightResult: preflightWithAutonomy({
+        level: "L1",
+        posture: { egress: "sealed", secrets: "powerful", confinement: "CC1" },
+        bound_by: ["secrets_powerful"],
+      }),
+      showHoldNote: true,
+    });
+    expect(await screen.findByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeInTheDocument();
+
+    r.rerenderWith({
+      preflightResult: preflightWithAutonomy({
+        level: "L2",
+        posture: { egress: "sealed", secrets: "powerful", confinement: "CC1" },
+        bound_by: ["secrets_powerful"],
+      }),
+      showHoldNote: true,
+    });
+    expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();
   });
 });

@@ -78,6 +78,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **The autonomy rubric is now visible in the console: the profile editor, the profiles list, the New
+  Run rail and the run header.** The profile editor grows a Rubric section (`profile-rubric.tsx`) —
+  three posture groups, nine rows, one `No cap`/`L0`-`L3` select each — that round-trips through
+  `GovernanceLimits.autonomy_rubric`. The profiles list names the strictest cap on the chip itself
+  (`Autonomy: <level> at the strictest`), not merely that a rubric exists, since the detail is
+  unreadable in a tooltip on a phone or by keyboard. The New Run rail reads `preflight.result.autonomy`
+  and states the resolved level plus one sentence naming every rubric row that bound it — `bound_by`
+  is a list, and a tie at the resolved level names every tied cause, never just the first, so
+  loosening one of them without the others is never a false promise. The run header carries the same
+  level beside `ConfinementChip` from the frozen `agent_runs.autonomy_level`. Levels read Attended /
+  Gated / Unattended / Unrestricted on screen; the internal `L0`-`L3` codes stay in `title` only, the
+  same way `ConfinementChip` keeps `CC1`-`CC3` out of the visible label. New copy lives in
+  `governance-copy.ts` (`RUBRIC`, `LIMITS_CHIP`, `AUTONOMY_RAIL`, `AUTONOMY_BOUND`) and a new
+  `wardyn/autonomy-meta.ts` mirroring `cc-meta.ts`; the TypeScript mirror of `AutonomyResolution` /
+  `AutonomyPosture` is new too (`lib/api/governance.ts`), there being no prior console consumer of
+  either.
 
 ### Fixed
 

@@ -6,6 +6,7 @@
 import * as React from "react";
 import { cn } from "../ui/utils";
 import { CC_META } from "./cc-meta";
+import { AUTONOMY_META, AUTONOMY_NO_CAP_LABEL } from "./autonomy-meta";
 import { APPROVAL, APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, WIRE_TO_COPY } from "./copy";
 import {
   Archive,
@@ -15,6 +16,7 @@ import {
   Cpu,
   Fence,
   BrickWall,
+  Gauge,
   ShieldX,
   Square,
   Vault,
@@ -22,6 +24,7 @@ import {
   CircleX,
   CircleAlert,
 } from "lucide-react";
+import type { AutonomyLevel } from "../../lib/api/governance";
 import type {
   ActorType,
   Agent,
@@ -263,6 +266,36 @@ export function ConfinementChip({ value }: { value: ConfinementClass }) {
           that string must NEVER reach accessible content — the confinement class
           is internal (D4). The visible barrier label ("Fence"/"Wall"/"Vault") is
           the accessible name; screen-reader users hear it, not the wire code. */}
+    </Chip>
+  );
+}
+
+/* Autonomy level (0.8 #93).
+ * A CAP IS NOT A RUN STATE, so this chip is always `neutral` — the semantic
+ * tones (success/warning/danger) stay reserved for run/approval/health state
+ * (CONSOLE-RULES §2, §5). Same shape as ConfinementChip: a friendly label on
+ * the face, the internal wire code (L0-L3) in `title` only.
+ */
+export function AutonomyChip({ level }: { level: AutonomyLevel | null | undefined }) {
+  if (!level) {
+    return (
+      <Chip tone="neutral" className="gap-1 px-1.5" title="No autonomy rubric applies to this run.">
+        <Gauge className="size-3" />
+        {AUTONOMY_NO_CAP_LABEL}
+      </Chip>
+    );
+  }
+  const meta = AUTONOMY_META[level];
+  const label = meta?.label ?? String(level);
+  const tagline = meta?.tagline ?? "";
+  const title = `${label} — ${tagline} · internal level ${level}`;
+  return (
+    <Chip tone="neutral" className="gap-1 px-1.5" title={title}>
+      <Gauge className="size-3" />
+      {label}
+      {/* No sr-only twin, same reasoning as ConfinementChip: `title` carries
+          the internal level code for a sighted power-user's hover, and that
+          code must never reach accessible content (D4). */}
     </Chip>
   );
 }
