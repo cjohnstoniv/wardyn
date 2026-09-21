@@ -504,6 +504,12 @@ func closedEnumChecks() []closedEnumCheck {
 		{"user_drives", "backend", enumSet(types.DriveBackends)},
 		{"user_drives", "home_template", enumSet(types.HomeTemplates)},
 		{"user_drives", "reclaim", enumSet(types.DriveReclaims)},
+		// 0067's fourth: which half of a minted object name carries the drive
+		// (the variable-width slug, or the drive's own fixed-width id — see
+		// types.DriveObjectScheme). Pinned for the same reason the other three
+		// are: a value landing in Go without the CHECK is a write that passes
+		// validation and 500s at the database.
+		{"user_drives", "object_scheme", enumSet(types.DriveObjectSchemes)},
 		// user_drive_grants.subject_type is the SAME closed enum the two tables
 		// above carry, reused rather than re-enumerated — one Go definition for
 		// "who is this row written against". Pinned here so a fourth subject
