@@ -318,14 +318,14 @@ test.describe("governance — the security admin's authoring walk", () => {
     await expect(editor.getByText(RUBRIC.HEADING)).toBeVisible();
     // Untouched: every row reads No cap.
     await expect(
-      editor.getByRole("combobox", { name: RUBRIC.ROWS.secrets_powerful[0], exact: true }),
+      editor.getByRole("combobox", { name: `${RUBRIC.ROWS.secrets_powerful[0]} caps autonomy at`, exact: true }),
     ).toHaveText(RUBRIC.NOCAP);
 
     // Two rows, at two different levels — the lower one is what the chip and
     // the footer note must name.
-    await editor.getByRole("combobox", { name: RUBRIC.ROWS.secrets_powerful[0], exact: true }).click();
+    await editor.getByRole("combobox", { name: `${RUBRIC.ROWS.secrets_powerful[0]} caps autonomy at`, exact: true }).click();
     await page.getByRole("option", { name: AUTONOMY_META.L2.label, exact: true }).click();
-    await editor.getByRole("combobox", { name: RUBRIC.ROWS.confinement_cc1[0], exact: true }).click();
+    await editor.getByRole("combobox", { name: `${RUBRIC.ROWS.confinement_cc1[0]} caps autonomy at`, exact: true }).click();
     await page.getByRole("option", { name: AUTONOMY_META.L1.label, exact: true }).click();
     await expect(editor.getByText(RUBRIC.SET_NOTE(2, AUTONOMY_META.L1.label))).toBeVisible();
 
@@ -341,10 +341,10 @@ test.describe("governance — the security admin's authoring walk", () => {
     await page.getByRole("button", { name: `${GOV.EDIT} ${RUBRIC_NAME}`, exact: true }).click();
     editor = page.getByTestId("governance-profile-editor");
     await expect(
-      editor.getByRole("combobox", { name: RUBRIC.ROWS.secrets_powerful[0], exact: true }),
+      editor.getByRole("combobox", { name: `${RUBRIC.ROWS.secrets_powerful[0]} caps autonomy at`, exact: true }),
     ).toHaveText(AUTONOMY_META.L2.label);
     await expect(
-      editor.getByRole("combobox", { name: RUBRIC.ROWS.confinement_cc1[0], exact: true }),
+      editor.getByRole("combobox", { name: `${RUBRIC.ROWS.confinement_cc1[0]} caps autonomy at`, exact: true }),
     ).toHaveText(AUTONOMY_META.L1.label);
   });
 

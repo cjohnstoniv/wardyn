@@ -163,13 +163,13 @@ describe("ProfileEditor — the autonomy rubric round-trips", () => {
     renderEditor({ ...GREENFIELD, limits: { autonomy_rubric: { secrets_powerful: "L1" } } });
 
     expect(screen.getByText(RUBRIC.HEADING)).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: RUBRIC.ROWS.secrets_powerful[0] })).toHaveTextContent(
+    expect(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.secrets_powerful[0]} caps autonomy at` })).toHaveTextContent(
       AUTONOMY_META.L1.label,
     );
     // An untouched row reads "No cap" — the wire's absent field, not L0.
-    expect(screen.getByRole("combobox", { name: RUBRIC.ROWS.confinement_cc1[0] })).toHaveTextContent(RUBRIC.NOCAP);
+    expect(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.confinement_cc1[0]} caps autonomy at` })).toHaveTextContent(RUBRIC.NOCAP);
 
-    await userEvent.click(screen.getByRole("combobox", { name: RUBRIC.ROWS.confinement_cc1[0] }));
+    await userEvent.click(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.confinement_cc1[0]} caps autonomy at` }));
     await userEvent.click(await screen.findByRole("option", { name: AUTONOMY_META.L2.label }));
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
 
@@ -187,7 +187,7 @@ describe("ProfileEditor — the autonomy rubric round-trips", () => {
     updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
     renderEditor({ ...GREENFIELD, limits: {} });
 
-    expect(screen.getByRole("combobox", { name: RUBRIC.ROWS.egress_open[0] })).toHaveTextContent(RUBRIC.NOCAP);
+    expect(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.egress_open[0]} caps autonomy at` })).toHaveTextContent(RUBRIC.NOCAP);
     expect(screen.getByText(RUBRIC.EMPTY_NOTE)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));

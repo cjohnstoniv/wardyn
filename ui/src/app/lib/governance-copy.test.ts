@@ -381,4 +381,23 @@ describe("AUTONOMY_BOUND / autonomyBoundSentence — ruling 1 (#96 review)", () 
     expect(s).toContain("it carries none");
     expect(s).toContain("Vault, confinement class CC3");
   });
+
+  // Finding 4 (#339 review): confinement's own detail carries a comma
+  // ("Fence, confinement class CC1"), so joining a three-way tie's details
+  // with plain ", " used to read as FOUR comma-separated fragments instead
+  // of three. Semicolons between details keep the three causes distinct.
+  it("a three-way tie stays unambiguous when one detail carries its own comma", () => {
+    const causes: AutonomyRubricRowKey[] = ["egress_open", "secrets_powerful", "confinement_cc1"];
+    const s = autonomyBoundSentence(causes);
+    expect(s).toContain("network reach");
+    expect(s).toContain("secrets");
+    expect(s).toContain("barrier");
+    expect(s).toContain("it can reach hosts beyond the baseline");
+    expect(s).toContain("it carries a credential that can write");
+    expect(s).toContain("Fence, confinement class CC1");
+    // Exactly three semicolon-delimited details — the comma inside
+    // confinement's own detail never reads as a fourth item boundary.
+    const detailClause = s.slice(s.indexOf(": ") + 2, -1);
+    expect(detailClause.split("; ")).toHaveLength(3);
+  });
 });

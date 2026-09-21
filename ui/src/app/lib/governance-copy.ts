@@ -471,6 +471,17 @@ function joinAnd(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
+// A cause's own detail can carry a comma of its own (confinement's "Fence,
+// confinement class CC1"), so joining multiple details with plain ", " reads
+// ambiguously about where one detail ends and the next begins — a three-way
+// tie could read as four comma-separated fragments. Semicolons disambiguate
+// unconditionally, so a tied detail list uses them instead of joinAnd's
+// comma-plus-"and" shape.
+function joinDetails(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return items.join("; ");
+}
+
 // autonomyBoundSentence composes AutonomyResolution.bound_by into the rail's
 // one sentence — ruling 1 (#96 review): every tied cause is named, never just
 // bound_by[0]. A single cause renders AUTONOMY_BOUND's frozen sentence
@@ -484,5 +495,5 @@ export function autonomyBoundSentence(causes: AutonomyRubricRowKey[]): string {
   if (causes.length === 1) return AUTONOMY_BOUND[causes[0]];
   const dims = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].dimension);
   const details = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].detail);
-  return `Bound by this run's ${joinAnd(dims)}: ${details.join(", ")}.`;
+  return `Bound by this run's ${joinAnd(dims)}: ${joinDetails(details)}.`;
 }

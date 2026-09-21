@@ -53,7 +53,7 @@ function RubricRow({
         onValueChange={(v) => onChange({ ...value, [rowKey]: v === NO_CAP ? undefined : v })}
         disabled={disabled}
       >
-        <SelectTrigger aria-label={label} className="w-[190px]">
+        <SelectTrigger aria-label={`${label} caps autonomy at`} className="w-[190px]">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

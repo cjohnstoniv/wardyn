@@ -48,16 +48,26 @@ describe("ProfileRubric — the three groups", () => {
 
   it("picking a level for one row calls onChange with only that field set", async () => {
     const { onChange } = renderRubric({});
-    await userEvent.click(screen.getByRole("combobox", { name: RUBRIC.ROWS.egress_sealed[0] }));
+    await userEvent.click(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.egress_sealed[0]} caps autonomy at` }));
     await userEvent.click(await screen.findByRole("option", { name: AUTONOMY_META.L3.label }));
     expect(onChange).toHaveBeenCalledWith({ egress_sealed: "L3" });
   });
 
   it("picking No cap again clears a previously set row", async () => {
     const { onChange } = renderRubric({ secrets_none: "L3" });
-    await userEvent.click(screen.getByRole("combobox", { name: RUBRIC.ROWS.secrets_none[0] }));
+    await userEvent.click(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.secrets_none[0]} caps autonomy at` }));
     await userEvent.click(await screen.findByRole("option", { name: RUBRIC.NOCAP }));
     expect(onChange).toHaveBeenCalledWith({ secrets_none: undefined });
+  });
+
+  // Finding 3 (#339 review): the select's accessible name must match the
+  // mock's "<row label> caps autonomy at" shape, not the bare row label —
+  // a screen reader used to hear a select called just "None" or "Baseline".
+  it("names each select's accessible name '<row label> caps autonomy at', matching the mock", () => {
+    renderRubric();
+    for (const [label] of Object.values(RUBRIC.ROWS)) {
+      expect(screen.getByRole("combobox", { name: `${label} caps autonomy at` })).toBeInTheDocument();
+    }
   });
 
   // The fold is a MIN over every set row, not "the first row set" — pins the
