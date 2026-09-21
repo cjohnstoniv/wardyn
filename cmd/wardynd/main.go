@@ -337,11 +337,16 @@ func run() error {
 		return err
 	}
 
-	// MEMBER-MODE DESKTOP posture. Checked here (not in validateConfig) because
-	// both of its inputs only exist this far into boot: lm.enabled is the
-	// RESOLVED local-mode fact — local mode auto-enables, so the raw flag is not
-	// the answer — and feats.authn is the resolved "OIDC is configured" one.
-	if err := validateMemberModePosture(*f.memberMode, lm.enabled, feats.authn != nil); err != nil {
+	// MEMBER-MODE DESKTOP posture, then HYBRID BOOT's org control-plane posture
+	// (issue #100) right after it — folded into one call so run() gains no
+	// extra branch for the second, adjacent refusal (gocyclo); see each
+	// validator's own doc comment in boot_posture.go for what it enforces.
+	// Checked here (not in validateConfig) because both of member mode's
+	// inputs only exist this far into boot: lm.enabled is the RESOLVED
+	// local-mode fact — local mode auto-enables, so the raw flag is not the
+	// answer — and feats.authn is the resolved "OIDC is configured" one.
+	if err := checkMemberAndHybridBootPosture(*f.memberMode, lm.enabled, feats.authn != nil,
+		*f.orgURL, *f.orgEnrolToken, *f.allowPlaintextListen); err != nil {
 		return err
 	}
 
