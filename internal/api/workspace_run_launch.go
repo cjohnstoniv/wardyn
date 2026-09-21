@@ -665,7 +665,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// No workspace/operator integration bound: fall back to the operator
 		// ceiling's convention subscription mount, else a brokered api-key grant
 		// (today's behavior for an unbound workspace).
-		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true); m {
+		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHost()); m {
 			subMounted = true
 		} else {
 			s.ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)
