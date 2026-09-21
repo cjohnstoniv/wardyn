@@ -21,8 +21,45 @@ and does not yet follow semantic versioning (interfaces are not stable).
   status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
   while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
 
+### Added
+
+- **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
+  profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
+  secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`
+  attended through `L3`, which also permits `task_mode=exec`). An invalid level in any field is
+  refused at write with a 400 naming which one. `agent_runs` gains `autonomy_level`
+  (migration `0065_agent_runs_autonomy_level`), where a run's resolved level will be frozen once
+  resolution lands; every existing and new run reads `""` until then. This is the types, validation,
+  storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
+  enforces one yet.
+
+### Fixed
+
+- **The decision-log line printed to stdout is now written under its own mutex.** A line over
+  `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
+  could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
+  with a dedicated `outMu`, held only around the write itself.
+- **The first-use "approval pending" refusal body now spells it the same way as the header.** The
+  JSON body wrote `approval_pending`; `X-Wardyn-Egress` wrote `approval-pending`. The body now
+  matches the header's spelling, which is the wire contract `attach-bashrc` reads.
+- **A panic in the audit webhook flush loop no longer takes the control plane down.** The one
+  detached `go` statement that skipped the panic-safe wrapper (`buildAuditFanout`'s sink `Run`
+  loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
+  deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
+  cancellation on shutdown — is unchanged.
+
+- **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
+  finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
+  `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
+  reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
+  FAILED so a run reaching a successful terminal state through the same path gets no hint.
+
 ### Changed
 
+- **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
+  `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
+  failure, so it can be called from a background worker. `internal/api/runs.go`'s
+  `handleCreateRun` answers the 201 (refreshed FAILED run + warnings) one frame up.
 - **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site
   citations and `docs/design/CONSOLE-RULES.md`'s 51 component citations moved from `path/file.go:NNN`
   to `path/file.go#Symbol` (`#Type.Method` for a method, `#heading-slug` into another document,

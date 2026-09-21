@@ -7,6 +7,8 @@
 // All wire fields are snake_case (see lib/types.ts's barrel comment for the
 // one documented exception, in a different domain module).
 
+import type { AutonomyLevel } from "../api/governance";
+
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
 // (string) so label mapping can tolerate both forms; the literals below
@@ -157,6 +159,13 @@ export interface AgentRun {
   // for the platform's own message; parseStatusDetail falls back to parsing the
   // string when a pre-0.7.6 daemon sends no token.
   status_reason?: string;
+  // internal/types/types.go's AgentRun.AutonomyLevel (0.8, migration 0065) —
+  // the level resolveRunAutonomy (#97) resolved this run to at create time.
+  // Absent for a run under no profile, a profile with no rubric, or a run
+  // created before this field existed. Nothing resolves or enforces it yet
+  // (#99 is types/storage/mirrors only); this field exists so the console has
+  // somewhere to read it the day #93 renders it.
+  autonomy_level?: AutonomyLevel;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
