@@ -294,7 +294,7 @@ it and injects it only when forwarding internal API calls.
 | `codex-cli/`    | `wardyn/agent-codex-cli:local`   | `codex`   (`@openai/codex`) |
 | `oracle/`       | `wardyn/agent-oracle:local`      | none (e2e stand-in; §4/§6 exempt — no git broker) |
 | `full/`         | `wardyn/agent-full:local`    | `claude` (inherited) |
-| `vscode/`       | `wardyn/agent-vscode:local`  | `claude` (inherited); adds `code-server` behind the UI-sandbox relay |
+| `vscode/`       | `wardyn/agent-vscode:local`  | none by default (agent-base); adds `code-server` behind the UI-sandbox relay |
 | `aws-sso/`      | `wardyn/agent-aws-sso:local` | `aws` (AWS CLI v2, no LLM harness) |
 
 `claude-code/` and `codex-cli/` are the two user-facing agent harnesses;
@@ -325,9 +325,13 @@ Record/Verify setup commands need an actual toolchain rather than the
 toolchain-less core image (which dies "command not found").
 
 `vscode/` is likewise a separate, opt-in image (`make agent-image-vscode`)
-built `FROM wardyn/agent-claude-code:local` plus a pinned, sha256-verified
-`code-server` — see "UI-sandbox image (`vscode/`)" below for the launcher
-contract and BYOI table.
+built `FROM wardyn/agent-base:local` (its `BASE_IMAGE` build arg default —
+the launcher only execs `code-server`, never a coding-agent CLI) plus a
+pinned, sha256-verified `code-server` — see "UI-sandbox image (`vscode/`)"
+below for the launcher contract and BYOI table. A developer checkout that
+wants `claude` reachable from the vscode terminal overrides the default:
+`make agent-image-vscode BASE_IMAGE=wardyn/agent-claude-code:local` (build
+the vendor base first with `make agent-images-core`).
 
 ---
 
@@ -374,8 +378,8 @@ will vary with the pinned `code-server` version and base-layer drift:
 
 | Image | Size |
 |---|---|
-| `wardyn/agent-claude-code:local` (base) | 336.6 MiB |
-| `wardyn/agent-vscode:local` | 564.8 MiB |
+| `wardyn/agent-base:local` (base) | 159.2 MiB |
+| `wardyn/agent-vscode:local` | 387.5 MiB |
 | **Delta (code-server + launcher)** | **+228.3 MiB (≈239 MB)** |
 
 ---
