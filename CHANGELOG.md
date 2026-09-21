@@ -50,6 +50,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refused when an org URL is set without `WARDYN_MEMBER_MODE`, when the URL is plaintext and not
   loopback, or when an enrolment token is set with no org URL to send it to. See `docs/ENV.md`.
 
+- **The kind AWS SSO walk now runs nightly instead of only by hand.** `.github/workflows/nightly.yml`
+  gained a `kind-sso-walk` job that brings up `make kind-quickstart` + `make kind-sso` on the hosted
+  runner and drives `scripts/kind-sso-walk.sh`, excluding `sso-reauth-hold.spec.ts` (its case K holds a
+  credential for about ten minutes by design, which a new `WARDYN_KIND_SSO_SKIP_REAUTH_HOLD` knob on
+  the walk now lets a caller drop). The job asserts the walk actually executed specs and reached its
+  own closing `PASS` line, rather than trusting a bare exit code — an unset `WARDYN_TEST_K8S` makes the
+  walk self-skip and exit 0, which would otherwise be a permanently green job proving nothing.
+
 - **`scripts/gpl-source-offer.sh` covers a first-time image publish before it ships.** The image list
   is now read straight out of `release.yml`'s publish matrix instead of a hand-maintained array that
   had already drifted once (the retired `agent-claude-code` name stayed listed after 0.6.2 stopped
@@ -114,6 +122,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Unset is byte-identical to today.
 
 ### Fixed
+
+- **5xx responses no longer echo driver/substrate error text to the caller.** ~90 handlers across
+  `internal/api` built a 500 (or other 5xx) body by concatenating `err.Error()` onto an action
+  string, so a transient Postgres or runner failure could hand an unprivileged-adjacent caller the
+  database host, port, SQLSTATE and constraint name, or similar substrate detail. Every such site
+  now goes through `writeServerError`/`loggedMsg` (`internal/api/writeservererror.go`), which log
+  the error with method and path and answer the caller with the action alone; a source-walking guard
+  test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
+  which are already caller-facing by design, are unchanged.
 
 - **A read-only terminal observer is now promoted in place when the writer leaves, instead of
   having to reconnect.** The registry keeps one writer and the observers queued behind it in
