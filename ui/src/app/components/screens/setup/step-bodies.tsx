@@ -23,7 +23,7 @@ import { sourceSubLine } from "../workspaces";
 import { Readiness, deploymentMode } from "../../../lib/readiness";
 import { lastCheckedLabel } from "../../../lib/readiness";
 import { toast } from "sonner";
-import type { SetupStepId, StepBadge } from "./steps";
+import { CONFIG_STEPS, DEMO_EGRESS_IDS, DEMO_SECRETS_IDS, STEP_LABEL, stepOrder, type SetupStepId, type StepBadge } from "./steps";
 import { statusTone, statusWord } from "../../../lib/workspace-status";
 import { AccessPanel, type AccessLoadState } from "./access-panel";
 import { UserDrivesCard } from "./user-drives-card";
@@ -73,6 +73,52 @@ export function CheckRow({ check }: { check: SetupCheck }) {
 // here is wrong, there's just a fix available for something that was never
 // required.
 const REVIEW_GROUP_OPTIONAL = "Optional — not blocking";
+
+// #213 — the two optional lists Review names apart, per the approved
+// prototype's reviewStep(): "Optional setup" (CONFIG_STEPS — real
+// configuration that blocks nothing) and "Demos" (the catalog's egress +
+// secrets sections — walk-throughs that change nothing). One shared running
+// number across both, matching the mock's own `var n = 0` shared by both
+// `list()` calls.
+function OptionalWorkLists({ status, onJump }: { status: SetupStatus; onJump: (id: SetupStepId) => void }) {
+  const walkable = new Set(stepOrder(status));
+  const demoIds = [...DEMO_EGRESS_IDS, ...DEMO_SECRETS_IDS].filter((id) => walkable.has(id));
+  let n = 0;
+  const list = (title: string, note: string, items: SetupStepId[]) =>
+    items.length > 0 && (
+      <section className="space-y-2" key={title}>
+        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+        <p className="text-xs text-muted-foreground">{note}</p>
+        <ul className="space-y-1">
+          {items.map((id) => {
+            n += 1;
+            return (
+              <li key={id}>
+                <button
+                  type="button"
+                  onClick={() => onJump(id)}
+                  className="flex items-center gap-2 text-sm text-info hover:underline"
+                >
+                  <span className="w-4 shrink-0 text-xs text-muted-foreground">{n}</span>
+                  {STEP_LABEL[id]}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    );
+  return (
+    <>
+      {list("Optional setup", "Real configuration you may not need yet. None of it blocks a run.", CONFIG_STEPS)}
+      {list(
+        "Demos",
+        `${demoIds.length} short walk-throughs that show a guarantee working. They change nothing.`,
+        demoIds,
+      )}
+    </>
+  );
+}
 
 export function ReviewStep({
   status,
@@ -144,6 +190,13 @@ export function ReviewStep({
       {group("Worth a look", "neutral", warnings)}
       {group(REVIEW_GROUP_OPTIONAL, "neutral", optionalNotBlocking)}
       {group("Ready", "success", ready)}
+
+      {/* #213 — the optional work, named as optional and listed after the
+          required steps rather than counted alongside them: three real
+          configuration steps that block nothing, then the demos that change
+          nothing. Numbered continuously (1..N) across both lists, matching
+          the prototype's reviewStep(). */}
+      <OptionalWorkLists status={status} onJump={onJump} />
 
       {infoNotes.length > 0 && (
         <section className="space-y-2">
