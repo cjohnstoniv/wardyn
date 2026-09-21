@@ -263,6 +263,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	applyUserDriveEnv(sandboxEnv, p.Drive)
+	// The agent-side half of this run's autonomy level: generated here and
+	// recorded, delivered once #94's ManagedFiles contract lands. Nothing below
+	// branches on it — see applyRunAgentPolicy.
+	s.applyRunAgentPolicy(ctx, run)
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
 	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
 	// settings — the same "only a discriminator + non-secret payload changes;

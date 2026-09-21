@@ -375,6 +375,22 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	if !p.Interactive && p.ToolApprovals == "hold" {
 		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
 	}
+	// The RESOLVED autonomy level, read off the run row the launch gate froze
+	// it on (resolveRunAutonomy, runs_autonomy.go) rather than off a dispatch
+	// parameter, so the sandbox and the audit trail cannot be told two levels
+	// for one run.
+	//
+	// An ANNOUNCEMENT, never the mechanism — the same posture WARDYN_USER_DRIVE
+	// takes. What constrains the agent is the launch branch above plus the
+	// managed-settings file generated from this same level
+	// (runs_dispatch_agentpolicy.go), so an agent that ignores this key still
+	// has both and one that fabricates it still has neither. It exists so the
+	// image's launcher can SAY which level it came up under, which is what
+	// makes a MISSING agent-side layer visible from inside the sandbox instead
+	// of only in the control plane. Absent for every run no rubric bound.
+	if run.AutonomyLevel != "" {
+		sandboxEnv["WARDYN_AUTONOMY_LEVEL"] = string(run.AutonomyLevel)
+	}
 	if p.FirstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = p.FirstGitHubGrantID.String()
 	}

@@ -37,6 +37,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the whole batch on any mismatch, and accepts a genesis row as a recorded chain reset. Storage and the
   store seam only — no routes, CLI or forwarder yet.
 
+- **A run's autonomy level is now expressed agent-side, as generated managed settings.** A resolved
+  level used to constrain only what the API would accept; inside the sandbox the agent still ran with
+  whatever its harness defaulted to. `internal/agentpolicy` now maps `(agent, level)` to the managed
+  settings that agent is launched under — `/etc/claude-code/managed-settings.json` for `claude-code`,
+  nothing for any other agent, which has no equivalent mechanism and gets one honest line in its own
+  launcher log instead of invented rules it would not honour. `L0` and `L1` refuse the
+  permission-skipping mode outright; `L1` additionally restricts hooks to managed ones, because a
+  repository-scoped `PreToolUse` hook otherwise resolves a tool call before the Wardyn approval gate
+  that rung derives is ever consulted. `L2` deliberately does **not** refuse the permission-skipping
+  mode: it is the rung that permits an unattended run, and that launcher branch needs the flag. The
+  unrestricted level, and a run no rubric bound, get no file at all. Every key is byte-for-byte what
+  was exercised against the Claude Code version this tree pins (`CLAUDE_CODE_VERSION=2.1.231`,
+  `deploy/images/claude-code/Dockerfile`), with the verified documents kept as golden files, and the
+  checks must be re-run on every version bump. The level rides the sandbox as
+  `WARDYN_AUTONOMY_LEVEL`, and a new `run.agent_policy` audit row records which document was
+  generated for which run.
+  **Known gap, unchanged by this:** a run launched with *"Let it use tools before I attach"* still
+  parks on Claude Code's own Bypass Permissions confirmation until a person attaches and answers it
+  (`threatmodel/THREAT-MODEL.md` §4.7). Whether ticking that box in the console counts as consent to
+  the CLI's own prompt is still an open owner decision, and these managed settings do not answer it.
+  **Not yet delivered:** placing the generated file root-owned inside the sandbox is the runner
+  contract's job and is not in this change — until it lands the row records `delivered:false`, which
+  is the difference between a ceiling the agent runs under and one only the control plane knows about.
 - **A run's autonomy level is now resolved once and enforced at launch and on Review.** With an
   `autonomy_rubric` on the assigned governance profile, a run's posture — egress reach (`open` with
   allow-all or any allowlisted host beyond the safe baseline, `reviewed` when first-use approval
