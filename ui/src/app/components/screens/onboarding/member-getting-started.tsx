@@ -321,6 +321,8 @@ export function MemberGettingStarted() {
                   // otherwise the deployment-wide "Provided by your admin"
                   // chip that arm exists to show is lost under exactly the
                   // caller (automation, the shared token) most likely to hit it.
+                  // #158 gives it its own chip instead (below, beside this
+                  // fall-through) rather than folding it back into this branch.
                   //
                   // U-1: WHICH label is modelAccessChip's call, not the table's
                   // — a shared row's `live` is the admin's credential.
@@ -337,6 +339,14 @@ export function MemberGettingStarted() {
                   // answer there.
                   <Chip tone="success">{T.MODEL_ACCESS_PROVIDED_CHIP}</Chip>
                 ) : null}
+                {/* #158: not_applicable's own chip, beside whatever the
+                    fall-through above rendered (or didn't) — the old code
+                    rendered NOTHING here when llmReady was false, which read
+                    as unknown rather than as this caller's real, deliberate
+                    answer ("a mechanism, not a person"). */}
+                {status?.model_access?.state === "not_applicable" && (
+                  <Chip tone="neutral">{AGENTS.MODEL_ACCESS_NOT_APPLICABLE}</Chip>
+                )}
                 {status?.auth.mode === "sso" && (
                   <Chip tone="info">{T.SIGNIN_SSO_CHIP}</Chip>
                 )}
