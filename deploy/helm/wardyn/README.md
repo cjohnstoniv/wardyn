@@ -596,7 +596,11 @@ only a local-directory source is refused), and therefore **no `~/.aws` /
 credential injection instead — substrate-agnostic, works unchanged here).
 Accepted but not enforced, with a logged warning naming the run: **no per-pod
 PIDs limit** (set the node-level kubelet `podPidsLimit` as a cluster-wide
-backstop). Also **no in-sandbox DNS** (a fast-failing loopback-only resolver —
+backstop). That one is not a missing feature and will not close: the Pod API
+has no per-container maximum-pids resource to request, so there is nothing for
+the chart to set — see `resourceRequirements` in
+`internal/runner/k8s/naming.go`. The kubelet setting is the only lever, and it
+is node-wide by design. Also **no in-sandbox DNS** (a fast-failing loopback-only resolver —
 only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress),
 **no k8s ground-truth correlator** (the Tetragon host-sensor pipeline has no
 k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every

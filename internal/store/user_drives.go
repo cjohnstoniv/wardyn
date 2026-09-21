@@ -25,7 +25,7 @@ import (
 )
 
 const userDriveCols = `id, name, backend, host_root, storage_class, home_template, ` +
-	`size_mib, writable, reclaim, created_at, updated_at, created_by`
+	`size_mib, writable, reclaim, created_at, updated_at, created_by, object_scheme`
 
 const userDriveGrantCols = `id, subject_type, subject, drive_id, priority, ` +
 	`size_mib_override, writable_override, home_override, enabled, created_at, created_by`
@@ -60,10 +60,18 @@ var driveHomeNamespaceClashSQL = `SELECT ` + fmt.Sprintf(driveHomeNamespaceClash
 // PRECONDITION the API's re-home gate hands in ($12, asserted under the row lock
 // UpsertUserDrive takes), and the cross-row home-namespace rule above. An empty
 // result means one of them refused — never that the row is missing.
+// object_scheme is the ONE column this statement never takes a caller value
+// for (types.DriveObjectScheme's own doc states why): the INSERT branch writes
+// the literal 'id' and the ON CONFLICT branch's SET references the TARGET
+// table's own current value — never EXCLUDED.object_scheme — which is what
+// "carries the stored value through on UPDATE" means in code. A row minted by
+// this statement is therefore 'id' from the moment it exists and stays
+// whatever it already was on every later edit, unconditionally; there is no
+// argument position for a request to influence it.
 var userDriveUpsertSQL = `
 		INSERT INTO user_drives (id, name, backend, host_root, storage_class,
-			home_template, size_mib, writable, reclaim, created_by, name_slug)
-		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text
+			home_template, size_mib, writable, reclaim, created_by, name_slug, object_scheme)
+		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text,'id'::text
 		WHERE (NOT $12::boolean OR NOT EXISTS (
 			SELECT 1 FROM user_drive_grants WHERE drive_id = $1::uuid
 		))
@@ -74,7 +82,8 @@ var userDriveUpsertSQL = `
 			    host_root = EXCLUDED.host_root, storage_class = EXCLUDED.storage_class,
 			    home_template = EXCLUDED.home_template, size_mib = EXCLUDED.size_mib,
 			    writable = EXCLUDED.writable, reclaim = EXCLUDED.reclaim,
-			    name_slug = EXCLUDED.name_slug, updated_at = now()
+			    name_slug = EXCLUDED.name_slug, updated_at = now(),
+			    object_scheme = user_drives.object_scheme
 		RETURNING ` + userDriveCols
 
 // userDriveDest is the scan target list for userDriveCols, written ONCE so the
@@ -83,7 +92,7 @@ var userDriveUpsertSQL = `
 // twelve destinations in the same order.
 func userDriveDest(d *types.UserDrive) []any {
 	return []any{&d.ID, &d.Name, &d.Backend, &d.HostRoot, &d.StorageClass, &d.HomeTemplate,
-		&d.SizeMiB, &d.Writable, &d.Reclaim, &d.CreatedAt, &d.UpdatedAt, &d.CreatedBy}
+		&d.SizeMiB, &d.Writable, &d.Reclaim, &d.CreatedAt, &d.UpdatedAt, &d.CreatedBy, &d.ObjectScheme}
 }
 
 // userDriveGrantDest is the same for userDriveGrantCols. writable_override is
@@ -396,7 +405,7 @@ func (s PG) DeleteUserDrive(ctx context.Context, id uuid.UUID) error {
 // user_drive_grants_drive_id_idx.
 func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error) {
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
-			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by,
+			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme,
 			COALESCE(c.n, 0)
 		FROM user_drives d
 		LEFT JOIN (SELECT drive_id, COUNT(*) AS n FROM user_drive_grants GROUP BY drive_id) c
@@ -753,7 +762,7 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string)
 		groups = []string{}
 	}
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
-			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by,
+			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme,
 			g.id, g.subject_type, g.subject, g.drive_id, g.priority,
 			g.size_mib_override, g.writable_override, g.home_override, g.enabled,
 			g.created_at, g.created_by
