@@ -112,7 +112,6 @@ type dialFunc = func(ctx context.Context, network, addr string) (net.Conn, error
 // it for net/http: net/http speaks HTTP/2 over TLS only when ALPN selected
 // h2, which is exactly what these peers never do.
 type h2Fallback struct {
-	//lint:ignore SA1019 net/http cannot speak HTTP/2 over TLS unless ALPN selected h2 (see h2Fallback)
 	transport *http2.Transport
 	hosts     sync.Map
 }
@@ -157,7 +156,6 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 	// x/net clones TLSClientConfig per dial, adds NextProtos ["h2"] and sets
 	// ServerName; the custom dialer skips its "ALPN must say h2" check, which
 	// is the point: this transport serves peers that never negotiate it.
-	//lint:ignore SA1019 see h2Fallback
 	p.h2.transport = &http2.Transport{
 		TLSClientConfig: base.Clone(),
 		IdleConnTimeout: 60 * time.Second,
@@ -266,7 +264,6 @@ func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
 	key := memoKey(req.URL.Hostname(), cmp.Or(req.URL.Port(), "443"))
 	tlsLane := req.URL.Scheme == "https"
 	if v, seen := p.h2.hosts.Load(key); seen && v.(bool) && tlsLane {
-		//lint:ignore SA1019 see h2Fallback
 		return p.h2.transport.RoundTrip(req)
 	}
 	// The body is shielded for the first attempt: net/http closes a request
@@ -308,7 +305,6 @@ func (p *Proxy) roundTripUpstream(req *http.Request) (*http.Response, error) {
 		closeBody()
 		return nil, mm
 	}
-	//lint:ignore SA1019 see h2Fallback
 	if resp, mm.h2Err = p.h2.transport.RoundTrip(retry); mm.h2Err != nil {
 		closeBody()
 		return nil, mm
