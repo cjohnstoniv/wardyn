@@ -33,6 +33,7 @@ vi.mock("./harness-login-pane", () => ({
 }));
 
 import { ModelProviderCard, S } from "./connection-cards";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { SetupStatus } from "../../../lib/types";
 
@@ -40,6 +41,19 @@ const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 function model(status: SetupStatus = baseStatus()) {
   return render(<ModelProviderCard status={status} siteConfig={null} onChanged={vi.fn()} />);
+}
+
+// #337: renders as a MEMBER (operator=false) — every other test in this file
+// renders unwrapped, which OperatorContext's fail-open default reads as an
+// operator (see operator-context.tsx). Needed to pin what a non-operator
+// caller actually sees, not just what an operator sees with `disabled` read
+// off the DOM.
+function memberModel(status: SetupStatus = baseStatus()) {
+  return render(
+    <OperatorProvider operator={false}>
+      <ModelProviderCard status={status} siteConfig={null} onChanged={vi.fn()} />
+    </OperatorProvider>,
+  );
 }
 
 beforeEach(() => {
@@ -80,6 +94,16 @@ function sharedRowStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
     harnesses: [
       { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, mechanism: "bedrock_sso", credential_source: "shared" },
     ],
+    ...overrides,
+  });
+}
+
+// #337: a per_user Bedrock BEARER row — perUserStatus's twin with
+// mechanism="bedrock_bearer" instead of "bedrock_sso". A member under THIS
+// row is the one whose own stored key their runs actually authenticate with.
+function perUserBearerStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
+  return baseStatus({
+    harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, mechanism: "bedrock_bearer", credential_source: "per_user" }],
     ...overrides,
   });
 }
@@ -320,6 +344,71 @@ describe("ModelProviderCard — R9: the bearer key is unused under per_user", ()
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     expect(screen.getByText(S.BEDROCK_BEARER_UNUSED_PER_USER)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /disconnect/i })).toBeInTheDocument();
+  });
+});
+
+// #337: a member on a per_user BEARER row can store and replace their own
+// Bedrock bearer key — the console's missing half of #153/#327's server-side
+// door. Every "still operator-only" case gets its own test, named for the
+// field it pins, rather than one test asserting a count of disabled fields.
+describe("ModelProviderCard — #337: a member's own bearer field under a per_user bearer row", () => {
+  it("the bearer field is editable for a member on a per_user bearer row", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).not.toBeDisabled();
+  });
+
+  it("stored reflects the member's OWN bearer, not the operator-namespace secrets.present", async () => {
+    memberModel(perUserBearerStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: false, bearer_present: true } }));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByRole("button", { name: /disconnect/i })).toBeInTheDocument();
+  });
+
+  it("a member on a SHARED row still cannot edit the bearer field", async () => {
+    memberModel(sharedRowStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).toBeDisabled();
+  });
+
+  it("a member on a per_user SSO row (not bearer) still cannot edit the bearer field", async () => {
+    memberModel(perUserStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).toBeDisabled();
+  });
+
+  it("a DISABLED per_user bearer row still cannot edit the field", async () => {
+    memberModel(
+      baseStatus({
+        harnesses: [
+          { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: false, mechanism: "bedrock_bearer", credential_source: "per_user" },
+        ],
+      }),
+    );
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).toBeDisabled();
+  });
+
+  it("a member on a per_user bearer row still cannot edit the Anthropic API key field", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /API key/ }));
+    expect(screen.getByLabelText("Anthropic API key")).toBeDisabled();
+  });
+
+  it("a member on a per_user bearer row still cannot edit the OpenAI API key field", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /API key/ }));
+    expect(screen.getByLabelText("OpenAI API key")).toBeDisabled();
+  });
+
+  it("a member on a per_user bearer row still cannot sign in to the Claude subscription lane", () => {
+    memberModel(perUserBearerStatus());
+    expect(screen.getByRole("button", { name: /^sign in$/i })).toBeDisabled();
+  });
+
+  it("an operator can still edit the bearer field under a per_user bearer row", async () => {
+    model(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).not.toBeDisabled();
   });
 });
 

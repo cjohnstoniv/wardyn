@@ -37,6 +37,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { isPerUserSsoRow } from "../../../lib/workspace-providers-copy";
+import { isPerUserBearerRow } from "../../../lib/model-access";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
@@ -453,6 +454,12 @@ export function ModelProviderCard({
   // See that function's comment for why `enabled !== false` is
   // load-bearing, not decorative.
   const perUserSso = !!status.harnesses?.some((h) => h.id === "claude-code" && isPerUserSsoRow(h));
+  // #337's twin predicate: the claude-code roster row is per_user Bedrock
+  // BEARER — a member's own stored key is what their runs actually
+  // authenticate with (the write door already admits it, #153/#327), so the
+  // bearer field below is theirs to edit. A shared row, or a per_user SSO
+  // row, leaves it operator-only exactly as before.
+  const perUserBearer = !!status.harnesses?.some((h) => h.id === "claude-code" && isPerUserBearerRow(h));
   const modelAccessState = status.model_access?.state;
   // `expiring` still counts as Connected — the session still signs, and the
   // warning rides the action line, not this badge.
@@ -630,8 +637,13 @@ export function ModelProviderCard({
                 label="Bedrock bearer key"
                 placeholder="Bearer token"
                 secretName="bedrock-api-key"
-                stored={present.includes("bedrock-api-key")}
-                disabled={!operator}
+                // `present` is the OPERATOR namespace only (setupSecretsSnapshot,
+                // internal/api/setup_status_secrets.go) — a member's own write
+                // never shows there. status.bedrock.bearer_present is read off
+                // the CALLER's own scope (bedrockBearerFor) instead, so a
+                // per_user-bearer member sees their own key reflected as stored.
+                stored={perUserBearer ? !!status.bedrock?.bearer_present : present.includes("bedrock-api-key")}
+                disabled={!operator && !perUserBearer}
                 onChanged={onChanged}
               />
               {perUserSso && (

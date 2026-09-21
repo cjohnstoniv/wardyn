@@ -364,6 +364,9 @@ async function spliceBedrockRow(
   page: Page,
   credentialSource: "per_user" | "shared",
   modelAccessState: string | null,
+  // #337: bedrock_bearer's twin call (below) is the ONLY caller that passes
+  // this — every existing call keeps splicing bedrock_sso, unchanged.
+  mechanism: "bedrock_sso" | "bedrock_bearer" = "bedrock_sso",
 ): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
     // /setup/status is POLLED by this screen, so a handler can still be mid
@@ -385,7 +388,7 @@ async function spliceBedrockRow(
     const row = {
       ...(idx >= 0 ? harnesses[idx] : { id: "claude-code" }),
       enabled: true,
-      mechanism: "bedrock_sso",
+      mechanism,
       credential_source: credentialSource,
     };
     if (idx >= 0) harnesses[idx] = row;
@@ -394,7 +397,7 @@ async function spliceBedrockRow(
     if (modelAccessState) {
       json.model_access = {
         state: modelAccessState,
-        mechanism: "bedrock_sso",
+        mechanism,
         action: modelAccessState === "live" || modelAccessState === "not_applicable" ? "" : "Sign in to AWS",
       };
     }
@@ -791,5 +794,36 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
+  });
+});
+
+// #337: a MEMBER on a per_user Bedrock BEARER row can edit their own bearer
+// field — the console's missing half of #153/#327's server-side write door
+// (member writes to bedrock-api-key are already admitted there). mockMemberRole
+// (fixtures.ts) splices GET /me's role/operator fields; spliceBedrockRow's
+// own **/api/v1/setup/status* route runs AFTER it (registered later, so it
+// intercepts first) and reads the real backend directly via route.fetch()
+// rather than mockMemberRole's redacted body — this proves the card's RENDER
+// behavior for the tier (this file's own header note #2), which is exactly
+// what `disabled`/editable turns on; it does not prove a real per-member
+// namespaced write (that needs a genuine OIDC session, out of this harness's
+// reach, same ceiling as every other mockMemberRole spec in this repo).
+test.describe("providers — #337: a member's own Bedrock bearer field under a per_user bearer row", () => {
+  test("editable on a per_user bearer row", async ({ page }) => {
+    await mockMemberRole(page);
+    await spliceBedrockRow(page, "per_user", null, "bedrock_bearer");
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await expect(page.getByLabel("Bedrock bearer key")).toBeEditable();
+  });
+
+  test("still disabled on a shared row", async ({ page }) => {
+    await mockMemberRole(page);
+    await spliceBedrockRow(page, "shared", null, "bedrock_bearer");
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await expect(page.getByLabel("Bedrock bearer key")).toBeDisabled();
   });
 });
