@@ -562,6 +562,7 @@ func TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch(t *testing.T) {
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201 — dispatch would have credentialed this run; body=%s", w.Code, w.Body.String())
 		}
+		fr.waitForSandbox(t)
 		if fr.createCalls != 1 {
 			t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 		}

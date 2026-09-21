@@ -42,11 +42,13 @@
 // and there is no migration for it. Three facts decide that, and the third is
 // the one that closes the question:
 //
-//  1. There is no create-then-dispatch WINDOW. handleCreateRun calls
-//     dispatchRun inline, in the same request, a few statements after this
-//     function runs; nothing in the tree re-dispatches a run later (reconcile
+//  1. The create-then-dispatch window belongs to ONE launch. handleCreateRun
+//     answers 201 once the run row exists and hands this mount to the detached
+//     finishCreateRunLaunch (runs_create_launch.go), which builds the image and
+//     dispatches; nothing in the tree re-dispatches a run later (reconcile
 //     FAILS in-flight pre-dispatch runs, it never resumes one). So the grant
-//     that resolved here is the grant in force at bind time.
+//     that resolved here is the grant that launch binds — a revocation landing
+//     during the build does not reach it, as below.
 //  2. Re-resolving at dispatch is IMPOSSIBLE anyway, which is why the ceiling
 //     does not do it either. Resolution keys on capabilitySubjects — the
 //     caller's OIDC sub, email and group snapshot — and the run row carries
