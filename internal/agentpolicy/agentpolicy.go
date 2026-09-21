@@ -53,16 +53,17 @@ const (
 	// bypass flag. `disableBypassPermissionsMode` was verified to refuse
 	// --dangerously-skip-permissions outright rather than warn about it.
 	//
-	// KNOWN CEILING: no `allowManagedHooksOnly` here. At L0 Wardyn installs no
-	// tool-approval gate for a hook to route around — the supervision IS the
-	// human at the pane answering the CLI's own prompt — and this is the L0
-	// document the pinned-CLI check exercised. A repository-scoped PreToolUse
-	// hook can still pre-answer that prompt; raising L0 to the L1 document is
-	// the one-word change if that is ever judged to matter.
+	// `allowManagedHooksOnly` here too, for the reason #334 measured on the
+	// pinned CLI: with only the bypass key, a repository-scoped PreToolUse hook
+	// answering "allow" resolved the CLI's own permission prompt before it
+	// rendered, so a checked-out repo could answer the question this rung
+	// exists to ask a person. With the key, the same hook never ran and the
+	// prompt rendered.
 	claudeL0 = `{
   "permissions": {
     "disableBypassPermissionsMode": "disable"
-  }
+  },
+  "allowManagedHooksOnly": true
 }
 `
 	// L1 "gated" — the rung that permits an unattended run but derives its

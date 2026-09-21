@@ -84,6 +84,27 @@ func TestAgentPolicyGatedRungRestrictsHooks(t *testing.T) {
 	}
 }
 
+// TestAgentPolicyAttendedRungRestrictsHooks pins #334: at L0 the human
+// answering the CLI's own permission prompt is the gate, and on the pinned CLI a
+// repository-scoped PreToolUse hook answering "allow" resolved that prompt
+// before it rendered unless allowManagedHooksOnly was set.
+func TestAgentPolicyAttendedRungRestrictsHooks(t *testing.T) {
+	_, content, ok := ForAgent("claude-code", types.AutonomyL0)
+	if !ok {
+		t.Fatal("ForAgent(claude-code, L0) ok=false, want the attended rung's managed settings")
+	}
+	var doc struct {
+		AllowManagedHooksOnly bool `json:"allowManagedHooksOnly"`
+	}
+	if err := json.Unmarshal(content, &doc); err != nil {
+		t.Fatalf("decode L0 managed settings: %v", err)
+	}
+	if !doc.AllowManagedHooksOnly {
+		t.Error("L0 does not set allowManagedHooksOnly: a repository-scoped PreToolUse hook can answer the " +
+			"permission prompt this rung exists to show a person")
+	}
+}
+
 // TestAgentPolicyUnattendedRungKeepsTheBypassMode is the same trap read
 // backwards, and it is the one that fails SILENTLY in production: L2 permits
 // auto-approval and seeded auto tools, and agent-run launches both with
