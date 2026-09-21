@@ -73,6 +73,14 @@ type Options struct {
 	// DefaultRouteProbe's reason: only the substrate knows how to read its own
 	// object. Nil ⇒ that sub-case is skipped.
 	EphemeralStorageProbe func(t *testing.T, ref string)
+	// AgentUserImage, when set, is SandboxImage run as uid 1000 — the identity
+	// the image contract gives every agent image. The managed-files case runs
+	// on it and then requires the probe to report uid 1000, because a root
+	// probe can rename, chmod and rewrite a root-owned file without any
+	// capability and so proves nothing about immutability. Empty ⇒ the case
+	// runs on SandboxImage and logs, rather than asserts, what only a non-root
+	// identity can show.
+	AgentUserImage string
 }
 
 func (o Options) timeout() time.Duration {

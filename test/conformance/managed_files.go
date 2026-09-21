@@ -15,38 +15,49 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// The managed-file case's fixtures. Two files in ONE directory, because the
-// contract has two halves and no single mode proves both on every image:
+// The managed-file case's fixtures. Two files in ONE directory:
 //
-//   - managedReadablePath at 0644 is the SHAPE THE PRODUCT SHIPS: an operator
-//     ceiling the agent is meant to READ and unable to write, because it is
-//     root-owned and the agent is uid 1000 (image contract §3).
-//   - managedLockedPath at 0444 is the shape that proves the refusal ON ANY
-//     IMAGE, including one whose sandbox identity is root. A sandbox has
-//     CapDrop ALL, so it holds no CAP_DAC_OVERRIDE: a 0444 file refuses even
-//     in-container root's write, where a root-owned 0644 file would not.
-//
-// Without the second file this case would be vacuous against a root-running
-// conformance image — it would read the file back, print a green line and
-// prove nothing about immutability, which is the only property the field
-// exists for.
+//   - managedReadablePath is THE CONSUMER'S OWN PATH — where Claude Code reads
+//     its managed settings — at the 0644 the product ships: readable by the
+//     agent, and unwritable because it is root-owned and the agent is uid 1000
+//     (image contract §3). The case runs on the real location, not a benign
+//     stand-in, so anything a substrate does to that directory shows up here.
+//   - managedLockedPath at 0444 is the shape that proves a refusal ON ANY
+//     IMAGE, including one whose sandbox identity is root: a sandbox has
+//     CapDrop ALL, so it holds no CAP_DAC_OVERRIDE and a 0444 file refuses
+//     even in-container root's write. The owner can still chmod it without
+//     any capability, which is why the chmod probe below needs uid 1000.
 const (
-	managedFileDir      = "/etc/wardyn/conformance"
-	managedReadablePath = managedFileDir + "/managed.json"
-	managedLockedPath   = managedFileDir + "/locked.txt"
+	managedReadablePath = "/etc/claude-code/managed-settings.json"
+	managedLockedPath   = runner.ManagedFileDir + "/locked.txt"
 	// No trailing newline on purpose: `cat` plus a byte count is what proves
 	// the substrate delivered the content EXACTLY rather than approximately.
 	managedReadableBody = `{"wardyn":"managed-file-ok","n":1}`
 	managedLockedBody   = "wardyn-managed-locked"
 )
 
+func managedFilesFixture() []runner.ManagedFile {
+	return []runner.ManagedFile{
+		{Path: managedReadablePath, Mode: 0o644, Content: []byte(managedReadableBody)},
+		{Path: managedLockedPath, Mode: 0o444, Content: []byte(managedLockedBody)},
+	}
+}
+
 // managedFileProbeScript reports everything the case needs in one exec, as
-// key=value lines. One exec rather than eight: on a substrate that wraps every
-// exec with the recorder (kubernetes), eight execs are eight recordings and
-// eight chances for a transport hiccup to look like a contract failure.
+// key=value lines. One exec rather than ten: on a substrate that wraps every
+// exec with the recorder (kubernetes), ten execs are ten recordings and ten
+// chances for a transport hiccup to look like a contract failure.
 //
-// Each write attempt runs in a subshell with stderr discarded so the shell's
-// own diagnostic never lands in the parsed stream; the WORD is the verdict.
+// Each attempt runs in a subshell with stderr discarded so the shell's own
+// diagnostic never lands in the parsed stream; the WORD is the verdict. The
+// two replacement routes come last, because either one that succeeds changes
+// what the probes before it would see:
+//
+//   - w_chmod: the owner of a file may chmod it without a capability, so a
+//     read-only mode alone is no ceiling against an agent that owns the file.
+//   - w_rename: a rename within one parent needs write on the parent only, so
+//     an agent that can write the directory's parent can move the directory
+//     aside and put its own in its place.
 var managedFileProbeScript = fmt.Sprintf(`echo uid=$(id -u)
 printf 'body='; cat %[1]s; echo
 echo bytes=$(wc -c < %[1]s)
@@ -56,7 +67,9 @@ echo own_dir=$(stat -c '%%u:%%g' %[3]s)
 if (echo x > %[1]s) 2>/dev/null; then echo w_readable=WROTE; else echo w_readable=REFUSED; fi
 if (echo x > %[2]s) 2>/dev/null; then echo w_locked=WROTE; else echo w_locked=REFUSED; fi
 if (: > %[3]s/wardyn-intruder) 2>/dev/null; then echo w_dir=WROTE; else echo w_dir=REFUSED; fi
-`, managedReadablePath, managedLockedPath, managedFileDir)
+if (chmod 0644 %[2]s && echo EVIL > %[2]s) 2>/dev/null; then echo w_chmod=WROTE; else echo w_chmod=REFUSED; fi
+if (mv %[3]s %[3]s.aside && mkdir %[3]s && echo EVIL > %[1]s) 2>/dev/null; then echo w_rename=WROTE; else echo w_rename=REFUSED; fi
+`, managedReadablePath, managedLockedPath, runner.ManagedFileDir)
 
 // testManagedFiles is conformance case 8: a driver that advertises
 // Capabilities.ManagedFiles must place an operator-authored file in the
@@ -65,11 +78,11 @@ if (: > %[3]s/wardyn-intruder) 2>/dev/null; then echo w_dir=WROTE; else echo w_d
 // THE REFUSAL IS THE CASE. Reading the file back only proves a file arrived,
 // and a driver that materialised it as the sandbox user would pass that half
 // while delivering nothing of value — the bug this case exists to catch is
-// invisible to a read. So the verdict rests on three assertions a mis-delivery
+// invisible to a read. So the verdict rests on assertions a mis-delivery
 // fails: the file is owned by ROOT at the mode that was asked for, its
-// DIRECTORY is owned by root (an agent that can write the parent can unlink
-// the file and put its own there, which makes the mode irrelevant), and a
-// write is REFUSED.
+// DIRECTORY is owned by root, and every route to a different file at that path
+// — a write, a new entry in the directory, chmod-then-write, and renaming the
+// directory aside — is REFUSED to the agent's identity.
 //
 // Self-skipping when the driver does not advertise the capability, and when it
 // declares no confinement classes (an honest stub has no sandbox to deliver
@@ -91,10 +104,10 @@ func testManagedFiles(t *testing.T, r runner.Runner, opts Options) {
 	}
 
 	sb := createStrongestSandboxWith(t, ctx, r, caps, opts, "ManagedFiles", func(spec *runner.SandboxSpec) {
-		spec.ManagedFiles = []runner.ManagedFile{
-			{Path: managedReadablePath, Mode: 0o644, Content: []byte(managedReadableBody)},
-			{Path: managedLockedPath, Mode: 0o444, Content: []byte(managedLockedBody)},
+		if opts.AgentUserImage != "" {
+			spec.Image = opts.AgentUserImage
 		}
+		spec.ManagedFiles = managedFilesFixture()
 	})
 
 	sess, err := r.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh", "-c", managedFileProbeScript}})
@@ -121,11 +134,15 @@ func testManagedFiles(t *testing.T, r runner.Runner, opts Options) {
 	}
 
 	got := parseKeyValueLines(string(out))
-	for _, k := range []string{"uid", "body", "bytes", "own_readable", "own_locked", "own_dir", "w_readable", "w_locked", "w_dir"} {
+	for _, k := range []string{"uid", "body", "bytes", "own_readable", "own_locked", "own_dir", "w_readable", "w_locked", "w_dir", "w_chmod", "w_rename"} {
 		if _, ok := got[k]; !ok {
-			t.Fatalf("managed-file probe produced no %q line; the image must provide sh, cat, wc, stat and id.\nprobe output:\n%s", k, out)
+			t.Fatalf("managed-file probe produced no %q line; the image must provide sh, cat, wc, stat, id, chmod, mv and mkdir.\nprobe output:\n%s", k, out)
 		}
 	}
+	if opts.AgentUserImage != "" && got["uid"] != "1000" {
+		t.Fatalf("the probe ran as uid %s on AgentUserImage %q, want 1000 — as any other identity its refusals are not the agent's", got["uid"], opts.AgentUserImage)
+	}
+	t.Logf("probe as uid %s: w_readable=%s w_locked=%s w_dir=%s w_chmod=%s w_rename=%s", got["uid"], got["w_readable"], got["w_locked"], got["w_dir"], got["w_chmod"], got["w_rename"])
 
 	// ── 1. the content arrived EXACTLY ─────────────────────────────────────
 	if got["body"] != managedReadableBody {
@@ -143,26 +160,30 @@ func testManagedFiles(t *testing.T, r runner.Runner, opts Options) {
 		t.Errorf("stat %s = %s, want 0:0:444", managedLockedPath, got["own_locked"])
 	}
 	if got["own_dir"] != "0:0" {
-		t.Errorf("stat %s = %s, want 0:0 — an agent that owns the directory can unlink the file and put its own there, whatever the file's mode says", managedFileDir, got["own_dir"])
+		t.Errorf("stat %s = %s, want 0:0 — an agent that owns the directory can unlink the file and put its own there, whatever the file's mode says", runner.ManagedFileDir, got["own_dir"])
 	}
 
-	// ── 3. the write is REFUSED ────────────────────────────────────────────
-	// The 0444 file, unconditionally: a sandbox has CapDrop ALL, so this
+	// ── 3. every route to a different file is REFUSED ──────────────────────
+	// The 0444 write, unconditionally: a sandbox has CapDrop ALL, so this
 	// refusal holds even when the image's sandbox identity is root.
 	if got["w_locked"] != "REFUSED" {
 		t.Errorf("`echo x > %s` = %s, want REFUSED — the agent rewrote a managed file, so it is not a ceiling", managedLockedPath, got["w_locked"])
 	}
-	// The 0644 file and the directory, for the identity the product actually
-	// runs: every Wardyn agent image is uid 1000.
+	// The rest, for the identity the product actually runs: every Wardyn agent
+	// image is uid 1000. Root owns the file and /etc, so as root each of these
+	// succeeds by definition.
 	if got["uid"] == "0" {
-		t.Logf("this image's sandbox identity is root (uid 0), so a root-owned 0644 file is writable by definition and the %s / %s checks are not assertions here; the unconditional refusal above rides %s, which CapDrop ALL refuses to root as well", managedReadablePath, managedFileDir, managedLockedPath)
-		t.Logf("for the record, as uid 0: w_readable=%s w_dir=%s", got["w_readable"], got["w_dir"])
-	} else {
-		if got["w_readable"] != "REFUSED" {
-			t.Errorf("`echo x > %s` as uid %s = %s, want REFUSED", managedReadablePath, got["uid"], got["w_readable"])
-		}
-		if got["w_dir"] != "REFUSED" {
-			t.Errorf("creating a file in %s as uid %s = %s, want REFUSED — the agent can replace the managed file by unlinking it", managedFileDir, got["uid"], got["w_dir"])
+		t.Logf("this image's sandbox identity is root (uid 0), so the write, directory, chmod and rename checks are recorded above, not asserted; set Options.AgentUserImage to assert them")
+		return
+	}
+	for _, c := range []struct{ key, what string }{
+		{"w_readable", "`echo x > " + managedReadablePath + "`"},
+		{"w_dir", "creating a file in " + runner.ManagedFileDir + " (the agent could unlink the managed file and put its own there)"},
+		{"w_chmod", "`chmod 0644 " + managedLockedPath + " && echo EVIL > " + managedLockedPath + "` (a read-only mode is no ceiling against its owner)"},
+		{"w_rename", "`mv " + runner.ManagedFileDir + " " + runner.ManagedFileDir + ".aside && mkdir " + runner.ManagedFileDir + "` then writing " + managedReadablePath + " (the agent could replace the whole directory)"},
+	} {
+		if got[c.key] != "REFUSED" {
+			t.Errorf("%s as uid %s = %s, want REFUSED", c.what, got["uid"], got[c.key])
 		}
 	}
 }
