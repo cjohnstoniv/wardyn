@@ -229,6 +229,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The sign-in screen stops advertising the demo admin token.** The admin-token field's
+  placeholder no longer carries `demo-admin-token`, and its hint no longer names
+  `WARDYN_ADMIN_TOKEN` or the compose demo token — it says what belongs in the field and where the
+  person saw it. The unreachable-daemon refusal now names Wardyn and names the `wardynd` daemon to
+  check, instead of a bare "Could not reach the control plane." with no next step. The email-domain
+  refusal no longer tells a locked-out, unauthenticated reader to go set `WARDYN_OIDC_EMAIL_DOMAINS`
+  themselves — it points them at their Wardyn admin instead. `sign-in.tsx` (Closes #212).
+
 - **The Recordings screen pages instead of stopping at 1,000.** It fetched the whole run list in one
   shot (capped at `LIST_LIMIT`), so an install past 1,000 runs silently lost every recording beyond
   that window, with only a passive "truncated" note and nothing to press. `listRuns()` now takes an
