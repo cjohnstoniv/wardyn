@@ -22,6 +22,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`wardyn attach` now tells you when a session is read-only, instead of silently discarding the
+  keystrokes.** The CLI used to skip every non-binary frame from the attach WebSocket, including the
+  server's `attach-mode` control frame — someone attached while another client held the terminal saw
+  no output and no explanation. It now decodes that frame: a read-only dial prints one line to STDERR
+  naming the holder and where they attached from, and a later promotion prints a promotion line and
+  re-sends the window size. stdout is untouched in every case — it stays exactly the PTY output it
+  always was.
 - **A read-only terminal observer is now promoted in place when the writer leaves, instead of
   having to reconnect.** The registry keeps one writer and the observers queued behind it in
   arrival order; an ordinary release promotes the oldest of them on the socket it already has,
