@@ -21,7 +21,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   fallback in either direction**: the resolve reads the caller's own namespace and never the
   operator's, the injection sink refuses rather than letting its own owner-fallback substitute the
   operator's key mid-run, and an empty or whitespace-only value reads as no credential rather than
-  as a configured one that fails upstream. `runs_bedrock.go` was split by seam first — the probe
+  as a configured one that fails upstream. The row's mechanism decides the lane, so a member
+  holding both their own AWS SSO session and their own bearer is resolved — and reported by setup
+  — on the one the row names. `runs_bedrock.go` was split by seam first — the probe
   and reporting half now lives in `runs_bedrock_probe.go` — because it had reached the
   1000-line file-size gate.
 
