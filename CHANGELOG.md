@@ -38,9 +38,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   is meant to constrain, and a one-shot root exec after start races the main process. A managed file
   must sit directly in `/etc/claude-code`, where Claude Code reads its managed settings: a directory
   under an agent-owned parent can be renamed aside, a tmpfs mounted at start hides the file, and
-  recording setup loosens `/var/log/wardyn`. A group- or other-writable mode is refused. Conformance
-  case 8 (`ManagedFiles`) holds both substrates to it, and its load-bearing assertion is that a
-  write is REFUSED, not that the file reads back. Nothing populates the field yet.
+  recording setup loosens `/var/log/wardyn`. A group- or other-writable mode is refused. On Docker
+  the run is also refused unless the image's `USER` resolves to a non-root uid and its `/etc` is a
+  root-owned directory not writable by group or others, because the agent runs as that user over
+  that `/etc`; Kubernetes runs the agent as uid 1000 on a read-only mount whatever the image says.
+  Conformance case 8 (`ManagedFiles`) holds both substrates to it, and its load-bearing assertion is
+  that a write is REFUSED, not that the file reads back. Nothing populates the field yet.
 
 - **A user drive's minted object name can no longer be forged by a crafted `home_override`.**
   `types.DriveObjectName` built a managed drive's storage-object name from the drive's

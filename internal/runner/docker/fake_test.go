@@ -6,6 +6,8 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -86,6 +88,13 @@ type fakeDocker struct {
 	// existingPaths are the in-container paths ContainerStatPath reports as
 	// present; every other path is not-found, as a fresh image's is.
 	existingPaths map[string]bool
+	// imageUsers is each image's USER, merged into a created container's
+	// config when the create leaves User empty, as the daemon does.
+	imageUsers map[string]string
+	// etcDir is the /etc entry CopyFromContainer reports (nil: a root-owned
+	// 0755 directory), and passwd is /etc/passwd's content ("" : absent).
+	etcDir *tar.Header
+	passwd string
 
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
@@ -315,9 +324,15 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	if err := f.refuseUnsupportedRRO(opts.HostConfig); err != nil {
 		return client.ContainerCreateResult{}, err
 	}
+	cfg := opts.Config
+	if u := f.imageUsers[cfg.Image]; u != "" && cfg.User == "" {
+		merged := *cfg
+		merged.User = u
+		cfg = &merged
+	}
 	c := &createdContainer{
 		name:  name,
-		cfg:   opts.Config,
+		cfg:   cfg,
 		host:  opts.HostConfig,
 		net:   opts.NetworkingConfig,
 		state: &container.State{Status: "created"},
@@ -371,6 +386,31 @@ func (f *fakeDocker) ContainerStatPath(ctx context.Context, id string, opts clie
 		return client.ContainerStatPathResult{}, fakeNotFound{msg: "no such path: " + opts.Path}
 	}
 	return client.ContainerStatPathResult{}, nil
+}
+
+func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.containers[id] == nil {
+		return client.CopyFromContainerResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	switch {
+	case opts.SourcePath == "/etc":
+		hdr := &tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o755}
+		if f.etcDir != nil {
+			hdr = f.etcDir
+		}
+		_ = tw.WriteHeader(hdr)
+	case opts.SourcePath == "/etc/passwd" && f.passwd != "":
+		_ = tw.WriteHeader(&tar.Header{Name: "passwd", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(f.passwd))})
+		_, _ = tw.Write([]byte(f.passwd))
+	default:
+		return client.CopyFromContainerResult{}, fakeNotFound{msg: "no such path: " + opts.SourcePath}
+	}
+	_ = tw.Close()
+	return client.CopyFromContainerResult{Content: io.NopCloser(&buf)}, nil
 }
 
 func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {

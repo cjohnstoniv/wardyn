@@ -110,6 +110,15 @@ func TestManagedFilesTarRefusesAnInvalidSpec(t *testing.T) {
 	}
 }
 
+// newManagedFake is a fake whose busybox image runs as uid 1000, the image
+// contract's agent identity, so a managed-file spec reaches the delivery.
+func newManagedFake() *fakeDocker {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	f.imageUsers = map[string]string{"busybox:latest": "1000:1000"}
+	return f
+}
+
 // managedSpec is testSpec plus two managed files.
 func managedSpec() runner.SandboxSpec {
 	spec := testSpec()
@@ -126,8 +135,7 @@ func managedSpec() runner.SandboxSpec {
 // cannot make — by the time anything reads it, the copy has happened either
 // way.
 func TestCreateSandbox_DeliversManagedFilesBeforeStart(t *testing.T) {
-	f := newFakeDocker()
-	f.images["busybox:latest"] = true
+	f := newManagedFake()
 	d := newTestDriver(f)
 
 	spec := managedSpec()
@@ -185,8 +193,7 @@ func TestCreateSandbox_NoManagedFilesNoCopy(t *testing.T) {
 // ceiling it was promised is the one outcome worse than no ceiling: the
 // control plane records it as delivered.
 func TestCreateSandbox_FailsClosedWhenDeliveryFails(t *testing.T) {
-	f := newFakeDocker()
-	f.images["busybox:latest"] = true
+	f := newManagedFake()
 	f.failCopyToContainer = true
 	d := newTestDriver(f)
 
@@ -207,8 +214,7 @@ func TestCreateSandbox_FailsClosedWhenDeliveryFails(t *testing.T) {
 // mounted there — is refused, not delivered into: nothing the daemon reports
 // says who owns it, and a mounted one is a host directory.
 func TestCreateSandbox_RefusesAManagedFileDirectoryThatAlreadyExists(t *testing.T) {
-	f := newFakeDocker()
-	f.images["busybox:latest"] = true
+	f := newManagedFake()
 	f.existingPaths = map[string]bool{runner.ManagedFileDir: true}
 	d := newTestDriver(f)
 
@@ -256,8 +262,7 @@ func TestCreateSandbox_RefusesAnInvalidManagedFileBeforeCreatingAnything(t *test
 // where the workload IS the main process — so the delivery has to happen there
 // too, and it is the path most likely to be forgotten.
 func TestExecLessPath_DeliversManagedFilesBeforeStart(t *testing.T) {
-	f := newFakeDocker()
-	f.images["busybox:latest"] = true
+	f := newManagedFake()
 	f.info = infoWithRuntimes("krun") // CC3 via krun: the exec-less path
 	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
 
@@ -298,5 +303,62 @@ func TestManagedFileDirIsNeitherCoveredNorLoosenedAfterStart(t *testing.T) {
 		if covers(dir) {
 			t.Errorf("recording setup chmods %s 0777, which covers %s", dir, runner.ManagedFileDir)
 		}
+	}
+}
+
+// On this substrate the directory holds only while the agent can neither
+// write /etc nor act as its owner, and both are the image's to decide: the
+// workload runs as the image's USER, over the image's /etc. An image that
+// gets either wrong is refused before the agent starts.
+func TestCreateSandbox_ManagedFilesNeedANonRootUserAndARootOwnedEtc(t *testing.T) {
+	const passwd = "root:x:0:0:root:/root:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/sh\ntoor:x:0:0::/root:/bin/sh\n"
+	const (
+		rootUser = "USER is a non-root user"
+		badEtc   = "/etc is a directory owned by root and not writable by group or others"
+	)
+	cases := []struct {
+		name, user, passwd string
+		etc                *tar.Header
+		want               string // "" means delivered
+	}{
+		{name: "numeric uid", user: "1000"},
+		{name: "numeric uid and gid", user: "1000:1000"},
+		{name: "name in /etc/passwd", user: "agent", passwd: passwd},
+		{name: "name and group", user: "agent:agent", passwd: passwd},
+		{name: "no USER", user: "", want: rootUser},
+		{name: "root by name", user: "root", passwd: passwd, want: rootUser},
+		{name: "uid 0", user: "0", want: rootUser},
+		{name: "uid 0 gid 0", user: "0:0", want: rootUser},
+		{name: "another name for uid 0", user: "toor", passwd: passwd, want: rootUser},
+		{name: "name missing from /etc/passwd", user: "ghost", passwd: passwd, want: "neither a number nor a name"},
+		{name: "name with no /etc/passwd", user: "agent", want: "could not be read"},
+		{name: "/etc a symlink", user: "1000", etc: &tar.Header{Name: "etc", Typeflag: tar.TypeSymlink, Linkname: "/work/etc", Mode: 0o777}, want: badEtc},
+		{name: "/etc world-writable", user: "1000", etc: &tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o777}, want: badEtc},
+		{name: "/etc group-writable", user: "1000", etc: &tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o775}, want: badEtc},
+		{name: "/etc owned by the agent", user: "1000", etc: &tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000}, want: badEtc},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newManagedFake()
+			f.imageUsers["busybox:latest"] = tc.user
+			f.passwd = tc.passwd
+			f.etcDir = tc.etc
+			d := newTestDriver(f)
+			spec := managedSpec()
+			_, err := d.CreateSandbox(context.Background(), spec)
+			started := slices.Contains(f.startedNames, agentContainerName(spec.RunID))
+			if tc.want == "" {
+				if err != nil || len(f.copies) != 1 || !started {
+					t.Fatalf("USER %q: err = %v, %d copies, started = %v; want the files delivered and the agent started", tc.user, err, len(f.copies), started)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("USER %q: err = %v, want a refusal containing %q", tc.user, err, tc.want)
+			}
+			if len(f.copies) != 0 || started {
+				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.copies), started)
+			}
+		})
 	}
 }

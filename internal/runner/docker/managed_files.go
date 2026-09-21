@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,9 +51,14 @@ var managedFileEpoch = time.Unix(0, 0).UTC()
 // cannot be told apart from one the agent owns (which makes the file
 // replaceable whatever its own mode), and a bind-mounted one is a HOST
 // directory the delivery would write into.
+//
+// NOR INTO AN IMAGE THAT COULD UNDO IT. See checkManagedFileImage.
 func (d *Driver) deliverManagedFiles(ctx context.Context, containerID string, files []runner.ManagedFile) error {
 	if len(files) == 0 {
 		return nil
+	}
+	if err := d.checkManagedFileImage(ctx, containerID); err != nil {
+		return err
 	}
 	for _, dir := range runner.ManagedFileDirs(files) {
 		_, err := d.cli.ContainerStatPath(ctx, containerID, client.ContainerStatPathOptions{Path: dir})
@@ -76,6 +83,93 @@ func (d *Driver) deliverManagedFiles(ctx context.Context, containerID string, fi
 		return fmt.Errorf("docker: deliver managed files: %w", err)
 	}
 	return nil
+}
+
+// checkManagedFileImage refuses a container whose image would let the agent
+// replace a root-owned file in runner.ManagedFileDir. That directory holds
+// only because the agent can neither write /etc nor act as its owner, and on
+// this substrate both depend on the image: the workload runs as the image's
+// USER, and /etc is the image's own. So the USER must resolve to a non-root
+// uid, and /etc must be a directory owned by root and not writable by group or
+// others. (Kubernetes runs the agent as uid 1000 on a read-only mount point
+// whatever the image says.)
+//
+// Everything is read from the created container through the archive API,
+// never by exec: nothing may run in it before the managed files are in place.
+func (d *Driver) checkManagedFileImage(ctx context.Context, containerID string) error {
+	insp, err := d.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("docker: inspect for managed files: %w", err)
+	}
+	var user string
+	if insp.Container.Config != nil {
+		user = insp.Container.Config.User
+	}
+	uid, err := d.managedFileUID(ctx, containerID, user)
+	if err != nil {
+		return err
+	}
+	if uid == 0 {
+		return fmt.Errorf("docker: managed files need an image whose USER is a non-root user; this image (USER %q) runs its workload as root, which owns /etc and may rename %s aside and replace the file", user, runner.ManagedFileDir)
+	}
+	etc, _, err := d.firstArchiveEntry(ctx, containerID, "/etc", 0)
+	if err != nil {
+		return fmt.Errorf("docker: read /etc for managed files: %w", err)
+	}
+	if etc.Typeflag != tar.TypeDir || etc.Uid != 0 || etc.Mode&0o022 != 0 {
+		what := fmt.Sprintf("owned by uid %d with mode %04o", etc.Uid, etc.Mode&0o7777)
+		if etc.Typeflag != tar.TypeDir {
+			what = "not a directory"
+		}
+		return fmt.Errorf("docker: managed files need an image whose /etc is a directory owned by root and not writable by group or others; this image's /etc is %s, so the workload may rename %s aside and replace the file", what, runner.ManagedFileDir)
+	}
+	return nil
+}
+
+// managedFileUID is the uid a workload runs as under USER user: numeric as
+// written, or the name's uid in the container's own /etc/passwd — the file
+// the runtime resolves it against at start. No USER at all is root.
+func (d *Driver) managedFileUID(ctx context.Context, containerID, user string) (uint64, error) {
+	name, _, _ := strings.Cut(user, ":")
+	if name == "" {
+		return 0, nil
+	}
+	if uid, err := strconv.ParseUint(name, 10, 32); err == nil {
+		return uid, nil
+	}
+	_, passwd, err := d.firstArchiveEntry(ctx, containerID, "/etc/passwd", 1<<20)
+	if err != nil {
+		return 0, fmt.Errorf("docker: managed files need an image whose USER is a non-root user; USER %q is a name, and the image's /etc/passwd could not be read to resolve it: %w", user, err)
+	}
+	for _, line := range strings.Split(string(passwd), "\n") {
+		f := strings.Split(line, ":")
+		if len(f) < 3 || f[0] != name {
+			continue
+		}
+		uid, err := strconv.ParseUint(f[2], 10, 32)
+		if err != nil {
+			return 0, fmt.Errorf("docker: managed files need an image whose USER is a non-root user; USER %q has uid %q in the image's /etc/passwd, which is not a number", user, f[2])
+		}
+		return uid, nil
+	}
+	return 0, fmt.Errorf("docker: managed files need an image whose USER is a non-root user; USER %q is neither a number nor a name in the image's /etc/passwd, so the uid it runs as cannot be checked", user)
+}
+
+// firstArchiveEntry returns the header of the first entry of the archive the
+// daemon streams for p — p itself — and up to limit bytes of its content.
+func (d *Driver) firstArchiveEntry(ctx context.Context, containerID, p string, limit int64) (*tar.Header, []byte, error) {
+	res, err := d.cli.CopyFromContainer(ctx, containerID, client.CopyFromContainerOptions{SourcePath: p})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer res.Content.Close()
+	tr := tar.NewReader(res.Content)
+	hdr, err := tr.Next()
+	if err != nil {
+		return nil, nil, err
+	}
+	body, err := io.ReadAll(io.LimitReader(tr, limit))
+	return hdr, body, err
 }
 
 // managedFilesTar builds the archive deliverManagedFiles extracts at "/": one

@@ -67,6 +67,9 @@ type dockerAPI interface {
 	// ContainerStatPath tells deliverManagedFiles whether a managed file's
 	// directory already exists (in the image or as a mount) before the copy.
 	ContainerStatPath(ctx context.Context, containerID string, options client.ContainerStatPathOptions) (client.ContainerStatPathResult, error)
+	// CopyFromContainer reads /etc and /etc/passwd out of a created container,
+	// so checkManagedFileImage can vet the image without running anything.
+	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
 
 	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
 	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)

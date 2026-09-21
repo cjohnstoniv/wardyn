@@ -52,9 +52,11 @@ const DefaultManagedFileMode fs.FileMode = 0o644
 // a rule about path shape because each property that makes a managed file a
 // ceiling depends on where the file is:
 //
-//   - its parent, /etc, is root-owned in any image that keeps the image
-//     contract, so the agent cannot rename this directory aside and put its own
-//     in its place (a rename within one parent needs write on the parent only);
+//   - its parent, /etc, is root-owned and not writable by the agent, and the
+//     agent is not root, so it cannot rename this directory aside and put its
+//     own in its place (a rename within one parent needs write on the parent
+//     only). The Docker driver refuses an image that breaks either; Kubernetes
+//     runs the agent as uid 1000 on a read-only mount point whatever the image;
 //   - nothing covers or loosens /etc after delivery: mount targets are confined
 //     to allowedTargetPrefixes, the sandbox's tmpfs is /tmp, and recording
 //     setup chmods only its own directories;
