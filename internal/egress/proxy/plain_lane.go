@@ -195,7 +195,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 			if log != nil {
 				p.emitH2Mismatch(ruleSourceUpstreamProtocolMismatch, log.Request, host, proto, hadTLS, log.Scan)
 			}
-			p.writeUpstreamProtocolMismatch(w, host, "upstream error", p.upstreamProtocolMismatchCause(proto, hadTLS))
+			p.writeUpstreamProtocolMismatch(w, host, "upstream error", p.upstreamProtocolMismatchCause(proto, hadTLS), err)
 			return
 		}
 		// The allow decision is emitted only AFTER a successful round-trip (same

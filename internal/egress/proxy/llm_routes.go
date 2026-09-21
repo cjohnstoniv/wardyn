@@ -416,7 +416,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		if isH2Preface(err) {
 			proto, hadTLS := alpnState()
 			p.emitH2Mismatch(ruleSourceUpstreamProtocolMismatch, p.reqOf(r, host, port), host, proto, hadTLS, scanSummary)
-			p.writeUpstreamProtocolMismatch(w, host, "llm upstream error", p.upstreamProtocolMismatchCause(proto, hadTLS))
+			p.writeUpstreamProtocolMismatch(w, host, "llm upstream error", p.upstreamProtocolMismatchCause(proto, hadTLS), err)
 			return
 		}
 		if p.sink != nil {

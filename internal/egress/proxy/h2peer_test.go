@@ -5,10 +5,14 @@ package proxy
 
 // h2peer_test.go is the rig for issue #359 (a TLS-terminating peer that
 // answers HTTP/2 unconditionally to an HTTP/1.1 request) plus isH2Preface's
-// own unit coverage. Kept reusable on purpose — the rig's two pieces (h2Peer,
-// the CONNECT-tunnel stub) take no ALPN-specific assumptions, so issue #360
-// can drive the same shape against a peer that DOES honour ALPN, or one that
-// falls back to HTTP/1.1 when it is not offered h2.
+// own unit coverage. The peer is DETERMINISTIC on purpose: it writes the
+// field report's own frame bytes the moment its TLS handshake completes,
+// unconditionally — no HTTP/2 server logic, no preface negotiation, and
+// therefore no race to retry around. An earlier version drove a real
+// golang.org/x/net/http2 Server here, which turned out to race ITS OWN
+// initial-SETTINGS write against ITS OWN preface-rejection close (confirmed
+// by reproducing the race against a bare http2.Server with no Wardyn code in
+// the loop at all) — good for realism, bad for a `-count=20` gate.
 
 import (
 	"bufio"
@@ -19,7 +23,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,20 +34,25 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/net/http2"
-
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// fieldReportFrames is the field report's own bytes, verbatim: a SETTINGS
+// frame (type 0x04, stream 0), a WINDOW_UPDATE, and a GOAWAY with
+// ErrCodeProtocol and last-stream-id 0 — kept as the ONE copy both the live
+// rig (h2Peer) and TestIsH2Preface assert against, so the two can never drift
+// apart into testing two different fixtures.
+const fieldReportFrames = "\x00\x00\x12\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x80\x00\x04\x00\x01\x00\x00\x00\x05\x00\xff\xff\xff\x00\x00\x04\b\x00\x00\x00\x00\x00\x7f\xff\x00\x00\x00\x00\b\a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+
 // h2Peer is a fake corp-upstream CONNECT proxy (plain TCP: "200 Connection
-// Established", then a raw byte pipe) in front of a TLS listener that ALWAYS
-// serves HTTP/2 via (&http2.Server{}).ServeConn, regardless of what ALPN the
-// client offered — the field report's peer: a TLS terminator that speaks
-// HTTP/2 even though this proxy's transport (mkTransport, ForceAttemptHTTP2
-// false — issue #360) offers none.
+// Established", then a raw byte pipe) in front of a TLS listener that writes
+// fieldReportFrames unconditionally, the instant its TLS handshake completes
+// — the field report's own peer: a TLS terminator that speaks HTTP/2 even
+// though this proxy's transport (mkTransport, ForceAttemptHTTP2 false — issue
+// #360) offers no ALPN at all.
 type h2Peer struct {
 	proxyLn net.Listener
 }
@@ -67,7 +75,7 @@ func startH2Peer(t *testing.T) *h2Peer {
 			if err != nil {
 				return
 			}
-			go serveH2Preface(c)
+			go serveH2Frames(c)
 		}
 	}()
 
@@ -88,26 +96,33 @@ func startH2Peer(t *testing.T) *h2Peer {
 	return &h2Peer{proxyLn: proxyLn}
 }
 
-// serveH2Preface completes the TLS handshake explicitly before handing the
-// conn to http2.Server: tls.Listener.Accept returns a conn whose handshake is
-// LAZY (it runs on first Read/Write), but http2.Server.ServeConn reads
-// tls.Conn.ConnectionState() synchronously at the top of the call — before
-// ever reading a byte — to enforce RFC 7540 §9.2's TLS-version floor. Against
-// a not-yet-handshaked conn that state is the zero value (Version 0), which
-// reads as "TLS version too low" and makes the server reject the connection
-// with its OWN (different, misleading) GOAWAY before the scenario under test
-// — an HTTP/2 answer to an HTTP/1.1 request — ever happens.
-func serveH2Preface(c net.Conn) {
-	if tc, ok := c.(*tls.Conn); ok {
-		if err := tc.Handshake(); err != nil {
-			return
-		}
+// serveH2Frames is the deterministic field-report peer: complete the TLS
+// handshake, write fieldReportFrames UNCONDITIONALLY — no preface check, no
+// waiting on the client — then read whatever the client sends (or hit a short
+// deadline) before closing.
+//
+// The read-before-close matters: without draining the client's own request
+// bytes first, closing this conn while they still sit unread in the kernel's
+// receive buffer can turn the close into a RST rather than a clean FIN, which
+// on some stacks discards this peer's OWN just-written (but not yet
+// acknowledged) bytes along with it — turning the intended malformed-response
+// shape into a bare connection-reset error instead. Reading first, even
+// best-effort, avoids that.
+func serveH2Frames(c net.Conn) {
+	defer c.Close()
+	tc, ok := c.(*tls.Conn)
+	if !ok {
+		return
 	}
-	//lint:ignore SA1019 the deprecated explicit API is the only one that forces
-	// h2 on a conn with NO ALPN negotiated — the exact shape under test; the
-	// suggested replacement (http.Server.Serve/ServeTLS) negotiates HTTP/2 via
-	// ALPN, which this rig must NOT do.
-	(&http2.Server{}).ServeConn(c, &http2.ServeConnOpts{})
+	if err := tc.Handshake(); err != nil {
+		return
+	}
+	if _, err := tc.Write([]byte(fieldReportFrames)); err != nil {
+		return
+	}
+	_ = tc.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	buf := make([]byte, 4096)
+	_, _ = tc.Read(buf)
 }
 
 // serveConnectTunnel answers one CONNECT with "200 Connection Established"
@@ -164,56 +179,6 @@ func selfSignedCert(t *testing.T) tls.Certificate {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
-// h2MismatchAttempts bounds awaitH2Mismatch's retry — see its doc comment for
-// why a retry belongs in this rig at all.
-const h2MismatchAttempts = 40
-
-// awaitH2Mismatch calls attempt (one full request against a proxy backed by
-// an h2Peer) until buf carries a builtin:upstream-protocol-mismatch decision
-// or the budget above is spent, and returns the recorder that produced it.
-//
-// A retry belongs here because of a genuine, PRE-EXISTING race INSIDE
-// golang.org/x/net/http2's own Server.ServeConn, confirmed by reproducing it
-// against a bare http2.Server with no Wardyn code anywhere in the loop: the
-// goroutine that writes the server's initial SETTINGS frame is scheduled
-// independently of serve()'s own readPreface, which rejects a non-HTTP/2
-// client (every real caller of this rig) and closes the conn — see
-// server.go's serve()/scheduleFrameWrite/readPreface. On loopback, where both
-// sides finish in low-single-digit microseconds, that race drops the SETTINGS
-// bytes and delivers a bare connection reset instead, measured at roughly
-// 30-60% of attempts. Neither delaying reads nor delaying the close narrows
-// the window (both were tried against the bare reproduction above): the race
-// is between two of x/net/http2's OWN goroutines, not anything this rig
-// controls. Retrying a fresh connection is the ordinary answer to a genuine
-// upstream race, and it keeps the assertions pointed at real net/http and
-// x/net/http2 behaviour instead of a hand-rolled substitute for either.
-func awaitH2Mismatch(t *testing.T, buf *bytes.Buffer, attempt func() *httptest.ResponseRecorder) *httptest.ResponseRecorder {
-	t.Helper()
-	var rec *httptest.ResponseRecorder
-	for i := 0; i < h2MismatchAttempts; i++ {
-		rec = attempt()
-		if hasDecision(buf, ruleSourceUpstreamProtocolMismatch) {
-			return rec
-		}
-	}
-	t.Fatalf("no %s decision after %d attempts against the h2Peer rig — sink:\n%s",
-		ruleSourceUpstreamProtocolMismatch, h2MismatchAttempts, buf.String())
-	return rec
-}
-
-// hasDecision reports whether any decision logged in buf carries ruleSource —
-// awaitH2Mismatch's non-fatal probe; findDecision (proxy_test.go) is the
-// fatal-on-miss assertion used once the retry above has already succeeded.
-func hasDecision(buf *bytes.Buffer, ruleSource string) bool {
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
-		var d egress.DecisionLog
-		if json.Unmarshal([]byte(line), &d) == nil && d.RuleSource == ruleSource {
-			return true
-		}
-	}
-	return false
-}
-
 // TestUpstreamProtocolMismatch_MITM_AWSLane is the field report itself,
 // end-to-end: the run's own SSO portal, MITM'd (mitm.go's serveMITMRequest ->
 // forwardInspectedLLM), re-originated through a corp upstream to h2Peer.
@@ -236,11 +201,8 @@ func TestUpstreamProtocolMismatch_MITM_AWSLane(t *testing.T) {
 		TLSClientConfig: testInsecureTLSConfig,
 	})
 
-	rec := awaitH2Mismatch(t, buf, func() *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+awsHost+"/", nil), awsHost, 443)
-		return rec
-	})
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+awsHost+"/", nil), awsHost, 443)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %q)", rec.Code, rec.Body.String())
@@ -267,8 +229,12 @@ func TestUpstreamProtocolMismatch_MITM_AWSLane(t *testing.T) {
 
 // TestUpstreamProtocolMismatch_PlainForward pins plain_lane.go's own
 // isH2Preface arm, reached through an ordinary absolute-URI forward
-// (handlePlain), which is never AWS-lane classified: a plain 400 carrying the
-// same sentence, through the same corp upstream and the same peer.
+// (handlePlain): a plain 400 carrying the same sentence, through the same
+// corp upstream and the same peer. writeUpstreamProtocolMismatch still
+// evaluates isAWSLane on THIS lane too — the plain body here is because
+// "h2.test" is not an AWS-lane host, not because the plain lane skips the
+// check (see TestUpstreamProtocolMismatch_MITM_AWSLane for the AWS-lane
+// twin of this exact code path).
 func TestUpstreamProtocolMismatch_PlainForward(t *testing.T) {
 	peer := startH2Peer(t)
 	up, err := parseUpstreamProxy("http://" + peer.addr())
@@ -285,11 +251,8 @@ func TestUpstreamProtocolMismatch_PlainForward(t *testing.T) {
 		TLSClientConfig: testInsecureTLSConfig,
 	})
 
-	rec := awaitH2Mismatch(t, buf, func() *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "https://h2.test/thing"))
-		return rec
-	})
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "https://h2.test/thing"))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %q)", rec.Code, rec.Body.String())
@@ -307,27 +270,46 @@ func TestUpstreamProtocolMismatch_PlainForward(t *testing.T) {
 	}
 }
 
-// TestIsH2Preface pins the detection function directly, including the exact
-// field-report error string (copy-pasted from the report): a toolchain change
-// that alters how net/http renders this failure should fail THIS test loudly,
-// rather than silently falling back to builtin:dial-failed everywhere else.
+// TestIsH2Preface pins the detection function against Go's OWN parse error,
+// not a hand-typed imitation of it: http.ReadResponse is exactly what
+// net/http/transport.go's readLoop calls under the hood (wrapping whatever it
+// returns as "net/http: HTTP/1.x transport connection broken: %w"), so
+// driving it directly on fieldReportFrames pins isH2Preface against
+// whatever THIS Go toolchain actually produces. A future wording change in
+// net/http fails this test loudly instead of silently falling back to
+// builtin:dial-failed everywhere else.
 func TestIsH2Preface(t *testing.T) {
-	// The field report's own text: SETTINGS (type 0x04, stream 0), WINDOW_UPDATE,
-	// GOAWAY PROTOCOL_ERROR last-stream-id=0 — a real HTTP/2 server connection
-	// preface, byte for byte.
-	fieldReportFrames := "\x00\x00\x12\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x80\x00\x04\x00\x01\x00\x00\x00\x05\x00\xff\xff\xff\x00\x00\x04\b\x00\x00\x00\x00\x00\x7f\xff\x00\x00\x00\x00\b\a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+	_, fieldReportErr := http.ReadResponse(bufio.NewReader(strings.NewReader(fieldReportFrames)), nil)
+	if fieldReportErr == nil {
+		t.Fatal("http.ReadResponse accepted the field report's frame bytes as a valid response — the fixture no longer reproduces a parse failure")
+	}
+
+	// KNOWN MISS, recorded rather than hidden: response.go's line-parser cuts
+	// the first line on the first SPACE byte, before it ever gets to
+	// "malformed HTTP response". A SETTINGS frame whose payload happens to
+	// carry a 0x20 byte before any 0x0a — here, INITIAL_WINDOW_SIZE (setting
+	// id 0x0004) set to 0x00200000 — instead trips response.go's "malformed
+	// HTTP status code" arm, carrying only a short fragment of the line, not
+	// the frame header isH2Preface needs. Detection from the response error
+	// text cannot see this shape; a post-TLS byte sniff that does not depend
+	// on net/http's parse error at all is tracked as issue #360's fix for it
+	// (see isH2Preface's own doc comment, upstream_protocol.go).
+	spaceInPayload := []byte{
+		0x00, 0x00, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, // SETTINGS header, 1 setting (6-byte payload)
+		0x00, 0x04, 0x00, 0x20, 0x00, 0x00, // INITIAL_WINDOW_SIZE = 0x00200000
+	}
+	_, spaceErr := http.ReadResponse(bufio.NewReader(bytes.NewReader(spaceInPayload)), nil)
+	if spaceErr == nil {
+		t.Fatal("http.ReadResponse accepted the space-in-payload fixture as a valid response — it no longer demonstrates the known miss")
+	}
 
 	for _, tc := range []struct {
 		name string
 		err  error
 		want bool
 	}{
-		{
-			"field report: HTTP/1.x transport connection broken, malformed HTTP response",
-			fmt.Errorf("net/http: HTTP/1.x transport connection broken: %w",
-				fmt.Errorf("%s %q", "malformed HTTP response", fieldReportFrames)),
-			true,
-		},
+		{"field report: Go's own parse error on the report's exact bytes", fieldReportErr, true},
+		{"known miss: a space byte before any newline reads as a status-code error, not frame bytes", spaceErr, false},
 		{
 			"malformed HTTP response, but not an HTTP/2 frame header",
 			fmt.Errorf("net/http: HTTP/1.x transport connection broken: %w",
