@@ -417,7 +417,7 @@ func TestSetupBedrock_SpentSSOReadsDead(t *testing.T) {
 		Now:          func() time.Time { return awsSSOTestFixedNow },
 	}}
 	blob := putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(-time.Minute)) // access token expired, refresh token present
-	s.markAWSSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken))
+	s.markAWSSSOTokenSpent(context.Background(), awsSSOTokenFingerprint(blob.RefreshToken), "")
 
 	b := s.setupBedrock(context.Background(), nil, awsSSOScope{})
 	if b.SSOPresent || !b.SSOExpired {
