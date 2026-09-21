@@ -49,6 +49,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A `/metrics` scrape that fails half-way is now a failed scrape, not a healthy one missing
+  series.** `handleMetrics` streamed the counter block straight at the `ResponseWriter` and only
+  then read the store for `wardyn_store_up` and the eBPF ground-truth counters. That committed
+  `200` plus a partial body before the live reads ran, so anything going wrong afterwards was
+  recovered by the router into a `500` that could no longer be written: Prometheus saw a healthy
+  scrape whose exposition simply stopped mid-file, `up` stayed `1`, and the vanished series read as
+  deleted rather than as an error. The exposition is now composed in full before a byte is written —
+  the same all-or-nothing property `writeEbpfGroundtruthCounters` already protects against a
+  malformed label. In-tree this had hidden ten nil-pointer panics on the scrape path behind a
+  passing suite: store doubles that embed a nil `store.Store` promote `Ping` and
+  `LatestAuditEventByAction` onto it. Those doubles now answer both reads, and
+  `TestMetricsScrapeIsAllOrNothing` pins the property.
+
 - **A spent AWS SSO refresh token is no longer forgotten on daemon restart.** `awssso_refresh.go`
   marked a redeemed-and-unpersistable (or AWS-retired) refresh token spent only in an in-memory map,
   so a restart wiped the mark and the credential graded "renewable" again — the exact credential

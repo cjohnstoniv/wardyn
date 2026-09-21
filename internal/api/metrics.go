@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -423,10 +424,26 @@ func (m *metrics) write(w io.Writer) {
 // admin token is configured (cmd/wardynd) and refuses capability disclosure on
 // the anonymous /healthz, so an open /metrics would contradict that posture. A
 // Prometheus scrape_config authenticates with two lines of `authorization:`.
+//
+// The exposition is composed IN FULL before a single byte reaches the
+// ResponseWriter, and that ordering is the point rather than a style choice.
+// writeHealthGauges below makes live store reads; streaming straight at the
+// ResponseWriter commits 200 plus the whole counter block first, so anything
+// that goes wrong afterwards can no longer change the status. The router's
+// Recoverer then writes a 500 that lands nowhere and the scrape reads back as a
+// HEALTHY 200 whose body simply stops mid-file — which Prometheus ingests as
+// "those series do not exist any more", not as a failed scrape. That is
+// strictly worse than a 5xx, because `up` stays 1 and an alert on an absent
+// series is the only thing left that could notice. writeEbpfGroundtruthCounters
+// already reasons about a malformed label taking the WHOLE scrape with it
+// (healthz.go); a buffer is what makes that all-or-nothing true of a panic too.
+// One small allocation per scrape, on a body of a few KB.
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	var body bytes.Buffer
+	s.metrics.write(&body)
+	s.writeHealthGauges(r, &body)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	s.metrics.write(w)
-	s.writeHealthGauges(r, w)
+	_, _ = w.Write(body.Bytes())
 }
 
 // writeHealthGauges appends the two LIVE gauges — sampled at scrape time rather
