@@ -177,12 +177,37 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(within(group).getByText("Vault")).toBeInTheDocument();
   });
 
-  it("(10) exactly one Recommended chip renders", () => {
-    // KVM-less ⇒ recommendedTier steps down from Vault to Wall (CC2) — the only
-    // reachable way to pin a non-Vault recommendation (see (R1) below).
+  it("(10) exactly one Recommended chip renders, tone=neutral (CONSOLE-RULES §2 — a recommendation is not an action)", () => {
     const status = baseStatus({ platform: { os: "linux", wsl: false, kvm: false } });
     renderStep({ status });
-    expect(screen.getAllByText("Recommended")).toHaveLength(1);
+    const chips = screen.getAllByText("Recommended");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveClass("border-border");
+    expect(chips[0]).not.toHaveClass("border-primary/25");
+  });
+
+  // #213 — the recommendation is the strongest INSTALLED barrier, and the
+  // note under the matrix says what's stronger and not yet set up.
+  it("(R2) names the stronger, not-yet-installed tiers under the matrix", () => {
+    renderStep(); // default fixture: CC1+CC2 installed, kvm true
+    expect(
+      screen.getByText(
+        "Recommended is the strongest barrier installed on this host. Vault are stronger and each needs a one-time setup step.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // #213 — the host-reports-nothing case: no chip at all, and the note says
+  // why instead of silently omitting Recommended.
+  it("(R3) a host reporting no barrier gets no Recommended chip and the honest 'nothing to recommend' note", () => {
+    const status = baseStatus({ runner: { driver: "docker", confinement_classes: [] } });
+    renderStep({ status });
+    expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Nothing is recommended while the host reports no barrier. Wardyn recommends what it can see, not what the operating system suggests.",
+      ),
+    ).toBeInTheDocument();
   });
 
   // Honesty invariants (delete-the-row must fail the suite)
@@ -229,13 +254,26 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   });
 
   // recommendedTier helper (exported for tests only)
-  it("(R1) recommendedTier picks the strongest COMPATIBLE tier, not the strongest installed", () => {
-    // kvm-capable ⇒ Vault is recommended even though CC3 isn't in confinement_classes.
-    expect(recommendedTier(baseStatus())).toBe("CC3");
-    // KVM-less ⇒ Vault is hardware-impossible, so it steps down to Wall.
+  it("(R1) recommendedTier picks the strongest INSTALLED tier, never inferred from hardware or the OS", () => {
+    // Default fixture: CC1+CC2 installed, CC3 not — CC2 is recommended even
+    // though this host is kvm-capable (kvm:true) and could in principle run
+    // Vault: #213's whole point is that "could run it" is not "recommended".
+    expect(recommendedTier(baseStatus())).toBe("CC2");
+    // A kvm-less host with the SAME installed classes recommends the same
+    // CC2 — kvm no longer plays into the recommendation at all.
+    expect(recommendedTier(baseStatus({ platform: { os: "linux", wsl: false, kvm: false } }))).toBe("CC2");
+    // Vault installed (whatever the OS/kvm probe says) is recommended outright.
     expect(
-      recommendedTier(baseStatus({ platform: { os: "linux", wsl: false, kvm: false } })),
-    ).toBe("CC2");
+      recommendedTier(
+        baseStatus({
+          runner: { driver: "docker", confinement_classes: ["CC1", "CC2", "CC3"] },
+          platform: { os: "linux", wsl: false, kvm: false },
+        }),
+      ),
+    ).toBe("CC3");
+    // The host-reports-nothing case (#213's explicit coverage requirement):
+    // nothing is recommended, full stop — never a fallback guess.
+    expect(recommendedTier(baseStatus({ runner: { driver: "docker", confinement_classes: [] } }))).toBeNull();
   });
 
   // #11 additions
