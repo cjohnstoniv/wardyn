@@ -42,6 +42,29 @@ import (
 // surface — is exactly the shape every site this issue fixed had, and the
 // shape a re-added leak is overwhelmingly likely to take: nobody accidentally
 // routes a hardcoded 500 through three layers of indirection.
+//
+// #295's ONE-HOP EXTENSION. A direct writeError(w, 5xx, "..."+err.Error())
+// call site is not the only shape #173 left standing: a handler can build the
+// (status, message) pair and hand it to a HELPER that calls writeError
+// itself, and the helper's own call site is all this guard used to read —
+// where the message has already collapsed into one opaque string argument.
+// serverErrorForwarders below names the helpers this guard now follows one
+// hop into: refuseCapture and uiFail take (status, msg) as ordinary
+// arguments, so the same is5xxStatusArg/callsErrorMethod checks run against
+// the ARGUMENT EXPRESSIONS at their call sites instead of writeError's.
+// driveBindFailureHere (and driveShareBindFailure, its tail call) builds its
+// answer as a *driveBindFailure composite literal rather than a function
+// call, so that shape is matched separately, by its status/member fields,
+// wherever such a literal is constructed. callsErrorMethod also treats a call
+// to sshExecStreamErrorMessage as carrying error text: its own fallback arm
+// is "exec failed: "+err.Error(), so a message built by calling it is exactly
+// as unsafe as calling err.Error() inline, one level up. This is deliberately
+// ONE hop, matching the issue's scope — a helper that forwards through a
+// SECOND helper is not chased; every known forwarder found by hand when this
+// extension was written reaches writeError (or, for the two SSH-exec-only
+// sshExecStreamErrorMessage callers in sshgateway_channels.go, a channel
+// stderr write that is not an HTTP 5xx body at all and this guard does not
+// watch) in one step.
 var serverErrorDriverTextAllowlist = map[string]string{
 	// injection_awssso.go:356 — the credential-reauth-raise failure is a
 	// DELIBERATELY MODELLED body (docs/design/0.8/PLAN.md's AWS SSO lane):
@@ -61,6 +84,72 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// here needs the same kind of justification (a named fixed sentinel or a
 	// design record, plus a pinning test) as these two, not just a passing
 	// build.
+}
+
+// serverErrorForwarder names one hop this guard follows: a function or
+// method whose ordinary arguments already carry a (status, message) pair
+// bound for writeError, at fixed positions written at the call site (the
+// same "no dataflow analysis" limit is5xxStatusArg's doc describes — a
+// forwarder that received its status or message through a variable built
+// elsewhere is not something this guard can prove either way).
+type serverErrorForwarder struct {
+	statusArg int
+	msgArg    int
+}
+
+// serverErrorForwarders is the known-forwarder table #295 asks this guard to
+// follow. Matched by the called function/method's NAME alone (not by
+// package-qualifying it), which is safe here because both names are unique
+// in this package: refuseCapture is awssso_pin.go's audited sso-token
+// refusal writer (ssotoken.go's four call sites are exactly what #295 fixed),
+// uiFail is uigateway.go's UI-relay dial-error constructor.
+var serverErrorForwarders = map[string]serverErrorForwarder{
+	"refuseCapture": {statusArg: 3, msgArg: 5}, // s.refuseCapture(w, r, claims, status, reason, msg, scope)
+	"uiFail":        {statusArg: 1, msgArg: 2}, // uiFail(ctx, status, msg)
+}
+
+// calleeName returns a CallExpr's called function or method name, or "" for
+// a call through anything else (a func value, an indexed/parenthesized
+// expression) — none of which this guard's fixed forwarder table matches.
+func calleeName(call *ast.CallExpr) string {
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		return fn.Name
+	case *ast.SelectorExpr:
+		return fn.Sel.Name
+	default:
+		return ""
+	}
+}
+
+// driveBindFailureLitStatusMember reports the status and member field
+// expressions of a `driveBindFailure{...}` composite literal, or nil, nil if
+// lit is not one or carries neither field. driveBindFailureHere and its tail
+// call driveShareBindFailure (user_drives_run.go) answer with this literal
+// rather than a call into writeError, so the (status, message) pair this
+// guard needs lives in the literal's fields, not in call arguments.
+func driveBindFailureLitStatusMember(lit *ast.CompositeLit) (status, member ast.Expr) {
+	id, ok := lit.Type.(*ast.Ident)
+	if !ok || id.Name != "driveBindFailure" {
+		return nil, nil
+	}
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		switch key.Name {
+		case "status":
+			status = kv.Value
+		case "member":
+			member = kv.Value
+		}
+	}
+	return status, member
 }
 
 // server5xxStatusIdents are the http.Status identifiers this guard treats as
@@ -115,23 +204,45 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		scanned++
 
 		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+			switch node := n.(type) {
+			case *ast.CallExpr:
+				// Direct shape: writeError(w, <5xx>, <msg with err.Error()>).
+				if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(node.Args) >= 3 {
+					if is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[2]) {
+						pos := fset.Position(node.Pos())
+						key := fmt.Sprintf("%s:%d", name, pos.Line)
+						found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
+					}
+					return true
+				}
+				// #295's one-hop shape: a call into a known forwarder that
+				// itself carries writeError's (status, msg) pair as ordinary
+				// arguments at fixed positions.
+				fwd, ok := serverErrorForwarders[calleeName(node)]
+				if !ok {
+					return true
+				}
+				maxArg := fwd.statusArg
+				if fwd.msgArg > maxArg {
+					maxArg = fwd.msgArg
+				}
+				if len(node.Args) > maxArg && is5xxStatusArg(node.Args[fwd.statusArg]) && callsErrorMethod(node.Args[fwd.msgArg]) {
+					pos := fset.Position(node.Pos())
+					key := fmt.Sprintf("%s:%d", name, pos.Line)
+					found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
+				}
+			case *ast.CompositeLit:
+				// #295's other one-hop shape: driveBindFailureHere /
+				// driveShareBindFailure answer with a *driveBindFailure
+				// literal instead of a writeError call, so the (status,
+				// message) pair lives in its fields, not call arguments.
+				status, member := driveBindFailureLitStatusMember(node)
+				if status != nil && member != nil && is5xxStatusArg(status) && callsErrorMethod(member) {
+					pos := fset.Position(node.Pos())
+					key := fmt.Sprintf("%s:%d", name, pos.Line)
+					found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
+				}
 			}
-			fn, ok := call.Fun.(*ast.Ident)
-			if !ok || fn.Name != "writeError" || len(call.Args) < 3 {
-				return true
-			}
-			if !is5xxStatusArg(call.Args[1]) {
-				return true
-			}
-			if !callsErrorMethod(call.Args[2]) {
-				return true
-			}
-			pos := fset.Position(call.Pos())
-			key := fmt.Sprintf("%s:%d", name, pos.Line)
-			found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
 			return true
 		})
 	}
@@ -194,6 +305,12 @@ func is5xxStatusArg(arg ast.Expr) bool {
 // receiver's variable name (err, gerr, lerr, cerr, aerr... every one of
 // #173's sites used a different one, which is exactly why this checks the
 // METHOD, not a variable name).
+// sshExecStreamErrorMessage's own fallback arm is "exec failed: "+err.Error()
+// (sshgateway_channels.go), so a message built by calling it carries driver
+// text exactly as directly as calling err.Error() inline one level up — see
+// the package doc comment's one-hop discussion.
+const errMethodForwarder = "sshExecStreamErrorMessage"
+
 func callsErrorMethod(expr ast.Expr) bool {
 	found := false
 	ast.Inspect(expr, func(n ast.Node) bool {
@@ -201,13 +318,20 @@ func callsErrorMethod(expr ast.Expr) bool {
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
-		if !ok || len(call.Args) != 0 {
+		if !ok {
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if ok && sel.Sel.Name == "Error" {
-			found = true
-			return false
+		switch fn := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			if fn.Sel.Name == "Error" && len(call.Args) == 0 {
+				found = true
+				return false
+			}
+		case *ast.Ident:
+			if fn.Name == errMethodForwarder {
+				found = true
+				return false
+			}
 		}
 		return true
 	})
