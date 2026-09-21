@@ -88,7 +88,25 @@ flowchart LR
    commit: `release/X.Y` is cut from it for a new minor, or fast-forwarded to it
    for a patch, and the tag goes on that branch.
 5. **Point releases.** A fix is a PR to `main`, cherry-picked onto
-   `release/X.Y`. The branch never takes a feature.
+   `release/X.Y`. The branch never takes a feature. Once `main` carries the
+   next minor, fast-forwarding `release/X.Y` would ship all of it, so a patch
+   takes this path instead:
+   1. Each fix is an issue labelled `backport/X.Y`, fixed by a PR into `main`.
+   2. One backport PR into `release/X.Y` cherry-picks those merge commits with
+      `git cherry-pick -x -m 1 <merge>`, so each commit names its source.
+   3. The release PR (steps 1 and 1b below) targets `release/X.Y`, and the tag
+      goes on that branch.
+   4. A follow-up PR into `main` moves the shipped entries out of
+      `[Unreleased]` into the dated `X.Y.Z` section and bumps `main`'s version
+      strings to match, so `TestVersionMatchesChangelog` stays true there.
+
+   Before tagging, prove nothing from `main` came along:
+
+   ```sh
+   git log --oneline vX.Y.(Z-1)..release/X.Y   # only cherry-picks + the release commit
+   git diff --name-only vX.Y.(Z-1) release/X.Y # only the files the issues name
+   git diff --quiet vX.Y.(Z-1) release/X.Y -- internal/store/migrations ui/src go.mod go.sum
+   ```
 
 **Evidence is certified against a SHA.** A walk, a conformance run or a gate
 proves the commit it ran on. Any commit after it — a fix, a rebase, the release
