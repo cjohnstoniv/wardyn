@@ -15,15 +15,18 @@ import (
 
 // TestAccessStaleSnapshotNamesTheCallerRemedy is F213.
 //
-// The stale-snapshot guard fires on any caller whose frozen claim snapshot
+// The stale-snapshot guard fires on any caller whose stamped claim snapshot
 // cannot reproduce the admin role they hold, and apiTokenAuth installs exactly
-// such a snapshot: api_tokens.groups is stamped at MINT and read verbatim, and a
-// NULL groups_truncated (a pre-0.7 token) reads as truncated by PF-26. So a
-// wdn_-token admin was refused every POST/DELETE /access/mappings and told to
-// "sign in again" — which changes nothing they hold. RefreshAPITokenRoles
-// re-stamps the ROLE column and provably does not touch groups, so no sign-in
-// clears it: the only exit is re-minting the token, and the refusal never said
-// so.
+// such a snapshot: api_tokens.groups is stamped at MINT and on every OnLogin
+// (store.RefreshAPITokenIdentity) and read verbatim, and a NULL
+// groups_truncated (a pre-0.7 token) reads as truncated by PF-26. A
+// wdn_-token admin is refused every POST/DELETE /access/mappings until the
+// stamp catches up — but unlike before #152, the owner's own next sign-in now
+// re-stamps role AND groups together, so "sign in again" is a real remedy for
+// this lane too. It is just not the SAME remedy as the cookie lane's: the
+// token-authenticated request itself cannot sign in, only its owner can,
+// separately, after which retrying the write succeeds. Re-minting the token
+// remains the fallback for an owner who cannot or will not sign in again.
 //
 // The guard already distinguishes lanes once (the admin-token/local-mode
 // exemption), so this pins the same distinction applied to the REMEDY. The
