@@ -59,6 +59,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the macOS `/Users/Shared/src` — really had no bind: compose cannot expand a CSV into volume
   lines, so only whichever one path `WARDYN_WORKSPACES_ROOT` is set to gets bound. A commented
   example line now sits beside the existing bind, and `docs/ENV.md` states the limit (#135).
+- **The webhook sink's Close test no longer reds CI at random.** `TestWebhookSink_CloseFlushesAndAwaitsDrain`
+  decided whether `Close` had awaited the drain by sampling whether the goroutine running `Run` had
+  reached the statement after `Run` returned. Nothing orders that statement before `Close` returns —
+  `Run` signals its done channel from inside `Run` — so on a loaded runner the check failed although
+  the drain had completed, reding the required `build` check on unrelated pull requests. The test now
+  holds the final delivery open inside the HTTP handler and asserts `Close` is still blocked while the
+  batch is in flight, an ordering the code actually guarantees. `Close` itself is unchanged.
 - **The decision-log line printed to stdout is now written under its own mutex.** A line over
   `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
   could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
