@@ -59,6 +59,76 @@ func validateMemberModePosture(memberMode, localMode, oidcConfigured bool) error
 	return nil
 }
 
+// validateHybridPosture enforces the org control-plane settings' preconditions
+// (issue #100, docs/design/0.8/PLAN.md): WARDYN_ORG_URL, WARDYN_ORG_ENROLMENT_TOKEN
+// and WARDYN_ORG_DEVICE_NAME. Kept as its OWN function rather than folded into
+// validateMemberModePosture above: that one owns the local-mode/OIDC
+// preconditions, and duplicating them here is exactly how the two would drift
+// apart — this one owns hybrid's preconditions instead, and calls neither.
+//
+// nil when orgURL is empty: no hybrid posture is asserted, nothing to check
+// (orgDeviceName carries no posture of its own and never reaches this
+// function). Otherwise, in order:
+//
+//  1. memberMode must be on. An org URL with no member-mode assertion is a
+//     laptop that claims to report to an org control plane while still
+//     behaving as its own admin — the incoherence member mode exists to catch,
+//     one level up.
+//  2. orgURL must be https://, unless its host is loopback — the same rule the
+//     webhook audit sink applies to a bearer token over plaintext
+//     (sinks.NewWebhookSink refuses a non-https bearer_token URL): the
+//     enrolment token is exactly that kind of long-lived, replayable
+//     credential, dispatched with a request to orgURL, and a plaintext URL
+//     would send it in cleartext to any peer on the path. allowPlaintextListen
+//     (WARDYN_ALLOW_PLAINTEXT_LISTEN) is the SAME override refusePlaintextListen
+//     already uses for wardynd's own listen address — one escape hatch, not a
+//     second one to keep in sync.
+//
+// enrolToken set with orgURL empty is refused by the nil check above, so by
+// the time clause 2 runs orgURL is known non-empty — a token naming nowhere to
+// go is a misconfiguration, not a no-op.
+func validateHybridPosture(orgURL, enrolToken string, memberMode, allowPlaintextListen bool) error {
+	if orgURL == "" {
+		if enrolToken != "" {
+			return errors.New("refusing to start: WARDYN_ORG_ENROLMENT_TOKEN is set but WARDYN_ORG_URL is not — " +
+				"an enrolment token has nowhere to go without an org control plane to enrol against; " +
+				"set WARDYN_ORG_URL or unset WARDYN_ORG_ENROLMENT_TOKEN")
+		}
+		return nil
+	}
+	if !memberMode {
+		return errors.New("refusing to start: WARDYN_ORG_URL is set but WARDYN_MEMBER_MODE is not — " +
+			"a daemon pointed at an org control plane with no member-mode assertion still treats the human at the " +
+			"keyboard as its own admin, which is precisely the incoherence member mode exists to refuse; " +
+			"set WARDYN_MEMBER_MODE=true or unset WARDYN_ORG_URL")
+	}
+	u, err := url.Parse(orgURL)
+	if err != nil {
+		return fmt.Errorf("refusing to start: WARDYN_ORG_URL %q does not parse as a URL", orgURL)
+	}
+	if !strings.EqualFold(u.Scheme, "https") && !allowPlaintextListen && !listenIsLoopback(u.Hostname()) {
+		return fmt.Errorf("refusing to start: WARDYN_ORG_URL %q is not https:// and its host is not loopback — "+
+			"the enrolment token travels with every request this daemon makes to it, and a plaintext non-loopback URL "+
+			"sends that credential in cleartext to any peer on the path; use https://, point WARDYN_ORG_URL at a "+
+			"loopback host for local testing, or set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", orgURL)
+	}
+	return nil
+}
+
+// checkMemberAndHybridBootPosture runs validateMemberModePosture then
+// validateHybridPosture in sequence, folded into ONE function call so run()
+// (cmd/wardynd/main.go) gains no extra `if err != nil` branch for the second,
+// adjacent refusal — gocyclo's function-complexity gate is already at its
+// ceiling there. The two validators stay separate on purpose (see
+// validateHybridPosture's own doc comment on why it does not extend
+// validateMemberModePosture); this is only the call site folded together.
+func checkMemberAndHybridBootPosture(memberMode, localMode, oidcConfigured bool, orgURL, enrolToken string, allowPlaintextListen bool) error {
+	if err := validateMemberModePosture(memberMode, localMode, oidcConfigured); err != nil {
+		return err
+	}
+	return validateHybridPosture(orgURL, enrolToken, memberMode, allowPlaintextListen)
+}
+
 // validateOperatorPosture is the second boot-time fail-closed rule, kept beside
 // validateConfig (and pure, for the same reason) but applied later: OIDC is not
 // built until boot_deps.go, well after validateConfig runs at the top of run().
