@@ -185,8 +185,11 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// 6. Forward to the vetted target over the pinned transport. Its DialContext
 	// dials the vetted ip:port carried on the request context (vettedIPKey), so the
 	// host is never re-resolved. Invoked only post-allow+vet.
-	resp, err := p.transport.RoundTrip(outReq)
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
+		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, log, host, "upstream error") {
+			return
+		}
 		// The allow decision is emitted only AFTER a successful round-trip (same
 		// accuracy fix as handleConnect, E3): a failed upstream dial must NOT
 		// over-report an allow. Emit a dial-failed deny (carrying any scan

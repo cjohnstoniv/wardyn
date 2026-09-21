@@ -268,7 +268,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 
 	p.emitGitDecision(r, egress.Allow, allowSrc)
 
-	resp, err := p.transport.RoundTrip(outReq)
+	// roundTripUpstream, not the transport directly: this forge speaks HTTP/2,
+	// and a peer that speaks it without negotiating it gets the same fallback
+	// the MITM and plain lanes get (upstream_protocol.go).
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
 		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
 		return

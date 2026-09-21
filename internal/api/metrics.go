@@ -307,6 +307,15 @@ func (m *metrics) egressDenied() {
 //     caused. It now carries its own rule_source (ruleSourceGatewayVetFailed,
 //     egress lane) and is DELIBERATELY absent from this exclusion list below —
 //     a guard refusal counts as a denial like any other.
+//   - builtin:upstream-protocol-mismatch — a round trip that GOT AN ANSWER: an
+//     HTTP/2 frame on a connection that negotiated no ALPN, which the proxy
+//     could not complete over HTTP/2 either (internal/egress/proxy's
+//     roundTripUpstream, which detects such a peer from its first bytes or
+//     from net/http's parse error and resends when it can). Kept separate from
+//     builtin:dial-failed for the same reason as errGatewayVet above, but the
+//     opposite direction: an identical retry does not fix it, so it is
+//     also DELIBERATELY absent from the exclusion list below and counts as a
+//     denial like any other.
 //   - egress.decisions.dropped:<n> — decisions.go's synthetic summary for
 //     decision records the buffer had to drop. An audit-FIDELITY alert about a
 //     wedged control plane, not a denial of anything; the count rides in the

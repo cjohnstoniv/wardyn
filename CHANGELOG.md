@@ -8,6 +8,37 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.9] — 2026-09-21
+
+### Fixed
+
+- **The egress proxy offered HTTP/2 it could not speak, on every install with a corporate CA.**
+  `NewServer` built one `*tls.Config` for the corporate CA pool and shared it between the sidecar's
+  control-plane client and the proxy's own transports. Enabling HTTP/2 on the first of those edits
+  that config in place, adding `h2` to the protocols offered, so the egress transport — which had no
+  HTTP/2 support — began offering HTTP/2 to every TLS peer. A peer that accepted the offer answered
+  with HTTP/2 frames the HTTP/1.1 reader could not parse, and the request failed. This is what broke
+  the AWS SSO lane behind `upstream_proxy_url` (`mode: sso-inject-proxy`) on a corporate-CA estate,
+  where every re-originated request failed. Each transport now gets its own copy (#360).
+- **The egress proxy could not talk to a TLS peer that speaks HTTP/2.** It now offers
+  `h2,http/1.1` and uses HTTP/2 when a peer selects it. A peer that speaks HTTP/2 without
+  negotiating it is recognised from its first bytes: that host is remembered for the run, and the
+  request is resent over HTTP/2 rather than failing (#360).
+- **An HTTP/2 answer was recorded as a dial failure and retried until the SDK gave up.** When a
+  request cannot be completed over HTTP/2 either, it now carries its own
+  `builtin:upstream-protocol-mismatch` rule source with a cause that names the mismatch instead of
+  raw frame bytes, and it is answered with a 400 so SDKs stop retrying (#359).
+
+- A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
+  so a write still finishing from the failed attempt can never interleave with the resend (#368).
+
+### Changed
+
+- The egress proxy offers HTTP/2 to TLS peers and uses it when a peer selects it, on every lane
+  including the git and PAT brokers. It previously spoke HTTP/1.1 only (#360).
+- `docs/OPERATIONS.md` states that `upstream_proxy_no_proxy` CIDR entries match destinations written
+  as IP literals, never a hostname that resolves into the range (#361).
+
 ## [0.7.8] — 2026-09-19
 
 ### Added
