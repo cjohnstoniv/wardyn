@@ -118,6 +118,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A per-user API token's group snapshot now refreshes at login, alongside its role.**
+  `store.RefreshAPITokenRoles` is now `RefreshAPITokenIdentity(ctx, principal, role, groups,
+  truncated)`: the `OnLogin` hook re-stamps `role`, `groups` and `groups_truncated` together, so a
+  human whose group memberships changed no longer authorizes forever against the snapshot their
+  token was minted with. `truncated` is bound exactly from the login's own session-completeness
+  signal, never defaulted — a snapshot this build could not fully enumerate still reads as
+  incomplete downstream. The residual narrows to the same shape the SSH-key analogue already has: a
+  human who never signs in again.
+
 - **5xx responses no longer echo driver/substrate error text to the caller.** ~90 handlers across
   `internal/api` built a 500 (or other 5xx) body by concatenating `err.Error()` onto an action
   string, so a transient Postgres or runner failure could hand an unprivileged-adjacent caller the
@@ -178,6 +187,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
   deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
   cancellation on shutdown — is unchanged.
+
+
 - **A run whose model credential is a stored AWS SSO session now says so when its confinement is
   weaker than that credential would otherwise require.** A captured AWS SSO session is delivered to
   the sandbox at dispatch, after the run's confinement class is already resolved, so it was never an
@@ -197,7 +208,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   state now renders in a persistent strip below the terminal, outside the scrollback, and a spent
   budget leaves a Reconnect button behind. Reconnecting keeps the existing scrollback and appends
   to it rather than clearing it.
-
 - **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
   finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
