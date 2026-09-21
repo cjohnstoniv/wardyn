@@ -664,6 +664,17 @@ export WARDYN_LIVE_KUBE_CONTEXT="${CONTEXT}"
 # that was there all along, one namespace over.
 export WARDYN_LIVE_KUBE_NAMESPACE="${RUNS_NAMESPACE}"
 export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
+# helpers.ts's SANDBOX_UP/LOGIN_DONE default to 300s, tuned on a developer box.
+# A GitHub-hosted runner (GITHUB_ACTIONS is set by every job, incl. the nightly
+# kind-sso-walk one — see docs/ENV.md) schedules the CNI, Postgres, the daemon,
+# Dex and every sandbox pod concurrently on two vCPUs, and #285's first nightly
+# dispatch timed out at exactly that ceiling waiting for a freshly created
+# sign-in sandbox. Raise it there; a caller that already set either var wins,
+# and an operator running this by hand keeps the 300s default.
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  export WARDYN_LIVE_SANDBOX_UP_MS="${WARDYN_LIVE_SANDBOX_UP_MS:-720000}"
+  export WARDYN_LIVE_LOGIN_DONE_MS="${WARDYN_LIVE_LOGIN_DONE_MS:-720000}"
+fi
 # THREE specs, ONE invocation: run-ui-e2e.sh runs them sequentially against this
 # one cluster, and sso-member-recovery.spec.ts inherits the state
 # sso-member.spec.ts leaves (a `live` member under the contradicting pin, and

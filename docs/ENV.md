@@ -480,3 +480,15 @@ last three are the cluster coordinates the recovery spec's cold-start case needs
 to taint the node and read the run pod's phase back: passing them rather than
 letting the spec guess is what makes that case RED on a renamed cluster instead
 of vacuous.
+
+`WARDYN_LIVE_SANDBOX_UP_MS` / `WARDYN_LIVE_LOGIN_DONE_MS` (int ms; default
+`300000`, unset) are the one pair of operator inputs in this group:
+`ui/e2e/live/helpers.ts`'s `SANDBOX_UP`/`LOGIN_DONE` poll ceilings for a fresh
+sign-in sandbox coming up and its capture landing. They exist for SLOWER CI
+HARDWARE, not flakiness — a member's own sign-in sandbox is a pod (image pull,
+schedule, proxy sidecar, a real device-code flow) created while the cluster is
+concurrently scheduling the CNI, Postgres, the daemon, Dex and every earlier
+sandbox, and the 300s default was tuned on a developer box (#285: the nightly
+walk's first hosted-runner dispatch timed out here). `scripts/kind-sso-walk.sh`
+raises both to `720000` (12m) itself when `GITHUB_ACTIONS` is set, unless the
+caller already exported one; nothing else in this file changes.

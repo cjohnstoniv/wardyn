@@ -87,6 +87,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
   reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
   FAILED so a run reaching a successful terminal state through the same path gets no hint.
+- **The nightly kind SSO walk's sandbox-up and login-done ceilings are now environment-overridable
+  (`WARDYN_LIVE_SANDBOX_UP_MS` / `WARDYN_LIVE_LOGIN_DONE_MS`).** The walk's first hosted-runner
+  dispatch timed out at `ui/e2e/live/helpers.ts`'s hardcoded 300s `SANDBOX_UP` ceiling waiting for a
+  freshly created sign-in sandbox: a hosted runner schedules the CNI, Postgres, the daemon, Dex and
+  every sandbox pod concurrently on two vCPUs, and that budget was tuned on a developer box.
+  `LOGIN_DONE` shares the same constant and the same code path, so it gets the same treatment.
+  `scripts/kind-sso-walk.sh` now raises both to 720s when `GITHUB_ACTIONS` is set; every other
+  caller keeps the unchanged 300s default. This is a slower-CI-hardware knob, not a flakiness
+  workaround — no assertion, skip or retry changed.
 
 ### Changed
 
