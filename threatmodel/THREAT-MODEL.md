@@ -1652,16 +1652,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     `groups_snapshot_stale`. The token carries no signal that anything was filtered,
     so there is nothing Wardyn could check.
 
-    Accepted for 0.7 because the remedy is procedural and the burden is the
-    operator's: re-key group-subject grants and group-tier assignments onto a
-    directly-assigned group or onto the user BEFORE changing the claim
-    configuration, then verify against a real login's `session_groups`
-    (`GET /me/capabilities`) rather than against the IdP's UI —
-    `docs/OPERATIONS.md`, "A third cause of a partial snapshot", carries the
-    procedure. User-subject rows are the only shape a claim-configuration change
-    cannot silently break. Closing this needs a signal the IdP does not send;
-    the nearest approximation is warning when a group-subject row stops matching
-    anyone, which is not built.
+    **STILL OPEN AT 0.8 — a stated ceiling, not a gap awaiting a fix.** The
+    remedy is procedural and the burden is the operator's: re-key group-subject
+    grants and group-tier assignments onto a directly-assigned group or onto the
+    user BEFORE changing the claim configuration, then verify against a real
+    login's `session_groups` (`GET /me/capabilities`) rather than against the
+    IdP's UI — `docs/OPERATIONS.md`, "A third cause of a partial snapshot",
+    carries the procedure. User-subject rows are the only shape a
+    claim-configuration change cannot silently break. Closing this needs a
+    signal the IdP does not send; the nearest approximation is warning when a
+    group-subject row stops matching anyone, which is not built.
 
 40. **Workspace-provider admission is URL-PREFIX matching over a clone URL, not
     a repository ACL.** 0.7.2's provider policy bounds which repositories a run
