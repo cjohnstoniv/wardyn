@@ -55,9 +55,15 @@ may push, not only where.
 
 ### What 0.8 is not
 
-Nothing on the v1.0 row moves up. The Kubernetes parity list — bring-your-own and devcontainer
-images, `local_dir` mounts, per-pod PID limits, the correlator — stays v1.0. Packaged team mode,
-SAML and SCIM stay unscheduled.
+Nothing on the v1.0 row moves up. Restated as four named gaps, not a placeholder, because
+per-pod PIDs in particular keeps being picked up as though it were a one-liner: bring-your-own
+and devcontainer image builds, `local_dir` host-path mounts, a per-pod PIDs limit, and a k8s
+ground-truth correlator, each carried in [deploy/helm/wardyn/README.md](../../../deploy/helm/wardyn/README.md)'s
+"Known gaps" as chart v1.0 scope. The PIDs one is not a one-line change: Kubernetes exposes no
+per-container "max pids" resource name — only the kubelet's node-level `podPidsLimit` — as
+`naming.go` and `sandbox.go` in `internal/runner/k8s` record, which is why Wardyn accepts the
+value, warns, and runs without enforcing it rather than claiming a cap that was silently
+dropped. Packaged team mode, SAML and SCIM stay unscheduled.
 
 **No refusal that exists today is relaxed**, with three exceptions, each an operator- or
 admin-controlled widening and never sandbox reach:
