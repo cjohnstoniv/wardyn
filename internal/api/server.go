@@ -783,13 +783,14 @@ type Server struct {
 	// ssoRefreshSpent records the fingerprints of refresh tokens the OIDC
 	// endpoint has already told us are gone, keyed to the TOKEN rather than the
 	// credential, so a later capture is never pre-marked dead. Process-local
-	// like sshSessions and lastTouch above, and correct for the same reason
-	// (replicas>1 is refused by construction). Zero values are ready to use.
+	// like sshSessions and lastTouch above — but, unlike them, a CACHE rather
+	// than the source of truth: it is write-through and read-once-memoized
+	// against store.AWSSSOSpentTokenStore (Postgres), so a restart no longer
+	// re-grades an already-spent credential `live` (#149) — the first read of a
+	// given fingerprint after a restart costs one best-effort row read, and
+	// every read after that (in THIS process) costs nothing.
 	// ponytail: ssoRefreshSpent grows one small entry per spent token per daemon
-	// lifetime — bound it only if that ever stops being negligible. Grading
-	// reads it too now (setupModelAccess, Finding 5), not only the refresher's
-	// own short-circuit — so a restart re-grades a spent credential `live`
-	// until the next dispatch marks it spent again, same as the refresher did.
+	// lifetime — bound it only if that ever stops being negligible.
 	ssoRefreshMu    sync.Mutex
 	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool
