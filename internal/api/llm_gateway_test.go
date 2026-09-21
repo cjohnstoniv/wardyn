@@ -82,6 +82,79 @@ func TestValidateLLMGateways_PathPrefixAndPortPreserved(t *testing.T) {
 	}
 }
 
+// TestAnthropicBaseURL pins the subscription/managed lanes' dispatch target
+// (runs_dispatch_llm.go): unset must stay byte-identical to today, and a
+// configured gateway must be dialed verbatim instead.
+func TestAnthropicBaseURL(t *testing.T) {
+	s := &Server{}
+	if got := s.anthropicBaseURL(); got != "https://api.anthropic.com" {
+		t.Fatalf("unset: anthropicBaseURL() = %q, want the vendor default", got)
+	}
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal:8443/v1"}
+	if got, want := s.anthropicBaseURL(), "https://llm-gateway.corp.internal:8443/v1"; got != want {
+		t.Fatalf("configured: anthropicBaseURL() = %q, want %q", got, want)
+	}
+}
+
+// TestAnthropicGatewayHostAndHostPort pins the bare-host and host:port forms
+// authorSubscriptionInjection and the injection-host allowlist consume: unset
+// is empty (no widening), a configured gateway with no explicit port defaults
+// to 443, and an explicit port is preserved.
+func TestAnthropicGatewayHostAndHostPort(t *testing.T) {
+	s := &Server{}
+	if h := s.anthropicGatewayHost(); h != "" {
+		t.Fatalf("unset: anthropicGatewayHost() = %q, want \"\"", h)
+	}
+	if hp := s.anthropicGatewayHostPort(); hp != "" {
+		t.Fatalf("unset: anthropicGatewayHostPort() = %q, want \"\"", hp)
+	}
+
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal"}
+	if h, want := s.anthropicGatewayHost(), "llm-gateway.corp.internal"; h != want {
+		t.Fatalf("anthropicGatewayHost() = %q, want %q", h, want)
+	}
+	if hp, want := s.anthropicGatewayHostPort(), "llm-gateway.corp.internal:443"; hp != want {
+		t.Fatalf("no explicit port: anthropicGatewayHostPort() = %q, want %q (default 443)", hp, want)
+	}
+
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal:8443/v1"}
+	if hp, want := s.anthropicGatewayHostPort(), "llm-gateway.corp.internal:8443"; hp != want {
+		t.Fatalf("explicit port: anthropicGatewayHostPort() = %q, want %q", hp, want)
+	}
+}
+
+// TestSubscriptionInjectionHostAllowed pins the security property: the
+// subscription/managed OAuth sentinel may target the vendor host always, the
+// configured gateway ONLY when one is set (from s.cfg, never from the host
+// argument itself), and nothing else — an unrelated host stays refused
+// regardless of gateway config.
+func TestSubscriptionInjectionHostAllowed(t *testing.T) {
+	s := &Server{}
+	if !s.subscriptionInjectionHostAllowed("api.anthropic.com") {
+		t.Fatal("the vendor host must always be allowed")
+	}
+	if s.subscriptionInjectionHostAllowed("llm-gateway.corp.internal") {
+		t.Fatal("an unconfigured gateway host must be refused")
+	}
+	if s.subscriptionInjectionHostAllowed("evil.example.com") {
+		t.Fatal("an arbitrary host must always be refused")
+	}
+
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal:8443"}
+	if !s.subscriptionInjectionHostAllowed("api.anthropic.com") {
+		t.Fatal("the vendor host must stay allowed once a gateway is configured")
+	}
+	if !s.subscriptionInjectionHostAllowed("llm-gateway.corp.internal") {
+		t.Fatal("the configured gateway host must now be allowed")
+	}
+	if !s.subscriptionInjectionHostAllowed("LLM-Gateway.corp.internal.") {
+		t.Fatal("the comparison must be case-insensitive and trailing-dot-insensitive, like hostEqual everywhere else")
+	}
+	if s.subscriptionInjectionHostAllowed("evil.example.com") {
+		t.Fatal("an arbitrary host must stay refused even with a gateway configured")
+	}
+}
+
 // TestValidateBedrockBaseURL pins WARDYN_BEDROCK_BASE_URL's own boot gate: it
 // inherits validateOneLLMGateway's seven rules (so it cannot drift from the
 // gateway knobs), with rule 5 measured against the REGIONAL Bedrock data-plane

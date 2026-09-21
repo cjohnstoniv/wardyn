@@ -224,9 +224,14 @@ type Config struct {
 	// (WARDYN_ANTHROPIC_BASE_URL / WARDYN_OPENAI_BASE_URL, validated by
 	// ValidateLLMGateways). Control-plane-authored, same trust boundary as
 	// TrustedCAPEM above — the sandbox cannot set this. nil/empty (the
-	// default) => every api-key lane dials the public host, byte-identical to
-	// today. Scope: the api-key lane only — see (*Server).llmProviderFor;
-	// subscription/managed runs still reach the public host directly.
+	// default) => every lane dials the public host, byte-identical to today.
+	// Consulted by (*Server).llmProviderFor (the api-key lane's host
+	// substitution) and, for Anthropic specifically, by
+	// (*Server).anthropicBaseURL/anthropicGatewayHost/anthropicGatewayHostPort
+	// (the subscription and Wardyn-managed lanes, runs_dispatch_llm.go) and the
+	// subscription-injection host allowlist (injection.go). The harness-login
+	// (`claude setup-token`) lane never consults it and always stays on the
+	// public host — that flow mints the OAuth token itself.
 	LLMGateways map[string]string
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).

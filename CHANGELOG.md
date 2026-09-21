@@ -19,6 +19,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **The configured Anthropic gateway (`WARDYN_ANTHROPIC_BASE_URL`) now also carries subscription
+  and Wardyn-managed runs, not just the api-key lane.** Dispatch points those two lanes'
+  `ANTHROPIC_BASE_URL` at the gateway when one is configured; the in-image `agent-run` launcher no
+  longer unconditionally clobbers it back to the vendor default; and the subscription-injection sink
+  accepts the configured gateway host — taken from configuration, never from a run's own request —
+  alongside `api.anthropic.com`. **Turning this on is an operator trust decision: it sends the
+  operator's live subscription/managed OAuth token to the configured gateway proxy-side**, exactly
+  as it is sent to `api.anthropic.com` today. The harness-login (`claude setup-token`) lane is
+  unaffected and always stays on the public host, since that flow mints the OAuth token itself.
+  Unset is byte-identical to today.
 
 ### Fixed
 
