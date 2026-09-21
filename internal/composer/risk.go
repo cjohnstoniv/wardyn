@@ -201,11 +201,11 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 	// policy predating this field, or a run using ssh_key for something other
 	// than the confined push path, must still be free to launch.
 	//
-	// pushRulesIsSet, not a bare != nil: an all-zero-but-non-nil push_rules
+	// PushRulesSpec.IsSet, not a bare != nil: an all-zero-but-non-nil push_rules
 	// (composer.Clamp can hand back "push_rules":{} inherited from an empty
 	// operator ceiling — see clampPushRules) carries no actual rule, so keying
 	// off != nil here would warn about rules that do not exist.
-	if pushRulesIsSet(spec.PushRules) && pushRulesUnenforceable(spec.EligibleGrants) {
+	if spec.PushRules.IsSet() && pushRulesUnenforceable(spec.EligibleGrants) {
 		add("push_rules", "set", RiskMedium,
 			"push_rules is set, but this run's only git-capable grant is ssh_key — the SSH transport has no broker seam, so these content rules cannot be enforced.", "2")
 	}

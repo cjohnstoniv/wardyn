@@ -343,14 +343,14 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 // max_inspect_pack_mib capped at the ceiling's when the ceiling's is
 // non-zero.
 //
-// pushRulesIsSet guards both the ceiling check here and the risk grade
+// PushRulesSpec.IsSet guards both the ceiling check here and the risk grade
 // (composer.Grade): an all-zero-but-non-nil *PushRulesSpec — push_rules: {}
 // on the wire — must read as "no opinion" exactly like nil, or an empty
 // ceiling would get inherited wholesale by every member spec and then
 // false-warn on the Review rail about rules that do not exist (found
 // reviewing #176).
 func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
-	if !pushRulesIsSet(ceiling.PushRules) {
+	if !ceiling.PushRules.IsSet() {
 		return warns
 	}
 	if out.PushRules == nil {
@@ -370,14 +370,6 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 	}
 	out.PushRules = &merged
 	return warns
-}
-
-// pushRulesIsSet reports whether pr carries an actual rule rather than an
-// all-zero (but non-nil) *PushRulesSpec. See clampPushRules' doc for why this
-// matters: an empty ceiling push_rules must be indistinguishable from an
-// absent one, both here and in composer.Grade.
-func pushRulesIsSet(pr *types.PushRulesSpec) bool {
-	return pr != nil && (len(pr.DenyPaths) > 0 || pr.MaxInspectPackMiB > 0)
 }
 
 // unionPaths is union's exact-string counterpart for push_rules.deny_paths.

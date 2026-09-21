@@ -306,6 +306,18 @@ type PushRulesSpec struct {
 	MaxInspectPackMiB int `json:"max_inspect_pack_mib,omitempty"`
 }
 
+// IsSet reports whether this spec carries an actual rule, which is what every
+// reader means by "the policy sets push_rules" — NOT a bare != nil. An
+// all-zero-but-non-nil *PushRulesSpec (a literal `push_rules: {}`, or the
+// struct a clamp leaves behind) says nothing about what a push may touch, and
+// must read exactly like an absent one wherever the field is consulted:
+// composer's clamp and risk grade, and the broker's no-thin advertisement
+// (internal/egress/proxy). One method so those readers cannot drift into
+// disagreeing about whether a run has content rules at all.
+func (s *PushRulesSpec) IsSet() bool {
+	return s != nil && (len(s.DenyPaths) > 0 || s.MaxInspectPackMiB > 0)
+}
+
 // ToolEffect is what a matching ToolRule does with the call.
 type ToolEffect string
 

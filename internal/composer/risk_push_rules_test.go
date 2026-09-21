@@ -61,7 +61,7 @@ func TestGrade_PushRulesUnenforceableWithSSHOnly(t *testing.T) {
 
 	// An all-zero-but-non-nil push_rules ("push_rules": {} — what
 	// composer.Clamp can hand back from an empty operator ceiling, see
-	// clampPushRules) carries no actual rule: pushRulesIsSet must keep this
+	// clampPushRules) carries no actual rule: PushRulesSpec.IsSet must keep this
 	// from grading a warning about rules that do not exist.
 	emptySpec := base
 	emptySpec.PushRules = &types.PushRulesSpec{}
