@@ -8,6 +8,45 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **Setup counts only the steps that block a run, and recommends what the host actually has.**
+  The Getting-started counter read "Step 1 of 17" with ten of those steps optional demos; it now
+  reads "Step 1 of 4" (Environment, People, Network, Review), with the honest count of what
+  follows named underneath. Three categories, not two: Secrets, Workspace providers and
+  Workspaces are real configuration that blocks nothing, kept apart in the rail and on Review
+  from the ten demos that change nothing — collapsing them into one list is what put Secrets
+  behind a "Start the demo" button. `recommendedTier` now reads only what the host reports
+  installed (`runner.confinement_classes`), never inferring from the operating system or from
+  hardware compatibility — a host reporting nothing gets no Recommended chip and a line saying
+  so, and a note names what's stronger when the recommendation isn't the strongest class that
+  exists. The `Recommended` chip is `tone="neutral"`, not the teal `"primary"` CONSOLE-RULES
+  already flagged as a violation, and its row is fixed-height so the barrier matrix can't shift
+  when the chip appears.
+
+### Added
+
+- **Device and audit-federation storage** (migration `0066_devices_and_federation`, part of hybrid
+  enrolment and audit federation). Three tables: `devices` (organisation-side inventory of enrolled
+  laptops, credential hashed at rest, soft-revocable), `device_enrolment_tokens` (single-use
+  admin-minted tokens a laptop's first boot exchanges for a device credential), and `org_federation`
+  (a laptop's own single-row durable forwarder cursor). `internal/store/store_devices.go` adds the
+  `DeviceStore` optional capability (`store.PG` only, like `Pager`/`AuditChainVerifier`) with
+  `IngestDeviceAudit`: it verifies a forwarded batch's claimed hash chain in one transaction under the
+  existing audit-chain advisory lock, recomputing each row's hash in SQL over the stored jsonb, refuses
+  the whole batch on any mismatch, and accepts a genesis row as a recorded chain reset. Storage and the
+  store seam only — no routes, CLI or forwarder yet.
+
+- **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
+  profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
+  secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`
+  attended through `L3`, which also permits `task_mode=exec`). An invalid level in any field is
+  refused at write with a 400 naming which one. `agent_runs` gains `autonomy_level`
+  (migration `0065_agent_runs_autonomy_level`), where a run's resolved level will be frozen once
+  resolution lands; every existing and new run reads `""` until then. This is the types, validation,
+  storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
+  enforces one yet.
+
 ### Fixed
 
 - **A per-user API token's group snapshot now refreshes at login, alongside its role.**
@@ -19,6 +58,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   incomplete downstream. The residual narrows to the same shape the SSH-key analogue already has: a
   human who never signs in again.
 
+- **A spent AWS SSO refresh token is no longer forgotten on daemon restart.** `awssso_refresh.go`
+  marked a redeemed-and-unpersistable (or AWS-retired) refresh token spent only in an in-memory map,
+  so a restart wiped the mark and the credential graded "renewable" again — the exact credential
+  Wardyn can never redeem twice. The mark now write-through persists to a new
+  `aws_sso_spent_tokens` table (migration `0068_aws_sso_spent_tokens`, a capability interface beside
+  the existing optional seams in `internal/store/pagination.go`) keyed by the same one-way,
+  credential-derived fingerprint the map has always used, plus the credential's owner — deliberately
+  NOT the secret/blob store the mark exists because of, since that store's own write is what just
+  failed. The map stays as a read-once memoized cache in front of it, so a restart costs one
+  best-effort row read per fingerprint rather than losing the fact outright. Stale rows are pruned
+  from the existing lifecycle reaper's per-tick advisory lock (no new timer), past the AWS SSO client
+  registration's 90-day lifetime.
 - **The decision-log line printed to stdout is now written under its own mutex.** A line over
   `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
   could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
@@ -31,6 +82,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
   deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
   cancellation on shutdown — is unchanged.
+
+
+- **A spent terminal reconnect budget now offers Reconnect instead of a `[closed]` line that
+  could scroll out of view.** The attach terminal used to write connection state — `[closed]`,
+  `[reconnected]`, `[connection lost — reconnecting…]`, `[taken over — not reconnecting]` — into
+  the same scrollback as the session's own output, so the only sign the connection had given up
+  could scroll away with nothing left to press; the only recovery was a full page reload. That
+  state now renders in a persistent strip below the terminal, outside the scrollback, and a spent
+  budget leaves a Reconnect button behind. Reconnecting keeps the existing scrollback and appends
+  to it rather than clearing it.
 - **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
   finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
@@ -38,6 +99,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   FAILED so a run reaching a successful terminal state through the same path gets no hint.
 
 ### Changed
+
+- **CLI help and an operator-facing log line no longer print internal campaign IDs.**
+  `wardyn policy default --help`, `wardyn-tetragon-ingest --help`, and the mint-refusal WARN log in
+  `internal/api/internal.go` cited review-package coordinates (`W14-S1-6`, `W24-S1-1`, `F098`) that
+  resolve to nothing outside this repository. Each now says the thing the coordinate stood for
+  instead.
 
 - **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
   `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
