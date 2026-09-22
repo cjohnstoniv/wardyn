@@ -429,16 +429,15 @@ type ResolvedInjection struct {
 	ExpiresAt int64  `json:"expires_at,omitempty"`
 	// Organisation is the Azure DevOps organisation a per-person Azure DevOps
 	// credential was dispatched for, on that lane's resolves only (empty on
-	// every other). The proxy needs it because the credential itself is not
-	// organisation-bound — an Entra access token carries no organisation claim
-	// at all, so only the request URL names one — which makes the proxy's
-	// per-request organisation pin the thing that binds it.
+	// every other). It is informational: the proxy does not read it. The
+	// proxy's REST gate pins the organisation from the dispatch-time ADOGrants
+	// in its own configuration (proxy.ADOGrantConfig), never from a resolve.
 	Organisation string `json:"organisation,omitempty"`
 	// Capabilities is the same lane's GRANTED capability set, in the
-	// internal/adoscope vocabulary, as the run was dispatched with it. It is what
-	// the proxy's capability gate holds each request to: the token itself
-	// carries every scope the person consented to and bounds nothing. Empty on
-	// every other lane.
+	// internal/adoscope vocabulary. The gate does NOT hold requests to it: it
+	// reads the dispatch-time ADOGrants. The proxy reads it in one place only,
+	// on a capability ask's resolve (ado_hold.go), to confirm the capability it
+	// asked for came back granted. Empty on every other lane.
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 

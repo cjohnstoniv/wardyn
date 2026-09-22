@@ -399,6 +399,9 @@ func readWrite(r route) bool {
 // Azure DevOps area appearing in a future API version is refused until someone
 // adds it here, rather than inheriting whatever the nearest area was granted.
 func classifyWrite(method string, r route, req Request) (Verdict, error) {
+	if packagePublish(r) {
+		return Verdict{Capability: CapPackagingWrite}, nil
+	}
 	switch r.area {
 	case "wit":
 		return witWrite(r, req)
@@ -427,6 +430,21 @@ func classifyWrite(method string, r route, req Request) (Verdict, error) {
 	return Verdict{Capability: CapUnclassifiedWrite}, nil
 }
 
+// packageProtocols are the feed protocols a package client publishes through.
+var packageProtocols = []string{"npm", "nuget", "pypi", "maven", "upack"}
+
+// packagePublish reports whether r is a package client's own feed route on the
+// packages host: [{project}/]_packaging/{feed}/{protocol}/…, with no _apis
+// segment. Positional, like every other rule here: _packaging must be the first
+// segment after the organisation, or the second when a project precedes it.
+func packagePublish(r route) bool {
+	if r.apis >= 0 || (r.host != "pkgs.dev.azure.com" && !strings.HasSuffix(r.host, ".pkgs.visualstudio.com")) {
+		return false
+	}
+	i := slices.Index(r.segs, "_packaging")
+	return (i == 0 || i == 1) && i+2 < len(r.segs) && slices.Contains(packageProtocols, r.segs[i+2])
+}
+
 // witWrite is the work-item area. The $batch door is the interesting one — see
 // batchIsWorkItemsOnly.
 func witWrite(r route, req Request) (Verdict, error) {
@@ -441,9 +459,14 @@ func witWrite(r route, req Request) (Verdict, error) {
 // gitCodeWriteResources are the git sub-resources that change code without
 // touching a branch policy or the repository object itself.
 var gitCodeWriteResources = []string{
-	"items", "commits", "merges", "cherrypicks", "reverts",
-	"annotatedtags", "importrequests", "forksyncrequests", "suggestions",
+	"items", "commits", "merges", "cherrypicks", "reverts", "suggestions",
 }
+
+// gitRefMoveResources create or move a ref whose name this catalogue does not
+// read out of the body: an annotated tag, or a fork sync onto a branch. Every
+// REST ref move is held to policy_bypass (adoRefProtected, ado_gate.go), so
+// these are too.
+var gitRefMoveResources = []string{"annotatedtags", "forksyncrequests"}
 
 // gitWrite is the git area, which carries four different capabilities behind
 // one scope: the repository object (CapRepoAdmin), its policies
@@ -472,7 +495,8 @@ func gitWrite(method string, r route, req Request) (Verdict, error) {
 // called.
 func gitRepositoryWrite(method string, r route, req Request) (Verdict, error) {
 	switch res := r.at(4); res {
-	case "":
+	case "", "importrequests":
+		// An import request replaces the repository's content wholesale.
 		return Verdict{Capability: CapRepoAdmin}, nil
 	case "refs", "pushes":
 		return refWrite(req)
@@ -483,6 +507,9 @@ func gitRepositoryWrite(method string, r route, req Request) (Verdict, error) {
 	case "permissions":
 		return Verdict{Capability: CapSecurityAdmin}, nil
 	default:
+		if slices.Contains(gitRefMoveResources, res) {
+			return Verdict{Capability: CapPolicyBypass}, nil
+		}
 		if slices.Contains(gitCodeWriteResources, res) {
 			return Verdict{Capability: CapCodeWrite}, nil
 		}

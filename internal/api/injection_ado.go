@@ -285,11 +285,11 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		Value:     value,
 		JTI:       minted.JTI,
 		ExpiresAt: access.ExpiresAt.UnixMilli(),
-		// The per-request organisation pin's input: the credential is not
-		// organisation-bound, so the proxy must be told which one it may reach.
+		// Informational only: the proxy's gate pins the organisation from the
+		// dispatch-time ADOGrants in its own configuration, not from this.
 		Organisation: snapshot.Organisation,
-		// The capability gate's input, handed over explicitly rather than
-		// re-derived proxy-side: the grant's own capabilities, never the token's.
+		// Not the gate's input either (dispatch-time ADOGrants are); the hold
+		// reads it only to confirm a capability ask came back granted.
 		Capabilities: adoCapabilityStrings(responseCaps),
 	})
 	return true
