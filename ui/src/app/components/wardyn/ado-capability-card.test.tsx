@@ -140,8 +140,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText(/Approving lets every push from this run through/)).toBeInTheDocument();
-    expect(within(card).queryByText(/every request from this run/)).not.toBeInTheDocument();
+    expect(card.textContent).toMatch(/Approving lets every push from this run through/);
+    expect(card.textContent).not.toMatch(/every request from this run/);
   });
 
   it("F1: a pull-request escalation's consequence sentence says 'action'", async () => {
@@ -156,7 +156,7 @@ describe("AdoCapabilityCard — the escalation states", () => {
       />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText(/Approving lets every action from this run through/)).toBeInTheDocument();
+    expect(card.textContent).toMatch(/Approving lets every action from this run through/);
   });
 
   it("picking Once from the caret stages it, and Approve/Deny both then send scope once", async () => {
@@ -199,15 +199,17 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(screen.getByText(/nothing here is saved to the workspace/)).toBeInTheDocument();
   });
 
-  // F7 — a deny now sticks for the rest of the run (#414); the scope readout
-  // sits by Approve only.
-  it("F7: Denying says it refuses this request for the rest of the run, and no scope readout sits by Deny", async () => {
+  // F7 — a deny now sticks for the rest of the run (#414, unless a later
+  // run-scoped approve lifts it); the scope readout sits by Approve only.
+  it("F7: Denying says it refuses this push for the rest of the run, unless later allowed for the whole run — and no scope readout sits by Deny", async () => {
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText(/Denying refuses this push for the rest of the run/)).toBeInTheDocument();
-    expect(within(card).queryByText(/may ask again/)).not.toBeInTheDocument();
+    expect(card.textContent).toMatch(
+      /Denying refuses this push for the rest of the run, unless this kind of change is later allowed for the whole run\./,
+    );
+    expect(card.textContent).not.toMatch(/may ask again/);
     const denyBtn = within(card).getByRole("button", { name: "Deny" });
     // The readout sits once, immediately after the caret/Deny group — assert
     // there is exactly one "Scope:" node and it precedes Deny in DOM order
@@ -217,16 +219,21 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(denyBtn).toBeInTheDocument();
   });
 
-  // F7 — the hold's honest expiry.
-  it("F7: says the request is held while requested_at is recent", async () => {
+  // F7 — the hold's honest expiry: the card can only ESTIMATE from
+  // requested_at, so it never claims a number ("four minutes") it cannot
+  // verify (round-2 N5).
+  it("F7: says the request may be waiting, honestly, while requested_at is recent", async () => {
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText(/is held at the proxy for up to four minutes/)).toBeInTheDocument();
+    expect(card.textContent).toMatch(
+      /The push may be waiting at the proxy for a short time; approving lets it through now or the next time the run asks\./,
+    );
+    expect(card.textContent).not.toMatch(/four minutes/);
   });
 
-  it("F7: says the request was not held once requested_at is more than four minutes old", async () => {
+  it("F7: says no longer waiting once requested_at is more than four minutes old", async () => {
     renderCard(
       <AdoCapabilityCard
         item={escalation({ requested_at: new Date(Date.now() - 5 * 60_000).toISOString() })}
@@ -238,7 +245,29 @@ describe("AdoCapabilityCard — the escalation states", () => {
       />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText(/was not held — approving lets it through the next time the run asks/)).toBeInTheDocument();
+    expect(card.textContent).toMatch(/No longer waiting — approving lets the push through the next time the run asks\./);
+  });
+
+  // N2 — round-2 fix: the bold-labeled lead-in used to DUPLICATE the canon
+  // sentence's own opening word ("Approving Approving lets…", "Denying
+  // Denying…"). Assert the FULL rendered sentence text for each, exactly as
+  // the mock draws it (index.html:512): one sentence, first word bold.
+  it("N2: Approving/Denying render as ONE sentence each, first word bold, never doubled", async () => {
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    const approvingP = within(card).getByText(/lets every push from this run through/).closest("p")!;
+    expect(approvingP.textContent).toBe(
+      "Approving lets every push from this run through until it ends. Nothing carries to the next run.",
+    );
+    expect(approvingP.querySelector("b")?.textContent).toBe("Approving");
+
+    const denyingP = within(card).getByText(/refuses this push for the rest of the run/).closest("p")!;
+    expect(denyingP.textContent).toBe(
+      "Denying refuses this push for the rest of the run, unless this kind of change is later allowed for the whole run.",
+    );
+    expect(denyingP.querySelector("b")?.textContent).toBe("Denying");
   });
 
   // F6 — Q3: policy_bypass/policy_admin get a plain Approve + destructive Deny.

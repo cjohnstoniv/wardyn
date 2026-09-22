@@ -16,10 +16,15 @@
 // 22.7 kB of lazy-side copy in the first load, which pushed the entry chunk
 // past bundle-split.test.ts's budget (578,279 B against 573,440).
 //
-// This module imports NOTHING, so the eager graph pays only for the sentence it
-// actually renders. model-access-copy.ts RE-EXPORTS it, so there is still one
+// This module imports NOTHING except ado-capability-copy.ts, which is itself
+// import-free (a flat `as const` object, no React, no other copy modules) —
+// so the eager graph pays only for the sentences it actually renders, the
+// same property that made this a leaf module in the first place.
+// bundle-split.test.ts is the gate that would catch a regression here.
+// model-access-copy.ts RE-EXPORTS waitingReauth, so there is still one
 // definition and the lazy-side surfaces keep the import path their canon row
 // names.
+import { ADO_CAPABILITY } from "./ado-capability-copy";
 //
 // DRAFT (M2 canon pending) — round-2 UX S8: the COUNT stays. A count-free
 // string would hide a co-pending egress approval, and the person would sign in
@@ -44,10 +49,11 @@ export const waitingReauth = (n: number, mine = true): string => {
 // waitingAdoConsent — the SAME string shape as waitingReauth, for the
 // Azure DevOps Entra-consent hold (S10 round 2, F13). Its own function, not
 // a `provider` argument on waitingReauth: the two must never share a call
-// site that could silently pass the wrong provider's mine/count pair. PLAIN,
-// NOT CANON — see live-approvals.tsx's ADO_CONSENT_STRIP_HEADING, which
-// carries the same "no §7 row for a strip-level sentence" note.
+// site that could silently pass the wrong provider's mine/count pair.
+// WAITING_ADO_MINE/OWNER are canon (§10.5, round-2 fix N6) — the count
+// suffix (`· {n-1} more waiting`) is composed here, same as waitingReauth,
+// and is not itself a frozen string (a number is not canon).
 export const waitingAdoConsent = (n: number, mine = true): string => {
-  const head = mine ? "Waiting for your Azure DevOps sign-in" : "Waiting for the owner's Azure DevOps sign-in";
+  const head = mine ? ADO_CAPABILITY.WAITING_ADO_MINE : ADO_CAPABILITY.WAITING_ADO_OWNER;
   return n > 1 ? `${head} · ${n - 1} more waiting` : head;
 };

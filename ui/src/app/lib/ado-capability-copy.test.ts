@@ -89,7 +89,7 @@ const EXPECTED: Array<[string, string]> = [
   ["REQ_SCOPE_UNTIL_REFUSED", "REQ_SCOPE_UNTIL_REFUSED"],
   ["REQ_SCOPE_ALWAYS_REFUSED", "REQ_SCOPE_ALWAYS_REFUSED"],
   ["REQ_CONSENT_CHIP", "REQ_CONSENT_CHIP"],
-  ["REQ_CONSENT_BODY", "REQ_CONSENT_BODY(capability)"],
+  ["REQ_CONSENT_BODY", "REQ_CONSENT_BODY"],
   ["REQ_CONSENT_CTA", "REQ_CONSENT_CTA"],
   ["REQ_CONSENT_OTHER_BODY", "REQ_CONSENT_OTHER_BODY(person)"],
   ["REQ_NOT_YOURS_CHIP", "REQ_NOT_YOURS_CHIP"],
@@ -112,12 +112,18 @@ const EXPECTED: Array<[string, string]> = [
   ["REQ_REF_CLASS_PROTECTED", "REQ_REF_CLASS_PROTECTED"],
   ["REQ_CONSENT_HEADING", "REQ_CONSENT_HEADING"],
   ["REQ_HELD_EXPIRED", "REQ_HELD_EXPIRED(thing)"],
+  ["REQ_RUN_UNAVAILABLE", "REQ_RUN_UNAVAILABLE"],
+  ["SCOPE_UNTIL_LABEL", "SCOPE_UNTIL_LABEL"],
+  ["SCOPE_ALWAYS_LABEL", "SCOPE_ALWAYS_LABEL"],
+  ["STRIP_HEADING_CONSENT", "STRIP_HEADING_CONSENT"],
+  ["WAITING_ADO_MINE", "WAITING_ADO_MINE"],
+  ["WAITING_ADO_OWNER", "WAITING_ADO_OWNER"],
 ];
 
 describe("ado-capability-copy — the hardcoded expected surface", () => {
   it("is not empty (a mutation guard: an emptied module must fail this suite)", () => {
     expect(EXPECTED.length).toBeGreaterThan(0);
-    expect(EXPECTED.length).toBe(50);
+    expect(EXPECTED.length).toBe(56);
   });
 
   it("the module exports EXACTLY the expected keys — no fewer, no more", () => {

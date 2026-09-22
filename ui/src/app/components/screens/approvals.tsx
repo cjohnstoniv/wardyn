@@ -637,7 +637,14 @@ function PendingCard({
   // own audience predicate.
   const principal = usePrincipal();
   const [adoBusy, setAdoBusy] = React.useState(false);
-  if (isAdoCapabilityRequest(item) || isAdoConsentRequest(item)) {
+  // N1 (round 2): PendingCard only ever receives PENDING rows today
+  // (pendingItems is fetched via api.listApprovals("PENDING")), but the
+  // state check is explicit here too — defense-in-depth against this
+  // component ever being reused for a broader list, and the single rule
+  // "AdoCapabilityCard only ever renders a PENDING row" stays true
+  // everywhere it mounts, not just by construction at the one caller that
+  // happens to pre-filter today.
+  if ((isAdoCapabilityRequest(item) || isAdoConsentRequest(item)) && item.state === "PENDING") {
     return (
       <div className="space-y-2">
         <RunContextRow runId={item.run_id} onRun={setRun} />

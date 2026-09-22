@@ -641,11 +641,11 @@ already done (§5 #10).
 | `REQ_BLAST_POLICY_ADMIN(repo)` | creating, changing and deleting branch policies anywhere in {repo} — including the ones that would hold back its own pushes. |
 | `REQ_WHAT_PR(pr, person)` | the run completes pull request {pr}, as {person}. |
 | `REQ_BLAST_PR(repo)` | opening, updating, commenting on and completing pull requests anywhere in {repo}. Completing one past its own policies is a separate ask. |
-| `REQ_HELD(thing)` | The {thing} is held at the proxy for up to four minutes while you answer. Nothing has reached Azure DevOps. |
+| `REQ_HELD(thing)` | The {thing} may be waiting at the proxy for a short time; approving lets it through now or the next time the run asks. |
 | `REQ_SCOPE_READOUT(scope)` | Scope: {scope} |
 | `REQ_APPROVING_ONCE(thing)` | Approving lets this one {thing} through. The next one asks again. |
 | `REQ_APPROVING_RUN(thing)` | Approving lets every {thing} from this run through until it ends. Nothing carries to the next run. |
-| `REQ_DENYING(thing)` | Denying refuses this {thing} for the rest of the run. The run keeps going, but this same request is refused every time it asks again. |
+| `REQ_DENYING(thing)` | Denying refuses this {thing} for the rest of the run, unless this kind of change is later allowed for the whole run. |
 | `REQ_SCOPE_ONCE_HINT(thing)` | This one {thing} goes through. The next one asks again. |
 | `REQ_SCOPE_RUN_HINT(thing)` | Every {thing} from this run goes through until it ends. (default) |
 | `REQ_SCOPE_UNTIL_REFUSED` | Refused for Azure DevOps capabilities: a capability can't outlive the run that was granted it. |
@@ -662,7 +662,7 @@ already done (§5 #10).
 | `REQ_UNCLASSIFIED_BODY` | An Azure DevOps write Wardyn doesn't recognise is refused rather than guessed at, because the card couldn't tell you truthfully what you'd be allowing. There is no setting that changes this — if a tool you need keeps hitting it, tell your admin what it was trying to do. |
 | `REQ_CONSENT_CHIP` | Needs your Microsoft consent |
 | `REQ_CONSENT_SOURCE(ts)` | Azure DevOps · you allowed this at {ts} · still held |
-| `REQ_CONSENT_BODY(capability)` | You allowed it, but your Azure DevOps connection doesn't cover {capability} yet. Reconnecting asks Microsoft for that permission — you'll see a consent screen for it, and nothing else changes. The run's request stays held meanwhile. |
+| `REQ_CONSENT_BODY` | Microsoft needs your consent before Azure DevOps lets this run use this access. Reconnecting asks Microsoft for it — you'll see a consent screen, and nothing else changes. The run's request stays held meanwhile. |
 | `REQ_CONSENT_CTA` | Allow and continue |
 | `REQ_CONSENT_OTHER_BODY(person)` | You allowed it, but only {person} can give Microsoft the extra permission it needs — the run acts as {person}, and consent is theirs to give. They've been shown this on their Getting started page. |
 | `REQ_NOT_YOURS_CHIP` | Not yours to decide |
@@ -686,13 +686,31 @@ already done (§5 #10).
 | `COL_WHERE` | Where |
 | `COL_OUTCOME` | Outcome |
 
-**Post-freeze correction (S10 round 2, lead-approved):** `REQ_DENYING` was frozen before #414 taught
-`answerADOCapability` that a deny STICKS for the rest of the run — the same canonical request is
-refused by naming the denied approval, regardless of the scope it was denied at (`adoCapDeniedForRunRefusal`).
-"The run keeps going and may ask again" was true when a deny only ever bound the one held request; it
-is not true now. The row above carries the corrected text. Because a deny's SCOPE choice no longer
-changes what happens, the `Scope: {scope}` readout (`REQ_SCOPE_READOUT`) is not shown next to Deny —
-only next to Approve, where once/run still means something.
+**Post-freeze corrections (S10 round 2 — owner-delegated to the lead, 2026-09-22):**
+
+- `REQ_DENYING` was frozen before #414 taught `answerADOCapability` that a deny STICKS for the rest
+  of the run — the same canonical request is refused by naming the denied approval, regardless of the
+  scope it was denied at (`adoCapDeniedForRunRefusal`). "The run keeps going and may ask again" was
+  true when a deny only ever bound the one held request; it is not true now. The row above also names
+  the ESCAPE HATCH the sticky refusal has: `adoStanding` still honours a later `run`-scoped APPROVAL of
+  the same capability, so "unless this kind of change is later allowed for the whole run" is the
+  accurate whole of it — a sticky deny is not permanent, an `Approve` at `run` scope lifts it. Because
+  a deny's SCOPE choice no longer changes what a DENY itself does, the `Scope: {scope}` readout
+  (`REQ_SCOPE_READOUT`) is not shown next to Deny — only next to Approve, where once/run still means
+  something.
+- `REQ_HELD` / `REQ_HELD_EXPIRED` (§10.3) claimed "up to four minutes" as if the card could always
+  tell a still-held request from one whose hold already lapsed server-side and was refused. It cannot:
+  no expiry timestamp reaches the client (see ado-capability-copy.ts's own note), so `stillHeld`'s
+  240s window is a CLIENT-SIDE ESTIMATE, not a read fact. Both rows are reworded to stop promising a
+  number the card cannot verify, while still being honest that approving works either way (it lets a
+  genuinely-still-held request through, or raises a fresh one if the old hold already lapsed).
+- `REQ_CONSENT_BODY` said "You allowed it, but…", which is only true when the consent gap follows a
+  person's own approval of an escalation. It is equally reachable when a capability is CONSENTED-yet-
+  ungranted at dispatch (the run started with it in `sn.Capabilities`, and Entra later refuses the
+  redemption) — nobody "allowed" anything in that path; the run simply asked. The reworded sentence is
+  true in both cases. It DROPS the `{capability}` parameter (no capability name reaches the wire scope
+  either way — see this card's own doc comment), so this is a plain string as of round 2, not a
+  function.
 
 ### 7.7 `ADO` — the launch door and the after view
 
@@ -921,16 +939,18 @@ ado-capability-card.tsx's own doc comment for why it is not paired.
 | `REQ_REF_CLASS_PROTECTED` | Protected by a branch policy |
 | `REQ_CONSENT_HEADING` | Azure DevOps needs more access |
 
-### 10.3 `ADO` — the hold's honest expiry
+### 10.3 `ADO` — the hold's honest expiry (owner-delegated to the lead, 2026-09-22)
 
-`REQ_HELD` (§7.6) says the request is held "for up to four minutes" — true only while it actually
-still is. Past that window the row is no longer parked at the proxy (the hold ran out server-side, same
-`HOLD_TIMEOUT_MS`-shaped ceiling every other hold in this console carries); saying so keeps the card
-honest instead of quietly wrong once four minutes pass.
+No expiry timestamp reaches the client for an Azure DevOps hold (unlike egress's HOLD_TIMEOUT_MS), so
+the card can only ESTIMATE whether a request is still parked at the proxy from its own `requested_at`
+— it cannot tell a still-held request from one whose hold already lapsed server-side and was refused.
+`REQ_HELD`'s original "for up to four minutes" claimed a precision the card does not have; both rows
+below say only what is actually true either way: approving works whether the hold is live (it lets the
+parked request through) or already lapsed (it raises a fresh one the next time the run asks).
 
 | Key | String |
 |---|---|
-| `REQ_HELD_EXPIRED(thing)` | The {thing} was not held — approving lets it through the next time the run asks. |
+| `REQ_HELD_EXPIRED(thing)` | No longer waiting — approving lets the {thing} through the next time the run asks. |
 
 ### 10.4 `ADO` — the decided badge
 
@@ -939,3 +959,23 @@ LIST's own outcome column). Round 2 extends `approvalScopeBadge` (`wardyn/copy.t
 decided Azure DevOps escalation too, so the /approvals and run-detail decided rows say "Allowed once" /
 "Allowed for this run" rather than the lowercase `once`/`this run` egress badge shares with every other
 kind. No new row: this section exists only to record the pointer.
+
+### 10.5 `ADO` — the remaining mount-site strings (owner-delegated to the lead, 2026-09-22)
+
+Round-2 review (N6): every string the card and its mount sites render was hardcoded somewhere rather
+than pinned — a run-fetch error, the scope caret's two disabled labels, the live strip's consent
+heading, and the Runs board's Azure DevOps sign-in chip. Moved here so the parity test covers them too.
+
+| Key | String |
+|---|---|
+| `REQ_RUN_UNAVAILABLE` | Couldn't load this run — try again. |
+| `SCOPE_UNTIL_LABEL` | Until… |
+| `SCOPE_ALWAYS_LABEL` | Always |
+| `STRIP_HEADING_CONSENT` | Azure DevOps sign-in needed — sign in to let this run's Azure DevOps access through |
+| `WAITING_ADO_MINE` | Waiting for your Azure DevOps sign-in |
+| `WAITING_ADO_OWNER` | Waiting for the owner's Azure DevOps sign-in |
+
+`WAITING_ADO_MINE`/`WAITING_ADO_OWNER` back `waitingAdoConsent(n, mine)` (`lib/reauth-waiting-copy.ts`)
+exactly the way `REAUTH_ROW`'s AWS strings back `waitingReauth` — the count suffix (`· {n-1} more
+waiting`) is composed client-side, same as that function, and is not itself a frozen string (a number
+is not canon).

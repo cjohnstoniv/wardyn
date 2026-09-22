@@ -81,20 +81,31 @@ export const ADO_CAPABILITY = {
   REQ_FIELD_REQUEST: `Request`,
   REQ_FIELD_ACTS_AS: `Acts as`,
   REQ_ACTS_AS_HINT: (person: string) => `Whatever you allow happens as ${person} on Azure DevOps, and Azure DevOps records it that way.`,
-  REQ_HELD: (thing: string) => `The ${thing} is held at the proxy for up to four minutes while you answer. Nothing has reached Azure DevOps.`,
+  // Post-freeze correction (§7.6's own note, S10 round 2 — owner-delegated to
+  // the lead, 2026-09-22): no expiry timestamp reaches the client for an ADO
+  // hold, so "for up to four minutes" claimed a precision the card doesn't
+  // have. REQ_HELD_EXPIRED (§10.3) is its honest "already lapsed" twin.
+  REQ_HELD: (thing: string) => `The ${thing} may be waiting at the proxy for a short time; approving lets it through now or the next time the run asks.`,
   REQ_SCOPE_READOUT: (scope: string) => `Scope: ${scope}`,
   REQ_APPROVING_ONCE: (thing: string) => `Approving lets this one ${thing} through. The next one asks again.`,
   REQ_APPROVING_RUN: (thing: string) => `Approving lets every ${thing} from this run through until it ends. Nothing carries to the next run.`,
-  // Post-freeze correction (§7.6's own note, S10 round 2): a deny STICKS for
-  // the rest of the run since #414 — see that note for why "may ask again"
-  // stopped being true.
-  REQ_DENYING: (thing: string) => `Denying refuses this ${thing} for the rest of the run. The run keeps going, but this same request is refused every time it asks again.`,
+  // Post-freeze correction (§7.6's own note, S10 round 2 — owner-delegated to
+  // the lead, 2026-09-22): a deny STICKS for the rest of the run since #414,
+  // UNLESS a later `run`-scoped Approve of the same capability lifts it
+  // (adoStanding) — see that note for the full reasoning.
+  REQ_DENYING: (thing: string) => `Denying refuses this ${thing} for the rest of the run, unless this kind of change is later allowed for the whole run.`,
   REQ_SCOPE_ONCE_HINT: (thing: string) => `This one ${thing} goes through. The next one asks again.`,
   REQ_SCOPE_RUN_HINT: (thing: string) => `Every ${thing} from this run goes through until it ends. (default)`,
   REQ_SCOPE_UNTIL_REFUSED: `Refused for Azure DevOps capabilities: a capability can't outlive the run that was granted it.`,
   REQ_SCOPE_ALWAYS_REFUSED: `Refused for Azure DevOps capabilities: nothing here is saved to the workspace.`,
   REQ_CONSENT_CHIP: `Needs your Microsoft consent`,
-  REQ_CONSENT_BODY: (capability: string) => `You allowed it, but your Azure DevOps connection doesn't cover ${capability} yet. Reconnecting asks Microsoft for that permission — you'll see a consent screen for it, and nothing else changes. The run's request stays held meanwhile.`,
+  // Post-freeze correction (§7.6's own note, S10 round 2 — owner-delegated to
+  // the lead, 2026-09-22): "You allowed it, but…" is false on the dispatch-
+  // granted path (nobody approved anything; the run simply asked and Entra
+  // refused the redemption). Dropped the {capability} parameter too — no
+  // capability name reaches the wire scope on this path either, so this is a
+  // plain string, not a function, as of round 2.
+  REQ_CONSENT_BODY: `Microsoft needs your consent before Azure DevOps lets this run use this access. Reconnecting asks Microsoft for it — you'll see a consent screen, and nothing else changes. The run's request stays held meanwhile.`,
   REQ_CONSENT_CTA: `Allow and continue`,
   REQ_CONSENT_OTHER_BODY: (person: string) => `You allowed it, but only ${person} can give Microsoft the extra permission it needs — the run acts as ${person}, and consent is theirs to give. They've been shown this on their Getting started page.`,
   REQ_NOT_YOURS_CHIP: `Not yours to decide`,
@@ -125,5 +136,13 @@ export const ADO_CAPABILITY = {
   REQ_CONSENT_HEADING: `Azure DevOps needs more access`,
 
   // ---- §10.3 `ADO` — the hold's honest expiry ----
-  REQ_HELD_EXPIRED: (thing: string) => `The ${thing} was not held — approving lets it through the next time the run asks.`,
+  REQ_HELD_EXPIRED: (thing: string) => `No longer waiting — approving lets the ${thing} through the next time the run asks.`,
+
+  // ---- §10.5 `ADO` — the remaining mount-site strings ----
+  REQ_RUN_UNAVAILABLE: `Couldn't load this run — try again.`,
+  SCOPE_UNTIL_LABEL: `Until…`,
+  SCOPE_ALWAYS_LABEL: `Always`,
+  STRIP_HEADING_CONSENT: `Azure DevOps sign-in needed — sign in to let this run's Azure DevOps access through`,
+  WAITING_ADO_MINE: `Waiting for your Azure DevOps sign-in`,
+  WAITING_ADO_OWNER: `Waiting for the owner's Azure DevOps sign-in`,
 } as const;

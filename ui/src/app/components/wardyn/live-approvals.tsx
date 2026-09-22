@@ -21,7 +21,6 @@ import * as React from "react";
 import { ShieldAlert, Clock, Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
-  canDecideAdoCapability,
   canDecideApproval,
   decisionArgs,
   isAdoCapabilityRequest,
@@ -32,6 +31,7 @@ import {
   type DecisionOptions,
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
+import { ADO_CAPABILITY } from "../../lib/ado-capability-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
@@ -131,13 +131,6 @@ function clip(s: string): string {
 // belongs to and must never grow past it. A fifth held row pushing the session
 // off the screen is the strip defeating the surface it exists to serve.
 const STRIP_ROWS = 2;
-
-// S10 round 2 (F3) — the strip's own heading when every pending row is an
-// Azure DevOps consent request (never REAUTH_HEADING, which names AWS
-// outright). PLAIN, NOT CANON: §7.6/§10 give the card's own chip
-// (REQ_CONSENT_CHIP) but no strip-heading sentence, so this mirrors
-// REAUTH_HEADING's own rhythm rather than inventing a new register.
-const ADO_CONSENT_STRIP_HEADING = "Azure DevOps sign-in needed — sign in to let this run's Azure DevOps access through";
 
 // The strip's own precedence, read from the ONE rank table the board's glyph
 // reads (run-state-glyph.tsx): a held request — the sandbox is parked on this
@@ -404,7 +397,7 @@ export function LiveApprovals({
   const heading = allAwsReauth
     ? REAUTH_HEADING
     : allAdoConsent
-      ? ADO_CONSENT_STRIP_HEADING
+      ? ADO_CAPABILITY.STRIP_HEADING_CONSENT
       : anyHeld
         ? "Sandbox is waiting — approve to let it through"
         : pending.every((a) => a.kind === "egress_domain")
@@ -430,15 +423,15 @@ export function LiveApprovals({
             // The re-auth kind is EXCLUDED: "requires the admin role" is false
             // of a row the admin cannot decide either (canDecideApproval is
             // false for it on every tier), and the person it is addressed to is
-            // the one who can fix it. An ADO escalation this VIEWER owns is
-            // ALSO excluded (round-2 F2) — canDecideApproval doesn't know the
-            // ADO ownership carve-out, so without this a run's own owner read
-            // "requires the admin role" on a row their own card lets them
-            // decide, on the very same strip.
-            (a) =>
-              a.kind !== "credential_reauth" &&
-              !canDecideApproval(securityOperator, a.kind) &&
-              !(isAdoCapabilityRequest(a) && canDecideAdoCapability(securityOperator, run?.created_by === principal)),
+            // the one who can fix it. Every ADO escalation is ALSO excluded
+            // (round-2 F2/N4) — this component's own fetch is ownership-gated
+            // server-side at all four of its mount sites (the same
+            // `ownershipScopedList` trust the card itself is given below), so
+            // a row reaching `pending` at all already proves this viewer may
+            // decide it — with or without a `run` object in hand. Without
+            // this, a run's own owner read "requires the admin role" on a row
+            // their own card lets them decide, on the very same strip.
+            (a) => a.kind !== "credential_reauth" && !canDecideApproval(securityOperator, a.kind) && !isAdoCapabilityRequest(a),
           ) && (
           <span className="ml-auto text-meta font-normal normal-case text-muted-foreground">
             {SECURITY_ONLY_REASON}
@@ -454,8 +447,12 @@ export function LiveApprovals({
         // prop's doc) — round 1 hardcoded `operator` to true here on the
         // (wrong, see F2/F12) assumption every mount site gates on
         // ownsRunOrAdmin the way run-detail.tsx's GET /runs/{id} does; two of
-        // this component's four real mounts (record-pane.tsx) do not.
-        if (isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) {
+        // this component's four real mounts (record-pane.tsx) do not. N1
+        // (round 2): `pending` (this component's own state) is already
+        // PENDING-only (refresh() fetches listApprovals("PENDING", runId)),
+        // but the check is explicit here too — same reasoning as
+        // approvals.tsx's PendingCard.
+        if ((isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) && a.state === "PENDING") {
           return (
             <AdoCapabilityCard
               key={a.id}
@@ -463,6 +460,12 @@ export function LiveApprovals({
               securityOperator={securityOperator}
               viewerPrincipal={principal}
               run={run}
+              // N4 (round 2): this component's own fetch (listApprovals(state,
+              // runId)) is ownership-gated server-side at every one of its
+              // four mount sites — a row reaching `pending` at all already
+              // proves this viewer may decide it, `run` or no `run`. See the
+              // card's own doc for what this does and does not change.
+              ownershipScopedList
               busy={busy === a.id}
               onApprove={(opts: [DecisionOptions]) => decideAdo(a, true, opts)}
               onDeny={(opts: [DecisionOptions]) => decideAdo(a, false, opts)}

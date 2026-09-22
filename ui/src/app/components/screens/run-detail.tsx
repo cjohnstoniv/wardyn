@@ -724,7 +724,17 @@ function ApprovalsTab({
         // an explicit decision_scope (never the bodyless decide onDecide's
         // ReasonDialog path produces) and the ownership-aware decidability
         // rule canDecideApproval doesn't model.
-        if (isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) {
+        //
+        // N1 (round 2) — gated on PENDING: `approvals` here is EVERY state
+        // this run's approvals ever reached (unlike approvals.tsx's
+        // pendingItems / live-approvals.tsx's pending, both already PENDING-
+        // only), so a DECIDED Azure DevOps row reaches this map too. Without
+        // the state check it rendered live Approve/Deny buttons — and, on an
+        // ended run, a false "nothing to allow" — over a row nobody can act
+        // on any more. A decided row falls through to the generic branch
+        // below, whose `scopeBadge` (approvalScopeBadge, extended F11) reads
+        // "Allowed once"/"Allowed for this run" for it.
+        if ((isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) && a.state === "PENDING") {
           return (
             <AdoCapabilityCard
               key={a.id}

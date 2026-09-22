@@ -126,6 +126,24 @@ function stillHeld(requestedAt: string): boolean {
   return Number.isNaN(at) ? true : Date.now() - at < HOLD_WINDOW_MS; // unparseable — fail toward showing the hold
 }
 
+// boldFirstWord — round-2 fix N2: REQ_APPROVING_ONCE/RUN and REQ_DENYING
+// already OPEN with "Approving"/"Denying" (the mock, index.html:512, bolds
+// exactly that first word and renders the rest plain, ONE sentence). Round 1
+// additionally hand-wrote a bold "Approving"/"Denying" label in front of the
+// canon string, so the rendered text doubled: "Approving Approving lets…".
+// This renders the canon string's own first word in bold instead of
+// prepending a second one.
+function boldFirstWord(sentence: string): React.ReactNode {
+  const idx = sentence.indexOf(" ");
+  if (idx === -1) return sentence;
+  return (
+    <>
+      <b className="font-semibold text-foreground">{sentence.slice(0, idx)}</b>
+      {sentence.slice(idx)}
+    </>
+  );
+}
+
 // relativeAbsolute — REQ_SOURCE's {ts} placeholder wants a short clock
 // reading (the mock draws "14:02:11"), not a relative phrase;
 // relativeTime (lib/format) is built for the latter. A locale time string is
@@ -145,6 +163,7 @@ export function AdoCapabilityCard({
   securityOperator,
   viewerPrincipal,
   run,
+  ownershipScopedList = false,
   busy,
   onApprove,
   onDeny,
@@ -160,8 +179,22 @@ export function AdoCapabilityCard({
   // this caller (render a generic error, never "Not yours"); an object =
   // loaded. A securityOperator viewer never needs this at all (their
   // decidability doesn't depend on ownership), so loading/null never gates
-  // THEM — only a non-security viewer waits on it.
+  // THEM — only a non-security viewer waits on it. See ownershipScopedList
+  // for the other way run can legitimately be null/undefined.
   run: AdoCardRun | null | undefined;
+  // Round-2 fix N4: true when the CALLER's own list fetch is already
+  // ownership-gated server-side — live-approvals.tsx's listApprovals(state,
+  // run_id) is exactly this for every one of its four mount sites (a member
+  // only ever gets back rows for runs they own; an admin gets everyone's),
+  // so a row appearing in that list at all already proves this viewer may
+  // decide it, with or without a `run` object in hand. When true, `run` being
+  // null/undefined never shows a loading skeleton or a run-fetch error and
+  // never blocks decidability — it only means "Acts as" has nothing to show.
+  // Defaults false: screens/approvals.tsx and run-detail.tsx's Approvals tab
+  // both list org-wide/other-owned rows too (an admin's view), so a row
+  // being visible there does NOT by itself prove ownership — those callers
+  // keep the real loading/error/ownership gates.
+  ownershipScopedList?: boolean;
   busy: boolean;
   onApprove: (opts: [DecisionOptions]) => void;
   onDeny: (opts: [DecisionOptions]) => void;
@@ -178,17 +211,19 @@ export function AdoCapabilityCard({
     return <AdoConsentCard item={item} viewerPrincipal={viewerPrincipal} />;
   }
 
-  if (!securityOperator && run === undefined) {
+  const trusted = ownershipScopedList && (run === null || run === undefined);
+
+  if (!securityOperator && !trusted && run === undefined) {
     return (
       <div className="rounded-xl border border-border bg-card p-4" data-testid="ado-capability-card">
         <span className="block h-5 w-48 animate-pulse rounded bg-muted" aria-label="loading" />
       </div>
     );
   }
-  if (!securityOperator && run === null) {
+  if (!securityOperator && !trusted && run === null) {
     return (
       <div className="rounded-xl border border-border bg-card p-4" data-testid="ado-capability-card">
-        <p className="text-sm text-muted-foreground">Couldn't load this run — try again.</p>
+        <p className="text-sm text-muted-foreground">{ADO_CAPABILITY.REQ_RUN_UNAVAILABLE}</p>
       </div>
     );
   }
@@ -211,7 +246,7 @@ export function AdoCapabilityCard({
   const destructive = DESTRUCTIVE_CAPABILITIES.has(scopeData.capability);
   const runOwner = run?.created_by;
   const isOwner = !!runOwner && runOwner === viewerPrincipal;
-  const decidable = canDecideAdoCapability(securityOperator, isOwner);
+  const decidable = trusted || canDecideAdoCapability(securityOperator, isOwner);
   const where = scopeData.repo ? `${scopeData.org}/${scopeData.repo}` : scopeData.org;
   const source = ADO_CAPABILITY.REQ_SOURCE(relativeAbsolute(item.requested_at));
   const held = stillHeld(item.requested_at);
@@ -285,12 +320,9 @@ export function AdoCapabilityCard({
             </Button>
           </div>
           <p className="mt-2.5 text-meta text-muted-foreground">
-            <b className="font-semibold text-foreground">Approving</b>{" "}
-            {scope === "once" ? ADO_CAPABILITY.REQ_APPROVING_ONCE(thing) : ADO_CAPABILITY.REQ_APPROVING_RUN(thing)}
+            {boldFirstWord(scope === "once" ? ADO_CAPABILITY.REQ_APPROVING_ONCE(thing) : ADO_CAPABILITY.REQ_APPROVING_RUN(thing))}
           </p>
-          <p className="mt-0.5 text-meta text-muted-foreground">
-            <b className="font-semibold text-foreground">Denying</b> {ADO_CAPABILITY.REQ_DENYING(thing)}
-          </p>
+          <p className="mt-0.5 text-meta text-muted-foreground">{boldFirstWord(ADO_CAPABILITY.REQ_DENYING(thing))}</p>
           <p className="mt-2.5 text-meta text-muted-foreground">
             {held ? ADO_CAPABILITY.REQ_HELD(thing) : ADO_CAPABILITY.REQ_HELD_EXPIRED(thing)}
           </p>
@@ -357,11 +389,11 @@ function AdoScopeMenu({
           </button>
         ))}
         <div className={SCOPE_ITEM_CLS} aria-disabled>
-          <span className="font-medium text-muted-foreground">Until…</span>
+          <span className="font-medium text-muted-foreground">{ADO_CAPABILITY.SCOPE_UNTIL_LABEL}</span>
           <span className="text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_SCOPE_UNTIL_REFUSED}</span>
         </div>
         <div className={SCOPE_ITEM_CLS} aria-disabled>
-          <span className="font-medium text-muted-foreground">Always</span>
+          <span className="font-medium text-muted-foreground">{ADO_CAPABILITY.SCOPE_ALWAYS_LABEL}</span>
           <span className="text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_SCOPE_ALWAYS_REFUSED}</span>
         </div>
       </DropdownMenuContent>
@@ -380,9 +412,10 @@ function AdoScopeMenu({
 // which is exactly the kind of unverifiable claim AGENTS.md and §5's
 // never-claim rule refuse. This card is therefore its own, honest, simpler
 // state, titled by REQ_CONSENT_HEADING (§10.2) rather than a guessed
-// capability name — flagged in the S10 handoff. REQ_CONSENT_BODY's own
-// {capability} placeholder gets "Azure DevOps access" — the honest generic
-// the card can name, in place of the specific one it cannot.
+// capability name — flagged in the S10 handoff. REQ_CONSENT_BODY (round 2)
+// is a plain string, not a function: it no longer claims a capability name
+// (or "you allowed it") the wire scope cannot back on every path — see its
+// own doc note in ado-capability-copy.ts.
 //
 // "Allow and continue" (REQ_CONSENT_CTA) links to Settings rather than
 // starting a redemption: the actual Azure DevOps sign-in surface
@@ -414,7 +447,7 @@ function AdoConsentCard({
         </dd>
       </dl>
       <p className="mt-3 border-t border-border/60 pt-3 text-sm text-muted-foreground">
-        {isOwner ? ADO_CAPABILITY.REQ_CONSENT_BODY("Azure DevOps access") : ADO_CAPABILITY.REQ_CONSENT_OTHER_BODY(owner)}
+        {isOwner ? ADO_CAPABILITY.REQ_CONSENT_BODY : ADO_CAPABILITY.REQ_CONSENT_OTHER_BODY(owner)}
       </p>
       {isOwner && (
         <div className="mt-3">

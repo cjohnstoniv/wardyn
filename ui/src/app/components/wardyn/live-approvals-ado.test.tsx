@@ -17,6 +17,7 @@ import type { ApprovalRequest } from "../../lib/types";
 import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
 import type { AdoCardRun } from "./ado-capability-card";
+import { SECURITY_ONLY_REASON } from "./copy";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -122,6 +123,30 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
     const card = await screen.findByTestId("ado-capability-card");
     await userEvent.click(within(card).getByRole("button", { name: "Approve" }));
     expect(approveMock).toHaveBeenCalledWith("esc-1", expect.any(String), { scope: "run" });
+  });
+
+  // F2 test gap (round 2) — the strip's own SECURITY_ONLY_REASON hint must
+  // not show when the viewer CAN in fact decide this row (their own run).
+  it("F2: the strip header does NOT show SECURITY_ONLY_REASON to the run's own owner", async () => {
+    listApprovalsMock.mockResolvedValue([escalationRow()]);
+    mount({ principal: "dana@acme.example" });
+    await screen.findByTestId("ado-capability-card");
+    expect(screen.queryByText(SECURITY_ONLY_REASON)).not.toBeInTheDocument();
+  });
+
+  // N4 (round 2) — record-pane.tsx and demo-runner.tsx pass run={null}
+  // (they have no AgentRun in hand), but their OWN list fetch is already
+  // ownership-gated server-side — a row reaching `pending` at all already
+  // proves this viewer may decide it. Before this fix, run=null showed the
+  // owner "Couldn't load this run — try again." and the SECURITY_ONLY_REASON
+  // hint, over a row their own list scoping already proved was theirs.
+  it("N4: run=null still renders decidable for a plain viewer — no run-fetch error, no admin-only header", async () => {
+    listApprovalsMock.mockResolvedValue([escalationRow()]);
+    mount({ principal: "dana@acme.example", run: null });
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).queryByText(/Couldn't load this run/)).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.queryByText(SECURITY_ONLY_REASON)).not.toBeInTheDocument();
   });
 
   it("an ordinary tool_call row (no Azure DevOps lane) still renders the strip's plain one-liner", async () => {

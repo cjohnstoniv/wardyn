@@ -150,6 +150,111 @@ describe("RunDetailScreen — the Approvals tab's Azure DevOps capability card (
   });
 });
 
+// N1 (round 2) — listApprovals("", id) returns EVERY state, not just
+// PENDING, so a decided Azure DevOps row reaches this tab too. It must fall
+// through to the generic decided row (with the F11 OUTCOME badge), never to
+// AdoCapabilityCard, which has no "decided" rendering at all — before this
+// fix it showed live Approve/Deny buttons (and, on an ended run, a false
+// "nothing to allow") over a row nobody can act on any more.
+describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab (N1)", () => {
+  it("an APPROVED escalation falls through to the generic row with the 'Allowed for this run' badge", async () => {
+    getRunMock.mockResolvedValue(RUN);
+    listApprovalsMock.mockResolvedValue([
+      { ...ESCALATION, state: "APPROVED", decided_by: "dana@acme.example", decision_scope: "run" },
+    ]);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} securityOperator={false} principal="dana@acme.example">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+
+    await screen.findByText(/Decided by/);
+    expect(screen.queryByTestId("ado-capability-card")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Allowed for this run/)).toBeInTheDocument();
+  });
+
+  it("a DENIED escalation falls through to the generic row, no Approve/Deny buttons", async () => {
+    getRunMock.mockResolvedValue(RUN);
+    listApprovalsMock.mockResolvedValue([
+      { ...ESCALATION, state: "DENIED", decided_by: "dana@acme.example", decision_scope: "once" },
+    ]);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} securityOperator={false} principal="dana@acme.example">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+
+    await screen.findByText(/Decided by/);
+    expect(screen.queryByTestId("ado-capability-card")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
+  });
+
+  it("a resolved (APPROVED) Entra-consent row falls through to the generic row, not AdoConsentCard", async () => {
+    getRunMock.mockResolvedValue(RUN);
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "consent-1",
+        run_id: "run-1",
+        kind: "credential_reauth",
+        requested_scope: { lane: "azure_devops", mechanism: "entra_consent", owner: "dana@acme.example", provider_id: "row_1", scopes: [] },
+        state: "APPROVED",
+        decided_by: "dana@acme.example",
+        requested_at: new Date().toISOString(),
+      },
+    ]);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} securityOperator={false} principal="dana@acme.example">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+
+    await screen.findByText(/Decided by/);
+    expect(screen.queryByTestId("ado-consent-card")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Allow and continue" })).not.toBeInTheDocument();
+  });
+
+  it("an ended run with an APPROVED escalation never says 'nothing to allow'", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, state: "COMPLETED" });
+    listApprovalsMock.mockResolvedValue([
+      { ...ESCALATION, state: "APPROVED", decided_by: "dana@acme.example", decision_scope: "once" },
+    ]);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} securityOperator={false} principal="dana@acme.example">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+
+    await screen.findByText(/Decided by/);
+    expect(screen.queryByText(/nothing to allow/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Allowed once/)).toBeInTheDocument();
+  });
+});
+
 describe("RunDetailScreen — the Overview viewerBlocked banner (F2)", () => {
   it("does NOT claim the run's own owner is blocked — their own card lets them decide it", async () => {
     renderOwnedBy("dana@acme.example");
