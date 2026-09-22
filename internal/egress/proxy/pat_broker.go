@@ -248,6 +248,10 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// (git_broker.go) — the same HTTP/2 fallback applies to a forge.
 	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
+		seen := &egress.DecisionLog{Request: p.reqOf(r, host, 443)}
+		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, "git upstream error") {
+			return
+		}
 		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
 		return
 	}

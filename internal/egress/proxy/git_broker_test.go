@@ -196,6 +196,47 @@ func TestGitBrokerDeniesUngrantedRepo(t *testing.T) {
 	}
 }
 
+// TestGitBrokerReportsH2MismatchNotDialFailed is #382's App-broker case,
+// beside the existing HTTP/2 peer tests (h2peer_test.go): github answering
+// unnegotiated HTTP/2 on a clone must classify as
+// builtin:upstream-protocol-mismatch with a 400, exactly as the LLM and plain
+// lanes already do, not the generic builtin:dial-failed 502 this lane gave
+// before roundTripUpstream's error arm called refuseH2Mismatch.
+func TestGitBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
+	mintUp := newGitBrokerUpstream(t, "gh-inst-token")
+	forgeAddr := startH2MismatchPeer(t)
+	grantID := uuid.New()
+	buf := &bytes.Buffer{}
+	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Sink:            sink,
+		Resolver:        publicResolver{},
+		Dial:            splitDial(upstreamAddr(mintUp.srv), forgeAddr),
+		ControlPlaneURL: "https://wardynd.test:8080",
+		RunToken:        newTokenSource("RUNTOK"),
+		TLSClientConfig: testInsecureTLSConfig,
+		GitGrants:       map[string]uuid.UUID{"octocat/hello-world": grantID},
+	})
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodGet,
+		"/wardyn/gh/octocat/hello-world.git/info/refs?service=git-upload-pack", nil)
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := denyBody(rec); !strings.Contains(got, "peer answered HTTP/2") {
+		t.Errorf("body = %q, want the h2-mismatch sentence", got)
+	}
+	d := findDecision(t, buf, ruleSourceUpstreamProtocolMismatch)
+	if d.Via != viaDirect {
+		t.Errorf("via = %q, want %q", d.Via, viaDirect)
+	}
+}
+
 // TestGitBrokerRejectsBadRequests: traversal / short / unknown-verb / bad-service
 // requests never reach github, whether they 403 (matched-repo, bad rest) or 404
 // (malformed path that doesn't even parse to a key).

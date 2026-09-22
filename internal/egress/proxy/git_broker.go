@@ -273,6 +273,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// the MITM and plain lanes get (upstream_protocol.go).
 	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
+		seen := &egress.DecisionLog{Request: p.reqOf(r, githubHost, 443)}
+		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, githubHost, "git upstream error") {
+			return
+		}
 		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
 		return
 	}
