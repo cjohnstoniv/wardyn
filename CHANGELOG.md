@@ -28,6 +28,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **A repository's own `.claude/settings.json` could approve tool calls on a `tool_approvals=hold`
+  run before Wardyn's approval gate was asked.** Claude Code resolves `permissions.allow` rules
+  before it consults `--permission-prompt-tool`, so a matching rule in the workspace (which the
+  agent can also write) ran the tool and `wardyn-toolgate` never saw it (#358). The hold lane in
+  the claude-code image's `agent-run` now passes `--setting-sources user`, so project and local
+  settings are not loaded; managed settings still are. This is an interim fix. The agent can still
+  write its own user-level `~/.claude/settings.json`; THREAT-MODEL.md §5 states that residual, and
+  #333's managed settings close it.
 - **An unauthenticated caller that rotated its source address wrote one `auth.failed` audit row per
   refused request.** The 0.7.2 coalescer keyed a streak on the peer IP, so every change of address
   closed the streak and opened a new one: a bad-token drip from ten addresses, one a second, recorded
