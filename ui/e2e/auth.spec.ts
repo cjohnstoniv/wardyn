@@ -240,6 +240,55 @@ test.describe("auth / sign-in gate", () => {
   });
 });
 
+// #378/#379 — the SSO-only screen shape, driven by a mocked /healthz.
+//
+// The server-side refusal (validateSSOOnlyPosture, cmd/wardynd/boot_posture.go)
+// is proven by the Kubernetes SSO walk, not hermetically here (#379's own
+// acceptance says so) — this spec instead pins what the CONSOLE does once the
+// daemon reports the posture: /healthz's token_login/sso_only bits, mocked at
+// the network boundary the same way the outage spec below mocks **/healthz.
+test.describe("SSO-only screen shape (#378/#379)", () => {
+  test("sso_only:true, token_login:false renders one 'Sign in with SSO' button and nothing else", async ({ page }) => {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", sso: true, sso_only: true, token_login: false }),
+      }),
+    );
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    const ssoLink = page.getByRole("link", { name: "Sign in with SSO" });
+    await expect(ssoLink).toBeVisible();
+    await expect(ssoLink).toHaveAttribute("href", "/auth/login");
+
+    // No admin-token form: neither the field nor its label/instructions.
+    await expect(signInToken(page)).toHaveCount(0);
+    await expect(page.getByText("Admin token", { exact: true })).toHaveCount(0);
+
+    // No role-source caveat — sso_only makes the "everyone is an admin"
+    // branch it describes unreachable.
+    await expect(page.getByText(/comes from your SSO role assignment/i)).toHaveCount(0);
+  });
+
+  test("sso:true, sso_only:false, token_login:false: the admin-token form is gone but the role-source caveat stays", async ({ page }) => {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", sso: true, sso_only: false, token_login: false }),
+      }),
+    );
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    await expect(page.getByRole("link", { name: "Sign in with SSO" })).toBeVisible();
+    await expect(signInToken(page)).toHaveCount(0);
+    await expect(page.getByText(/comes from your SSO role assignment/i)).toBeVisible();
+  });
+});
+
 // R4/F027 — a 5xx from the daemon is not a statement about the caller.
 //
 // probeAuth used to return a bare boolean, so a 500 on the mount probe was

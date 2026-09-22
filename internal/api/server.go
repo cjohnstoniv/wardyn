@@ -186,6 +186,21 @@ type Config struct {
 	// LocalOperator is the principal stamped on runs/approvals/audit in
 	// LocalMode (e.g. "local:<os-user>"). Ignored unless LocalMode is true.
 	LocalOperator string
+	// MemberMode mirrors WARDYN_MEMBER_MODE (cmd/wardynd's validateMemberModePosture
+	// already enforces its precondition at boot). internal/api did not carry this
+	// bit before #378/#379: it exists here so handleHealthz can compute
+	// token_login — a member-mode desktop's admin token is a PROCESS credential
+	// (deploy/desktop/wardyn.env.m-prime.example), never a human sign-in path, so
+	// the console must not offer it as one.
+	MemberMode bool
+	// SSOOnly mirrors WARDYN_SSO_ONLY: the operator's declaration that SSO is the
+	// ONLY way into this console. cmd/wardynd's validateSSOOnlyPosture refuses
+	// boot unless that is actually true (OIDC configured, admin token/local
+	// mode/member mode/no-operator-list override all absent) before this field
+	// is ever set, so handleHealthz's sso_only bit — which the sign-in screen
+	// reads to drop the admin-token form and the role-derivation caveat — can
+	// never overclaim.
+	SSOOnly bool
 	// SubscriptionPostureOK reports whether this deployment may resolve a SHARED
 	// subscription credential (one operator's live Anthropic OAuth token) into an
 	// agent run. Decided once at boot by subscriptionInjectPosture (cmd/wardynd) —
