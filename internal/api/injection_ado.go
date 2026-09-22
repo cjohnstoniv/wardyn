@@ -107,9 +107,12 @@ func (c *adoEntraAccessCache) put(key string, a ADOEntraAccess) {
 
 // adoEntraAccessFor returns a live access token for owner, redeeming only when
 // no cached one has comfortably more life left than the proxy's own margin.
-func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owner string, scopes []string) (ADOEntraAccess, error) {
+//
+// fresh skips the cache: a cached token predates any sign-in since, so a
+// caller asking whether the person has NOW consented to something must redeem.
+func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owner string, scopes []string, fresh bool) (ADOEntraAccess, error) {
 	key := strings.Join([]string{owner, cfg.RowID, cfg.TenantID, cfg.ClientID, strings.Join(scopes, " ")}, "\x00")
-	if a, ok := s.adoEntraTokens.get(key, s.cfg.Now()); ok {
+	if a, ok := s.adoEntraTokens.get(key, s.cfg.Now()); ok && !fresh {
 		return a, nil
 	}
 	a, err := s.RedeemADOEntraAccess(ctx, cfg, owner, scopes)
@@ -186,6 +189,23 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(http.StatusForbidden, "capability_not_grantable", adoResolveScopeChangedRefusal, nil)
 	}
 
+	// THE CAPABILITY ARM (injection_ado_capability.go): the proxy asking for
+	// access this run was not dispatched with. It either answers here (403/423)
+	// or names what this resolve grants; the consent that grant needs is checked
+	// against the authority's answer below.
+	responseCaps := snapshot.Capabilities
+	var capAsk adoCapabilityGrant
+	var need []string
+	if r.URL.Query().Get("capability") != "" {
+		var ok bool
+		if capAsk, ok = s.answerADOCapability(w, r, claims, snapshot, siteCfg, grantID, fail); !ok {
+			return true
+		}
+		// Cannot fail: answerADOCapability admits grantable capabilities only.
+		need, _ = adoscope.ScopesFor([]adoscope.Capability{capAsk.capability})
+		responseCaps = capAsk.standing
+	}
+
 	// REQUEST THE ROW'S CONSENTED CEILING, not a subset computed from this run's
 	// capabilities. Two measured facts decide it: Entra ignores a narrower
 	// request for this resource and returns every consented scope anyway, so a
@@ -193,11 +213,44 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	// not consented to fails whole (AADSTS65001, classified consent_required)
 	// with no token at all — so a computed subset is a way to fail, never a way
 	// to narrow. The run's capabilities bound it at the proxy, not here.
-	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, cfg.Scopes)
+	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, cfg.Scopes, false)
+	if err == nil && capAsk.capability != "" && !adoScopesWithin(need, access.Scopes) {
+		access, err = s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, cfg.Scopes, true)
+	}
 	if err != nil {
 		class := ADOEntraClassify(err)
+		if capAsk.capability != "" && class == ADOEntraFailureConsentRequired {
+			return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
+		}
 		status, body := adoResolveFailureAnswer(class)
 		return fail(status, string(class), body, map[string]any{"owner": snapshot.OwnerSubject})
+	}
+	if capAsk.capability != "" {
+		// The authority's GRANTED set is the person's whole consent for the
+		// resource (measured), so a capability whose scope is missing from it
+		// is one they have not consented to — whoever approved it here.
+		if !adoScopesWithin(need, access.Scopes) {
+			return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
+		}
+		if capAsk.once != nil {
+			spender, ok := s.cfg.Store.(approvalOnceSpender)
+			if !ok {
+				return fail(http.StatusServiceUnavailable, "once_unspendable", adoCapUnspendableBody, nil)
+			}
+			spent, serr := spender.SpendApprovalOnce(ctx, capAsk.once.ID, minted.JTI)
+			if serr != nil {
+				return fail(http.StatusServiceUnavailable, "once_unspendable", adoCapUnspendableBody, nil)
+			}
+			if !spent {
+				// Another request spent it first: this one is a new attempt.
+				rows, rerr := s.runApprovals(ctx, claims.RunID, "")
+				if rerr != nil {
+					return fail(http.StatusServiceUnavailable, "approvals_unreadable", adoCapApprovalsUnreadable, nil)
+				}
+				s.raiseADOCapability(w, r, claims, snapshot, grantID, capAsk.capability, rows, fail)
+				return true
+			}
+		}
 	}
 
 	// The ONE wire shape, forced whatever the grant authored — the subscription
@@ -208,16 +261,24 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		s.cfg.MaskRegistry.Add(claims.RunID, []byte(access.AccessToken))
 		s.cfg.MaskRegistry.Add(claims.RunID, []byte(value))
 	}
+	data := map[string]any{
+		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,
+		"owner": snapshot.OwnerSubject, "provider_row": snapshot.ProviderRowID,
+		"organisation": snapshot.Organisation, "capabilities": responseCaps,
+		// What the AUTHORITY said the token carries — not what was asked
+		// for, and not a claim read out of the token.
+		"granted_scope": strings.Join(access.Scopes, " "),
+	}
+	if capAsk.capability != "" {
+		data["capability"] = capAsk.capability
+		if capAsk.once != nil {
+			// The join "approval X let request Z through": Z's jti is now
+			// the approval row's minted_jti.
+			data["approval_id"] = capAsk.once.ID
+		}
+	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"secret.read", types.ADOEntraAccessTokenSecret, "success",
-		mustJSON(map[string]any{
-			"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,
-			"owner": snapshot.OwnerSubject, "provider_row": snapshot.ProviderRowID,
-			"organisation": snapshot.Organisation, "capabilities": snapshot.Capabilities,
-			// What the AUTHORITY said the token carries — not what was asked
-			// for, and not a claim read out of the token.
-			"granted_scope": strings.Join(access.Scopes, " "),
-		})))
+		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:      minted.Injection.Host,
 		Header:    adoEntraInjectHeader,
@@ -229,7 +290,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		Organisation: snapshot.Organisation,
 		// The capability gate's input, handed over explicitly rather than
 		// re-derived proxy-side: the grant's own capabilities, never the token's.
-		Capabilities: adoCapabilityStrings(snapshot.Capabilities),
+		Capabilities: adoCapabilityStrings(responseCaps),
 	})
 	return true
 }

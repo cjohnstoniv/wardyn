@@ -68,28 +68,29 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 	if !ok {
 		return src
 	}
-	if msg := adoCheck(r, host, grant); msg != "" {
-		p.refuseADO(w, r, host, port, msg)
+	if msg, held := adoCheck(r, host, grant); msg != "" && !p.refuseADO(w, r, host, port, msg, held) {
 		return ""
 	}
 	return ruleSourceADO
 }
 
-// adoCheck returns "" when r may be forwarded, else the refusal sentence.
-func adoCheck(r *http.Request, host string, grant ADOGrant) string {
+// adoCheck returns "" when r may be forwarded, else the refusal sentence. held
+// is non-nil only for the ONE refusal a person may lift — a grantable
+// capability the run does not hold — and names what the request needs.
+func adoCheck(r *http.Request, host string, grant ADOGrant) (string, *adoscope.Verdict) {
 	path := adoRawPath(r)
 	if !adoOrgMatches(host, path, grant.Organization) {
-		return fmt.Sprintf("Wardyn refused this Azure DevOps request: this run is granted the %q organisation only.", grant.Organization)
+		return fmt.Sprintf("Wardyn refused this Azure DevOps request: this run is granted the %q organisation only.", grant.Organization), nil
 	}
 	if strings.ContainsFunc(path, func(c rune) bool { return c == '\\' || c < 0x20 || c == 0x7f }) {
-		return "Wardyn refused this Azure DevOps request: its path carries a backslash or a control character."
+		return "Wardyn refused this Azure DevOps request: its path carries a backslash or a control character.", nil
 	}
 	if adoGitPath(path) {
-		return "Wardyn refused this Azure DevOps request: git must use Wardyn's git broker, not the API connection."
+		return "Wardyn refused this Azure DevOps request: git must use Wardyn's git broker, not the API connection.", nil
 	}
 	peek, msg := adoPeekBody(r)
 	if msg != "" {
-		return msg
+		return msg, nil
 	}
 	v, err := adoscope.Classify(adoscope.Request{
 		Method:       r.Method,
@@ -101,16 +102,16 @@ func adoCheck(r *http.Request, host string, grant ADOGrant) string {
 		RefProtected: adoRefProtected,
 	})
 	if err != nil {
-		return "Wardyn refused this Azure DevOps request: it could not tell what access the request needs."
+		return "Wardyn refused this Azure DevOps request: it could not tell what access the request needs.", nil
 	}
 	if adoscope.Permits(grant.Capabilities, v) {
-		return ""
+		return "", nil
 	}
 	if !v.Capability.Grantable() {
-		return fmt.Sprintf("Wardyn refused this Azure DevOps request (%s). No run is granted this.", adoscope.Label(v.Capability))
+		return fmt.Sprintf("Wardyn refused this Azure DevOps request (%s). No run is granted this.", adoscope.Label(v.Capability)), nil
 	}
 	return fmt.Sprintf("Wardyn refused this Azure DevOps request: it needs %q (%s), and this run was not granted it.",
-		adoscope.Label(v.Capability), v.Capability)
+		adoscope.Label(v.Capability), v.Capability), &v
 }
 
 // adoRawPath is the request's path as it arrived on the wire, still
@@ -194,12 +195,21 @@ type adoRefusal struct {
 	EventID        int     `json:"eventId"`
 }
 
-// refuseADO is the ONE refusal point. A later slice that turns some refusals
-// into holds replaces this body.
+// refuseADO is the ONE refusal point, and the hold point. held names a
+// capability a person may grant (adoCheck); for that refusal alone the request
+// is escalated (awaitADOCapability) and, if a person approves it in time,
+// refuseADO reports true and the caller forwards. Every other refusal, and an
+// escalation that ends without an approval, is answered here.
 //
 // 403, never 401: git and several tools read a 401 as "try another
 // credential", which is not what happened.
-func (p *Proxy) refuseADO(w http.ResponseWriter, r *http.Request, host string, port int, msg string) {
+func (p *Proxy) refuseADO(w http.ResponseWriter, r *http.Request, host string, port int, msg string, held *adoscope.Verdict) bool {
+	if held != nil {
+		var ok bool
+		if ok, msg = p.awaitADOCapability(r.Context(), host, *held, adoRequestDetail(r), msg); ok {
+			return true
+		}
+	}
 	if p.sink != nil {
 		p.sink.emit(decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceADODenied))
 	}
@@ -213,4 +223,5 @@ func (p *Proxy) refuseADO(w http.ResponseWriter, r *http.Request, host string, p
 		ErrorCode: 0,
 		EventID:   3000,
 	})
+	return false
 }
