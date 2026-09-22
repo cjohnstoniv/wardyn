@@ -6,7 +6,23 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { EmptyState, ErrorState } from "./states";
+import { EmptyState, ErrorState, STATES } from "./states";
+
+// #457 (docs/design/signin-first-contact-canon.md): the shared default —
+// every pane that renders ErrorState with no message of its own reads this
+// one honest sentence, not "control plane"/"Please" jargon.
+describe("ErrorState — default message (#457)", () => {
+  it("renders STATES.ERROR_DEFAULT when no message is passed", () => {
+    render(<ErrorState />);
+    expect(screen.getByText(STATES.ERROR_DEFAULT)).toBeInTheDocument();
+  });
+
+  it("a passed message overrides the default", () => {
+    render(<ErrorState message="a specific failure" />);
+    expect(screen.getByText("a specific failure")).toBeInTheDocument();
+    expect(screen.queryByText(STATES.ERROR_DEFAULT)).not.toBeInTheDocument();
+  });
+});
 
 describe("ErrorState — action", () => {
   it("renders a passed action after the message", async () => {

@@ -9,6 +9,17 @@ import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
 import { HttpError } from "../../lib/api/core";
 
+// #457 (docs/design/signin-first-contact-canon.md): ErrorState's default
+// message was "We couldn't reach the Wardyn control plane. Please try
+// again." — jargon ("control plane") plus a "Please" no other refusal in the
+// console uses. Frozen; every pane that renders ErrorState with no `message`
+// of its own reads this same honest default.
+export const STATES = {
+  ERROR_TITLE: "Something went wrong",
+  ERROR_DEFAULT: "Wardyn isn't answering. Try again.",
+  RETRY: "Retry",
+} as const;
+
 // X3-F5 — the third arm every gated screen needs. A 403 is not "we couldn't
 // reach the control plane": the daemon answered, and answered about this
 // caller's tier, so a Retry over it retries forever. Screens that already had
@@ -92,14 +103,14 @@ export function ErrorState({
         <AlertTriangle className="size-5" />
       </div>
       <div className="space-y-1">
-        <Heading className="text-foreground">Something went wrong</Heading>
+        <Heading className="text-foreground">{STATES.ERROR_TITLE}</Heading>
         <p className="max-w-sm text-sm text-muted-foreground">
-          {message ?? "We couldn't reach the Wardyn control plane. Please try again."}
+          {message ?? STATES.ERROR_DEFAULT}
         </p>
       </div>
       {onRetry && (
         <Button variant="outline" size="sm" onClick={onRetry}>
-          <RotateCw className="size-3.5" /> Retry
+          <RotateCw className="size-3.5" /> {STATES.RETRY}
         </Button>
       )}
       {action}

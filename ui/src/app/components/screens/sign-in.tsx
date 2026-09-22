@@ -27,7 +27,7 @@ import {
   withLimit,
 } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
-import { SIGNIN } from "../../lib/people-access-copy";
+import { SIGNIN } from "../../lib/sign-in-copy";
 import { usePoll } from "../../lib/use-poll";
 
 // How often the gate re-asks /healthz for `sso` (R4/F027). Slower than the
@@ -35,19 +35,9 @@ import { usePoll } from "../../lib/use-poll";
 // daemon that came up after the gate rendered.
 const SSO_POLL_MS = 10000;
 
-// Unreachable (#212, design/first-contact-prototype) — was "Could not reach
-// the control plane.", which named the product nothing and gave no next
-// step. Now names Wardyn and names one thing to check.
-export const UNREACHABLE_ERROR =
-  "Wardyn isn't answering at this address. Check that the wardynd daemon is running, then try again.";
-
-// Token hint (#212, design/first-contact-prototype) — was "Paste the token
-// this control plane was started with (WARDYN_ADMIN_TOKEN; the compose demo
-// uses demo-admin-token).": it named an env var and a working demo
-// credential on a screen reachable by anyone, authenticated or not. Says
-// what belongs in the field and where the person saw it instead.
-export const TOKEN_HINT =
-  "The token this Wardyn daemon was started with. Your install printed it when it finished.";
+// #457: how many unanswered reads before the checking state says so out
+// loud (Q457-2) — see the `checking`/`unansweredReads` state below.
+const STILL_CHECKING_AFTER_READS = 3;
 
 // The OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
 // redirects a user-actionable login denial to "/?auth_error=<code>" instead
@@ -56,25 +46,10 @@ export const TOKEN_HINT =
 // with zero explanation. These are the stable, machine-readable codes
 // redirectAuthError sends; keep in sync with oidc.go's authError* consts.
 //
-// no_role/email_verified_absent are REWORDED (0.7 SSO Phase 3,
-// docs/design/people-access-prompt.md §7.7) — both now name "your Wardyn
-// admin" as who to ask, env var(s) demoted to a parenthetical, per that
-// section's rule that a signed-in human should never be told to go set an env
-// var themselves. claims_overage is the newest arm (an Entra groups/App-Roles
-// overage the server refuses rather than defaulting through — see
-// authErrorClaimsOverage in oidc.go); the generic fallback would have told this
-// human to try again, which can never work. role_check_unavailable is the one NEW arm (the People
-// step's preview panel and this screen share the same "couldn't check"
-// language). All three come from lib/people-access-copy.ts's SIGNIN table —
-// every other arm below is unchanged and out of scope this round.
-//
-// email_domain (#212, design/first-contact-prototype) — was "Ask an operator
-// to add it to WARDYN_OIDC_EMAIL_DOMAINS": an environment variable this
-// reader, who is not signed in, cannot reach, on a screen that must not
-// advertise a deployment's internals to someone unauthenticated. The remedy
-// belongs to the admin, not this person.
-export const EMAIL_DOMAIN_REFUSAL =
-  "This email's domain isn't allowed to sign in to this console. Ask your Wardyn admin to allow it.";
+// #457 (docs/design/signin-first-contact-canon.md) reworded every arm below
+// except email_unverified: no env var names, no "operator" — "your Wardyn
+// admin" throughout, since a locked-out reader cannot reach a chart value.
+// claims_overage is NOT a "try again": retrying resends the identical token.
 function authErrorMessage(code: string): string {
   switch (code) {
     case "email_unverified":
@@ -82,24 +57,19 @@ function authErrorMessage(code: string): string {
     case "email_verified_absent":
       return SIGNIN.EMAIL_VERIFIED_ABSENT;
     case "email_domain":
-      return EMAIL_DOMAIN_REFUSAL;
+      return SIGNIN.EMAIL_DOMAIN;
     case "no_role":
       return SIGNIN.NO_ROLE;
     case "role_check_unavailable":
       return SIGNIN.ROLE_CHECK_UNAVAILABLE;
-    // claims_overage: the IdP withheld the groups/App Roles claim entirely
-    // (too many groups to fit a sign-in token), so the role map matched
-    // nothing and the server refused to let the default role decide. NOT a
-    // "try again" — retrying sends the same token — which is exactly why it
-    // must not fall through to the generic arm below.
     case "claims_overage":
-      return "Your identity provider sent too many groups to list in a sign-in token, so this console can't tell what access you should have — and won't guess. Ask your Wardyn admin to map your role by App Role or email instead (the People step, or WARDYN_OIDC_ROLE_MAP). Trying again won't help.";
+      return SIGNIN.CLAIMS_OVERAGE;
     case "oidc_transient":
-      return "Your identity provider didn't respond in time. This is usually temporary — try signing in again.";
+      return SIGNIN.OIDC_TRANSIENT;
     case "oidc_config":
-      return "Sign-in with your identity provider failed. Try again; if it keeps happening, ask an operator to check the OIDC client configuration.";
+      return SIGNIN.OIDC_CONFIG;
     default:
-      return "Sign-in failed. Try again, or contact an operator.";
+      return SIGNIN.AUTH_FAILED;
   }
 }
 
@@ -126,13 +96,22 @@ export function SignIn({
   // Defaults false: without the flow mounted the link would 404, and an older
   // server simply omits the field.
   const [sso, setSso] = React.useState(false);
-  // #378/#379: whether the admin-token form can work at all, and whether SSO
-  // is the ONLY way in. tokenLogin defaults true (today's behaviour: the form
-  // always renders until the daemon says otherwise) and ssoOnly defaults
-  // false (today's caveat always renders under an enabled SSO button) — an
-  // older daemon that omits both fields must read exactly as it does today.
+  // #378/#379: whether the admin-token form can work at all. Defaults true
+  // (today's behaviour: the form renders until the daemon says otherwise) —
+  // an older daemon that omits the field must read exactly as it does today.
   const [tokenLogin, setTokenLogin] = React.useState(true);
-  const [ssoOnly, setSsoOnly] = React.useState(false);
+  // #457: whether /healthz has EVER answered (as opposed to the {} R4/F027
+  // already treats as "no answer" — see refreshSso below). Before the first
+  // real answer neither door is known, so neither renders (Q457-1) — a
+  // token field or an SSO button would be a claim about what's configured,
+  // and none has been earned yet. unansweredReads only matters while this is
+  // false; capped rather than left to grow forever on a daemon that never
+  // answers.
+  const [answered, setAnswered] = React.useState(false);
+  const [unansweredReads, setUnansweredReads] = React.useState(0);
+  const checking = !answered;
+  const stillChecking = checking && unansweredReads >= STILL_CHECKING_AFTER_READS;
+
   // R4/F027: health() resolves `{}` on a network error or ANY non-2xx, so a
   // single mount fetch against a daemon that is merely starting (or briefly
   // 5xx-ing) read as `sso: false` and left the SSO button unrendered — on an
@@ -140,21 +119,24 @@ export function SignIn({
   // because nothing ever asked again. So: only believe an answer that actually
   // came back, leave the last known value alone otherwise, and keep asking.
   const refreshSso = React.useCallback(() => {
-    // Still fetched for `sso` (plus token_login/sso_only, #378/#379): together
-    // they decide what the screen offers. trust_domain / identity_provider are
+    // Still fetched for `sso` (plus token_login, #378/#379): together they
+    // decide what the screen offers. trust_domain / identity_provider are
     // deliberately NOT read here any more.
     void health.health().then((h) => {
       // health() resolves the EMPTY object for "no answer" (health.ts:237-243:
       // `if (!res.ok) return {}` / `catch { return {} }`), and a real /healthz
       // body is never empty — it always carries at least status and version. So
       // an empty object is the outage, and the last known answer survives it.
-      if (Object.keys(h).length === 0) return;
+      if (Object.keys(h).length === 0) {
+        setUnansweredReads((n) => Math.min(n + 1, STILL_CHECKING_AFTER_READS));
+        return;
+      }
+      setAnswered(true);
       setSso(!!h.sso);
       // token_login is undefined on an older daemon — read that as `true`, not
       // `false`: the form is that daemon's only path in, and dropping it on a
       // missing field would be a regression, not a safer default.
       setTokenLogin(h.token_login !== false);
-      setSsoOnly(!!h.sso_only);
     });
   }, []);
   React.useEffect(refreshSso, [refreshSso]);
@@ -204,11 +186,9 @@ export function SignIn({
     } catch (e) {
       if (e instanceof HttpError && e.status === 401) {
         setToken(null); // a real rejection — don't keep carrying a bad token
-        setError(
-          "That admin token was rejected. Check the value and try again.",
-        );
+        setError(SIGNIN.TOKEN_REJECTED);
       } else {
-        setError(UNREACHABLE_ERROR);
+        setError(SIGNIN.UNREACHABLE_ERROR);
       }
     } finally {
       setLoading(null);
@@ -220,9 +200,11 @@ export function SignIn({
   // at all (!sso && !tokenLogin) — a local-mode desktop reaches this screen
   // reporting both false when a request is refused for a non-loopback peer or
   // host, and "no sign-in is configured" would be the wrong advice there.
-  // Reduces to !ssoOnly whenever tokenLogin is false with sso true (the
-  // sso-only shape, where the daemon has already refused every other way in).
   const showTokenForm = tokenLogin || !sso;
+  // #457: the OR divider (and the SSO door itself) only makes sense once
+  // checking is done — see the `checking` guard on both below.
+  const showSso = !checking && sso;
+  const showDivider = !checking && showTokenForm && showSso;
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4">
@@ -276,69 +258,80 @@ export function SignIn({
         <div className="rounded-xl border border-border bg-card p-6 shadow-floating">
           <div className="mb-4">
             <h2 className="text-base font-semibold text-foreground">Sign in</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              This console governs the agents on this host.
-            </p>
+            <p className="mt-1 text-sm text-muted-foreground">{SIGNIN.LEAD}</p>
           </div>
 
-          {/* #378/#379: the admin-token form renders only when the daemon says a
-              token can actually work (showTokenForm) — never on an SSO-only
-              deployment, where a live token is a second front door the posture
-              asserts does not exist. Every other cell (today's combined
-              deployment, a token-only deployment, and the "neither is known to
-              work" local-mode/misconfigured case) keeps rendering it. */}
-          {showTokenForm && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void submitToken();
-              }}
-              className="space-y-2"
-            >
-              <Label htmlFor="token" className="text-foreground">
-                Admin token
-              </Label>
-              <div className="relative">
-                <KeyRound className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  id="token"
-                  type="password"
-                  value={token}
-                  onChange={(e) => {
-                    setTokenValue(e.target.value);
-                    if (error) setError(null);
-                  }}
-                  className="pl-9 font-mono"
-                  autoComplete="off"
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">{TOKEN_HINT}</p>
-              <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                <Checkbox
-                  checked={remember}
-                  onCheckedChange={(v) => setRemember(v === true)}
-                  aria-label="Remember on this device"
-                />
-                Remember on this device
-                <span className="text-muted-foreground">
-                  (keeps the token after the browser closes)
-                </span>
-              </label>
-              <Button
-                type="submit"
-                className="mt-1 w-full"
-                disabled={!token || loading !== null}
+          {/* #457 (Q457-1): before /healthz has answered even once, neither
+              door is known to exist — no token field, no SSO button, no claim
+              either way, just an honest "checking" row. After
+              STILL_CHECKING_AFTER_READS unanswered reads (Q457-2), say the
+              checking is still going rather than sit silent. */}
+          {checking ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              <span>{stillChecking ? SIGNIN.STILL_CHECKING : SIGNIN.CHECKING}</span>
+            </div>
+          ) : (
+            // #378/#379: the admin-token form renders only when the daemon
+            // says a token can actually work (showTokenForm) — never on an
+            // SSO-only deployment, where a live token is a second front
+            // door the posture asserts does not exist. Every other cell
+            // (today's combined deployment, a token-only deployment, and
+            // the "neither is known to work" local-mode/misconfigured
+            // case) keeps rendering it.
+            showTokenForm && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void submitToken();
+                }}
+                className="space-y-2"
               >
-                {loading === "token" ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <>
-                    Sign in
-                    <ArrowRight className="size-4" />
-                  </>
-                )}
-              </Button>
-            </form>
+                <Label htmlFor="token" className="text-foreground">
+                  Admin token
+                </Label>
+                <div className="relative">
+                  <KeyRound className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="token"
+                    type="password"
+                    value={token}
+                    onChange={(e) => {
+                      setTokenValue(e.target.value);
+                      if (error) setError(null);
+                    }}
+                    className="pl-9 font-mono"
+                    autoComplete="off"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">{SIGNIN.TOKEN_HINT}</p>
+                <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={remember}
+                    onCheckedChange={(v) => setRemember(v === true)}
+                    aria-label="Remember on this device"
+                  />
+                  Remember on this device
+                  <span className="text-muted-foreground">
+                    (keeps the token after the browser closes)
+                  </span>
+                </label>
+                <Button
+                  type="submit"
+                  className="mt-1 w-full"
+                  disabled={!token || loading !== null}
+                >
+                  {loading === "token" ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <>
+                      Sign in
+                      <ArrowRight className="size-4" />
+                    </>
+                  )}
+                </Button>
+              </form>
+            )
           )}
 
           {error && (
@@ -351,7 +344,7 @@ export function SignIn({
             </div>
           )}
 
-          {showTokenForm && (
+          {showDivider && (
             <div className="my-5 flex items-center gap-3">
               <div className="h-px flex-1 bg-border" />
               <span className="text-xs uppercase tracking-wide text-muted-foreground">
@@ -361,46 +354,20 @@ export function SignIn({
             </div>
           )}
 
-          {/* SSO sign-in. The server-side OIDC flow (PKCE; GET /auth/login) ships
-              whenever WARDYN_OIDC_* is configured, and its session cookie
-              authenticates the whole API — so when /healthz reports sso we link
-              straight to it (a plain GET redirect, no JS handshake). Without OIDC
-              configured there is nothing to link to; the button stays disabled and
-              the admin token is the supported path. What is still missing is per-user
-              RBAC, not the login — hence the caveat below, kept in the enabled state
-              rather than dropped along with the disabled attribute — UNLESS sso_only
-              (#379) says that branch of role derivation is unreachable here, in which
-              case the caveat is noise on the front door and is dropped too. */}
-          {sso ? (
-            <>
-              <Button asChild variant="outline" className="w-full">
-                <a href="/auth/login">
-                  <Building2 className="size-4" />
-                  Sign in with SSO
-                </a>
-              </Button>
-              {!ssoOnly && (
-                <p className="mt-2 text-center text-xs text-muted-foreground">
-                  {SIGNIN.ROLE_SOURCE}
-                </p>
-              )}
-            </>
-          ) : (
-            <>
-              <Button
-                variant="outline"
-                className="w-full"
-                disabled
-                title="SSO sign-in needs OIDC configured on this control plane (WARDYN_OIDC_*)"
-              >
+          {/* SSO sign-in. The server-side OIDC flow (PKCE; GET /auth/login)
+              ships whenever OIDC is configured, and its session cookie
+              authenticates the whole API — so when /healthz reports sso we
+              link straight to it (a plain GET redirect, no JS handshake).
+              #457: without sso there is nothing to render here at all — no
+              disabled stub, no "isn't configured" caveat naming a chart
+              value a reader here cannot reach. */}
+          {showSso && (
+            <Button asChild variant="outline" className="w-full">
+              <a href="/auth/login">
                 <Building2 className="size-4" />
                 Sign in with SSO
-              </Button>
-              <p className="mt-2 text-center text-xs text-muted-foreground">
-                SSO sign-in isn&apos;t configured on this control plane — use an
-                admin token.
-              </p>
-            </>
+              </a>
+            </Button>
           )}
         </div>
       </div>

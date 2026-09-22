@@ -138,6 +138,10 @@ ds-bundle/
 # link to the design document, so it has to be in the repo they link from.
 !/docs/design/0.8/
 !/docs/design/first-contact-prototype/
+# signin-first-contact-canon.md is #457's frozen-strings table, cited by
+# CHANGELOG.md and sign-in-copy.ts's header comment — ships for the same
+# reason people-access-prompt.md does.
+!/docs/design/signin-first-contact-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
