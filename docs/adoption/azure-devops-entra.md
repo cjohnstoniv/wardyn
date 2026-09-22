@@ -55,9 +55,10 @@ only the rows in the table above whose capability you actually intend some row's
 adding, since they reach permission assignments and service-connection secrets respectively rather
 than anything scoped to a single repository.
 
-Grant **administrator consent** for these scopes — an individual user cannot consent to
-`vso.security_manage` or `vso.serviceendpoint_manage` on their own, and Wardyn's sign-in expects
-consent to already be in place rather than prompting for it mid-run.
+Grant **administrator consent** for these scopes. Azure DevOps publishes all of them — including
+`vso.security_manage` and `vso.serviceendpoint_manage` — as user-consentable, so a person can consent
+for themselves at their first sign-in; granting once as an administrator simply means nobody is asked,
+and a tenant whose consent policy restricts user consent will require it anyway.
 
 Add the callback as a registered **redirect URI**, a **web** platform entry pointing at your own
 Wardyn address:
