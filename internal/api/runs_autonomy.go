@@ -63,7 +63,13 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	if ceiling.Profile == nil || ceiling.Limits.AutonomyRubric == nil {
 		return types.AutonomyResolution{}, nil, scmSite, true
 	}
-	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite), enforced)
+	// runIdentitySubject(principalFromRequest), the SAME pair dispatch resolves
+	// the per-person Azure DevOps lane from (runs_dispatch.go reads
+	// run.CreatedBy, which IS principalFromRequest at this door) — never
+	// secretOwnerFromRequest, which answers "" for every operator and would
+	// hide the lane from an admin whose own run dispatch credentials fine.
+	posture := composer.AutonomyPostureOf(
+		autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, runIdentitySubject(r.Context(), principalFromRequest(r))), enforced)
 	level, boundBy := composer.FoldAutonomy(*ceiling.Limits.AutonomyRubric, posture)
 	res := types.AutonomyResolution{Level: level, Posture: posture, BoundBy: boundBy}
 	// An all-unset rubric — or one that leaves this posture's three fields
@@ -264,7 +270,11 @@ func autonomyAgentLabel(agent string) string {
 //     rubric's `sealed` row;
 //   - a git_pat's Azure DevOps bundle and an ssh_key's SSH-over-443 endpoint,
 //     from grantLaneEgress — the helper persistRunGrants itself builds those
-//     lanes with, so the two cannot drift about which hosts they are.
+//     lanes with, so the two cannot drift about which hosts they are;
+//   - the PER-PERSON AZURE DEVOPS lane (unionADOEntraLane), which is the one
+//     lane here that carries a CREDENTIAL and not only reach: dispatch writes
+//     its api_key grants, so the secrets axis has to see them at create or the
+//     level is frozen a rung too high.
 //
 // Graded BEFORE the launch-side decisions that can drop a lane — the provider
 // row's per-host veto in persistRunGrants and codex-cli's missing SSH lane —
@@ -274,12 +284,14 @@ func autonomyAgentLabel(agent string) string {
 // always graded `open`, and a run whose lane was vetoed may be graded `open`
 // on reach it will not get. Lanes added later still, at dispatch, are not
 // here: the model-provider hosts resolved from global configuration and the
-// artifact-redirect substitution.
+// artifact-redirect substitution. The per-person Azure DevOps lane is authored
+// at dispatch too and IS here, because it is the only one of the three that
+// hands the run a credential — see unionADOEntraLane.
 //
 // Works on a copy with both domain slices cloned: spec is the one the caller
 // goes on to persist and dispatch, and unionDomains appends in place.
 func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig,
+	scmSite types.SiteConfig, subject string,
 ) types.RunPolicySpec {
 	out := spec
 	out.AllowedDomains = slices.Clone(spec.AllowedDomains)
@@ -296,6 +308,64 @@ func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, leg
 	}
 	for _, g := range spec.EligibleGrants {
 		unionAllowedDomains(&out, grantLaneEgress(g))
+	}
+	unionADOEntraLane(&out, spec, scmSite, subject)
+	return out
+}
+
+// unionADOEntraLane folds the per-person Azure DevOps lane into the spec the
+// posture is graded on: the api_key grants dispatch will write for it and the
+// egress they ride on.
+//
+// The lane is AUTHORED at dispatch (authorADOEntraLane, runs_dispatch.go),
+// long after this gate froze the level, so without this fold the secrets axis
+// reads a run that will hold a person's Entra bearer as `none` — and a rubric
+// whose secrets_powerful row is the binding one caps that run at the wrong
+// rung on BOTH doors, which is why the parity test cannot see it. The same
+// escape grantLaneEgress closes for a git_pat's Azure DevOps bundle, one lane
+// over.
+//
+// Resolved from resolveADOEntraRun — dispatch's OWN predicate, called rather
+// than restated — on the identical inputs dispatch passes it: the one
+// site-config snapshot, the spec's workspace repositories (repoLocatorsOf, the
+// same field; the legacy free-text repo is deliberately NOT added, because
+// dispatch does not see it and a second organisation in the list makes
+// resolveADOEntraRun decline, which would grade LESS than dispatch authors),
+// and the caller's subject.
+//
+// Graded whenever the lane RESOLVES, not whenever it is finally authored: the
+// three dispatch-time refusals in front of it (token mode, capabilities, the
+// per-run certificate authority) fail the run closed, so a run this grades and
+// dispatch refuses never reaches an agent — while the reverse would be a run
+// launched above its cap.
+func unionADOEntraLane(out *types.RunPolicySpec, spec types.RunPolicySpec, scmSite types.SiteConfig, subject string) {
+	ado, ok := resolveADOEntraRun(scmSite, repoLocatorsOf(spec.WorkspaceRepos), subject)
+	if !ok {
+		return
+	}
+	out.EligibleGrants = append(slices.Clone(spec.EligibleGrants), adoEntraPostureGrants(ado.org)...)
+	unionAllowedDomains(out, adoEntraEgressEntries(ado.org))
+}
+
+// adoEntraPostureGrants are the grants createADOEntraGrants writes for one
+// organisation, in the shape the secrets axis reads: one api_key per host in
+// adoEntraHosts, authored from the same helper so the two cannot drift about
+// which hosts the credential rides to.
+//
+// The dispatch-time snapshot is the one field left off. It is the immutable
+// record of the provider row the credential was minted against, and nothing
+// about it exists yet at create — nor is it graded: apiKeyToNonBaselineHost
+// reads the host and the kind, and `dev.azure.com` is outside
+// composer.safeBaselineDomains, which is what makes this lane POWERFUL.
+func adoEntraPostureGrants(org string) []types.GrantSpec {
+	hosts := adoEntraHosts(org)
+	out := make([]types.GrantSpec, 0, len(hosts))
+	for _, host := range hosts {
+		out = append(out, types.GrantSpec{Kind: types.GrantAPIKey, TTLSeconds: adoEntraGrantTTLSeconds,
+			Scope: mustJSON(map[string]any{
+				"host": host, "header": adoEntraInjectHeader, "format": adoEntraInjectFormat,
+				"secret_name": types.ADOEntraAccessTokenSecret, "require_tls": true,
+			})})
 	}
 	return out
 }
