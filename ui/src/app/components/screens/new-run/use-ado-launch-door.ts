@@ -60,7 +60,13 @@ export function useAdoLaunchDoor(): {
   // one, off the fallback link), close the dialog either way, and — only on
   // a real connection — toast the fact (§7.7's RELAUNCH_TOAST). Nothing
   // relaunches (F8, above).
-  const settle = async (connected: boolean) => {
+  //
+  // connected === null means the popup was blocked (review finding F1):
+  // useAdoConnect already set blockedUrl, so the dialog must stay OPEN,
+  // showing the fallback link, instead of closing as if the person had
+  // answered.
+  const settle = async (connected: boolean | null) => {
+    if (connected === null) return;
     if (!mountedRef.current) return;
     setOpen(false);
     if (connected) {

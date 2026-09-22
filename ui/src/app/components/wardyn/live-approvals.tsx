@@ -49,7 +49,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { cn } from "../ui/utils";
 import { Mono } from "./code-block";
 
@@ -629,6 +629,12 @@ const SCOPE_ITEM_CLS =
 // DropdownMenuItem: Always must carry a REAL disabled attribute when gated
 // (see reason-dialog.tsx's identical note) — a div-based menu item can never
 // have one, only aria-disabled, and Playwright will happily "click" that.
+// Held in a Popover, not a DropdownMenu (review finding F3): Radix's
+// DropdownMenuContent runs its own roving-tabindex focus manager over
+// registered DropdownMenuItems and swallows Tab, so a plain <button> inside
+// it is dead to the keyboard — neither Tab nor the arrow keys ever reach it.
+// Popover's content does not manage focus that way, so Tab walks these
+// buttons in plain DOM order and Enter/Space activate them natively.
 function ScopeMenu({
   verb,
   hasWorkspace,
@@ -667,7 +673,7 @@ function ScopeMenu({
   };
 
   return (
-    <DropdownMenu
+    <Popover
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
@@ -677,14 +683,14 @@ function ScopeMenu({
         }
       }}
     >
-      <DropdownMenuTrigger asChild>
+      <PopoverTrigger asChild>
         {/* Deliberately not named "…approve…"/"…deny…" — see the row comment
             above this component's two mount sites. */}
         <Button size="sm" variant="outline" className={cn("h-7 w-6 p-0", triggerClassName)} aria-label="More options">
           <ChevronDown className="size-3.5" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64 space-y-0.5 p-1">
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-64 space-y-0.5 p-1">
         {!untilMode ? (
           <>
             {(["once", "run"] as const).map((s) => (
@@ -756,8 +762,8 @@ function ScopeMenu({
             </div>
           </>
         )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </PopoverContent>
+    </Popover>
   );
 }
 
