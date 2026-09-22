@@ -146,6 +146,68 @@ const HOLD_TIMEOUT_MS = 30_000;
 // the same fact ("N waiting · sandbox held"). Two copies of this test would be
 // two truths that can disagree, and the disagreement would read as "nothing is
 // holding the sandbox" while the sandbox is, in fact, held.
+// ─── Azure DevOps capability escalation (plan slice S10) ───────────────────
+//
+// The canonical scope of a tool_call raised by injection_ado_capability.go's
+// answerADOCapability — see that file's adoCapabityScope doc. Cmd and Tool
+// are server-COMPOSED (adoCapabilityCmd), never client-derived: the console
+// renders them, it does not reconstruct them from the other fields.
+export interface AdoCapabilityScope {
+  lane: "azure_devops";
+  provider_id: string;
+  org: string;
+  grant_id: string;
+  capability: string;
+  repo: string;
+  ref_class?: "protected" | "";
+  tool: string;
+  cmd: string;
+}
+
+// The canonical scope of a credential_reauth raised by raiseADOConsent — the
+// Entra-consent-missing chain injection_ado_capability.go's doc names.
+export interface AdoConsentScope {
+  lane: "azure_devops";
+  mechanism: "entra_consent";
+  owner: string;
+  provider_id: string;
+  scopes: string[];
+}
+
+// Structural, never scope-key-based (mirrors the server's own
+// adoEscalationScope, internal/api/injection_ado_capability.go): a tool_call
+// with grant_id set is a control-plane-raised ADO escalation, an older
+// console's generic tool_call card is not.
+export function isAdoCapabilityRequest(
+  a: ApprovalRequest,
+): a is ApprovalRequest & { requested_scope: AdoCapabilityScope } {
+  return a.kind === "tool_call" && !!a.grant_id && a.requested_scope?.lane === "azure_devops";
+}
+
+export function isAdoConsentRequest(
+  a: ApprovalRequest,
+): a is ApprovalRequest & { requested_scope: AdoConsentScope } {
+  return (
+    a.kind === "credential_reauth" &&
+    a.requested_scope?.lane === "azure_devops" &&
+    a.requested_scope?.mechanism === "entra_consent"
+  );
+}
+
+// canDecideApproval's ADO carve-out: authorizeMemberDecision
+// (internal/api/approvals.go) lets the run's OWNER decide their own run's
+// escalation, on top of the security-operator tier ownsRunOrAdmin
+// (internal/api/helpers.go) already covers — unlike every other tool_call,
+// which stays admin-only regardless of ownership. `securityOperator`, not a
+// general operator/admin flag: ownsRunOrAdmin bypasses ownership for
+// isSecurityOperator only, matching every other decide-path gate in this
+// codebase (0.7 §B). Kept as its own function rather than folded into
+// canDecideApproval: that one has no ownership parameter today and every
+// other kind it decides needs none.
+export function canDecideAdoCapability(securityOperator: boolean, isRunOwner: boolean): boolean {
+  return securityOperator || isRunOwner;
+}
+
 export function isHeld(a: ApprovalRequest): boolean {
   if (a.kind === "tool_call") return true;
   // A credential_reauth row is raised BECAUSE the proxy is holding a request.

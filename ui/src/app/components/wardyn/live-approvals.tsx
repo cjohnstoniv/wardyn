@@ -20,7 +20,17 @@
 import * as React from "react";
 import { ShieldAlert, Clock, Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
-import { canDecideApproval, decisionArgs, isHeld, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
+import {
+  canDecideApproval,
+  decisionArgs,
+  isAdoCapabilityRequest,
+  isAdoConsentRequest,
+  isHeld,
+  type ApprovalRequest,
+  type ApprovalScope,
+  type DecisionOptions,
+} from "../../lib/types";
+import { AdoCapabilityCard } from "./ado-capability-card";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
@@ -268,9 +278,16 @@ export function LiveApprovals({
   // "run" so this stays a literal 2-argument api call for the default path
   // (vitest's toHaveBeenCalledWith matches arity exactly).
   //
-  // A tool_call row can only ever take that default path: decide rule 4
-  // (approvals.go) 400s ANY explicit decision_scope on a non-egress approval,
-  // so the caret is not rendered for those rows and nothing can hand one in.
+  // A NON-ADO tool_call row can only ever take that default path: decide
+  // rule 4 (approvals.go) 400s ANY explicit decision_scope on a non-egress,
+  // non-ADO approval, so the caret is not rendered for those rows and
+  // nothing can hand one in. An Azure DevOps escalation (S10) is the ONE
+  // tool_call exception — adoDecisionRule accepts once/run — and it never
+  // reaches this function: isAdoCapabilityRequest/isAdoConsentRequest rows
+  // render <AdoCapabilityCard> below instead, which calls decideAdo (its own
+  // function, right after this one) — NOT decide() — because decisionArgs'
+  // omit-for-"run" convention would collide with adoDecisionRule's own
+  // different bodyless default; see decideAdo's doc.
   const decide = async (a: ApprovalRequest, approve: boolean, scope: ApprovalScope = "run", until?: string) => {
     setBusy(a.id);
     try {
@@ -290,6 +307,23 @@ export function LiveApprovals({
       toast.error(approve ? "Approve failed" : "Deny failed", {
         description: getErrorMessage(e),
       });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // decideAdo — the ADO capability card's own decide path (S10), used
+  // instead of decide() above for exactly the reason its comment gives: this
+  // card ALWAYS sends an explicit decision_scope (adoDecisionArgs in
+  // ado-capability-card.tsx), never decisionArgs()'s omit-for-"run" shape.
+  const decideAdo = async (a: ApprovalRequest, approve: boolean, opts: [DecisionOptions]) => {
+    setBusy(a.id);
+    try {
+      if (approve) await api.approve(a.id, reasonApprove, ...opts);
+      else await api.deny(a.id, reasonDeny, ...opts);
+      await refresh();
+    } catch (e) {
+      toast.error(approve ? "Approve failed" : "Deny failed", { description: getErrorMessage(e) });
     } finally {
       setBusy(null);
     }
@@ -365,6 +399,29 @@ export function LiveApprovals({
         )}
       </div>
       {shown.map((a) => {
+        // S10 — an Azure DevOps escalation (or its Entra-consent chain) gets
+        // the FULL card, not the strip's usual one-liner: it needs fields
+        // (repository, ref class, the composed command) and its own Once/
+        // This-run scope control the strip's plain row can't show. `operator`
+        // is unconditionally true here: this component only ever mounts on
+        // a run's own cockpit, and GET /runs/{id} (handleGetRun ->
+        // getRunAuthorized -> ownsRunOrAdmin) already refused anyone who
+        // isn't the run's owner or a security operator before this page
+        // could load at all — so "not yours to decide" cannot be reached
+        // from here, only from the standalone /approvals list
+        // (screens/approvals.tsx), which has no such gate on VIEWING a row.
+        if (isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) {
+          return (
+            <AdoCapabilityCard
+              key={a.id}
+              item={a}
+              operator
+              busy={busy === a.id}
+              onApprove={(opts: [DecisionOptions]) => decideAdo(a, true, opts)}
+              onDeny={(opts: [DecisionOptions]) => decideAdo(a, false, opts)}
+            />
+          );
+        }
         const label = rowLabel(a);
         const held = isHeld(a);
         // Only egress decisions carry a scope (decide rule 4) — see decide().
