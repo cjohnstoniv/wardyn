@@ -2,12 +2,11 @@
   Copyright 2025 The Wardyn Authors
   SPDX-License-Identifier: Apache-2.0
 
-  Workspace-providers mock — shared stylesheet for index.html / agents.html / canon.html.
-  Tokens and CSS idioms copied verbatim from docs/design/user-drives-mock/index.html
-  (which copied them from the governance mock): the four rungs, no ad-hoc sizes
-  (CONSOLE-RULES §3). The only additions are the few idioms this round's surfaces
-  need — a tab strip, a provider row, lane chip-checkboxes, a textarea control and a
-  toast — each built from the same tokens.
+  Azure DevOps / Entra mock — stylesheet for index.html.
+  Byte-for-byte docs/design/workspace-providers-mock/mock.css (which copied the
+  token block from the drives mock, which copied it from the governance mock):
+  the four rungs, no ad-hoc sizes (CONSOLE-RULES §3). This round's own additions
+  are the four idioms in the last block of this file, and nothing above it changed.
 */
 :root{
   --background:#ffffff; --foreground:#171717; --card:#ffffff; --surface-2:#f4f4f5;
