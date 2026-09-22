@@ -321,6 +321,14 @@ func TestReceivePackCommandParser(t *testing.T) {
 			pkt(someOID+" "+otherOID+" "+prefix+"../../heads/main"+firstCaps) + "0000", "malformed refname"},
 		{"embedded-second-ref",
 			pkt(someOID+" "+otherOID+" "+inNS+" refs/heads/main"+firstCaps) + "0000", "malformed refname"},
+		// The ref-name rule is adoscope.CheckRefName, shared with the REST
+		// refs door: every character git's check-ref-format forbids is refused
+		// here too, inside the namespace, where the prefix test cannot help.
+		{"caret-refname", pkt(someOID+" "+otherOID+" "+inNS+"^{}"+firstCaps) + "0000", "malformed refname"},
+		{"tilde-refname", pkt(someOID+" "+otherOID+" "+inNS+"~1"+firstCaps) + "0000", "malformed refname"},
+		{"colon-refname", pkt(someOID+" "+otherOID+" "+inNS+":refs/heads/main"+firstCaps) + "0000", "malformed refname"},
+		{"backslash-refname", pkt(someOID+" "+otherOID+" "+inNS+`\x`+firstCaps) + "0000", "malformed refname"},
+		{"glob-refname", pkt(someOID+" "+otherOID+" "+inNS+"*"+firstCaps) + "0000", "malformed refname"},
 		// An embedded LF/CR is the shape that smuggles a second command past a
 		// line-oriented reader. Both stay INSIDE the namespace, so only the
 		// control-character check can refuse them — the prefix test cannot.

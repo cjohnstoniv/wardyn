@@ -471,3 +471,17 @@ func TestAddGitBrokerHosts_Merges(t *testing.T) {
 		t.Errorf("WARDYN_GIT_PAT_BROKER_HOSTS = %q, want %q", got, want)
 	}
 }
+
+// The organisation-less app.vssps.visualstudio.com is never a host an
+// organisation's credential rides to: nothing pins a request there to the
+// organisation, and the classifier has no exemption for it (adoscope refuses
+// it like any other organisation's host).
+func TestADOEntraHostsNeverIncludeTheOrganisationlessVSSPSHost(t *testing.T) {
+	for _, org := range []string{"acme", "fabrikam", "contoso-dev"} {
+		for _, h := range adoEntraHosts(org) {
+			if strings.HasPrefix(strings.ToLower(h), "app.vssps.") {
+				t.Errorf("adoEntraHosts(%q) includes %q", org, h)
+			}
+		}
+	}
+}

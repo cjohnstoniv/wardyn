@@ -276,12 +276,15 @@ func TestEvasionResourceNamedRepository(t *testing.T) {
 
 // F4 — THE $BATCH DOOR WAS NOT PINNED TO THE ORGANISATION. Every operation URI
 // is a route in its own right and gets the row's organisation applied to it.
+// "/{x}/_apis/wit/…" is the documented PROJECT-relative shape, resolved under
+// the pinned organisation, so another organisation is named as
+// "/{org}/{project}/_apis/…" — see TestBatchOperationURIShapes.
 func TestEvasionBatchCrossOrg(t *testing.T) {
 	batch := "/acme/_apis/wit/$batch"
 	runCases(t, []caseT{
 		{
 			name:    "an operation aimed at another organisation",
-			req:     adoReq(http.MethodPost, batch, `[{"uri":"/evil/_apis/wit/workitems/1"}]`),
+			req:     adoReq(http.MethodPost, batch, `[{"uri":"/evil/loot/_apis/wit/workitems/1"}]`),
 			wantErr: true,
 		},
 		{
@@ -301,7 +304,7 @@ func TestEvasionBatchCrossOrg(t *testing.T) {
 		},
 		{
 			name:    "an operation naming another organisation with backslashes throughout",
-			req:     adoReq(http.MethodPost, batch, `[{"uri":"\\evil\\_apis\\wit\\workitems\\1"}]`),
+			req:     adoReq(http.MethodPost, batch, `[{"uri":"\\evil\\loot\\_apis\\wit\\workitems\\1"}]`),
 			wantErr: true,
 		},
 		{
@@ -366,5 +369,33 @@ func TestGitOverHTTPIsOutOfScope(t *testing.T) {
 		{name: "a fetch", req: adoReq(http.MethodPost, "/acme/proj/_git/repo/git-upload-pack", "want"), wantErr: true},
 		{name: "the ref advertisement", req: adoReq(http.MethodGet, "/acme/proj/_git/repo/info/refs", ""), wantErr: true},
 		{name: "the repository page", req: adoReq(http.MethodGet, "/acme/proj/_git/repo", ""), wantErr: true},
+	})
+}
+
+// THE $BATCH OPERATION URI SHAPES. Microsoft's WIT batch reference writes an
+// operation URI relative to the organisation the batch is POSTed to — both
+// "/_apis/wit/workItems/284" and the project-relative
+// "/Fabrikam-Fiber-Git/_apis/wit/workItems/$Task". Each accepted shape stays
+// inside the pinned organisation; one naming another organisation, or hiding
+// a traversal, is refused.
+func TestBatchOperationURIShapes(t *testing.T) {
+	batch := func(uri string) Request {
+		return adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"method":"PATCH","uri":"`+uri+`"}]`)
+	}
+	runCases(t, []caseT{
+		{name: "organisation-relative", req: batch("/_apis/wit/workitems/284?api-version=7.1"), want: CapWorkWrite},
+		{name: "organisation named", req: batch("/acme/_apis/wit/workitems/284"), want: CapWorkWrite},
+		{name: "organisation and project named", req: batch("/acme/proj/_apis/wit/workitems/284"), want: CapWorkWrite},
+		{name: "project-relative create", req: batch("/proj/_apis/wit/workitems/$Bug?api-version=7.1"), want: CapWorkWrite},
+		{name: "project-relative, project named like the documented example", req: batch("/Fabrikam-Fiber-Git/_apis/wit/workItems/$Task"), want: CapWorkWrite},
+
+		{name: "another organisation, then a project", req: batch("/evil/loot/_apis/wit/workitems/1"), wantErr: true},
+		{name: "another organisation in upper case", req: batch("/EVIL/proj/_apis/wit/workitems/1"), wantErr: true},
+		{name: "_apis too deep to be a project route", req: batch("/acme/proj/extra/_apis/wit/workitems/1"), wantErr: true},
+		{name: "a project-relative URI outside the work-item area", req: batch("/proj/_apis/git/repositories/r/pushes"), wantErr: true},
+		{name: "a dot segment walking out of the project", req: batch("/proj/../evil/_apis/wit/workitems/1"), wantErr: true},
+		{name: "an encoded dot segment", req: batch("/proj/%2e%2e/evil/_apis/wit/workitems/1"), wantErr: true},
+		{name: "a dot segment walking out of the work-item area", req: batch("/proj/_apis/wit/../hooks/subscriptions"), wantErr: true},
+		{name: "an absolute URI", req: batch("https://dev.azure.com/evil/_apis/wit/workitems/1"), wantErr: true},
 	})
 }

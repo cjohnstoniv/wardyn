@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
@@ -33,6 +34,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
 // The sentences a sandbox reads when an escalation ends without an approval.
@@ -50,6 +52,47 @@ const (
 		"request, and another request used it. Retry to ask again."
 )
 
+// The sentences a sandbox reads when its Azure DevOps credential could not be
+// renewed: a sign-in hold that ended without a sign-in, or any other failure.
+//
+// DRAFT (M2 canon pending)
+const (
+	adoSignInTimedOutRefusal = "Wardyn held this Azure DevOps request while its owner was asked to sign in to Azure " +
+		"DevOps again, and nobody signed in before the hold expired. Nothing was substituted; retry once they have signed in."
+	adoSignInEndedRefusal = "Wardyn asked this Azure DevOps request's owner to sign in to Azure DevOps again, and the " +
+		"request ended before a sign-in arrived. Nothing was substituted."
+	adoCredentialFailedRefusal = "Wardyn could not renew this run's Azure DevOps credential."
+)
+
+// adoCredentialRefusalFor is the sentence for a failed credential resolve on an
+// Azure DevOps host, and the decision row's source: credential:reauth-timeout
+// for the FIRST observer of a hold's expiry (one row per hold, as on the AWS
+// lane), fallback otherwise. A control-plane refusal (a closed sign-in
+// request, the per-run cap) keeps its own sentence.
+func adoCredentialRefusalFor(err error, fallback string) (string, string) {
+	switch {
+	case errors.Is(err, errReauthTimedOutAgain):
+		return adoSignInTimedOutRefusal, fallback
+	case errors.Is(err, errReauthTimedOut):
+		return adoSignInTimedOutRefusal, ruleSourceCredentialReauthTimeout
+	case errors.Is(err, errReauthNoCredential):
+		return adoSignInEndedRefusal, fallback
+	}
+	return adoControlPlaneRefusal(err, adoCredentialFailedRefusal), fallback
+}
+
+// refuseADOCredential answers a REST request whose credential could not be
+// resolved, in Azure DevOps' own error shape. 403 for all of them, never 401:
+// git and several tools read a 401 as "try another credential".
+func (p *Proxy) refuseADOCredential(w http.ResponseWriter, r *http.Request, host string, port int, err error) {
+	msg, src := adoCredentialRefusalFor(err, ruleSourceADODenied)
+	if p.sink != nil {
+		p.sink.emit(decisionLog(p.reqOf(r, host, port), egress.Deny, src))
+	}
+	slog.Warn("proxy: an Azure DevOps credential could not be resolved", "host", host, "err", reauthHoldError(err))
+	writeADORefusal(w, http.StatusForbidden, "CredentialUnavailableException", msg)
+}
+
 // adoAsk is what the control plane is told about a held request besides the
 // capability. repo and refClass are part of the approval's canonical identity;
 // method and path are for the human-readable card and the audit row only.
@@ -65,6 +108,12 @@ func adoRequestDetail(r *http.Request) adoAsk {
 
 // adoRepoOf is the repository a REST path addresses under
 // `_apis/git/repositories/{repo}`, lower-cased, or "".
+//
+// It is the SPELLING the sandbox chose — a repository name or its GUID — not a
+// resolved identity, and the approval's canonical scope (and so a sticky deny)
+// is keyed on it. A denied repo re-asked under its other spelling is a new ask.
+// That is bounded, not closed: every ask spends one of the run's
+// maxCapabilityHolds (16), and a person answers each.
 func adoRepoOf(path string) string {
 	segs := strings.Split(strings.ToLower(strings.Trim(path, "/")), "/")
 	for i := 0; i+3 < len(segs); i++ {

@@ -318,4 +318,8 @@ export const ADO = {
   WAITING_ADO_MINE: `Waiting for your Azure DevOps sign-in`,
   WAITING_ADO_OWNER: `Waiting for the owner's Azure DevOps sign-in`,
 
+  // ---- §10.6 `ADO` — the mid-run sign-in card ----
+  REQ_REAUTH_HELD_BODY: `This run's Azure DevOps request is held while you sign in again. Sign in and it goes through on its own — the run doesn't have to start over. If the hold runs out first, its next request goes through once you have.`,
+  REQ_REAUTH_OTHER_BODY: (person: string) => `Only ${person} can sign in again — the run acts as ${person}. Its Azure DevOps requests go through once they have.`,
+
 } as const;

@@ -636,6 +636,8 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		"scopes": granted, "source": adoEntraSourceSignIn,
 		"expires_at": blob.ExpiresAt.Format(time.RFC3339),
 	})
+	// After the capture row, never before: captured -> resolved -> retry.
+	s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
 	http.Redirect(w, r, adoSignInDonePath, http.StatusFound)
 }
 

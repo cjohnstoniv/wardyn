@@ -450,6 +450,7 @@ the Go constants block.
 | An always-denied capability on the ceiling (400) | `validateProviderEntra` | entra: "{capability}" can't be put on capability_ceiling — creating and revoking Azure DevOps tokens is refused on every row |
 | Not connected, at run create (422, `reason: git_credential`) | `ADO_422.*`, `runs_create_validate.go` | git_credential: you are not connected to Azure DevOps — connect and start the run again |
 | Connection ended, at run create (422, `reason: git_credential`) | `runs_create_validate.go` | git_credential: your Azure DevOps connection ended — connect and start the run again |
+| Connection doesn't cover the run's baseline, at run create (422, `reason: git_credential`) | `scmaccess.go` | git_credential: your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again |
 | Repository outside the row's org (403, proxy) | `ADO_REFUSE.*`, `proxy/ado_gate.go` | this run may only reach {org} on Azure DevOps |
 | Token creation attempted (403, proxy) | `proxy/ado_gate.go` | creating or revoking Azure DevOps tokens is refused for every run |
 | Capability refused after a decision (403, proxy) | `proxy/ado_gate.go` | {capability} was denied for this run |
@@ -985,3 +986,19 @@ heading, and the Runs board's Azure DevOps sign-in chip. Moved here so the parit
 exactly the way `REAUTH_ROW`'s AWS strings back `waitingReauth` — the count suffix (`· {n-1} more
 waiting`) is composed client-side, same as that function, and is not itself a frozen string (a number
 is not canon).
+
+### 10.6 `ADO` — the mid-run sign-in card (owner-delegated to the lead, 2026-09-22)
+
+A refresh token that dies mid-run, or a Conditional Access policy that wants the person present, now
+HOLDS the run's Azure DevOps request on a `credential_reauth` row (`mechanism: entra_signin`,
+`reason: signin`) until the person signs in again — the §7.6 "connection ended mid-run" state. The card
+reuses `REQ_REAUTH_CHIP`/`REQ_REAUTH_TITLE` and `CONNECT_ADO`, but not `REQ_REAUTH_BODY`: that row
+promises "up to four minutes", and this hold's bound is the operator's
+`WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (ten minutes by default). The body below claims no number. The board
+chip and the strip heading (`WAITING_ADO_*`, `STRIP_HEADING_CONSENT`) already say "Azure DevOps
+sign-in" and are true for this row as they stand.
+
+| Key | String |
+|---|---|
+| `REQ_REAUTH_HELD_BODY` | This run's Azure DevOps request is held while you sign in again. Sign in and it goes through on its own — the run doesn't have to start over. If the hold runs out first, its next request goes through once you have. |
+| `REQ_REAUTH_OTHER_BODY(person)` | Only {person} can sign in again — the run acts as {person}. Its Azure DevOps requests go through once they have. |

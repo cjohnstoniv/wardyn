@@ -123,37 +123,20 @@ func TestLabelsSayWhatIsGranted(t *testing.T) {
 	}
 }
 
-// DISCOVERY READS. The Azure CLI's first two calls are the signed-in person's
-// profile and their organisation list, both on app.vssps.visualstudio.com —
-// a host with NO organisation in its path. Refusing them makes every az
-// devops / az repos command fail on its first request. That host is admitted
-// for exactly those two areas, reads only; everything else on it stays refused.
-func TestOrganisationlessDiscoveryReads(t *testing.T) {
+// PROFILE READS. The signed-in person's profile is an ordinary pinned read on
+// the organisation's vssps host. app.vssps.visualstudio.com — the
+// organisation-less host the Azure CLI's first calls used — is not a host a
+// run's credential rides to (adoEntraHosts), so it has no exemption here: its
+// first label is not the pinned organisation, and every request on it is
+// refused like any other organisation's.
+func TestOrganisationlessDiscoveryHostIsRefused(t *testing.T) {
 	disc := func(method, path string) Request {
 		return Request{Method: method, Host: "app.vssps.visualstudio.com", Path: path, Org: "acme"}
 	}
-	withOverride := func(r Request, m string) Request { r.Header = hdr("X-HTTP-Method-Override", m); return r }
 	runCases(t, []caseT{
-		{name: "the signed-in profile", req: disc(http.MethodGet, "/_apis/profile/profiles/me"), want: CapRead},
-		{name: "the organisation list", req: disc(http.MethodGet, "/_apis/accounts"), want: CapRead},
-		{name: "a HEAD of the organisation list", req: disc(http.MethodHead, "/_apis/accounts"), want: CapRead},
-		{name: "the host in upper case", req: func() Request {
-			r := disc(http.MethodGet, "/_apis/profile/profiles/me")
-			r.Host = "APP.VSSPS.VISUALSTUDIO.COM"
-			return r
-		}(), want: CapRead},
-
-		{name: "a WRITE to the profile is refused", req: disc(http.MethodPatch, "/_apis/profile/profiles/me"), wantErr: true},
-		{name: "a POST to the profile is refused", req: disc(http.MethodPost, "/_apis/profile/profiles/me"), wantErr: true},
-		{name: "a write to the organisation list is refused", req: disc(http.MethodPost, "/_apis/accounts"), wantErr: true},
-		{name: "a DELETE is refused", req: disc(http.MethodDelete, "/_apis/profile/profiles/me"), wantErr: true},
-		{name: "a POST dressed as a read by an override is refused", req: withOverride(disc(http.MethodPost, "/_apis/profile/profiles/me"), "GET"), wantErr: true},
-		{name: "the token area on the discovery host is refused", req: disc(http.MethodGet, "/_apis/tokens/pats"), wantErr: true},
-		{name: "any other area on the discovery host is refused", req: disc(http.MethodGet, "/_apis/projects"), wantErr: true},
-		{name: "the graph on the discovery host is refused", req: disc(http.MethodGet, "/_apis/graph/users"), wantErr: true},
-		{name: "an organisation smuggled into the discovery path is refused", req: disc(http.MethodGet, "/evil/_apis/profile/profiles/me"), wantErr: true},
-		{name: "a path with no _apis on the discovery host is refused", req: disc(http.MethodGet, "/profile"), wantErr: true},
-		{name: "a dot segment on the discovery host is still refused", req: disc(http.MethodGet, "/_apis/profile/../tokens/pats"), wantErr: true},
+		{name: "the profile on the organisation-less host is refused", req: disc(http.MethodGet, "/_apis/profile/profiles/me"), wantErr: true},
+		{name: "the organisation list on the organisation-less host is refused", req: disc(http.MethodGet, "/_apis/accounts"), wantErr: true},
+		{name: "the token area on the organisation-less host is refused", req: disc(http.MethodGet, "/_apis/tokens/pats"), wantErr: true},
 
 		// On an ORGANISATION host the two areas are ordinary pinned reads.
 		{name: "the profile on the pinned organisation", req: func() Request {
@@ -172,7 +155,7 @@ func TestOrganisationlessDiscoveryReads(t *testing.T) {
 		t.Fatalf("ScopesFor(read) error = %v", err)
 	}
 	if !slices.Contains(scopes, ResourceID+"/vso.profile") {
-		t.Error("the read scope set lacks vso.profile, so the discovery reads 403")
+		t.Error("the read scope set lacks vso.profile, so a profile read 403s")
 	}
 }
 

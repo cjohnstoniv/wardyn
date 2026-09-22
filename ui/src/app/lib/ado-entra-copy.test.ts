@@ -93,8 +93,8 @@ function render(docKey: string): string {
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 
 describe("ado-entra-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 237 frozen keys in the doc (218 from §7, 19 from §10)", () => {
-    expect(doc.size).toBe(237);
+  it("finds all 239 frozen keys in the doc (218 from §7, 21 from §10)", () => {
+    expect(doc.size).toBe(239);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

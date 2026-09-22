@@ -198,3 +198,33 @@ func TestProxyConfig_NoWarnForNonSSOInjectionHost(t *testing.T) {
 		t.Errorf("a non-SSO injection host triggered the SSO-coverage warning:\n%s", logged)
 	}
 }
+
+// An Azure DevOps grant is enforced only on a terminated connection, so a
+// config carrying ado_grants without the MITM CA fails at boot instead of
+// degrading to a credential-less tunnel.
+func TestApplyDefaultsAndValidate_ADOGrantsRequireTheMITMCA(t *testing.T) {
+	certPEM, keyPEM := genTestCA(t)
+	base := func(cert, key string) *Config {
+		return &Config{
+			RunID:           uuid.New(),
+			ControlPlaneURL: "http://cp:8080",
+			RunToken:        "tok",
+			MITMCACertPEM:   cert,
+			MITMCAKeyPEM:    key,
+			ADOGrants:       []ADOGrantConfig{{}},
+		}
+	}
+	for name, cfg := range map[string]*Config{
+		"no CA":   base("", ""),
+		"no key":  base(string(certPEM), ""),
+		"no cert": base("", string(keyPEM)),
+	} {
+		err := cfg.applyDefaultsAndValidate()
+		if err == nil || !strings.Contains(err.Error(), "ado_grants") {
+			t.Errorf("%s: err = %v, want a refusal naming ado_grants", name, err)
+		}
+	}
+	if err := base(string(certPEM), string(keyPEM)).applyDefaultsAndValidate(); err != nil {
+		t.Fatalf("ado_grants with the MITM CA: %v", err)
+	}
+}

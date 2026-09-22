@@ -18,7 +18,7 @@
 import { Button } from "../../ui/button";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
-import { scmAccessCause, scmAccessChip } from "../../../lib/scm-access-display";
+import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import type { SetupStatus } from "../../../lib/types";
 
@@ -37,7 +37,7 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
     });
   };
   if (!access || access.state === "") return null;
-  const chip = scmAccessChip(access.state, access.source);
+  const chip = scmAccessChip(access.state, access.source, access.cause);
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
@@ -65,7 +65,7 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
           </>
         )}
         {access.state === "live" && !access.source && <p className="text-muted-foreground">{ADO.ACCESS_SHARED_NOTE}</p>}
-        {access.state === "not_configured" && (
+        {scmAccessNeedsConnect(access.state) && (
           <>
             <p className="text-warning">{scmAccessCause(access.cause)}</p>
             <Button size="sm" variant="outline" disabled={connecting} onClick={() => void handleConnect()}>

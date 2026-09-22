@@ -520,9 +520,9 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	// derivable from capture provenance, and gated on exactly what the eager
 	// path checks. A no-op for every other kind and state.
 	ap = s.reconcileReauthOnRead(r.Context(), ap)
-	// The same repair for an Azure DevOps consent request: the person's sign-in
-	// with the needed consent is the resolution (injection_ado_capability.go).
-	ap = s.reconcileADOConsentOnRead(r.Context(), ap)
+	// The same repair for an Azure DevOps consent or sign-in request: the
+	// person's new sign-in is the resolution (injection_ado_signin.go).
+	ap = s.reconcileADOReauthOnRead(r.Context(), ap)
 	writeJSON(w, http.StatusOK, ap)
 }
 

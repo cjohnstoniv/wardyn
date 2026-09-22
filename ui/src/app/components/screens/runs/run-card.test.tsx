@@ -123,6 +123,23 @@ describe("RunCard — two-row anatomy", () => {
     expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
   });
 
+  // A mid-run Azure DevOps SIGN-IN request is the same chip, never the AWS one.
+  it("a run held on an Azure DevOps sign-in request names Azure DevOps, never AWS", () => {
+    const signals = approvalSignals([
+      {
+        id: "a-ado-signin",
+        run_id: "run_3b7f10c4aa99",
+        kind: "credential_reauth",
+        requested_scope: { lane: "azure_devops", mechanism: "entra_signin", reason: "signin", owner: "me", provider_id: "row_1" },
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+      },
+    ]);
+    renderCard(run(), signals, "me");
+    expect(screen.getByText(waitingAdoConsent(1))).toBeInTheDocument();
+    expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
+  });
+
   it("…and the same card read by somebody else says the owner's Azure DevOps sign-in", () => {
     renderCard(run(), adoConsentSignals("run_3b7f10c4aa99"), "admin@corp");
     expect(screen.getByText(waitingAdoConsent(1, false))).toBeInTheDocument();

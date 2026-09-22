@@ -320,10 +320,12 @@ export interface SCMAccess {
     | "shared_expired"
     | "not_applicable"
     | (string & {});
-  /** Set only for state "live" on a per-user row: "org" (the Wardyn sign-in
-   *  widened) or "separate" (the dedicated Connect flow). */
+  /** Set for state "live" or "expired_signin" on a per-user row: "org" (the
+   *  Wardyn sign-in widened) or "separate" (the dedicated Connect flow). */
   source?: "org" | "separate" | (string & {});
-  /** Narrows "not_configured" — today only "row_is_newer" is ever sent. */
+  /** Narrows "not_configured" ("row_is_newer") and "expired_signin" ("ended":
+   *  a renewal found the sign-in dead or blocked by Conditional Access;
+   *  "consent_needed": it no longer covers what a run on the row needs). */
   cause?: string;
   /** The Azure DevOps address this row clones from, for the connect/launch
    *  dialogs' {org}. */
