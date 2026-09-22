@@ -367,6 +367,13 @@ type Authenticator struct {
 	// does send the claim after all. See warnMergedMapNeedsGroupsScope.
 	warnedMergedGroupsScope sync.Once
 	sawGroupClaim           atomic.Bool
+
+	// grants holds the optional login-grant sink: the seam that lets this
+	// login ALSO acquire a downstream credential instead of making every
+	// person run a second sign-in for one. Unattached (the zero value) leaves
+	// the authorization request and the callback byte-identical to a
+	// deployment that never heard of it — see login_grant.go.
+	grants loginGrantHook
 }
 
 // New constructs an Authenticator by performing OIDC discovery against
@@ -549,6 +556,16 @@ func providerGatesGroupsScope(provider *gooidc.Provider, requested []string) boo
 // random state and nonce, stores them in HttpOnly SameSite=Lax cookies, and
 // redirects the user to the IdP authorization endpoint.
 func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
+	a.startLogin(w, r, true)
+}
+
+// startLogin is LoginHandler's body, with ONE parameter LoginHandler always
+// passes true: whether an attached login-grant sink may widen the scope
+// request. The callback passes false to start the SAME login over without the
+// extra scopes, which is the recovery path that keeps a downstream resource's
+// refusal from costing anyone their console session — see
+// widenRetryableError.
+func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen bool) {
 	state := randomToken()
 	nonce := randomToken()
 	// PKCE: code verifier (32 octets => the 43-char minimum RFC 7636 §4.1
@@ -562,10 +579,37 @@ func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// PKCE verifier cookie: sent to token endpoint in CallbackHandler.
 	http.SetCookie(w, a.loginCookie(pkceCookieName, codeVerifier))
 
-	authURL := a.oauth2.AuthCodeURL(state,
+	opts := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("nonce", nonce),
 		oauth2.S256ChallengeOption(codeVerifier),
-	)
+	}
+	// The one place this login is ever widened. An attached sink may add
+	// downstream scopes so that signing into the console also acquires the
+	// credential for them (login_grant.go); with NO sink attached, a sink that
+	// asks for nothing, or a retry after a refusal, `scope` is not overridden
+	// at all and the request is byte-for-byte the one this handler has always
+	// built.
+	param := ""
+	if widen {
+		param = a.loginScopeParam(a.extraLoginScopes(r.Context()))
+	}
+	if param != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("scope", param))
+		// The marker the callback reads to know THIS redirect asked for more
+		// than a login, and may therefore be retried without the extra.
+		http.SetCookie(w, a.loginCookie(widenedCookieName, "1"))
+	} else if _, err := r.Cookie(widenedCookieName); err == nil {
+		// An unwidened request clears a marker LEFT BY AN EARLIER ATTEMPT, so
+		// one can never make an unwidened callback retry — and only when the
+		// browser actually presented one, so the overwhelmingly common
+		// unwidened login still sets exactly the three cookies it always did.
+		// Expired through loginCookie rather than clearCookie so it carries
+		// the same Secure posture as every other cookie this handler writes.
+		stale := a.loginCookie(widenedCookieName, "")
+		stale.MaxAge = -1
+		http.SetCookie(w, stale)
+	}
+	authURL := a.oauth2.AuthCodeURL(state, opts...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -848,6 +892,11 @@ const (
 	stateCookieName   = "wardyn_oidc_state"
 	nonceCookieName   = "wardyn_oidc_nonce"
 	pkceCookieName    = "wardyn_oidc_pkce"
+	// widenedCookieName marks an authorization request that asked for more than
+	// the login's own scopes, so a refusal of the extras can be retried without
+	// them (login_grant.go). It carries no secret — only the fact that this
+	// redirect was widened.
+	widenedCookieName = "wardyn_oidc_widened"
 )
 
 // ─── sentinel errors ─────────────────────────────────────────────────────────
