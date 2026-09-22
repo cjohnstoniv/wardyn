@@ -20,7 +20,7 @@ export function useDemoVideoBaseUrl(): string | undefined {
     let alive = true;
     health.health().then((h) => {
       if (alive && h.demo_video_base_url) setBase(h.demo_video_base_url);
-    });
+    }).catch(() => {}); // unreachable /healthz keeps the GitHub default
     return () => {
       alive = false;
     };
