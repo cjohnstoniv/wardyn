@@ -267,8 +267,8 @@ export function SignIn({
               STILL_CHECKING_AFTER_READS unanswered reads (Q457-2), say the
               checking is still going rather than sit silent. */}
           {checking ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
+            <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
               <span>{stillChecking ? SIGNIN.STILL_CHECKING : SIGNIN.CHECKING}</span>
             </div>
           ) : (
