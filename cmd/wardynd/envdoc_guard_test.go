@@ -161,6 +161,9 @@ var envDocShellOnly = map[string]bool{
 	// the exports just above), but read only by ui/e2e/live/helpers.ts
 	// (process.env) and set only by scripts/kind-sso-walk.sh — never by Go.
 	"WARDYN_LIVE_SANDBOX_UP_MS": true, "WARDYN_LIVE_LOGIN_DONE_MS": true,
+	// The chart render ui/e2e/live/sso-roles.spec.ts runs on, set per leg by
+	// the walk — another walk output, read only via process.env.
+	"WARDYN_LIVE_ROLES_RENDER": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)

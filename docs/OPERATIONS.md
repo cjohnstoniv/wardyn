@@ -2312,8 +2312,8 @@ Sign in as a second, real person. This is strictly more faithful than the
 toggle — it exercises the server's own role derivation, its own session, and
 its own ownership namespace.
 
-- **kind quickstart** — the bundled Dex already ships two logins:
-  `admin@wardyn.local` and `member@wardyn.local` (`deploy/kind/sso/dex.yaml`,
+- **kind quickstart** — the bundled Dex ships one login per role path:
+  `admin@`, `member@`, `member2@`, `secadmin@`, `operator@` and `stranger@wardyn.local` (`deploy/kind/sso/dex.yaml`,
   role map in `deploy/kind/sso/values.yaml`).
 - **Entra** — the walk provisions `wardyn-admin`, `wardyn-member` and
   `wardyn-outsider` (`deploy/azure-entra-sso/03-people.sh`).
@@ -3742,8 +3742,8 @@ and no real credential anywhere in the loop.
 `wardyn/agent-aws-sso:local` login image and refuses to start without it), then
 `WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322
 make kind-quickstart`, then `make kind-sso` (see `deploy/kind/sso/README.md`).
-The overlay adds Dex with two static principals —
-`admin@wardyn.local` and `member@wardyn.local`, password `password` — plus
+The overlay adds Dex with one static principal per role path —
+`admin@wardyn.local`, `member@wardyn.local` and four more, password `password` — plus
 `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services
 (`sso-oidc` and the `sso` portal) and a bedrock-runtime stub, all on one
 in-cluster Service. `make kind-sso-down` removes the overlay; the cluster itself

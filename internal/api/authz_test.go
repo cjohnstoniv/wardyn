@@ -624,7 +624,10 @@ func authzMatrixSiteConfig() types.SiteConfig {
 	}}}}
 }
 
-func newAuthzMatrixServer(t *testing.T) (*Server, *authzStore, *authzApprovals, *recording.FSStore) {
+// shape, when given, adjusts the config before New — the deployment-shape knobs
+// (AdminToken, SSOOnly, MemberMode) TestSSOShapeRoleMatrix walks this same
+// router under.
+func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authzStore, *authzApprovals, *recording.FSStore) {
 	t.Helper()
 	ast := newAuthzStore()
 	aap := newAuthzApprovals(ast)
@@ -639,6 +642,9 @@ func newAuthzMatrixServer(t *testing.T) (*Server, *authzStore, *authzApprovals, 
 	cfg.RecordingStore = rs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	ast.siteCfg = authzMatrixSiteConfig()
+	for _, f := range shape {
+		f(&cfg)
+	}
 	return New(cfg), ast, aap, rs
 }
 

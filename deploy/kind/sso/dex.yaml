@@ -36,6 +36,26 @@ data:
         hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
         username: "member"
         userID: "gsv-member-0001"
+      # The role walk's cast (ui/e2e/live/sso-roles.spec.ts), one per role path
+      # in values.yaml. Keyed by email: this Dex's password DB emits no groups
+      # claim. oidc's TestShippedShapeRoleDerivation holds this list equal to its
+      # expectation table.
+      - email: "member2@wardyn.local"      # second member: cross-member isolation
+        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+        username: "member2"
+        userID: "gsv-member-0002"
+      - email: "secadmin@wardyn.local"     # role map -> security_admin
+        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+        username: "secadmin"
+        userID: "gsv-secadmin-0001"
+      - email: "operator@wardyn.local"     # operator allowlist only -> admin
+        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+        username: "operator"
+        userID: "gsv-operator-0001"
+      - email: "stranger@wardyn.local"     # matches nothing, no default role -> refused
+        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+        username: "stranger"
+        userID: "gsv-stranger-0001"
 ---
 apiVersion: apps/v1
 kind: Deployment
