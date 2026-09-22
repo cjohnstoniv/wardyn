@@ -40,6 +40,7 @@ import { SshKeysPane } from "../ssh-keys";
 import { ModelProviderCard } from "./connection-cards";
 import { UserDrivesCard } from "../setup/user-drives-card";
 import { ProvidersCard } from "../setup/providers-card";
+import { AdoConnectionCard } from "./ado-connection";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -262,6 +263,10 @@ export function SettingsScreen() {
               the same shared component the funnel's `providers` step body
               renders (setup/providers-card.tsx). */}
           <ProvidersCard harnesses={status?.harnesses} />
+          {/* #386, Q9: the connected panel's Settings home — "between Model
+              provider and SSH keys". Renders nothing with no Azure DevOps
+              row configured. */}
+          <AdoConnectionCard status={status} onChanged={load} />
           <SshKeysPane heading="h3" />
           {/* The FIFTH card, and so the last one (user-drives-prompt.md §6) —
               the SAME component the setup funnel's Workspaces step renders,

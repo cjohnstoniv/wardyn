@@ -17,11 +17,12 @@ import (
 
 // pingStore is a minimal store.Store double whose only interesting method is
 // Ping — everything else panics if called, which /readyz must never do.
-// LatestAuditEventByAction is the one exception: TestMetricsHealthGaugesSeeAnOutage
-// (metrics_test.go) drives this SAME double at /metrics, whose writeHealthGauges
-// reads it unconditionally on every scrape regardless of Ping's own answer, so
-// leaving it on the nil embed panicked there (#338) rather than reporting the
-// "unavailable" a deployment with no eBPF sensor should.
+//
+// /metrics, however, does: TestMetricsHealthGaugesSeeAnOutage drives this double
+// through the SCRAPE to read wardyn_store_up 0, and the scrape reads the sensor
+// heartbeat straight after the ping. So LatestAuditEventByAction is answered
+// too — the panic that read past the ping was invisible for as long as the
+// scrape streamed a committed 200 (#323).
 type pingStore struct {
 	store.Store
 	err error

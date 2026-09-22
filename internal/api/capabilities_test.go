@@ -61,14 +61,16 @@ func (noGovernanceStore) GetSiteConfig(context.Context) (types.SiteConfig, error
 	return types.SiteConfig{}, nil
 }
 
-// Ping and LatestAuditEventByAction answer the two store reads /metrics makes
-// on EVERY scrape (writeHealthGauges): a reachable store and a deployment no
-// eBPF sensor has ever beaten on. Every double that embeds noGovernanceStore
-// is reachable through humanOrAdminAuth+requireOperator the same way /metrics
-// is, so leaving these on the nil embed turned an admin session's incidental
-// /metrics scrape into a recovered nil-pointer panic (#338) — the exact
-// "answering rather than panicking is the right default" reasoning GetSiteConfig
-// above already gives.
+// Ping and LatestAuditEventByAction are the two reads a /metrics SCRAPE makes —
+// the wardyn_store_up gauge and the eBPF ground-truth counters — and they are
+// answered here for GetSiteConfig's second reason exactly: the scrape is a route
+// these doubles are driven through, so a nil embed turns every one of them into
+// a segfault the moment a test reads a counter (#323).
+//
+// A reachable store and a deployment no sensor has ever beaten on: the
+// 0.6-shaped deployment again, and the two answers that make the scrape whole
+// rather than absent. ErrNotFound is what ebpfGroundtruthStatus reads as "no
+// sensor has ever beaten here", which omits the ground-truth family entirely.
 func (noGovernanceStore) Ping(context.Context) error { return nil }
 
 func (noGovernanceStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {

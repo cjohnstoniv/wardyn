@@ -562,6 +562,7 @@ func TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch(t *testing.T) {
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201 — dispatch would have credentialed this run; body=%s", w.Code, w.Body.String())
 		}
+		fr.waitForSandbox(t)
 		if fr.createCalls != 1 {
 			t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 		}
@@ -721,7 +722,7 @@ func TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope(t *testing.T) {
 	sandboxEnv := map[string]string{}
 
 	_, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, sandboxEnv,
-		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false)
+		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false)
 	if ok {
 		t.Fatal("dispatch went ahead on an unreadable roster — the credential namespace was decided from a zero site config")
 	}

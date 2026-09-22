@@ -188,10 +188,8 @@ func govCreateAndDispatch(t *testing.T, srv *Server, st *govEscapeStore, audit *
 		runID = id
 	}
 	st.mu.Unlock()
-	ev := findAudit(audit.events, runID, "run.policy.effective", "success")
-	if ev == nil {
-		t.Fatalf("dispatch recorded no run.policy.effective envelope for %s", runID)
-	}
+	// Dispatch runs after the 201 (runs_create_launch.go): wait for its envelope.
+	ev := waitForRecAudit(t, audit, runID, "run.policy.effective", "success")
 	var spec types.RunPolicySpec
 	if err := json.Unmarshal(ev.Data, &spec); err != nil {
 		t.Fatalf("envelope is not a RunPolicySpec: %v (%s)", err, ev.Data)

@@ -31,10 +31,39 @@ const adminToken = "test-admin-token"
 
 // ─── fakes ─────────────────────────────────────────────────────────────────
 
-type recRecorder struct{ events []types.AuditEvent }
+// recRecorder's mutex exists for the detached create-run launch: it records
+// audit rows after the 201, while the test is already reading.
+type recRecorder struct {
+	mu     sync.Mutex
+	events []types.AuditEvent
+}
 
 func (r *recRecorder) Record(_ context.Context, ev types.AuditEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.events = append(r.events, ev)
+	return nil
+}
+
+// snapshot is the locked read of events a launch may still be appending to.
+func (r *recRecorder) snapshot() []types.AuditEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]types.AuditEvent(nil), r.events...)
+}
+
+// waitForRecAudit polls for the run's action/outcome row, which POST /runs'
+// detached launch writes after the response.
+func waitForRecAudit(t *testing.T, r *recRecorder, runID uuid.UUID, action, outcome string) *types.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ev := findAudit(r.snapshot(), runID, action, outcome); ev != nil {
+			return ev
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("no %s/%s row for run %s after 5s; events=%s", action, outcome, runID, auditDump(r.snapshot(), runID))
 	return nil
 }
 
@@ -345,7 +374,33 @@ func panicFails(t testing.TB, h http.Handler) http.Handler {
 	})
 }
 
+// panicIsTheFixture is panicFails' one exemption: a handler whose panic IS the
+// thing under test — metrics_test.go's scrapePanicStore, the #323
+// reintroduction fixture — where a recovered panic is the fixture firing, not
+// a defect. The check is INVERTED rather than dropped: the test fails if
+// nothing panicked, so an exempted call site cannot quietly stop exercising
+// the fixture it was exempted for.
+func panicIsTheFixture(t testing.TB, h http.Handler) http.Handler {
+	t.Helper()
+	c := &panicCatcher{}
+	t.Cleanup(func() {
+		if _, _, ok := c.take(); !ok {
+			t.Fatalf("no panic was recovered, but this call site exists to drive one (#338/#323)")
+		}
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, middleware.WithLogEntry(r, c))
+	})
+}
+
 func do(t *testing.T, srv *Server, method, path, bearer, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return doVia(t, panicFails, srv, method, path, bearer, body)
+}
+
+// doVia is do's body with the panic-catcher wrapper as a parameter, so the one
+// test whose fixture panics on purpose reuses the same request shape.
+func doVia(t *testing.T, wrap func(testing.TB, http.Handler) http.Handler, srv *Server, method, path, bearer, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var r *http.Request
 	if body == "" {
@@ -368,7 +423,7 @@ func do(t *testing.T, srv *Server, method, path, bearer, body string) *httptest.
 	// loopback peer. Model that so local-mode tests exercise the allowed path.
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	panicFails(t, srv.Handler()).ServeHTTP(w, r)
+	wrap(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 
@@ -510,6 +565,67 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 			t.Errorf("network_policy = %v, want key entirely absent on a Capabilities() error", v)
 		}
 	})
+}
+
+// TestHealthz_TokenLoginAndSSOOnly pins the two bits #378/#379 added to the
+// anonymous /healthz body: token_login (should the sign-in screen offer the
+// admin-token form?) and sso_only (mirrors Config.SSOOnly). token_login is
+// computed, never a plain field mirror, precisely so a token that CANNOT work
+// as a human sign-in path — sso-only's second front door, or member mode's
+// process credential (deploy/desktop/wardyn.env.m-prime.example) — is never
+// advertised as one.
+func TestHealthz_TokenLoginAndSSOOnly(t *testing.T) {
+	decode := func(t *testing.T, srv *Server) map[string]any {
+		t.Helper()
+		w := do(t, srv, http.MethodGet, "/healthz", "", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("healthz code = %d", w.Code)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body
+	}
+
+	for _, tc := range []struct {
+		name           string
+		cfg            Config
+		wantTokenLogin bool
+		wantSSOOnly    bool
+	}{
+		{
+			name:           "plain token deployment: token works, no sso_only",
+			cfg:            Config{AdminToken: "tok"},
+			wantTokenLogin: true,
+		},
+		{
+			name:           "no token, no sso, no member: nothing to offer (local-mode/misconfigured)",
+			cfg:            Config{},
+			wantTokenLogin: false,
+		},
+		{
+			name:           "sso-only: token forced off even if a token were somehow set",
+			cfg:            Config{AdminToken: "tok", SSOOnly: true},
+			wantTokenLogin: false,
+			wantSSOOnly:    true,
+		},
+		{
+			name:           "member mode: the token is a process credential, never a human sign-in path",
+			cfg:            Config{AdminToken: "tok", MemberMode: true},
+			wantTokenLogin: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := decode(t, New(tc.cfg))
+			if got := body["token_login"]; got != tc.wantTokenLogin {
+				t.Errorf("token_login = %v, want %v", got, tc.wantTokenLogin)
+			}
+			if got := body["sso_only"]; got != tc.wantSSOOnly {
+				t.Errorf("sso_only = %v, want %v", got, tc.wantSSOOnly)
+			}
+		})
+	}
 }
 
 func TestAdminAuthRequired(t *testing.T) {

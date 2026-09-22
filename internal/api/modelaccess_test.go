@@ -757,7 +757,7 @@ func TestRedactSetupStatusForMember_KeepsModelAccess(t *testing.T) {
 		Checks:  []SetupCheck{{ID: "runner", Detail: "operator detail"}},
 		Secrets: SetupSecrets{Present: []string{"bedrock-api-key"}},
 	}
-	out := redactSetupStatusForMember(in, false)
+	out := redactSetupStatusForMember(in, false, false)
 	if out.ModelAccess != in.ModelAccess {
 		t.Fatalf("ModelAccess = %+v, want it kept verbatim (%+v)", out.ModelAccess, in.ModelAccess)
 	}

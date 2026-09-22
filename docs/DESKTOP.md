@@ -178,17 +178,20 @@ explicitly is not; and compose serves the console and the UI relay on a
 UI-in-container does not, and the envelope ships `WARDYN_UI_SANDBOX_LISTEN`
 commented out rather than pretending otherwise.
 
-The reason is images, not code. The relay itself is built and tested, but no
-`agent-vscode` or noVNC image is published — `release.yml`'s matrix is
-`wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli`, `agent-aws-sso` —
-and `deploy/images/vscode/Dockerfile` builds `FROM wardyn/agent-claude-code:local`,
-itself unpublished. A managed laptop has no repo and no build path: the launcher
-runs `--no-build` specifically so it "refuses to fall back to building from
-source on a laptop with no repo checkout". So enabling the listener here would
-publish a port with nothing to serve.
+The reason is wiring, not images. `agent-vscode` and `agent-novnc` publish
+starting with the next tagged release (`release.yml`'s `images-ui-sandbox`
+job, #141), both `FROM` `agent-base`, never the unpublished
+`agent-claude-code`. But the desktop envelope's `WARDYN_AGENT_IMAGES` does not
+register either by default — they are opt-in, not part of the installer's
+default catalog — and a managed laptop has no repo and no build path: the
+launcher runs `--no-build` specifically so it "refuses to fall back to
+building from source on a laptop with no repo checkout". So enabling the
+listener here would still publish a port with nothing pinned to serve it,
+until an operator adds `agent-vscode`/`agent-novnc` to `WARDYN_AGENT_IMAGES`
+themselves.
 
 It works today on a **developer checkout** (`make agent-images` then
-`make test-e2e-ui-sandbox`). Publishing the UI images is deferred to 0.8.
+`make test-e2e-ui-sandbox`).
 
 ## The member-mode profile (topology m′)
 
@@ -744,8 +747,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.8|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.8|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.10|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.10|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

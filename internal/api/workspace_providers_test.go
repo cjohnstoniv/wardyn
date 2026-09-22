@@ -139,7 +139,7 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 		}), true},
 
 		{"app on github.com", ok(types.GitProvider{
-			ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com/acme"},
+			ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com"},
 			Lanes: []types.GitLane{types.GitLaneApp, types.GitLanePAT, types.GitLaneSSH},
 		}), false},
 		{"app on a GHES row is refused", ok(types.GitProvider{
@@ -150,14 +150,18 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 			ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
 			Lanes: []types.GitLane{types.GitLaneApp},
 		}), true},
-		{"ssh on dev.azure.com", ok(types.GitProvider{
-			ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
-			Lanes: []types.GitLane{types.GitLaneSSH},
-		}), false},
 		{"ssh on an ADO Server row is refused", ok(types.GitProvider{
 			ID: "ados", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://tfs.corp.example/acme"},
 			Lanes: []types.GitLane{types.GitLaneSSH},
 		}), true},
+		{"#380: explicit ssh lane on an org-scoped row is refused", ok(types.GitProvider{
+			ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
+			Lanes: []types.GitLane{types.GitLaneSSH},
+		}), true},
+		{"#380: empty lanes on an org-scoped row is admitted (host-level SSH warns, not refuses)",
+			ok(types.GitProvider{
+				ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
+			}), false},
 		{"pat needs no host", ok(types.GitProvider{
 			ID: "ghes", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://git.corp.example/acme"},
 			Lanes: []types.GitLane{types.GitLanePAT},
@@ -185,7 +189,7 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 		}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateWorkspaceProviders(normalizeWorkspaceProviders(tc.block))
+			err := validateWorkspaceProviders(normalizeWorkspaceProviders(tc.block), true)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("validateWorkspaceProviders() error = %v, wantErr = %v", err, tc.wantErr)
 			}
@@ -199,14 +203,14 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 func TestValidateWorkspaceProvidersRefusalStrings(t *testing.T) {
 	err := validateWorkspaceProviders(&types.WorkspaceProviders{Storage: &types.StorageProviders{
 		Ephemeral: &types.EphemeralProvider{DefaultDiskMiB: 2, MaxDiskMiB: 1},
-	}})
+	}}, true)
 	if err == nil || err.Error() != providers400DiskOrder {
 		t.Errorf("ephemeral order refusal = %v, want the providers400DiskOrder constant", err)
 	}
 	err = validateWorkspaceProviders(&types.WorkspaceProviders{Git: []types.GitProvider{
 		githubRow("gh", false, "https://github.com/acme"),
 		githubRow("gh", false, "https://git.corp.example/acme"),
-	}})
+	}}, true)
 	if err == nil || !strings.Contains(err.Error(), "not unique") {
 		t.Errorf("duplicate id refusal = %v, want the providers400DupID constant", err)
 	}
@@ -261,7 +265,7 @@ func TestBaseURLClientMirrorParity(t *testing.T) {
 		block := &types.WorkspaceProviders{Git: []types.GitProvider{
 			{ID: "row", Kind: tc.kind, BaseURLs: []string{tc.url}},
 		}}
-		err := validateWorkspaceProviders(normalizeWorkspaceProviders(block))
+		err := validateWorkspaceProviders(normalizeWorkspaceProviders(block), true)
 		if (err != nil) != tc.refused {
 			t.Errorf("validate(%q, %s) = %v, want refused=%v", tc.url, string(tc.kind), err, tc.refused)
 		}
@@ -315,7 +319,7 @@ func TestProviderBaseURLRefusalSentences(t *testing.T) {
 	} {
 		err := validateWorkspaceProviders(normalizeWorkspaceProviders(&types.WorkspaceProviders{
 			Git: []types.GitProvider{githubRow("gh", false, raw)},
-		}))
+		}), true)
 		want := fmt.Sprintf(providers400BaseURL, 0)
 		if err == nil || err.Error() != want {
 			t.Errorf("validate(%q) = %v, want the base-URL sentence %q", raw, err, want)
@@ -542,6 +546,82 @@ func TestWorkspaceProvidersGet(t *testing.T) {
 	}
 	if w.Header().Get("ETag") == "" {
 		t.Error("GET carries no ETag — the console's If-Match round trip has nothing to send")
+	}
+}
+
+// TestWorkspaceProvidersGetProjectsGitPatBrokerEnabled is #381's wire contract:
+// a configured install's GET states the real WARDYN_GIT_PAT_BROKER switch (on
+// by default) as git_pat_broker_enabled, true or false, so the console can
+// label the PAT lane correctly — and a PUT can never smuggle a stale value
+// back into storage.
+func TestWorkspaceProvidersGetProjectsGitPatBrokerEnabled(t *testing.T) {
+	row := githubRow("gh", false, "https://github.com/acme")
+	for _, tc := range []struct {
+		name                string
+		disableGitPATBroker bool
+		want                *bool
+	}{
+		{"broker on (0.7.10 default)", false, boolPtr(true)},
+		{"broker off (operator escape hatch)", true, boolPtr(false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{
+				cfg: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}},
+			}}
+			cfg := baseTestConfig(h, fake)
+			cfg.DisableGitPATBroker = tc.disableGitPATBroker
+			srv := New(cfg)
+			w := do(t, srv, http.MethodGet, "/api/v1/workspace-providers", adminToken, "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			var got types.WorkspaceProviders
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode: %v (body=%s)", err, w.Body.String())
+			}
+			if got.GitPatBrokerEnabled == nil || *got.GitPatBrokerEnabled != *tc.want {
+				t.Fatalf("git_pat_broker_enabled = %v, want %v", got.GitPatBrokerEnabled, *tc.want)
+			}
+		})
+	}
+}
+
+// TestWorkspaceProvidersPutClearsGitPatBrokerEnabled: a client that echoes the
+// GET response's git_pat_broker_enabled field back on a PUT (the ordinary
+// GET-modify-PUT pattern this screen already uses) must never persist it —
+// GitPatBrokerEnabled is server-projected, not stored config. The body
+// smuggles true while the real switch is OFF, so a PUT response (or a later
+// GET) reporting true rather than false would prove the smuggled value won,
+// not the live one (#381 F1 + F4).
+func TestWorkspaceProvidersPutClearsGitPatBrokerEnabled(t *testing.T) {
+	h := newHarness(t)
+	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	cfg := baseTestConfig(h, fake)
+	cfg.DisableGitPATBroker = true // the real switch: OFF
+	srv := New(cfg)
+	w := do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken,
+		`{"git":[{"id":"gh","kind":"github","base_urls":["https://github.com/acme"]}],"git_pat_broker_enabled":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen == nil || fake.putSeen.WorkspaceProviders == nil {
+		t.Fatal("the provider block was not written")
+	}
+	if fake.putSeen.WorkspaceProviders.GitPatBrokerEnabled != nil {
+		t.Fatalf("stored WorkspaceProviders.GitPatBrokerEnabled = %v, want nil (never stored)",
+			*fake.putSeen.WorkspaceProviders.GitPatBrokerEnabled)
+	}
+	// F4: the PUT's own response must report the REAL switch (false), never
+	// the smuggled true — a console doing setDraft(result.providers) after
+	// Save must see the correct label immediately, not until the next GET.
+	var resp workspaceProvidersPutResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.GitPatBrokerEnabled == nil || *resp.GitPatBrokerEnabled {
+		t.Errorf("PUT response git_pat_broker_enabled = %v, want false (the real switch, not the smuggled true)",
+			resp.GitPatBrokerEnabled)
 	}
 }
 
@@ -871,6 +951,114 @@ func TestSiteConfigDoorFailsRatherThanMiscount(t *testing.T) {
 	}
 	if fake.putSeen != nil {
 		t.Error("the block was stored anyway — the admin would have been told nothing was affected")
+	}
+}
+
+// TestSiteConfigDoorGrandfathersExplicitSSHPathScope is #380 F2's fix: a
+// managed site-config document that 0.7.9 accepted — an explicit SSH lane on
+// an org-scoped row — must keep applying through PUT /site-config (an
+// unattended boot re-apply, with no undo and no migration path), even though
+// the SAME row 400s through the console door (PUT /workspace-providers, a
+// human choosing in the moment). The write reports the grandfathered row
+// rather than failing silently.
+func TestSiteConfigDoorGrandfathersExplicitSSHPathScope(t *testing.T) {
+	body := `{"workspace_providers":{"git":[` +
+		`{"id":"ado","kind":"azure_devops","base_urls":["https://dev.azure.com/acme"],"lanes":["ssh"]}]}}`
+
+	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	srv, audit := newProvidersHarness(t, fake)
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT /site-config with an explicit-SSH-with-path row = %d, want 200 (grandfathered); body=%s",
+			w.Code, w.Body.String())
+	}
+	if fake.putSeen == nil || fake.putSeen.WorkspaceProviders == nil || len(fake.putSeen.WorkspaceProviders.Git) != 1 {
+		t.Fatal("the whole document was not stored — a boot re-apply would have lost scm_hosts/egress too")
+	}
+	if got := fake.putSeen.WorkspaceProviders.Git[0].Lanes; len(got) != 1 || got[0] != types.GitLaneSSH {
+		t.Errorf("stored lanes = %v, want the explicit ssh lane kept verbatim (never silently dropped)", got)
+	}
+	var resp siteConfigPutResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.SSHLaneWidePastPath) != 1 || resp.SSHLaneWidePastPath[0] != "ado" {
+		t.Errorf("ssh_lane_wide_past_path = %v, want [\"ado\"] — the grandfather must be reported, never silent",
+			resp.SSHLaneWidePastPath)
+	}
+	found := false
+	for _, ev := range audit.events {
+		if ev.Action == "site_config.write" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no site_config.write audit row — the grandfathered write must still audit like any other")
+	}
+
+	// The console door refuses the IDENTICAL row: the two doors deliberately
+	// disagree on this one rule (see validateWorkspaceProviders's doc).
+	fake2 := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	srv2, _ := newProvidersHarness(t, fake2)
+	w2 := do(t, srv2, http.MethodPut, "/api/v1/workspace-providers", adminToken,
+		`{"git":[{"id":"ado","kind":"azure_devops","base_urls":["https://dev.azure.com/acme"],"lanes":["ssh"]}]}`)
+	if w2.Code != http.StatusBadRequest {
+		t.Errorf("PUT /workspace-providers with the same row = %d, want 400 (console door keeps refusing)", w2.Code)
+	}
+}
+
+// TestSiteConfigDoorClearsGitPatBrokerEnabled is #381 F1's fix: PUT
+// /site-config must never persist a client-submitted git_pat_broker_enabled
+// (nested in workspace_providers) — it is projected on read from the
+// deployment's own WARDYN_GIT_PAT_BROKER switch, the same way
+// handlePutWorkspaceProviders was already fixed to do. Before this fix a
+// probe that stored false on a deployment whose real switch is true (on) was
+// echoed back as truth on every later GET and PUT response.
+func TestSiteConfigDoorClearsGitPatBrokerEnabled(t *testing.T) {
+	h := newHarness(t)
+	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	cfg := baseTestConfig(h, fake)
+	cfg.DisableGitPATBroker = false // the real switch: ON
+	srv := New(cfg)
+
+	// The body smuggles false — a stale probe, or a hand-edited file.
+	body := `{"workspace_providers":{"git":[{"id":"gh","kind":"github","base_urls":["https://github.com/acme"]}],` +
+		`"git_pat_broker_enabled":false}}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen == nil || fake.putSeen.WorkspaceProviders == nil {
+		t.Fatal("the provider block was not written")
+	}
+	if fake.putSeen.WorkspaceProviders.GitPatBrokerEnabled != nil {
+		t.Fatalf("stored WorkspaceProviders.GitPatBrokerEnabled = %v, want nil (never stored)",
+			*fake.putSeen.WorkspaceProviders.GitPatBrokerEnabled)
+	}
+	// The PUT's own response must report the REAL switch, not the smuggled one
+	// (#381 F4's parity on this door).
+	var resp siteConfigPutResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.WorkspaceProviders == nil || resp.WorkspaceProviders.GitPatBrokerEnabled == nil ||
+		!*resp.WorkspaceProviders.GitPatBrokerEnabled {
+		t.Errorf("PUT response git_pat_broker_enabled = %v, want true (the real switch, not the smuggled false)",
+			resp.WorkspaceProviders.GitPatBrokerEnabled)
+	}
+
+	// A following GET must ALSO report the real switch, never the smuggled one.
+	w2 := do(t, srv, http.MethodGet, "/api/v1/site-config", adminToken, "")
+	if w2.Code != http.StatusOK {
+		t.Fatalf("GET = %d, want 200; body=%s", w2.Code, w2.Body.String())
+	}
+	var got types.SiteConfig
+	if err := json.Unmarshal(w2.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkspaceProviders == nil || got.WorkspaceProviders.GitPatBrokerEnabled == nil ||
+		!*got.WorkspaceProviders.GitPatBrokerEnabled {
+		t.Errorf("GET git_pat_broker_enabled = %v, want true", got.WorkspaceProviders.GitPatBrokerEnabled)
 	}
 }
 
