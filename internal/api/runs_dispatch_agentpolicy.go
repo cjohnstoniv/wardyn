@@ -22,8 +22,9 @@ type runAgentPolicy struct {
 	// files is what SandboxSpec.ManagedFiles carries: the generated document,
 	// or nil when the runner cannot deliver it.
 	files []runner.ManagedFile
-	// withheld says why a generated document is not on the spec. Empty when
-	// it is.
+	// withheld says why the row records delivered:false: the document is not
+	// on the spec, or it is but this runtime's delivery is not verified
+	// (managedFilesGap). Empty when the delivery is one the row can vouch for.
 	withheld string
 	// execLess: the runner creates this run's agent container at Exec, not at
 	// CreateSandbox (krun), so delivery — or the driver's refusal — happens
@@ -65,38 +66,64 @@ func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun) (runAge
 			run.AutonomyLevel, err)
 	}
 	p := runAgentPolicy{path: path, bytes: len(content)}
-	if !caps.ManagedFiles {
-		p.withheld = managedFilesWithheldReason(caps.Driver)
+	var deliverable bool
+	p.withheld, deliverable = managedFilesGap(caps, run.ConfinementClass)
+	if !deliverable {
 		return p, nil
 	}
 	p.files = []runner.ManagedFile{{Path: path, Content: content}}
-	// The same label byoiExecLessRefused reads.
-	p.execLess = strings.HasPrefix(caps.Resolved[run.ConfinementClass], "oci/krun")
+	p.execLess = isExecLess(caps, run.ConfinementClass)
 	return p, nil
+}
+
+// isExecLess reports an exec-less (krun) substrate for class: the same label
+// byoiExecLessRefused reads.
+func isExecLess(caps runner.Capabilities, class types.ConfinementClass) bool {
+	return strings.HasPrefix(caps.Resolved[class], "oci/krun")
+}
+
+// krunManagedFilesUnverified is the ruling for the exec-less krun path: the
+// file is still placed, but libkrun runs the guest init as root and does not
+// apply the image's USER (the Docker driver's own note on that path), while
+// the file's immutability rests on the agent NOT being root. Until that is
+// verified on a krun host, the row does not vouch for it.
+const krunManagedFilesUnverified = "unverified on this runtime: libkrun may run the guest as root"
+
+// managedFilesGap is the one decision the audit row and the 201 warning both
+// read, so they cannot drift: reason is why the row will record
+// delivered:false ("" when it will not), and deliverable is whether the file
+// goes on the spec at all.
+func managedFilesGap(caps runner.Capabilities, class types.ConfinementClass) (reason string, deliverable bool) {
+	switch {
+	case !caps.ManagedFiles:
+		return fmt.Sprintf("runner %q does not deliver managed files", caps.Driver), false
+	case isExecLess(caps, class):
+		return krunManagedFilesUnverified, true
+	default:
+		return "", true
+	}
 }
 
 // managedSettingsUndeliveredWarning is the 201's half of delivered:false: the
 // same fact the run.agent_policy row records, said where the person launching
-// the run reads it. Empty when the level generates no file or the runner can
-// deliver it. A Capabilities error says nothing here: dispatch fails that run
+// the run reads it. Empty when the level generates no file or the row will say
+// delivered. A Capabilities error says nothing here: dispatch fails that run
 // with the reason.
-func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, agent string, level types.AutonomyLevel) string {
+func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, agent string, level types.AutonomyLevel, class types.ConfinementClass) string {
 	if _, _, ok := agentpolicy.ForAgent(agent, level); !ok || s.cfg.Runner == nil {
 		return ""
 	}
 	caps, err := s.cfg.Runner.Capabilities(ctx)
-	if err != nil || caps.ManagedFiles {
+	if err != nil {
+		return ""
+	}
+	reason, _ := managedFilesGap(caps, class)
+	if reason == "" {
 		return ""
 	}
 	return fmt.Sprintf(
 		"%s's managed settings for autonomy level %s are not delivered: %s, so this run's agent runs under its launch flags alone and a repository's own settings can let it run tools without asking",
-		autonomyAgentLabel(agent), level, managedFilesWithheldReason(caps.Driver))
-}
-
-// managedFilesWithheldReason is the one sentence the audit row carries and the
-// 201 warning quotes, so the two cannot drift.
-func managedFilesWithheldReason(driver string) string {
-	return fmt.Sprintf("runner %q does not deliver managed files", driver)
+		autonomyAgentLabel(agent), level, reason)
 }
 
 // auditAgentPolicy records run.agent_policy once the agent's container exists,
@@ -117,7 +144,7 @@ func (s *Server) auditAgentPolicy(ctx context.Context, run types.AgentRun, p run
 	}
 	delivered := false
 	for _, f := range spec.ManagedFiles {
-		if f.Path == p.path {
+		if f.Path == p.path && p.withheld == "" {
 			delivered = true
 		}
 	}

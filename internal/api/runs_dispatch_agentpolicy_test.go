@@ -243,21 +243,26 @@ func TestAgentPolicyDispatchFailsTheRunWhenCapabilitiesAreUnknown(t *testing.T) 
 // TestAgentPolicyDispatchExecLessRowWaitsForTheAgent: on an exec-less runner
 // (krun) CreateSandbox returns before any agent container exists, and the
 // driver delivers the file — or refuses the image — at Exec. The row is
-// written only once Exec has succeeded, and never for a refused one.
+// written only once Exec has succeeded, and never for a refused one. Even
+// then it records delivered:false: libkrun may run the guest as root, which
+// the file's immutability depends on it not being, and that is unverified.
 func TestAgentPolicyDispatchExecLessRowWaitsForTheAgent(t *testing.T) {
 	krun := map[types.ConfinementClass]string{types.CC1: "oci/krun"}
 
-	t.Run("delivered once the agent starts", func(t *testing.T) {
+	t.Run("recorded once the agent starts, as unverified", func(t *testing.T) {
 		fr := &fakeRunner{capsResolved: krun}
 		spec, data, _ := agentPolicyDispatchTask(t, fr, "claude-code", types.AutonomyL1, "do the thing")
 		if len(spec.ManagedFiles) != 1 {
-			t.Fatalf("spec.ManagedFiles = %d entries, want the L1 document", len(spec.ManagedFiles))
+			t.Fatalf("spec.ManagedFiles = %d entries, want the L1 document still placed", len(spec.ManagedFiles))
 		}
 		if fr.execCount() != 1 {
 			t.Fatalf("Exec calls = %d, want 1", fr.execCount())
 		}
-		if data == nil || !data.Delivered {
-			t.Errorf("row = %+v, want delivered=true once the agent's Exec succeeded", data)
+		if data == nil {
+			t.Fatal("no run.agent_policy row once the agent's Exec succeeded")
+		}
+		if data.Delivered || data.Reason != "unverified on this runtime: libkrun may run the guest as root" {
+			t.Errorf("row delivered=%v reason=%q, want delivered=false with the krun ruling's reason", data.Delivered, data.Reason)
 		}
 	})
 

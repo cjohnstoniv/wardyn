@@ -814,9 +814,20 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 		level          types.AutonomyLevel
 		body           string
 		noManagedFiles bool
+		krunCC2        bool
 		want           []string
 		absent         []string
 	}{
+		{
+			// The exec-less krun ruling: the file is placed, but the row records
+			// delivered:false and the person launching the run is told the same.
+			name:    "a gated run on the exec-less krun runtime is told its managed settings are unverified",
+			level:   types.AutonomyL1,
+			body:    `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			krunCC2: true,
+			want:    []string{"claude-code's " + undelivered + " L1 are not delivered", "unverified on this runtime: libkrun may run the guest as root"},
+			absent:  []string{derived, noLane},
+		},
 		{
 			name:   "an overridden auto is reported, with the profile and every tied cause",
 			level:  types.AutonomyL1,
@@ -883,6 +894,9 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 			srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
 			if tc.noManagedFiles {
 				srv.cfg.Runner = &fakeRunner{noManagedFiles: true}
+			}
+			if tc.krunCC2 {
+				srv.cfg.Runner = &fakeRunner{capsResolved: map[types.ConfinementClass]string{types.CC2: "oci/krun"}}
 			}
 			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), tc.body)
 			if w.Code != http.StatusCreated {

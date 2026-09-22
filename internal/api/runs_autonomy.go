@@ -91,6 +91,14 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 		return res, nil, scmSite, grade, true
 	}
 	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade), ceiling.Profile.Name)
+	// Here rather than in the ladder: whether the managed settings land depends
+	// on the ENFORCED class's substrate, which only this function holds. No
+	// agent process on an exec run to say it about.
+	if ok && req.TaskMode != "exec" {
+		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level, enforced); msg != "" {
+			warnings = append(warnings, msg)
+		}
+	}
 	return res, warnings, scmSite, grade, ok
 }
 
@@ -178,11 +186,6 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 		warnings = append(warnings, fmt.Sprintf(
 			"%s has no Wardyn tool-approval lane: autonomy level %s is enforced at launch and by the proxy, and nothing inside the sandbox gates this agent's tool calls",
 			autonomyAgentLabel(req.Agent), level))
-	}
-	if req.TaskMode != "exec" {
-		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level); msg != "" {
-			warnings = append(warnings, msg)
-		}
 	}
 	// Derivation is NON-INTERACTIVE ONLY, for the structural reason
 	// effectiveToolApprovals states: applyDispatchModeEnv writes
