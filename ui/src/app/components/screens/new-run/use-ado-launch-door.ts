@@ -47,7 +47,7 @@ export function useAdoLaunchDoor(): {
 } {
   const [open, setOpen] = React.useState(false);
   const [org, setOrg] = React.useState("");
-  const { connecting, connect, connectFallback, blockedUrl } = useAdoConnect();
+  const { connecting, connect, connectFallback, cancel, blockedUrl } = useAdoConnect();
   // Never toast into an unmounted screen (review finding F9) — a person who
   // navigated away while the popup was open must not see a stray "Connected"
   // toast land on whatever page they are on now.
@@ -87,7 +87,15 @@ export function useAdoLaunchDoor(): {
       blockedUrl,
       onConfirm: () => void connect().then(settle),
       onFallbackClick: () => void connectFallback().then(settle),
-      onCancel: () => setOpen(false),
+      // Cancel does not just close the dialog (regression finding 2) — it
+      // stops the in-flight poll too. Without cancel(), the fallback link's
+      // bounded poll ran on for the full FALLBACK_POLL_TIMEOUT_MS after
+      // Cancel, and a late `true` fired the RELAUNCH_TOAST on whatever
+      // screen the person had moved to by then.
+      onCancel: () => {
+        cancel();
+        setOpen(false);
+      },
     },
   };
 }

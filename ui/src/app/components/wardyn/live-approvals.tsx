@@ -621,8 +621,13 @@ export function LiveApprovals({
   );
 }
 
+// outline-none + the three focus-visible: classes are CONSOLE-RULES.md §34's
+// standard ring (button.tsx#buttonVariants carries the same three) — these
+// buttons went keyboard-reachable under a Popover (review finding F3) and,
+// without this, showed the browser's default outline instead (review
+// finding 5).
 const SCOPE_ITEM_CLS =
-  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
+  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
 
 // ScopeMenu — the split button's caret content (Approve and Deny each mount
 // their own instance). Renders every option as a plain <button>, not
@@ -690,7 +695,10 @@ function ScopeMenu({
           <ChevronDown className="size-3.5" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-64 space-y-0.5 p-1">
+      {/* review finding 6: PopoverContent renders role="dialog" with no
+          accessible name by default — label it to match the trigger it
+          opens from. */}
+      <PopoverContent align="end" className="w-64 space-y-0.5 p-1" aria-label="More options">
         {!untilMode ? (
           <>
             {(["once", "run"] as const).map((s) => (
