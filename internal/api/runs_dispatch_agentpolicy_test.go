@@ -87,7 +87,7 @@ func agentPolicyDispatchTask(t *testing.T, fr *fakeRunner, agent string, level t
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 	})
-	ev := findAudit(audit.events, run.ID, "run.agent_policy", "success")
+	ev := findAudit(audit.snapshot(), run.ID, "run.agent_policy", "success")
 	if ev == nil {
 		return fr.lastSpec, nil, st
 	}

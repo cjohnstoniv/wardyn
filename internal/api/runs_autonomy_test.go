@@ -194,7 +194,7 @@ func TestRunAutonomyLadder(t *testing.T) {
 					t.Fatalf("status = %d, want %d: %s", w.Code, exp.status, w.Body.String())
 				}
 				if exp.status == http.StatusForbidden {
-					if got := lastAuthzDenied(audit.events); got != exp.target {
+					if got := lastAuthzDenied(audit.snapshot()); got != exp.target {
 						t.Errorf("authz.denied target = %q, want %q", got, exp.target)
 					}
 					st.mu.Lock()
@@ -451,7 +451,7 @@ func TestAutonomyReviewRefusesWhatLaunchRefuses(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("preflight = %d, want 403: %s", w.Code, w.Body.String())
 	}
-	if got := lastAuthzDenied(audit.events); got != "runs.task_mode" {
+	if got := lastAuthzDenied(audit.snapshot()); got != "runs.task_mode" {
 		t.Errorf("preflight authz.denied target = %q, want runs.task_mode", got)
 	}
 }
