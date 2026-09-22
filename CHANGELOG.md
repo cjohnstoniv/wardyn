@@ -178,6 +178,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Settings is reachable from the sidebar, and a save conflict keeps your work.** Settings now sits
+  last in the sidebar, under a divider, beside the nine existing sections — it also keeps its
+  long-standing account-menu entry, so nobody's muscle memory breaks. The Providers screen and its
+  Agents tab share one navigation guard: leaving a dirty Git, Storage or Agents draft now raises a
+  blocking confirm ("Leave without saving?") instead of losing the edits silently, the console's first
+  use of this pattern. When a save collides with someone else's (a 412), the banner offers "Copy my
+  changes" — the changed fields as readable text, never the whole draft as JSON — before "Discard mine
+  and reload", which is no longer the only way out. A disabled Save now states its reason beside the
+  button, not only in a title tooltip.
+
 - **An organisation control plane can enrol managed laptops, list them, revoke one, and take in
   their audit rows** (#102). An admin mints a single-use enrolment token
   (`wardyn device enrol-token --name`, 72-hour expiry, shown once); the laptop's first boot trades
