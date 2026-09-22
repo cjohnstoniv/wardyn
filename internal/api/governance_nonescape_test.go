@@ -544,7 +544,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 			strings.NewReader(`{"agent":"claude-code","task":"t"}`))
 		r.Header.Set("Authorization", "Bearer "+st.tokenRaw)
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("create with a pre-0.7 token = %d, want 403: %s", w.Code, w.Body.String())
 		}
@@ -557,7 +557,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 			strings.NewReader(`{"agent":"claude-code","task":"t"}`))
 		r.Header.Set("Authorization", "Bearer "+st.tokenRaw)
 		w = httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create with a 0.7-stamped token = %d, want 201: %s", w.Code, w.Body.String())
 		}

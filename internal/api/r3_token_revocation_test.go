@@ -278,7 +278,7 @@ func TestAPITokenMintCannotOutliveTheLeverItRacedWith(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/me/tokens", body)
 		r.AddCookie(ssoSession(t, "sub-alice", "alice@corp.example", oidc.RoleMember))
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, r)
+		panicFails(t, srv.Handler()).ServeHTTP(rec, r)
 		done <- result{rec}
 	}()
 	select {

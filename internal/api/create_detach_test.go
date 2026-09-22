@@ -172,7 +172,7 @@ func TestCreateRun_ClientDisconnectDuringBuild_StillCompensates(t *testing.T) {
 	r.Host = "127.0.0.1"
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r.WithContext(ctx))
+	panicFails(t, srv.Handler()).ServeHTTP(w, r.WithContext(ctx))
 
 	// The 201 answers as soon as the run row exists; the build runs detached
 	// after it (runs_create_launch.go), so the body is the PENDING run and the

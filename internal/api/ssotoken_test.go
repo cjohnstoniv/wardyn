@@ -365,7 +365,7 @@ func TestUploadSSOToken_ConcurrentUploadsFromOneLoginRun(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(),
 				strings.NewReader(validSSOBody))
 			r.Header.Set("Authorization", "Bearer "+tok)
-			srv.Handler().ServeHTTP(w, r)
+			panicFails(t, srv.Handler()).ServeHTTP(w, r)
 			codes <- w.Code
 		}()
 	}

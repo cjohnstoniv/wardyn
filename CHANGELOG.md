@@ -70,6 +70,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
   status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
   while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
+- **Fourteen recovered nil-pointer panics in `internal/api`'s test suite were reported as passing
+  tests.** #323 fixed ten on the `/metrics` scrape path; the rest were the same class elsewhere — a
+  test double embeds `store.Store` as a nil interface to satisfy the wide type, a request reaches a
+  method the double never implemented, and chi's `Recoverer` turns the dereference into an
+  unremarkable 500 every assertion still matched. `rbacStore`, `tokenMemStore`, `pingStore`,
+  `apiTokenErrStore`, `driveStore`, `wsReadStore` and `recordTierStore` now answer `Ping`,
+  `LatestAuditEventByAction`, `GetSiteConfig`, `PutSiteConfig` and `ListRuns` where a request
+  legitimately reaches them instead of leaving them on the nil embed; `noGovernanceStore` — already
+  the shared "empty deployment" answer several of them embed — gained the store reads several
+  request paths (a scrape, a capability check) make regardless of what the test means to exercise.
+  The five `handleCreateRun` panics were a deliberate no-Store harness design ("a request accepted
+  past validation panics inside `CreateRun`, which chi turns into the 500 that proves it got there")
+  that the same class caught: `createRunUnconfiguredStore` now answers that same "accepted past
+  validation" 500 from a real `CreateRun` error instead of a crash, and the two tests that read that
+  sentinel now assert the 500 directly rather than only its side effects. The durable half needs no
+  production code: chi's `Recoverer` already calls `GetLogEntry(r).Panic(rvr, stack)` when the
+  request carries one instead of just printing the stack, a seam nothing outside `_test.go` uses, so
+  a new `panicFails` test helper attaches a catcher via `middleware.WithLogEntry` and fails the test
+  if `Panic` ran. Every `srv.Handler().ServeHTTP` and `httptest.NewServer(srv.Handler())` call site in
+  the package — about 55 of them — now wraps its handler with it, so no test path in the package can
+  read a recovered panic back as a passing test (#338). The one site whose panic IS the fixture
+  (#323's `/metrics` scrape) inverts the check with `panicIsTheFixture` rather than dropping it, so
+  it fails if nothing panics.
 - **An HTTP/2 answer to the egress proxy's HTTP/1.1 request is now recorded as
   `builtin:upstream-protocol-mismatch` with a plain cause, and answered with a 400 so SDKs stop
   retrying, instead of a `builtin:dial-failed` that was retried until the SDK gave up (#359).**

@@ -175,7 +175,7 @@ func TestAttachPromotion_RegistryQueueIsFIFO(t *testing.T) {
 // sandbox, and the detach row records what the client ENDED as.
 func TestAttachPromotion_WebObserverPromotedInPlace(t *testing.T) {
 	srv, _, fr, audit, run := holderTestServer(t)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
 	c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "&cols=80&rows=24")
@@ -244,7 +244,7 @@ func TestAttachPromotion_WebObserverPromotedInPlace(t *testing.T) {
 func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 	t.Run("the taker's own observer is promoted in place", func(t *testing.T) {
 		srv, _, fr, audit, run := holderTestServer(t)
-		ts := httptest.NewServer(srv.Handler())
+		ts := httptest.NewServer(panicFails(t, srv.Handler()))
 		defer ts.Close()
 		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
 
@@ -287,7 +287,7 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 
 	t.Run("a bystander is never promoted", func(t *testing.T) {
 		srv, _, fr, audit, run := holderTestServer(t)
-		ts := httptest.NewServer(srv.Handler())
+		ts := httptest.NewServer(panicFails(t, srv.Handler()))
 		defer ts.Close()
 		admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
@@ -330,7 +330,7 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 // window, because it never resized the shared tmux session while it watched.
 func TestAttachPromotion_SSHObserverPromoted(t *testing.T) {
 	srv, _, fr, audit, run := holderTestServer(t)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
 	c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "&cols=80&rows=24")

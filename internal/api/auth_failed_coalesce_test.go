@@ -206,7 +206,9 @@ func meFromPeer(t *testing.T, srv *Server, peer string) {
 	r.RemoteAddr = peer
 	r.Header.Set("Authorization", "Bearer not-the-admin-token")
 	w := httptest.NewRecorder()
-	srv.router.ServeHTTP(w, r)
+	// srv.router is what Handler() returns, so this raw drive gets the same
+	// panic catcher every other call site in the package has (#338).
+	panicFails(t, srv.router).ServeHTTP(w, r)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("bad token from %s = %d, want 401", peer, w.Code)
 	}
