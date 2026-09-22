@@ -15,10 +15,70 @@ and does not yet follow semantic versioning (interfaces are not stable).
   local mode, member mode, or the override that makes every signed-in human an admin — and the chart
   refuses to render the same combinations. The sign-in screen then offers one SSO button: no
   admin-token field, and none of the role-derivation caveat that the posture makes untrue (#378, #379).
+- **Per-person Azure DevOps access on Entra ID.** An Azure DevOps provider row can now use a new
+  `entra` lane with `credential_source: per_user`: each person's runs reach Azure DevOps as that
+  person, with their own Entra sign-in, instead of on a shared token. The row names the tenant, the
+  app registration and a capability ceiling in plain terms (`read`, `code_write`, `pr`,
+  `policy_bypass`, `repo_admin`, and so on); every ceiling includes `read`. The lane is accepted only
+  on `dev.azure.com` and `<org>.visualstudio.com`. An empty `lanes` list on a provider row still means
+  the app, PAT and SSH lanes only, so no existing row is opted into the new lane (#400).
+- **Wardyn checks every Azure DevOps REST call on that lane against what the run was granted.** An
+  Entra token carries every scope the person ever consented to, so the token does not limit a run.
+  Wardyn does: it pins the organisation, works out which capability each request needs, and forwards
+  only what the run holds. A refusal answers in Azure DevOps' own error shape (#407).
+- **The person's Azure DevOps credential is set up when a run starts and never enters the sandbox.**
+  Wardyn redeems the person's stored sign-in at dispatch and the egress proxy adds it to each
+  request; the sandbox holds nothing it could copy out. A run is refused at dispatch if its profile
+  asks for more than the row's ceiling (#408).
+- **git on that lane goes through Wardyn's git broker with the person's own credential.** Clone and
+  fetch need `read`; a push to the run's own `wardyn/<run-id>/` branches needs `code_write`, and a push
+  to any other branch needs `policy_bypass`. A push the run was not granted is held for approval
+  instead of failing, and git prints why in its own output when it is refused. This includes
+  exec-mode tasks on the published `agent-base` image, which previously could not reach the run's
+  own organisation over git (#409, #425).
+- **A request beyond what the run holds is held for a person to approve** rather than refused
+  outright. The person (or an admin) can allow it once, for this one request, or for the rest of the
+  run; nobody can approve past the row's ceiling. The request resumes on the same connection when
+  approved (#411).
+- **Wardyn reports whether you are connected to Azure DevOps, and a run that needs it waits for you.**
+  `GET /api/v1/me/scm-access` reports the calling person's connection state (also in
+  `/setup/status` and in the launch preflight as `git_credential`). Creating a run on a per-person
+  Azure DevOps repository with no sign-in on file is refused with a 422 (`reason: git_credential`);
+  the New Run form opens a Connect Azure DevOps dialog and relaunches once you are connected.
+  Building, scanning and recording a workspace are gated the same way, since each clones the
+  repository on the server. Getting started and Settings show the connection too (#415).
+- **Held Azure DevOps requests appear as approval cards.** The run's live approvals strip and the
+  Approvals screen show what the request needs, on which organisation and repository, with allow
+  once, allow for this run and deny. When the person's Entra consent is missing, the card points
+  them to reconnect instead. Run detail and the run card show a consent chip (#419).
+- **A Bedrock model call refused by an AWS policy or throttled now says so on the failed run.** A
+  403 `AccessDeniedException` (an Organizations SCP or IAM deny) or a 429 `ThrottlingException` on a
+  call the proxy relays is recorded on the egress decision and written to the run's failure hint; a
+  later clean call clears it. The response itself still passes through unchanged. Lanes where the
+  sandbox signs Bedrock calls itself over an opaque tunnel are not covered (#418).
+- An opt-in live test harness for Entra sign-in, Azure DevOps, Bedrock and AWS SSO against real
+  services, described in `docs/LIVE-TESTS.md`. It never runs in CI (#422).
 
 ### Fixed
 
 - **Recordings past the thousandth were unreachable** in the console; the screen now pages (#296).
+- **An Azure DevOps request on the per-person lane could be sent through the proxy's plain lane,
+  skipping the organisation and capability checks while still carrying the person's credential.**
+  The plain lane now refuses every request to a host the run's Azure DevOps grant covers; REST goes
+  only through the checked, intercepted path and git only through the broker. Moving an annotated
+  tag and syncing a fork now need `policy_bypass`, like every other REST ref move; an import into a
+  repository needs `repo_admin`; and publishing to a package feed is recognised as `packaging_write`
+  instead of being refused as unrecognised (#413).
+- **A denied Azure DevOps request is refused for the rest of the run** instead of asking again, and an
+  approved request is no longer stuck until a restart when the proxy's check with the control plane
+  fails once (#414).
+- **Azure DevOps refusals now say what happened.** A 203 sign-in page becomes a 401 saying the person
+  is not signed in to Azure DevOps; a 401 names an expired, revoked or insufficient credential as the
+  likely causes; a 403 or 404 from Azure DevOps says the person's account lacks access. The same
+  messages reach git on the broker (#421).
+- **A drive-share probe could report its answer before it had cleared its own in-flight mark**, so an
+  immediate second probe could see a stale mark. The mark is now cleared before the answer is sent
+  (#423).
 - **A decision-log line could interleave with another and corrupt the record.** The proxy mirrors
   decisions concurrently, and a line longer than the pipe buffer is not an atomic write; writes are
   now locked. The first-use "approval pending" refusal body now spells it `approval-pending`, as the
@@ -115,10 +175,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Changed
 
 - `docs/adoption/azure-devops-entra.md` documents per-person Azure DevOps access on Entra ID.
+- **`/healthz` now always reports `token_login` and `sso_only`**, so the sign-in screen can decide
+  what to offer before anyone signs in. Anyone who can reach `/healthz` can read them: `sso_only` is
+  new, and `token_login` reflects whether member mode is on, which `/healthz` did not previously
+  disclose (#378, #379).
 
 
 ### Security
 
+- **Console SSO sign-in now asks for Azure DevOps access and keeps a refresh token per person** when
+  an Azure DevOps Entra row names the console's own app registration in the sign-in tenant. The
+  sign-in request adds the row's scopes and `offline_access`, and Wardyn stores each person's refresh
+  token in its encrypted secret store under that person, so runs can reach Azure DevOps without
+  another sign-in. A tenant that refuses the extra scopes does not block the console sign-in: Wardyn
+  retries once without them. A deployment with no such row sends exactly the sign-in request it sent
+  before. A dedicated Azure DevOps sign-in is also available for anyone the console sign-in did not
+  connect (#401).
 - **A handler that builds a 5xx body's `(status, message)` pair and hands it to a helper could still
   forward driver/substrate error text into it, past the guard added for #173.** The guard only read
   direct `writeError` call sites, so a helper's own call site — where the message had already
