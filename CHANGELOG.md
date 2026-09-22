@@ -78,6 +78,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   is not signed in to Azure DevOps; a 401 names an expired, revoked or insufficient credential as the
   likely causes; a 403 or 404 from Azure DevOps says the person's account lacks access. The same
   messages reach git on the broker (#421).
+- **An Azure DevOps sign-in that expires or is blocked by Conditional Access mid-run no longer fails
+  the run's request.** The request is held and the person is asked to sign in again. A sign-in that
+  is already dead when the run starts fails it with a specific hint, and the next launch opens the
+  sign-in door. Widening the organisation's capability ceiling no longer breaks existing sign-ins.
+- **Large Azure DevOps package publishes and wiki attachments now work.** Wardyn inspects a request
+  body only on the three routes whose classification reads it. Project-relative `$batch` operations
+  are accepted, both the REST gate and the git broker apply one rule for which ref names are valid,
+  and the sidecar refuses an Azure DevOps grant when the run has no interception CA.
 - **A drive-share probe could report its answer before it had cleared its own in-flight mark**, so an
   immediate second probe could see a stale mark. The mark is now cleared before the answer is sent
   (#423).
