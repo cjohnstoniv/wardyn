@@ -92,7 +92,17 @@ func TestBYOI_MemberDenied403(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("admin image, no builder: code = %d, want 400 (unchanged): %s", w.Code, w.Body.String())
 	}
-	if w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", admin, bodies["devcontainer_repo"]); w.Code == http.StatusForbidden {
-		t.Fatalf("admin devcontainer_repo: code = %d, must never be 403", w.Code)
+	// createRunUnconfiguredStore (inline_policy_test.go), set HERE rather than
+	// for the whole test: this devcontainer_repo probe degrades past validation
+	// and reaches CreateRun for real, which used to dereference a nil Store
+	// (#338) — this answers it with a controlled error instead. Every probe
+	// above stops at its own 4xx/403 without ever touching the store, so
+	// leaving Store nil for them keeps the fast, well-trodden no-Store path
+	// this harness uses everywhere else. The 500 below is that controlled
+	// errCreateRunNoStoreConfigured, not a crash, so it is now the exact code
+	// to assert rather than just "not 403".
+	h.srv.cfg.Store = createRunUnconfiguredStore{}
+	if w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", admin, bodies["devcontainer_repo"]); w.Code != http.StatusInternalServerError {
+		t.Fatalf("admin devcontainer_repo: code = %d, want 500 (errCreateRunNoStoreConfigured — never 403)", w.Code)
 	}
 }

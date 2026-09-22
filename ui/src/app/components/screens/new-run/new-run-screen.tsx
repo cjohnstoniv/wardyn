@@ -698,8 +698,13 @@ export function NewRunScreen() {
           cc={cc}
           showModelWarning={isAgent && llmReady === false}
           startup={startupLine}
+          // The server derives a hold in the OPPOSITE case from what this used
+          // to check: autonomyDerive (runs_autonomy.go) sets tool_approvals=
+          // hold when the run is non-interactive, the agent has a hold lane
+          // (claude-code, here) and the request did NOT already ask for hold.
+          // Picking hold yourself derives nothing to announce.
           showHoldNote={
-            !isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals === "hold"
+            !isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals !== "hold"
           }
           toolRules={toolRules}
           launch={{

@@ -307,11 +307,6 @@ export interface SetupModelAccess {
 // docs/design/ado-entra-prompt.md §7.5). `source`/`cause` are set only where
 // the state carries one — see the Go doc comment (scmaccess.go).
 export interface SCMAccess {
-  /** Which Azure DevOps row this answer is about (review finding F6) —
-   *  meaningful once a deployment can carry more than one per-user row
-   *  (#383); today's server sends at most one row's answer anywhere this
-   *  type is used singly. */
-  row_id?: string;
   state:
     | "live"
     | "expiring"
@@ -330,6 +325,10 @@ export interface SCMAccess {
   /** The Azure DevOps address this row clones from, for the connect/launch
    *  dialogs' {org}. */
   org?: string;
+  /** The provider kind this row is ("azure_devops", always, today) — paired
+   *  with `org` as the stable key a list of these needs, in place of a row
+   *  id (review finding F4, Go scmaccess.go's SCMAccess.Kind: "NO ROW ID"). */
+  kind?: string;
 }
 
 export interface SetupStatus {

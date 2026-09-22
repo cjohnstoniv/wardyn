@@ -31,6 +31,7 @@
 //     (/api/v1/me/ssh-keys). The rest of /api/v1/me is NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
+//   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDevices, RevokeDevice
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -51,7 +52,8 @@
 //     credential is shared or per-person (0.7.2). Admin-only, same page
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
-//   - /api/v1/admin          — operator maintenance (the sandbox sweep)
+//   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
+//   - /api/v1/devices        — an enrolled laptop's daemon routes (enrol, audit, heartbeat)
 //   - /api/v1/internal       — the AGENT-facing plane (mint, decisions, groundtruth,
 //     scan-results, token renew). Deliberately unwrapped: it is the sandbox's
 //     surface, not an operator's.

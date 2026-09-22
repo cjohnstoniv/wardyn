@@ -673,13 +673,23 @@ echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 #     live in the C0 spike, claude 2.1.234).
 #   CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0   a human decision can take hours; the
 #     stdio idle timer must not turn patience into a deny.
+#   --setting-sources user   load NO project or local settings (#358). Claude
+#     Code resolves permissions.allow rules BEFORE it consults the prompt tool,
+#     so a rule in the workspace's .claude/settings.json (a checkout the agent
+#     itself can write) ran matching tools without the gate ever being asked.
+#     Managed settings (/etc/claude-code) still load: that source is not
+#     selectable here. Residual: ~/.claude/settings.json is user scope and the
+#     agent can write it too; #333's allowManagedPermissionRulesOnly closes that.
+#     Only this lane: the autonomous lane below already runs every tool, and the
+#     interactive lanes have no Wardyn gate to bypass (the human in the pane is
+#     the approver, behind Claude Code's own workspace-trust prompt).
 if [[ "${WARDYN_TOOL_APPROVALS:-}" == "hold" ]]; then
     mkdir -p "$HOME/.wardyn"  # only --idle creates it; this is the exec path
     printf '{"mcpServers":{"gate":{"command":"wardyn-toolgate"}}}\n' > "$HOME/.wardyn/toolgate-mcp.json"
     echo "agent-run: tool-approval hold — gated tool use parks on Wardyn approvals" >&2
     export CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0
     exec claude -p "$task" --output-format text \
-        --permission-mode manual \
+        --permission-mode manual --setting-sources user \
         --mcp-config "$HOME/.wardyn/toolgate-mcp.json" --strict-mcp-config \
         --permission-prompt-tool mcp__gate__approve
 fi

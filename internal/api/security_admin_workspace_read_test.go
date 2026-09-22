@@ -58,6 +58,23 @@ func (s *wsReadStore) UpdateWorkspace(_ context.Context, id uuid.UUID, ws types.
 	return s.ws, nil
 }
 
+// GetSiteConfig answers the zero document: GET /api/v1/workspaces/{id} calls
+// admissionStamper, which reads it on every request regardless of what the
+// workspace itself carries — the nil embed panicked here (#338).
+func (s *wsReadStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
+// ListRuns answers no runs: GET /observed-egress windows the deployment's
+// history (newest-first) for hosts THIS workspace's runs observed, and this
+// double has none. Test doubles are the ONLY caller of the non-Pager
+// ListRuns(ctx) fallback in production (handleObservedEgress's own comment) —
+// the nil embed panicked here (#338) instead of reporting the empty history
+// this workspace's test fixture actually has.
+func (s *wsReadStore) ListRuns(context.Context) ([]types.AgentRun, error) {
+	return nil, nil
+}
+
 // workspaceReadRoutes is the set DERIVED from routeMatrix rather than listed:
 // every classMember GET under /workspaces/{id}. getWorkspaceReadable's four call
 // sites are exactly these, and deriving means a FIFTH read route arriving on the

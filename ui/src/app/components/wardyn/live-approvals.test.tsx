@@ -318,6 +318,35 @@ describe("LiveApprovals", () => {
       expect(approveMock).toHaveBeenCalledWith("held", expect.any(String), { scope: "once", until: undefined });
     });
 
+    // review finding F3: these options were plain <button>s inside a Radix
+    // DropdownMenuContent, whose own keydown handler swallows Tab and whose
+    // roving-focus manager only ever registers DropdownMenuItems — never
+    // these buttons. A keyboard-only operator could open the menu but never
+    // move focus onto "Once". Driven with the keyboard alone: no user.click
+    // ever lands on a scope option.
+    it("F3: the scope caret is reachable with the keyboard alone — Tab reaches Once, Enter decides", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      const user = userEvent.setup();
+
+      const caret = within(panel).getAllByRole("button", { name: /more options/i })[0];
+      caret.focus();
+      await user.keyboard("{Enter}");
+
+      const isOnceButton = () =>
+        document.activeElement?.tagName === "BUTTON" && !!document.activeElement.textContent?.includes("Once");
+      let reached = isOnceButton();
+      for (let i = 0; i < 6 && !reached; i++) {
+        await user.tab();
+        reached = isOnceButton();
+      }
+      expect(reached).toBe(true);
+
+      await user.keyboard("{Enter}");
+      expect(approveMock).toHaveBeenCalledWith("held", expect.any(String), { scope: "once", until: undefined });
+    });
+
     it("Always is enabled with hasWorkspace, and picking it decides with scope always", async () => {
       listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
       render(<LiveApprovals runId="r1" hasWorkspace />);

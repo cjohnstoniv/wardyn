@@ -358,7 +358,7 @@ func doSSOIfMatch(t *testing.T, srv *Server, method, path string, cookie *http.C
 		r.Header.Set("If-Match", ifMatch)
 	}
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 

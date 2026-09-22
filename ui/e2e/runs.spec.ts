@@ -9,6 +9,7 @@ import { RUN, RUN_COCKPIT, RUNS_WAIT } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
+import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import {
   CHIP_IMAGE_PULL_FAILED,
   CHIP_SETTING_UP,
@@ -427,6 +428,44 @@ test.describe("Run detail (/runs/:id)", () => {
       // into a Playwright strict-mode failure rather than a clean miss.
       await expect(header.getByText("Interactive", { exact: true }), `Interactive at ${width}px`).toBeVisible();
       await expect(header.getByText("Fence", { exact: true }), `Fence at ${width}px`).toBeVisible();
+    }
+  });
+});
+
+// #93/#97 — the run header's autonomy chip, beside ConfinementChip.
+// run.autonomy_level freezes the level resolveRunAutonomy capped this run at,
+// at create time — never populated by the seeded backend's operator bearer
+// (same operator short-circuit governance.spec.ts's header note explains for
+// the rail), so spliced onto the real GET response — the same
+// route.fetch()+patch+refulfill technique the interactive/failure_hint splice
+// right above this block already uses.
+test.describe("Run header — the autonomy chip (#93/#97)", () => {
+  test("renders the level's friendly label beside the barrier chip", async ({ page }) => {
+    await openRuns(page);
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 2") json.autonomy_level = "L1";
+      await route.fulfill({ response, json });
+    });
+
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText(AUTONOMY_META.L1.label, { exact: true })).toBeVisible();
+    // The internal wire level stays out of accessible content (D4) — same
+    // rule ConfinementChip's CC1/CC2/CC3 follows.
+    await expect(header.getByText("L1", { exact: true })).toHaveCount(0);
+  });
+
+  test("an ordinary run (empty autonomy_level) renders no autonomy chip at all", async ({ page }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    const header = page.getByTestId("run-summary-header");
+    for (const meta of Object.values(AUTONOMY_META)) {
+      await expect(header.getByText(meta.label, { exact: true })).toHaveCount(0);
     }
   });
 });

@@ -32,3 +32,15 @@ export const SHELL = {
   SIGN_OUT_FAILED_BODY: "Your session may still be active on the server. Close the browser, or try signing out again.",
 } as const;
 
+// #217 — the console's one dirty-navigation guard (lib/use-unsaved-guard.tsx),
+// generic across every form that uses it rather than owned by Settings/
+// Providers: a blocking confirm, never an inline banner that a click could
+// sail past (issue #217's binding default — "An inline banner that never
+// interrupts cannot prevent the loss it exists to prevent").
+export const UNSAVED_GUARD = {
+  TITLE: "Leave without saving?",
+  BODY: "This form has changes that aren't saved. Leaving now discards them.",
+  STAY: "Keep editing",
+  LEAVE: "Discard changes",
+} as const;
+

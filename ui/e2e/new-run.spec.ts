@@ -24,6 +24,8 @@ import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
 import { NO_BARRIER, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
+import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
+import { AUTONOMY_RAIL, autonomyBoundSentence } from "../src/app/lib/governance-copy";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
 import type { ConfinementClass } from "../src/app/lib/types";
@@ -765,5 +767,51 @@ test.describe("New run rail — credentials and recording are read, not asserted
     // NOT replaced by the named-stage card, which is reserved for the one
     // shape with no server-composed reason at all).
     await expect(page.getByRole("alert")).toHaveText(refusal);
+  });
+});
+
+// #93/#96 — the New Run rail's Autonomy section. The seeded backend's bearer
+// is an operator, so a real preflight never resolves an autonomy cap
+// (effectiveCeiling's own operator short-circuit — see governance.spec.ts's
+// header note) — spliced onto POST /runs/preflight's real response, the same
+// route.fetch()+patch+refulfill technique this file already uses above for
+// model_credential, so the shape around the spliced field stays genuine.
+test.describe("New run rail — the Autonomy section (#93/#96)", () => {
+  async function mockPreflightAutonomy(page: Page, boundBy: string[]): Promise<void> {
+    await page.route("**/api/v1/runs/preflight", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.autonomy = {
+        level: "L1",
+        posture: { egress: "sealed", secrets: "powerful", confinement: "CC1" },
+        bound_by: boundBy,
+      };
+      await route.fulfill({ response, json });
+    });
+  }
+
+  test("shows the resolved level and, for a tie, EVERY bound_by cause — not just the first", async ({ page }) => {
+    // Ruling 1 (#96 review): bound_by is a LIST, and a tie at the resolved
+    // level names every cause. This is the regression the ruling exists to
+    // prevent: reading bound_by[0] alone would drop confinement_cc1 here.
+    await mockPreflightAutonomy(page, ["secrets_powerful", "confinement_cc1"]);
+    await openNewRun(page);
+    await page.getByRole("button", { name: "Preflight" }).click();
+    await expect(page.getByTestId("preflight-result")).toBeVisible();
+
+    await expect(page.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
+    await expect(page.getByText(AUTONOMY_META.L1.label, { exact: true })).toBeVisible();
+    const sentence = autonomyBoundSentence(["secrets_powerful", "confinement_cc1"]);
+    await expect(page.getByText(sentence, { exact: true })).toBeVisible();
+  });
+
+  test("with no autonomy on the wire (the default): no cap on this deployment's operator bearer", async ({
+    page,
+  }) => {
+    await openNewRun(page);
+    await page.getByRole("button", { name: "Preflight" }).click();
+    await expect(page.getByTestId("preflight-result")).toBeVisible();
+    await expect(page.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
+    await expect(page.getByText(AUTONOMY_RAIL.NO_PROFILE, { exact: true })).toBeVisible();
   });
 });

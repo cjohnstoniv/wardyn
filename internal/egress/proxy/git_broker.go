@@ -267,20 +267,16 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	outReq.Host = githubHost
 	outReq.Header.Del("Host")
 
-	p.emitGitDecision(r, egress.Allow, allowSrc)
-
 	// roundTripUpstream, not the transport directly: this forge speaks HTTP/2,
 	// and a peer that speaks it without negotiating it gets the same fallback
-	// the MITM and plain lanes get (upstream_protocol.go).
+	// the MITM and plain lanes get (upstream_protocol.go). The allow row follows
+	// a successful round trip only (failUpstream).
 	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
-		seen := &egress.DecisionLog{Request: p.reqOf(r, githubHost, 443)}
-		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, githubHost, "git upstream error") {
-			return
-		}
-		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
+		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, githubHost, 443)}, githubHost, "git upstream error")
 		return
 	}
+	p.emitGitDecision(r, egress.Allow, allowSrc)
 	defer func() { _ = resp.Body.Close() }()
 
 	relay(w, resp) // stream the pack back

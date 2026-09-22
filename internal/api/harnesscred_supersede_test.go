@@ -780,7 +780,7 @@ func doSSOCtx(t *testing.T, srv *Server, ctx context.Context, method, path strin
 		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 

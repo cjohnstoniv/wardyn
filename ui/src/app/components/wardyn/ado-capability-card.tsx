@@ -54,7 +54,7 @@ import { canDecideAdoCapability, isAdoConsentRequest, type AdoCapabilityScope, t
 import { isTerminalRunState } from "../../lib/types";
 import { ADO } from "../../lib/ado-entra-copy";
 import { Button } from "../ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Chip } from "./primitives";
 import { Mono } from "./code-block";
 import { cn } from "../ui/utils";
@@ -340,8 +340,13 @@ export function AdoCapabilityCard({
   );
 }
 
+// outline-none + the three focus-visible: classes are CONSOLE-RULES.md §34's
+// standard ring (button.tsx#buttonVariants carries the same three) — these
+// buttons went keyboard-reachable under a Popover (review finding F3) and,
+// without this, showed the browser's default outline instead (review
+// finding 5).
 const SCOPE_ITEM_CLS =
-  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
+  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
 
 // AdoScopeMenu — the caret half of the mock's "shipped Approve-and-scope
 // control" (Q2). Unlike live-approvals.tsx's ScopeMenu (egress's four live
@@ -349,6 +354,13 @@ const SCOPE_ITEM_CLS =
 // between exactly the two scopes adoDecisionRule accepts — Approve/Deny
 // commit whichever is currently staged, matching the mock's "the pair on the
 // right is what they read with Once selected instead of This run".
+//
+// Held in a Popover, not a DropdownMenu (review finding F3): a DropdownMenu's
+// roving-tabindex focus manager only covers registered DropdownMenuItems and
+// swallows Tab, so the plain <button>s below (needed for the always/until
+// rows' real `disabled`, same reason as live-approvals.tsx's ScopeMenu) were
+// unreachable by keyboard. Popover's content does not manage focus that way,
+// so Tab walks the buttons in plain DOM order and Enter/Space pick one.
 function AdoScopeMenu({
   scope,
   thing,
@@ -366,13 +378,16 @@ function AdoScopeMenu({
   onOpenChange: (o: boolean) => void;
 }) {
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
         <Button size="sm" variant="outline" className="h-8 w-6 rounded-l-none p-0" aria-label="More options">
           <ChevronDown className="size-3.5" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64 space-y-0.5 p-1">
+      </PopoverTrigger>
+      {/* review finding 6: PopoverContent renders role="dialog" with no
+          accessible name by default — label it to match the trigger it
+          opens from. */}
+      <PopoverContent align="start" className="w-64 space-y-0.5 p-1" aria-label="More options">
         {(["once", "run"] as const).map((s) => (
           <button
             key={s}
@@ -400,8 +415,8 @@ function AdoScopeMenu({
           <span className="font-medium text-muted-foreground">{ADO.SCOPE_ALWAYS_LABEL}</span>
           <span className="text-meta text-muted-foreground">{ADO.REQ_SCOPE_ALWAYS_REFUSED}</span>
         </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </PopoverContent>
+    </Popover>
   );
 }
 

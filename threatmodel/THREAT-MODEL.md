@@ -2426,6 +2426,29 @@ residual because it means the gate's absence is not, by itself, evidence the ins
 is fine: an operator who wants that assurance still reads the checklist, not just
 whether the funnel opened.
 
+### Hold-lane settings sources: user scope is still agent-writable
+
+Claude Code resolves `permissions.allow` rules before it asks the
+`--permission-prompt-tool`, so on a `tool_approvals=hold` run a matching rule runs
+the tool and `wardyn-toolgate` is never consulted (#358). Since 0.8 the hold lane
+in `deploy/images/claude-code/agent-run` passes `--setting-sources user`, which
+keeps the workspace's `.claude/settings.json` and `.claude/settings.local.json`
+out. Managed settings (`/etc/claude-code/managed-settings.json`) are not a
+selectable source and still load.
+
+**What the flag does NOT cover:** user scope, `~/.claude/settings.json` inside
+the sandbox, is still loaded, and the agent runs as the uid that owns it. An agent
+that writes its own `permissions.allow` rule there is un-gated for every later
+`claude` process that reads it, such as a child `claude` it starts, exactly as a
+repository rule was. The flag narrows
+the route to a file the agent must write itself, rather than one a cloned
+repository can ship. What closes it is #333's root-owned managed settings with
+`allowManagedPermissionRulesOnly: true`, which applies only to runs with a resolved
+autonomy level. The flag is on the hold lane only: the autonomous lane already runs
+every tool (`--dangerously-skip-permissions`), and the interactive lanes have no
+Wardyn gate in the path. The approver there is the human in the pane. codex-cli has
+no hold lane, so there is no gate for a repository config to pre-empt.
+
 ### Known latent vulnerabilities
 
 We publish known-uncalled findings here rather than let them sit in a scanner's
