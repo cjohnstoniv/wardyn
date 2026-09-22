@@ -240,3 +240,24 @@ func TestADOGate_UncoveredHostStandsAside(t *testing.T) {
 		t.Errorf("gateADO on an uncovered host = %q, want the source unchanged", got)
 	}
 }
+
+// ONE RULE PER REF ACROSS BOTH DOORS: a REST push to the run's own branch
+// namespace needs code_write, exactly as a git push through the broker does
+// (adoRunRefProtected).
+func TestADOGate_RunNamespacePushNeedsCodeWrite(t *testing.T) {
+	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	body := `{"refUpdates":[{"name":"` + BranchNSPrefix(h.p.runID) + `work","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
+	rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil)
+	if rec.Code/100 != 2 {
+		t.Fatalf("run-namespace push under code_write: status %d body %s, want it forwarded", rec.Code, rec.Body.String())
+	}
+}
+
+// A REST push to any other ref is a protected-ref move and needs
+// policy_bypass, as on the git door.
+func TestADOGate_NonRunRefPushNeedsPolicyBypass(t *testing.T) {
+	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	body := `{"refUpdates":[{"name":"refs/heads/main","oldObjectId":"` + zeroOID + `"}],"commits":[]}`
+	h.mustRefuse(t, h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil),
+		string(adoscope.CapPolicyBypass))
+}

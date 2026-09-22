@@ -48,10 +48,23 @@ type ADOGrantSource interface {
 	ADOGrantFor(host string) (ADOGrant, bool)
 }
 
-// adoRefProtected is the protected-ref predicate the classifier is given. No
-// grant carries a protected-branch list yet, so EVERY ref counts as protected:
-// a REST ref move or push needs policy_bypass until one does. Fail closed.
+// adoRefProtected is the base protected-ref rule: no grant carries a
+// protected-branch list yet, so every ref counts as protected. Fail closed.
 func adoRefProtected(string) bool { return true }
+
+// adoRunRefProtected is the ONE protected-ref predicate both Azure DevOps doors
+// use — the REST gate's classifier and the git broker's push check — so a ref
+// needs the same capability whichever door moves it. It is adoRefProtected with
+// one exception: a ref inside this run's own branch namespace,
+// refs/heads/wardyn/<run-id>/…, which agent-run checks the work tree out onto
+// and nothing else writes, needs code_write and not policy_bypass.
+func (p *Proxy) adoRunRefProtected(ref string) bool {
+	prefix := BranchNSPrefix(p.runID)
+	if strings.HasPrefix(ref, prefix) && len(ref) > len(prefix) {
+		return false
+	}
+	return adoRefProtected(ref)
+}
 
 // adoGitVerbs are the git smart-HTTP endpoints. They are refused on the
 // intercepted connection by name: git goes through the broker.
@@ -68,7 +81,7 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 	if !ok {
 		return src
 	}
-	if msg, held := adoCheck(r, host, grant); msg != "" && !p.refuseADO(w, r, host, port, msg, held) {
+	if msg, held := adoCheck(r, host, grant, p.adoRunRefProtected); msg != "" && !p.refuseADO(w, r, host, port, msg, held) {
 		return ""
 	}
 	return ruleSourceADO
@@ -77,7 +90,7 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 // adoCheck returns "" when r may be forwarded, else the refusal sentence. held
 // is non-nil only for the ONE refusal a person may lift — a grantable
 // capability the run does not hold — and names what the request needs.
-func adoCheck(r *http.Request, host string, grant ADOGrant) (string, *adoscope.Verdict) {
+func adoCheck(r *http.Request, host string, grant ADOGrant, refProtected func(string) bool) (string, *adoscope.Verdict) {
 	path := adoRawPath(r)
 	if !adoOrgMatches(host, path, grant.Organization) {
 		return fmt.Sprintf("Wardyn refused this Azure DevOps request: this run is granted the %q organisation only.", grant.Organization), nil
@@ -99,7 +112,7 @@ func adoCheck(r *http.Request, host string, grant ADOGrant) (string, *adoscope.V
 		Header:       r.Header,
 		BodyPeek:     peek,
 		Org:          grant.Organization,
-		RefProtected: adoRefProtected,
+		RefProtected: refProtected,
 	})
 	if err != nil {
 		return "Wardyn refused this Azure DevOps request: it could not tell what access the request needs.", nil

@@ -783,6 +783,7 @@ func branchNSSwitch(name string, dflt bool, warnOnce *sync.Once) bool {
 func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 	var buf bytes.Buffer
 	hdr := make([]byte, 4)
+	seenCmd := false
 	for {
 		if _, err := io.ReadFull(body, hdr); err != nil {
 			return nil, fmt.Errorf("unreadable pkt-line length: %w", err)
@@ -808,19 +809,30 @@ func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 			return nil, fmt.Errorf("truncated pkt-line: %w", err)
 		}
 		buf.Write(payload)
-		if err := checkPushCommand(string(payload), prefix); err != nil {
+		if err := checkPushCommand(string(payload), prefix, !seenCmd); err != nil {
 			return nil, err
 		}
+		seenCmd = seenCmd || !bytes.HasPrefix(payload, []byte("shallow "))
 	}
 }
 
 // checkPushCommand validates ONE command-section pkt-line payload:
 // "<old-oid> SP <new-oid> SP <refname>", with "\0<capabilities>" on the first and
-// an optional trailing LF, or a "shallow <oid>" line (no ref to check).
-func checkPushCommand(line, prefix string) error {
-	line, _, _ = strings.Cut(line, "\x00") // capabilities ride the FIRST command only
+// an optional trailing LF, or a "shallow <oid>" line (no ref to check). first
+// reports whether this is the first command line.
+//
+// A NUL anywhere but the first command is refused: git's receive-pack reads a
+// capability list only there, and a forge whose parser differs could read
+// "<old> <new> refs/heads/wardyn/<run>/x\0refs/heads/main" on a later line as a
+// different ref than the one checked here.
+func checkPushCommand(line, prefix string, first bool) error {
+	line, _, caps := strings.Cut(line, "\x00") // capabilities ride the FIRST command only
 	line = strings.TrimSuffix(line, "\n")
-	if strings.HasPrefix(line, "shallow ") {
+	shallow := strings.HasPrefix(line, "shallow ")
+	if caps && (!first || shallow) {
+		return fmt.Errorf("refusing receive-pack command %q: a NUL is allowed only on the first command", line)
+	}
+	if shallow {
 		return nil
 	}
 	parts := strings.SplitN(line, " ", 3)
