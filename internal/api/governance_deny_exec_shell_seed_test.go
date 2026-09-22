@@ -30,6 +30,9 @@ func TestGovernanceDenyExecRefusesShellBootSeed(t *testing.T) {
 			if w.Code != tc.want {
 				t.Fatalf("create = %d, want %d: %s", w.Code, tc.want, w.Body.String())
 			}
+			if w.Code == http.StatusCreated {
+				fr.waitForSandbox(t) // dispatch runs after the 201
+			}
 			env := fr.lastSandboxEnv()
 			if env["WARDYN_INTERACTIVE_SEED"] != "" && env["WARDYN_INTERACTIVE_START"] != "agent" {
 				t.Errorf("deny_task_mode_exec profile dispatched a boot-time shell command: %q", env["WARDYN_INTERACTIVE_SEED"])

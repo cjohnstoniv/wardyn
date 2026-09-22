@@ -146,7 +146,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// One call for both provider questions over both fields (see
 	// requestRepoProviderRefusals): this function is at the gocyclo ratchet, and a
 	// second branch here is what tipped it over.
-	if s.requestRepoProviderRefusals(w, r, req) {
+	if s.requestRepoProviderRefusals(w, r, req, true) { // true: this is launch, #386's gate applies
 		return req, noCeiling, "", "", false
 	}
 

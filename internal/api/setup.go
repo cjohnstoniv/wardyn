@@ -123,6 +123,11 @@ type SetupStatus struct {
 	// why a member whose own AWS session had lapsed read a green chip off it).
 	// Redaction-safe by construction and KEPT for a member: see SetupModelAccess.
 	ModelAccess SetupModelAccess `json:"model_access,omitzero"`
+	// SCMAccess is THIS PRINCIPAL's Azure DevOps access state — scmaccess.go's
+	// computeSCMAccess, ModelAccess's sibling for #386. Zero value (state "")
+	// when no Azure DevOps row is configured; safe for a member by
+	// construction (their own state, computed from their own OIDC subject).
+	SCMAccess SCMAccess `json:"scm_access,omitzero"`
 	// TrustedCACerts is the number of additional roots WARDYN_TRUSTED_CA_FILE
 	// loaded at boot (0 = unset). Derived from Config.TrustedCAPEM, never a
 	// second boot-time field — see handleSetupStatus. Go + test only: no
@@ -392,87 +397,6 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 	}, true
 }
 
-// agentImageCheck reports the resolved claude-code agent image so an operator
-// sees, before a run ever fails, whether it is the Node-only convention image
-// or a provisioned override — the readiness surface for the multi-toolchain image's
-// BLOCKER-1 (a non-JS workspace exit-127s on the shipped default, silently).
-// wardynd has no docker CLI (the compose build is distroless static) and no
-// wired image-inspect capability on the Runner interface, so this is a NAME
-// heuristic against the two known-Node-only convention refs, not a real
-// `docker inspect` — labeled honestly as such rather than guessing further.
-// Always info/warn, never fail: an operator-chosen image is assumed
-// provisioned on purpose.
-func agentImageCheck(images map[string]string) SetupCheck {
-	ref := agentImage("claude-code", images)
-	if isConventionLimitedToolchainImage(ref) {
-		// Info, not warn. This is the SHIPPED DEFAULT: it is true of every stock
-		// install, it is documented rather than misconfigured, and it clears only
-		// by building or wiring a multi-toolchain image that a JS/Python operator
-		// never needs. setup_checks.go reserves "info" for exactly that —
-		// permanent or purely optional — and the first-run gate (ui setup-gate.ts)
-		// redirects on warn, so grading this warn locked every stock install in
-		// the funnel with no in-product way out.
-		return SetupCheck{
-			ID: "agent_image", Label: "Agent image toolchains", Status: "info",
-			Detail: "The configured claude-code agent image (" + ref + ") is a shipped convention image with a " +
-				"limited toolchain — a Go, Rust or Java workspace will fail verify/record with exit 127 " +
-				"(toolchain not found).",
-			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (helm: env.WARDYN_AGENT_IMAGES) (e.g. build deploy/images/full " +
-				"(the fat toolchain image), or your own image satisfying the IMAGE CONTRACT in deploy/images/README.md), or pass a " +
-				"per-run base image in the New Run wizard's \"Sandbox image\" field — Wardyn wraps it with the runner tools.",
-		}
-	}
-	// The setup connectivity probe (site_config_probe.go) dispatches the "base"
-	// image, never "claude-code" (a probe is a bare curl task, not a coding
-	// agent). The claude-code catalog row's ImageKey ALSO points at
-	// base, so on a stock deployment these are the same image and stating them
-	// as a contrast would present one image as two. They diverge only when an
-	// operator pins claude-code in WARDYN_AGENT_IMAGES — which is exactly when
-	// an operator needs to know the probe does not follow that pin.
-	probeRef := agentImage("base", images)
-	detail := "claude-code harness image: " + ref + ". "
-	if probeRef != ref {
-		detail += "The setup connectivity probe runs the `base` image instead: " + probeRef + ". "
-	}
-	return SetupCheck{
-		ID: "agent_image", Label: "Agent image toolchains", Status: "info",
-		Detail: detail + "Wardyn cannot inspect image contents from the " +
-			"control plane (no docker CLI in the distroless build) — verify a workspace to confirm its toolchains.",
-	}
-}
-
-// isConventionLimitedToolchainImage reports whether ref is one of Wardyn's own
-// shipped convention images — the ones known, by construction, to carry a
-// limited toolchain, so a Go/Rust/Java workspace fails verify/record at exit 127.
-//
-// agent-base is in this set. It is reachable because the claude-code catalog
-// row's ImageKey points at `base` (agent-claude-code is not published), so the
-// ghcr fallback resolves here — and without this entry
-// the check silently downgraded from warn to info for the DEFAULT install,
-// which is exactly the configuration that most needs the warning. Verified
-// against ghcr.io/cjohnstoniv/agent-base:0.6.4: node, npm, python3 and git are
-// present; go, java and cargo are not.
-//
-// The pre-rename :demo tag stays matched so holdout boxes keep the accurate warn.
-func isConventionLimitedToolchainImage(ref string) bool {
-	// Prefix, not an exact tag: the ghcr convention carries the daemon's own
-	// version tag, not a fixed :latest — every published tag is the same
-	// convention image.
-	for _, p := range []string{
-		"ghcr.io/cjohnstoniv/agent-claude-code:",
-		"ghcr.io/cjohnstoniv/agent-base:",
-	} {
-		if strings.HasPrefix(ref, p) {
-			return true
-		}
-	}
-	switch ref {
-	case "wardyn/agent-claude-code:local", "wardyn/agent-claude-code:demo", "wardyn/agent-base:local":
-		return true
-	}
-	return false
-}
-
 // handleSetupStatus assembles the first-run readiness snapshot. It sits behind
 // humanOrAdminAuth (reaching it already proves auth: local-mode bypass, an OIDC
 // session, or the admin bearer), so it may enumerate resident CLIs, present
@@ -708,6 +632,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Harnesses:    setupHarnessTools(siteCfg, s.cfg.AgentImages),
 		LLMReady:     llmReady,
 		ModelAccess:  modelAccess,
+		SCMAccess:    s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
@@ -719,7 +644,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// setup mutation, which stays super-only. A security admin sees the same
 	// summary a member does because there is nothing here they could act on.
 	if !s.isOperator(ctx) {
-		resp = redactSetupStatusForMember(resp, ssoScope.perUser)
+		resp = redactSetupStatusForMember(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -765,7 +690,10 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // to write); TestRedactSetupStatusForMember_DropsHostCredentialPosture pins it.
 // ownAWSRow says the aws harness row is the CALLER'S OWN capture (a per_user
 // row scoped the read to their namespace). It decides one field — see Harness.
-func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
+// ownBearerRow (#337) is narrower: per_user AND bedrock_bearer specifically,
+// false under a per_user bedrock_sso row (which has no bearer lane of its
+// own to read). It decides one field too — see Bedrock.
+func redactSetupStatusForMember(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
 	// Say the strip happened, so a reader never takes [] for "nothing is wired".
 	st.ChecksRedacted = true
@@ -784,7 +712,14 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	// already the member-safe form modelaccess.go computes SetupModelAccess
 	// from — nothing here is new information a member's own ModelAccess row
 	// (kept below) does not already imply.
+	// BearerPresent is the one exception (#337): kept under ownBearerRow only,
+	// it is already scoped to the CALLER's own namespace (bedrockBearerFor),
+	// so it carries no host-credential posture — only "does MY key exist".
+	bearerPresent := st.Bedrock.BearerPresent
 	st.Bedrock = SetupBedrock{Ready: st.Bedrock.Ready}
+	if ownBearerRow {
+		st.Bedrock.BearerPresent = bearerPresent
+	}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on

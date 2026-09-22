@@ -91,6 +91,16 @@ type ClassSupport struct {
 	// consulted BEFORE routing, so one substrate that cannot bind a drive makes
 	// the deployment unable to promise one.
 	UserDrives bool
+	// ManagedFiles reports whether this substrate can deliver
+	// runner.SandboxSpec.ManagedFiles — a root-owned file the agent cannot
+	// modify, in place before its main process runs.
+	//
+	// The orchestrator aggregates this as a CONJUNCTION, exactly as UserDrives
+	// above and for the same reason: the flag is read BEFORE routing, so one
+	// substrate that cannot deliver the file makes the deployment unable to
+	// promise it. Never overclaim — a ceiling reported as delivered and not
+	// delivered is worse than none.
+	ManagedFiles bool
 	// EphemeralDiskEnforcement names WHAT ACTUALLY BINDS a run's
 	// runner.Resources.DiskMiB on this substrate — `filesystem` (a storage-driver
 	// quota refuses the write), `eviction` (the kubelet kills the pod over the

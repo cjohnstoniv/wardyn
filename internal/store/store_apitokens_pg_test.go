@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -187,14 +188,15 @@ func TestPG_APITokens_NilGroupsStayNull(t *testing.T) {
 	}
 }
 
-// TestPG_APITokens_RefreshRolesAtLogin pins the bound the token lane did not
-// have. The role is stamped at mint and only two statements ever touched this
-// table — last_used_at and revoked_at — so demoting a human from admin left
-// every outstanding wdn_ token of theirs authenticating AS AN ADMIN until
-// someone separately remembered to revoke it, and 0.7 widened that stamp to
-// carry security_admin. The sibling credential got exactly this bound in
-// migration 0046 (RefreshSSHKeyRoles, fired from the same OnLogin hook); this
-// is its twin.
+// TestPG_APITokens_RefreshIdentityAtLogin pins the bound the token lane did not
+// have. The role and groups are stamped at mint and only two statements ever
+// touched this table — last_used_at and revoked_at — so demoting a human from
+// admin, or a group membership change, left every outstanding wdn_ token of
+// theirs authenticating as who they used to be until someone separately
+// remembered to revoke it, and 0.7 widened that stamp to carry security_admin.
+// The sibling credential got exactly this bound in migration 0046
+// (RefreshSSHKeyRoles, fired from the same OnLogin hook); this is its twin,
+// widened by #152 from role-only to role+groups+groups_truncated together.
 //
 // Four properties, each a way the UPDATE could be wrong:
 //   - it re-stamps EVERY token the principal holds, not just one;
@@ -204,7 +206,7 @@ func TestPG_APITokens_NilGroupsStayNull(t *testing.T) {
 //     what that credential was);
 //   - a principal with no tokens is not an error, which is the ordinary case
 //     for most humans and would otherwise fail every login.
-func TestPG_APITokens_RefreshRolesAtLogin(t *testing.T) {
+func TestPG_APITokens_RefreshIdentityAtLogin(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
@@ -216,9 +218,10 @@ func TestPG_APITokens_RefreshRolesAtLogin(t *testing.T) {
 	gone := seedToken(t, st, alice, "wdn_"+uuid.NewString(), nil)
 	b1 := seedToken(t, st, bob, "wdn_"+uuid.NewString(), nil)
 
-	// Alice is promoted, so her live tokens must follow at her next login.
-	if err := st.RefreshAPITokenRoles(ctx, alice, "admin"); err != nil {
-		t.Fatalf("RefreshAPITokenRoles: %v", err)
+	// Alice is promoted and her groups changed, so her live tokens must follow
+	// at her next login.
+	if err := st.RefreshAPITokenIdentity(ctx, alice, "admin", []string{"eng", "oncall"}, false); err != nil {
+		t.Fatalf("RefreshAPITokenIdentity: %v", err)
 	}
 	roleOf := func(id uuid.UUID) string {
 		t.Helper()
@@ -227,6 +230,20 @@ func TestPG_APITokens_RefreshRolesAtLogin(t *testing.T) {
 			t.Fatalf("read role: %v", err)
 		}
 		return role
+	}
+	groupsOf := func(id uuid.UUID) []string {
+		t.Helper()
+		var raw []byte
+		if err := pool.QueryRow(ctx, `SELECT groups FROM api_tokens WHERE id = $1`, id).Scan(&raw); err != nil {
+			t.Fatalf("read groups: %v", err)
+		}
+		var groups []string
+		if raw != nil {
+			if err := json.Unmarshal(raw, &groups); err != nil {
+				t.Fatalf("unmarshal groups: %v", err)
+			}
+		}
+		return groups
 	}
 	if got := roleOf(a1.ID); got != "admin" {
 		t.Errorf("a1 role = %q, want admin — the login hook did not reach every token", got)
@@ -237,13 +254,19 @@ func TestPG_APITokens_RefreshRolesAtLogin(t *testing.T) {
 	if got := roleOf(b1.ID); got != "member" {
 		t.Errorf("bob's role = %q, want member — one human's login re-stamped ANOTHER human's token", got)
 	}
+	if got := groupsOf(a1.ID); len(got) != 2 || got[0] != "eng" || got[1] != "oncall" {
+		t.Errorf("a1 groups = %v, want [eng oncall] — the login hook did not re-stamp the group half", got)
+	}
+	if got := groupsOf(b1.ID); got != nil {
+		t.Errorf("bob's groups = %v, want nil — one human's login re-stamped ANOTHER human's token", got)
+	}
 
 	// And the demotion direction, which is the one the finding is about.
 	if _, err := st.RevokeAPIToken(ctx, gone.ID, "", time.Now().UTC()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if err := st.RefreshAPITokenRoles(ctx, alice, "member"); err != nil {
-		t.Fatalf("RefreshAPITokenRoles (demote): %v", err)
+	if err := st.RefreshAPITokenIdentity(ctx, alice, "member", []string{"eng"}, true); err != nil {
+		t.Fatalf("RefreshAPITokenIdentity (demote): %v", err)
 	}
 	if got := roleOf(a1.ID); got != "member" {
 		t.Errorf("a1 role = %q after demotion, want member — a demoted human kept admin on an outstanding token", got)
@@ -260,7 +283,69 @@ func TestPG_APITokens_RefreshRolesAtLogin(t *testing.T) {
 
 	// A principal with no tokens at all: every login of every human without a
 	// token takes this path.
-	if err := st.RefreshAPITokenRoles(ctx, "nobody-"+uuid.NewString(), "admin"); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, "nobody-"+uuid.NewString(), "admin", []string{"x"}, false); err != nil {
 		t.Errorf("refresh for a principal with no tokens = %v, want nil — this fires on EVERY login", err)
+	}
+}
+
+// TestPG_APITokens_RefreshIdentityCarriesGroupsAndTruncated is the acceptance
+// proof for #152: a token minted from one session, then a login carrying a
+// LATER session's groups, reads the later session's groups — not the ones it
+// was minted with. It also pins the truncation bit: the caller's own
+// completeness signal must land verbatim, never defaulted to false (a NULL or
+// a stale-true groups_truncated reads as INCOMPLETE by design, and silently
+// clearing it would assert "these are all their groups" for a snapshot that
+// is not — the wrong direction for an authorization decision).
+func TestPG_APITokens_RefreshIdentityCarriesGroupsAndTruncated(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	principal := "carol-" + uuid.NewString()
+	raw := "wdn_" + uuid.NewString()
+
+	// Mint under session A: complete snapshot, two groups.
+	created := seedToken(t, st, principal, raw, []string{"team-a", "team-b"})
+	if created.GroupsTruncated != nil {
+		t.Fatalf("seedToken left groups_truncated = %v, want nil at mint (CreateAPIToken does not stamp it)", created.GroupsTruncated)
+	}
+
+	// Sign in again as session B: a DIFFERENT group set, and a truncated one —
+	// exactly the shape sessionGroups (internal/auth/oidc/derive.go) reports
+	// for a human who fell off the snapshot cap or hit an IdP-side overage.
+	sessionBGroups := []string{"team-c"}
+	if err := st.RefreshAPITokenIdentity(ctx, principal, "member", sessionBGroups, true); err != nil {
+		t.Fatalf("RefreshAPITokenIdentity: %v", err)
+	}
+
+	// The token now resolves session B's groups — the live, auth-time lookup
+	// every request actually uses (GetAPITokenByRaw), not a raw column peek.
+	got, err := st.GetAPITokenByRaw(ctx, raw)
+	if err != nil {
+		t.Fatalf("lookup after refresh: %v", err)
+	}
+	if len(got.Groups) != 1 || got.Groups[0] != "team-c" {
+		t.Errorf("groups after a second session's login = %v, want %v — the token still replays the MINTING session's groups", got.Groups, sessionBGroups)
+	}
+	if got.GroupsTruncated == nil || !*got.GroupsTruncated {
+		t.Errorf("groups_truncated after a second session's login = %v, want true — the login's own completeness bit "+
+			"was dropped or defaulted rather than passed through", got.GroupsTruncated)
+	}
+
+	// A THIRD login with a complete snapshot must be able to clear the bit —
+	// proving it is not a one-way ratchet, i.e. RefreshAPITokenIdentity binds
+	// truncated EXACTLY as given, not OR'd with whatever was there before.
+	if err := st.RefreshAPITokenIdentity(ctx, principal, "member", []string{"team-c", "team-d"}, false); err != nil {
+		t.Fatalf("RefreshAPITokenIdentity (session C): %v", err)
+	}
+	got, err = st.GetAPITokenByRaw(ctx, raw)
+	if err != nil {
+		t.Fatalf("lookup after third login: %v", err)
+	}
+	if got.GroupsTruncated == nil || *got.GroupsTruncated {
+		t.Errorf("groups_truncated after a COMPLETE third login = %v, want false — a stale truncated bit was never cleared", got.GroupsTruncated)
+	}
+	if len(got.Groups) != 2 || got.Groups[0] != "team-c" || got.Groups[1] != "team-d" {
+		t.Errorf("groups after third login = %v, want [team-c team-d]", got.Groups)
 	}
 }

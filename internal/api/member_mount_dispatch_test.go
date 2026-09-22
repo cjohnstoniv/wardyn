@@ -78,6 +78,7 @@ func createMemberRun(t *testing.T, srv *Server, fr *fakeRunner, session *http.Co
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	fr.waitForSandbox(t) // dispatch runs after the 201 (runs_create_launch.go)
 	if fr.createCalls != 1 {
 		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}

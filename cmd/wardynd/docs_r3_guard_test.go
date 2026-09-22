@@ -120,7 +120,7 @@ func TestDesktopDocSecretTierMatchesTheRouter(t *testing.T) {
 	for _, want := range []struct{ file, src string }{
 		{"runs_policy.go", "func (s *Server) secretOwnerFromRequest("},
 		{"secrets.go", `"?owner= is admin-only"`},
-		{"secrets.go", "sinkReservedSecret(name) || name == bedrockAPIKeySecret"},
+		{"secrets.go", `if owner != "" && sinkReservedSecret(name) {`},
 	} {
 		if !strings.Contains(readSrc(t, "internal", "api", want.file), want.src) {
 			t.Errorf("internal/api/%s no longer carries %q — DESKTOP.md's secret paragraph names it", want.file, want.src)
@@ -136,29 +136,44 @@ func TestDesktopDocSecretTierMatchesTheRouter(t *testing.T) {
 		"`secretOwnerFromRequest` returns `\"\"` for an operator",
 		"`?owner=<principal>`",
 	)
-	// Every Bedrock/SigV4 name the write boundary refuses to a member has to be
-	// in the doc's list, derived from the constants rather than typed twice.
+	// Every AWS SigV4 name the write boundary refuses to a member has to be in
+	// the doc's list, derived from the constants rather than typed twice.
 	for _, name := range bedrockReservedSecretNames(t) {
 		if !strings.Contains(doc, "`"+name+"`") {
 			t.Errorf("docs/DESKTOP.md's admin-only secret list omits %q, which writableSecretName refuses to a member", name)
 		}
 	}
+	// And the one name that is NOT refused any more has to read that way, or the
+	// doc still tells a member the door is shut on a key they can now store.
+	mustNotSay(t, doc, "docs/DESKTOP.md",
+		"`aws-session-token`, `bedrock-api-key`), which a non-operator `PUT`/`DELETE`",
+		"`bedrock-api-key` and the AWS SigV4 pair are refused for a member's own",
+	)
+	mustSay(t, doc, "docs/DESKTOP.md",
+		"a member may store their own `bedrock-api-key`",
+	)
 }
 
-// bedrockReservedSecretNames is the four-name set a non-operator PUT/DELETE is
-// refused, read off the constants the refusal is written against.
+// bedrockReservedSecretNames is the AWS SigV4 name set a non-operator PUT/DELETE
+// is refused, read off the constants the refusal is written against.
+//
+// bedrock-api-key is deliberately excluded and the exclusion is asserted, not
+// assumed: the BEARER is the one Bedrock name a member may write for themselves,
+// and the tempting one-character widening of writableSecretName would hand them
+// these three as well.
 func bedrockReservedSecretNames(t *testing.T) []string {
 	t.Helper()
 	src := readSrc(t, "internal", "api", "runs_bedrock.go")
 	re := regexp.MustCompile(`bedrock\w*Secret\s+=\s+"([a-z0-9-]+)"`)
 	var out []string
 	for _, m := range re.FindAllStringSubmatch(src, -1) {
-		if !slices.Contains(out, m[1]) {
-			out = append(out, m[1])
+		if m[1] == "bedrock-api-key" || slices.Contains(out, m[1]) {
+			continue
 		}
+		out = append(out, m[1])
 	}
-	if len(out) < 4 {
-		t.Fatalf("found %d Bedrock secret-name constants (%v) — this guard's matcher needs updating, it is checking almost nothing", len(out), out)
+	if len(out) < 3 {
+		t.Fatalf("found %d AWS SigV4 secret-name constants (%v) — this guard's matcher needs updating, it is checking almost nothing", len(out), out)
 	}
 	slices.Sort(out)
 	return out

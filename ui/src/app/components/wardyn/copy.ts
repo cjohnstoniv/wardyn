@@ -8,6 +8,7 @@
 // every-tier note live in cc-meta.ts (CC_META / CONFINEMENT_CONSTANT_NOTE) —
 // import from there, never duplicate them here.
 import type { ApprovalKind as WireApprovalKind, ApprovalRequest, ApprovalScope } from "../../lib/types";
+import { isAdoCapabilityRequest } from "../../lib/types";
 import { shortTime } from "../../lib/format";
 
 // The single residual-risk prefix (D11) — everywhere a tier is explained, never
@@ -81,10 +82,22 @@ export const CAPABILITY = {
   // with mint/TTL claims there. cloud_sts can't be minted at all (needs SPIRE).
   brokerLine:
     "The run works through a short-lived, scoped credential — your stored key stays in Wardyn.",
-  // Honest exception: a git PAT grant is injected into git INSIDE the sandbox as
-  // the credential, so whatever's running there can read it. Screens rendering a
-  // git_pat grant must use THIS line, not brokerLine.
+  // #381: since 0.7 WARDYN_GIT_PAT_BROKER defaults ON, so a git_pat grant's
+  // stored token is rewritten to a broker path and attached by the proxy on
+  // the outbound leg — it never enters the sandbox, the same posture
+  // brokerLine describes. It still isn't brokerLine's line, though: a PAT is
+  // exactly as long-lived and unscoped as the value the operator stored, never
+  // the "short-lived, scoped" credential brokerLine promises, so it keeps its
+  // own honesty line rather than borrowing that one. This is the DEFAULT
+  // (broker-on) shape; gitPatLineResident below is what remains true with the
+  // switch off.
   gitPatLine:
+    "A stored git access token is attached to the request by the proxy on the outbound leg — it never enters the sandbox.",
+  // gitPatLineResident is gitPatLine's pre-0.7 shape: still exactly correct
+  // for an operator who set WARDYN_GIT_PAT_BROKER=off, where a git_pat grant
+  // reverts to being injected into git INSIDE the sandbox as the credential,
+  // so whatever's running there can read it.
+  gitPatLineResident:
     "A git access token is handed to git inside the sandbox — the process running there can read it.",
   // Honest exception (same shape as gitPatLine): an ssh_key grant writes a
   // RESIDENT private key file for the sandbox's git-over-SSH client to read —
@@ -298,8 +311,21 @@ export const ALWAYS_NEEDS_WORKSPACE = "Always needs a workspace — this run isn
 // ApprovalStateBadge, which already says Approved/Denied — this is just the
 // "· once" half.
 export function approvalScopeBadge(
-  item: Pick<ApprovalRequest, "kind" | "state" | "decision_scope" | "decision_expires_at">,
+  item: Pick<ApprovalRequest, "kind" | "state" | "decision_scope" | "decision_expires_at" | "grant_id" | "requested_scope">,
 ): string | undefined {
+  // S10 round 2 (F11): a decided ADO escalation reads the canon
+  // OUTCOME_ALLOWED_ONCE/RUN phrase (§7.6), not the lowercase word every
+  // other kind shares — adoDecisionRule never produces until/always, and a
+  // DENIED row needs no extra badge (#414: every ado deny means the same
+  // thing regardless of scope). Hand-copied literals, not an ADO import
+  // (round 3): this file is EAGER (primitives.tsx), and ado-entra-copy.ts is
+  // #415's full ~300-line canon — importing it here blew the entry-chunk
+  // budget. Cross-checked in copy-approval-scope-badge.test.ts, same
+  // discipline lib/reauth-waiting-copy.ts's own hand-copied strings follow.
+  if (isAdoCapabilityRequest(item)) {
+    if (item.state !== "APPROVED" || !item.decision_scope) return undefined;
+    return item.decision_scope === "once" ? "Allowed once" : "Allowed for this run";
+  }
   if (item.kind !== "egress_domain") return undefined;
   if (item.state !== "APPROVED" && item.state !== "DENIED") return undefined;
   const scope = item.decision_scope;
@@ -711,6 +737,30 @@ export const RUNS_MEMBER_EMPTY = {
   BODY: "Nothing is running yet. Start one against a workspace your admin has made available to you.",
   ACTION: "New run",
   GUIDE: MEMBER_GETTING_STARTED.TITLE,
+} as const;
+
+// #160 — TitleGroup's second chip row (runs/title-group.tsx): what a group's
+// runs are waiting on, one counted chip per reason instead of a bare count.
+// `n` is always the GROUP's count for that reason — CONSOLE-RULES §10's "say
+// how many", never "some runs need attention".
+export const RUNS_WAIT = {
+  HELD: (n: number) => `${n} awaiting confirmation`,
+  REAUTH: (n: number) => `${n} awaiting AWS sign-in`,
+  STARTING: (n: number) => `${n} waiting to start`,
+  // Absent while anything else waits; a single UNCOUNTED chip, and only once
+  // the approvals fetch has resolved enough to know the group is really clean.
+  NONE: "Nothing waiting",
+  // The pre-fetch window: nothing derived from the approvals fetch may paint
+  // before it resolves, so this stands alone rather than reading as "nothing
+  // is held" (the empty-Map default's lie).
+  CHECKING: "Checking…",
+  // The card's own sentence once a hold isHeld no longer counts as live (the
+  // 60-minute stale-hold ceiling, lib/types/approvals.ts) — replaces the
+  // per-run reason line, not the group's chip below.
+  STALE_CARD: "Was held — check the run",
+  // The header's uncounted-elsewhere chip for the same fact, at group
+  // granularity: a degraded claim, not silence about what happened here.
+  STALE_GROUP: (n: number) => (n === 1 ? "1 was held" : `${n} were held`),
 } as const;
 
 // Demo episode rows (episode-card.tsx) — the funnel steps' "Watch" affordance

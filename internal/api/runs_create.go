@@ -254,6 +254,61 @@ func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass,
 	return enforced, nil
 }
 
+// credentialConfinementBelowFloor is the ONE value the run.create audit row's
+// credential_confinement field carries today — a closed vocabulary, like
+// confinement_source's requested/defaulted, so an incident review can GROUP on
+// it instead of parsing free text. Absent (field omitted) covers everything
+// else: no SSO-delivered credential, or one whose enforced confinement already
+// meets CC3.
+const credentialConfinementBelowFloor = "below_floor"
+
+// credentialConfinementAdvisory is the WARN-never-refuse counterpart to the
+// blast-radius floor above (0.8 #150). A stored AWS SSO credential is
+// delivered to the sandbox at DISPATCH — after enforcedConfinement has already
+// resolved the class above — so it is never itself an eligible grant and
+// composer.RequiredConfinementFloor never sees it: folding it in there would
+// change ENFORCEMENT, which is explicitly out of scope here. Silence would
+// leave a run holding a captured AWS identity under a confinement class
+// nothing chose for that reason; this says so instead of raising the floor for
+// it, because a host that can only ever offer the weakest class must still be
+// able to launch — adding a refusal here would break every single-class
+// deployment.
+//
+// ssoDelivered is the caller's own answer to "did this run's model credential
+// resolve to the captured-AWS-SSO lane" (selectedMechanism ==
+// types.AgentMechanismBedrockSSO, i.e. resolveBedrockAuth's ssoInject arm) —
+// resolved once by the caller from the SAME lane resolution the
+// model-credential grade already ran (modelCredentialFacts.Mechanism), never
+// re-derived here. Pure, with the same purity contract as enforcedConfinement,
+// so it is called from both the launch path and the preflight path off the
+// same resolved body — the two can never disagree about whether a run carries
+// the advisory.
+//
+// spec is currently unread: it rides along for the same reason
+// enforcedConfinement takes the whole spec rather than just the fields it
+// needs today — a future policy-level exception would have somewhere to read
+// from without a signature change.
+func credentialConfinementAdvisory(spec types.RunPolicySpec, enforced types.ConfinementClass, ssoDelivered bool) string {
+	if !ssoDelivered || confinementGE(enforced, types.CC3) {
+		return ""
+	}
+	return fmt.Sprintf(credentialConfinementAdvisorySentence, enforced)
+}
+
+// appendCredentialConfinementAdvisory is the two call sites' shared plumbing
+// around credentialConfinementAdvisory (runs.go's handleCreateRun and
+// preflight.go's handlePreflightRun): append the sentence to warnings when it
+// fires, and report whether it did, since the create path's audit row needs
+// that same answer for credential_confinement. mechanism is the resolved
+// modelCredentialFacts.Mechanism both callers already have in hand.
+func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicySpec, enforced types.ConfinementClass, mechanism string) ([]string, bool) {
+	advisory := credentialConfinementAdvisory(spec, enforced, mechanism == string(types.AgentMechanismBedrockSSO))
+	if advisory == "" {
+		return warnings, false
+	}
+	return append(warnings, advisory), true
+}
+
 // resolveEnforcedConfinement resolves the run's confinement class and gates it
 // against what the runner and identity provider can actually deliver (invariant
 // 5, fail closed). The request value wins when set (never WEAKER than the
