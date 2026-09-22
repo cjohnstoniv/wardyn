@@ -1,0 +1,843 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — Azure DevOps per-person sign-in mock</title>
+<!--
+  Azure DevOps / Microsoft Entra mock, one page · static, for owner review.
+  Every visible PRODUCT string below is verbatim from
+  docs/design/ado-entra-prompt.md §7 (DRAFT tables — the owner freezes them at this
+  gate; the implementation later transcribes them into
+  ui/src/app/lib/ado-entra-copy.ts). Strings §7.1 marks as REUSED canon come from
+  wardyn/copy.ts / workspace-providers-copy.ts / people-access-copy.ts /
+  connection-cards.tsx and are rendered unchanged — never re-frozen.
+
+  No build, no deps, no fetch — open the file. The only script is the light/dark
+  toggle carried over from the providers mock. Tokens and idioms are mock.css (that
+  mock's block, plus four idioms listed at the end of it).
+
+  SCAFFOLD vs PRODUCT: the sticky bar, the `.tag` state labels, the `.varlabel`
+  variant strips and the HTML comments are REVIEW SCAFFOLDING — 11px uppercase,
+  muted, outside the `.frame`. Everything inside a `.frame` is the product.
+
+  THE ONE THING THIS MOCK MUST GET RIGHT (live measurement, FINDINGS.md F-LIVE-1):
+  an Entra access token carries EVERY Azure DevOps scope that person has consented
+  to. Requesting a subset changes nothing. So no string anywhere on this page says
+  or implies that a run's token is scoped to the run. The three honest claims, drawn
+  as a fixed three-row panel wherever the question arises:
+    1. WHO the run acts as          — enforced by Azure DevOps (their own sign-in)
+    2. WHAT that run may do with it — enforced by Wardyn (the proxy's own check)
+    3. the token's own reach        — narrowed by NOBODY, unless the row is in
+                                      minted-token mode, where Azure DevOps mints
+                                      and bounds the run its own token.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Azure DevOps, per person — mock, one round · the row, the sign-in, the request card, the launch door, the after view</h1>
+    <div class="sub">Product strings verbatim from <code>docs/design/ado-entra-prompt.md</code> §7. Static: nothing here is wired.</div>
+  </div>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- =================================================================== -->
+<!-- ===== STATE 1 ===== The provider row editor — per person, sign-in mode -->
+<!-- =================================================================== -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>State 1</span><b>The Azure DevOps row, credential = per person, token = the person's sign-in (SUPER). The ceiling ("may ever ask for") over the default profile ("starts with"), and the enforcement panel that carries F-LIVE-1</b></div>
+  <div class="frame">
+    <div class="pad ph">
+      <div>
+        <h2>Workspace providers</h2>
+        <p class="lead">Where work can come from, and how big it can get. Enable a git provider to bound which repositories a run may clone; set the storage ceilings every run and every drive is held to.</p>
+      </div>
+    </div>
+    <div class="tabs"><span class="sel">Git providers</span><span>Storage</span><span>Agents</span></div>
+
+    <div class="prow" style="margin-top:14px">
+      <div class="head">
+        <span class="sw on" aria-hidden="true"></span>
+        <div class="grow"><span class="kind">Azure DevOps</span><span class="hosts">dev.azure.com/acme</span></div>
+        <span class="chip neutral">Enabled</span>
+        <button class="btn sm" type="button">Remove</button>
+      </div>
+      <div class="body">
+        <div class="form two">
+          <div class="f">
+            <label>Allowed addresses</label>
+            <div class="ctl ta mono"><span>https://dev.azure.com/acme</span></div>
+            <div class="hint wide">One per line, over HTTPS. A repository is admitted when its URL starts with one of these.</div>
+          </div>
+          <div class="f">
+            <label>Permitted lanes</label>
+            <!-- The new lane joins the three LANE_META chips, keeping its own residency tone.
+                 ENTRA is success (brokered — nothing enters the sandbox), like App. -->
+            <div class="lanes">
+              <span class="lc"><span class="box on" style="width:15px;height:15px;border-radius:4px;background:var(--primary);display:inline-block"></span><span class="chip success" title="The run works as you, through a token the proxy holds — nothing is written into the sandbox.">Microsoft Entra · brokered</span></span>
+              <span class="lc off"><span style="width:15px;height:15px;border-radius:4px;border:1px solid var(--border-strong);display:inline-block"></span><span><span class="chip success">App · brokered</span><span class="why">Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent.</span></span></span>
+              <span class="lc off"><span style="width:15px;height:15px;border-radius:4px;border:1px solid var(--border-strong);display:inline-block"></span><span><span class="chip info">PAT · brokered</span><span class="why">Turned off while this row signs in per person. A stored token would put every run back on one account.</span></span></span>
+              <span class="lc off"><span style="width:15px;height:15px;border-radius:4px;border:1px solid var(--border-strong);display:inline-block"></span><span><span class="chip warning">SSH · resident</span><span class="why">Turned off while this row signs in per person. A stored key would put every run back on one account.</span></span></span>
+            </div>
+            <div class="hint wide">Which credential a run may use for this provider. Turning one off does not delete its stored secret.</div>
+          </div>
+        </div>
+
+        <hr class="rule">
+        <div class="form two">
+          <div class="f">
+            <label>Credential</label>
+            <div class="seg"><span>Shared token</span><span class="sel">Each person signs in</span></div>
+            <div class="hint wide">Each person signs in to Azure DevOps themselves. Their runs act as them, Azure DevOps applies their own permissions, and removing them from your directory ends it.</div>
+          </div>
+          <div class="f">
+            <label>Token</label>
+            <div class="seg"><span class="sel">Their sign-in</span><span>One Azure DevOps mints per run</span></div>
+            <div class="hint wide">Their sign-in is renewed in the background and never stored anywhere a run can read. A minted token is bounded by Azure DevOps itself, and exists there until Wardyn revokes it.</div>
+          </div>
+        </div>
+
+        <div class="form two" style="padding-top:0">
+          <div class="f">
+            <label>Directory (tenant) ID</label>
+            <div class="ctl mono">8f026763-0f1e-4c2a-9c3d-5b7a1d0e44c1</div>
+            <div class="hint wide">The Microsoft Entra directory your organisation signs in to.</div>
+          </div>
+          <div class="f">
+            <label>Application (client) ID</label>
+            <div class="ctl mono off">c2e308c7-6b11-4f0a-84d2-9e3c77a2b510</div>
+            <div class="hint wide">Filled from the application this console signs in with. Wardyn can only tie an Azure DevOps sign-in to the person's own Wardyn session when both use one application.</div>
+          </div>
+        </div>
+
+        <!-- ===== The ceiling / profile pair. The two labels are the whole point of the
+             surface, so they sit side by side with their one-line meanings, never in
+             a collapsed "advanced" block. ===== -->
+        <hr class="rule">
+        <div class="pad" style="padding:14px 14px 4px">
+          <h3 class="sectitle">What a run may do here</h3>
+          <p class="secsub">Two lists, and the difference between them matters: the ceiling is what a run may ever ask for, the defaults are what it starts with.</p>
+        </div>
+        <div class="grid2" style="padding:6px 14px 14px">
+          <div>
+            <label class="mono" style="display:none"></label>
+            <div style="font-size:12px;font-weight:500">Capability ceiling</div>
+            <p class="secsub" style="margin-bottom:8px">What a run may ever ask for. Anything not ticked here is refused outright — nobody can approve it, not the person and not you.</p>
+            <div style="display:flex;flex-direction:column;gap:9px">
+              <span class="cb"><span class="box on"></span><span class="txt"><b style="font-size:13px;font-weight:500">Read</b><p>Clone, fetch, and read work items, pipelines and policies.</p></span></span>
+              <span class="cb"><span class="box on"></span><span class="txt"><b style="font-size:13px;font-weight:500">Push</b><p>Push commits, and create or move a branch no policy protects.</p></span></span>
+              <span class="cb"><span class="box on"></span><span class="txt"><b style="font-size:13px;font-weight:500">Pull requests</b><p>Open, update, comment on and complete a pull request.</p></span></span>
+              <span class="cb"><span class="box on"></span><span class="txt"><b style="font-size:13px;font-weight:500">Branch policies</b><p>Create, change or delete a branch policy.</p></span></span>
+              <span class="cb"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Push past a branch policy</b><p>Move a policy-protected branch, or complete a pull request with its policies bypassed.</p></span></span>
+              <span class="cb"><span class="box on"></span><span class="txt"><b style="font-size:13px;font-weight:500">Run pipelines</b><p>Queue a build or a release.</p></span></span>
+              <span class="cb"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Repository settings</b><p>Rename, fork, or change a repository's own settings.</p></span></span>
+              <span class="cb"><span class="box on"></span><span class="txt"><b style="font-size:13px;font-weight:500">Work items</b><p>Create and edit work items.</p></span></span>
+              <span class="cb"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Wiki</b><p>Create and edit wiki pages.</p></span></span>
+              <span class="cb"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Anything Wardyn does not recognise</b><p>Off: a write Wardyn can't name is refused and can't be approved. On: it can be asked for, named by its address. Leave it off unless a tool you need is being refused.</p></span></span>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:500">Every run starts with</div>
+            <p class="secsub" style="margin-bottom:8px">What a run has before anyone decides anything. Everything else on the ceiling is held at the proxy until you or the person who started the run allows it.</p>
+            <div style="display:flex;flex-direction:column;gap:9px">
+              <span class="cb"><span class="box on"></span><span class="txt"><b style="font-size:13px;font-weight:500">Read</b></span></span>
+              <span class="cb"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Push</b></span></span>
+              <span class="cb"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Pull requests</b></span></span>
+              <span class="cb"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Branch policies</b></span></span>
+              <span class="cb off"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Push past a branch policy</b><p>Not on the ceiling, so it can't be a default.</p></span></span>
+              <span class="cb"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Run pipelines</b></span></span>
+              <span class="cb off"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Repository settings</b><p>Not on the ceiling, so it can't be a default.</p></span></span>
+              <span class="cb"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Work items</b></span></span>
+              <span class="cb off"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Wiki</b><p>Not on the ceiling, so it can't be a default.</p></span></span>
+              <span class="cb off"><span class="box"></span><span class="txt"><b style="font-size:13px;font-weight:500">Anything Wardyn does not recognise</b><p>Not on the ceiling, so it can't be a default.</p></span></span>
+            </div>
+            <div class="note plain" style="max-width:none"><span>Read-only is the honest default. A run that only reads never interrupts anyone; a run that starts able to push never asks.</span></div>
+          </div>
+        </div>
+
+        <!-- ===== The F-LIVE-1 panel. Three fixed rows, always all three, in this order.
+             Row 3 is the one the product must not lie about. ===== -->
+        <hr class="rule">
+        <div class="pad" style="padding:14px">
+          <h3 class="sectitle">Where this is enforced</h3>
+          <p class="secsub" style="margin-bottom:10px">Three different things, held by three different parties. Wardyn states all three because only two of them are Wardyn's.</p>
+          <div class="enf">
+            <div class="r forge"><b>Who a run acts as</b><span>Azure DevOps. It is that person's own sign-in, so their own Azure DevOps permissions apply and a repository they can't read stays unreadable. Every commit and every API call is recorded under their name.</span></div>
+            <div class="r"><b>What a run may do</b><span>Wardyn. Every Azure DevOps request is read at the proxy and refused if this run hasn't been granted it. This check is what bounds the run — not the token.</span></div>
+            <div class="r none"><b>The token's own reach</b><span>Nobody narrows it. A Microsoft Entra sign-in token carries every Azure DevOps permission that person has consented to, and asking for less changes nothing. Switch Token to “One Azure DevOps mints per run” to have Azure DevOps bound it too.</span></div>
+          </div>
+          <div class="note plain" style="max-width:none"><b>Always refused, on every Azure DevOps row</b><span>Creating or revoking tokens, service hooks, and installing extensions. They are not on the ceiling, they can't be approved, and no change here allows them.</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pad" style="padding-top:0;padding-bottom:14px">
+      <div class="note plain" style="margin-top:0"><span>Only the GitHub App lane keeps its token outside the sandbox — a PAT or SSH key enters it for the clone, then is wiped. Public repos clone with no credential at all.</span></div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="display:flex;gap:10px;justify-content:flex-end"><button class="btn primary" type="button">Save providers</button></div>
+  </div>
+</section>
+
+<!-- =================================================================== -->
+<!-- ===== STATE 2 ===== Row variants: shared (today), minted mode, refusals -->
+<!-- =================================================================== -->
+<section class="state">
+  <div class="tag"><span>State 2</span><b>The other three shapes of the same row — shared token (today, unchanged, with the honest cost stated); minted-token mode (the enforcement panel's third row changes, and only then); and the write refusals</b></div>
+  <div class="frame">
+    <div class="varlabel"><b>Credential: shared token</b> — today's behaviour, byte-identical, and the one sentence that was missing from it</div>
+    <div class="pad" style="padding-bottom:0">
+      <div class="form two" style="padding:0 0 12px">
+        <div class="f">
+          <label>Credential</label>
+          <div class="seg"><span class="sel">Shared token</span><span>Each person signs in</span></div>
+          <div class="hint wide">One token an admin stores. Every run uses it, so Azure DevOps records every commit and every API call under that one account, whoever started the run.</div>
+        </div>
+        <div class="f">
+          <label>Token</label>
+          <div class="seg"><span class="sel off">Their sign-in</span><span class="off">One Azure DevOps mints per run</span></div>
+          <div class="hint wide">There is one token and it is the one you stored. This choice appears when each person signs in.</div>
+        </div>
+      </div>
+      <div class="enf">
+        <div class="r none"><b>Who a run acts as</b><span>The account your stored token belongs to — the same one for everybody. Azure DevOps applies that account's permissions, not the person's, and its audit names that account.</span></div>
+        <div class="r"><b>What a run may do</b><span>Wardyn's host and address checks only. Capabilities, and the requests they hold, need each person to sign in.</span></div>
+        <div class="r none"><b>The token's own reach</b><span>Whatever you gave the token when you created it in Azure DevOps. Wardyn can neither narrow it nor expire it.</span></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Token: one Azure DevOps mints per run</b> — the only mode in which the forge bounds a run, and the cost of it said plainly</div>
+    <div class="pad" style="padding-bottom:0">
+      <div class="enf">
+        <div class="r forge"><b>Who a run acts as</b><span>Azure DevOps. It is that person's own sign-in, so their own Azure DevOps permissions apply and a repository they can't read stays unreadable. Every commit and every API call is recorded under their name.</span></div>
+        <div class="r"><b>What a run may do</b><span>Wardyn. Every Azure DevOps request is read at the proxy and refused if this run hasn't been granted it. This check is what bounds the run — not the token.</span></div>
+        <div class="r forge"><b>The token's own reach</b><span>Azure DevOps. It mints this run its own token, limited to the capabilities the run has been granted and to the run's lifetime, and widens it only when you allow more.</span></div>
+      </div>
+      <div class="note amber" style="max-width:none"><b>A minted token is more exposed than a sign-in</b><span>It exists at Azure DevOps under that person's name until Wardyn revokes it — at the end of the run, or on the next sweep if this Wardyn was stopped mid-run. A sign-in is never written anywhere and needs no cleanup. Choose this when you need Azure DevOps itself to bound the run.</span></div>
+      <div class="note plain" style="max-width:none"><span>Your organisation may refuse token creation by policy. If it does, runs on this row are refused with the policy named, and nothing falls back to a wider token.</span></div>
+    </div>
+
+    <div class="varlabel"><b>Write refusals</b> — the console contributes the heading; the body is the server's own 400, verbatim</div>
+    <div class="pad">
+      <div class="note red" style="max-width:none;margin-top:0"><b>These providers can't be saved as written</b><span><span class="mono">entra</span>: "policy_bypass" is in default_profile but not in capability_ceiling</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span><span class="mono">entra</span>: the Microsoft Entra lane is available for dev.azure.com and &lt;org&gt;.visualstudio.com only — an Azure DevOps Server host signs in with a stored token</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span><span class="mono">entra</span>: client_id must be this deployment's sign-in application (<span class="mono">c2e308c7-…</span>) — Wardyn ties an Azure DevOps sign-in to the person's own session by matching the two, and cannot do that across applications</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span><span class="mono">entra</span>: tenant_id must be a GUID</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span><span class="mono">credential_source</span>: per_user needs the entra lane on this row</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span><span class="mono">entra</span>: "tokens" can't be put on capability_ceiling — creating and revoking Azure DevOps tokens is refused on every row</span></div>
+    </div>
+
+    <div class="varlabel"><b>Saved, narrowed</b> — an admin taking a capability off the ceiling while runs are going</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:12px;padding-bottom:18px">
+      <div class="toast warn"><b>Providers saved.</b><span>2 runs were granted Branch policies and no longer hold it — their next request for it is refused.</span></div>
+      <div class="note amber" style="max-width:none;margin-top:0"><span>2 runs were granted Branch policies and no longer hold it — their next request for it is refused.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== -->
+<!-- ===== STATE 3 ===== Member sign-in: not connected → connect → connected -->
+<!-- =================================================================== -->
+<section class="state">
+  <div class="tag"><span>State 3</span><b>Member sign-in, on Getting started — not signed in, the dialog that sends them to Microsoft, and signed in (which identity, which capabilities, when it ends)</b></div>
+  <div class="frame">
+    <div class="pad ph">
+      <div><h2>Getting started</h2></div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="card">
+        <h4 class="sectitle">What's set up for you</h4>
+        <p class="secsub" style="margin-top:6px">Your admin configured the barrier, network and shared credentials. Your runs inherit them.</p>
+        <div class="chips">
+          <span class="chip neutral">Barrier · Fence</span>
+          <span class="chip success"><i class="dot"></i>Model access · Provided by your admin</span>
+          <span class="chip success"><i class="dot"></i>Sign-in · SSO</span>
+          <span class="chip warning">Azure DevOps · Not signed in</span>
+        </div>
+        <p class="secsub" style="margin-top:8px">Runs that clone from Azure DevOps act as you. Sign in once — it takes a click.</p>
+        <div style="margin-top:12px"><button class="btn primary" type="button">Sign in to Azure DevOps</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>The dialog</b> — what they are about to agree to, and what it does and does not bound (the consent screen is Microsoft's; this is the sentence before it)</div>
+    <div class="dlgwrap">
+      <div class="dlg" style="max-width:560px">
+        <h3>Sign in to Azure DevOps</h3>
+        <p>You'll go to your organisation's Microsoft sign-in and come straight back. After that your runs reach <span class="mono">dev.azure.com/acme</span> as you, instead of through one account shared by everyone.</p>
+        <p style="margin-top:10px">Microsoft may ask you to consent once. What you consent to is what Wardyn is able to ask Azure DevOps for at all. What any one run may actually do is smaller, and Wardyn holds it there:</p>
+        <dl class="kv" style="margin-top:10px">
+          <dt>Starts with</dt><dd>Read</dd>
+          <dt>Can ask you for</dt><dd>Push · Pull requests · Branch policies · Run pipelines · Work items</dd>
+          <dt>Never</dt><dd>Push past a branch policy · Repository settings · Wiki · creating tokens · service hooks · extensions</dd>
+        </dl>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Continue to Microsoft</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Signed in</b> — who, where, what, until when; and the same three-row truth the admin saw, in the member's words</div>
+    <div class="pad">
+      <div class="card">
+        <h4 class="sectitle">Azure DevOps</h4>
+        <div class="chips" style="margin-top:8px"><span class="chip success"><i class="dot"></i>Azure DevOps · Signed in as you</span></div>
+        <dl class="kv" style="margin-top:12px">
+          <dt>Signed in as</dt><dd>dana.okafor@acme.com<span class="sub">Your runs act as this account, and Azure DevOps records them under it.</span></dd>
+          <dt>Organisation</dt><dd><span class="mono">dev.azure.com/acme</span></dd>
+          <dt>Starts with</dt><dd>Read</dd>
+          <dt>Can ask you for</dt><dd>Push · Pull requests · Branch policies · Run pipelines · Work items</dd>
+          <dt>Never</dt><dd>Push past a branch policy · Repository settings · Wiki</dd>
+          <dt>Sign-in ends</dt><dd>Renewed while you keep using it<span class="sub">Wardyn renews it in the background. If your organisation ends your sessions, or you're removed from the directory, it stops and you sign in again.</span></dd>
+        </dl>
+        <div class="enf" style="margin-top:12px">
+          <div class="r forge"><b>Who your runs act as</b><span>Azure DevOps. It is your own sign-in, so your own permissions apply — a repository you can't read, your run can't read either.</span></div>
+          <div class="r"><b>What they may do</b><span>Wardyn. Every request is read before it leaves and refused unless the run was granted it. That check is what holds a run to the list above.</span></div>
+          <div class="r none"><b>The sign-in's own reach</b><span>It covers everything you consented to for Azure DevOps — Wardyn doesn't make it smaller. That is why the check above exists, and why every one of these is recorded.</span></div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px"><button class="btn sm" type="button">Sign in again</button><button class="btn sm ghost" type="button">Sign out of Azure DevOps</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Sign out</b> — the confirm</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Sign out of Azure DevOps?</h3>
+        <p>Runs you start after this can't reach Azure DevOps until you sign in again. Runs already going keep the sign-in they started with.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn" type="button">Sign out</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== -->
+<!-- ===== STATE 4 ===== The six access states -->
+<!-- =================================================================== -->
+<section class="state">
+  <div class="tag"><span>State 4</span><b>The six access states this design reuses from Model access — one chip, one action line, one button each. Success tone for <span class="mono">live</span> only; never green over a dead sign-in, never neutral either</b></div>
+  <div class="frame">
+    <table>
+      <thead><tr><th style="width:15ch">State</th><th style="width:30ch">Chip</th><th>Action line</th><th style="width:22ch">Button</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="nm mono">live</td>
+          <td><span class="chip success"><i class="dot"></i>Azure DevOps · Signed in as you</span></td>
+          <td class="sub" style="max-width:none">—</td>
+          <td class="sub" style="max-width:none">—</td>
+        </tr>
+        <tr>
+          <td class="nm mono">expiring</td>
+          <td><span class="chip warning">Azure DevOps · Expiring</span></td>
+          <td>Sign in again before 17:40 today</td>
+          <td><button class="btn sm" type="button">Sign in again</button></td>
+        </tr>
+        <tr>
+          <td class="nm mono">expired_signin</td>
+          <td><span class="chip warning">Azure DevOps · Signed out</span></td>
+          <td>Your Azure DevOps sign-in ended. Runs that clone from it are refused until you sign in again.</td>
+          <td><button class="btn sm" type="button">Sign in to Azure DevOps</button></td>
+        </tr>
+        <tr>
+          <td class="nm mono">not_configured</td>
+          <td><span class="chip warning">Azure DevOps · Not signed in</span></td>
+          <td>Runs that clone from Azure DevOps act as you. Sign in once — it takes a click.</td>
+          <td><button class="btn sm" type="button">Sign in to Azure DevOps</button></td>
+        </tr>
+        <tr>
+          <td class="nm mono">shared_expired</td>
+          <td><span class="chip warning">Azure DevOps · Your admin's credential expired</span></td>
+          <td>Your admin's Azure DevOps token expired — ask them to replace it. There is nothing for you to sign in to.</td>
+          <td class="sub" style="max-width:none">— (nothing the member can do)</td>
+        </tr>
+        <tr>
+          <td class="nm mono">not_applicable</td>
+          <td class="sub" style="max-width:none">— (no chip is rendered)</td>
+          <td class="sub" style="max-width:none">This deployment has no Azure DevOps provider, or its row uses a shared token that is live. Nothing is claimed.</td>
+          <td class="sub" style="max-width:none">—</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="varlabel"><b>Shared and live</b> — the one state that reuses the existing chip rather than adding a word</div>
+    <div class="pad" style="padding-top:12px;padding-bottom:16px">
+      <div class="chips" style="margin-top:0"><span class="chip success"><i class="dot"></i>Azure DevOps · Provided by your admin</span></div>
+      <p class="secsub" style="margin-top:8px">Rendered when the row uses a shared token and that token works. It is deliberately not a per-person claim: the run does not act as this person.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== -->
+<!-- ===== STATE 5 ===== The capability request card — live run -->
+<!-- =================================================================== -->
+<section class="state">
+  <div class="tag"><span>State 5</span><b>The capability request card, in the live run — an agent asked to push. What it wants, on what repository and ref, as whom; three decisions with their consequence under each; and the protected-branch variant</b></div>
+  <div class="frame">
+    <div class="pad ph">
+      <div><h2>checkout retry</h2><p class="lead">Running · started 14:01 · Claude Code</p></div>
+      <div class="acts"><span class="chip warning">1 waiting for you</span></div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="req hold">
+        <div class="top">
+          <span class="chip warning">Waiting for you</span>
+          <div class="grow"><h4>Push to a repository</h4><span class="who">Azure DevOps · asked by this run at 14:02:11</span></div>
+          <span class="chip neutral">3:42 left</span>
+        </div>
+        <div class="bd">
+          <dl class="kv">
+            <dt>Repository</dt><dd class="mono">acme/payments-api<span class="sub">dev.azure.com/acme</span></dd>
+            <dt>Branch</dt><dd class="mono">refs/heads/feature/checkout-retry<span class="sub">No branch policy protects this branch.</span></dd>
+            <dt>Command</dt><dd class="mono">git push origin feature/checkout-retry</dd>
+            <dt>Acts as</dt><dd>Dana Okafor<span class="sub">Whatever you allow happens as Dana on Azure DevOps, and Azure DevOps records it that way.</span></dd>
+          </dl>
+          <p style="margin-top:12px">Allowing this lets the run push commits and create or move branches that no policy protects, anywhere in <span class="mono">acme/payments-api</span>. It does not let it move a protected branch, complete a pull request, or change a policy — each of those asks separately.</p>
+        </div>
+        <div class="ft">
+          <div class="dec">
+            <span class="b"><button class="btn primary" type="button">Allow once</button><span>This one push goes through. The next one asks again.</span></span>
+            <span class="b"><button class="btn" type="button">Allow for this run</button><span>Every push from this run goes through until it ends. Nothing carries to the next run.</span></span>
+            <span class="b"><button class="btn" type="button">Deny</button><span>The push is refused and the tool is told why. The run keeps going and may ask again.</span></span>
+          </div>
+          <p class="secsub" style="margin-top:12px">The push is held at the proxy until you answer. Nothing has reached Azure DevOps.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>The protected-branch variant</b> — the same card when the ref the run is moving IS policy-protected, so the capability is the bigger one</div>
+    <div class="pad" style="padding-top:12px">
+      <div class="req hold">
+        <div class="top">
+          <span class="chip warning">Waiting for you</span>
+          <div class="grow"><h4>Push past a branch policy</h4><span class="who">Azure DevOps · asked by this run at 14:11:02</span></div>
+          <span class="chip neutral">3:55 left</span>
+        </div>
+        <div class="bd">
+          <div class="note amber" style="margin-top:0;max-width:none"><b><span class="mono">refs/heads/main</span> is protected by a branch policy</b><span>Allowing this moves it anyway. The policy that requires a reviewed pull request will not stop it, because Dana's Azure DevOps account is allowed to bypass it.</span></div>
+          <dl class="kv" style="margin-top:12px">
+            <dt>Repository</dt><dd class="mono">acme/payments-api<span class="sub">dev.azure.com/acme</span></dd>
+            <dt>Branch</dt><dd class="mono">refs/heads/main<span class="sub">Protected: 2 reviewers required, build must pass.</span></dd>
+            <dt>Command</dt><dd class="mono">git push origin HEAD:main</dd>
+            <dt>Acts as</dt><dd>Dana Okafor<span class="sub">Whatever you allow happens as Dana on Azure DevOps, and Azure DevOps records it that way.</span></dd>
+          </dl>
+        </div>
+        <div class="ft">
+          <div class="dec">
+            <span class="b"><button class="btn" type="button">Allow once</button><span>This one push goes through. The next one asks again.</span></span>
+            <span class="b"><button class="btn" type="button">Allow for this run</button><span>Every push past a policy from this run goes through until it ends.</span></span>
+            <span class="b"><button class="btn danger" type="button">Deny</button><span>The push is refused and the tool is told why. The run keeps going and may ask again.</span></span>
+          </div>
+          <p class="secsub" style="margin-top:12px">The push is held at the proxy until you answer. Nothing has reached Azure DevOps.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>A branch policy edit, and a pull request completion</b> — the same card, two more capabilities, drawn short</div>
+    <div class="pad" style="padding-top:12px;padding-bottom:18px;display:flex;flex-direction:column;gap:12px">
+      <div class="req hold">
+        <div class="top">
+          <span class="chip warning">Waiting for you</span>
+          <div class="grow"><h4>Change a branch policy</h4><span class="who">Azure DevOps · asked by this run at 14:09:40</span></div>
+          <span class="chip neutral">2:08 left</span>
+        </div>
+        <div class="bd">
+          <dl class="kv">
+            <dt>Repository</dt><dd class="mono">acme/payments-api</dd>
+            <dt>Branch</dt><dd class="mono">refs/heads/main</dd>
+            <dt>Change</dt><dd class="mono">POST policy/configurations<span class="sub">Minimum reviewers: 2 → 1</span></dd>
+            <dt>Acts as</dt><dd>Priya Raman</dd>
+          </dl>
+          <p style="margin-top:12px">Allowing this lets the run create, change and delete branch policies in <span class="mono">acme/payments-api</span> — including the ones that would hold back its own pushes.</p>
+        </div>
+        <div class="ft"><div class="dec">
+          <span class="b"><button class="btn" type="button">Allow once</button><span>This one change goes through. The next one asks again.</span></span>
+          <span class="b"><button class="btn" type="button">Allow for this run</button><span>Every policy change from this run goes through until it ends.</span></span>
+          <span class="b"><button class="btn danger" type="button">Deny</button><span>The change is refused and the tool is told why.</span></span>
+        </div></div>
+      </div>
+      <div class="req hold">
+        <div class="top">
+          <span class="chip warning">Waiting for you</span>
+          <div class="grow"><h4>Complete a pull request</h4><span class="who">Azure DevOps · asked by this run at 14:14:27</span></div>
+          <span class="chip neutral">3:31 left</span>
+        </div>
+        <div class="bd">
+          <dl class="kv">
+            <dt>Repository</dt><dd class="mono">acme/payments-api</dd>
+            <dt>Pull request</dt><dd class="mono">!482<span class="sub">feature/checkout-retry → main</span></dd>
+            <dt>Acts as</dt><dd>Dana Okafor</dd>
+          </dl>
+          <p style="margin-top:12px">Allowing this lets the run open, update, comment on and complete pull requests in <span class="mono">acme/payments-api</span>. Completing one past its own policies is a separate ask.</p>
+        </div>
+        <div class="ft"><div class="dec">
+          <span class="b"><button class="btn" type="button">Allow once</button><span>This one pull request action goes through. The next one asks again.</span></span>
+          <span class="b"><button class="btn" type="button">Allow for this run</button><span>Every pull request action from this run goes through until it ends.</span></span>
+          <span class="b"><button class="btn" type="button">Deny</button><span>The action is refused and the tool is told why.</span></span>
+        </div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== -->
+<!-- ===== STATE 6 ===== Not approvable, and needs more consent -->
+<!-- =================================================================== -->
+<section class="state">
+  <div class="tag"><span>State 6</span><b>The cards with no decision to make — above the administrator's ceiling, always refused, refused by governance — and the one that needs something else from the person first: Microsoft's consent</b></div>
+  <div class="frame">
+    <div class="pad" style="display:flex;flex-direction:column;gap:14px">
+
+      <!-- Above the ceiling: NO buttons. Drawing buttons here would be the lie. -->
+      <div class="req stop">
+        <div class="top">
+          <span class="chip danger">Refused</span>
+          <div class="grow"><h4>Push past a branch policy</h4><span class="who">Azure DevOps · asked by this run at 14:11:02</span></div>
+        </div>
+        <div class="bd">
+          <dl class="kv">
+            <dt>Repository</dt><dd class="mono">acme/payments-api</dd>
+            <dt>Branch</dt><dd class="mono">refs/heads/main<span class="sub">Protected: 2 reviewers required, build must pass.</span></dd>
+          </dl>
+          <div class="note red" style="max-width:none"><b>Above this deployment's ceiling</b><span>Your admin's Azure DevOps row doesn't list this capability, so there is nothing to decide: it was refused and the run was told. An admin can add it to the ceiling, and then a future run could ask.</span></div>
+        </div>
+      </div>
+
+      <div class="req stop">
+        <div class="top">
+          <span class="chip danger">Refused</span>
+          <div class="grow"><h4>Create an Azure DevOps token</h4><span class="who">Azure DevOps · asked by this run at 14:22:09</span></div>
+        </div>
+        <div class="bd">
+          <div class="note red" style="max-width:none;margin-top:0"><b>Always refused</b><span>Creating or revoking tokens, service hooks and extensions are refused on every Azure DevOps row. This can't be approved, and no ceiling change allows it — a run that could mint its own token would be outside every check on this page.</span></div>
+        </div>
+      </div>
+
+      <div class="req stop">
+        <div class="top">
+          <span class="chip danger">Refused</span>
+          <div class="grow"><h4>Change a branch policy</h4><span class="who">Azure DevOps · asked by this run at 14:09:40</span></div>
+        </div>
+        <div class="bd">
+          <div class="note red" style="max-width:none;margin-top:0"><b>Refused by your governance policy</b><span>The policy this run launched under refuses this capability. It was refused and recorded; nobody here can allow it, and a policy edit doesn't reach a run already going.</span></div>
+        </div>
+      </div>
+
+      <div class="req stop">
+        <div class="top">
+          <span class="chip danger">Refused</span>
+          <div class="grow"><h4>An Azure DevOps request Wardyn doesn't recognise</h4><span class="who">Azure DevOps · asked by this run at 14:31:55</span></div>
+        </div>
+        <div class="bd">
+          <dl class="kv">
+            <dt>Request</dt><dd class="mono">POST _apis/hooks/subscriptions</dd>
+          </dl>
+          <div class="note red" style="max-width:none"><b>Wardyn can't name what this would do</b><span>An Azure DevOps write Wardyn doesn't recognise is refused rather than guessed at, because the card couldn't tell you truthfully what you'd be allowing. An admin can turn on “Anything Wardyn does not recognise” for this row if a tool you need keeps hitting this.</span></div>
+        </div>
+      </div>
+
+      <!-- The consent door: they DID decide; Microsoft is the one that hasn't. -->
+      <div class="req hold">
+        <div class="top">
+          <span class="chip warning">Needs your Microsoft consent</span>
+          <div class="grow"><h4>Change a branch policy</h4><span class="who">Azure DevOps · you allowed this at 14:09:52 · still held</span></div>
+          <span class="chip neutral">2:41 left</span>
+        </div>
+        <div class="bd">
+          <p style="margin-top:0">You allowed it, but your Azure DevOps sign-in doesn't cover branch policies yet. Signing in again asks Microsoft for that permission — you'll see a consent screen for it, and nothing else changes. The run's request stays held meanwhile.</p>
+          <div style="margin-top:12px"><button class="btn primary" type="button">Sign in and continue</button></div>
+        </div>
+      </div>
+
+      <div class="req hold">
+        <div class="top">
+          <span class="chip warning">Waiting for Dana Okafor</span>
+          <div class="grow"><h4>Change a branch policy</h4><span class="who">Azure DevOps · you allowed this at 14:09:52 · still held</span></div>
+          <span class="chip neutral">2:20 left</span>
+        </div>
+        <div class="bd">
+          <p style="margin-top:0">You allowed it, but only Dana Okafor can give Microsoft the extra permission it needs — the run acts as Dana, and consent is theirs to give. They've been shown this on their Getting started page.</p>
+        </div>
+      </div>
+
+      <div class="req">
+        <div class="top">
+          <span class="chip neutral">Not yours to decide</span>
+          <div class="grow"><h4>Push to a repository</h4><span class="who">Azure DevOps · asked by this run at 14:02:11</span></div>
+        </div>
+        <div class="bd"><p style="margin-top:0">Only Dana Okafor, who started this run, or an admin can answer this.</p></div>
+      </div>
+
+      <div class="req">
+        <div class="top">
+          <span class="chip danger">Refused</span>
+          <div class="grow"><h4>Push to a repository</h4><span class="who">Azure DevOps · asked by this run at 14:02:11</span></div>
+        </div>
+        <div class="bd"><p style="margin-top:0">Nobody answered within four minutes, so the push was refused and the run was told. It can ask again.</p></div>
+      </div>
+
+      <div class="req">
+        <div class="top">
+          <span class="chip neutral">Cancelled</span>
+          <div class="grow"><h4>Push to a repository</h4><span class="who">Azure DevOps · asked by this run at 14:02:11</span></div>
+        </div>
+        <div class="bd"><p style="margin-top:0">The run ended before anyone decided this. Nothing was approved and nothing was denied.</p></div>
+      </div>
+
+      <div class="req">
+        <div class="top">
+          <span class="chip warning">Sign-in ended</span>
+          <div class="grow"><h4>Your Azure DevOps sign-in ended mid-run</h4><span class="who">Azure DevOps · 14:44:03</span></div>
+          <span class="chip neutral">3:12 left</span>
+        </div>
+        <div class="bd">
+          <p style="margin-top:0">This run's next Azure DevOps request is held while you sign in again. Sign in and it goes through on its own — the run doesn't have to start over.</p>
+          <div style="margin-top:12px"><button class="btn primary" type="button">Sign in to Azure DevOps</button></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== -->
+<!-- ===== STATE 7 ===== The list — found later, on /approvals -->
+<!-- =================================================================== -->
+<section class="state">
+  <div class="tag"><span>State 7</span><b>The same requests found LATER, in the approvals list: one waiting (still decidable, same three buttons), the decided rows with who and when, and the ones whose run has ended</b></div>
+  <div class="frame">
+    <div class="pad ph">
+      <div><h2>Approvals</h2><p class="lead">What runs asked for, and what was decided.</p></div>
+    </div>
+    <div class="tabs"><span class="sel">Waiting</span><span>Decided</span></div>
+
+    <div class="pad">
+      <!-- Waiting, in the list: identical card, plus the run link the live view doesn't need. -->
+      <div class="req hold">
+        <div class="top">
+          <span class="chip warning">Waiting for you</span>
+          <div class="grow"><h4>Push to a repository</h4><span class="who">Azure DevOps · run “checkout retry” · started by Dana Okafor · asked 14:02:11</span></div>
+          <span class="chip neutral">3:42 left</span>
+        </div>
+        <div class="bd">
+          <dl class="kv">
+            <dt>Repository</dt><dd class="mono">acme/payments-api<span class="sub">dev.azure.com/acme</span></dd>
+            <dt>Branch</dt><dd class="mono">refs/heads/feature/checkout-retry<span class="sub">No branch policy protects this branch.</span></dd>
+            <dt>Command</dt><dd class="mono">git push origin feature/checkout-retry</dd>
+            <dt>Acts as</dt><dd>Dana Okafor<span class="sub">Whatever you allow happens as Dana on Azure DevOps, and Azure DevOps records it that way.</span></dd>
+          </dl>
+          <p style="margin-top:12px">Allowing this lets the run push commits and create or move branches that no policy protects, anywhere in <span class="mono">acme/payments-api</span>. It does not let it move a protected branch, complete a pull request, or change a policy — each of those asks separately.</p>
+        </div>
+        <div class="ft">
+          <div class="dec">
+            <span class="b"><button class="btn primary" type="button">Allow once</button><span>This one push goes through. The next one asks again.</span></span>
+            <span class="b"><button class="btn" type="button">Allow for this run</button><span>Every push from this run goes through until it ends. Nothing carries to the next run.</span></span>
+            <span class="b"><button class="btn" type="button">Deny</button><span>The push is refused and the tool is told why. The run keeps going and may ask again.</span></span>
+            <span class="b"><a class="btn ghost" href="#" onclick="return false">Open run</a><span>Watch it live instead.</span></span>
+          </div>
+          <p class="secsub" style="margin-top:12px">The push is held at the proxy until you answer. Nothing has reached Azure DevOps.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Decided</b> — one row each, the decision and the decider on the row, never in a tooltip</div>
+    <table>
+      <thead><tr><th style="width:11ch">Time</th><th style="width:22ch">Asked for</th><th>Where</th><th style="width:30ch">Outcome</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">14:02:11</td><td class="nm">Push</td><td class="mono">acme/payments-api · refs/heads/feature/checkout-retry</td><td><span class="chip success"><i class="dot"></i>Allowed once</span><span class="sub">by Dana Okafor at 14:02:31</span></td></tr>
+        <tr><td class="mono">14:09:40</td><td class="nm">Branch policies</td><td class="mono">acme/payments-api · refs/heads/main</td><td><span class="chip danger">Denied</span><span class="sub">by Priya Raman at 14:10:02</span></td></tr>
+        <tr><td class="mono">14:14:27</td><td class="nm">Pull requests</td><td class="mono">acme/payments-api · !482</td><td><span class="chip success"><i class="dot"></i>Allowed for this run</span><span class="sub">by Dana Okafor at 14:14:39</span></td></tr>
+        <tr><td class="mono">14:11:02</td><td class="nm">Push past a branch policy</td><td class="mono">acme/payments-api · refs/heads/main</td><td><span class="chip danger">Refused</span><span class="sub">Above this deployment's ceiling — nobody was asked.</span></td></tr>
+        <tr><td class="mono">14:22:09</td><td class="nm">Create an Azure DevOps token</td><td class="mono">acme</td><td><span class="chip danger">Refused</span><span class="sub">Always refused — nobody was asked.</span></td></tr>
+        <tr><td class="mono">14:31:55</td><td class="nm">Not recognised</td><td class="mono">POST _apis/hooks/subscriptions</td><td><span class="chip danger">Refused</span><span class="sub">Wardyn couldn't name what it would do — nobody was asked.</span></td></tr>
+        <tr><td class="mono">14:44:03</td><td class="nm">Push</td><td class="mono">acme/payments-api · refs/heads/feature/checkout-retry</td><td><span class="chip neutral">Refused</span><span class="sub">Nobody answered within four minutes.</span></td></tr>
+      </tbody>
+    </table>
+
+    <div class="varlabel"><b>Found after the run ended</b> — nothing to decide, and the card says so instead of showing three dead buttons</div>
+    <div class="pad" style="padding-bottom:18px">
+      <div class="req">
+        <div class="top">
+          <span class="chip neutral">This run has ended</span>
+          <div class="grow"><h4>Push to a repository</h4><span class="who">Azure DevOps · run “checkout retry” · asked 14:02:11</span></div>
+        </div>
+        <div class="bd">
+          <p style="margin-top:0">There's nothing to allow — the request went away with the run. It's here so you can see what it asked for.</p>
+          <dl class="kv" style="margin-top:10px">
+            <dt>Repository</dt><dd class="mono">acme/payments-api</dd>
+            <dt>Branch</dt><dd class="mono">refs/heads/feature/checkout-retry</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>The screen's own honesty line, corrected</b> — today it says no backend component enforces a tool-call approval, which stops being true here</div>
+    <div class="pad" style="padding-top:12px;padding-bottom:18px">
+      <div class="note plain" style="margin-top:0;max-width:none"><span>An Azure DevOps capability request is held at the proxy until someone decides it — nothing reaches Azure DevOps first, and a denial is a refusal, not a note. Every other kind of tool-call approval is a record of what a run said it was about to do; nothing stops it.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== -->
+<!-- ===== STATE 8 ===== The launch door -->
+<!-- =================================================================== -->
+<section class="state">
+  <div class="tag"><span>State 8</span><b>The launch door — the New Run rail's preflight fact before launching, the dialog that opens instead of a dead end, and the form coming back as it stood</b></div>
+  <div class="frame">
+    <div class="varlabel"><b>Before launch</b> — the rail says what it knows, in the three states it can be in</div>
+    <div class="pad" style="padding-bottom:0">
+      <div class="grid2">
+        <div class="card">
+          <h4 class="sectitle">Ready to launch</h4>
+          <dl class="rail" style="margin-top:10px">
+            <dt>Workspace</dt><dd class="plain">payments-api</dd>
+            <dt>Agent</dt><dd class="plain">Claude Code</dd>
+            <dt>Barrier</dt><dd class="plain">Fence</dd>
+          </dl>
+          <div class="chips"><span class="chip success"><i class="dot"></i>Azure DevOps · signed in as Dana Okafor</span></div>
+          <div style="margin-top:12px"><button class="btn primary" type="button">Launch</button></div>
+        </div>
+        <div class="card">
+          <h4 class="sectitle">Ready to launch</h4>
+          <dl class="rail" style="margin-top:10px">
+            <dt>Workspace</dt><dd class="plain">payments-api</dd>
+            <dt>Agent</dt><dd class="plain">Claude Code</dd>
+            <dt>Barrier</dt><dd class="plain">Fence</dd>
+          </dl>
+          <div class="chips"><span class="chip warning">Azure DevOps · not signed in</span></div>
+          <p class="secsub" style="margin-top:6px">You'll be asked to sign in when you launch.</p>
+          <div style="margin-top:12px"><button class="btn primary" type="button">Launch</button></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="chips" style="margin-top:0"><span class="chip warning">Azure DevOps · your sign-in ends at 17:40</span></div>
+        <p class="secsub" style="margin-top:6px">A run going when it ends holds its next Azure DevOps request until you sign in again. Signing in now avoids that.</p>
+        <div style="margin-top:10px;display:flex;gap:8px"><button class="btn sm" type="button">Sign in again</button><button class="btn sm ghost" type="button">Launch anyway</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Launch pressed, not signed in</b> — the dialog, not a dead end. Cancel returns to the form; signing in relaunches it exactly as it stood</div>
+    <div class="dlgwrap">
+      <div class="dlg" style="max-width:520px">
+        <h3>Sign in to Azure DevOps first</h3>
+        <p>This workspace clones from <span class="mono">dev.azure.com/acme</span>, and your runs there act as you. Sign in once and this form comes back exactly as you left it.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Sign in to Azure DevOps</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Back from Microsoft</b> — the toast, and the form as it stood</div>
+    <div class="pad" style="padding-bottom:18px;display:flex;flex-direction:column;gap:12px">
+      <div class="toast"><b>Signed in to Azure DevOps.</b><span>Your run is as you left it — launch when you're ready.</span></div>
+      <div class="varlabel" style="padding-left:0;background:none;border:0"><b>The same door, from the API</b> — what a script or the CLI gets, rendered verbatim by the console if it ever reaches it</div>
+      <div class="note red" style="max-width:none;margin-top:0"><span><span class="mono">git_credential</span>: you have not signed in to Azure DevOps — sign in and start the run again</span></div>
+      <div class="note red" style="max-width:none;margin-top:0"><span><span class="mono">git_credential</span>: your Azure DevOps sign-in ended — sign in and start the run again</span></div>
+      <div class="note amber" style="max-width:none;margin-top:0"><b>Run launched with a warning</b><span>Your Azure DevOps sign-in ends at 17:40. After that this run holds its next Azure DevOps request until you sign in again.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== -->
+<!-- ===== STATE 9 ===== The after view -->
+<!-- =================================================================== -->
+<section class="state">
+  <div class="tag"><span>State 9</span><b>After the run — what was asked, what was granted, by whom, and what the forge recorded. The one place the token's real scope list appears, with the sentence that stops it being read as a bound</b></div>
+  <div class="frame">
+    <div class="pad ph">
+      <div><h2>checkout retry</h2><p class="lead">Finished 14:52 · Claude Code · Fence</p></div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="card">
+        <h4 class="sectitle">Azure DevOps access</h4>
+        <p class="secsub" style="margin-top:6px">What this run asked for, what it was given, and who decided.</p>
+        <dl class="kv" style="margin-top:12px">
+          <dt>Acted as</dt><dd>Dana Okafor · dana.okafor@acme.com<span class="sub">dev.azure.com/acme</span></dd>
+          <dt>Started with</dt><dd>Read</dd>
+          <dt>Ended holding</dt><dd>Read · Pull requests<span class="sub">Push was allowed once, for one request, and never joined the run's standing set.</span></dd>
+        </dl>
+
+        <table style="margin-top:14px">
+          <thead><tr><th style="width:11ch">Time</th><th style="width:20ch">Asked for</th><th>Where</th><th style="width:28ch">Outcome</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">14:02:11</td><td class="nm">Push</td><td class="mono">acme/payments-api · refs/heads/feature/checkout-retry</td><td><span class="chip success"><i class="dot"></i>Allowed once</span><span class="sub">by Dana Okafor at 14:02:31</span></td></tr>
+            <tr><td class="mono">14:09:40</td><td class="nm">Branch policies</td><td class="mono">acme/payments-api · refs/heads/main</td><td><span class="chip danger">Denied</span><span class="sub">by Priya Raman at 14:10:02</span></td></tr>
+            <tr><td class="mono">14:11:02</td><td class="nm">Push past a branch policy</td><td class="mono">acme/payments-api · refs/heads/main</td><td><span class="chip danger">Refused</span><span class="sub">Above this deployment's ceiling — nobody was asked.</span></td></tr>
+            <tr><td class="mono">14:14:27</td><td class="nm">Pull requests</td><td class="mono">acme/payments-api · !482</td><td><span class="chip success"><i class="dot"></i>Allowed for this run</span><span class="sub">by Dana Okafor at 14:14:39</span></td></tr>
+            <tr><td class="mono">14:22:09</td><td class="nm">Create an Azure DevOps token</td><td class="mono">acme</td><td><span class="chip danger">Refused</span><span class="sub">Always refused — nobody was asked.</span></td></tr>
+          </tbody>
+        </table>
+
+        <!-- The scope list. It is evidence, not a bound, and the note is what keeps that honest. -->
+        <div class="note plain" style="max-width:none;margin-top:14px">
+          <b>What the sign-in itself covered</b>
+          <span>Azure DevOps issued this run a token covering: Read code · Write code · Manage code · Build · Run builds · Work items · Write work items · Wiki · Packaging · Project and team · Security · Service endpoints · Tokens · Profile.</span>
+          <span>That is what the token carried, not what the run was allowed to do. Wardyn's own check is what held it to the five decisions above; a Microsoft Entra sign-in can't be issued narrower than what the person has consented to.</span>
+        </div>
+
+        <div class="note plain" style="max-width:none"><b>Azure DevOps has its own record</b><span>Every request that went through appears in your organisation's audit log and in the repository's push history, under Dana Okafor — not under Wardyn, and not under a shared account.</span></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>The same widget on a minted-token run</b> — the third note is different, because in this mode the forge did bound it</div>
+    <div class="pad">
+      <div class="card">
+        <h4 class="sectitle">Azure DevOps access</h4>
+        <dl class="kv" style="margin-top:10px">
+          <dt>Acted as</dt><dd>Dana Okafor · dana.okafor@acme.com</dd>
+          <dt>Ended holding</dt><dd>Read · Pull requests</dd>
+        </dl>
+        <div class="note plain" style="max-width:none;margin-top:12px"><b>What the token itself covered</b><span>Azure DevOps minted <span class="mono">wardyn-run-4f2a9c</span> for this run, limited to Read and Pull requests and to 14:01–15:01, and Wardyn revoked it at 14:52:08. Outside those, Azure DevOps refused the request itself.</span></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Revoke failed</b> — the one honest failure state a minted token has</div>
+    <div class="pad" style="padding-bottom:18px">
+      <div class="note amber" style="max-width:none;margin-top:0"><b>This run's Azure DevOps token hasn't been revoked</b><span>Your sign-in had ended, so Wardyn couldn't revoke <span class="mono">wardyn-run-4f2a9c</span>. It will be revoked the next time you sign in. You can also delete it yourself under your Azure DevOps personal access tokens.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== -->
+<!-- ===== STATE 10 ===== Sentences that stop being true -->
+<!-- =================================================================== -->
+<section class="state">
+  <div class="tag"><span>State 10</span><b>Three shipped sentences this design falsifies, drawn beside their replacements so the owner can freeze both halves at once</b></div>
+  <div class="frame">
+    <div class="pad" style="display:flex;flex-direction:column;gap:16px;padding-bottom:22px">
+      <div>
+        <div class="secsub" style="margin-bottom:6px">On <span class="mono">/approvals</span>, today:</div>
+        <div class="note red" style="max-width:none;margin-top:0"><span>No backend component enforces a <span class="mono">tool_call</span> approval.</span></div>
+        <div class="secsub" style="margin:8px 0 6px">Replaced by:</div>
+        <div class="note plain" style="max-width:none;margin-top:0"><span>An Azure DevOps capability request is held at the proxy until someone decides it — nothing reaches Azure DevOps first, and a denial is a refusal, not a note. Every other kind of tool-call approval is a record of what a run said it was about to do; nothing stops it.</span></div>
+      </div>
+      <div>
+        <div class="secsub" style="margin-bottom:6px">On the Secrets page, today, over an Azure DevOps token:</div>
+        <div class="note red" style="max-width:none;margin-top:0"><span>Wardyn cannot expire or down-scope a PAT.</span></div>
+        <div class="secsub" style="margin:8px 0 6px">Replaced, for a row where each person signs in, by:</div>
+        <div class="note plain" style="max-width:none;margin-top:0"><span>This row stores no Azure DevOps token: each person's sign-in is their own, and removing them from your directory ends it. Wardyn holds every run to its granted capabilities at the proxy.</span></div>
+        <div class="secsub" style="margin:8px 0 6px">Kept, unchanged, for a row with a stored token:</div>
+        <div class="note plain" style="max-width:none;margin-top:0"><span>Wardyn cannot expire or down-scope a PAT.</span></div>
+      </div>
+      <div>
+        <div class="secsub" style="margin-bottom:6px">The lane chip, today:</div>
+        <div class="chips" style="margin-top:0"><span class="chip info">PAT · in-sandbox</span></div>
+        <div class="secsub" style="margin:8px 0 6px">With the broker on, which is what these rows run:</div>
+        <div class="chips" style="margin-top:0"><span class="chip info">PAT · brokered</span> <span class="chip success">Microsoft Entra · brokered</span></div>
+        <p class="secsub" style="margin-top:8px">“In-sandbox” is still the true word when the broker is off, so the chip reads from the switch rather than being renamed outright.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>

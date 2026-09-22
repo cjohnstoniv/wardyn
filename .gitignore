@@ -116,6 +116,8 @@ ds-bundle/
 !/docs/design/governance-mock/
 !/docs/design/workspace-providers-prompt.md
 !/docs/design/workspace-providers-mock/
+!/docs/design/ado-entra-prompt.md
+!/docs/design/ado-entra-mock/
 # CONSOLE-RULES.md is a permanent doc, not a mock round: docs/README.md indexes it
 # and every UI review cites it, so it ships with the repo like any other doc.
 !/docs/design/CONSOLE-RULES.md
