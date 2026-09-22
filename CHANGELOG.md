@@ -178,6 +178,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The broker advertises `no-thin`, so a push it must inspect arrives self-contained.** When a run's
+  policy sets `push_rules`, the brokered receive-pack reference advertisement relayed back to the
+  sandbox gains the `no-thin` capability. The agent images clone with `--depth 1`, so a real push's
+  root tree is normally a delta against a base object that stayed on the forge: the pack is *thin*,
+  and nothing in the request can resolve what it deltified against. `gitprotocol-capabilities` says a
+  client must not send a thin pack when the server advertises `no-thin`, so the client packs those
+  bases in and the content rules can read what they are being asked about instead of refusing every
+  legitimate push. An advertisement that is not exactly the expected shape is relayed byte for byte
+  and the push is left thin — corrupting one would break every push through the broker, while an
+  un-rewritten one is merely refused later, on its own terms. Only the push advertisement is
+  rewritten; fetch is untouched, and so is the POST that carries the pack.
+
+- **`push_rules` policy field: content rules for a brokered git push.** `RunPolicySpec` carries a new
+  `*PushRulesSpec` — `deny_paths` and `max_inspect_pack_mib` — alongside `git_push_any_branch`:
+  where that field says WHERE a run's push may land, this one says WHAT it may touch. `nil` (every
+  policy authored before this field existed) is byte-identical to today's behaviour. This change
+  stores and validates the field only; no matcher reads `deny_paths` yet — a policy that sets
+  `push_rules` while the run's only git-capable grant is `ssh_key` (which the broker cannot inspect)
+  grades a medium-risk warning on the Review rail rather than a write-time refusal.
 - **Settings is reachable from the sidebar, and a save conflict keeps your work.** Settings now sits
   last in the sidebar, under a divider, beside the nine existing sections — it also keeps its
   long-standing account-menu entry, so nobody's muscle memory breaks. The Providers screen and its

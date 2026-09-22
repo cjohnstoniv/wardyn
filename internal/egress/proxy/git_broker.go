@@ -263,6 +263,16 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// credential header the sandbox set — X-Api-Key, Cookie, X-Access-Token — on
 	// the request alongside the brokered installation token.
 	stripSandboxCredentials(outReq.Header, "")
+	// Content rules need a pack they can read, and a client only sends one when
+	// the server asks (push_advert.go). The advertisement must be PARSEABLE to be
+	// rewritten, so the sandbox's own content-coding negotiation does not go out
+	// on this ONE request: identity is asked for explicitly rather than merely
+	// deleting the header, which would leave the transport free to negotiate a
+	// coding of its own.
+	noThin := p.noThinAdvert(r, rest)
+	if noThin {
+		outReq.Header.Set("Accept-Encoding", "identity")
+	}
 	outReq.SetBasicAuth(gitBrokerUsername, token) // GitHub App installation-token auth
 	outReq.Host = githubHost
 	outReq.Header.Del("Host")
@@ -279,6 +289,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	p.emitGitDecision(r, egress.Allow, allowSrc)
 	defer func() { _ = resp.Body.Close() }()
 
+	if noThin {
+		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
+		return
+	}
 	relay(w, resp) // stream the pack back
 }
 

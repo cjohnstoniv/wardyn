@@ -257,6 +257,65 @@ type RunPolicySpec struct {
 	// ponytail: whole-namespace off, not a per-run allowed-prefix list — add a
 	// prefix list when someone needs an external tool AND confinement at once.
 	GitPushAnyBranch bool `json:"git_push_any_branch,omitempty"`
+	// PushRules declares CONTENT rules for this run's brokered git pushes — WHAT
+	// a push may touch, alongside GitPushAnyBranch's WHERE. Nil (the default,
+	// and every policy authored before this field existed) means no content
+	// rules at all: byte-identical to today's wire shape and behaviour, since
+	// nothing reads this field yet (see PushRulesSpec's own doc — the matcher
+	// and enforcement are #179, not this change).
+	//
+	// A policy that sets PushRules while this run's only git-capable grant is
+	// ssh_key is legal but UNENFORCEABLE — the SSH transport has no broker
+	// seam (see internal/composer/risk.go's ssh_key rationale) — and
+	// composer.Grade surfaces that as a medium-risk WARNING, never a write-time
+	// refusal: a stored policy is never 422'd for an unenforceable combination.
+	PushRules *PushRulesSpec `json:"push_rules,omitempty"`
+}
+
+// PushRulesSpec declares content rules for a run's brokered git pushes — the
+// counterpart to GitPushAnyBranch's branch-namespace confinement: this type
+// says WHAT a push may touch, not WHERE it may land (issue #57, tracked as
+// #176/#178/#179).
+//
+// Phase one (this type, landed by #176) carries the two fields the future
+// pack inspector reads: DenyPaths and MaxInspectPackMiB. Phase two
+// (RequireReviewPaths, DenyNewExecutables, MaxFileSizeMiB, HoldSeconds) is
+// reserved for a later change — adding them here would be new fields, not
+// this one's plumbing.
+//
+// A closed struct, deliberately not a free-form rules map: an open map cannot
+// be policed by the strict-field JSON decoder (DisallowUnknownFields) or by
+// TestPolicyDoc_EveryFieldHasRow's reflection-based census, so a typo'd key
+// would silently do nothing instead of failing at write time.
+//
+// STORING and VALIDATING these strings is all #176 does — no matcher reads
+// them yet. internal/egress/proxy/ (the git broker) and
+// internal/api/approvals.go are untouched by this type: #179 adds the
+// `**`-capable glob matcher (filepath.Match cannot express `**`, and go.mod
+// carries no such library) and the enforcement path that actually reads
+// DenyPaths.
+type PushRulesSpec struct {
+	// DenyPaths are glob-shaped path patterns (e.g. ".github/workflows/**")
+	// the future pack inspector will refuse in a push. Stored and validated
+	// as OPAQUE strings only in this change — see the type doc above.
+	DenyPaths []string `json:"deny_paths,omitempty"`
+	// MaxInspectPackMiB caps how much of an incoming push pack the future
+	// inspector reads before giving up. 0/absent keeps that inspector's own
+	// built-in default; this change only bounds the authored value (0..64,
+	// validatePolicySpec).
+	MaxInspectPackMiB int `json:"max_inspect_pack_mib,omitempty"`
+}
+
+// IsSet reports whether this spec carries an actual rule, which is what every
+// reader means by "the policy sets push_rules" — NOT a bare != nil. An
+// all-zero-but-non-nil *PushRulesSpec (a literal `push_rules: {}`, or the
+// struct a clamp leaves behind) says nothing about what a push may touch, and
+// must read exactly like an absent one wherever the field is consulted:
+// composer's clamp and risk grade, and the broker's no-thin advertisement
+// (internal/egress/proxy). One method so those readers cannot drift into
+// disagreeing about whether a run has content rules at all.
+func (s *PushRulesSpec) IsSet() bool {
+	return s != nil && (len(s.DenyPaths) > 0 || s.MaxInspectPackMiB > 0)
 }
 
 // ToolEffect is what a matching ToolRule does with the call.
@@ -328,6 +387,11 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	if s.Resources != nil {
 		r := *s.Resources
 		out.Resources = &r
+	}
+	if s.PushRules != nil {
+		pr := *s.PushRules
+		pr.DenyPaths = append([]string(nil), s.PushRules.DenyPaths...)
+		out.PushRules = &pr
 	}
 	return out
 }

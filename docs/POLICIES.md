@@ -62,6 +62,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes — since 0.7.2, one field governs BOTH brokers: the GitHub-App lane and the `git_pat` lane — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
+| `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Phase one only: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below — stored and validated, not yet enforced. |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -775,6 +776,46 @@ and would silently read as enforcement that is not.
 |---|---|---|---|
 | `tool` | `string` | — (required) | The tool name, matched exactly and case-sensitively (`Read`, `Bash`, `WebFetch`, …), or the literal `*` for the unmatched default. Duplicates are refused at write time: two rules for one tool means one of them does nothing. |
 | `effect` | `string` | — (required) | `allow` (run it, no human, still recorded), `hold` (raise an approval and block — the default behaviour), or `deny` (refuse it, no human). A closed enum: an unrecognised effect is a 400, never a silently-ignored rule that reads as enforcement. |
+
+## `push_rules` — `PushRulesSpec`
+
+Content rules for this run's brokered git pushes — the counterpart to
+`git_push_any_branch`'s WHERE: this says WHAT a push may touch (issue #57).
+`null`/omitted (every policy authored before this field existed) means **no
+content rules at all** — byte-identical to today's wire shape and behaviour.
+
+**Phase one only.** This field is **stored and validated**, never enforced —
+nothing in the git broker (`internal/egress/proxy/`) reads it yet. A later
+change lands the pack inspector that actually matches `deny_paths` against an
+incoming push (a `**`-capable glob matcher: `filepath.Match` cannot express
+`**`, and `go.mod` carries no such library today) and the rest of the phase-two
+fields this type reserves (`require_review_paths`, `deny_new_executables`,
+`max_file_size_mib`, `hold_seconds`).
+
+**Unenforceable is a warning, not a refusal.** `push_rules` is read only on the
+brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no
+broker seam. A policy that sets `push_rules` while `ssh_key` is the run's
+**only** git-capable grant is legal (never a `422` at write time) but the rules
+cannot be enforced; the Review rail's risk grade (`composer.Grade`) surfaces
+that as a **medium**-risk item so the operator is told rather than blocked. An
+all-zero `push_rules: {}` — nothing in `deny_paths`, `max_inspect_pack_mib`
+`0`/absent — reads as **absent**, the same as `null`: it never survives an
+operator ceiling into a member's clamped spec, and never grades the warning
+above.
+
+**Clamped as a floor, not a bare merge.** An operator ceiling's `push_rules`
+is inherited wholesale by a proposal that sets none, and unioned into one that
+does — `deny_paths` by **exact string**, never case- or whitespace-folded (a
+git path is case- and space-sensitive on Linux, unlike a DNS name), so a
+member re-typing the ceiling's own entry in different case adds a second
+entry rather than silently dropping the operator's. A ceiling that sets none
+leaves a proposal's own `push_rules` untouched — this field only narrows, so
+there is nothing here for a silent ceiling to protect against.
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `deny_paths` | `[]string` | `[]` | Glob-shaped path patterns (e.g. `.github/workflows/**`) a future pack inspector will refuse in a push. Stored and validated as **opaque strings only** — no matcher runs against them in this change. Each entry at most **256 bytes**, no NUL or other control character; rejected (`400`) at write time. **No count cap** — deny-only lists narrow rather than widen, the same stance `denied_domains` takes, and a clamp-merged list can legitimately exceed what either the operator's ceiling or the member's own proposal authored on its own. |
+| `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push pack a future inspector reads before giving up. `0`/absent keeps that inspector's own built-in default. Bounded at write time to **0..64**. |
 
 ## `llm_inspection` — `LLMInspectionSpec`
 

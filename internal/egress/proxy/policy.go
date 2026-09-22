@@ -94,6 +94,13 @@ type Policy struct {
 	// brokered pushes skip branch-namespace confinement (handleGitBroker). The
 	// per-run counterpart of the deployment-wide BranchNSEnforced() switch.
 	gitPushAnyBranch bool
+	// pushRules records that RunPolicySpec.PushRules carries an actual rule
+	// (types.PushRulesSpec.IsSet, so a literal push_rules:{} reads as absent).
+	// Only the FACT is kept, not the rules: the one thing the broker does with
+	// it today is advertise no-thin on the receive-pack advertisement
+	// (push_advert.go). The rules themselves are read by the enforcement path,
+	// not by this compiled policy.
+	pushRules bool
 }
 
 // CompilePolicy builds a Policy from a RunPolicySpec. Domains are normalized
@@ -109,6 +116,7 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		firstUse:            spec.FirstUseApproval.Normalize(),
 		allowAll:            spec.AllowAllEgress,
 		gitPushAnyBranch:    spec.GitPushAnyBranch,
+		pushRules:           spec.PushRules.IsSet(),
 	}
 	// Compiled into a map rather than scanned: validatePolicySpec already refuses
 	// duplicates, so the map cannot lose a rule, and an exact-match lookup is the
@@ -162,6 +170,11 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 // out of branch-namespace confinement. Nil-safe like ToolEffectFor: a proxy
 // built without a compiled policy keeps confinement ON.
 func (p *Policy) GitPushAnyBranch() bool { return p != nil && p.gitPushAnyBranch }
+
+// PushRulesSet reports whether this run's policy carries git push CONTENT
+// rules. Nil-safe like GitPushAnyBranch: a proxy built without a compiled
+// policy has none, which keeps today's advertisement untouched.
+func (p *Policy) PushRulesSet() bool { return p != nil && p.pushRules }
 
 // FirstUseMode reports how unknown domains are handled (always_deny /
 // deny_with_review / wait_for_review), normalized (never empty).
