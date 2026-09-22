@@ -92,6 +92,11 @@ func Classify(req Request) (Verdict, error) {
 	if err != nil {
 		return Verdict{}, err
 	}
+	if method == http.MethodOptions {
+		if err := optionsCarriesNoBody(req); err != nil {
+			return Verdict{}, err
+		}
+	}
 	r, err := parseRoute(req.Host, req.Path, req.Org)
 	if err != nil {
 		return Verdict{}, err
@@ -105,6 +110,9 @@ func Classify(req Request) (Verdict, error) {
 	if c, ok := deniedAreas[r.area]; ok {
 		return Verdict{Capability: c}, nil
 	}
+	if method == http.MethodOptions {
+		return locationDiscovery(r), nil
+	}
 	if slices.Contains(readMethods, method) || readWrite(r) {
 		if _, ok := readScope(r); ok {
 			return Verdict{Capability: CapRead}, nil
@@ -112,6 +120,47 @@ func Classify(req Request) (Verdict, error) {
 		return Verdict{Capability: CapUnclassifiedRead}, nil
 	}
 	return classifyWrite(method, r, req)
+}
+
+// locationDiscovery classifies an OPTIONS request.
+//
+// OPTIONS is the Azure DevOps SDK's API location-discovery call — MEASURED as
+// the azure-devops CLI extension's first request, `OPTIONS /{org}/_apis`, and
+// the Node SDK makes the same one. It returns route templates, not data, and
+// like connectionData it needs no scope. It is admitted on exactly the
+// discovery shapes — the API root, or one area's location, at the
+// organisation or project level — and is otherwise an unclassified read.
+//
+// Any area name is accepted here, including ones readAreas does not list: the
+// SDK asks for the location of whatever area it is about to call, and the
+// denied areas were already refused before this is reached. What makes it
+// safe to be that open is that OPTIONS cannot carry a write: a body and every
+// override header are refused before routing.
+func locationDiscovery(r route) Verdict {
+	if (r.apis == 0 || r.apis == 1) && r.at(2) == "" {
+		return Verdict{Capability: CapRead}
+	}
+	return Verdict{Capability: CapUnclassifiedRead}
+}
+
+// optionsCarriesNoBody refuses an OPTIONS request that carries, or declares,
+// a body. Discovery sends none, and a body is the only place a write could
+// hide on a method the service is otherwise told is a read.
+func optionsCarriesNoBody(req Request) error {
+	if len(req.BodyPeek) > 0 {
+		return fmt.Errorf("adoscope: an OPTIONS request carries a body — discovery sends none")
+	}
+	n, known, err := declaredLength(req.Header)
+	if err != nil {
+		return err
+	}
+	if known && n > 0 {
+		return fmt.Errorf("adoscope: an OPTIONS request declares a %d-byte body — discovery sends none", n)
+	}
+	if len(headerValues(req.Header, "Transfer-Encoding")) > 0 {
+		return fmt.Errorf("adoscope: an OPTIONS request declares a streamed body — discovery sends none")
+	}
+	return nil
 }
 
 // readAreas is EVERY area this catalogue answers CapRead for, with the scope a
@@ -186,6 +235,12 @@ func effectiveMethod(method string, h http.Header) (string, error) {
 	}
 	over := strings.ToUpper(strings.TrimSpace(ov[0]))
 	switch {
+	case base == http.MethodOptions:
+		// OPTIONS is admitted only as location discovery, which is a read
+		// precisely because nothing can ride on it. An override header — even
+		// a redundant one — is the one way a write could, so it is refused
+		// outright rather than weighed.
+		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override on an OPTIONS request — discovery takes no override")
 	case !knownMethod(over):
 		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override: %q is not an HTTP method", ov[0])
 	case base != http.MethodPost:

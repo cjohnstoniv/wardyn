@@ -175,3 +175,32 @@ func TestOrganisationlessDiscoveryReads(t *testing.T) {
 		t.Error("the read scope set lacks vso.profile, so the discovery reads 403")
 	}
 }
+
+// LOCATION DISCOVERY. Measured: the azure-devops CLI extension's FIRST request
+// is `OPTIONS /{org}/_apis` — the Azure DevOps SDK's location-discovery call —
+// and the Node SDK makes the same one. It is a pinned read with no scope, like
+// connectionData. OPTIONS must never carry a write, so a body or any override
+// header on it is refused, and it is admitted only on the discovery shapes.
+func TestOptionsLocationDiscovery(t *testing.T) {
+	opt := func(path string) Request { return adoReq(http.MethodOptions, path, "") }
+	withHeader := func(r Request, kv ...string) Request { r.Header = hdr(kv...); return r }
+	runCases(t, []caseT{
+		{name: "the organisation's API root", req: opt("/acme/_apis"), want: CapRead},
+		{name: "one area's location", req: opt("/acme/_apis/git"), want: CapRead},
+		{name: "one area's location under a project", req: opt("/acme/proj/_apis/wit"), want: CapRead},
+		{name: "an area this catalogue has no read entry for", req: opt("/acme/_apis/distributedtask"), want: CapRead},
+		{name: "a legacy host's API root", req: func() Request { r := opt("/_apis"); r.Host = "acme.visualstudio.com"; return r }(), want: CapRead},
+
+		{name: "another organisation is refused", req: opt("/evil/_apis"), wantErr: true},
+		{name: "a body on OPTIONS is refused", req: adoReq(http.MethodOptions, "/acme/_apis", `{"x":1}`), wantErr: true},
+		{name: "a declared body the peek did not carry is refused", req: withHeader(opt("/acme/_apis"), "Content-Length", "5"), wantErr: true},
+		{name: "a chunked body is refused", req: withHeader(opt("/acme/_apis"), "Transfer-Encoding", "chunked"), wantErr: true},
+		{name: "an override naming a read is refused on OPTIONS", req: withHeader(opt("/acme/_apis"), "X-HTTP-Method-Override", "GET"), wantErr: true},
+		{name: "an override naming OPTIONS itself is refused", req: withHeader(opt("/acme/_apis"), "X-HTTP-Method-Override", "OPTIONS"), wantErr: true},
+		{name: "an override naming a write is refused", req: withHeader(opt("/acme/_apis/git"), "X-HTTP-Method-Override", "DELETE"), wantErr: true},
+		{name: "a denied area stays denied", req: opt("/acme/_apis/tokens"), want: CapDeniedTokens},
+		{name: "OPTIONS below an area is not location discovery", req: opt("/acme/proj/_apis/git/repositories"), want: CapUnclassifiedRead},
+		{name: "OPTIONS off _apis is not location discovery", req: opt("/acme/proj/_admin"), want: CapUnclassifiedRead},
+		{name: "a zero Content-Length is not a body", req: withHeader(opt("/acme/_apis"), "Content-Length", "0"), want: CapRead},
+	})
+}
