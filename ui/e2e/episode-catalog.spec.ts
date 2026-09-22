@@ -17,7 +17,33 @@ import { EPISODES } from "../src/app/lib/demo-videos";
 
 async function mockFreshInstall(page: Page, opts: { sso?: boolean } = {}): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
-    const response = await route.fetch();
+    // The welcome hero (OnboardingScreen) does not read the landing read's
+    // status — it holds its OWN independent SetupStatus state and fires its
+    // own /setup/status GET from its own mount effect (onboarding-screen.tsx),
+    // strictly AFTER the page has already navigated to /setup. That is a
+    // SECOND real round trip through this same interception, not a cache hit
+    // and not concurrent with the first — confirmed by request timing: the
+    // first settles before waitForURL(/\/setup/) resolves, the second starts
+    // only once OnboardingScreen mounts.
+    //
+    // getSetupStatus() (lib/api/setup.ts) treats ANY fetch failure — not just
+    // a timeout — as "answer READY_FALLBACK" (single-user, unreachable),
+    // with no retry of its own; its effect runs once. So a single dropped
+    // connection on this SECOND round trip, on a loaded CI host, silently
+    // and PERMANENTLY sinks the rest of the test into single-user: nothing
+    // ever re-fetches, so no amount of extra `expect(...).toBeVisible()`
+    // timeout can recover it — this is what made the 15s wait fail outright
+    // rather than just late. Retry the real round trip here instead.
+    let response: Awaited<ReturnType<typeof route.fetch>> | undefined;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3 && !response; attempt++) {
+      try {
+        response = await route.fetch();
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (!response) throw lastErr;
     const json = await response.json();
     json.onboarding_complete = false;
     if (opts.sso) json.auth = { ...json.auth, mode: "sso" };
