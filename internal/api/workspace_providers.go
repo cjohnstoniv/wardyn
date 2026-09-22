@@ -219,6 +219,9 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders) error {
 		if err := validateProviderLanes(i, row); err != nil {
 			return err
 		}
+		if err := validateProviderEntra(i, row); err != nil {
+			return err
+		}
 	}
 	return validateStorageProviders(p.Storage)
 }
