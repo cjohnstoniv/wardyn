@@ -87,6 +87,24 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 	return ruleSourceADO
 }
 
+// refuseADOPlain refuses, on the plain forward lane, every request to a host
+// the run's Azure DevOps grant covers, and reports whether it did. The lane
+// never runs gateADO, and an absolute-form `https://` request-line there would
+// otherwise be credentialed by applyInjection with nothing checking the
+// organisation or the capability. REST reaches these hosts through a CONNECT
+// tunnel and git through the broker; this lane is not a third door.
+func (p *Proxy) refuseADOPlain(w http.ResponseWriter, r *http.Request) bool {
+	if p.adoGrants == nil || r.URL == nil {
+		return false
+	}
+	host, port := splitHostPort(r.URL.Host, defaultPortForScheme(r.URL.Scheme))
+	if _, ok := p.adoGrants.ADOGrantFor(host); !ok {
+		return false
+	}
+	p.refuseADO(w, r, host, port, "Wardyn refused this Azure DevOps request: it must be sent through an HTTPS tunnel (CONNECT), not as a plain proxy request.", nil)
+	return true
+}
+
 // adoCheck returns "" when r may be forwarded, else the refusal sentence. held
 // is non-nil only for the ONE refusal a person may lift — a grantable
 // capability the run does not hold — and names what the request needs.

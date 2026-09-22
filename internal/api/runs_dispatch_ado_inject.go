@@ -28,14 +28,16 @@ package api
 //     `*.visualstudio.com` wildcard adoEgressDomains opens for the pat/ssh
 //     lanes, which would let this credential ride to any organisation in the
 //     tenant the person also belongs to.
-//   - THERE IS EXACTLY ONE CREDENTIALED DOOR. Every rule sets require_tls and
-//     every host is authored port-qualified, so the proxy's plain lane refuses
-//     a cleartext `http://dev.azure.com/...` outright instead of attaching the
-//     bearer on port 80 — which would skip both the classifier and the
-//     organisation pin. And a run with no per-run certificate authority is
-//     REFUSED rather than downgraded: handleConnect only intercepts when a CA
-//     exists, so authoring these hosts without one would leave a blind tunnel
-//     carrying the sandbox's own headers.
+//   - ONE CREDENTIALED DOOR PER PATH: REST goes through the TLS-MITM tunnel,
+//     where the proxy's REST gate classifies every request and pins the
+//     organisation, and git goes through the broker. The proxy's plain forward
+//     lane never runs that gate, so it refuses every request to a host this
+//     grant covers, https:// or not (refuseADOPlain,
+//     internal/egress/proxy/ado_gate.go); require_tls on every rule is the
+//     floor under that refusal. And a run with no per-run certificate
+//     authority is REFUSED rather than downgraded: handleConnect only
+//     intercepts when a CA exists, so authoring these hosts without one would
+//     leave a blind tunnel carrying the sandbox's own headers.
 
 import (
 	"context"
@@ -69,11 +71,6 @@ const (
 	// hosted serves https and nothing else, so a port-qualified entry costs
 	// nothing and buys the cleartext refusal above.
 	adoEntraHostPort = "443"
-	// adoEntraIdentityProbeHost is the account-membership endpoint
-	// (`_apis/accounts?memberId=`) a client uses to learn which organisations an
-	// identity belongs to. It is org-independent, which is why it is named
-	// separately from the per-organisation family below.
-	adoEntraIdentityProbeHost = "app.vssps.visualstudio.com"
 	// adoEntraPlaceholderEnv is what a tool that INSISTS on a token reads. The
 	// value is inert: the real credential is attached by the proxy, and
 	// stripSandboxCredentials (internal/egress/proxy/inject.go) removes whatever
@@ -280,7 +277,7 @@ func adoOrganisationLabel(raw string) (string, bool) {
 // does not bind to an organisation (measured), that wildcard would be the whole
 // pin gone.
 func adoEntraHosts(org string) []string {
-	hosts := make([]string, 0, 2*len(adoEntraServices)+3)
+	hosts := make([]string, 0, 2*len(adoEntraServices)+2)
 	add := func(h string) {
 		if !slices.Contains(hosts, h) {
 			hosts = append(hosts, h)
@@ -294,7 +291,6 @@ func adoEntraHosts(org string) []string {
 	for _, svc := range adoEntraServices {
 		add(org + "." + svc + ".visualstudio.com")
 	}
-	add(adoEntraIdentityProbeHost)
 	return hosts
 }
 

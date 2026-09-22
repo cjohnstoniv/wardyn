@@ -559,7 +559,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleLocalRoute(w, r)
 		return
 	}
-	p.handlePlain(w, r)
+	p.servePlain(w, r)
 }
 
 // splitHostPort returns the host (lowercased, no port) and port, defaulting

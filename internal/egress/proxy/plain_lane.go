@@ -57,6 +57,16 @@ func defaultPortForScheme(scheme string) int {
 	return 80
 }
 
+// servePlain is the plain forward lane's entry. A host the run's Azure DevOps
+// grant covers is refused here, before evaluation or any injection, because
+// this lane never runs the REST gate (refuseADOPlain).
+func (p *Proxy) servePlain(w http.ResponseWriter, r *http.Request) {
+	if p.refuseADOPlain(w, r) {
+		return
+	}
+	p.handlePlain(w, r)
+}
+
 // handlePlain forwards an absolute-URI plain HTTP request.
 func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// A forward-proxy request carries an absolute URI; the host lives in the
