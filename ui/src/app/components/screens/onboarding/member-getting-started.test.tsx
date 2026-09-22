@@ -15,6 +15,14 @@ vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
 
+// The connect popup + poll (#386) — mocked so the chip's CONNECT_ADO tests
+// below drive the click without a real window.
+const adoConnectMock = vi.fn();
+let adoBlockedUrl: string | null = null;
+vi.mock("../../../lib/hooks/use-ado-connect", () => ({
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, connectFallback: adoConnectMock, blockedUrl: adoBlockedUrl }),
+}));
+
 const listSecretsMineMock = vi.fn();
 const setSecretMock = vi.fn();
 const deleteSecretMock = vi.fn();
@@ -58,6 +66,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { ADO } from "../../../lib/ado-entra-copy";
 import { MEMBER_GETTING_STARTED as T, YOUR_MODEL_KEY as YMK } from "../../wardyn/copy";
 
 // U-13 (a11y): the two "Sign in to AWS" buttons now carry DISTINCT accessible
@@ -752,6 +761,100 @@ describe("MemberGettingStarted", () => {
       await waitFor(() =>
         expect(screen.getByRole("link", { name: "New run" }).className).not.toContain("bg-primary "),
       );
+    });
+  });
+
+  // #386: one more chip from the six states, reusing the vocabulary for a
+  // second subject (§6.2/§7.5) — no button in the common case, a named cause
+  // in the fallback, never for `not_applicable` (unreachable from a browser).
+  describe("the Azure DevOps chip reads status.scm_access", () => {
+    beforeEach(() => {
+      adoConnectMock.mockReset();
+      adoBlockedUrl = null;
+    });
+
+    it("live via the org's sign-in: success tone, no action line, no button", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "live", source: "org" } }));
+      renderPage();
+      const chip = await screen.findByText(ADO.ACCESS_LIVE_ORG);
+      expect(chip.closest("span")?.className).toMatch(/success/);
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+
+    it("live via a separate connect: its own chip label", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "live", source: "separate" } }));
+      renderPage();
+      expect(await screen.findByText(ADO.ACCESS_LIVE_SEPARATE)).toBeInTheDocument();
+    });
+
+    it("live on a shared row (no source): the shared chip, still no button — makes no per-person claim", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "live" } }));
+      renderPage();
+      expect(await screen.findByText(ADO.ACCESS_SHARED_LIVE)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+
+    it("not_configured: warning tone, the row-is-newer cause line, and CONNECT_ADO", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ scm_access: { state: "not_configured", cause: "row_is_newer" } }),
+      );
+      renderPage();
+      const chip = await screen.findByText(ADO.ACCESS_NOT_CONNECTED);
+      expect(chip.closest("span")?.className).toMatch(/warning/);
+      expect(screen.getByText(ADO.CAUSE_ROW_IS_NEWER)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: ADO.CONNECT_ADO })).toBeInTheDocument();
+    });
+
+    it("clicking Connect Azure DevOps drives the popup flow and reloads status on success", async () => {
+      adoConnectMock.mockResolvedValueOnce(true);
+      getSetupStatusMock.mockResolvedValue(
+        status({ scm_access: { state: "not_configured", cause: "row_is_newer" } }),
+      );
+      renderPage();
+      await userEvent.click(await screen.findByRole("button", { name: ADO.CONNECT_ADO }));
+      expect(adoConnectMock).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
+    });
+
+    // Review follow-ups F9/N1: a blocked popup shows the canon sentence and
+    // fallback link, and clicking it starts the same poll (bounded).
+    it("a blocked popup shows the canon sentence and fallback link, which reloads status once connected", async () => {
+      adoBlockedUrl = "/api/v1/scm/azure-devops/signin";
+      adoConnectMock.mockResolvedValueOnce(true);
+      getSetupStatusMock.mockResolvedValue(
+        status({ scm_access: { state: "not_configured", cause: "row_is_newer" } }),
+      );
+      renderPage();
+      expect(await screen.findByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
+      const link = screen.getByRole("link", { name: ADO.CONNECT_ADO });
+      expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
+      await userEvent.click(link);
+      expect(adoConnectMock).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
+    });
+
+    it("shared_expired: warning tone, the action line, and NO button — nothing the member can do", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "shared_expired" } }));
+      renderPage();
+      const chip = await screen.findByText(ADO.ACCESS_SHARED_EXPIRED);
+      expect(chip.closest("span")?.className).toMatch(/warning/);
+      expect(screen.getByText(ADO.ACCESS_SHARED_EXPIRED_ACTION)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+    });
+
+    it("scm_access absent (no Azure DevOps row) renders no chip at all", async () => {
+      getSetupStatusMock.mockResolvedValue(status());
+      renderPage();
+      await screen.findByRole("heading", { name: T.SETUP_SUMMARY_TITLE });
+      expect(screen.queryByText(ADO.ACCESS_LIVE_ORG)).not.toBeInTheDocument();
+      expect(screen.queryByText(ADO.ACCESS_NOT_CONNECTED)).not.toBeInTheDocument();
+    });
+
+    it("not_applicable renders no chip — unreachable from a browser session, and §7.5 freezes none for it", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "not_applicable" } }));
+      renderPage();
+      await screen.findByRole("heading", { name: T.SETUP_SUMMARY_TITLE });
+      expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
     });
   });
 });
