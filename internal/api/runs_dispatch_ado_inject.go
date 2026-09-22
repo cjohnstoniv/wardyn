@@ -294,6 +294,13 @@ func adoEntraHosts(org string) []string {
 	return hosts
 }
 
+// adoEntraGitHosts are the broker entries for the hosts git is served from in
+// both naming schemes, plus `<org>@dev.azure.com`: the URL Azure DevOps' own
+// Clone button hands out carries the organisation as a user name.
+func adoEntraGitHosts(org string) []string {
+	return []string{"dev.azure.com", org + "@dev.azure.com", org + ".visualstudio.com"}
+}
+
 // adoEntraEgressEntries is the same set PORT-QUALIFIED, which is what an
 // allowlist entry and a TLS-MITM entry are both written as.
 //
@@ -409,6 +416,12 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 	// re-decide.
 	if sandboxEnv != nil && sandboxEnv[adoEntraPlaceholderEnv] == "" {
 		sandboxEnv[adoEntraPlaceholderEnv] = adoEntraPlaceholderValue
+	}
+	// GIT GOES THROUGH THE BROKER. The REST gate refuses git on the intercepted
+	// connection, so agent-run must rewrite this organisation's clone URLs onto
+	// the proxy's /wardyn/git/ route (pat_broker_entra.go).
+	if sandboxEnv != nil {
+		addGitBrokerHosts(sandboxEnv, adoEntraGitHosts(ado.org)...)
 	}
 	return injections, adoEntraEgressEntries(ado.org), true
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
@@ -84,7 +85,7 @@ func newADOCapFixture(t *testing.T) *adoCapFixture {
 // ask is one capability resolve as the proxy makes it.
 func (f *adoCapFixture) ask(t *testing.T, c adoscope.Capability, mode types.FirstUseMode, approval uuid.UUID, path string) *httptest.ResponseRecorder {
 	t.Helper()
-	q := url.Values{"capability": {string(c)}, "first_use": {string(mode)}, "method": {"POST"}, "path": {path}, "repo": {"app"}}
+	q := url.Values{"capability": {string(c)}, "first_use": {string(mode)}, "method": {"POST"}, "path": {path}, "repo": {testRepoOf(path)}}
 	if approval != uuid.Nil {
 		q.Set("approval", approval.String())
 	}
@@ -473,4 +474,88 @@ func TestInternalApprovalRequest_RefusesALaneKey(t *testing.T) {
 			t.Errorf("%s: auth.failed row %s does not name the reason", key, ev.Data)
 		}
 	}
+}
+
+// F4: an approval is spent only by the request it was raised for. A `once`
+// approved for pr, named on an ask for work_write, is refused and stays
+// unspent.
+func TestADOCapability_ANamedApprovalMustMatchTheCapability(t *testing.T) {
+	f := newADOCapFixture(t)
+	row := &f.st.site.WorkspaceProviders.Git[0]
+	row.Entra.CapabilityCeiling = append(row.Entra.CapabilityCeiling, adoscope.CapWorkWrite)
+	a := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath), adoCapabilityPendingState)
+	f.decide(t, a, types.ApprovalApproved, types.ScopeOnce)
+
+	w := f.ask(t, adoscope.CapWorkWrite, types.FirstUseWaitForReview, a, "/contoso/proj/_apis/wit/workitems/1")
+	if w.Code != http.StatusForbidden || f.failureReasonOf(t)["reason"] != "approval_mismatch" {
+		t.Fatalf("status %d body %s, want 403 approval_mismatch", w.Code, w.Body.String())
+	}
+	if f.row(a).MintedJTI != "" {
+		t.Fatal("the pr approval was spent by a work_write request")
+	}
+}
+
+// F5: a deny sticks for the run — the same canonical request is refused naming
+// the decision, and nothing new is raised.
+func TestADOCapability_ADenySticksForTheRun(t *testing.T) {
+	f := newADOCapFixture(t)
+	a := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath), adoCapabilityPendingState)
+	f.decide(t, a, types.ApprovalDenied, "")
+	for i := 0; i < 3; i++ {
+		w := f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath+"?try="+strconv.Itoa(i))
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), a.String()) ||
+			f.failureReasonOf(t)["reason"] != "capability_denied" {
+			t.Fatalf("attempt %d: status %d body %s, want 403 naming %s", i, w.Code, w.Body.String(), a)
+		}
+	}
+	if len(f.approvals.requested) != 1 {
+		t.Errorf("rows = %d, want the denied one only", len(f.approvals.requested))
+	}
+	// Another repository is another question.
+	pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, "/contoso/_apis/git/repositories/other/pullrequests"), adoCapabilityPendingState)
+}
+
+// F8: a consent Entra refuses is not re-asked on every request: inside the
+// negative-cache window, two refused requests cost one redemption.
+func TestADOCapability_ConsentRefusalIsCachedBriefly(t *testing.T) {
+	f := newADOCapFixture(t)
+	var redeems atomic.Int32
+	target, _ := url.Parse(f.fake.URL())
+	rp := httputil.NewSingleHostReverseProxy(target)
+	counter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/token") {
+			redeems.Add(1)
+		}
+		rp.ServeHTTP(w, r)
+	}))
+	t.Cleanup(counter.Close)
+	f.cfg.AuthorityOverride = counter.URL
+
+	a := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath), adoCapabilityPendingState)
+	f.decide(t, a, types.ApprovalApproved, types.ScopeOnce)
+	f.fake.SetConsentRequired(true)
+	b := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath), reauthPendingState)
+	if got := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath), reauthPendingState); got != b {
+		t.Fatalf("second refusal named %s, want the same consent request %s", got, b)
+	}
+	if n := redeems.Load(); n != 1 {
+		t.Fatalf("redemptions = %d, want 1 inside the window", n)
+	}
+	// Past the window the authority is asked again.
+	later := adoTestNow.Add(adoConsentRefusalTTL + time.Second)
+	f.srv.cfg.Now = func() time.Time { return later }
+	pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath), reauthPendingState)
+	if n := redeems.Load(); n != 2 {
+		t.Errorf("redemptions after the window = %d, want 2", n)
+	}
+}
+
+// testRepoOf is the repository the proxy reports for path (proxy.adoRepoOf).
+func testRepoOf(path string) string {
+	_, rest, ok := strings.Cut(path, "/_apis/git/repositories/")
+	if !ok {
+		return ""
+	}
+	repo, _, _ := strings.Cut(rest, "/")
+	return repo
 }

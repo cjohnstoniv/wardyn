@@ -84,6 +84,9 @@ const adoEntraAccessReuseMargin = 10 * time.Minute
 type adoEntraAccessCache struct {
 	mu sync.Mutex
 	m  map[string]ADOEntraAccess
+	// refused is when a consent_required answer was last given per (owner,
+	// row, needed scopes) — adoConsentRefusedRecently's negative cache.
+	refused map[string]time.Time
 }
 
 func (c *adoEntraAccessCache) get(key string, now time.Time) (ADOEntraAccess, bool) {
@@ -213,6 +216,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	// not consented to fails whole (AADSTS65001, classified consent_required)
 	// with no token at all — so a computed subset is a way to fail, never a way
 	// to narrow. The run's capabilities bound it at the proxy, not here.
+	if capAsk.capability != "" && s.adoConsentRefusedRecently(ctx, cfg, snapshot.OwnerSubject, need) {
+		return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
+	}
 	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, cfg.Scopes, false)
 	if err == nil && capAsk.capability != "" && !adoScopesWithin(need, access.Scopes) {
 		access, err = s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, cfg.Scopes, true)
@@ -220,37 +226,14 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		class := ADOEntraClassify(err)
 		if capAsk.capability != "" && class == ADOEntraFailureConsentRequired {
+			s.adoConsentRefused(cfg, snapshot.OwnerSubject, need)
 			return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
 		}
 		status, body := adoResolveFailureAnswer(class)
 		return fail(status, string(class), body, map[string]any{"owner": snapshot.OwnerSubject})
 	}
-	if capAsk.capability != "" {
-		// The authority's GRANTED set is the person's whole consent for the
-		// resource (measured), so a capability whose scope is missing from it
-		// is one they have not consented to — whoever approved it here.
-		if !adoScopesWithin(need, access.Scopes) {
-			return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
-		}
-		if capAsk.once != nil {
-			spender, ok := s.cfg.Store.(approvalOnceSpender)
-			if !ok {
-				return fail(http.StatusServiceUnavailable, "once_unspendable", adoCapUnspendableBody, nil)
-			}
-			spent, serr := spender.SpendApprovalOnce(ctx, capAsk.once.ID, minted.JTI)
-			if serr != nil {
-				return fail(http.StatusServiceUnavailable, "once_unspendable", adoCapUnspendableBody, nil)
-			}
-			if !spent {
-				// Another request spent it first: this one is a new attempt.
-				rows, rerr := s.runApprovals(ctx, claims.RunID, "")
-				if rerr != nil {
-					return fail(http.StatusServiceUnavailable, "approvals_unreadable", adoCapApprovalsUnreadable, nil)
-				}
-				s.raiseADOCapability(w, r, claims, snapshot, grantID, capAsk.capability, rows, fail)
-				return true
-			}
-		}
+	if capAsk.capability != "" && s.settleADOCapability(w, r, claims, snapshot, cfg, grantID, minted.JTI, capAsk, need, access, fail) {
+		return true
 	}
 
 	// The ONE wire shape, forced whatever the grant authored — the subscription

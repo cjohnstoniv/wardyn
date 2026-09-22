@@ -287,6 +287,14 @@ func TestReceivePackCommandParser(t *testing.T) {
 			pkt(someOID+" "+otherOID+" "+inNS+"\nrefs/heads/main"+firstCaps) + "0000", "control character"},
 		{"embedded-cr-refname",
 			pkt(someOID+" "+otherOID+" "+inNS+"\rrefs/heads/main"+firstCaps) + "0000", "control character"},
+		// A NUL rides the FIRST command only: on a later line a forge whose
+		// parser is not git's could read the ref after it instead.
+		{"nul-on-second-command",
+			pkt(someOID+" "+otherOID+" "+inNS+firstCaps) + pkt(someOID+" "+otherOID+" "+prefix+"b\x00refs/heads/main\n") + "0000",
+			"a NUL is allowed only on the first command"},
+		{"nul-on-shallow-line",
+			pkt("shallow "+someOID+"\x00refs/heads/main\n") + pkt(someOID+" "+otherOID+" "+inNS+firstCaps) + "0000",
+			"a NUL is allowed only on the first command"},
 		{"push-cert", pkt("push-cert"+firstCaps) + "0000", "unsupported receive-pack command"},
 		{"malformed-length", "zzzz" + "0000", "malformed pkt-line length"},
 		{"delim-pkt", "0001" + "0000", "unexpected pkt-line length"},

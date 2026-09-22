@@ -73,10 +73,11 @@ const (
 	// of the same kind (maxADOCapabilityHoldsPerRun); this one alone is not a
 	// limit, because a restarted sidecar starts it at zero.
 	maxCapabilityHolds = 16
-	// maxCapabilityHoldTimeout clamps a capability hold BELOW the MITM inner
-	// server's 5-minute ReadTimeout, which bounds the whole request including
-	// its body: a longer hold would fail an approved POST on the body read that
-	// follows the approval.
+	// maxCapabilityHoldTimeout clamps a capability hold below the MITM inner
+	// server's 5-minute ReadTimeout. The gate has already read the body whole
+	// (adoPeekBody) before it holds, so this is a belt under that timeout —
+	// a held request must still be answered inside the connection's own
+	// deadline — not a guard for a body read after the approval.
 	maxCapabilityHoldTimeout = 240 * time.Second
 )
 
@@ -347,11 +348,15 @@ func (c *reauthCoordinator) admitWith(approvalID uuid.UUID, budget time.Duration
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if existing, found := c.workflows[approvalID]; found {
-		// A capability hold that ran out while its request was still open is
-		// the one exception to "terminal is sticky": the person may answer
-		// after the budget, and the retry must wait again (counted), not be
-		// told at once that nobody answered.
-		if query == nil || !existing.finished() || !errors.Is(existing.err, errReauthTimedOut) {
+		// A capability hold that ENDED WITHOUT A CREDENTIAL is not sticky. The
+		// control plane names an approval id to a new ask only while that
+		// approval is still open (pending) or approved and unspent, so a retry
+		// handed this id has a live question behind it — whatever ended the old
+		// hold (its budget, a failed or timed-out re-resolve, a chained consent
+		// request that expired, a shutdown). Joining the dead workflow would
+		// refuse every retry at once until the proxy restarted; the retry waits
+		// again instead, counted against maxCapabilityHolds.
+		if query == nil || !existing.finished() || existing.err == nil {
 			return existing, false, true
 		}
 	}
