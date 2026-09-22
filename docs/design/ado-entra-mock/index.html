@@ -223,7 +223,8 @@
         <div class="r forge"><b>The token's own reach</b><span>Azure DevOps. It mints this run its own token, limited to the capabilities the run has been granted and to the run's lifetime, and widens it only when you allow more.</span></div>
       </div>
       <div class="note amber" style="max-width:none"><b>A minted token is more exposed than a sign-in</b><span>It exists at Azure DevOps under that person's name until Wardyn revokes it — at the end of the run, or on the next sweep if this Wardyn was stopped mid-run. A sign-in is never written anywhere and needs no cleanup. Choose this when you need Azure DevOps itself to bound the run.</span></div>
-      <div class="note plain" style="max-width:none"><span>Your organisation may refuse token creation by policy. If it does, runs on this row are refused with the policy named, and nothing falls back to a wider token.</span></div>
+      <div class="note plain" style="max-width:none"><span>Your organisation may refuse token creation, or cap how long a token may live, by policy. If it does, runs on this row are refused with the policy named, and nothing falls back to a wider token.</span></div>
+      <div class="note plain" style="max-width:none"><span>Azure DevOps does not promise that revoking a token ends a connection already open with it. Revoking is what stops the next request, not necessarily the one in flight.</span></div>
     </div>
 
     <div class="varlabel"><b>Write refusals</b> — the console contributes the heading; the body is the server's own 400, verbatim</div>
@@ -279,6 +280,7 @@
           <dt>Can ask you for</dt><dd>Push · Pull requests · Branch policies · Run pipelines · Work items</dd>
           <dt>Never</dt><dd>Push past a branch policy · Repository settings · Wiki · creating tokens · service hooks · extensions</dd>
         </dl>
+        <p class="secsub" style="margin-top:12px">The application asking is <b style="font-weight:600">Wardyn (acme)</b> — the same one you signed in to this console with. You can withdraw the consent at any time from your Microsoft account's My Apps page; doing so stops your runs reaching Azure DevOps.</p>
         <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Continue to Microsoft</button></div>
       </div>
     </div>
@@ -287,7 +289,7 @@
     <div class="pad">
       <div class="card">
         <h4 class="sectitle">Azure DevOps</h4>
-        <div class="chips" style="margin-top:8px"><span class="chip success"><i class="dot"></i>Azure DevOps · Signed in as you</span></div>
+        <div class="chips" style="margin-top:8px"><span class="chip success"><i class="dot"></i>Azure DevOps · Your sign-in</span></div>
         <dl class="kv" style="margin-top:12px">
           <dt>Signed in as</dt><dd>dana.okafor@acme.com<span class="sub">Your runs act as this account, and Azure DevOps records them under it.</span></dd>
           <dt>Organisation</dt><dd><span class="mono">dev.azure.com/acme</span></dd>
@@ -327,7 +329,7 @@
       <tbody>
         <tr>
           <td class="nm mono">live</td>
-          <td><span class="chip success"><i class="dot"></i>Azure DevOps · Signed in as you</span></td>
+          <td><span class="chip success"><i class="dot"></i>Azure DevOps · Your sign-in</span></td>
           <td class="sub" style="max-width:none">—</td>
           <td class="sub" style="max-width:none">—</td>
         </tr>
@@ -375,7 +377,7 @@
 <!-- ===== STATE 5 ===== The capability request card — live run -->
 <!-- =================================================================== -->
 <section class="state">
-  <div class="tag"><span>State 5</span><b>The capability request card, in the live run — an agent asked to push. What it wants, on what repository and ref, as whom; three decisions with their consequence under each; and the protected-branch variant</b></div>
+  <div class="tag"><span>State 5</span><b>The capability request card, in the live run — a run asked to push. What it wants, on what repository and ref, as whom; three decisions with their consequence under each; and the protected-branch variant</b></div>
   <div class="frame">
     <div class="pad ph">
       <div><h2>checkout retry</h2><p class="lead">Running · started 14:01 · Claude Code</p></div>
@@ -395,7 +397,8 @@
             <dt>Command</dt><dd class="mono">git push origin feature/checkout-retry</dd>
             <dt>Acts as</dt><dd>Dana Okafor<span class="sub">Whatever you allow happens as Dana on Azure DevOps, and Azure DevOps records it that way.</span></dd>
           </dl>
-          <p style="margin-top:12px">Allowing this lets the run push commits and create or move branches that no policy protects, anywhere in <span class="mono">acme/payments-api</span>. It does not let it move a protected branch, complete a pull request, or change a policy — each of those asks separately.</p>
+          <p style="margin-top:12px"><b style="font-weight:600;color:var(--foreground)">What you're approving:</b> the run pushes this branch to <span class="mono">acme/payments-api</span>, as Dana.</p>
+          <p style="margin-top:6px"><b style="font-weight:600;color:var(--foreground)">Blast radius:</b> commits, and creating or moving branches no policy protects, anywhere in <span class="mono">acme/payments-api</span>. Not a protected branch, not completing a pull request, not changing a policy — each of those asks separately.</p>
         </div>
         <div class="ft">
           <div class="dec">
@@ -451,7 +454,8 @@
             <dt>Change</dt><dd class="mono">POST policy/configurations<span class="sub">Minimum reviewers: 2 → 1</span></dd>
             <dt>Acts as</dt><dd>Priya Raman</dd>
           </dl>
-          <p style="margin-top:12px">Allowing this lets the run create, change and delete branch policies in <span class="mono">acme/payments-api</span> — including the ones that would hold back its own pushes.</p>
+          <p style="margin-top:12px"><b style="font-weight:600;color:var(--foreground)">What you're approving:</b> the run lowers the reviewer count on <span class="mono">main</span>, as Priya.</p>
+          <p style="margin-top:6px"><b style="font-weight:600;color:var(--foreground)">Blast radius:</b> creating, changing and deleting branch policies anywhere in <span class="mono">acme/payments-api</span> — including the ones that would hold back its own pushes.</p>
         </div>
         <div class="ft"><div class="dec">
           <span class="b"><button class="btn" type="button">Allow once</button><span>This one change goes through. The next one asks again.</span></span>
@@ -471,13 +475,39 @@
             <dt>Pull request</dt><dd class="mono">!482<span class="sub">feature/checkout-retry → main</span></dd>
             <dt>Acts as</dt><dd>Dana Okafor</dd>
           </dl>
-          <p style="margin-top:12px">Allowing this lets the run open, update, comment on and complete pull requests in <span class="mono">acme/payments-api</span>. Completing one past its own policies is a separate ask.</p>
+          <p style="margin-top:12px"><b style="font-weight:600;color:var(--foreground)">What you're approving:</b> the run completes pull request <span class="mono">!482</span>, as Dana.</p>
+          <p style="margin-top:6px"><b style="font-weight:600;color:var(--foreground)">Blast radius:</b> opening, updating, commenting on and completing pull requests anywhere in <span class="mono">acme/payments-api</span>. Completing one past its own policies is a separate ask.</p>
         </div>
         <div class="ft"><div class="dec">
           <span class="b"><button class="btn" type="button">Allow once</button><span>This one pull request action goes through. The next one asks again.</span></span>
           <span class="b"><button class="btn" type="button">Allow for this run</button><span>Every pull request action from this run goes through until it ends.</span></span>
           <span class="b"><button class="btn" type="button">Deny</button><span>The action is refused and the tool is told why.</span></span>
         </div></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Q2's losing variant</b> — today's shipped shape: one Approve button with the persistence hidden behind a caret. Drawn so the owner can rule, because a push is not an egress: “once” and “for this run” are materially different answers and both should be readable without opening a menu</div>
+    <div class="pad" style="padding-top:12px;padding-bottom:18px">
+      <div class="req hold">
+        <div class="top">
+          <span class="chip warning">Waiting for you</span>
+          <div class="grow"><h4>Push to a repository</h4><span class="who">Azure DevOps · asked by this run at 14:02:11</span></div>
+        </div>
+        <div class="bd">
+          <p style="margin-top:0"><b style="font-weight:600;color:var(--foreground)">What you're approving:</b> the run pushes this branch to <span class="mono">acme/payments-api</span>, as Dana.</p>
+        </div>
+        <div class="ft" style="display:flex;gap:8px;align-items:center">
+          <button class="btn primary" type="button">Approve</button>
+          <button class="btn" type="button" aria-label="More options">⌄</button>
+          <button class="btn" type="button">Deny</button>
+          <span class="secsub" style="margin-left:8px">Scope: This run</span>
+        </div>
+      </div>
+      <div class="opts" style="margin-top:10px;max-width:42ch">
+        <div class="o">Once<span class="why">This one connection. The next attempt asks again.</span></div>
+        <div class="o sel">This run<span class="why">Every attempt until this run ends. (default)</span></div>
+        <div class="o off">Until…<span class="why">Refused for Azure DevOps capabilities: a capability can't outlive the run that was granted it.</span></div>
+        <div class="o off">Always<span class="why">Refused for Azure DevOps capabilities: nothing here is saved to the workspace.</span></div>
       </div>
     </div>
   </div>
@@ -502,7 +532,7 @@
             <dt>Repository</dt><dd class="mono">acme/payments-api</dd>
             <dt>Branch</dt><dd class="mono">refs/heads/main<span class="sub">Protected: 2 reviewers required, build must pass.</span></dd>
           </dl>
-          <div class="note red" style="max-width:none"><b>Above this deployment's ceiling</b><span>Your admin's Azure DevOps row doesn't list this capability, so there is nothing to decide: it was refused and the run was told. An admin can add it to the ceiling, and then a future run could ask.</span></div>
+          <div class="note red" style="max-width:none"><b>Above this deployment's ceiling</b><span>Your admin's Azure DevOps row doesn't list this capability, so there is nothing to decide: it was refused and the run was told. An admin can add it to the ceiling — that changes what a future run may ask for, and does nothing for this one.</span></div>
         </div>
       </div>
 
@@ -629,7 +659,8 @@
             <dt>Command</dt><dd class="mono">git push origin feature/checkout-retry</dd>
             <dt>Acts as</dt><dd>Dana Okafor<span class="sub">Whatever you allow happens as Dana on Azure DevOps, and Azure DevOps records it that way.</span></dd>
           </dl>
-          <p style="margin-top:12px">Allowing this lets the run push commits and create or move branches that no policy protects, anywhere in <span class="mono">acme/payments-api</span>. It does not let it move a protected branch, complete a pull request, or change a policy — each of those asks separately.</p>
+          <p style="margin-top:12px"><b style="font-weight:600;color:var(--foreground)">What you're approving:</b> the run pushes this branch to <span class="mono">acme/payments-api</span>, as Dana.</p>
+          <p style="margin-top:6px"><b style="font-weight:600;color:var(--foreground)">Blast radius:</b> commits, and creating or moving branches no policy protects, anywhere in <span class="mono">acme/payments-api</span>. Not a protected branch, not completing a pull request, not changing a policy — each of those asks separately.</p>
         </div>
         <div class="ft">
           <div class="dec">
