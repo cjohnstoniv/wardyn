@@ -440,6 +440,12 @@ type Config struct {
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
 	MaskRegistry *secretmask.Registry
+	// ADOEntra resolves the Azure DevOps Entra app registration the per-user
+	// sign-in runs against (see ado_entra.go). Nil — the default — means this
+	// deployment offers no Azure DevOps sign-in and both of its routes refuse.
+	// A function rather than a value so the provider row stays the single
+	// source of truth and the sign-in never acts on a cached copy of it.
+	ADOEntra ADOEntraSource
 	// SubscriptionToken, when non-nil, yields the operator's LIVE Anthropic
 	// subscription OAuth access token from the resident ~/.claude credentials.
 	// The internal injection-resolve endpoint uses it to inject a fresh token
@@ -788,6 +794,11 @@ type Server struct {
 	ssoRefreshMu    sync.Mutex
 	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool
+	// adoEntra is the per-owner single-flight registry the Azure DevOps
+	// sign-in's redemption takes before it redeems a rotating refresh token
+	// (see ado_entra_store.go). Process-local for the same reason as the locks
+	// above, and its zero value is ready to use.
+	adoEntra adoEntraFlight
 }
 
 // New constructs a Server and builds its router. It does not start listening.
