@@ -344,10 +344,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	llm, injections := plan.llm, plan.injections
-	injections, adoMITMHosts, ok := s.authorADOEntraLane(ctx, run, adoRun, adoInject, plan, &policy, sandboxEnv, injections)
+	ado, ok := s.authorADOEntraLane(ctx, run, adoRun, adoInject, plan, &policy, sandboxEnv, injections)
 	if !ok {
 		return
 	}
+	injections = ado.injections
 
 	// BROKERED GIT: make the broker route the only route to the managed host names.
 	// Last of the policy
@@ -447,7 +448,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: append(append(append([]string{}, artifactPlan.mitmHosts...), plan.bedrockMITMHosts...), adoMITMHosts...),
+			MITMHosts: append(append(append([]string{}, artifactPlan.mitmHosts...), plan.bedrockMITMHosts...), ado.mitmHosts...),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so
@@ -467,6 +468,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// not the caller's: a brokered forge's PAT is withheld from BOTH halves
 			// of dispatch or from neither.
 			PATGrants: patBrokerGrants(p.GitPATGrants, p.PATBroker),
+			// The per-person Azure DevOps REST gate's grant (runs_dispatch_ado_inject.go).
+			// Nil for every run not on that lane, which leaves the gate off.
+			ADOGrants: ado.gate,
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,

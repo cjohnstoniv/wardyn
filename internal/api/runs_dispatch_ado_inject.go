@@ -49,6 +49,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -315,19 +316,37 @@ func adoEntraEgressEntries(org string) []string {
 	return out
 }
 
+// adoEntraLane is everything the lane adds to one run's sidecar configuration.
+type adoEntraLane struct {
+	injections []runner.InjectionGrant
+	mitmHosts  []string
+	// gate is what the proxy's REST gate holds every request on these hosts to
+	// (proxy.ADOGrantConfig): the organisation, the granted capabilities and the
+	// exact hosts. The injection alone would attach the person's credential with
+	// nothing narrowing it — the token bounds nothing — so the two always travel
+	// together; nil exactly when no injection was authored.
+	gate []proxy.ADOGrantConfig
+}
+
 // authorADOEntraLane is dispatchRun's one call into this file: it authors the
-// run's Azure DevOps grant, injection rules, egress and TLS-MITM entries, or
-// declines when this run is not on the lane. ok=false means the run has already
-// been marked FAILED and dispatch must stop — authorBedrockSSOInjection's
-// contract, deliberately identical.
+// run's Azure DevOps grant, injection rules, egress, TLS-MITM entries and REST
+// gate grant, or declines when this run is not on the lane. ok=false means the
+// run has already been marked FAILED and dispatch must stop —
+// authorBedrockSSOInjection's contract, deliberately identical.
 func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado adoEntraRun, on bool,
 	plan dispatchLLMPlan, policy *types.RunPolicySpec, sandboxEnv map[string]string,
 	injections []runner.InjectionGrant,
-) ([]runner.InjectionGrant, []string, bool) {
+) (adoEntraLane, bool) {
 	if !on {
-		return injections, nil, true
+		return adoEntraLane{injections: injections}, true
 	}
-	return s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
+	inj, mitm, ok := s.authorADOEntraInjection(ctx, run, ado, plan.mitmCACertPEM, plan.mitmCAKeyPEM, policy, sandboxEnv, injections)
+	if !ok {
+		return adoEntraLane{injections: injections}, false
+	}
+	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: []proxy.ADOGrantConfig{{
+		Organization: ado.org, Capabilities: slices.Clone(ado.caps), Hosts: adoEntraHosts(ado.org),
+	}}}, true
 }
 
 // authorADOEntraInjection authors the whole lane for one run.

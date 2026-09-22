@@ -1,0 +1,269 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"bufio"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/test/adofake"
+)
+
+// TestADOEntraLane_EndToEnd is the proof the whole runtime path works: a run
+// DISPATCHED on the per-person Azure DevOps lane boots the REAL proxy sidecar
+// from its own authored configuration, and through it
+//
+//   - a read inside the grant is intercepted, credentialed with the person's
+//     bearer and forwarded;
+//   - a write OUTSIDE the grant is refused by the REST gate before any byte
+//     reaches Azure DevOps;
+//   - a read addressed to ANOTHER organisation is refused (the pin the token
+//     itself does not carry).
+//
+// Wire: authorADOEntraLane -> runner.BuildProxyConfig -> proxy.LoadConfigBytes
+// -> proxy.NewServer -> a sandbox client CONNECTing to dev.azure.com:443 and
+// trusting only the run's own CA. The sidecar's upstream leg is routed through
+// a stand-in corporate proxy that terminates TLS for dev.azure.com and hands
+// the request to test/adofake — which answers any credential it knows, so a
+// refusal can only be Wardyn's. The control plane's resolve is stubbed to what
+// resolveADOInjection answers (that arm has its own tests).
+func TestADOEntraLane_EndToEnd(t *testing.T) {
+	const bearer = "entra-bearer-for-contoso"
+	fake := adofake.New()
+	t.Cleanup(fake.Close)
+	fake.RegisterToken(bearer, adofake.ScopeCodeRead, adofake.ScopeCodeWrite, adofake.ScopeWorkRead,
+		adofake.ScopeWorkWrite, adofake.ScopeProjectRead)
+	fake.AddProject("contoso", "", "proj")
+	fake.AddProject("fabrikam", "", "loot")
+
+	upstreamCA := newTestUpstreamCA(t, "dev.azure.com")
+	corp := newTLSTerminatingCorpProxy(t, upstreamCA.leaf, fake.URL())
+
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/internal/injection/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
+			Header: "Authorization", Value: "Bearer " + bearer, ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+			Organisation: "contoso", Capabilities: []string{"read", "code_write"},
+		})
+	}))
+	t.Cleanup(cp.Close)
+
+	// DISPATCH: the lane as dispatchRun calls it, with a real per-run CA.
+	caCert, caKey, err := generateRunCA(time.Now())
+	if err != nil {
+		t.Fatalf("generateRunCA: %v", err)
+	}
+	st := &adoTestStore{}
+	s, _ := newADODispatchServer(st)
+	policy := types.RunPolicySpec{}
+	runID := uuid.New()
+	lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: runID}, adoTestRun(t), true,
+		dispatchLLMPlan{mitmCACertPEM: string(caCert), mitmCAKeyPEM: string(caKey)}, &policy, map[string]string{}, nil)
+	if !ok || len(lane.gate) != 1 {
+		t.Fatalf("dispatch: ok=%v gate=%+v", ok, lane.gate)
+	}
+
+	port := freeLoopbackPort(t)
+	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
+		RunToken: "run-token", ControlPlaneURL: cp.URL, Policy: policy, Injection: lane.injections,
+		MITMCACertPEM: string(caCert), MITMCAKeyPEM: string(caKey), MITMHosts: lane.mitmHosts,
+		ADOGrants: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCA.caPEM,
+	}, port)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	cfg, err := proxy.LoadConfigBytes(raw)
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	cfg.Listen = "127.0.0.1:" + strconv.Itoa(port)
+	psrv, err := proxy.NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, io.Discard)
+	if err != nil {
+		t.Fatalf("sidecar boot: %v", err)
+	}
+	go func() { _ = psrv.ListenAndServe() }()
+	t.Cleanup(func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = psrv.Shutdown(sctx)
+	})
+
+	// THE SANDBOX: trusts only the run's CA and holds only the placeholder.
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caCert)
+	proxyURL, _ := url.Parse("http://" + cfg.Listen)
+	sandbox := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+		Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+	}}
+	send := func(method, target, body string) (int, string) {
+		t.Helper()
+		var resp *http.Response
+		var err error
+		for i := 0; i < 50; i++ {
+			req, _ := http.NewRequest(method, target, strings.NewReader(body))
+			req.Header.Set("Authorization", "Basic "+adoEntraPlaceholderValue)
+			if body != "" {
+				req.Header.Set("Content-Type", "application/json-patch+json")
+			}
+			if resp, err = sandbox.Do(req); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, target, err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode, string(b)
+	}
+
+	// 1. A read inside the grant: forwarded, with the bearer attached.
+	if code, body := send(http.MethodGet, "https://dev.azure.com/contoso/_apis/projects?api-version=7.1", ""); code != http.StatusOK {
+		t.Fatalf("granted read: status %d body %s", code, body)
+	}
+	reqs := fake.Requests()
+	if len(reqs) != 1 || reqs[0].Token != bearer || !reqs[0].Authorized {
+		t.Fatalf("upstream saw %+v, want one authorized request carrying the person's bearer", reqs)
+	}
+	if strings.Contains(reqs[0].Headers.Get("Authorization"), adoEntraPlaceholderValue) {
+		t.Fatal("the sandbox's placeholder reached Azure DevOps")
+	}
+
+	// 2. A write outside the grant (work_write): refused by the gate, never forwarded.
+	code, body := send(http.MethodPatch, "https://dev.azure.com/contoso/proj/_apis/wit/workitems/1?api-version=7.1",
+		`[{"op":"add","path":"/fields/System.Title","value":"x"}]`)
+	if code != http.StatusForbidden || !strings.Contains(body, "CapabilityNotGranted") {
+		t.Errorf("ungranted write: status %d body %s, want the gate's 403", code, body)
+	}
+	// 3. Another organisation: refused by the organisation pin.
+	if code, body := send(http.MethodGet, "https://dev.azure.com/fabrikam/_apis/projects?api-version=7.1", ""); code != http.StatusForbidden {
+		t.Errorf("cross-organisation read: status %d body %s, want 403", code, body)
+	}
+	if n := len(fake.Requests()); n != 1 {
+		t.Errorf("upstream saw %d requests, want only the granted read", n)
+	}
+}
+
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+type testUpstreamCA struct {
+	caPEM string
+	leaf  tls.Certificate
+}
+
+// newTestUpstreamCA mints a CA and a leaf for host, standing in for the public
+// PKI the sidecar's upstream leg would otherwise verify against.
+func newTestUpstreamCA(t *testing.T, host string) testUpstreamCA {
+	t.Helper()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test upstream CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("ca: %v", err)
+	}
+	ca, _ := x509.ParseCertificate(caDER)
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: host}, DNSNames: []string{host},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, KeyUsage: x509.KeyUsageDigitalSignature,
+	}, ca, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("leaf: %v", err)
+	}
+	return testUpstreamCA{
+		caPEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})),
+		leaf:  tls.Certificate{Certificate: [][]byte{leafDER}, PrivateKey: leafKey},
+	}
+}
+
+// newTLSTerminatingCorpProxy is a CONNECT proxy that, instead of tunnelling,
+// terminates TLS with leaf and serves the request from the plain-HTTP fake.
+// Returns its host:port.
+func newTLSTerminatingCorpProxy(t *testing.T, leaf tls.Certificate, fakeURL string) string {
+	t.Helper()
+	target, _ := url.Parse(fakeURL)
+	rp := httputil.NewSingleHostReverseProxy(target)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				br := bufio.NewReader(c)
+				req, err := http.ReadRequest(br)
+				if err != nil || req.Method != http.MethodConnect {
+					_ = c.Close()
+					return
+				}
+				_, _ = io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+				tc := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12})
+				_ = (&http.Server{Handler: rp, ReadHeaderTimeout: 5 * time.Second}).Serve(&oneConnListener{c: tc})
+			}(conn)
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// oneConnListener serves exactly one connection, then reports closed.
+type oneConnListener struct {
+	c    net.Conn
+	done bool
+}
+
+func (l *oneConnListener) Accept() (net.Conn, error) {
+	if l.done {
+		return nil, net.ErrClosed
+	}
+	l.done = true
+	return l.c, nil
+}
+func (l *oneConnListener) Close() error   { return nil }
+func (l *oneConnListener) Addr() net.Addr { return l.c.LocalAddr() }

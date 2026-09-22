@@ -304,9 +304,10 @@ func TestADOEntraLane_UnconfiguredDeploymentIsUnchanged(t *testing.T) {
 		policy := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
 		env := map[string]string{"K": "V"}
 		in := []runner.InjectionGrant{{GrantID: uuid.New()}}
-		gotInj, mitm, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: uuid.New()}, ado, on,
+		lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: uuid.New()}, ado, on,
 			dispatchLLMPlan{}, &policy, env, in)
-		if !ok || mitm != nil || !reflect.DeepEqual(gotInj, in) ||
+		gotInj, mitm := lane.injections, lane.mitmHosts
+		if !ok || mitm != nil || lane.gate != nil || !reflect.DeepEqual(gotInj, in) ||
 			!reflect.DeepEqual(policy, types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}) ||
 			!reflect.DeepEqual(env, map[string]string{"K": "V"}) || len(st.grants) != 0 || len(audit.rows) != 0 {
 			t.Errorf("%s: the off lane changed dispatch output: inj=%v mitm=%v policy=%+v env=%v grants=%d audit=%d",
