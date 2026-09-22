@@ -138,3 +138,9 @@ f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generi
 # re-copied nor re-moded. The word PREEXISTING is the whole payload — it is not bech32, not a keygen
 # output, and decodes to nothing; generic-api-key matches only its AGE-SECRET-KEY- shape.
 3fe6eb6e5c28ba456577427799dc04569f9e19ae:scripts/test-up-policy.sh:generic-api-key:145
+# The same FAKE GitLab PAT fixture, moved to line 46 when the mask test started minting a unique
+# fixture per iteration so a -count=2 re-run no longer collides in the global mask registry (#374).
+# Commit-scoped: the squash on feature/0.7.10, its lane commit, and the upstream commit.
+e7b3bc6464a6645ea7945e270bef64fc21365a55:internal/egress/proxy/pat_broker_mask_test.go:gitlab-pat:46
+0e7795b4d41970bc01f0ec754381582a8f008cc8:internal/egress/proxy/pat_broker_mask_test.go:gitlab-pat:46
+ab7173568b195893e0dc798c3c419976425acd27:internal/egress/proxy/pat_broker_mask_test.go:gitlab-pat:46

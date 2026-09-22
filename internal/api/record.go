@@ -371,6 +371,16 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		if s.writeAdmissionLaunchRefusal(w, r, lerr) {
 			return
 		}
+		// The per-user Azure DevOps gate (#386 review follow-up N4): admitted,
+		// but this person hasn't connected — the same 422 shape the New Run
+		// door and the Build/Scan steps answer with (gitCredentialErrorBody).
+		var gcErr *gitCredentialRefusalError
+		if errors.As(lerr, &gcErr) {
+			writeJSON(w, http.StatusUnprocessableEntity, gitCredentialErrorBody{
+				Error: gitCredentialNotConnectedRefusal, Reason: gitCredentialRefusalReason, Org: gcErr.Org,
+			})
+			return
+		}
 		// A governance LIMIT is a refusal, not a fault: 403, the same status
 		// denyMemberGovernance answers when the identical limit refuses the
 		// identical principal's ordinary run. Both limits map here — the quota

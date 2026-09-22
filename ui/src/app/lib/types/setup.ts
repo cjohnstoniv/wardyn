@@ -302,6 +302,36 @@ export interface SetupModelAccess {
   deadline?: string;
 }
 
+// THIS PRINCIPAL's Azure DevOps access state (internal/api.SCMAccess) —
+// ModelAccess's sibling for a second subject (#386,
+// docs/design/ado-entra-prompt.md §7.5). `source`/`cause` are set only where
+// the state carries one — see the Go doc comment (scmaccess.go).
+export interface SCMAccess {
+  /** Which Azure DevOps row this answer is about (review finding F6) —
+   *  meaningful once a deployment can carry more than one per-user row
+   *  (#383); today's server sends at most one row's answer anywhere this
+   *  type is used singly. */
+  row_id?: string;
+  state:
+    | "live"
+    | "expiring"
+    | "expired_signin"
+    | "not_configured"
+    | "shared_expired"
+    | "not_applicable"
+    | (string & {});
+  /** Set for state "live" or "expired_signin" on a per-user row: "org" (the
+   *  Wardyn sign-in widened) or "separate" (the dedicated Connect flow). */
+  source?: "org" | "separate" | (string & {});
+  /** Narrows "not_configured" ("row_is_newer") and "expired_signin" ("ended":
+   *  a renewal found the sign-in dead or blocked by Conditional Access;
+   *  "consent_needed": it no longer covers what a run on the row needs). */
+  cause?: string;
+  /** The Azure DevOps address this row clones from, for the connect/launch
+   *  dialogs' {org}. */
+  org?: string;
+}
+
 export interface SetupStatus {
   ready: boolean;
   // Server-computed "does SOME run/compose LLM access path exist" (resident
@@ -327,6 +357,9 @@ export interface SetupStatus {
   // declares a lane for claude-code and no session is captured), in which case
   // the console renders today's chip.
   model_access?: SetupModelAccess;
+  // The CALLER's own Azure DevOps access state — ModelAccess's sibling.
+  // Absent when no Azure DevOps row is configured at all.
+  scm_access?: SCMAccess;
   /** Whether an operator has finished (or deliberately left) the Getting
    *  Started funnel ON THIS INSTALL — SiteConfig.OnboardingCompletedAt
    *  flattened to one bit. A fact about the install, never the browser —

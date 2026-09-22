@@ -430,6 +430,16 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		return of, err
 	}
 
+	// WARDYN_SSO_ONLY's precondition (see validateSSOOnlyPosture): declaring SSO
+	// the only way in requires OIDC actually being configured, and requires every
+	// OTHER way in to be absent. Checked beside validateOperatorPosture above for
+	// the same reason — of.authn is the resolved "OIDC is configured" fact, and
+	// the raw flags below are the ones an operator actually set, not a value
+	// resolveLocalMode or anything else may have derived from them.
+	if err := validateSSOOnlyPosture(*f.ssoOnly, of.authn != nil, *f.adminToken, *f.localMode, *f.memberMode, *f.allowOIDCNoOperatorList); err != nil {
+		return of, err
+	}
+
 	// Directory autocomplete (§I / PF-29), opt-in. Its own function because the
 	// refusal-plus-construct-plus-announce shape is a unit, and buildOptionalFeatures
 	// is at the cyclomatic ceiling.

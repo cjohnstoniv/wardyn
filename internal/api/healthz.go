@@ -79,7 +79,23 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// (cmd/wardynd: "Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode").
 		// One bit, no configuration detail: it discloses nothing /auth/login's own
 		// presence does not.
-		"sso":               s.cfg.OIDC != nil,
+		"sso": s.cfg.OIDC != nil,
+		// token_login (#378/#379) is whether the sign-in screen should offer the
+		// admin-token form at all: a token is actually configured, and neither
+		// sso_only nor member mode is set. Member mode's admin token is a PROCESS
+		// credential (deploy/desktop/wardyn.env.m-prime.example), not a human
+		// sign-in path, and sso_only's whole point is that the token is not a
+		// second way in — either one makes the form something that cannot work,
+		// which is exactly the disclosure this bit exists to prevent (no store
+		// read, like every other field here).
+		"token_login": s.cfg.AdminToken != "" && !s.cfg.SSOOnly && !s.cfg.MemberMode,
+		// sso_only mirrors WARDYN_SSO_ONLY, enforced at boot by
+		// validateSSOOnlyPosture (cmd/wardynd/boot_posture.go) — true here only
+		// when OIDC is configured and every other way in (admin token, local
+		// mode, member mode, the no-operator-list override) was refused, so the
+		// sign-in screen can safely drop SIGNIN.ROLE_SOURCE's "everyone is an
+		// admin" caveat: that branch of role derivation is unreachable here.
+		"sso_only":          s.cfg.SSOOnly,
 		"identity_provider": idp,
 		"trust_domain":      s.cfg.TrustDomain,
 		"runner":            runnerName,

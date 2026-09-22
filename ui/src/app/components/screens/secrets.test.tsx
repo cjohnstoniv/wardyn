@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { WorkspaceProvidersSnapshot } from "../../lib/api/providers";
 
 // Fixes pinned here:
 //  - a failed deleteSecret() must surface a toast.error.
@@ -26,6 +27,17 @@ vi.mock("../../lib/api/secrets", () => ({
     deleteSecret: (...a: unknown[]) => deleteSecretMock(...a),
     setSecret: (...a: unknown[]) => setSecretMock(...a),
   },
+}));
+
+// #381 F3/F8: SecretsScreen reads the real WARDYN_GIT_PAT_BROKER switch off
+// GET /workspace-providers when the caller is an operator. Defaults to
+// resolving nothing (the fetch's own .catch keeps the ON default) unless a
+// test overrides it.
+const getWorkspaceProvidersMock = vi.fn<() => Promise<WorkspaceProvidersSnapshot>>(() =>
+  Promise.reject(new Error("not mocked")),
+);
+vi.mock("../../lib/api/providers", () => ({
+  providers: { getWorkspaceProviders: () => getWorkspaceProvidersMock() },
 }));
 
 import { SecretsScreen, AddSecretDialog } from "./secrets";
@@ -230,7 +242,30 @@ describe("AddSecretDialog — locked, host-aware mode (L2)", () => {
     // The host is a fact (Mono text), not a labelled/editable field.
     expect(screen.getByText("dev.azure.com")).toBeInTheDocument();
     expect(screen.queryByLabelText(/host/i)).toBeNull();
-    expect(screen.getByText(LANE_META.pat.label)).toBeInTheDocument();
+    // A LITERAL string, not LANE_META.pat.label — asserting through the same
+    // constant the component reads is self-referential and would not have
+    // caught #381 (the label read "PAT · in-sandbox" here long after the
+    // broker went on by default; see the OFF-position test below for the
+    // other half of this pin).
+    expect(screen.getByText("PAT · brokered")).toBeInTheDocument();
+  });
+
+  // #381 F8: the ON-default test above proves nothing about the off
+  // position — this is the real coverage the review found missing.
+  it("renders the pre-0.7 in-sandbox label when patBrokerEnabled is false", () => {
+    render(
+      <AddSecretDialog
+        open
+        onOpenChange={() => {}}
+        lockName
+        host="dev.azure.com"
+        lane="pat"
+        initialName="git-pat-dev-azure-com"
+        patBrokerEnabled={false}
+      />,
+    );
+    expect(screen.getByText("PAT · in-sandbox")).toBeInTheDocument();
+    expect(screen.queryByText("PAT · brokered")).not.toBeInTheDocument();
   });
 
   it("defaults the lane chip via laneOfName(name) when `lane` is omitted", () => {
@@ -317,6 +352,34 @@ describe("AddSecretDialog — locked, host-aware mode (L2)", () => {
     );
     expect(screen.getByText(/write-only.*never read back/i)).toBeInTheDocument();
     expect(screen.queryByText(/cleared on save/i)).toBeNull();
+  });
+});
+
+// #381 F3/F8: the page-header sentence reads the real switch, both positions.
+describe("SecretsScreen — the PAT broker sentence in the page header", () => {
+  beforeEach(() => {
+    listSecretsMock.mockReset().mockResolvedValue([]);
+    getWorkspaceProvidersMock.mockReset();
+  });
+
+  it("says the brokered sentence when the switch resolves on (the 0.7.10 default)", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: true }, etag: null });
+    render(<SecretsScreen />);
+    await waitFor(() =>
+      expect(
+        screen.getByText(/A stored git access token is attached to the request by the proxy/),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Exception:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/is handed to git inside the sandbox/)).not.toBeInTheDocument();
+  });
+
+  it("says the pre-0.7 exception sentence when the switch resolves off", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: { git_pat_broker_enabled: false }, etag: null });
+    render(<SecretsScreen />);
+    await waitFor(() =>
+      expect(screen.getByText(/Exception: A git access token is handed to git inside the sandbox/)).toBeInTheDocument(),
+    );
   });
 });
 

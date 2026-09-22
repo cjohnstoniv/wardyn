@@ -22,11 +22,16 @@
 ARG BASE_IMAGE=wardyn/agent-base:local
 FROM ${BASE_IMAGE}
 
-# Local build recipe only — never in release.yml's publish matrix (a gate in
-# scripts/check-image-pins.sh keeps it out). The licences label extends the
-# inherited base expression with what THIS stage adds: code-server (MIT).
+# Published (release.yml's images-ui-sandbox job, #141). agent-base already
+# carries these two COPYs, but scripts/check-image-pins.sh's licence-file gate
+# reads each PUBLISHED Dockerfile's own text, not what an inherited layer
+# happens to contain, so a published stage restates them. The licences label
+# extends the inherited base expression with what THIS stage adds: code-server
+# (MIT).
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/
+COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
 LABEL org.opencontainers.image.title="agent-vscode" \
-      org.opencontainers.image.description="Wardyn agent image: agent-base plus code-server (local build only)" \
+      org.opencontainers.image.description="Wardyn agent image: agent-base plus code-server" \
       org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND MIT" \
       org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn"
 

@@ -327,6 +327,11 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
 		return
 	}
+	// #386 review follow-up N4: a scan clones a repo server-side too — the
+	// same gate the Build step and New Run door answer with.
+	if s.gitCredentialRefusal(w, r, repoSourceLocators(ws.Sources)...) {
+		return
+	}
 	s.scanAttachedSources(w, r, ws)
 }
 

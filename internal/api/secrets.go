@@ -129,7 +129,8 @@ func sinkReservedSecret(name string) bool {
 // whole point.
 func secretsAPIReserved(name string) bool {
 	return reservedSecret(name) || name == types.SubscriptionOAuthSecret ||
-		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret
+		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret ||
+		name == types.ADOEntraAccessTokenSecret
 }
 
 type putSecretRequest struct {
