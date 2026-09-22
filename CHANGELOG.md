@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.10] — 2026-09-22
+
 ### Added
 
 - **An operator can declare SSO the only way into the console** (`WARDYN_SSO_ONLY`, chart
