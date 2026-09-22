@@ -46,6 +46,7 @@ type adoGitHarness struct {
 	home   string
 	work   string
 	runID  uuid.UUID
+	proxy  string // the proxy listener's URL, as WARDYN_PROXY_URL
 	sink   *bytes.Buffer
 	logs   *bytes.Buffer
 }
@@ -99,7 +100,7 @@ func newADOGitHarness(t *testing.T, caps ...adoscope.Capability) *adoGitHarness 
 	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
 
-	h := &adoGitHarness{p: p, fake: fake, bearer: token, bare: bare, home: t.TempDir(), work: t.TempDir(), runID: runID, sink: sink, logs: logs}
+	h := &adoGitHarness{p: p, fake: fake, bearer: token, bare: bare, home: t.TempDir(), work: t.TempDir(), runID: runID, proxy: srv.URL, sink: sink, logs: logs}
 	// The REAL rewrite: agent-run-lib.sh's configure_git_pat_broker_insteadof,
 	// fed exactly what dispatch writes.
 	_, self, _, _ := runtime.Caller(0)
