@@ -15,36 +15,36 @@ import (
 // it wrong.
 const ResourceID = "499b84ac-1321-427f-aa17-267ca6975798"
 
-// ScopeTokens is the scope the PAT-lifecycle API requires, and it is NOT in
-// any capability's scope set below — deliberately, and this is the record of
-// why a minted_pat row is accepted at the write boundary anyway:
+// neverRequestedScopes are the token-lifecycle scopes, and nothing in this
+// package may ever put them in a scope or consent set.
 //
-// A row with token_mode: minted_pat needs this scope to mint the PAT at all,
-// yet CapDeniedTokens means no CLASSIFIED request may ever use the token area.
-// The two are consistent only because the mint happens on the control plane's
-// own behalf, before a run exists, and the minted PAT is what the run sees.
-// A run whose token carried this scope could mint itself a second credential
-// outside every capability it was granted, so the run's token never does.
-const ScopeTokens = "vso.tokens"
+// Nothing can use them: Azure DevOps mints personal access tokens only for
+// Microsoft's own first-party clients — measured, an app registration holding
+// both scopes gets 401 TF400813 on the mint — and the token areas are denied to
+// every classified request anyway. Asking for them would be pure exposure,
+// because consent rather than the request decides a token's scopes: once
+// consented, they would ride along in every run's token.
+var neverRequestedScopes = []string{"vso.tokens", "vso.pats"}
 
-// readScopes are the scopes CapRead needs.
+// readScopes are the scopes CapRead needs: every non-empty scope in readAreas,
+// sorted.
 //
-// It is the union of every area's READ scope rather than one scope, because
-// ScopesFor is given capabilities and no AREA: the classifier answers CapRead
-// for a read of code, work items, builds, releases, wikis, feeds, projects,
-// service connections, identities, test results and analytics alike, so a
-// token minted for "read" has to be able to perform any of them. Narrowing
-// this to the area actually touched is a per-request mint, not a scope table.
-//
-// An area this package can answer CapRead for and is MISSING here is not a
-// safety problem — it is a read that 403s at the forge — but it is a
-// first-use failure on a route the operator believes they granted, so the two
-// lists are meant to be kept level with each other.
-var readScopes = []string{
-	"vso.code", "vso.work", "vso.build", "vso.release", "vso.wiki",
-	"vso.packaging", "vso.project", "vso.serviceendpoint", "vso.graph",
-	"vso.identity", "vso.test", "vso.analytics",
-}
+// It is DERIVED rather than written out because it is the union of every
+// area's read scope — ScopesFor is given capabilities and no area, so a token
+// minted for "read" has to be able to perform a read of any area the
+// classifier answers CapRead for — and a hand-written copy of that union is
+// exactly what drifted before. Narrowing it to the area actually touched is a
+// per-request mint, not a scope table.
+var readScopes = func() []string {
+	var out []string
+	for _, s := range readAreas {
+		if s != "" && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	slices.Sort(out)
+	return out
+}()
 
 // capabilityScopes is the capability -> Entra scope table.
 //

@@ -63,6 +63,131 @@ func TestEvasionDotSegments(t *testing.T) {
 	})
 }
 
+// F-A — BACKSLASH IS A SEPARATOR. Azure DevOps routes "\" exactly as it routes
+// "/", so every dot-segment evasion above has a backslash twin that the
+// forward-slash refusal alone did not see: the path split on "/" only, a "\"
+// stayed INSIDE what the classifier treated as one segment, and "..\" walked
+// through it into a denied area or out of the pinned organisation. Each case is
+// the backslash twin of a forward-slash case in TestEvasionDotSegments.
+func TestEvasionBackslashSeparator(t *testing.T) {
+	runCases(t, []caseT{
+		{
+			name:    "a denied area reached through ..\\ under a grantable capability",
+			req:     adoReq(http.MethodPost, `/acme/_apis/wit/..\hooks/subscriptions`, `{}`),
+			wantErr: true,
+		},
+		{
+			name:    "the token area reached through ..\\ under the read floor",
+			req:     adoReq(http.MethodGet, `/acme/_apis/git\..\tokens/pats`, ""),
+			wantErr: true,
+		},
+		{
+			name:    "the organisation pin walked off with ..\\",
+			req:     adoReq(http.MethodGet, `/acme/proj\..\..\evil/_apis/projects`, ""),
+			wantErr: true,
+		},
+		{
+			name:    "a push to ANOTHER organisation through backslashes",
+			req:     adoReq(http.MethodPost, `/acme/proj\..\..\evil/_apis/git/repositories/r/pushes`, `{"refUpdates":[{"name":"refs/heads/main"}]}`),
+			wantErr: true,
+		},
+		{
+			name:    "an organisation segment that carries its own escape",
+			req:     adoReq(http.MethodGet, `/acme\..\evil/_apis/projects`, ""),
+			wantErr: true,
+		},
+		{
+			name:    "a percent-encoded backslash",
+			req:     adoReq(http.MethodGet, "/acme/proj%5c..%5c..%5cevil/_apis/projects", ""),
+			wantErr: true,
+		},
+		{
+			name:    "a percent-encoded backslash in upper case",
+			req:     adoReq(http.MethodGet, "/acme/proj%5C..%5C..%5Cevil/_apis/projects", ""),
+			wantErr: true,
+		},
+		{
+			name:    "a single dot between backslashes",
+			req:     adoReq(http.MethodGet, `/acme/.\_apis/tokens/pats`, ""),
+			wantErr: true,
+		},
+		{
+			name:    "the two separators mixed",
+			req:     adoReq(http.MethodPost, `/acme/_apis/wit/workitems\./..\../hooks/subscriptions`, `{}`),
+			wantErr: true,
+		},
+		{
+			name:    "a $batch operation that walks out through a backslash",
+			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"uri":"/_apis/wit/..\\hooks/subscriptions"}]`),
+			wantErr: true,
+		},
+		{
+			name:    "a $batch operation with an encoded backslash",
+			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"uri":"/_apis/wit/..%5Chooks/subscriptions"}]`),
+			wantErr: true,
+		},
+
+		// The model is "a backslash is a separator", NOT "a backslash is
+		// refused": a backslash-delimited path that stays inside its own
+		// organisation classifies exactly as its forward-slash spelling does.
+		// These pin that the fix split the path rather than blanket-refusing.
+		{
+			name: "a backslash-delimited read on the pinned organisation",
+			req:  adoReq(http.MethodGet, `/acme\proj\_apis\git\repositories`, ""),
+			want: CapRead,
+		},
+		{
+			name: "a backslash-delimited denied area is still denied, not refused",
+			req:  adoReq(http.MethodGet, `/acme\_apis\tokens\pats`, ""),
+			want: CapDeniedTokens,
+		},
+		{
+			name: "a backslash-delimited work-item write",
+			req:  adoReq(http.MethodPatch, `/acme/proj\_apis\wit\workitems\12`, `{}`),
+			want: CapWorkWrite,
+		},
+	})
+}
+
+// MULTIPLY-ENCODED STRUCTURE. "%252F" decodes once to the literal text "%2F",
+// which is harmless to a service that decodes once — and a separator to any
+// layer between here and the service that decodes one more time. Whether such
+// a layer exists is not knowable from here, so a segment that decodes, at ANY
+// further depth, to a separator or a dot segment is refused. Each separator
+// and the dot have a twin, and the depth goes past two so the rule is not
+// "decode exactly twice".
+func TestEvasionMultiplyEncodedStructure(t *testing.T) {
+	runCases(t, []caseT{
+		{name: "a double-encoded slash", req: adoReq(http.MethodGet, "/acme/proj%252F..%252F..%252Fevil/_apis/projects", ""), wantErr: true},
+		{name: "a double-encoded slash in upper case", req: adoReq(http.MethodGet, "/acme/proj%252f_apis/tokens/pats", ""), wantErr: true},
+		{name: "a double-encoded backslash", req: adoReq(http.MethodGet, "/acme/proj%255C..%255C..%255Cevil/_apis/projects", ""), wantErr: true},
+		{name: "a double-encoded backslash in lower case", req: adoReq(http.MethodGet, "/acme/proj%255c_apis/tokens/pats", ""), wantErr: true},
+		{name: "double-encoded dots", req: adoReq(http.MethodGet, "/acme/%252e%252e/evil/_apis/projects", ""), wantErr: true},
+		{name: "double-encoded dots in upper case", req: adoReq(http.MethodGet, "/acme/%252E%252E/evil/_apis/projects", ""), wantErr: true},
+		{name: "a TRIPLE-encoded slash", req: adoReq(http.MethodGet, "/acme/proj%25252F_apis/tokens/pats", ""), wantErr: true},
+		{name: "a triple-encoded backslash", req: adoReq(http.MethodGet, "/acme/proj%25255C_apis/tokens/pats", ""), wantErr: true},
+		{
+			// The re-decode must be LENIENT: a strict decoder gives up on the
+			// whole segment at "%zz" and calls it harmless, while a lenient one
+			// — the kind a request might actually meet — decodes the "%2f".
+			name:    "a double-encoded separator beside a malformed escape",
+			req:     adoReq(http.MethodGet, "/acme/proj%252f%25zz/_apis/projects", ""),
+			wantErr: true,
+		},
+		{
+			name:    "a double-encoded separator inside a $batch operation",
+			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"uri":"/_apis/wit/..%255Chooks/subscriptions"}]`),
+			wantErr: true,
+		},
+
+		// A literal "%" in a name is NOT structure, and must not be refused:
+		// the rule is about what further decoding PRODUCES, not about "%".
+		{name: "a repository whose name holds a literal percent sign", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/100%25", ""), want: CapRead},
+		{name: "a name that decodes again to ordinary letters", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/a%2541", ""), want: CapRead},
+		{name: "a literal percent before non-hex", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/50%25off", ""), want: CapRead},
+	})
+}
+
 // F2 — THE METHOD OVERRIDE IS TRUSTED DOWNWARD. Microsoft documents the
 // override for a POST carrying PATCH or DELETE; whether the service honours a
 // GET override is exactly the "not knowable" case this package refuses
@@ -167,6 +292,21 @@ func TestEvasionBatchCrossOrg(t *testing.T) {
 		{
 			name: "an organisation-relative operation",
 			req:  adoReq(http.MethodPost, batch, `[{"uri":"/_apis/wit/workitems/1?api-version=7.1"}]`),
+			want: CapWorkWrite,
+		},
+		{
+			name:    "an operation aimed at another organisation through a backslash",
+			req:     adoReq(http.MethodPost, batch, `[{"uri":"/acme\\..\\evil/_apis/wit/workitems/1"}]`),
+			wantErr: true,
+		},
+		{
+			name:    "an operation naming another organisation with backslashes throughout",
+			req:     adoReq(http.MethodPost, batch, `[{"uri":"\\evil\\_apis\\wit\\workitems\\1"}]`),
+			wantErr: true,
+		},
+		{
+			name: "a backslash-delimited operation on the pinned organisation",
+			req:  adoReq(http.MethodPost, batch, `[{"uri":"\\acme\\proj\\_apis\\wit\\workitems\\2"}]`),
 			want: CapWorkWrite,
 		},
 	})
