@@ -895,6 +895,11 @@ a row above or a filed entry here.
 
 ### Who writes the provider policy: console vs CLI/MDM
 
+On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
+can be set to per-user sign-in instead of one shared PAT — see
+[docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
+row's fields, and what a member sees.
+
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
 ephemeral/drive storage ceilings) and `agent_providers` (which agents this
