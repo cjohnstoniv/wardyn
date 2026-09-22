@@ -348,6 +348,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   as it is sent to `api.anthropic.com` today. The harness-login (`claude setup-token`) lane is
   unaffected and always stays on the public host, since that flow mints the OAuth token itself.
   Unset is byte-identical to today.
+- **A configured Anthropic or OpenAI gateway can now be given its own injection header name and
+  value format**, instead of only ever the harness catalog's compile-time convention
+  (`x-api-key` bare / `Authorization: Bearer %s`). Four new boot settings —
+  `WARDYN_ANTHROPIC_GATEWAY_HEADER`, `WARDYN_ANTHROPIC_GATEWAY_FORMAT`, and the OpenAI pair —
+  are validated at boot (`ValidateLLMGateways`): the format must contain exactly one `%s` and no
+  other verb, and the header must be a valid HTTP header token; a malformed value refuses boot
+  naming the setting, rather than surfacing later as a confusing dial error. Each of the two
+  settings is independent and applies field-by-field in `(*Server).llmProviderFor`, the seam that
+  already resolves the gateway host. Unset (either or both) is byte-identical to today — the
+  vendor defaults are untouched.
+
 - **The autonomy rubric is now visible in the console: the profile editor, the profiles list, the New
   Run rail and the run header.** The profile editor grows a Rubric section (`profile-rubric.tsx`) —
   three posture groups, nine rows, one `No cap`/`L0`-`L3` select each — that round-trips through
