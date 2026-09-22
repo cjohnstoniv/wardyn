@@ -201,6 +201,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if log != nil {
+		log.UpstreamFault = p.bedrockUpstreamFault(host, r.URL.Path, resp)
 		p.sink.emit(*log)
 	}
 	defer func() { _ = resp.Body.Close() }()

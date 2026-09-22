@@ -88,6 +88,8 @@ type Proxy struct {
 	// yet), so coverage is reported honestly without flooding the audit log.
 	blindMu    sync.Mutex
 	blindHosts map[string]struct{}
+	// bedrockFaulted: data-plane hosts whose last model call AWS refused (bedrock_fault.go).
+	bedrockFaulted sync.Map
 
 	// privIP is B6's per-run builtin:private-ip memo — the one egress verdict
 	// that cannot change mid-run, so an identical retry is answered without a
