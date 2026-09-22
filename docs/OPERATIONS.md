@@ -4079,7 +4079,10 @@ dial (the gateway included) is CONNECTed through the corp proxy by the transport
 never dialled directly. A gateway the corp proxy cannot reach — an internal one,
 typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address.
+other internal address. wardynd also warns at boot when an upstream proxy is
+configured but no `upstream_proxy_no_proxy` entry covers a configured gateway
+host — a snapshot taken at boot only, since `SiteConfig` is admin-editable
+afterwards and either setting can change without a restart.
 
 **Scope: the api-key lane only.** A subscription or Wardyn-managed-token run
 still talks to `api.anthropic.com` directly — the published agent images

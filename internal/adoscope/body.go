@@ -268,9 +268,21 @@ func refNames(body []byte) ([]string, error) {
 	}
 	var out []string
 	for _, u := range updates {
-		if name := strings.TrimSpace(u.Name); name != "" {
-			out = append(out, name)
+		name := strings.TrimSpace(u.Name)
+		if name == "" {
+			continue
 		}
+		// A backslash in a ref name is REFUSED, not passed through. The caller
+		// checks each name against a protected-branch cache keyed by the
+		// forward-slash spelling, so "refs\\heads\\main" misses the cache for
+		// "refs/heads/main" and reads as an unprotected push — while the
+		// service, which treats "\\" as a separator, may resolve it to the very
+		// branch the cache protects. Git's own ref-name rules forbid the byte,
+		// so refusing it costs no legitimate ref anything.
+		if strings.ContainsRune(name, '\\') {
+			return nil, fmt.Errorf("adoscope: ref name %q holds a backslash — it cannot be checked against a protected-branch list", name)
+		}
+		out = append(out, name)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("adoscope: a ref update naming no branch cannot be gated")
