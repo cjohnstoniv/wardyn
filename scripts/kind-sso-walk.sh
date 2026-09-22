@@ -56,6 +56,11 @@
 # because its case K spends ten minutes of wall clock and every case in it makes
 # its own capture.
 #
+# Then the ROLE WALK (step 6): ui/e2e/live/sso-roles.spec.ts signs in every
+# identity deploy/kind/sso/dex.yaml ships — admin, allowlist-only operator,
+# security admin, two members and one that matches no role — on this render and
+# again on auth.ssoOnly=true, and restores this render afterwards.
+#
 # WARDYN_KIND_SSO_REBUILD=1 rebuilds wardynd + the proxy from this tree and
 # reloads them before the walk — the flag a RELEASE walk sets, because the
 # console is baked into the daemon image (see step 1b).
@@ -68,6 +73,16 @@ if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
   echo "kind-sso-walk: set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)."
   exit 0
 fi
+
+# WARDYN_KIND_SSO_PROFILE=ado is a DIFFERENT walk on a different install: the
+# console signs in against a fake Entra tenant instead of Dex, and the member's
+# login captures an Azure DevOps credential their run then redeems. It shares
+# nothing below this line, so it lives in its own file.
+case "${WARDYN_KIND_SSO_PROFILE:-default}" in
+  default) ;;
+  ado) exec "$(dirname "${BASH_SOURCE[0]}")/lib/kind-sso-walk-ado.sh" ;;
+  *) echo "ERROR: WARDYN_KIND_SSO_PROFILE must be default or ado (got ${WARDYN_KIND_SSO_PROFILE})" >&2; exit 1 ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
@@ -98,8 +113,9 @@ KIND_NODE="${WARDYN_KIND_SSO_NODE:-${CLUSTER}-control-plane}"
 # (wardynd/proxy/claude-code) and deploy/kind/sso/overlay.sh (aws-sso, the
 # fake), or step 1b rebuilds tags nothing on the node is running and the
 # provenance record names images the node never saw.
-WARDYND_IMAGE="wardyn/wardynd:quickstart"
-PROXY_IMAGE="wardyn/wardyn-proxy:quickstart"
+# The tag is per cluster (deploy/kind/quickstart.sh's WARDYN_QUICKSTART_IMAGE_TAG).
+WARDYND_IMAGE="wardyn/wardynd:${WARDYN_QUICKSTART_IMAGE_TAG:-quickstart}"
+PROXY_IMAGE="wardyn/wardyn-proxy:${WARDYN_QUICKSTART_IMAGE_TAG:-quickstart}"
 AGENT_IMAGE="wardyn/agent-claude-code:local"
 AWS_SSO_IMAGE="wardyn/agent-aws-sso:local"
 FAKE_IMAGE="wardyn/awsssofake:local"
@@ -344,9 +360,56 @@ AGENT_IMAGES="$(jq -cn --argjson cur "${CUR_AGENT_IMAGES}" \
   '$cur + {"aws-sso": "wardyn/agent-aws-sso:local"}')" \
   || die "could not extend WARDYN_AGENT_IMAGES (read: ${CUR_AGENT_IMAGES:-<empty>})"
 
+# ── 2b. the Dex cast the role legs sign in as ───────────────────────────────
+# `make kind-sso` applied dex.yaml once; a cluster made before the role walk's
+# extra identities has only admin@ and member@. Re-apply every walk, and when the
+# ConfigMap changed restart Dex (memory storage, config read at boot) — which
+# kills the overlay's browser-facing port-forward, because a forward to a Service
+# pins the one pod it resolved. So the forward is re-established here, under the
+# overlay's own pidfile so `make kind-sso-down` still stops it.
+DEX_PORT="${WARDYN_KIND_SSO_DEX_PORT:-5557}"
+DEX_PF_PIDFILE="${TMPDIR:-/tmp}/wardyn-kind-sso-dex-${CLUSTER}.pid"
+step "refreshing the Dex cast (deploy/kind/sso/dex.yaml)"
+# RENDERED onto this cluster's ports exactly as overlay.sh renders it. Applying
+# the raw file re-points a non-default cluster's issuer and callback at the
+# DEFAULT ports, which on a shared box are another cluster's Dex and console —
+# so the walk's browser signs in THERE and every assertion reads the wrong
+# install.
+dex_apply="$(sed -e "s#http://localhost:5557#http://localhost:${DEX_PORT}#g" \
+                 -e "s#http://localhost:8280/auth/callback#http://localhost:${HTTP_PORT}/auth/callback#g" \
+                 deploy/kind/sso/dex.yaml | kubectl --context "${CONTEXT}" apply -f -)" \
+  || die "could not apply deploy/kind/sso/dex.yaml"
+echo "${dex_apply}"
+if grep -q "configmap/wardyn-dex configured" <<<"${dex_apply}"; then
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout restart deployment/wardyn-dex >/dev/null \
+    || die "could not restart Dex after its config changed"
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/wardyn-dex --timeout=180s \
+    || die "Dex did not come back after its config changed"
+  [[ -f "${DEX_PF_PIDFILE}" ]] && kill "$(cat "${DEX_PF_PIDFILE}")" 2>/dev/null
+  rm -f "${DEX_PF_PIDFILE}"
+fi
+if ! curl -sf --max-time 3 "http://localhost:${DEX_PORT}/.well-known/openid-configuration" >/dev/null 2>&1; then
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward svc/wardyn-dex "${DEX_PORT}:5556" >/dev/null 2>&1 &
+  echo $! > "${DEX_PF_PIDFILE}"
+  for _ in $(seq 1 30); do
+    curl -sf --max-time 3 "http://localhost:${DEX_PORT}/.well-known/openid-configuration" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  curl -sf --max-time 3 "http://localhost:${DEX_PORT}/.well-known/openid-configuration" >/dev/null 2>&1 \
+    || die "Dex never answered on http://localhost:${DEX_PORT} (is ${DEX_PORT} taken?)"
+fi
+
+# The browser leg must land on THIS cluster's Dex and console: refuse a Dex
+# whose issuer names another port rather than walk someone else's install.
+dex_iss="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get configmap wardyn-dex -o jsonpath='{.data.config\.yaml}' | sed -n 's/^issuer: *//p')"
+[[ "${dex_iss}" == "http://localhost:${DEX_PORT}" ]] \
+  || die "this cluster's Dex issuer is '${dex_iss}', not http://localhost:${DEX_PORT} — the browser would sign in elsewhere"
+
 step "pointing wardynd at the fake AWS endpoints (helm upgrade --reuse-values; WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT})"
 helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
-  -n "${NAMESPACE}" --reuse-values \
+  -n "${NAMESPACE}" --reuse-values -f deploy/kind/sso/values.yaml \
+  --set "env.WARDYN_OIDC_ISSUER=http://localhost:${DEX_PORT}" \
+  --set "env.WARDYN_OIDC_REDIRECT_URL=http://localhost:${HTTP_PORT}/auth/callback" \
   --set "auth.adminToken.value=${ADMIN_TOKEN}" \
   --set "env.WARDYN_ALLOW_TEST_ENDPOINTS=true" \
   --set "env.WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=${FAKE_URL}" \
@@ -619,6 +682,7 @@ pod_watch_pid=""
 # node taint has to come off here too (see untaint_coldpull above for the failure
 # a leftover one causes on the NEXT walk).
 cleanup_walk() {
+  [[ -n "${SSO_ONLY_APPLIED:-}" ]] && set_render sso
   [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null
   [[ -n "${pod_watch_pid}" ]] && kill "${pod_watch_pid}" 2>/dev/null
   untaint_coldpull
@@ -664,6 +728,17 @@ export WARDYN_LIVE_KUBE_CONTEXT="${CONTEXT}"
 # that was there all along, one namespace over.
 export WARDYN_LIVE_KUBE_NAMESPACE="${RUNS_NAMESPACE}"
 export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
+# helpers.ts's SANDBOX_UP/LOGIN_DONE default to 300s, tuned on a developer box.
+# A GitHub-hosted runner (GITHUB_ACTIONS is set by every job, incl. the nightly
+# kind-sso-walk one — see docs/ENV.md) schedules the CNI, Postgres, the daemon,
+# Dex and every sandbox pod concurrently on two vCPUs, and #285's first nightly
+# dispatch timed out at exactly that ceiling waiting for a freshly created
+# sign-in sandbox. Raise it there; a caller that already set either var wins,
+# and an operator running this by hand keeps the 300s default.
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  export WARDYN_LIVE_SANDBOX_UP_MS="${WARDYN_LIVE_SANDBOX_UP_MS:-720000}"
+  export WARDYN_LIVE_LOGIN_DONE_MS="${WARDYN_LIVE_LOGIN_DONE_MS:-720000}"
+fi
 # THREE specs, ONE invocation: run-ui-e2e.sh runs them sequentially against this
 # one cluster, and sso-member-recovery.spec.ts inherits the state
 # sso-member.spec.ts leaves (a `live` member under the contradicting pin, and
@@ -717,8 +792,52 @@ if ! curl -sf "${SEEN_URL}" | tee "${EVIDENCE_DIR}/seen.json" | grep -q .; then
 fi
 echo
 
-if [[ "${walk_rc}" -ne 0 ]]; then
-  echo "kind-sso-walk: FAILED (see ${EVIDENCE_DIR}/walk.log)" >&2
+# ── 6. THE ROLE WALK, on both chart renders ─────────────────────────────────
+# ui/e2e/live/sso-roles.spec.ts signs every Dex identity in and checks the role
+# it derives, the console it gets and three API tiers, plus the cross-member
+# existence oracle. It runs AFTER the AWS walk so it can change nothing that walk
+# depends on, then twice: on the render above (SSO + the admin token), and on
+# auth.ssoOnly=true with the token removed — the recipe the SSO-only posture
+# ships with. The render is restored afterwards (and by the EXIT trap if this is
+# interrupted), and each leg's /healthz is saved beside its log, so the evidence
+# names the render every assertion ran against.
+set_render() { # sso | sso-only
+  local only=false token="${ADMIN_TOKEN}"
+  [[ "$1" == "sso-only" ]] && { only=true; token=""; }
+  helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn -n "${NAMESPACE}" --reuse-values \
+    --set "auth.ssoOnly=${only}" --set "auth.adminToken.value=${token}" \
+    >"${EVIDENCE_DIR}/helm-render-$1.log" 2>&1 \
+    || { tail -20 "${EVIDENCE_DIR}/helm-render-$1.log" >&2; return 1; }
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=300s >/dev/null || return 1
+  # The old pod stays in the endpoints for a moment after the new one is Ready.
+  for _ in $(seq 1 60); do
+    curl -s "${BASE_URL}/healthz" | jq -e --argjson o "${only}" '.sso_only == $o' >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  return 1
+}
+roles_rc=0
+roles_leg() { # <render>
+  curl -s "${BASE_URL}/healthz" >"${EVIDENCE_DIR}/roles-$1-healthz.json"
+  WARDYN_LIVE_ROLES_RENDER="$1" ./scripts/run-ui-e2e.sh sso-roles 2>&1 | tee "${EVIDENCE_DIR}/roles-$1.log"
+  [[ "${PIPESTATUS[0]}" -eq 0 ]] || roles_rc=1
+}
+step "role walk, render: SSO + admin token"
+roles_leg sso
+step "role walk, render: auth.ssoOnly=true, no admin token"
+SSO_ONLY_APPLIED=1
+if set_render sso-only; then
+  roles_leg sso-only
+else
+  echo "FAIL: the sso-only render did not come up (see ${EVIDENCE_DIR}/helm-render-sso-only.log)" >&2
+  roles_rc=1
+fi
+step "restoring the SSO + admin token render"
+set_render sso || die "could not restore the SSO + admin token render (see ${EVIDENCE_DIR}/helm-render-sso.log)"
+SSO_ONLY_APPLIED=""
+
+if [[ "${walk_rc}" -ne 0 || "${roles_rc}" -ne 0 ]]; then
+  echo "kind-sso-walk: FAILED (walk rc=${walk_rc}, roles rc=${roles_rc}; see ${EVIDENCE_DIR}/walk.log and roles-*.log)" >&2
   exit 1
 fi
 # The walk being green ALREADY says a real agent-run booted and spent a
