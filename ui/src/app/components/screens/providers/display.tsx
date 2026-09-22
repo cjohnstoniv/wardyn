@@ -126,24 +126,42 @@ export function sshLaneAvailable(baseUrls: string[]): boolean {
   return baseUrls.some((u) => hostOf(u) === "github.com" || hostOf(u) === "dev.azure.com");
 }
 
-// The SSH scoping CEILING is visible exactly when both halves are true: this row
-// carries an ORG PATH (so it reads as bounded) and it PERMITS the ssh lane (so a
-// clone can actually take the host-level route). Either alone is honest already —
-// a bare host bounds nothing to widen, and a row with no ssh lane never widens.
-export function sshScopedHostLevel(baseUrls: string[], permitsSSH: boolean): boolean {
-  if (!permitsSSH) return false;
-  return baseUrls.some((raw) => {
+// sshLaneExceedsPathScope mirrors the server's rule (workspace_providers.go's
+// function of the same name) bit for bit (#380 F5): true when EVERY base URL
+// matching an SSH-over-443 host (github.com or dev.azure.com, literal) carries
+// a path. SSH scoping is host-level only — a bare-host entry means the row
+// already bounds the whole host and the lane widens nothing; a path on every
+// matching entry means ticking ssh would exceed what the row's own addresses
+// declare, which the console door refuses outright.
+//
+// For azure_devops this is unconditionally true: dev.azure.com's OWN host-kind
+// rule (validateProviderHostForKind) makes the org segment MANDATORY, so no
+// legal Azure DevOps row can ever present a bare dev.azure.com entry — the
+// explicit SSH lane is therefore never selectable there, not a bug this
+// mirror should paper over.
+export function sshLaneExceedsPathScope(baseUrls: string[]): boolean {
+  let sawSSHHost = false;
+  for (const raw of baseUrls) {
+    let u: URL;
     try {
-      return new URL(raw.trim()).pathname.replace(/^\/+|\/+$/g, "") !== "";
+      u = new URL(raw.trim());
     } catch {
-      return false;
+      continue;
     }
-  });
+    const host = u.hostname.toLowerCase();
+    if (host !== "github.com" && host !== "dev.azure.com") continue;
+    sawSSHHost = true;
+    if (u.pathname.replace(/^\/+|\/+$/g, "") === "") return false; // bounds the whole host already
+  }
+  return sawSSHHost;
 }
 
 export function laneUnavailableReason(lane: GitLane, kind: GitProviderKind, baseUrls: string[]): string | null {
   if (lane === "app" && !appLaneAvailable(kind, baseUrls)) return PROVIDERS.LANE_APP_UNAVAILABLE;
-  if (lane === "ssh" && !sshLaneAvailable(baseUrls)) return PROVIDERS.LANE_SSH_UNAVAILABLE;
+  if (lane === "ssh") {
+    if (!sshLaneAvailable(baseUrls)) return PROVIDERS.LANE_SSH_UNAVAILABLE;
+    if (sshLaneExceedsPathScope(baseUrls)) return PROVIDERS.LANE_SSH_PATH_SCOPED;
+  }
   return null;
 }
 

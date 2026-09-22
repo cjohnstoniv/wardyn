@@ -126,7 +126,8 @@ func sinkReservedSecret(name string) bool {
 // whole point.
 func secretsAPIReserved(name string) bool {
 	return reservedSecret(name) || name == types.SubscriptionOAuthSecret ||
-		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret
+		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret ||
+		name == types.ADOEntraAccessTokenSecret
 }
 
 type putSecretRequest struct {
@@ -145,15 +146,21 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) b
 		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
 		return false
 	}
-	// The Bedrock/SigV4 credential material is ALWAYS resolved from the
-	// operator namespace (runs_bedrock.go's setupBedrock reads present[...]
-	// off For("")) — a member row under one of these four names would read as
-	// "Bedrock is configured" in setup while dispatch never actually uses it,
-	// a confusing dead end rather than a working BYOK path. sinkReservedSecret
-	// deliberately excludes bedrock-api-key (the operator's legitimate write
-	// path); that exclusion does not extend to a non-operator namespace. Shared
-	// by Put and Delete so both paths carry it.
-	if owner != "" && (sinkReservedSecret(name) || name == bedrockAPIKeySecret) {
+	// The three RESIDENT AWS SigV4 names are ALWAYS resolved from the operator
+	// namespace (resolveBedrockAuth signs with them off For("")) — a member row
+	// under one of them would read as "Bedrock is configured" in setup while
+	// dispatch never actually used it, a confusing dead end rather than a
+	// working BYOK path. sinkReservedSecret is exactly that three-name set on
+	// top of the platform keys, so this arm is it.
+	//
+	// bedrock-api-key is NOT among them, and that is the one widening here: the
+	// BEARER is a static Authorization header the proxy injects per run from the
+	// RUN OWNER's own namespace, so a member's own bearer is a credential their
+	// runs really authenticate with (bedrockBearerFor, runs_bedrock.go). Widening
+	// this predicate any further hands a member the three SigV4 names too, which
+	// compiles and passes almost everything — see the per-name tests in
+	// secrets_test.go. Shared by Put and Delete so both paths carry it.
+	if owner != "" && sinkReservedSecret(name) {
 		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
 		return false
 	}

@@ -28,6 +28,8 @@ export interface UseLaunchParams {
   ccTouched: boolean;
   /** The post-parse union of the authored spec with this run's own selections, or null while the spec doesn't parse. */
   merged: ReturnType<typeof mergeRunSelections> | null;
+  /** Called from Launch's catch block with the caught error (#386's Azure DevOps launch door). */
+  onLaunchError?: (e: unknown) => void;
 }
 
 export interface UseLaunchResult {
@@ -52,7 +54,7 @@ export interface UseLaunchResult {
 // `ccTouched`/`merged` are the screen's own form state, read here rather than
 // duplicated: buildRunInput composes the wire body from exactly what the form
 // shows, so the screen and this hook can never author two different requests.
-export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: UseLaunchParams): UseLaunchResult {
+export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLaunchError }: UseLaunchParams): UseLaunchResult {
   const navigate = useNavigate();
 
   const [launching, setLaunching] = React.useState(false);
@@ -133,6 +135,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");
       setCredentialRefused(isCredentialRefusal(e));
+      onLaunchError?.(e);
       setLaunching(false);
     }
   };

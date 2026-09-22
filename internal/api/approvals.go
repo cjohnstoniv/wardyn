@@ -370,7 +370,11 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// checking the kind would cost a load on the approval's grant_id for a rule
 	// the broker already enforces at the only place a lease can be spent. A `run`
 	// scope on another credential kind is recorded and simply leases nothing.
-	if scope != "" && ap.Kind != types.ApprovalEgressDomain {
+	var isADO bool // an Azure DevOps escalation has its own scope rule
+	if scope, isADO, ok = s.adoDecisionRule(w, r, ap, scope, approve); !ok {
+		return
+	}
+	if !isADO && scope != "" && ap.Kind != types.ApprovalEgressDomain {
 		if !(ap.Kind == types.ApprovalCredential && scope == types.ScopeRun) {
 			writeError(w, http.StatusBadRequest,
 				"decision_scope is only valid on an egress_domain approval (or \"run\" on a credential approval, for a per-run lease)")
@@ -578,7 +582,10 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 	}
 	var err error
 	ap, err = s.cfg.Approvals.Get(r.Context(), id)
-	if err != nil || ap.Kind != types.ApprovalEgressDomain {
+	// The one tool_call a member may decide: an Azure DevOps escalation, known
+	// STRUCTURALLY by its grant_id (adoEscalationScope), never by its scope.
+	_, isADO := adoEscalationScope(ap)
+	if err != nil || (ap.Kind != types.ApprovalEgressDomain && !isADO) {
 		writeError(w, http.StatusNotFound, "approval not found")
 		return ap, run, false, false
 	}
@@ -594,6 +601,9 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 				"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
 		}
 		return ap, run, false, false
+	}
+	if isADO { // ownership is the whole member rule; decide() holds the ceiling
+		return ap, run, true, true
 	}
 
 	// The egress_host capability, LAST — after kind and ownership are both

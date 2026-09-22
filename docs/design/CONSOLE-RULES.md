@@ -49,11 +49,13 @@ Known violations, cited as what the rule forbids:
 
 | Site | What it does | Why it is out of budget |
 |---|---|---|
-| `setup/environment-step.tsx#ColumnState` | `<Chip tone="primary">Recommended</Chip>` | Decorative teal. A recommendation is not an action — `tone="neutral"`, or let the default selection carry it |
 | `run-context-row.tsx#RunContextRow` | `text-primary` on "Open run" | Teal on a disclosure control. It is a link: `--info`, or a `ghost` Button |
 
 `runs.tsx`'s two former violations at this same class ("Show all N" and "Load N more")
-are fixed: both now render `text-info` (`runs.tsx#TitleGroup`, `runs.tsx#RunsTable`).
+are fixed: both now render `text-info` (`title-group.tsx#TitleGroup`, `runs.tsx#RunsTable`).
+`setup/environment-step.tsx#ColumnState`'s `<Chip tone="primary">Recommended</Chip>` is
+fixed too (#213): the chip now renders `tone="neutral"` — a recommendation is not an
+action.
 
 ## 3. Type scale
 

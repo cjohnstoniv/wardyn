@@ -6,6 +6,38 @@
 import type { Page } from "@playwright/test";
 import { test, expect, mockMemberRole } from "./fixtures";
 
+/**
+ * Count the /setup/status reads the page has actually made. The console
+ * coalesces a refocus that arrives while a read is in flight, so "I dispatched
+ * an event" and "the app read the status" are different facts, and a test that
+ * conflates them can pass because nothing happened.
+ */
+function countReads(page: Page): () => Promise<number> {
+  let n = 0;
+  page.on("response", (r) => {
+    if (r.url().includes("/api/v1/setup/status")) n += 1;
+  });
+  return async () => n;
+}
+
+/**
+ * Dispatch visibilitychange until `done` holds. One nudge is not enough: the
+ * poll's in-flight guard drops a refocus that lands during a read, and clears
+ * that guard a tick after the response, so whether any single dispatch causes a
+ * read depends on timing this test does not control.
+ */
+async function nudgeUntil(page: Page, done: () => Promise<boolean>, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    for (let i = 0; i < 8; i++) {
+      if (await done()) return;
+      await page.waitForTimeout(125);
+    }
+    if (Date.now() > deadline) throw new Error("the console never answered the refocus nudge");
+  }
+}
+
 // The setup gate, exercised as a USER experiences it — routed, rendered,
 // clicked. Every case here was found manually on a live multi-user walk before
 // any test covered it (the suite's own backend seeds its install as onboarded
@@ -18,7 +50,7 @@ import { test, expect, mockMemberRole } from "./fixtures";
 
 async function mockGatedStatus(
   page: Page,
-  overrides: { onboarded?: boolean; sso?: boolean } = {},
+  overrides: { onboarded?: boolean; sso?: boolean; nonBlockingFail?: boolean } = {},
 ): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
     const response = await route.fetch();
@@ -47,6 +79,11 @@ async function mockGatedStatus(
         // exists to cover.
         blocking: true,
       },
+      // #161: a non-blocking fail, for the Review-step grouping case below —
+      // it must never land under "Blocking" alongside the probe.
+      ...(overrides.nonBlockingFail
+        ? [{ id: "e2e_nonblocking_fail", label: "e2e non-blocking fail", status: "fail", detail: "forced by setup-gate.spec.ts" }]
+        : []),
     ];
     await route.fulfill({ response, json });
   });
@@ -65,6 +102,15 @@ async function skipHero(page: Page): Promise<void> {
 }
 
 async function openPermissionsFromPeople(page: Page): Promise<void> {
+  // The rail itself is the real signal that the funnel's lazy chunk has
+  // mounted — waited on explicitly rather than assumed, since the caller's
+  // waitForURL(/\/setup/) resolves on the client-side route change alone and
+  // can land well before the chunk (and the SSO-mode /access read the People
+  // step's multi-user branch kicks off) are done. Without this the People
+  // click below is the first thing to notice the rail isn't there yet, which
+  // reads as "the button never appeared" rather than "the funnel is still
+  // loading".
+  await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible();
   // The rail's steps are buttons; "Open Permissions" is a Link (role=link).
   await page.getByRole("button", { name: /^People/ }).click();
   await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible();
@@ -168,6 +214,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
   }) => {
     let blocking = false;
     await page.route("**/api/v1/setup/status*", async (route) => {
+      await new Promise((r) => setTimeout(r, 600));
       const response = await route.fetch();
       const json = await response.json();
       json.onboarding_complete = false;
@@ -199,28 +246,28 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await page.goto("/runs/new");
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
 
+    // usePoll drops a refocus while a read is already in flight
+    // (`if (pausedRef.current || inFlight.current) return`), and it clears that
+    // flag a tick AFTER the response lands. So a single dispatch is not a
+    // guarantee of a read, and a waiter registered around one dispatch can
+    // match a read that some earlier nudge started. Both halves below therefore
+    // nudge until the app has actually answered, rather than assuming one
+    // dispatch produces one read.
+    const reads = countReads(page);
+
     // FIRST, the fix itself: a warn the daemon did not mark blocking — the very
     // row that used to throw this admin onto Getting started — survives a
-    // background refresh with the person still on New Run.
-    // The waiter is created BEFORE the event that triggers the refetch: the
-    // refocus tick refetches immediately, so registering the waiter afterwards
-    // races it and waits out the full timeout whenever the response wins.
-    const refreshed = page.waitForResponse((r) => r.url().includes("/setup/status"));
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await refreshed;
+    // background refresh with the person still on New Run. The read has to be
+    // observed, or "still on New Run" would also be true of a nudge that was
+    // swallowed and never read anything at all.
+    await nudgeUntil(page, async () => (await reads()) >= 1);
     await expect(page).toHaveURL(/\/runs\/new$/);
 
     // THEN the positive: the install now fails a genuinely blocking check — as
     // it would seconds after the owner clicked Launch — and the NEXT read gates.
     blocking = true;
-    // Same reason as above, one step further: waitForURL polls, so it cannot
-    // race a waiter — but nothing here waited for the second refetch to happen
-    // at all, so the assertion jumped to the navigation that refetch is meant
-    // to cause. Wait for the read, then assert what it did.
-    const gated = page.waitForResponse((r) => r.url().includes("/setup/status"));
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await gated;
-    await page.waitForURL(/\/setup/);
+    await nudgeUntil(page, async () => /\/setup/.test(page.url()));
+    await expect(page).toHaveURL(/\/setup/);
   });
 
   // Re-check means "look at the HOST again", and only the daemon can do that:
@@ -325,6 +372,119 @@ test.describe("setup gate — forced on access, never a prison", () => {
     // …and the strip still claims nothing about when the host was last seen.
     await expect(page.getByText(/^Checked /)).toHaveCount(0);
     await expect(page.getByText(/^Last checked /)).toHaveCount(0);
+  });
+});
+
+// #213 — the step counter counts only what blocks a run, the rail keeps three
+// categories apart (Required / Optional setup / Demos, not one flat
+// "optional" list), and the barrier recommendation is derived from what the
+// host reports installed, never inferred from hardware or the OS.
+test.describe("setup counter and rail — three categories, not two (#213)", () => {
+  test.afterEach(async ({ page }) => {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
+  test("Environment shows the four-step counter and its honest, live-derived subline", async ({ page }) => {
+    await mockGatedStatus(page);
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    await expect(page.getByText("Step 1 of 4")).toBeVisible();
+    // "3" (CONFIG_STEPS) is a constant; the demo count is derived live from
+    // stepOrder(status), so it's asserted by pattern, not a hand-kept number.
+    await expect(
+      page.getByText(/^Required before a run can launch\. 3 optional setup steps and \d+ demos follow\.$/),
+    ).toBeVisible();
+  });
+
+  // #161: the Review step partitions on `blocking` first, not on grade — a
+  // blocking warn must not read as optional, and a non-blocking fail must not
+  // read as a wall. mockGatedStatus's probe (warn, blocking: true) plus the
+  // nonBlockingFail addition (fail, no blocking) prove both sides at once.
+  test("Review groups a blocking warn under Blocking, and a non-blocking fail under Worth a look", async ({
+    page,
+  }) => {
+    await mockGatedStatus(page, { nonBlockingFail: true });
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    // Review sits behind the Corporate network gate (steps.ts: "no click-past
+    // corp_network"), so it has to be cleared first — same proof the rail test
+    // above uses (the e2e backend's `-runner none` answers `no_runner`, which
+    // clears the gate on this host).
+    const rail = page.getByRole("navigation", { name: /setup steps/i }).last();
+    await rail.getByRole("button", { name: /^Network/ }).click();
+    await page.getByRole("button", { name: /^Test connectivity$/i }).click();
+    await expect(page.getByRole("button", { name: /^Next:/i })).toBeEnabled();
+    await rail.getByRole("button", { name: /^Review/ }).click();
+    await expect(page.getByRole("heading", { name: /review readiness/i })).toBeVisible();
+    const blocking = page.locator("section").filter({ has: page.getByText("Blocking", { exact: true }) });
+    await expect(blocking.getByText("e2e gate probe")).toBeVisible();
+    const worthALook = page.locator("section").filter({ has: page.getByText("Worth a look", { exact: true }) });
+    await expect(worthALook.getByText("e2e non-blocking fail")).toBeVisible();
+    await expect(blocking.getByText("e2e non-blocking fail")).toHaveCount(0);
+  });
+
+  test("the rail keeps Required / Optional setup / Demos apart, and Secrets (not required) is still reachable with the optional-step footer", async ({
+    page,
+  }) => {
+    await mockGatedStatus(page);
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+
+    // Scoped to the full rail's own landmark: "Required" is also a substring
+    // of the step-counter's subline ("Required before a run can launch…"),
+    // and Playwright's text matcher is substring/case-insensitive by default.
+    const navs = page.getByRole("navigation", { name: /setup steps/i });
+    const rail = navs.last();
+    await expect(rail.getByText("Required", { exact: true })).toBeVisible();
+    await expect(rail.getByText("· 4")).toBeVisible();
+    await expect(rail.getByText("Optional setup")).toBeVisible();
+    await expect(rail.getByText("· 3")).toBeVisible();
+    await expect(rail.getByText("Demos", { exact: true })).toBeVisible();
+
+    // Prove the mandatory Network gate (the e2e backend has no real sandbox
+    // runner, so the probe answers no_runner — the one honest bypass) before
+    // Secrets becomes reachable: it is real configuration, not one of the
+    // four required steps, but it still sits BEHIND the same crossing gate.
+    await rail.getByRole("button", { name: /^Network/ }).click();
+    await expect(page.getByRole("heading", { name: "Network" })).toBeVisible();
+    await page.getByRole("button", { name: /^Test connectivity$/i }).click();
+    await expect(page.getByRole("button", { name: /^Next:/i })).toBeEnabled();
+
+    // Secrets opens from the rail, and its footer is the optional-step pair,
+    // never a numbered Next.
+    await rail.getByRole("button", { name: /^Secrets/ }).click();
+    await expect(page.getByRole("heading", { name: "Secrets" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Next:/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Back to required steps" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Done with this one" })).toBeVisible();
+  });
+
+  test("a host reporting no barrier gets no Recommended chip, and the honest note names why", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.onboarding_complete = false;
+      json.runner = { driver: "docker", confinement_classes: [] };
+      await route.fulfill({ response, json });
+    });
+    await skipHero(page);
+    await page.goto("/setup");
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    // exact: Playwright's default text match is substring + case-insensitive,
+    // and the honest note below contains "recommended" as a lowercase word.
+    await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByText(
+        "Nothing is recommended while the host reports no barrier. Wardyn recommends what it can see, not what the operating system suggests.",
+      ),
+    ).toBeVisible();
   });
 });
 

@@ -97,7 +97,7 @@ func csrfDo(t *testing.T, srv *Server, method, path, host, origin, secFetchSite,
 		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 
@@ -337,7 +337,7 @@ func TestCSRFGuard_BearerCallerIsNotRefused(t *testing.T) {
 	r.Header.Set("Origin", "https://evil.example")
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	if w.Code != http.StatusFound {
 		t.Fatalf("bearer caller with a cross-site Origin: code = %d, want 302 (exempt by construction)\nbody: %s", w.Code, w.Body.String())
 	}
@@ -375,9 +375,9 @@ func TestCSRFGuard_EveryMutatingRouteIsFenced(t *testing.T) {
 			// No credential is consulted, so there is no ambient authority to
 			// forge — the CSRF question does not arise.
 			continue
-		case classInternal:
-			// Run-token / ground-truth BEARER lanes: no cookie, exempt by
-			// construction exactly as the admin bearer is.
+		case classInternal, classDevice:
+			// Run-token / ground-truth / device BEARER credentials: no cookie,
+			// exempt by construction exactly as the admin bearer is.
 			continue
 		}
 		fenced++

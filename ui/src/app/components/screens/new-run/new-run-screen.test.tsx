@@ -40,6 +40,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
     isCredentialRefusal: actual.isCredentialRefusal,
+    isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
       createRun: (...a: unknown[]) => createRunMock(...a),
       listRuns: () => Promise.resolve([]),
@@ -62,6 +63,12 @@ vi.mock("./new-run-rail", async (importOriginal) => {
     },
   };
 });
+// The connect popup + poll (#386) — mocked so the launch-door tests below
+// drive the screen's own dialog wiring without a real window.
+const adoConnectMock = vi.fn();
+vi.mock("../../../lib/hooks/use-ado-connect", () => ({
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, connectFallback: adoConnectMock, blockedUrl: null }),
+}));
 const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
   workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
@@ -82,10 +89,11 @@ import { NewRunScreen } from "./new-run-screen";
 import type { Me } from "../../../lib/api/health";
 import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, MEMBER, AUTONOMY_RAIL } from "../../../lib/governance-copy";
 import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
+import { ADO } from "../../../lib/ado-entra-copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -864,5 +872,129 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
     await user.click(launch);
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
     expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+});
+
+// Finding 2 (#339 review): the server derives a hold (runs_autonomy.go's
+// autonomyDerive) at L1 when the run is non-interactive, the agent has a
+// hold lane (claude-code) and the request did NOT already ask for hold. The
+// rail's note used to render in the OPPOSITE case — only when hold was
+// already picked, which is exactly when nothing was derived.
+describe("NewRunScreen — the derived-hold note follows the server's own derivation case", () => {
+  function mockPreflightAtL1() {
+    preflightRunMock.mockResolvedValue({
+      setup_items: [],
+      enforced_confinement_class: "CC1",
+      overall_risk: "low",
+      warnings: [],
+      autonomy: {
+        level: "L1",
+        posture: { egress: "sealed", secrets: "powerful", confinement: "CC1" },
+        bound_by: ["secrets_powerful"],
+      },
+    });
+  }
+
+  it("auto chosen at L1, non-interactive: the note shows", async () => {
+    mockPreflightAtL1();
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
+    // toolApprovals defaults to "auto" — never touched.
+    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    expect(await screen.findByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeInTheDocument();
+  });
+
+  it("hold chosen: the note does not claim a derivation", async () => {
+    mockPreflightAtL1();
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
+    await user.click(screen.getByRole("radio", { name: /^Hold in Wardyn/ }));
+    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await screen.findByTestId("preflight-result");
+    expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();
+  });
+
+  it("interactive: no note, whatever tool approvals would hold", async () => {
+    mockPreflightAtL1();
+    renderScreen();
+    // Interactive is the default (initialWizardState) — left untouched.
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await screen.findByTestId("preflight-result");
+    expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();
+  });
+});
+
+// #386's launch door: a 422 carrying reason git_credential opens the Connect
+// Azure DevOps dialog. Review finding F8: connecting does NOT relaunch —
+// RELAUNCH_TOAST_BODY's own words are "launch when you're ready", so the
+// form stays exactly as it stood and the person presses Launch themselves.
+describe("NewRunScreen — the git_credential refusal opens the Connect Azure DevOps dialog", () => {
+  async function titled() {
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    return screen.getByRole("button", { name: /Launch run/ });
+  }
+
+  beforeEach(() => adoConnectMock.mockReset());
+
+  it("opens the dialog automatically, with no click on it", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "you are not connected to Azure DevOps", "git_credential"));
+    const launch = await titled();
+    await user.click(launch);
+    expect(await screen.findByText("you are not connected to Azure DevOps")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeInTheDocument();
+  });
+
+  // Review finding F1: the org comes from the 422 body itself, so the dialog
+  // names it even with NO preflight verdict ever having run (this screen
+  // fires preflight on a debounce; a fast Launch click can beat it there).
+  it("F1: names the org from the 422 body, with no preflight verdict having run", async () => {
+    createRunMock.mockRejectedValueOnce(
+      new HttpError(422, "git_credential: you are not connected to Azure DevOps — connect and start the run again", "git_credential", "https://dev.azure.com/contoso"),
+    );
+    const launch = await titled();
+    await user.click(launch);
+    await screen.findByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE });
+    expect(screen.getByText(ADO.LAUNCH_DIALOG_BODY("https://dev.azure.com/contoso"))).toBeInTheDocument();
+  });
+
+  it("F8: confirming connects and closes the dialog, but never relaunches — the person presses Launch themselves", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
+    adoConnectMock.mockResolvedValueOnce(true);
+    const launch = await titled();
+    await user.click(launch);
+    await screen.findByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE });
+    await user.click(screen.getByRole("button", { name: ADO.CONNECT_CTA }));
+    expect(adoConnectMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull());
+    // No second createRun call, no navigation — the form stays as it stood.
+    expect(createRunMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled();
+  });
+
+  it("a popup that closes without connecting closes the dialog and launches nothing", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
+    adoConnectMock.mockResolvedValueOnce(false);
+    const launch = await titled();
+    await user.click(launch);
+    await screen.findByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE });
+    await user.click(screen.getByRole("button", { name: ADO.CONNECT_CTA }));
+    expect(adoConnectMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull());
+    expect(createRunMock).toHaveBeenCalledTimes(1); // the original refused attempt only
+  });
+
+  it("Cancel closes the dialog without ever calling connect", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
+    const launch = await titled();
+    await user.click(launch);
+    await screen.findByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(adoConnectMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull();
   });
 });

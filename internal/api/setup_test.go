@@ -166,7 +166,7 @@ func TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring(t *testing.T) {
 		t.Fatalf("before: model_access.state = %q, want live", before.ModelAccess.State)
 	}
 
-	srv.markAWSSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken))
+	srv.markAWSSSOTokenSpent(context.Background(), awsSSOTokenFingerprint(blob.RefreshToken), "")
 
 	code, after := decodeSetupSSO(t, srv, member)
 	if code != http.StatusOK {
@@ -793,7 +793,7 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 		}},
 		Integrations: []SetupIntegration{{}},
 	}
-	got := redactSetupStatusForMember(full, false)
+	got := redactSetupStatusForMember(full, false, false)
 
 	if got.SCM != (setup.SCMPosture{}) {
 		t.Errorf("scm = %+v, want zero — host git-credential posture is not a member's business", got.SCM)

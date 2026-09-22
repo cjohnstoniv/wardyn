@@ -1695,7 +1695,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 // newAuthWithOnLogin is newAuth plus Config.OnLogin (migration 0046's
 // callback-refresh hook), for TestCallbackInvokesOnLoginWithSubAndRole.
-func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string)) *writoidc.Authenticator {
+func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string, []string, bool)) *writoidc.Authenticator {
 	t.Helper()
 	rt := &rewriteTokenRT{
 		base:          http.DefaultTransport,
@@ -1732,10 +1732,12 @@ func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
 	env := newIdPEnv(t)
 	var gotCtx context.Context
 	var gotSub, gotRole string
+	var gotGroups []string
+	var gotTruncated bool
 	calls := 0
-	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role string) {
+	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role string, groups []string, truncated bool) {
 		calls++
-		gotCtx, gotSub, gotRole = ctx, sub, role
+		gotCtx, gotSub, gotRole, gotGroups, gotTruncated = ctx, sub, role, groups, truncated
 	})
 
 	loginReq := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
@@ -1772,6 +1774,15 @@ func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
 	if gotRole != writoidc.RoleAdmin {
 		t.Errorf("OnLogin role = %q, want %q", gotRole, writoidc.RoleAdmin)
 	}
+	// #152: OnLogin's groups/truncated are the SAME values the session carries
+	// (sessionGroups run once, not re-derived) — no roles/groups claim in this
+	// fixture's ID token, so the snapshot is empty and complete.
+	if gotGroups == nil || len(gotGroups) != 0 {
+		t.Errorf("OnLogin groups = %v, want a non-nil empty slice", gotGroups)
+	}
+	if gotTruncated {
+		t.Error("OnLogin truncated = true, want false — the fixture's ID token carries no claim this build could not decode")
+	}
 }
 
 // TestCallbackDeniedLoginNeverInvokesOnLogin: a role-map miss with no
@@ -1792,7 +1803,7 @@ func TestCallbackDeniedLoginNeverInvokesOnLogin(t *testing.T) {
 		ClientSecret: "secret",
 		RedirectURL:  "http://localhost/auth/callback",
 		RoleMap:      map[string]string{"some-other-role": writoidc.RoleAdmin},
-		OnLogin:      func(context.Context, string, string) { calls++ },
+		OnLogin:      func(context.Context, string, string, []string, bool) { calls++ },
 	}, testHMACKey)
 	if err != nil {
 		t.Fatalf("writoidc.New: %v", err)

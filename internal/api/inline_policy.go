@@ -712,6 +712,17 @@ func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDo
 		if derr != nil {
 			return nil, nil, http.StatusUnprocessableEntity, fmt.Errorf("%s grant scope invalid: %w", g.Kind, derr)
 		}
+		// bedrock-api-key is never member-authored, whoever owns the row — ahead
+		// of the own-key arm, which would otherwise admit it to any model-provider
+		// host under any header. Its one author is dispatch, whose grant records
+		// the namespace the key is read from (resolveBedrockBearerInjection); a
+		// member's own key reaches their runs that way under a per_user row.
+		if secretRef == bedrockAPIKeySecret {
+			warns = append(warns, fmt.Sprintf(
+				"dropped %s grant naming secret %q: the Bedrock API key reaches a run only through the grant Wardyn authors at launch",
+				g.Kind, secretRef))
+			continue
+		}
 		if g.Kind == types.GrantAPIKey {
 			if _, _, isSentinel := s.oauthProviderForSentinel(secretRef); isSentinel {
 				kept = append(kept, g) // host-pinned to the provider by validateInlineSecretRefs

@@ -28,6 +28,8 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.7.6** | "The facts exist; connect them to the person" — a fourth field report from the same estate: an actionable model-access state now rides a banner on every screen instead of only Getting Started, a run refused for a dead model credential offers the sign-in instead of directions to it, a slow start says what it is waiting on instead of a poll-tick guess, the AWS sign-in tab opens and closes itself, a spent refresh token stops grading `live` for days, and wardynd's own outbound calls (OIDC, AWS SSO renewal, Entra sync) gain a scoped corporate-proxy knob that does not share `HTTPS_PROXY`'s process-wide blast radius; a mid-run credential lapse holding the run instead of killing it ships behind a kill switch (below) | **Shipped (pre-alpha)** — `v0.7.6` (see [CHANGELOG.md](CHANGELOG.md); tag `v0.7.6`, 2026-09-18) |
 | **v0.7.7** | A fifth field report from the same estate: with an expired AWS SSO session, Launch bounced the console to Getting Started. The setup gate stops grading the two per-person model-provider rows, a create-time refusal carries the machine-readable reason `model_credential`, the console opens the sign-in from that refusal and relaunches the same run, and the launch redeems an expired session at the click instead of admitting a spent one (below) | **Shipped (pre-alpha)** — `v0.7.7`, 2026-09-18 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.8** | Three field reports and the terminal: the setup gate's blocking decision moved server-side (`SetupCheck.Blocking`), the shipped confinement floor is CC1 with the strongest installed class as the default, a dial refusal names its own cause and hop, AWS-lane refusals answer in SDK-readable JSON, `wardyn attach` rides a single-use ticket, and the terminal's holder and focus defects are fixed (below) | **Shipped (pre-alpha)** — `v0.7.8`, 2026-09-19 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.9** | Patch: the egress proxy shared one TLS config with the sidecar's control-plane client, so on a corporate-CA install it offered HTTP/2 it could not speak and every re-originated request to a peer that accepted the offer failed; the proxy now speaks HTTP/2, handles a peer that speaks it unasked, and files a protocol mismatch as its own refusal instead of a dial failure | **Shipped (pre-alpha)** — `v0.7.9`, 2026-09-21 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.10** | **Per-person Azure DevOps access on Entra ID**: a run reaches Azure DevOps as the person who started it, with their own sign-in captured at console login and never placed in the sandbox; every REST call and git push is checked against a plain-language capability the run was granted, and a request beyond it is held for approval once or for the run. Also: an SSO-only console posture, Bedrock policy-deny and throttle refusals named on the failed run | **Shipped (pre-alpha)** — `v0.7.10`, 2026-09-22 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ### What v0.4 shipped
 
@@ -242,10 +244,12 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   HTTP-client e2e lane (`make test-e2e-ui-sandbox`) and a browser e2e lane
   (`make test-e2e-ui`). A browser desktop (noVNC) **shipped in 0.7**
   (`deploy/images/novnc/`, `make agent-image-novnc`) — and, as predicted, it is
-  an image variant on this same primitive with **no server change**. Local-build
-  only, like `agent-vscode`: publishing an X stack drags in the trivy matrix,
-  a per-image SBOM and a GPL source offer for a whole desktop, which is a
-  supply-chain workstream rather than an image. A general
+  an image variant on this same primitive with **no server change**. Both
+  `agent-vscode` and `agent-novnc` publish from the next tagged release (#141):
+  the trivy matrix, a per-image SBOM and a GPL source offer for a whole desktop
+  turned out to be exactly the supply-chain workstream predicted, now landed in
+  `release.yml`'s `images-ui-sandbox` job rather than deferred indefinitely. A
+  general
   native lane stays **exploratory** — the four candidates are costed in
   UI-SANDBOXES.md rather than promised, and natively on the user's own machine
   remains VS Code Remote-SSH over the SSH gateway.
@@ -661,13 +665,15 @@ eight are unconditional below; the eighth ships behind a kill switch.
   (`TestDocker_TheSameRunResumesWhenTheHoldReleases`) has run green on this
   release's tip (22 s).
 
-What did **not** close this release, and what was deliberately deferred to
-0.7.7 — see the CHANGELOG's "Known gaps" for the full statement of each: the
-§7.4 frozen copy table's admin-only remedy clause, a credentialed-proxy form
-of the daemon proxy knob, the spent-token mark's in-memory (unpersisted)
-posture, the Runs board's group header, and the three items already promised
-after 0.7.5 (the per-person supersede lock, a third Kubernetes cache volume,
-the admin-tier 5xx driver-text sweep) — none bundled into this release (O-1).
+What did **not** close this release, and was not bundled into 0.7.7 either —
+0.7.7 answered a different field report instead — see the CHANGELOG's "Known
+gaps" for the full statement of each: the §7.4 frozen copy table's
+admin-only remedy clause, a credentialed-proxy form of the daemon proxy
+knob, the spent-token mark's in-memory (unpersisted) posture, the Runs
+board's group header, and the three items already promised after 0.7.5 (the
+per-person supersede lock, a third Kubernetes cache volume, the admin-tier
+5xx driver-text sweep, O-1) — all seven now sit on the 0.8 plan
+([docs/design/0.8/PLAN.md](docs/design/0.8/PLAN.md)).
 
 ### What v0.7.7 shipped
 
@@ -760,8 +766,11 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   persistence (UD-collision / D3) · widening `/drives/grants` and `/preview` to
   the security-admin tier (UD-tier) · the share readability probe as uid 1000
   (UD-readprobe) · **byte enforcement on Docker volumes and shares (TM #36)** —
-  untouched by 0.7.2, whose storage work bounds only the ephemeral writable layer,
-  so a drive's size stays an allocation on every substrate · **team-shared drives**
+  never built into the product, and 0.8 closes it as a documented ceiling instead:
+  an XFS project-quota recipe for operators (`docs/OPERATIONS.md`, "User drives on
+  Docker") and `threatmodel/THREAT-MODEL.md` #36 updated to "accepted with a
+  recipe" — the case `types.StorageEnforcementFilesystem` reserved a value for ·
+  **team-shared drives**
   (one object, many principals — it breaks the `UNIQUE(subject_type, subject)` +
   LIMIT-1 resolver invariant and needs its own design round) · multiple drives per
   principal · drive as a workspace-library source · a top-level nav item · per-user
@@ -772,11 +781,16 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   separator collision: 0.7.1's migration `0061` closed the slug-uniqueness half,
   and the fixed-width drive id that closes the rest re-homes everyone who already
   has storage under a minted name. Documentation debt on the same feature, by its
-  own `FOLLOWUPS.md` ids: `:3` (the preview resolves claims as typed while the
-  object name is hashed), `:7` (the `disk_mib` text-to-speech trap in a demo
-  script), `:8` (a stale "previewed as a warning" sentence in the design doc),
-  `:11` (a fourth copy of `withMono`), and the three demo-track lines `:4`, `:5`
-  and `:6`, which ride the demo bullet below.
+  own `FOLLOWUPS.md` ids: `:3` and `:8` fixed in `docs/design/user-drives-prompt.md`
+  (the object name is now documented as derived, never taken as typed; the
+  preview's backend-unavailable answer is now documented as the shipped 422, not
+  "previewed as a warning"). `:11` was a miscall, not a defect: `code-block.tsx`'s
+  `makeMono` is one factory, and `drives/display.tsx`, `governance/display.tsx`,
+  `setup/access-panel.tsx` and `new-run/workspace-card.tsx` are four configured
+  bindings of it, never copies — nothing to deduplicate. Still open: `:7` (the
+  `disk_mib` text-to-speech trap in a demo script — not locatable anywhere in the
+  tree) and the three demo-track lines `:4`, `:5` and `:6`, which ride the demo
+  bullet below.
 - **Identity and authz.** Other people's subjects on records (`known_principals`)
   · PF-48 resident credential lanes above a re-asserted ceiling (architectural) ·
   **TM #38** (a per-user API token's group snapshot never refreshes — the
@@ -789,8 +803,7 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   an unauthorized caller) · **R1-F289** (a DB-clock cookie `iat`; the shipped
   comparison-time fix is recorded as safe to leave standing).
 - **Deployment.** Subscription/managed runs through the internal model gateway ·
-  publishing the UI-sandbox images (`vscode`/`novnc`) · direct-dial bypass per
-  target · BYO-Bedrock for members · an air-gapped video mirror + config-driven CSP
+  BYO-Bedrock for members · an air-gapped video mirror + config-driven CSP
   · the gateway auth-scheme seam · `ssh_key` clone-only vs bind-mounted workspaces
   (F11) · age-key rotation (F12) · react-router 8 (F13) · the Kata/TPROXY/io_uring
   quick-hits (F14) · the k8s parity list (F23, on the v1.0 row below) · ADO
@@ -859,17 +872,6 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
 
 These are known, documented ceilings. They are listed so they are not mistaken for
 shipped behavior; none is scheduled.
-
-- **The UI-sandbox images are not published.** The relay ships and works, and
-  0.7 added a second app (`novnc`) alongside `vscode` — but neither image is in
-  `release.yml`'s publish matrix, and `deploy/images/vscode/` builds `FROM` a
-  locally-built base. Consequences: the browser lane is **unavailable on the
-  desktop tier** (a managed laptop has no repo and no build path) and on Helm (a
-  cluster pulling only published images gets a gateway with nothing to serve).
-  It works today on a developer checkout. Publishing them means taking on the
-  trivy matrix, a per-image SBOM assertion, and a GPL source offer for a whole X
-  stack — a supply-chain workstream rather than an image build. **Deferred to
-  0.8.**
 
 - **Seventeen of the 23 catalogued demo episodes are still unrecorded stubs**
   (`ui/src/app/lib/demo-videos.ts`'s `EPISODES`; `cmd/wardynd/demo_videos_guard_test.go`
@@ -1025,11 +1027,6 @@ shipped behavior; none is scheduled.
   0.7 scopes the gateway to the api-key lane only; those lanes need
   `deploy/images/claude-code/agent-run` to honour an explicit operator-set
   base URL, which needs an image rebuild — 0.8.
-- **A per-target direct-dial bypass for a gateway behind a corporate
-  upstream proxy.** 0.7 dials the gateway THROUGH a configured upstream by
-  design (upstream-first); an operator who wants the gateway dialled
-  directly while everything else still goes through the upstream has no
-  knob for it.
 - **The Network step rendering "N trusted CA certs."** `/setup/status`
   carries the count (0.7); no console reader exists yet.
 
