@@ -67,7 +67,7 @@ vi.mock("./new-run-rail", async (importOriginal) => {
 // drive the screen's own dialog wiring without a real window.
 const adoConnectMock = vi.fn();
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
-  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, blockedUrl: null }),
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, connectFallback: adoConnectMock, blockedUrl: null }),
 }));
 const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({

@@ -151,8 +151,8 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, true)
 		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "alice")
-		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured || rows[0].Cause != scmAccessCauseRowIsNewer || rows[0].RowID != scmTestRowID {
-			t.Fatalf("got %+v, want one row state=not_configured cause=row_is_newer row_id=%s", rows, scmTestRowID)
+		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured || rows[0].Cause != scmAccessCauseRowIsNewer || rows[0].Kind != string(types.GitProviderAzureDevOps) {
+			t.Fatalf("got %+v, want one row state=not_configured cause=row_is_newer kind=azure_devops", rows)
 		}
 	})
 
@@ -209,7 +209,7 @@ func TestScmAccessValue(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, true)
 		v := s.scmAccessValue(context.Background(), sc, "alice")
-		if v.State != modelAccessNotConfigured || v.RowID != scmTestRowID {
+		if v.State != modelAccessNotConfigured || v.Kind != string(types.GitProviderAzureDevOps) {
 			t.Fatalf("got %+v", v)
 		}
 	})
@@ -231,8 +231,12 @@ func TestHandleGetSCMAccess(t *testing.T) {
 	if !strings.HasPrefix(strings.TrimSpace(body), "[") {
 		t.Fatalf("body = %s, want a JSON array (F6)", body)
 	}
-	if !strings.Contains(body, `"row_id":"`+scmTestRowID+`"`) || !strings.Contains(body, `"state":"not_configured"`) {
+	if !strings.Contains(body, `"kind":"azure_devops"`) || !strings.Contains(body, `"state":"not_configured"`) {
 		t.Errorf("body = %s", body)
+	}
+	// review follow-up N3: no row id in a member-visible body.
+	if strings.Contains(body, "row_id") {
+		t.Errorf("body = %s, must not carry a row id", body)
 	}
 }
 
@@ -288,7 +292,7 @@ func TestGitCredentialFactForRepos(t *testing.T) {
 // ── the launch door's 422 (review findings F1, F7) ─────────────────────────
 
 func TestGitCredentialRefusal(t *testing.T) {
-	t.Run("per-user row, no captured sign-in: 422 with the org and row id (F1)", func(t *testing.T) {
+	t.Run("per-user row, no captured sign-in: 422 with the org, no row id (F1, N3)", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, true)
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
@@ -304,12 +308,14 @@ func TestGitCredentialRefusal(t *testing.T) {
 		for _, want := range []string{
 			`"reason":"git_credential"`,
 			`"org":"` + scmTestADOOrg + `"`,
-			`"row_id":"` + scmTestRowID + `"`,
 			gitCredentialNotConnectedRefusal,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("body = %s, want it to contain %s", body, want)
 			}
+		}
+		if strings.Contains(body, "row_id") {
+			t.Errorf("body = %s, must not carry a row id (N3)", body)
 		}
 	})
 
@@ -556,6 +562,37 @@ func TestGitCredentialGate_PreflightNeverRefuses(t *testing.T) {
 	assertGitCredential422(t, launch)
 }
 
+// TestGitCredentialGate_FreeTextRepo is review follow-up N2: the FREE-TEXT
+// `repo` field specifically (requestRepoProviderRefusals' own gate, not
+// seedAndAdmitWorkspace's resolved-spec one — the other cases in this file
+// exercise that one via inline_policy/workspace_id). Proven by mutation: see
+// the commit message for the two reverts run against this test and
+// TestGitCredentialGate_FreeTextRepo_PreflightNeverRefuses, each restored
+// after confirming a failure.
+func TestGitCredentialGate_FreeTextRepo(t *testing.T) {
+	srv, _, _ := adoRunHarness(t, true)
+	cookie := adoOperatorSession(t)
+	body := `{"agent":"claude-code","task":"do the thing","repo":"` + scmTestADORepo + `"}`
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body)
+	assertGitCredential422(t, w)
+	if !strings.Contains(w.Body.String(), `"org":"`+scmTestADOOrg+`"`) {
+		t.Errorf("body = %s, want the org (F1)", w.Body.String())
+	}
+}
+
+func TestGitCredentialGate_FreeTextRepo_PreflightNeverRefuses(t *testing.T) {
+	srv, _, _ := adoRunHarness(t, true)
+	cookie := adoOperatorSession(t)
+	body := `{"agent":"claude-code","task":"do the thing","repo":"` + scmTestADORepo + `"}`
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", cookie, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("preflight status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"git_credential":{`) || !strings.Contains(w.Body.String(), `"state":"not_configured"`) {
+		t.Errorf("preflight body = %s, want a git_credential fact", w.Body.String())
+	}
+}
+
 // TestGitCredentialFact_OnlyThisRunsOwnRepos is F2's "never a deployment-wide
 // guess" half: a run whose repos are NOT on the Azure DevOps row gets no
 // git_credential fact at all, even though the deployment HAS a per-user row
@@ -638,5 +675,57 @@ func TestByteIdentical_NoADORowAtAll(t *testing.T) {
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", cookie, "")
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "scm_access") {
 		t.Errorf("status=%d body contains scm_access with no Azure DevOps row at all", w.Code)
+	}
+}
+
+// ── review follow-up N4: the same gate at the other doors that clone a
+// repo server-side — the Build step, the Scan step, and a record session. ──
+
+func adoWorkspaceWithADORepo(t *testing.T, st *ownerStore) string {
+	t.Helper()
+	id := adoCreateWorkspace(t, st, types.WorkspaceSource{
+		Type: types.WorkspaceSourceTypeRepo, Source: scmTestADORepo, Target: "/home/agent/work",
+	})
+	return id.String()
+}
+
+func TestGitCredentialGate_WorkspaceBuild(t *testing.T) {
+	srv, st, _ := adoRunHarness(t, true)
+	id := adoWorkspaceWithADORepo(t, st)
+	cookie := adoOperatorSession(t)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+id+"/build", cookie, "{}")
+	assertGitCredential422(t, w)
+}
+
+func TestGitCredentialGate_WorkspaceScan(t *testing.T) {
+	srv, st, _ := adoRunHarness(t, true)
+	id := adoWorkspaceWithADORepo(t, st)
+	cookie := adoOperatorSession(t)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+id+"/scan", cookie, "{}")
+	assertGitCredential422(t, w)
+}
+
+// POST /workspaces/{id}/record is operator-only (routes.go), so a member
+// case does not apply here the way it does for Build/Scan.
+func TestGitCredentialGate_RecordSession(t *testing.T) {
+	srv, st, _ := adoRunHarness(t, true)
+	id := adoWorkspaceWithADORepo(t, st)
+	cookie := adoOperatorSession(t)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+id+"/record", cookie, `{"name":"e2e record"}`)
+	assertGitCredential422(t, w)
+}
+
+// TestGitCredentialGate_RecordSession_MechanismPrincipal is the admin-token
+// bearer — a MECHANISM, not a person (review follow-up N4's own instruction:
+// "follow what gitCredentialRefusal does for the admin-token principal" —
+// oidcHumanFromContext answers "" for it, so gitCredentialRefusalForLauncher
+// never refuses; the record attempt proceeds to whatever the next gate
+// answers, never a git_credential 422 it could not possibly repair).
+func TestGitCredentialGate_RecordSession_MechanismPrincipal(t *testing.T) {
+	srv, st, _ := adoRunHarness(t, true)
+	id := adoWorkspaceWithADORepo(t, st)
+	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+id+"/record", adminToken, `{"name":"e2e record"}`)
+	if strings.Contains(w.Body.String(), "git_credential") {
+		t.Errorf("the admin-token mechanism principal was refused git_credential: %s", w.Body.String())
 	}
 }

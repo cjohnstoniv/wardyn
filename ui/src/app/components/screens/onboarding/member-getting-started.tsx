@@ -259,9 +259,16 @@ export function MemberGettingStarted() {
   // #386: the Azure DevOps chip + its fallback connect control — the same
   // popup-driven flow the New Run rail's launch door uses.
   const scmChip = status?.scm_access ? scmAccessChip(status.scm_access.state, status.scm_access.source) : null;
-  const { connecting: adoConnecting, connect: adoConnect, blockedUrl: adoBlockedUrl } = useAdoConnect();
+  const { connecting: adoConnecting, connect: adoConnect, connectFallback: adoConnectFallback, blockedUrl: adoBlockedUrl } = useAdoConnect();
   const handleAdoConnect = async () => {
     if (await adoConnect()) setRetryTick((n) => n + 1);
+  };
+  // review follow-up N1: the fallback link opens sign-in in a new tab; this
+  // starts the SAME poll (bounded) so the chip still updates on return.
+  const handleAdoFallbackClick = () => {
+    void adoConnectFallback().then((ok) => {
+      if (ok) setRetryTick((n) => n + 1);
+    });
   };
 
   // Shape C (approved mock round 2026-08-31): the member's own path leads
@@ -442,11 +449,18 @@ export function MemberGettingStarted() {
                   >
                     {ADO.CONNECT_ADO}
                   </Button>
-                  {/* review finding F9: the browser refused the popup outright. */}
+                  {/* review finding F9: the browser refused the popup outright;
+                      N1: the fallback link's own click also starts the poll. */}
                   {adoBlockedUrl && (
                     <p className="mt-1 text-sm text-muted-foreground">
-                      Your browser blocked the popup.{" "}
-                      <a href={adoBlockedUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-info hover:underline">
+                      {ADO.CONNECT_POPUP_BLOCKED}{" "}
+                      <a
+                        href={adoBlockedUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-info hover:underline"
+                        onClick={handleAdoFallbackClick}
+                      >
                         {ADO.CONNECT_ADO}
                       </a>
                     </p>

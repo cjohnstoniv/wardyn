@@ -23,10 +23,18 @@ import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import type { SetupStatus } from "../../../lib/types";
 
 export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus; onChanged: () => void }) {
-  const { connecting, connect, blockedUrl } = useAdoConnect();
+  const { connecting, connect, connectFallback, blockedUrl } = useAdoConnect();
   const access = status?.scm_access;
   const handleConnect = async () => {
     if (await connect()) onChanged();
+  };
+  // review follow-up N1: the fallback link opens sign-in in a new tab; this
+  // starts the SAME poll (bounded, connectFallback) so the card still
+  // updates when the person comes back connected.
+  const handleFallbackClick = () => {
+    void connectFallback().then((ok) => {
+      if (ok) onChanged();
+    });
   };
   if (!access || access.state === "") return null;
   const chip = scmAccessChip(access.state, access.source);
@@ -65,8 +73,14 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
             </Button>
             {blockedUrl && (
               <p className="text-xs text-muted-foreground">
-                Your browser blocked the popup.{" "}
-                <a href={blockedUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-info hover:underline">
+                {ADO.CONNECT_POPUP_BLOCKED}{" "}
+                <a
+                  href={blockedUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-info hover:underline"
+                  onClick={handleFallbackClick}
+                >
                   {ADO.CONNECT_ADO}
                 </a>
               </p>

@@ -129,4 +129,82 @@ describe("useAdoConnect", () => {
     });
     expect(getMineMock.mock.calls.length).toBe(callsBeforeUnmount);
   });
+
+  // Review follow-up N6: the outstanding connect() promise resolves (false)
+  // on unmount, rather than hanging forever with no one left to await it.
+  it("N6: resolves the outstanding connect() promise on unmount, instead of leaving it pending", async () => {
+    const popup = fakePopup();
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    getMineMock.mockResolvedValue([]); // never live — the popup stays "open" from this hook's view
+
+    const { result, unmount } = renderHook(() => useAdoConnect());
+    let resolved: boolean | "pending" = "pending";
+    act(() => {
+      void result.current.connect().then((ok) => {
+        resolved = ok;
+      });
+    });
+    expect(resolved).toBe("pending");
+
+    unmount();
+    await act(async () => {
+      await Promise.resolve(); // let the resolved microtask settle
+    });
+    expect(resolved).toBe(false);
+  });
+
+  describe("connectFallback (review follow-up N1)", () => {
+    it("never opens a popup", async () => {
+      const openSpy = vi.spyOn(window, "open");
+      getMineMock.mockResolvedValue([{ state: "live" }]);
+
+      const { result } = renderHook(() => useAdoConnect());
+      act(() => {
+        void result.current.connectFallback();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+
+      expect(openSpy).not.toHaveBeenCalled();
+    });
+
+    it("resolves true once a row reads live, the same poll connect() uses", async () => {
+      getMineMock.mockResolvedValue([{ state: "live" }]);
+
+      const { result } = renderHook(() => useAdoConnect());
+      let resolved: boolean | undefined;
+      act(() => {
+        void result.current.connectFallback().then((ok) => {
+          resolved = ok;
+        });
+      });
+      expect(result.current.connecting).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+
+      expect(resolved).toBe(true);
+      expect(result.current.connecting).toBe(false);
+    });
+
+    it("gives up and resolves false after the bounded timeout — there is no popup to watch", async () => {
+      getMineMock.mockResolvedValue([]);
+
+      const { result } = renderHook(() => useAdoConnect());
+      let resolved: boolean | undefined;
+      act(() => {
+        void result.current.connectFallback().then((ok) => {
+          resolved = ok;
+        });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1500);
+      });
+
+      expect(resolved).toBe(false);
+    });
+  });
 });

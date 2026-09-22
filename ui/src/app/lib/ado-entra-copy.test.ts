@@ -17,8 +17,10 @@ import { ADO } from "./ado-entra-copy";
 // doc row or a deleted one all fail here rather than shipping.
 //
 // The doc's own freeze note (§0) says §7.2 onward is 217 rows, but warns that
-// is ITS OWN checker's count — this suite's parser is the one that matters,
-// and it agrees: 217.
+// is ITS OWN checker's count — this suite's parser is the one that matters.
+// It agreed at 217 when §7 was frozen; CONNECT_POPUP_BLOCKED (review
+// follow-up N1) added one row after the freeze, at the same gate, so the
+// live count is 218.
 //
 // Two normalisations, both documented rules rather than fudges (the drives
 // precedent):
@@ -79,8 +81,8 @@ function render(docKey: string): string {
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 
 describe("ado-entra-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 217 frozen keys in the doc", () => {
-    expect(doc.size).toBe(217);
+  it("finds all 218 frozen keys in the doc", () => {
+    expect(doc.size).toBe(218);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

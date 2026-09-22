@@ -383,20 +383,24 @@ func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Requ
 }
 
 // recordLaunchRefusals are the ORG-POLICY refusals a record session must clear
-// before it claims anything: the agent roster (recordRosterRefusal) and provider
-// admission over the workspace's repo sources. They travel together because they
-// are one question — may this session start on this deployment? — and because
+// before it claims anything: the agent roster (recordRosterRefusal), provider
+// admission, and (review follow-up N4) the per-user Azure DevOps gate, all
+// over the workspace's repo sources. They travel together because they are
+// one question — may this session start on this deployment? — and because
 // they share every property that decides WHERE the check goes: a bare error, not
 // routed through abort(); sited before the CAS claim so a refusal costs no state;
 // and mapped by handleRecordWorkspace to the status its own door answers.
 //
-// ONE call site rather than two because launchRecordRun sits at the funlen
+// ONE call site rather than three because launchRecordRun sits at the funlen
 // ratchet, which is what its own comment there asks the next lane to do.
 func (s *Server) recordLaunchRefusals(ctx context.Context, ws types.Workspace, agent string) error {
 	if rerr := s.recordRosterRefusal(ctx, agent); rerr != nil {
 		return rerr
 	}
-	return s.admitLauncherRepo(ctx, repoSourceLocators(ws.Sources)...)
+	if rerr := s.admitLauncherRepo(ctx, repoSourceLocators(ws.Sources)...); rerr != nil {
+		return rerr
+	}
+	return s.gitCredentialRefusalForLauncher(ctx, oidcHumanFromContext(ctx), repoSourceLocators(ws.Sources)...)
 }
 
 // presentRepos drops the empty locators a call site would otherwise have to

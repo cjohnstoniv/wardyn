@@ -12,7 +12,7 @@ import { ADO } from "../../../lib/ado-entra-copy";
 const adoConnectMock = vi.fn();
 let adoBlockedUrl: string | null = null;
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
-  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, blockedUrl: adoBlockedUrl }),
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, connectFallback: adoConnectMock, blockedUrl: adoBlockedUrl }),
 }));
 
 import { AdoConnectionCard } from "./ado-connection";
@@ -76,11 +76,27 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
 
 // Review finding F9 — a blocked popup.
 describe("AdoConnectionCard — a blocked popup (F9)", () => {
-  it("shows a plain fallback link to the sign-in URL, alongside the button", () => {
+  beforeEach(() => {
+    adoConnectMock.mockReset();
     adoBlockedUrl = "/api/v1/scm/azure-devops/signin";
+  });
+
+  it("shows the canon sentence and a plain fallback link to the sign-in URL, alongside the button", () => {
     render(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />);
+    expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
     const link = screen.getByRole("link", { name: ADO.CONNECT_ADO });
     expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
     expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  // Review follow-up N1: clicking the fallback link starts the SAME poll
+  // (connectFallback), so the card reloads status on a real connection.
+  it("N1: clicking the fallback link starts the poll and reloads status once connected", async () => {
+    adoConnectMock.mockResolvedValueOnce(true);
+    const onChanged = vi.fn();
+    render(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={onChanged} />);
+    await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_ADO }));
+    expect(adoConnectMock).toHaveBeenCalledTimes(1);
+    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 });

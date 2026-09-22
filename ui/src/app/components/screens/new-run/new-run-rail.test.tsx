@@ -106,6 +106,7 @@ function railTree(props: {
   adoOrg?: string;
   adoBlockedUrl?: string | null;
   onAdoConfirm?: () => void;
+  onAdoFallbackClick?: () => void;
   onAdoCancel?: () => void;
   /** Mounted as a sibling INSIDE the same ModelAccessProvider — a test-only
    *  stand-in for a surface elsewhere in the shell that can close the shared
@@ -156,6 +157,7 @@ function railTree(props: {
         org: props.adoOrg ?? "",
         blockedUrl: props.adoBlockedUrl ?? null,
         onConfirm: props.onAdoConfirm ?? (() => {}),
+        onFallbackClick: props.onAdoFallbackClick ?? (() => {}),
         onCancel: props.onAdoCancel ?? (() => {}),
       }}
     />
@@ -781,6 +783,15 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
     expect(screen.queryByText(ADO.PREFLIGHT_MISSING)).toBeNull();
   });
 
+  // Review follow-up N5: a `live` gitCredential fact rendered nothing
+  // (above), but showCredentials used to key on `!!gitCredential` — truthy
+  // for `live` too — so a shell run with a live Azure DevOps connection and
+  // no other credential to describe got an empty "Credentials" heading.
+  it("N5: a live shell run with no other credential renders no empty Credentials heading", () => {
+    renderRail({ gitCredential: { state: "live", source: "org" } });
+    expect(screen.queryByText("Credentials")).toBeNull();
+  });
+
   it("the dialog names the row's org (from the 422 body — F1) and offers Continue to Microsoft / Cancel", () => {
     // No preflight verdict at all — F1: the org comes from the 422 itself,
     // never from a git_credential fact that may not exist yet.
@@ -791,11 +802,25 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
-  it("a blocked popup shows a plain fallback link to the sign-in URL (F9)", () => {
+  it("a blocked popup shows the canon sentence and a plain fallback link to the sign-in URL (F9)", () => {
     renderRail({ adoDialogOpen: true, adoBlockedUrl: "/api/v1/scm/azure-devops/signin" });
+    expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
     const link = screen.getByRole("link", { name: ADO.CONNECT_CTA });
     expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
     expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  // Review follow-up N1: clicking the fallback link ALSO starts the poll
+  // (alongside its own href navigation), so the dialog advances on return.
+  it("N1: clicking the fallback link fires onFallbackClick", async () => {
+    const onAdoFallbackClick = vi.fn();
+    renderRail({
+      adoDialogOpen: true,
+      adoBlockedUrl: "/api/v1/scm/azure-devops/signin",
+      onAdoFallbackClick,
+    });
+    await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_CTA }));
+    expect(onAdoFallbackClick).toHaveBeenCalledTimes(1);
   });
 
   it("Continue to Microsoft calls onAdoConfirm; Cancel calls onAdoCancel", async () => {

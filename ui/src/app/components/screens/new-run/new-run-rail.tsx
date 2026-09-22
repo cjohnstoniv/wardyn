@@ -116,6 +116,9 @@ interface RunRailProps {
     org: string;
     blockedUrl: string | null;
     onConfirm: () => void;
+    /** review follow-up N1: fires the same connect outcome as onConfirm, off
+     *  the blocked-popup fallback link's own poll. */
+    onFallbackClick: () => void;
     onCancel: () => void;
   };
 }
@@ -397,7 +400,11 @@ export function RunRail({
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
   // has no Credentials section at all, rather than a heading over nothing.
-  const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess || !!gitCredential;
+  // review follow-up N5: gitCredential contributes only when GitCredentialLine
+  // actually renders something for it (state "not_configured") — a `live`
+  // gitCredential (nothing to say, see GitCredentialLine above) must not by
+  // itself open an empty heading over a shell run with nothing else to show.
+  const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess || gitCredential?.state === "not_configured";
   // U-5: with NO provider connected and nothing resolved, "Resolved at launch."
   // and the Preflight hint sat directly under "No model provider is connected.
   // This run launches; its first model call fails." Nothing resolves at launch
@@ -627,15 +634,18 @@ export function RunRail({
             <DialogDescription>{ADO.LAUNCH_DIALOG_BODY(adoDialog.org)}</DialogDescription>
           </DialogHeader>
           {/* review finding F9: the browser refused the popup outright — a
-              plain link is the fallback, opened by the browser itself. */}
+              plain link is the fallback, opened by the browser itself. N1:
+              the same connect poll starts alongside that navigation, so the
+              dialog still advances when the person comes back connected. */}
           {adoDialog.blockedUrl && (
             <p className="text-xs text-muted-foreground">
-              Your browser blocked the popup.{" "}
+              {ADO.CONNECT_POPUP_BLOCKED}{" "}
               <a
                 href={adoDialog.blockedUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="font-medium text-info hover:underline"
+                onClick={adoDialog.onFallbackClick}
               >
                 {ADO.CONNECT_CTA}
               </a>

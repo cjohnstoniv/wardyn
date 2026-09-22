@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -85,10 +86,6 @@ const scmAccessCauseRowIsNewer = "row_is_newer"
 // claim" (§7.5's ACCESS_SHARED_NOTE) rather than assume Source is always
 // present — see ado-connection.tsx's own fix (review finding F3).
 type SCMAccess struct {
-	// RowID names which Azure DevOps GitProvider row this answer is about —
-	// meaningful once a deployment can carry more than one per-user row
-	// (#383); "" from no caller in this codebase today.
-	RowID string `json:"row_id,omitempty"`
 	// State is one of the six modelaccess.go values.
 	State string `json:"state"`
 	// Source is "org" or "separate" — set only for a live per-user connection.
@@ -97,7 +94,20 @@ type SCMAccess struct {
 	Cause string `json:"cause,omitempty"`
 	// Org is the Azure DevOps address this row clones from (the row's first
 	// base URL) — the {org} the connect and launch dialogs name.
+	//
+	// NO ROW ID (review follow-up N3). workspace_admission.go's own
+	// disclosure rule ("the kind, never the row id") applies here the same
+	// way it applies to admitSSHHostLevel's 201 warning; Org is kept as the
+	// one deliberate exception the frozen copy needs (LAUNCH_DIALOG_BODY,
+	// CONNECT_DIALOG_BODY, PANEL_ORG all interpolate {org} verbatim) — Kind
+	// below is what a caller that needs a stable key over the /me/scm-access
+	// array uses instead of a row id (org + kind is unique per row today,
+	// since a deployment carries at most one Azure DevOps org).
 	Org string `json:"org,omitempty"`
+	// Kind is the provider kind this row is ("azure_devops", always, today —
+	// scmaccess.go grades Azure DevOps rows only) — paired with Org as the
+	// stable key a list of these needs, in place of a row id.
+	Kind string `json:"kind,omitempty"`
 }
 
 // adoAccessState grades one PER-USER row's captured sign-in into the
@@ -206,7 +216,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, row types.GitProvider, cfg
 		}
 	}
 	state := adoAccessState(isMechanism, found)
-	out := SCMAccess{RowID: row.ID, State: state, Org: adoOrgDisplay(row)}
+	out := SCMAccess{State: state, Org: adoOrgDisplay(row), Kind: string(row.Kind)}
 	if state == modelAccessLive {
 		out.Source = source
 	}
@@ -300,15 +310,15 @@ func (s *Server) gitCredentialFactForRepos(ctx context.Context, subject string, 
 }
 
 // gitCredentialErrorBody is the git_credential 422's body (review finding
-// F1): the frozen sentence + reason, plus the org and row id the LAUNCH
-// DOOR names in its dialog before any preflight verdict exists — a 422 can
-// be the very FIRST thing this caller hears about the row, so the dialog
-// cannot depend on a `git_credential` preflight fact having already landed.
+// F1): the frozen sentence + reason, plus the org the LAUNCH DOOR names in
+// its dialog before any preflight verdict exists — a 422 can be the very
+// FIRST thing this caller hears about the row, so the dialog cannot depend
+// on a `git_credential` preflight fact having already landed. No row id
+// (review follow-up N3) — see SCMAccess's own doc comment.
 type gitCredentialErrorBody struct {
 	Error  string `json:"error"`
 	Reason string `json:"reason"`
 	Org    string `json:"org,omitempty"`
-	RowID  string `json:"row_id,omitempty"`
 }
 
 // gitCredentialRefusalReason is the 422 `reason` the New Run rail recognises
@@ -328,32 +338,41 @@ const gitCredentialRefusalReason = "git_credential"
 // can add that branch without moving this one.
 const gitCredentialNotConnectedRefusal = "git_credential: you are not connected to Azure DevOps — connect and start the run again"
 
-// gitCredentialRefusal is the git_credential 422 GATE (#386's launch door,
-// review finding F5): a repository on a per-user Azure DevOps row, with no
-// usable captured sign-in for the caller, refuses here. It is called from
-// EVERY door a repository can reach a run through that this deployment can
-// actually launch from — requestRepoProviderRefusals (the two free-text
-// fields) and seedAndAdmitWorkspace (the resolved spec's WorkspaceRepos,
-// which is what a workspace_id, a second workspace, a stored policy or an
-// inline policy all fold into) — but NEVER from preflight, which reads the
-// same row through gitCredentialFactForRepos instead and never refuses.
+// errGitCredentialRefused is gitCredentialRefusalForLauncher's sentinel —
+// errRepoNotAdmitted's shape (workspace_admission.go), for the launchers
+// that hold no ResponseWriter (review follow-up N4: record.go's
+// launchRecordRun). A caller matches it with errors.As, on the concrete
+// *gitCredentialRefusalError below, to recover the org for the 422 body.
+var errGitCredentialRefused = errors.New(gitCredentialRefusalReason)
+
+// gitCredentialRefusalError carries the one extra fact
+// gitCredentialErrorBody needs (the org) through an error return — Unwrap
+// makes it match errGitCredentialRefused for a caller that only wants to
+// know WHICH refusal this is, errors.As for one that wants the org too.
+type gitCredentialRefusalError struct{ Org string }
+
+func (e *gitCredentialRefusalError) Error() string { return gitCredentialNotConnectedRefusal }
+func (e *gitCredentialRefusalError) Unwrap() error { return errGitCredentialRefused }
+
+// gitCredentialRefusalForLauncher is the git_credential GATE (#386's launch
+// door, review finding F5) for a caller with no ResponseWriter — a
+// SERVER-SIDE launcher (review follow-up N4: recordLaunchRefusals, called
+// from launchRecordRun). nil when admitted; a *gitCredentialRefusalError
+// (wrapped) otherwise, for the caller to map to its own door's 422 shape —
+// record.go's own chain of errors.Is/errors.As mappings is the precedent
+// (errWorkspaceSourceTarget, errAgentNotEnabled, ...).
 //
-// It runs AFTER admission (a repo not admitted at all never reaches this),
-// so it only ever needs to resolve the row that already admitted the repo,
-// never re-derive admission itself.
-func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, repos ...string) bool {
+// subject == "" (no OIDC human — an admin-token or local-mode caller) never
+// refuses: no sign-in it could complete, the same rule the HTTP-facing
+// gitCredentialRefusal follows for the identical reason.
+func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject string, repos ...string) error {
 	repos = presentRepos(repos)
-	if len(repos) == 0 || s.cfg.Store == nil {
-		return false
+	if len(repos) == 0 || s.cfg.Store == nil || subject == "" {
+		return nil
 	}
-	ctx := r.Context()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil || !providersConfigured(sc) {
-		return false // a read failure or legacy open mode: admitRepoSources already answered, or there are no rows to grade
-	}
-	subject := oidcHumanFromContext(ctx)
-	if subject == "" {
-		return false // no session to bind a repair to — the same caller admission already let through
+		return nil // a read failure or legacy open mode: the caller's own admission check already answered, or there are no rows to grade
 	}
 	for _, row := range s.perUserADORowsAdmitting(ctx, sc, repos) {
 		cfg, ok := s.adoEntraRowConfig(ctx, row.ID)
@@ -363,19 +382,39 @@ func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, re
 		if _, found, _ := s.readADOEntraBlob(ctx, subject, cfg.RowID); found {
 			continue
 		}
-		// Not audited under authz.denied: that action's `reason` is a
-		// documented CLOSED enum (docs/OPERATIONS.md), and this create-time
-		// 422 follows writeLLMRefusal's own precedent (runs_dispatch_llm_mechanism.go)
-		// — the sibling model_credential refusal at this same door is
-		// likewise unaudited; only a run that actually DISPATCHES and then
-		// fails audits, under run.create.
-		writeJSON(w, http.StatusUnprocessableEntity, gitCredentialErrorBody{
-			Error: gitCredentialNotConnectedRefusal, Reason: gitCredentialRefusalReason,
-			Org: adoOrgDisplay(row), RowID: row.ID,
-		})
-		return true
+		return &gitCredentialRefusalError{Org: adoOrgDisplay(row)}
 	}
-	return false
+	return nil
+}
+
+// gitCredentialRefusal is gitCredentialRefusalForLauncher at an HTTP door
+// that holds a ResponseWriter — requestRepoProviderRefusals (the two
+// free-text fields) and seedAndAdmitWorkspace (the resolved spec's
+// WorkspaceRepos, which is what a workspace_id, a second workspace, a
+// stored policy or an inline policy all fold into), plus
+// handleBuildWorkspace and handleScanWorkspace directly (review follow-up
+// N4) — but NEVER from preflight, which reads the same row through
+// gitCredentialFactForRepos instead and never refuses.
+//
+// It runs AFTER admission (a repo not admitted at all never reaches this),
+// so it only ever needs to resolve the row that already admitted the repo,
+// never re-derive admission itself.
+func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, repos ...string) bool {
+	err := s.gitCredentialRefusalForLauncher(r.Context(), oidcHumanFromContext(r.Context()), repos...)
+	var gcErr *gitCredentialRefusalError
+	if !errors.As(err, &gcErr) {
+		return false
+	}
+	// Not audited under authz.denied: that action's `reason` is a documented
+	// CLOSED enum (docs/OPERATIONS.md), and this create-time 422 follows
+	// writeLLMRefusal's own precedent (runs_dispatch_llm_mechanism.go) — the
+	// sibling model_credential refusal at this same door is likewise
+	// unaudited; only a run that actually DISPATCHES and then fails audits,
+	// under run.create.
+	writeJSON(w, http.StatusUnprocessableEntity, gitCredentialErrorBody{
+		Error: gitCredentialNotConnectedRefusal, Reason: gitCredentialRefusalReason, Org: gcErr.Org,
+	})
+	return true
 }
 
 // handleGetSCMAccess serves GET /api/v1/me/scm-access: this caller's own

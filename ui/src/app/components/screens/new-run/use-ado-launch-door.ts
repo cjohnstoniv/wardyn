@@ -38,12 +38,16 @@ export function useAdoLaunchDoor(): {
     org: string;
     blockedUrl: string | null;
     onConfirm: () => void;
+    /** Fires the SAME connect outcome as onConfirm, off connectFallback()'s
+     *  bounded poll (review follow-up N1) — call when the blockedUrl link
+     *  itself is clicked, alongside its normal href navigation. */
+    onFallbackClick: () => void;
     onCancel: () => void;
   };
 } {
   const [open, setOpen] = React.useState(false);
   const [org, setOrg] = React.useState("");
-  const { connecting, connect, blockedUrl } = useAdoConnect();
+  const { connecting, connect, connectFallback, blockedUrl } = useAdoConnect();
   // Never toast into an unmounted screen (review finding F9) — a person who
   // navigated away while the popup was open must not see a stray "Connected"
   // toast land on whatever page they are on now.
@@ -52,11 +56,11 @@ export function useAdoLaunchDoor(): {
     mountedRef.current = false;
   }, []);
 
-  // Connect confirmed: run the popup + poll, close the dialog either way, and
-  // — only on a real connection — toast the fact (§7.7's RELAUNCH_TOAST).
-  // Nothing relaunches (F8, above).
-  const onConfirm = async () => {
-    const connected = await connect();
+  // Connect confirmed: run the popup + poll (or connectFallback()'s bounded
+  // one, off the fallback link), close the dialog either way, and — only on
+  // a real connection — toast the fact (§7.7's RELAUNCH_TOAST). Nothing
+  // relaunches (F8, above).
+  const settle = async (connected: boolean) => {
     if (!mountedRef.current) return;
     setOpen(false);
     if (connected) {
@@ -75,7 +79,8 @@ export function useAdoLaunchDoor(): {
       connecting,
       org,
       blockedUrl,
-      onConfirm: () => void onConfirm(),
+      onConfirm: () => void connect().then(settle),
+      onFallbackClick: () => void connectFallback().then(settle),
       onCancel: () => setOpen(false),
     },
   };

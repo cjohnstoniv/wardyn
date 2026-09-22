@@ -18,8 +18,9 @@ vi.mock("../../../lib/api/setup", () => ({
 // The connect popup + poll (#386) — mocked so the chip's CONNECT_ADO tests
 // below drive the click without a real window.
 const adoConnectMock = vi.fn();
+let adoBlockedUrl: string | null = null;
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
-  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, blockedUrl: null }),
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, connectFallback: adoConnectMock, blockedUrl: adoBlockedUrl }),
 }));
 
 const listSecretsMineMock = vi.fn();
@@ -767,7 +768,10 @@ describe("MemberGettingStarted", () => {
   // second subject (§6.2/§7.5) — no button in the common case, a named cause
   // in the fallback, never for `not_applicable` (unreachable from a browser).
   describe("the Azure DevOps chip reads status.scm_access", () => {
-    beforeEach(() => adoConnectMock.mockReset());
+    beforeEach(() => {
+      adoConnectMock.mockReset();
+      adoBlockedUrl = null;
+    });
 
     it("live via the org's sign-in: success tone, no action line, no button", async () => {
       getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "live", source: "org" } }));
@@ -808,6 +812,23 @@ describe("MemberGettingStarted", () => {
       );
       renderPage();
       await userEvent.click(await screen.findByRole("button", { name: ADO.CONNECT_ADO }));
+      expect(adoConnectMock).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
+    });
+
+    // Review follow-ups F9/N1: a blocked popup shows the canon sentence and
+    // fallback link, and clicking it starts the same poll (bounded).
+    it("a blocked popup shows the canon sentence and fallback link, which reloads status once connected", async () => {
+      adoBlockedUrl = "/api/v1/scm/azure-devops/signin";
+      adoConnectMock.mockResolvedValueOnce(true);
+      getSetupStatusMock.mockResolvedValue(
+        status({ scm_access: { state: "not_configured", cause: "row_is_newer" } }),
+      );
+      renderPage();
+      expect(await screen.findByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
+      const link = screen.getByRole("link", { name: ADO.CONNECT_ADO });
+      expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
+      await userEvent.click(link);
       expect(adoConnectMock).toHaveBeenCalledTimes(1);
       await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
     });
