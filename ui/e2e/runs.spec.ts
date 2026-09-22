@@ -157,9 +157,14 @@ test.describe("Runs board (default view)", () => {
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
     await search.fill("e2e fixture 4");
 
-    // Only the COMPLETED fixture-4 run should remain.
-    await expect(page.getByText("e2e fixture 4")).toBeVisible();
-    await expect(page.getByText("e2e fixture 0")).toHaveCount(0);
+    // Only the COMPLETED fixture-4 run should remain. CI-flake (same shape as
+    // the attention-badge slack above): the board's own poll (runs.tsx's
+    // POLL_MS=3000) can land a background listRuns() mid-assertion on a loaded
+    // CI host, and the filter is re-derived from whichever `runs` state is
+    // current — real slack via Playwright's own retry, not a sleep, since the
+    // assertion still fails outright if fixture 0 never leaves the filtered set.
+    await expect(page.getByText("e2e fixture 4")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("e2e fixture 0")).toHaveCount(0, { timeout: 15_000 });
   });
 
   test("a non-matching search shows the empty state, then recovers when cleared", async ({ page }) => {
@@ -172,9 +177,11 @@ test.describe("Runs board (default view)", () => {
     await expect(page.getByText("No runs match these filters.")).toBeVisible();
     await expect(page.getByText("Try a different search term or facet.")).toBeVisible();
 
-    // Clearing the filters restores the full board.
+    // Clearing the filters restores the full board. Same CI-flake shape as
+    // the search assertion above — the board's own 3s poll can still be
+    // in flight when this re-render is checked.
     await page.getByRole("button", { name: "Clear filters" }).click();
-    await expect(page.getByText("e2e fixture 0")).toBeVisible();
+    await expect(page.getByText("e2e fixture 0")).toBeVisible({ timeout: 15_000 });
   });
 
   // The critical regression: a COMPLETED run must NOT crash the console.

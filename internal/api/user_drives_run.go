@@ -682,10 +682,17 @@ func (s *Server) driveShareProbe(ctx context.Context, key string, check func() e
 		// FIRST probe's mark while that probe is still outstanding, and if that
 		// one then strands, the map has forgotten it and the next reader starts
 		// a syscall behind it — the exact stacking this exists to stop.
+		//
+		// CLEARED BEFORE THE SEND, not after via defer: the send on done is what
+		// wakes the select below, so ordering the delete first makes it
+		// happen-before that wakeup. A caller that receives an ANSWER is then
+		// guaranteed to see the mark already gone — no window where the probe
+		// has answered but the map still calls it outstanding.
+		result := check()
 		if !loaded {
-			defer driveShareProbes.Delete(key)
+			driveShareProbes.Delete(key)
 		}
-		done <- check()
+		done <- result
 	}()
 	timer := time.NewTimer(driveShareProbeTimeout)
 	defer timer.Stop()
