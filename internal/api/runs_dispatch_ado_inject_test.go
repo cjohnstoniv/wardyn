@@ -216,6 +216,12 @@ func TestAuthorADOEntraInjection_Golden(t *testing.T) {
 	if env[adoEntraPlaceholderEnv] != adoEntraPlaceholderValue {
 		t.Errorf("sandbox %s = %q, want the inert placeholder", adoEntraPlaceholderEnv, env[adoEntraPlaceholderEnv])
 	}
+	// git goes through the broker: agent-run rewrites exactly these onto
+	// /wardyn/git/ (the proxy's pat_broker_entra_test.go drives the same list
+	// through the real agent-run-lib.sh).
+	if got, want := env["WARDYN_GIT_PAT_BROKER_HOSTS"], "contoso.visualstudio.com contoso@dev.azure.com dev.azure.com"; got != want {
+		t.Errorf("WARDYN_GIT_PAT_BROKER_HOSTS = %q, want %q", got, want)
+	}
 
 	if len(injections) != len(adoContosoHosts) || len(st.grants) != len(adoContosoHosts) {
 		t.Fatalf("injections=%d grants=%d, want %d each", len(injections), len(st.grants), len(adoContosoHosts))
@@ -436,5 +442,16 @@ func TestADOSignIn_UnconfiguredSourceAnswersLikeNoSource(t *testing.T) {
 	if c0 != c1 || b0 != b1 || l0 || l1 {
 		t.Fatalf("nil source: %d %q widened=%v; unconfigured source: %d %q widened=%v — want identical, never widened",
 			c0, b0, l0, c1, b1, l1)
+	}
+}
+
+// The two lanes that write WARDYN_GIT_PAT_BROKER_HOSTS merge rather than
+// overwrite: a stored-PAT host already on the list keeps its entry.
+func TestAddGitBrokerHosts_Merges(t *testing.T) {
+	env := map[string]string{"WARDYN_GIT_PAT_BROKER_HOSTS": "gitlab.com"}
+	addGitBrokerHosts(env, adoEntraGitHosts("contoso")...)
+	addGitBrokerHosts(env, "dev.azure.com")
+	if got, want := env["WARDYN_GIT_PAT_BROKER_HOSTS"], "contoso.visualstudio.com contoso@dev.azure.com dev.azure.com gitlab.com"; got != want {
+		t.Errorf("WARDYN_GIT_PAT_BROKER_HOSTS = %q, want %q", got, want)
 	}
 }
