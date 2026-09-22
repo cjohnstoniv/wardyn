@@ -22,21 +22,52 @@ consent to when they sign in to Wardyn itself.
 
 On that app registration, add **delegated permissions** for the Azure DevOps API resource
 (`499b84ac-1321-427f-aa17-267ca6975798`). The scopes to add are the granular `vso.*` permissions that
-back the capability ceiling you intend to grant (see [Capabilities](#capabilities) below) — grant only
-what the ceiling needs, not every scope Azure DevOps offers:
+back the capability ceiling you intend to grant (see [Capabilities](#capabilities) below). These tables
+list every scope Wardyn can request, and which capability needs each one.
 
-| Scope | Grants |
-|---|---|
-| `vso.code` | Read source code, history, branches, and pull requests |
-| `vso.code_write` | Push commits, open and update pull requests |
-| `vso.code_manage` | Create/delete repositories, manage branch policies |
-| `vso.work_write` | Read and update work items and boards |
-| `vso.build` | Read build results, definitions, and requests |
-| `vso.build_execute` | Queue a build, update build properties |
-| `vso.packaging_write` | Read and publish packages and feeds |
-| `vso.wiki_write` | Read and update wiki pages |
-| `vso.security_manage` | Read and change Azure DevOps permission assignments |
-| `vso.serviceendpoint_manage` | Read, create, and manage service connections |
+Every ceiling includes `read`, and `read` requests all of these scopes at once, because a run holding
+`read` may read any area Wardyn classifies as a read. Add all of them:
+
+| Scope | Needed by | Reads |
+|---|---|---|
+| `vso.analytics` | `read` | Analytics |
+| `vso.build` | `read` | Builds and pipelines |
+| `vso.code` | `read` | Repositories, commits, branches, pull requests, branch policies, and code search |
+| `vso.graph` | `read` | The organisation's groups and users |
+| `vso.identity` | `read` | Directory identities |
+| `vso.memberentitlementmanagement` | `read` | User and group entitlements |
+| `vso.packaging` | `read` | Feeds and packages |
+| `vso.profile` | `read` | The signed-in person's profile and organisation list |
+| `vso.project` | `read` | Projects and project collections |
+| `vso.release` | `read` | Classic releases |
+| `vso.securefiles_read` | `read` | Secure files |
+| `vso.serviceendpoint` | `read` | Service connections |
+| `vso.test` | `read` | Test plans, runs, and results |
+| `vso.variablegroups_read` | `read` | Variable groups |
+| `vso.wiki` | `read` | Wiki pages |
+| `vso.work` | `read` | Work items and boards |
+
+Add these only for the capabilities some row's ceiling will reach:
+
+| Scope | Needed by | Grants |
+|---|---|---|
+| `vso.code_write` | `code_write`, `pr`, `policy_admin`, `policy_bypass` | Push commits, move refs, work on pull requests, and edit branch policies |
+| `vso.code_manage` | `repo_admin` | Create, rename, and delete repositories |
+| `vso.security_manage` | `security_admin` | Change Azure DevOps permission assignments |
+| `vso.graph_manage` | `security_admin` | Create and change the organisation's groups and memberships |
+| `vso.identity_manage` | `security_admin` | Change directory identities |
+| `vso.serviceendpoint_manage` | `serviceendpoint_admin` | Create and change service connections |
+| `vso.build_execute` | `build_execute`, `build_admin` | Queue pipeline runs, and edit pipeline definitions |
+| `vso.release_execute` | `build_execute` | Create, deploy, and delete classic releases |
+| `vso.release_manage` | `build_admin` | Edit classic release definitions |
+| `vso.work_write` | `work_write` | Create and update work items |
+| `vso.wiki_write` | `wiki_write` | Create and update wiki pages |
+| `vso.packaging_write` | `packaging_write` | Publish packages to feeds |
+| `vso.project_manage` | `project_admin` | Create, change, and delete projects |
+
+Several capabilities share one scope (`code_write`, `pr`, `policy_admin` and `policy_bypass` all need
+`vso.code_write`, because Azure DevOps offers no narrower one), and one capability can need several
+(`security_admin` needs three). The capability, not the scope, is what Wardyn checks on each request.
 
 Also add `openid` and `offline_access` — Wardyn holds a refresh token per person, not a one-time
 code, so it can renew an access token as runs need one without asking anyone to sign in again for every
@@ -49,7 +80,7 @@ reason the capability ceiling exists as a second, narrower gate on top of the to
 [Two layers of enforcement](#two-layers-of-enforcement)): granting the scope on the app registration
 makes a capability *available* to be granted per row; it does not hand every signed-in person
 `security_manage` or `serviceendpoint_manage` just because the app registration can ask for it. Add
-only the rows in the table above whose capability you actually intend some row's ceiling to reach —
+only the rows in the second table above whose capability you actually intend some row's ceiling to reach —
 `vso.security_manage` and `vso.serviceendpoint_manage` in particular are worth a second look before
 adding, since they reach permission assignments and service-connection secrets respectively rather
 than anything scoped to a single repository.
