@@ -55,9 +55,10 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/workspaces/{id}/reassign", "`reassign`"},
 	// The /drives family arrived with the user-drives merge and its own table
 	// rows; keyed on the mount function the row names, which is also what
-	// decides the tier.
+	// decides the tier. Issue #168 (0.8) split the family across two doc rows
+	// — the host-naming four stay on `mountUserDriveRoutes`'s token, and the
+	// three that moved to securityOps get their own tokens below.
 	{"POST /api/v1/drives", "`mountUserDriveRoutes`"},
-	{"POST /api/v1/drives/grants", "`mountUserDriveRoutes`"},
 	// The workspace-provider policy (0.7.2). Separate tokens per verb, the
 	// record/promote-egress precedent: the two share a tier today, and a later
 	// widening of the READ to a member-safe projection must red here rather than
@@ -89,6 +90,13 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/audit/chain/verify", "`GET /audit/chain/verify`"},
 	{"POST /api/v1/governance/profiles", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/access/directory/search", "`GET /access/directory/search`"},
+	// Issue #168 (0.8): the three /drives routes that DON'T name a host path
+	// moved off classAdmin. Each gets its own token — the doc row lists all
+	// three by name rather than through `mountUserDriveRoutes`, which stays
+	// the host-naming four's token below.
+	{"POST /api/v1/drives/grants", "`POST /drives/grants`"},
+	{"DELETE /api/v1/drives/grants/{id}", "`DELETE /drives/grants/{id}`"},
+	{"POST /api/v1/drives/preview", "`POST /drives/preview`"},
 
 	// ─── the rest of the gated surface (R1 F316) ─────────────────────────────
 	//
@@ -101,15 +109,14 @@ var docTierRows = []struct{ route, token string }{
 	// So every gated route now names the token that covers it, and a route with
 	// NO covering token is listed in docTierUndocumented below with the reason.
 	// Several rows deliberately cover a FAMILY — the doc names
-	// `mountUserDriveRoutes` rather than six /drives lines — and that is the
+	// `mountUserDriveRoutes` rather than four /drives lines — and that is the
 	// document being readable rather than the guard being loose: the mapping is
 	// per route either way, so a route that leaves the family still has to be
-	// re-pointed here.
+	// re-pointed here. (The other three /drives routes moved to their own
+	// tokens above in #168.)
 	{"GET /api/v1/drives", "`mountUserDriveRoutes`"},
 	{"PUT /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
 	{"DELETE /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
-	{"DELETE /api/v1/drives/grants/{id}", "`mountUserDriveRoutes`"},
-	{"POST /api/v1/drives/preview", "`mountUserDriveRoutes`"},
 	{"DELETE /api/v1/access/mappings/{id}", "`/access` role-mapping routes"},
 	{"GET /api/v1/access", "`/access` role-mapping routes"},
 	{"POST /api/v1/access/preview", "`/access` role-mapping routes"},
@@ -144,6 +151,11 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/admin/sandboxes/sweep", "`POST /admin/sandboxes/sweep`"},
 	{"POST /api/v1/setup/onboarding-complete", "`POST /setup/onboarding-complete`"},
 	{"GET /api/v1/runs/{id}/attach", "`GET /runs/{id}/attach`"},
+	// Hybrid enrolment (0.8): the mint is SUPER, the inventory and revoke are
+	// the security tier's inventory-then-revoke pair.
+	{"POST /api/v1/admin/devices/enrolment-tokens", "`POST /admin/devices/enrolment-tokens`"},
+	{"GET /api/v1/admin/devices", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
+	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each

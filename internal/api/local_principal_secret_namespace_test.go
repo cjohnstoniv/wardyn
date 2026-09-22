@@ -90,7 +90,7 @@ func TestLocalPrincipalHeaderCannotSteerTheSecretNamespace(t *testing.T) {
 	r.Host = "127.0.0.1"
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 
 	subjects, sponsors := rec.seen()
 	if len(subjects) == 0 {

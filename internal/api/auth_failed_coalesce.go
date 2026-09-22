@@ -1,46 +1,79 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The SECOND bound on the auth.failed emit. http.go's authFailedLimiter caps the
-// RATE (~1 row/sec, burst 5); this file folds a slow, permanent DRIP — the
+// The two bounds on the auth.failed emit. authFailedLimiter caps the RATE (~1
+// row/sec, burst 5); the streak below folds a slow, permanent DRIP — the
 // failure mode that actually emptied a deployment's audit window: one row a
 // minute from a single sidecar retrying a renew the control plane would never
-// grant, forever, under a limiter it never once tripped. Split out of http.go
-// along that seam — the limiter answers "how fast", this answers "how many of the
-// same thing" — and because http.go was at its size ceiling.
+// grant, forever, under a limiter it never once tripped. The limiter answers
+// "how fast", the streak "how many of the same thing"; both were split out of
+// http.go along that seam because http.go was at its size ceiling.
 
 package api
 
 import (
 	"context"
+	"maps"
 	"net"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// authFailedRatePerSec and authFailedBurst bound the auth.failed audit emit
+// (see authFailedLimiter.allow) — a steady 1/sec with a small burst so a
+// handful of genuine failures in the same second are not silently dropped,
+// while a scanner's rapid-fire 401s past the burst are.
+const (
+	authFailedRatePerSec = 1.0
+	authFailedBurst      = 5.0
+)
+
+// authFailedLimiter is a process-local token bucket gating auth.failed
+// audit emits. Zero value is ready to use (tokens fill to authFailedBurst on
+// first call).
+type authFailedLimiter struct {
+	mu     sync.Mutex
+	last   time.Time
+	tokens float64
+}
+
+func (l *authFailedLimiter) allow(now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last.IsZero() {
+		l.tokens = authFailedBurst
+	} else if elapsed := now.Sub(l.last).Seconds(); elapsed > 0 {
+		l.tokens += elapsed * authFailedRatePerSec
+		if l.tokens > authFailedBurst {
+			l.tokens = authFailedBurst
+		}
+	}
+	l.last = now
+	if l.tokens < 1 {
+		return false
+	}
+	l.tokens--
+	return true
+}
+
 // authFailedKey is what makes two auth.failed rows "identical" for coalescing:
-// the boundary that refused, its bounded reason, the request path, and the peer
-// IP.
+// the boundary that refused, its bounded reason, and the request path.
 //
-// The peer IP, without the ephemeral port. r.RemoteAddr is
-// host:port, and the port is a fresh number on every TCP connection — so keying
-// on it made the whole fold a no-op for exactly the clients that matter: a
-// scanner, an ingress, or any HTTP client without keep-alive opens a connection
-// per request, every request lands under its own key, and nothing coalesces. The
-// drip this coalescer was built for (one sidecar, one long-lived connection) folded; the
-// flood did not.
+// The peer is deliberately NOT in the key. With it there, a caller that rotates
+// its source address opened a fresh streak — and wrote a fresh row — on every
+// request, so an unauthenticated drip spread over ten addresses recorded one row
+// per refusal right up to the rate limiter's ~1/sec (#347). The peer is carried
+// in the streak instead: the summary row keeps the opening peer as SourceIP and
+// counts the distinct peers it folded (authFailedStreak.peers).
 //
-// sourceIP is in the key because on a single-tenant or loopback deployment it
-// genuinely separates principals — but it is NOT the defence here and
-// THREAT-MODEL.md says so: behind a Kubernetes ingress or load balancer every
-// client shares one peer address (RealIP is deliberately not installed, see
-// routes.go), so a credential-stuffing burst arrives under ONE key. What keeps
-// such a burst from collapsing into a single row is the pair of bounds below —
-// the window and the max count — plus the rate limiter every summary emit is
-// charged to (recordAuthFailedSummary) — not this field.
+// Peers are counted by IP, without the ephemeral port. r.RemoteAddr is
+// host:port, and the port is a fresh number on every TCP connection, so a client
+// without keep-alive would otherwise count as a new peer per request.
 type authFailedKey struct {
-	actor, reason, target, sourceIP string
+	actor, reason, target string
 }
 
 // peerIP strips the ephemeral port off a net/http RemoteAddr, leaving the bare
@@ -61,6 +94,12 @@ func peerIP(remoteAddr string) string {
 // single row is allowed to stand for.
 const maxAuthFailedStreak = 1000
 
+// maxAuthFailedPeers caps how many distinct peer IPs one streak remembers, so a
+// caller rotating through a large address pool cannot grow the set without
+// bound. The summary's peers and peer_ips fields stop growing here, and
+// peers_truncated says a further peer was seen.
+const maxAuthFailedPeers = 100
+
 // authFailedStreak is the ONE open run of identical consecutive refusals.
 // Consecutive, so there is at most one: any row with a different key closes it.
 type authFailedStreak struct {
@@ -70,10 +109,16 @@ type authFailedStreak struct {
 	// keeps the host:port shape every other audit row in the package uses and a
 	// streak's summary stays readable next to the row that opened it.
 	sourceAddr string
-	count      int
-	firstSeen  time.Time
-	lastSeen   time.Time
-	timer      *time.Timer
+	// peers is the set of distinct peer IPs (peerIP) the streak folded, capped
+	// at maxAuthFailedPeers.
+	peers     map[string]struct{}
+	count     int
+	firstSeen time.Time
+	lastSeen  time.Time
+	timer     *time.Timer
+
+	// peersTruncated records that a peer arrived after the set was full.
+	peersTruncated bool
 }
 
 // coalesceAuthFailed folds identical consecutive refusals together.
@@ -96,7 +141,8 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, remoteAddr string) (b
 	if window <= 0 {
 		return false, nil // disabled: every refusal is its own row, exactly as before
 	}
-	key := authFailedKey{actor: actor, reason: reason, target: target, sourceIP: peerIP(remoteAddr)}
+	key := authFailedKey{actor: actor, reason: reason, target: target}
+	peer := peerIP(remoteAddr)
 	now := s.cfg.Now()
 
 	s.authFailedStreakMu.Lock()
@@ -105,6 +151,13 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, remoteAddr string) (b
 	if open != nil && open.key == key {
 		open.count++
 		open.lastSeen = now
+		if _, seen := open.peers[peer]; !seen {
+			if len(open.peers) < maxAuthFailedPeers {
+				open.peers[peer] = struct{}{}
+			} else {
+				open.peersTruncated = true
+			}
+		}
 		if open.count >= maxAuthFailedStreak {
 			return true, s.closeAuthFailedStreakLocked()
 		}
@@ -116,7 +169,8 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, remoteAddr string) (b
 	// A different key (or none open): close what was open, then start a streak
 	// whose FIRST row the caller goes on to emit normally.
 	summary := s.closeAuthFailedStreakLocked()
-	fresh := &authFailedStreak{key: key, sourceAddr: remoteAddr, count: 1, firstSeen: now, lastSeen: now}
+	fresh := &authFailedStreak{key: key, sourceAddr: remoteAddr, peers: map[string]struct{}{peer: {}},
+		count: 1, firstSeen: now, lastSeen: now}
 	// A streak closed by the timer has no request in flight, so its summary is
 	// recorded under BaseCtx (daemon lifetime) — a cancelled request context
 	// would drop the row on the floor.
@@ -155,14 +209,16 @@ func (s *Server) FlushAuthFailedStreak() {
 	s.authFailedStreakMu.Lock()
 	ev := s.closeAuthFailedStreakLocked()
 	s.authFailedStreakMu.Unlock()
-	if ev == nil {
-		return
-	}
 	base := s.cfg.BaseCtx
 	if base == nil {
 		base = context.Background()
 	}
-	s.recordAuthFailedSummary(context.WithoutCancel(base), ev)
+	ctx := context.WithoutCancel(base)
+	// The device routes' failure streams close here too, for the same reason
+	// (device_audit_bounds.go).
+	s.enrolFailures.flush(s, ctx)
+	s.ingestFailures.flush(s, ctx)
+	s.recordAuthFailedSummary(ctx, ev)
 }
 
 // recordAuthFailedSummary is the ONE way a closing streak's summary row reaches
@@ -213,12 +269,17 @@ func (s *Server) closeAuthFailedStreakLocked() *types.AuditEvent {
 	if open.count < 2 {
 		return nil
 	}
+	// peer_ips carries the addresses themselves, so an operator can see who, not
+	// just how many; sorted, so the row is deterministic.
 	ev := s.auditEvent(nil, types.ActorSystem, open.key.actor, "auth.failed", open.key.target,
 		"failure", mustJSON(map[string]any{
-			"reason":     open.key.reason,
-			"count":      open.count,
-			"first_seen": open.firstSeen.UTC().Format(time.RFC3339),
-			"last_seen":  open.lastSeen.UTC().Format(time.RFC3339),
+			"reason":          open.key.reason,
+			"count":           open.count,
+			"peers":           len(open.peers),
+			"peer_ips":        slices.Sorted(maps.Keys(open.peers)),
+			"peers_truncated": open.peersTruncated,
+			"first_seen":      open.firstSeen.UTC().Format(time.RFC3339),
+			"last_seen":       open.lastSeen.UTC().Format(time.RFC3339),
 		}))
 	ev.SourceIP = open.sourceAddr
 	return &ev

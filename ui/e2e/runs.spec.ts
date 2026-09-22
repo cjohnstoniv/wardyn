@@ -4,11 +4,12 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
-import { RUN, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
+import { RUN, RUN_COCKPIT, RUNS_WAIT } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
+import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import {
   CHIP_IMAGE_PULL_FAILED,
   CHIP_SETTING_UP,
@@ -53,6 +54,8 @@ import type { Page, Locator } from "@playwright/test";
 // the read-only assertions from racing the mutation regardless of the global
 // fullyParallel setting, and runs the mutating tests last (declaration order).
 test.describe.configure({ mode: "serial" });
+
+const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
 // fixture index -> { state badge label, terminal? }
 const FIXTURES = [
@@ -105,7 +108,8 @@ test.describe("Runs board (default view)", () => {
     await expect(group).toBeVisible();
     await expect(group.getByText("e2e fixture 0")).toBeVisible();
     await expect(group.getByText("e2e fixture 1")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Ungrouped" })).toBeVisible();
+    // #215: "Other runs" replaces "Ungrouped" — a data-model word.
+    await expect(page.getByRole("heading", { name: "Other runs" })).toBeVisible();
 
     // Every seeded run is still on the board — an untitled run names itself by
     // its task exactly as it did before titles existed.
@@ -157,9 +161,18 @@ test.describe("Runs board (default view)", () => {
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
     await search.fill("e2e fixture 4");
 
-    // Only the COMPLETED fixture-4 run should remain.
+    // Only the COMPLETED fixture-4 run should remain. The filter itself is
+    // synchronous client-side state (runs.tsx's `filtered` is re-derived from
+    // `runs` + `query` on every render — nothing async sits between the fill
+    // and the board reflecting it, so a longer timeout buys nothing a real
+    // stall wouldn't also blow through). The structural card count is the
+    // stronger signal: `getByText("e2e fixture 0")` without `exact` is a
+    // substring match, so it is provably watching the SAME "is fixture 0
+    // gone" fact as `run-card` count 1 — asserting both pins the invariant
+    // two independent ways instead of leaning on one text query alone.
     await expect(page.getByText("e2e fixture 4")).toBeVisible();
-    await expect(page.getByText("e2e fixture 0")).toHaveCount(0);
+    await expect(page.getByTestId("run-card")).toHaveCount(1);
+    await expect(page.getByText("e2e fixture 0", { exact: true })).toHaveCount(0);
   });
 
   test("a non-matching search shows the empty state, then recovers when cleared", async ({ page }) => {
@@ -172,9 +185,10 @@ test.describe("Runs board (default view)", () => {
     await expect(page.getByText("No runs match these filters.")).toBeVisible();
     await expect(page.getByText("Try a different search term or facet.")).toBeVisible();
 
-    // Clearing the filters restores the full board.
+    // Clearing the filters restores the full board. The board's own 3s poll
+    // can still be in flight when this re-render is checked.
     await page.getByRole("button", { name: "Clear filters" }).click();
-    await expect(page.getByText("e2e fixture 0")).toBeVisible();
+    await expect(page.getByText("e2e fixture 0")).toBeVisible({ timeout: 15_000 });
   });
 
   // The critical regression: a COMPLETED run must NOT crash the console.
@@ -414,6 +428,44 @@ test.describe("Run detail (/runs/:id)", () => {
       // into a Playwright strict-mode failure rather than a clean miss.
       await expect(header.getByText("Interactive", { exact: true }), `Interactive at ${width}px`).toBeVisible();
       await expect(header.getByText("Fence", { exact: true }), `Fence at ${width}px`).toBeVisible();
+    }
+  });
+});
+
+// #93/#97 — the run header's autonomy chip, beside ConfinementChip.
+// run.autonomy_level freezes the level resolveRunAutonomy capped this run at,
+// at create time — never populated by the seeded backend's operator bearer
+// (same operator short-circuit governance.spec.ts's header note explains for
+// the rail), so spliced onto the real GET response — the same
+// route.fetch()+patch+refulfill technique the interactive/failure_hint splice
+// right above this block already uses.
+test.describe("Run header — the autonomy chip (#93/#97)", () => {
+  test("renders the level's friendly label beside the barrier chip", async ({ page }) => {
+    await openRuns(page);
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 2") json.autonomy_level = "L1";
+      await route.fulfill({ response, json });
+    });
+
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText(AUTONOMY_META.L1.label, { exact: true })).toBeVisible();
+    // The internal wire level stays out of accessible content (D4) — same
+    // rule ConfinementChip's CC1/CC2/CC3 follows.
+    await expect(header.getByText("L1", { exact: true })).toHaveCount(0);
+  });
+
+  test("an ordinary run (empty autonomy_level) renders no autonomy chip at all", async ({ page }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    const header = page.getByTestId("run-summary-header");
+    for (const meta of Object.values(AUTONOMY_META)) {
+      await expect(header.getByText(meta.label, { exact: true })).toHaveCount(0);
     }
   });
 });
@@ -990,6 +1042,166 @@ test.describe("Focus mode — Escape inside a Deny confirm (F1-F3 repro)", () =>
       await expect(page.getByRole("button", { name: RUN_COCKPIT.exitFocus })).toBeVisible();
     } finally {
       sql(`DELETE FROM approvals WHERE id = '${approvalId}'`);
+    }
+  });
+});
+
+// ── #160 — the group header says what its runs are waiting on ───────────────
+// #215 — a run opens from a link ─────────────────────────────────────────────
+//
+// Synthetic runs, created for real through POST /api/v1/runs (like
+// scripts/e2e-backend.sh seeds the file's own fixtures) rather than a raw
+// agent_runs INSERT, then pinned to a state/approval shape SQL alone can't
+// produce. Cleaned up in `finally` — DELETE FROM agent_runs cascades to their
+// approvals (0001_init.sql's ON DELETE CASCADE), so one statement is enough.
+//
+// A LIVE held/reauth run is never reachable inside a rendered TitleGroup here:
+// attentionFor (run-state-glyph.tsx) grades it "permission", runs.tsx's
+// existing needsYou split (predates #160, untouched) pins every "permission"
+// run to the "Needs you" lane BEFORE grouping, and a TitleGroup only ever
+// receives what's left. The counted held/reauth chip vocabulary itself is
+// pinned directly against TitleGroup in runs/title-group.test.tsx (which
+// renders it with its own run list, independent of that split); board-groups
+// .test.ts and run-card.test.tsx pin the same predicate isHeld/isStaleHold
+// drive. What's reachable live, and pinned below: the STARTING chip (a
+// run.state fact, not an approval one), the "Checking…" pre-resolve window,
+// a STALE credential_reauth (which drops out of "permission" once stale and
+// so stays grouped), and a stale TOOL_CALL hold's card degrading to Open in
+// the lane it's still pinned to (RunCard is the same component either way).
+async function createGroupRun(page: Page, title: string, task: string): Promise<string> {
+  const res = await page.request.post("/api/v1/runs", {
+    headers: auth,
+    data: { agent: "claude-code", repo: "acme/widgets", title, task },
+  });
+  expect(res.status(), await res.text()).toBe(201);
+  return sql(`SELECT id FROM agent_runs WHERE task = '${task}' ORDER BY created_at DESC LIMIT 1`);
+}
+
+test.describe("Runs board — group wait row (#160) and run links (#215)", () => {
+  test("the group header counts waiting-to-start and a stale hold — its own runs, not the ones pinned to the Needs-you lane — and its title opens from a real, keyboard-reachable link", async ({
+    page,
+  }) => {
+    const title = "e2e wait row";
+    const starting = await createGroupRun(page, title, "wait starting");
+    const clean = await createGroupRun(page, title, "wait clean");
+    const staleReauth = await createGroupRun(page, title, "wait stale reauth");
+    const ids = [starting, clean, staleReauth];
+
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id IN ('${clean}','${staleReauth}')`);
+    // status_reason is derived server-side from status_detail, never stored
+    // (lib/types/runs.ts's own note) — the stored column is status_detail,
+    // in the substrate's own "<component>: <Reason>[: <message>]" shape.
+    sql(
+      `UPDATE agent_runs SET state = 'STARTING', status_detail = 'pod: ImagePullBackOff: rpc error: image not found' WHERE id = '${starting}'`,
+    );
+    // credential_reauth past the 60-minute ceiling: isHeld no longer counts
+    // it live, and (unlike a WAITING_FOR_CONFIRMATION tool_call) its run
+    // state alone does not force "permission" either — it stays in the
+    // group instead of the lane, which is what makes it the one live way to
+    // see the header's stale-hold chip.
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
+       ('${randomUUID()}','${staleReauth}','credential_reauth','{}'::jsonb,'PENDING',now() - interval '90 minutes')`,
+    );
+
+    try {
+      await openRuns(page);
+      const group = page.getByRole("region", { name: title });
+      await expect(group).toBeVisible();
+      const waitRow = group.getByLabel("What this group is waiting on");
+      await expect(waitRow.getByText(RUNS_WAIT.STARTING(1))).toBeVisible();
+      await expect(waitRow.getByText(RUNS_WAIT.STALE_GROUP(1))).toBeVisible();
+      await expect(waitRow.getByText(RUNS_WAIT.NONE)).toHaveCount(0);
+      // Exactly two chips here — no third.
+      await expect(waitRow.locator(":scope > *")).toHaveCount(2);
+
+      // The stale-hold card itself: the neutral sentence, no Review/Open
+      // button (credential_reauth never had one), RunStateBadge untouched.
+      const staleCard = page.getByTestId("run-card").filter({ hasText: "wait stale reauth" });
+      await expect(staleCard.getByText(RUNS_WAIT.STALE_CARD)).toBeVisible();
+      await expect(staleCard.getByRole("button", { name: "Review" })).toHaveCount(0);
+      await expect(staleCard.getByRole("button", { name: "Open" })).toHaveCount(0);
+      await expect(staleCard.getByText("Running", { exact: true })).toBeVisible();
+
+      // #215 — the clean run's own title is a real, keyboard-reachable link,
+      // not a div with onClick.
+      const link = group.getByRole("link", { name: "wait clean" });
+      await expect(link).toHaveAttribute("href", `/runs/${clean}`);
+      await link.focus();
+      await expect(link).toBeFocused();
+    } finally {
+      sql(`DELETE FROM agent_runs WHERE id IN ('${ids.join("','")}')`);
+    }
+  });
+
+  test("pins 'Checking…' before the approvals fetch resolves — the STARTING chip still comes through, since it is a run.state fact, not an approvals one", async ({
+    page,
+  }) => {
+    const title = "e2e checking wait";
+    const starting = await createGroupRun(page, title, "checking wait starting");
+    const clean = await createGroupRun(page, title, "checking wait clean");
+    sql(`UPDATE agent_runs SET state = 'STARTING' WHERE id = '${starting}'`);
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${clean}'`);
+
+    try {
+      // Hold the approvals fetch open so the FIRST paint is provably the
+      // pre-resolve window, not a race against a fast real backend.
+      let releaseApprovals!: () => void;
+      const held = new Promise<void>((res) => {
+        releaseApprovals = res;
+      });
+      await page.route("**/api/v1/approvals**", async (route) => {
+        await held;
+        await route.fallback();
+      });
+
+      await gotoConsole(page);
+      await navTo(page, "Runs");
+      const group = page.getByRole("region", { name: title });
+      await expect(group).toBeVisible();
+      const waitRow = group.getByLabel("What this group is waiting on");
+      await expect(waitRow.getByText(RUNS_WAIT.CHECKING)).toBeVisible();
+      await expect(waitRow.getByText(RUNS_WAIT.STARTING(1))).toBeVisible();
+      await expect(waitRow.getByText(RUNS_WAIT.NONE)).toHaveCount(0);
+
+      releaseApprovals();
+      await page.unroute("**/api/v1/approvals**");
+
+      // Resolved, and clean — Checking… is gone and the group settles on the
+      // one thing it was already allowed to say.
+      await expect(waitRow.getByText(RUNS_WAIT.CHECKING)).toHaveCount(0);
+      await expect(waitRow.getByText(RUNS_WAIT.STARTING(1))).toBeVisible();
+    } finally {
+      await page.unroute("**/api/v1/approvals**").catch(() => {});
+      sql(`DELETE FROM agent_runs WHERE id IN ('${starting}','${clean}')`);
+    }
+  });
+
+  test("a stale tool_call hold, still pinned to the Needs-you lane by its own wire state, offers Open instead of Review — RunStateBadge unchanged", async ({
+    page,
+  }) => {
+    const solo = await createGroupRun(page, "e2e stale solo", "stale solo run");
+    sql(`UPDATE agent_runs SET state = 'WAITING_FOR_CONFIRMATION' WHERE id = '${solo}'`);
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
+       ('${randomUUID()}','${solo}','tool_call','{"tool":"Bash","cmd":"rm -rf build"}'::jsonb,'PENDING',now() - interval '90 minutes')`,
+    );
+
+    try {
+      await openRuns(page);
+      const lane = page.getByRole("region", { name: "Needs you" });
+      // Ungrouped (ONE run holds this title): the card names itself by the
+      // title, not the task — rowHeadline's `grouped` fallback chain.
+      const card = lane.getByTestId("run-card").filter({ hasText: "e2e stale solo" });
+      await expect(card).toBeVisible();
+      await expect(card.getByRole("button", { name: "Open" })).toBeVisible();
+      await expect(card.getByRole("button", { name: "Review" })).toHaveCount(0);
+      await expect(card.getByText(RUNS_WAIT.STALE_CARD)).toBeVisible();
+      // The DELIBERATE LIMIT: the run's own wire state, via RunStateBadge,
+      // still reads exactly what it is.
+      await expect(card.getByText("Awaiting confirmation")).toBeVisible();
+    } finally {
+      sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
     }
   });
 });

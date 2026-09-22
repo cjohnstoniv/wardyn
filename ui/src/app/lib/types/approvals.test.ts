@@ -4,7 +4,17 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { canDecideApproval, decisionArgs, type ApprovalKind } from "./approvals";
+import { canDecideApproval, decisionArgs, isHeld, isStaleHold, type ApprovalKind, type ApprovalRequest } from "./approvals";
+
+const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
+  id: "a1",
+  run_id: "run-1",
+  kind: "tool_call",
+  requested_scope: {},
+  state: "PENDING",
+  requested_at: new Date().toISOString(),
+  ...over,
+});
 
 // canDecideApproval is the ONE predicate both approvals.tsx and run-detail.tsx
 // gate their decide buttons on — it must mirror internal/api/approvals.go's
@@ -60,5 +70,54 @@ describe("canDecideApproval — the re-auth kind", () => {
     expect(canDecideApproval(false, "credential")).toBe(false);
     expect(canDecideApproval(true, "credential")).toBe(true);
     expect(canDecideApproval(true, "tool_call")).toBe(true);
+  });
+});
+
+// #160 — isHeld's stale-hold ceiling on its two unconditional arms (tool_call,
+// credential_reauth): 60 minutes, NOT the 30s HOLD_TIMEOUT_MS the egress
+// wait_for_review arm below uses — a different arm entirely, left untouched.
+// Both isHeld's callers (the runs board via board-groups.ts, and the run
+// cockpit's command bar via run-detail.tsx's `pending.some(isHeld)`) share
+// this one predicate, so pinning it here pins both call sites at once.
+describe("isHeld / isStaleHold — the 60-minute ceiling on tool_call/credential_reauth", () => {
+  it("a fresh tool_call is held; a fresh credential_reauth is held", () => {
+    expect(isHeld(approval({ kind: "tool_call" }))).toBe(true);
+    expect(isHeld(approval({ kind: "credential_reauth" }))).toBe(true);
+    expect(isStaleHold(approval({ kind: "tool_call" }))).toBe(false);
+    expect(isStaleHold(approval({ kind: "credential_reauth" }))).toBe(false);
+  });
+
+  it("a tool_call/credential_reauth row past 60 minutes is no longer held, and IS stale", () => {
+    const old = new Date(Date.now() - 61 * 60_000).toISOString();
+    for (const kind of ["tool_call", "credential_reauth"] as const) {
+      expect(isHeld(approval({ kind, requested_at: old }))).toBe(false);
+      expect(isStaleHold(approval({ kind, requested_at: old }))).toBe(true);
+    }
+  });
+
+  it("a row well short of 60 minutes (past isHeld's unrelated 30s egress ceiling) is still held, not stale", () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    for (const kind of ["tool_call", "credential_reauth"] as const) {
+      expect(isHeld(approval({ kind, requested_at: fiveMinutesAgo }))).toBe(true);
+      expect(isStaleHold(approval({ kind, requested_at: fiveMinutesAgo }))).toBe(false);
+    }
+  });
+
+  it("an unparseable requested_at fails TOWARD showing the hold, not toward stale", () => {
+    expect(isHeld(approval({ kind: "tool_call", requested_at: "not-a-date" }))).toBe(true);
+    expect(isStaleHold(approval({ kind: "tool_call", requested_at: "not-a-date" }))).toBe(false);
+  });
+
+  it("isStaleHold is false for every other kind, at any age — this arm is tool_call/credential_reauth only", () => {
+    const old = new Date(Date.now() - 61 * 60_000).toISOString();
+    expect(isStaleHold(approval({ kind: "egress_domain", requested_scope: { host: "h" }, requested_at: old }))).toBe(false);
+    expect(isStaleHold(approval({ kind: "credential", requested_at: old }))).toBe(false);
+  });
+
+  it("egress wait_for_review keeps its own 30s ceiling, unaffected by the new 60-minute one", () => {
+    const past30s = new Date(Date.now() - 60_000).toISOString();
+    const held = approval({ kind: "egress_domain", requested_scope: { host: "h", mode: "wait_for_review" }, requested_at: past30s });
+    expect(isHeld(held)).toBe(false); // still the pre-existing 30s behaviour
+    expect(isStaleHold(held)).toBe(false); // not this arm at all — falls to passiveHold upstream
   });
 });

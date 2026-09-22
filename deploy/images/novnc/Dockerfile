@@ -4,29 +4,39 @@
 # substrate code and no new network path out of the sandbox, exactly like the
 # code-server image beside it.
 #
-# BASE: agent-base, NOT agent-claude-code (which deploy/images/vscode uses).
-# Deliberate, and the one design decision in this image:
+# BASE: `ARG BASE_IMAGE=wardyn/agent-base:local`, NOT agent-claude-code (which
+# deploy/images/vscode also defaults away from, for the same reason). Deliberate,
+# and the one design decision in this image:
 #   * agent-base is the image contract with no vendor CLI, and it is what this
-#     project actually PUBLISHES — agent-claude-code is a local build recipe.
+#     project actually PUBLISHES — agent-claude-code is a local build recipe
+#     whose licence file ships in neither the image nor this repository.
 #   * An X stack layered on node + npm + a vendor CLI is a materially different
 #     size and CVE decision from one on the bare contract. A graphical desktop
 #     already brings Xvfb, a window manager, x11vnc and websockify; adding a
 #     language runtime it never uses is surface for nothing.
 # Inheriting vscode's base would have been the path of least resistance and the
-# wrong answer.
+# wrong answer. A developer checkout that wants the vendor CLI reachable from
+# this image overrides the default explicitly (build it first with
+# `make agent-images-core`):
+#   make agent-image-novnc BASE_IMAGE=wardyn/agent-claude-code:local
 #
 # IMAGE CONTRACT (deploy/images/README.md): inherited from agent-base. This
 # stage adds no ENTRYPOINT and keeps USER agent (uid 1000).
-FROM wardyn/agent-base:local
+ARG BASE_IMAGE=wardyn/agent-base:local
+FROM ${BASE_IMAGE}
 
-# Local build recipe only — never in release.yml's publish matrix (a gate in
-# scripts/check-image-pins.sh keeps it out). The licences label extends the
-# inherited base expression with what THIS stage adds: x11vnc and procps
-# (GPL-2.0-only), openbox (GPL-2.0-or-later), websockify (LGPL-3.0),
+# Published (release.yml's images-ui-sandbox job, #141). agent-base already
+# carries these two COPYs, but scripts/check-image-pins.sh's licence-file gate
+# reads each PUBLISHED Dockerfile's own text, not what an inherited layer
+# happens to contain, so a published stage restates them. The licences label
+# extends the inherited base expression with what THIS stage adds: x11vnc and
+# procps (GPL-2.0-only), openbox (GPL-2.0-or-later), websockify (LGPL-3.0),
 # noVNC (MPL-2.0), Xvfb/xterm (MIT/X11) — per-package copyright files are the
 # source of each.
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/
+COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
 LABEL org.opencontainers.image.title="agent-novnc" \
-      org.opencontainers.image.description="Wardyn agent image: agent-base plus an X/noVNC desktop stack (local build only)" \
+      org.opencontainers.image.description="Wardyn agent image: agent-base plus an X/noVNC desktop stack" \
       org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND LGPL-3.0-or-later AND MPL-2.0 AND MIT" \
       org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn"
 

@@ -43,6 +43,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if len(spec.Mounts) > 0 {
 		return runner.Sandbox{}, fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
 	}
+	// Managed files are validated in the same free-failure window, and for the
+	// same reason the mounts refusal sits here: an unusable path or an
+	// agent-writable mode must refuse the run before the namespace has
+	// anything in it.
+	if err := runner.ValidateManagedFiles(spec.ManagedFiles); err != nil {
+		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
+	}
 	runtimeClassName, runtimeHandler, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
 	if err != nil {
 		return runner.Sandbox{}, err
@@ -168,6 +175,17 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	for k, v := range spec.SecretEnv {
 		secretData[secretEnvDataKey(k)] = []byte(v)
 	}
+	// The MANAGED FILES ride it too, one entry per file. Not because their
+	// content is necessarily secret — it is operator policy, and the agent is
+	// meant to read it — but because a Secret volume is the only projection on
+	// this substrate that lands a file ROOT-OWNED and read-only inside a
+	// directory the agent cannot replace. A ConfigMap volume would do the same
+	// thing; the Secret is already here, already labelled, and already swept by
+	// teardown, and a second object is one more thing the rollback has to get
+	// right.
+	for k, v := range managedFileSecretData(spec.ManagedFiles) {
+		secretData[k] = v
+	}
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName(spec.RunID),
@@ -287,17 +305,17 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// The scratch volumes, and ONLY when the run carries a disk budget: they are
 	// what puts the AGENT's own writes inside disk_mib, because Exec copies the
 	// main container's mounts onto the ephemeral container the agent actually runs
-	// in (see ephemeralScratchVolumes). Appended to the MAIN container alone —
-	// exec.go is not a second call site to keep in step, it reads these back off
-	// the live pod.
-	if vols, mounts := ephemeralScratchVolumes(spec.Resources.DiskMiB); len(vols) > 0 {
-		agentPod.Spec.Volumes = append(agentPod.Spec.Volumes, vols...)
-		for i := range agentPod.Spec.Containers {
-			if agentPod.Spec.Containers[i].Name == mainContainerName {
-				agentPod.Spec.Containers[i].VolumeMounts = append(agentPod.Spec.Containers[i].VolumeMounts, mounts...)
-			}
-		}
-	}
+	// in (see ephemeralScratchVolumes).
+	scratchVols, scratchMounts := ephemeralScratchVolumes(spec.Resources.DiskMiB)
+	addMainContainerVolumes(agentPod, scratchVols, scratchMounts)
+	// The managed files, read-only off the per-run Secret created above, for
+	// exactly the same reason: Exec copies the main container's mounts verbatim
+	// onto the ephemeral container the agent actually runs in, so mounting here
+	// is what reaches the agent. They are in the pod's filesystem before any
+	// container starts — there is no window in which the agent runs without its
+	// ceiling.
+	managedVols, managedMounts := managedFileVolumes(spec.RunID, spec.ManagedFiles)
+	addMainContainerVolumes(agentPod, managedVols, managedMounts)
 	// The drive, and ONLY on a pod that has one: a drive-less agent pod keeps the
 	// nil pod-level SecurityContext it has always had, so nothing about the pods
 	// this substrate already produces changes shape. applyDriveToPod appends
@@ -329,6 +347,26 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	return runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}, nil
+}
+
+// addMainContainerVolumes attaches vols to pod and mounts them on the MAIN
+// container only, doing nothing when there is nothing to attach.
+//
+// The main container ALONE, and that is not an omission: exec.go is not a
+// second call site to keep in step — it reads the main container's mounts back
+// off the live pod and copies them verbatim onto the ephemeral container the
+// agent actually runs in. Both of this function's callers depend on that, which
+// is why they share it rather than each spelling the walk out.
+func addMainContainerVolumes(pod *corev1.Pod, vols []corev1.Volume, mounts []corev1.VolumeMount) {
+	if len(vols) == 0 {
+		return
+	}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, vols...)
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == mainContainerName {
+			pod.Spec.Containers[i].VolumeMounts = append(pod.Spec.Containers[i].VolumeMounts, mounts...)
+		}
+	}
 }
 
 // waitContainerRunning polls podName until its named container reports

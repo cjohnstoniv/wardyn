@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -272,10 +273,26 @@ func TestWebhookSink_DropCounterOnRetryExhaustion(t *testing.T) {
 // flushed. Close() must (a) block until the background flusher has exited and
 // (b) deliver the last buffered batch. The Run ctx is left live so this exercises
 // the Close()/stop path specifically.
+//
+// The await is pinned by holding the final delivery open inside the handler
+// rather than by looking at whether Run's goroutine has been scheduled. Only the
+// former is ordered: the handler runs strictly before the POST completes, which
+// runs before Run's deferred close of its done channel, which is what Close
+// blocks on. So while the handler is held, a Close that awaits the drain cannot
+// have returned. Sampling the Run goroutine instead is unordered — Run signals
+// done from inside Run, so any statement after Run returns may still be pending
+// when Close returns, and on a loaded box it is.
 func TestWebhookSink_CloseFlushesAndAwaitsDrain(t *testing.T) {
 	t.Parallel()
 
 	var received atomic.Int32
+	// inFlight reports that the drain's POST has reached the server; the handler
+	// then parks on releaseDelivery so the delivery stays unfinished until the
+	// test says otherwise.
+	inFlight := make(chan struct{})
+	releaseDelivery := make(chan struct{})
+	signalInFlight := sync.OnceFunc(func() { close(inFlight) })
+	release := sync.OnceFunc(func() { close(releaseDelivery) })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		scanner := bufio.NewScanner(bytes.NewReader(body))
@@ -284,9 +301,14 @@ func TestWebhookSink_CloseFlushesAndAwaitsDrain(t *testing.T) {
 				received.Add(1)
 			}
 		}
+		signalInFlight()
+		<-releaseDelivery
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
+	// Runs before srv.Close (cleanups are LIFO) so a failed assertion cannot
+	// leave the handler parked and srv.Close waiting on it.
+	t.Cleanup(release)
 
 	sink, err := sinks.NewWebhookSink(sinks.WebhookConfig{
 		URL:           srv.URL,
@@ -318,25 +340,45 @@ func TestWebhookSink_CloseFlushesAndAwaitsDrain(t *testing.T) {
 	}
 
 	// Close must flush the final partial batch and block until Run has returned.
+	var closeErr error
 	closeReturned := make(chan struct{})
 	go func() {
-		if cerr := sink.Close(); cerr != nil {
-			t.Errorf("Close: %v", cerr)
-		}
+		closeErr = sink.Close()
 		close(closeReturned)
 	}()
+
+	select {
+	case <-inFlight:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not deliver the final batch within 5s")
+	}
+
+	// The batch is on the wire and unanswered, so the drain is demonstrably
+	// still running. A Close that awaits it must still be blocked.
+	select {
+	case <-closeReturned:
+		t.Error("Close returned while the final batch was still in flight; Close did not await drain")
+	default:
+	}
+
+	release()
 
 	select {
 	case <-closeReturned:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close did not return within 5s (drain goroutine not awaited / blocked)")
 	}
+	if closeErr != nil {
+		t.Errorf("Close: %v", closeErr)
+	}
 
-	// After Close returns, Run must have exited (Close awaits done).
+	// Close awaits Run's return, so Run's goroutine finishes without further
+	// prompting; waiting for it (rather than sampling it) keeps the assertion
+	// off the scheduler.
 	select {
 	case <-runDone:
-	default:
-		t.Error("Run goroutine still running after Close returned; Close did not await drain")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run goroutine did not return after Close")
 	}
 
 	if got := received.Load(); got != total {

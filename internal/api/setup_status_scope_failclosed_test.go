@@ -94,7 +94,7 @@ func TestRedactSetupStatusForMember_SourceRunIDOnlyOnTheCallersOwnRow(t *testing
 		{Provider: "anthropic", Captured: true, SourceRunID: runID, Aging: true},
 	}}
 
-	own := redactSetupStatusForMember(full, true)
+	own := redactSetupStatusForMember(full, true, false)
 	if own.Harness[0].SourceRunID != runID {
 		t.Errorf("per_user aws row source_run_id = %q, want %q — a member cannot corroborate their own sign-in without it",
 			own.Harness[0].SourceRunID, runID)
@@ -107,10 +107,70 @@ func TestRedactSetupStatusForMember_SourceRunIDOnlyOnTheCallersOwnRow(t *testing
 		t.Errorf("the rest of the lifecycle detail rode through: %+v", own.Harness[0])
 	}
 
-	shared := redactSetupStatusForMember(full, false)
+	shared := redactSetupStatusForMember(full, false, false)
 	for _, h := range shared.Harness {
 		if h.SourceRunID != "" {
 			t.Errorf("shared/legacy row %q kept source_run_id %q — that is the ADMIN's login run", h.Provider, h.SourceRunID)
 		}
+	}
+}
+
+// TestRedactSetupStatusForMember_BearerPresentOnlyOnTheCallersOwnBearerRow is
+// #337's server half — the finding-1 fix (PR #352 review): a member's own
+// stored bedrock-api-key must survive redaction so the Settings console can
+// render Replace/Disconnect after their own Save, exactly like every other
+// per_user-own field this function already keeps (SourceRunID above). Before
+// this, `st.Bedrock = SetupBedrock{Ready: st.Bedrock.Ready}` zeroed
+// BearerPresent for every non-operator unconditionally — the console read an
+// always-empty field back, no matter what the member had just stored.
+func TestRedactSetupStatusForMember_BearerPresentOnlyOnTheCallersOwnBearerRow(t *testing.T) {
+	full := SetupStatus{Bedrock: SetupBedrock{
+		Region: "us-east-1", Model: "anthropic.claude", Ready: true, BearerPresent: true,
+	}}
+
+	own := redactSetupStatusForMember(full, true, true)
+	if !own.Bedrock.BearerPresent {
+		t.Error("a member on their own per_user bearer row: bearer_present = false, want true — bedrockBearerFor already scoped this to their own namespace")
+	}
+	// The host-credential-posture fields stay dropped even on the caller's own
+	// row — BearerPresent is the one named exception, not a door back to the
+	// rest of SetupBedrock.
+	if own.Bedrock.Region != "" || own.Bedrock.Model != "" {
+		t.Errorf("boot-time config leaked through: %+v", own.Bedrock)
+	}
+
+	// ownBearerRow=false covers BOTH cases the review named: a shared row
+	// (ownAWSRow=false too) and a per_user row whose mechanism is bedrock_sso,
+	// not bedrock_bearer (ownAWSRow=true, ownBearerRow=false — the caller owns
+	// the AWS harness row, e.g. for SourceRunID, but not a bearer lane).
+	shared := redactSetupStatusForMember(full, false, false)
+	if shared.Bedrock.BearerPresent {
+		t.Error("a member on a shared row: bearer_present = true, want false — that would be the OPERATOR's key read as the member's own")
+	}
+	ssoRow := redactSetupStatusForMember(full, true, false)
+	if ssoRow.Bedrock.BearerPresent {
+		t.Error("a member on a per_user SSO row: bearer_present = true, want false — that row has no bearer lane of its own")
+	}
+}
+
+// TestRedactSetupStatusForMember_BearerAbsentDespiteOperatorSecretPresent is
+// finding 6 (PR #352 review): the negative case. present listing the secret
+// name is an OPERATOR-namespace fact (setupSecretsSnapshot); it says nothing
+// about whether THIS member's own key exists, and it is redacted to empty for
+// a member regardless. bearer_present must not borrow that fact — a member
+// with none stored of their own must read not-stored even when the operator
+// (or a different member, in a store that predates per-namespace isolation)
+// has one.
+func TestRedactSetupStatusForMember_BearerAbsentDespiteOperatorSecretPresent(t *testing.T) {
+	full := SetupStatus{
+		Bedrock: SetupBedrock{Ready: true, BearerPresent: false},
+		Secrets: SetupSecrets{Present: []string{"bedrock-api-key"}},
+	}
+	out := redactSetupStatusForMember(full, true, true)
+	if out.Bedrock.BearerPresent {
+		t.Error("bearer_present = true, want false — nothing in this fixture says the CALLER stored one")
+	}
+	if len(out.Secrets.Present) != 0 {
+		t.Errorf("secrets.present = %v, want empty — still redacted the same as every other member read", out.Secrets.Present)
 	}
 }

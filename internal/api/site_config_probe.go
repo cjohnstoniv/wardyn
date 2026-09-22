@@ -828,7 +828,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	siteCfg, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	// An unconfigured proxy is not an error, it is the common case — and the
@@ -896,7 +896,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, http.StatusOK, siteConfigProbeResponse{State: "no_runner", Detail: perr.Error()})
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
+		writeServerError(w, r, "launch proxy probe", perr)
 		return
 	}
 	resp := classifyProxyProbe(res, subj, s.cfg.ControlPlaneURL)
@@ -945,7 +945,7 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 	ctx := r.Context()
 	siteCfg, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	red, ok := findEgressRedirect(siteCfg, req.From)
@@ -975,7 +975,7 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 			writeJSON(w, http.StatusOK, siteConfigProbeResponse{State: "no_runner", Detail: perr.Error()})
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "launch redirect probe: "+perr.Error())
+		writeServerError(w, r, "launch redirect probe", perr)
 		return
 	}
 	resp := classifyRedirectProbe(res, toHost, fromHost, s.cfg.ControlPlaneURL)

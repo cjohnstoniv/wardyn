@@ -610,15 +610,15 @@ door, so they are keyed (§7.4, `PROVIDER_MEMBER`) the way `DRIVE_MEMBER`'s refu
 | `BASE_URLS_REQUIRED` | Name at least one address. A row with none admits nothing and is refused at save. |
 | `FIELD_LANES` | Permitted lanes |
 | `LANES_HINT` | Which credential a run may use for this provider. Turning one off does not delete its stored secret. |
-| `LANE_APP_UNAVAILABLE` | Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent. |
+| `LANE_APP_UNAVAILABLE` | Not available: the App broker mints repository-scoped tokens for github.com only — Wardyn doesn't broker Azure DevOps's own token API this way (yet). Use the PAT lane there. |
 | `LANE_SSH_UNAVAILABLE` | Not available: SSH over port 443 is offered for `github.com` and `dev.azure.com` only — a self-hosted host clones over HTTPS. |
-| `SSH_HOST_LEVEL_HINT` | SSH clones are admitted for the whole host: an SSH URL carries no org path to bound. Drop SSH here to keep this row's addresses binding. |
+| `LANE_SSH_PATH_SCOPED` | Not available: this row's addresses carry an organisation path, and SSH has none to bound — it would admit the whole host. Leave lanes at their default, or drop the path. |
 | `LANES_NEED_ADDRESS` | Add an allowed address first — a credential is stored under its host. |
 | `LEGACY_OPEN_TITLE` | No git provider rows |
 | `LEGACY_OPEN_BODY` | Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name. |
 | `LEGACY_OPEN_OTHER_HOSTS` | A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page. |
 | `SAVED_ELSEWHERE_TITLE` | Someone else saved providers since you loaded this page |
-| `SAVED_ELSEWHERE_BODY` | Reload to see their version before saving yours. |
+| `SAVED_ELSEWHERE_BODY` | Your changes are still here and still unsaved. Copy them first — reloading replaces them with the saved version. |
 | `SAVED_TOAST` | Providers saved. |
 | `SAVED_NARROWED(n)` | {n} onboarded source is now outside every enabled provider — runs can't clone it until an admin widens the addresses or turns its host on. / {n} onboarded sources are now outside every enabled provider — runs can't clone them until an admin widens the addresses or turns their host on. |
 | `SAVE_CTA` | Save providers |
@@ -866,6 +866,7 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `MODEL_ACCESS_NOT_CONFIGURED` | Model access · Not signed in |
 | `MODEL_ACCESS_SHARED_EXPIRED` | Model access · Your admin's credential expired |
 | `MODEL_ACCESS_SHARED_EXPIRED_ACTION` | Your admin's model credential expired — ask them to reconnect it |
+| `MODEL_ACCESS_NOT_APPLICABLE` | Model access · Not applicable |
 | `SIGN_IN_AWS` | Sign in to AWS |
 | `FLOOR_UNPARSEABLE(value)` | "{value}" isn't a barrier class, so this policy sets no floor — the barrier above is what launches. |
 | `EFFECTIVE_TITLE` | Effective policy |
@@ -875,14 +876,16 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `OPEN_RUN_CTA` | Open run |
 | `AGENT_ROW_DISABLED_CHIP` | Off |
 
-The six lifecycle states and what each renders: `live` → `MODEL_ACCESS_LIVE`, success, no action
+The seven lifecycle states and what each renders: `live` → `MODEL_ACCESS_LIVE`, success, no action
 (`expired_renewable` folds in — dispatch renews it); `expiring` → `MODEL_ACCESS_EXPIRING` +
 `_ACTION(ts)`, warning, `SIGN_IN_AWS`; `expired_signin` → `MODEL_ACCESS_EXPIRED`, warning,
 `SIGN_IN_AWS`; `not_configured` → `MODEL_ACCESS_NOT_CONFIGURED`, warning, `SIGN_IN_AWS`; `shared`
 live → `MEMBER_GETTING_STARTED.MODEL_ACCESS_PROVIDED_CHIP` (reused), success; `shared_expired` →
-`MODEL_ACCESS_SHARED_EXPIRED` + `_ACTION`, warning, no button (nothing the member can do). The
-action line renders under the chip row, in the member's own words, and `SIGN_IN_AWS` opens
-`HarnessLoginPane` in place. The admin's own chip on the Agents tab renders the same six.
+`MODEL_ACCESS_SHARED_EXPIRED` + `_ACTION`, warning, no button (nothing the member can do);
+`not_applicable` → `MODEL_ACCESS_NOT_APPLICABLE`, neutral, no action — the caller is a mechanism
+(the shared admin token under a per_user row), not a person, so there is no sign-in for it to
+complete. The action line renders under the chip row, in the member's own words, and `SIGN_IN_AWS`
+opens `HarnessLoginPane` in place. The admin's own chip on the Agents tab renders the same seven.
 `MECHANISM_*` labels name Bedrock's four sub-lanes under the card's "AWS Bedrock" lane title; the
 Anthropic and OpenAI lanes reuse the model card's titles (§7.1). `UNAVAILABLE` is the picker item's
 sub-line (the plan's fragment, sentence-cased). `FLOOR_UNPARSEABLE` renders under the JSON policy

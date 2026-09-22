@@ -34,13 +34,17 @@ func TestBedrockPlainHTTPIsAudibleAtBoot(t *testing.T) {
 		f := &bootFlags{
 			anthropicBaseURL:       &empty,
 			openaiBaseURL:          &empty,
+			anthropicGatewayHeader: &empty,
+			anthropicGatewayFormat: &empty,
+			openaiGatewayHeader:    &empty,
+			openaiGatewayFormat:    &empty,
 			bedrockBaseURL:         &baseURL,
 			bedrockRegion:          &region,
 			bedrockModel:           &model,
 			allowTestEndpoints:     &ack,
 			awsSSOEndpointOverride: &override,
 		}
-		_, _, _, err := validateModelEndpoints(f)
+		_, _, _, _, err := validateModelEndpoints(f)
 		return buf.String(), err
 	}
 

@@ -269,8 +269,8 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 		live := st.liveRoles()
 		for _, p := range revokedWant {
 			if _, still := live[p]; still {
-				t.Errorf("%s still holds a live wdn_ token after the demotion — its role stamp is frozen at mint and "+
-					"read verbatim on every request, so the admin removed nothing", p)
+				t.Errorf("%s still holds a live wdn_ token after the demotion — its role stamp goes unrefreshed until "+
+					"the owner's next sign-in and is read verbatim on every request, so the admin removed nothing", p)
 			}
 		}
 		for p, role := range wantRoles {

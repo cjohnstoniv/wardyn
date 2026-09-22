@@ -506,8 +506,15 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
       const approveCaret = row.getByRole("button", { name: "More options" }).first();
       const denyCaret = row.getByRole("button", { name: "More options" }).last();
 
+      // review finding F3: the caret's content moved from a Radix
+      // DropdownMenu (role="menu") to a Popover holding the same real
+      // <button>s — a DropdownMenuContent's own focus manager swallowed Tab,
+      // so a keyboard-only user could open the menu but never reach a scope
+      // option (see ado-capability-card.test.tsx / live-approvals.test.tsx's
+      // F3 tests for the keyboard-reachability proof). A Popover has no
+      // "menu" role; its content is found by its data-slot instead.
       await approveCaret.click();
-      const approveMenu = page.getByRole("menu");
+      const approveMenu = page.locator('[data-slot="popover-content"]');
       await expect(approveMenu).toBeVisible();
       // All four approve-flavor options render together (ScopeMenu's default,
       // pre-"Until…"-picked view).
@@ -526,17 +533,17 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
       ).toBeVisible();
       // Close without picking — this approval stays undecided for cleanup.
       await page.keyboard.press("Escape");
-      await expect(page.getByRole("menu")).toHaveCount(0);
+      await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0);
 
       // The deny-flavor menu carries its OWN label set (DENY_SCOPE_LABEL) —
       // spot-check one to prove the verb swap actually renders different copy
       // rather than reusing the approve labels.
       await denyCaret.click();
-      const denyMenu = page.getByRole("menu");
+      const denyMenu = page.locator('[data-slot="popover-content"]');
       await expect(denyMenu).toBeVisible();
       await expect(denyMenu.getByRole("button", { name: /^Deny always\b/ })).toBeVisible();
       await page.keyboard.press("Escape");
-      await expect(page.getByRole("menu")).toHaveCount(0);
+      await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0);
     } finally {
       deleteApproval(id);
     }

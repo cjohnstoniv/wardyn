@@ -9,8 +9,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -46,6 +48,16 @@ type govEscapeStore struct {
 	// deployment every pre-0.7.2 test in this file assumed — no provider rows,
 	// no agent roster — so setting it is opt-in.
 	siteConfig types.SiteConfig
+	// failSiteConfigReadFrom, when set, fails the GetSiteConfig reads made
+	// directly from the function of that name, and only those. A request reads
+	// site config many times, and the first reader already fails closed on its
+	// own, so a store that failed every read could never show what one
+	// particular reader does with a dropped connection.
+	failSiteConfigReadFrom string
+	// onCreateRun, when set, runs inside CreateRun with mu held. CreateRun is
+	// the one store write between the autonomy gate and launch's egress union,
+	// so a test can change what site config answers across that span.
+	onCreateRun func()
 }
 
 func newGovEscapeStore(cs *capStore) *govEscapeStore {
@@ -66,6 +78,11 @@ func (s *govEscapeStore) ListWorkspaces(context.Context) ([]types.Workspace, err
 func (s *govEscapeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failSiteConfigReadFrom != "" {
+		if pc, _, _, ok := runtime.Caller(1); ok && strings.HasSuffix(runtime.FuncForPC(pc).Name(), "."+s.failSiteConfigReadFrom) {
+			return types.SiteConfig{}, errors.New("conn closed by peer")
+		}
+	}
 	return s.siteConfig, nil
 }
 func (s *govEscapeStore) SetRunImage(context.Context, uuid.UUID, string) error   { return nil }
@@ -83,6 +100,9 @@ func (s *govEscapeStore) CreateRun(_ context.Context, run types.AgentRun) (types
 	defer s.mu.Unlock()
 	s.runs[run.ID] = run
 	s.states[run.ID] = run.State
+	if s.onCreateRun != nil {
+		s.onCreateRun()
+	}
 	return run, nil
 }
 
@@ -188,10 +208,8 @@ func govCreateAndDispatch(t *testing.T, srv *Server, st *govEscapeStore, audit *
 		runID = id
 	}
 	st.mu.Unlock()
-	ev := findAudit(audit.events, runID, "run.policy.effective", "success")
-	if ev == nil {
-		t.Fatalf("dispatch recorded no run.policy.effective envelope for %s", runID)
-	}
+	// Dispatch runs after the 201 (runs_create_launch.go): wait for its envelope.
+	ev := waitForRecAudit(t, audit, runID, "run.policy.effective", "success")
 	var spec types.RunPolicySpec
 	if err := json.Unmarshal(ev.Data, &spec); err != nil {
 		t.Fatalf("envelope is not a RunPolicySpec: %v (%s)", err, ev.Data)
@@ -526,7 +544,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 			strings.NewReader(`{"agent":"claude-code","task":"t"}`))
 		r.Header.Set("Authorization", "Bearer "+st.tokenRaw)
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("create with a pre-0.7 token = %d, want 403: %s", w.Code, w.Body.String())
 		}
@@ -539,9 +557,133 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 			strings.NewReader(`{"agent":"claude-code","task":"t"}`))
 		r.Header.Set("Authorization", "Bearer "+st.tokenRaw)
 		w = httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create with a 0.7-stamped token = %d, want 201: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// ─── rows 19-21, the AUTONOMY doors (0.8 #97) ─────────────────────────────
+	//
+	// A rubric bounds what a run may do UNATTENDED, so its escapes are neither
+	// egress nor grants and none of them appears in the envelope the rows above
+	// are asserted on. Each row names its own oracle: the status plus the
+	// absence of a run row for the two refusals, and the SANDBOX ENV for the
+	// derived hold — the only place that says whether the supervision actually
+	// reached the container.
+	//
+	// The profile is built per row rather than shared with assigned() above.
+	// The walled fixture carries deny_interactive AND a deny tool_rule, both of
+	// which refuse these same request shapes on their own, so a row sharing it
+	// would pass without the rubric ever being consulted.
+	autonomyAssigned := func(level types.AutonomyLevel) *capStore {
+		p := govProfile("autonomy-walled")
+		p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(level)}
+		return autonomyCapStore(p)
+	}
+
+	// Row 19 — THE EXEC DOOR. task_mode=exec runs a bare command with no agent
+	// and no toolgate, so no rubric, tool rule or approval binds it once it is
+	// running; only the top rung may open it. Counterfactual: leave exec to the
+	// profile's own deny_task_mode_exec and a profile that authors a rubric
+	// without that boolean hands every member the unsupervised door.
+	t.Run("row 19: task_mode=exec below L3", func(t *testing.T) {
+		srv, st, _ := govEscapeFixture(t, autonomyAssigned(types.AutonomyL2))
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+			`{"agent":"claude-code","task":"echo hi","confinement_class":"CC2","task_mode":"exec"}`)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("create = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		runs := len(st.runs)
+		st.mu.Unlock()
+		if runs != 0 {
+			t.Errorf("the refused exec run left %d row(s) behind", runs)
+		}
+	})
+
+	// Row 20 — OPTING OUT OF THE DERIVED HOLD. L1 permits an unattended run and
+	// not an unsupervised one, so an explicit `tool_approvals=auto` has to lose.
+	// Asserted on WARDYN_TOOL_APPROVALS in the sandbox the run actually got,
+	// never on the audit row: the derivation has to land on the request BEFORE
+	// the dispatch parameters are built, and a gate running one line too late
+	// would audit `hold` while the container ran unsupervised — the same escape
+	// with a clean paper trail.
+	t.Run("row 20: tool_approvals=auto cannot opt out of the L1 hold", func(t *testing.T) {
+		srv, _, _ := govEscapeFixture(t, autonomyAssigned(types.AutonomyL1))
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+			`{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+		}
+		fr, ok := srv.cfg.Runner.(*fakeRunner)
+		if !ok {
+			t.Fatal("the fixture's runner is no longer the recording double")
+		}
+		fr.waitForSandbox(t) // dispatch runs after the 201
+		if got := fr.lastSandboxEnv()["WARDYN_TOOL_APPROVALS"]; got != "hold" {
+			t.Errorf("WARDYN_TOOL_APPROVALS = %q, want hold — the member ran unsupervised under a rung that forbids it", got)
+		}
+	})
+
+	// Row 21 — LAUNDERING THE HOLD THROUGH AN AGENT THAT IGNORES IT. The rung
+	// above is only real if the agent honours the derived value; codex-cli has
+	// no external tool-approval contract, so a member who cannot opt out of the
+	// hold could otherwise opt out of the ENFORCEMENT by changing agent.
+	// Counterfactual: warn instead of refusing and the run launches carrying a
+	// WARDYN_TOOL_APPROVALS no launcher in that image reads.
+	t.Run("row 21: an agent with no hold lane cannot launder an unattended L1 run", func(t *testing.T) {
+		srv, st, _ := govEscapeFixture(t, autonomyAssigned(types.AutonomyL1))
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+			`{"agent":"codex-cli","task":"t","confinement_class":"CC2"}`)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("create = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		runs := len(st.runs)
+		st.mu.Unlock()
+		if runs != 0 {
+			t.Errorf("the refused codex-cli run left %d row(s) behind", runs)
+		}
+	})
+
+	// Row 22 — BUYING AN AUTONOMY RUNG WITH THE `repo` FIELD. The posture is
+	// graded before unionRunEgress, so every host that union adds is a candidate
+	// escape; the SITE-CONFIG SCM lane is the reachable one, because it needs no
+	// grant at all. `declaresRepo` is true from the free-text `repo` field alone
+	// (runs_create.go) and unionSiteConfigScmHosts reads nothing but site config,
+	// so one request field buys reach to an operator-declared internal forge.
+	//
+	// Counterfactual: grade the pre-union spec and this run reads `sealed`, takes
+	// the rubric's sealed rung — the permissive one, since a sealed run is the
+	// safe one to leave alone — and launches unsupervised WITH the forge in its
+	// allowlist. Both doors agree on that answer, so the Review/launch parity
+	// test cannot see it.
+	//
+	// Asserted on WARDYN_TOOL_APPROVALS, not the resolution: the level is only
+	// worth grading if the supervision it implies reaches the container.
+	t.Run("row 22: the repo field cannot buy a rung the run's real egress forbids", func(t *testing.T) {
+		const ghes = "ghes.corp.example"
+		p := govProfile("autonomy-scm")
+		p.Limits = types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{
+			EgressOpen: types.AutonomyL1, EgressSealed: types.AutonomyL3,
+		}}
+		srv, st, _ := govEscapeFixture(t, autonomyCapStore(p))
+		st.siteConfig = types.SiteConfig{ScmHosts: []string{ghes}}
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t),
+			`{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto",`+
+				`"repo":"https://`+ghes+`/team/app"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+		}
+		fr, ok := srv.cfg.Runner.(*fakeRunner)
+		if !ok {
+			t.Fatal("the fixture's runner is no longer the recording double")
+		}
+		fr.waitForSandbox(t) // dispatch runs after the 201
+		env := fr.lastSandboxEnv()
+		if got := env["WARDYN_TOOL_APPROVALS"]; got != "hold" {
+			t.Errorf("WARDYN_TOOL_APPROVALS = %q, want hold — the run reaches %q and was graded as if sealed", got, ghes)
 		}
 	})
 }

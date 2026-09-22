@@ -564,17 +564,15 @@ func TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem(t *testing.
 
 // TestUnionSiteConfigScmHosts asserts unionSiteConfigScmHosts adds the
 // operator's declared ScmHosts (deduped against what's already allowed),
-// no-ops when unconfigured/errored, and never touches AllowedDomains it
-// didn't add (additive only).
+// no-ops when unconfigured, and never touches AllowedDomains it didn't add
+// (additive only). It reads nothing: what happens when site config cannot be
+// read is scmLaneSiteConfig's answer, pinned by
+// TestAutonomySiteConfigReadFailureFailsClosed.
 func TestUnionSiteConfigScmHosts(t *testing.T) {
-	ctx := context.Background()
-
 	t.Run("adds missing hosts, dedupes existing", func(t *testing.T) {
-		fake := &fakeSiteConfigStore{cfg: types.SiteConfig{ScmHosts: []string{"ghes.corp.internal", "github.com"}}}
-		srv, _ := newSiteConfigHarness(t, fake)
 		spec := types.RunPolicySpec{AllowedDomains: []string{"github.com"}}
 
-		added := srv.unionSiteConfigScmHosts(ctx, &spec)
+		added := unionSiteConfigScmHosts(&spec, types.SiteConfig{ScmHosts: []string{"ghes.corp.internal", "github.com"}})
 		if strings.Join(added, ",") != "ghes.corp.internal" {
 			t.Errorf("added = %v, want [ghes.corp.internal] (github.com already present)", added)
 		}
@@ -584,33 +582,13 @@ func TestUnionSiteConfigScmHosts(t *testing.T) {
 	})
 
 	t.Run("no site config configured is a no-op", func(t *testing.T) {
-		fake := &fakeSiteConfigStore{}
-		srv, _ := newSiteConfigHarness(t, fake)
 		spec := types.RunPolicySpec{AllowedDomains: []string{"github.com"}}
 
-		if added := srv.unionSiteConfigScmHosts(ctx, &spec); added != nil {
+		if added := unionSiteConfigScmHosts(&spec, types.SiteConfig{}); added != nil {
 			t.Errorf("added = %v, want nil", added)
 		}
 		if strings.Join(spec.AllowedDomains, ",") != "github.com" {
 			t.Errorf("AllowedDomains mutated: %v", spec.AllowedDomains)
-		}
-	})
-
-	t.Run("store error is a no-op, never fatal", func(t *testing.T) {
-		fake := &fakeSiteConfigStore{getErr: context.DeadlineExceeded}
-		srv, _ := newSiteConfigHarness(t, fake)
-		spec := types.RunPolicySpec{}
-
-		if added := srv.unionSiteConfigScmHosts(ctx, &spec); added != nil {
-			t.Errorf("added = %v, want nil", added)
-		}
-	})
-
-	t.Run("nil Store is a no-op", func(t *testing.T) {
-		srv := New(Config{TrustDomain: "wardyn.local", ControlPlaneURL: "http://wardynd:8080"})
-		spec := types.RunPolicySpec{}
-		if added := srv.unionSiteConfigScmHosts(ctx, &spec); added != nil {
-			t.Errorf("added = %v, want nil", added)
 		}
 	})
 }
@@ -715,7 +693,7 @@ func doIfMatch(t *testing.T, srv *Server, method, path, bearer, ifMatch, body st
 	r.Host = "127.0.0.1"             // see do (api_test.go) FIX #8
 	r.RemoteAddr = "127.0.0.1:54321" // see do (api_test.go) N1
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 

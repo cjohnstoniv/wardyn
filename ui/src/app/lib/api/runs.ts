@@ -15,6 +15,7 @@ import type {
   PolicyGrade,
   PreflightResult,
   ProfileProposal,
+  RunDetail,
   RunFilesResult,
   RunPolicySpec,
   RunResources,
@@ -138,6 +139,43 @@ export function isCredentialRefusal(e: unknown): boolean {
   return e instanceof HttpError && e.status === 422 && e.reason === "model_credential";
 }
 
+// The create-time git-credential refusal (#386's launch door) —
+// gitCredentialRefusal's 422 carrying reason `git_credential`: a repository
+// admitted onto a per-user Azure DevOps row with no usable captured sign-in
+// for this caller. The New Run rail answers it with the Connect Azure DevOps
+// dialog and launches again once the connection lands — isCredentialRefusal's
+// twin, for a second credential.
+export function isGitCredentialRefusal(e: unknown): boolean {
+  return e instanceof HttpError && e.status === 422 && e.reason === "git_credential";
+}
+
+// #159: the Recordings screen paginates instead of stopping at LIST_LIMIT
+// (1000). unwrapList discards the response object, so it can never carry
+// X-Wardyn-Truncated — the caller needs it FROM listRuns, not from a second
+// helper duplicating this fetch. Overloaded so every existing caller (the
+// board's poll, the shell's mount probe, permissions, new-run's preflight, …)
+// keeps asking for the plain default page and keeps getting a bare
+// AgentRun[] back, unchanged; only a caller that opts into BOTH limit and
+// offset gets the wider { runs, truncated } shape carrying the header.
+export type PagedRuns = { runs: AgentRun[]; truncated: boolean };
+
+async function listRuns(opts: {
+  includeRecordingMeta?: boolean;
+  limit: number;
+  offset: number;
+}): Promise<PagedRuns>;
+async function listRuns(opts?: { includeRecordingMeta?: boolean }): Promise<AgentRun[]>;
+async function listRuns(
+  opts?: { includeRecordingMeta?: boolean; limit?: number; offset?: number },
+): Promise<AgentRun[] | PagedRuns> {
+  const paging = opts?.limit != null && opts?.offset != null;
+  let path = paging ? `/runs?limit=${opts.limit}&offset=${opts.offset}` : withLimit("/runs");
+  if (opts?.includeRecordingMeta) path += "&include=recording_meta";
+  const res = await wfetch(path, { method: "GET" });
+  const rows = unwrapList<AgentRun>(await asJson<unknown>(res));
+  return paging ? { runs: rows, truncated: res.headers.get("X-Wardyn-Truncated") === "true" } : rows;
+}
+
 export const runs = {
   // GET /api/v1/runs
   //
@@ -148,18 +186,16 @@ export const runs = {
   // endpoint also backs the Runs board's POLL_MS=3000 poll at limit=1000,
   // which renders none of those three fields. Only the Recordings screen,
   // which actually shows them, should pass true.
-  async listRuns(opts?: { includeRecordingMeta?: boolean }): Promise<AgentRun[]> {
-    let path = withLimit("/runs");
-    if (opts?.includeRecordingMeta) path += "&include=recording_meta";
-    const res = await wfetch(path, { method: "GET" });
-    return unwrapList<AgentRun>(await asJson<unknown>(res));
-  },
+  //
+  // limit/offset (#159): explicit server-side paging — see the PagedRuns
+  // overload above.
+  listRuns,
 
-  // GET /api/v1/runs/{id}
-  async getRun(id: string): Promise<AgentRun | undefined> {
+  // GET /api/v1/runs/{id} — the ONE endpoint that sends ui_apps (RunDetail).
+  async getRun(id: string): Promise<RunDetail | undefined> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "GET" });
     if (res.status === 404) return undefined;
-    return asJson<AgentRun>(res);
+    return asJson<RunDetail>(res);
   },
 
   // POST /api/v1/runs/{id}/attach-ticket — mint a single-use, short-TTL ticket
