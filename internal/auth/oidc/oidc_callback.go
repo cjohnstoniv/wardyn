@@ -52,31 +52,40 @@ import (
 // does not match a cookie this server set is not a login this browser began, and
 // nothing else about the request is worth reading until that holds.
 //
-// Returns the nonce the ID token must carry and the PKCE verifier the exchange
-// must present. ok=false means the response has ALREADY been written — the same
-// (value, ok) shape parseIDParam and the getWorkspace* helpers use, so a caller
-// that forgets to return on !ok is a familiar bug rather than a new one.
-func consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, ok bool) {
+// Returns the nonce the ID token must carry, the PKCE verifier the exchange
+// must present, and whether this browser's authorization request was WIDENED
+// beyond the login's own scopes. ok=false means the response has ALREADY been
+// written — the same (value, ok) shape parseIDParam and the getWorkspace*
+// helpers use, so a caller that forgets to return on !ok is a familiar bug
+// rather than a new one.
+//
+// The widened marker is read with the other three and carries no secret: it is
+// the fact that this redirect asked for more than a login, which is what lets a
+// refusal of the extras be retried without them.
+func consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, widened, ok bool) {
 	stateParam := r.URL.Query().Get("state")
 	stateCookie, err := r.Cookie(stateCookieName)
 	if err != nil || stateCookie.Value == "" || stateParam != stateCookie.Value {
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
-		return "", "", false
+		return "", "", false, false
 	}
 	nonceCookie, err := r.Cookie(nonceCookieName)
 	if err != nil || nonceCookie.Value == "" {
 		http.Error(w, "missing nonce cookie", http.StatusBadRequest)
-		return "", "", false
+		return "", "", false, false
 	}
 	pkceCookie, err := r.Cookie(pkceCookieName)
 	if err != nil || pkceCookie.Value == "" {
 		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
-		return "", "", false
+		return "", "", false, false
 	}
+	widenedCookie, werr := r.Cookie(widenedCookieName)
+	widened = werr == nil && widenedCookie.Value != ""
 	clearCookie(w, stateCookieName)
 	clearCookie(w, nonceCookieName)
 	clearCookie(w, pkceCookieName)
-	return nonceCookie.Value, pkceCookie.Value, true
+	clearCookie(w, widenedCookieName)
+	return nonceCookie.Value, pkceCookie.Value, widened, true
 }
 
 // callbackClaims is everything CallbackHandler reads out of a verified
@@ -195,9 +204,21 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 
 func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	// (1) CSRF and the one-time cookies — consumeCallbackCookies below.
-	nonce, verifier, ok := consumeCallbackCookies(w, r)
+	nonce, verifier, widened, ok := consumeCallbackCookies(w, r)
 	if !ok {
 		return
+	}
+
+	// A refusal of the EXTRA scopes must not cost this person the console. When
+	// (and only when) this browser's authorization request was widened by an
+	// attached login-grant sink, a consent/interaction refusal restarts the
+	// login with the login's own scopes — once, by construction. Every other
+	// refusal, and every unwidened login, falls through to the behaviour below
+	// exactly as before (login_grant.go).
+	if idpErr := r.URL.Query().Get("error"); idpErr != "" {
+		if a.retryLoginUnwidened(w, r, widened, idpErr) {
+			return
+		}
 	}
 
 	// (2) Exchange code for tokens, supplying the PKCE verifier.
@@ -366,6 +387,13 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	if a.cfg.OnLogin != nil {
 		a.cfg.OnLogin(r.Context(), idToken.Subject, role)
 	}
+	// The login-grant sink, for the same reason and in the same place as
+	// OnLogin: the login is APPROVED here and not before, so a refused login
+	// never yields a downstream credential. It is handed the exchanged grant
+	// and reports nothing — a credential that could not be stored must not
+	// cost this person the session they just earned (login_grant.go).
+	// Session is unchanged by it: no token of any kind rides the cookie.
+	a.captureLoginGrant(r.Context(), idToken.Subject, token)
 
 	// (6) Create a Wardyn session. Groups is stamped from the SAME two
 	// tolerantly-decoded claims deriveRole just consumed — a claim malformed

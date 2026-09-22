@@ -513,14 +513,23 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	clientID, clientSecret := s.clientID, s.clientSecret
 	s.mu.Unlock()
-	if r.Form.Get("client_id") != clientID {
+	// Client authentication arrives EITHER in the form (client_secret_post, and
+	// for a public client the bare client_id) OR as HTTP Basic
+	// (client_secret_basic). The real service accepts both and a client library
+	// picks one from the discovery document, so a fake that read only the form
+	// would refuse a perfectly correct client over a style choice.
+	gotID, gotSecret := r.Form.Get("client_id"), r.Form.Get("client_secret")
+	if basicID, basicSecret, ok := r.BasicAuth(); ok {
+		gotID, gotSecret = basicID, basicSecret
+	}
+	if gotID != clientID {
 		writeTokenError(w, http.StatusUnauthorized, ErrInvalidClient,
-			"AADSTS700016: application with identifier "+r.Form.Get("client_id")+" was not found in the directory")
+			"AADSTS700016: application with identifier "+gotID+" was not found in the directory")
 		return
 	}
 	// A confidential client must present its secret; a public one must not be
 	// asked for one it does not have.
-	if clientSecret != "" && r.Form.Get("client_secret") != clientSecret {
+	if clientSecret != "" && gotSecret != clientSecret {
 		writeTokenError(w, http.StatusUnauthorized, ErrInvalidClient,
 			"AADSTS7000215: invalid client secret provided")
 		return

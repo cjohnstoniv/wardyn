@@ -856,3 +856,17 @@ func runRecordingSweeper(ctx context.Context, s recordingSweepable, rec audit.Re
 		}
 	}
 }
+
+// attachLoginGrantSink joins the console login to the credential capture, and
+// owns the nil check so run() does not: authn is nil on every deployment
+// without SSO, and there is no login to widen there.
+//
+// The edge is attached rather than configured because the two sides form a
+// cycle — oidc.Config is built before the server, and the server holds the
+// Authenticator — so the only order that works is "construct both, then join".
+func attachLoginGrantSink(authn *oidc.Authenticator, sink oidc.LoginGrantSink) {
+	if authn == nil {
+		return
+	}
+	authn.AttachLoginGrantSink(sink)
+}
