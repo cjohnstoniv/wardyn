@@ -770,6 +770,14 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
+	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
+	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
+	// self-service block and nowhere else — both doors refuse a caller with no
+	// identity provider subject, the capture is bound to that subject
+	// fail-closed, and the credential is written under that principal's own
+	// namespace, so neither route can reach anyone else's credential whatever
+	// tier the caller holds.
+	s.mountAzureDevOpsSignInRoutes(r)
 	// "View as member" (0.7.4, P2, membermode.go). Registered HERE rather than
 	// beside the ssh-keys block in routes() only because routes() sits exactly
 	// on the funlen ratchet — this is the /me self-service family either way.

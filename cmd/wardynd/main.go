@@ -349,6 +349,12 @@ func run() error {
 	// The roster half of the model-identity posture, WARNED at boot beside the
 	// model-ARN one above (validateModelEndpoints). See warnBedrockSSOPinPosture.
 	warnBedrockSSOPinPosture(bootCtx, st, *f.bedrockModel)
+	// The SiteConfig half of warnMissingGatewayHosts above: that call (line
+	// ~305) runs before st exists (SiteConfig lives in Postgres), so its
+	// sibling — no upstream_proxy_no_proxy entry covering a configured
+	// gateway host — reads st here instead, against the same llmGateways.
+	// See warnUpstreamProxyNoBypass.
+	warnUpstreamProxyNoBypass(bootCtx, st, llmGateways)
 
 	srv := api.New(api.Config{
 		Store:     st,
@@ -450,6 +456,16 @@ func run() error {
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
 		BaseCtx: rootCtx,
 	})
+
+	// The login-grant edge, joined here because it is a CYCLE: oidc.Config is
+	// built before the server (the server's Config holds the Authenticator), and
+	// the capture is the server's to perform. Attaching it after both exist, and
+	// before anything is served, is the only order that works.
+	//
+	// It is a NO-OP for every deployment without an Azure DevOps Entra row: the
+	// sink answers "nothing to add", the authorization request is not widened
+	// and the callback stores nothing (internal/api/ado_entra_login.go).
+	attachLoginGrantSink(feats.authn, srv)
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).

@@ -4,7 +4,9 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -101,5 +103,98 @@ func TestProxyConfig_LLMUpstreams_RejectsMalformedURL(t *testing.T) {
 	}))
 	if err == nil {
 		t.Fatal("a malformed llm_upstreams URL must be rejected at config load")
+	}
+}
+
+// captureConfigLoadLogs runs LoadConfigBytes with a temporary slog default
+// so the test can inspect what boot logged, then restores it — same
+// mechanism cmd/wardynd's TestBedrockPlainHTTPIsAudibleAtBoot uses.
+func captureConfigLoadLogs(t *testing.T, raw []byte) (logged string, cfg *Config, err error) {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	cfg, err = LoadConfigBytes(raw)
+	return buf.String(), cfg, err
+}
+
+const testSSOPortalHost = "portal.sso.eu-west-2.amazonaws.com"
+
+// TestProxyConfig_WarnsOnUncoveredAWSSSOInjectionHost: an upstream corp proxy
+// configured alongside an AWS SSO injection rule, with no bypass entry
+// covering the portal host, must WARN at load (never refuse boot — the
+// operator may genuinely want that host proxied) so the failure names the
+// condition instead of surfacing as a bare CONNECT timeout.
+func TestProxyConfig_WarnsOnUncoveredAWSSSOInjectionHost(t *testing.T) {
+	logged, cfg, err := captureConfigLoadLogs(t, baseConfigJSON(t, map[string]any{
+		"upstream_proxy_url": "http://corp-proxy.internal:8080",
+		"injection": []map[string]any{
+			{"host": testSSOPortalHost, "header": "x-amz-sso_bearer_token", "grant_id": uuid.New().String()},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	if cfg.UpstreamProxyURL == "" {
+		t.Fatal("upstream_proxy_url did not round-trip")
+	}
+	if !strings.Contains(logged, testSSOPortalHost) {
+		t.Errorf("boot log does not name the uncovered SSO host:\n%s", logged)
+	}
+}
+
+// TestProxyConfig_NoWarnWhenBypassCoversSSOHost: the negative control — a
+// upstream_proxy_no_proxy entry covering the portal's suffix means the SSO
+// host will NOT be chained through the upstream, so no warning is due.
+func TestProxyConfig_NoWarnWhenBypassCoversSSOHost(t *testing.T) {
+	logged, _, err := captureConfigLoadLogs(t, baseConfigJSON(t, map[string]any{
+		"upstream_proxy_url":      "http://corp-proxy.internal:8080",
+		"upstream_proxy_no_proxy": []string{"amazonaws.com"},
+		"injection": []map[string]any{
+			{"host": testSSOPortalHost, "header": "x-amz-sso_bearer_token", "grant_id": uuid.New().String()},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	if strings.Contains(logged, testSSOPortalHost) {
+		t.Errorf("a covered SSO host still warned:\n%s", logged)
+	}
+}
+
+// TestProxyConfig_NoWarnWithoutUpstreamProxy: no corp upstream configured at
+// all — the SSO host is never chained through anything, so an uncovered
+// bypass list is moot and must not warn.
+func TestProxyConfig_NoWarnWithoutUpstreamProxy(t *testing.T) {
+	logged, _, err := captureConfigLoadLogs(t, baseConfigJSON(t, map[string]any{
+		"injection": []map[string]any{
+			{"host": testSSOPortalHost, "header": "x-amz-sso_bearer_token", "grant_id": uuid.New().String()},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	if strings.Contains(logged, testSSOPortalHost) {
+		t.Errorf("no upstream proxy configured, yet it warned about the SSO host:\n%s", logged)
+	}
+}
+
+// TestProxyConfig_NoWarnForNonSSOInjectionHost: an ordinary (non-AWS-SSO)
+// injection host uncovered by the bypass list is NOT this warning's concern
+// — it is the operator's own artifact/API host, not the per-user SSO portal
+// isAWSSSOPortalHost exists to flag.
+func TestProxyConfig_NoWarnForNonSSOInjectionHost(t *testing.T) {
+	logged, _, err := captureConfigLoadLogs(t, baseConfigJSON(t, map[string]any{
+		"upstream_proxy_url": "http://corp-proxy.internal:8080",
+		"injection": []map[string]any{
+			{"host": "api.anthropic.com", "header": "Authorization", "grant_id": uuid.New().String()},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	if strings.Contains(logged, "not covered") {
+		t.Errorf("a non-SSO injection host triggered the SSO-coverage warning:\n%s", logged)
 	}
 }

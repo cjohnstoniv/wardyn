@@ -393,6 +393,14 @@ var routeMatrix = map[string]classifiedRoute{
 	// principal-scoped so it already answers store.ErrNotFound (404)
 	// without needing an owner/foreign id pair here.
 	"GET /api/v1/me/ssh-keys": {class: classMember},
+	// The per-user Azure DevOps sign-in (ado_entra.go): classMember, and for
+	// the same reason as /me/ssh-keys above — a member signs in FOR
+	// THEMSELVES. Both doors refuse a caller with no identity provider
+	// subject, the capture is bound to that subject fail-closed, and the
+	// credential is written under that principal's own namespace, so neither
+	// route can reach anyone else's credential whatever tier the caller holds.
+	"GET /api/v1/scm/azure-devops/signin":   {class: classMember},
+	"GET /api/v1/scm/azure-devops/callback": {class: classMember},
 	// /me/tokens is the same self-service shape as /me/ssh-keys above:
 	// classMember, principal-scoped AT THE STORE, so DELETE /me/tokens/{id}
 	// answers a foreign id with store.ErrNotFound (404) without needing an
