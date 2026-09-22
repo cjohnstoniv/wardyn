@@ -8,6 +8,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- `WARDYN_SSO_ONLY` (flag `-sso-only`, chart `auth.ssoOnly`) lets an operator declare SSO the only
+  way into the console. Boot is refused unless OIDC is configured and the admin token, local mode,
+  member mode and the no-operator-list override are all unset — each refusal names the one to
+  remove. The Helm chart mirrors the same refusal at render time (#378).
+- The sign-in screen reads the new posture from `/healthz` and renders only what can work: the
+  admin-token form when a token is actually usable, and the SSO role-derivation caveat only when
+  SSO is not the only way in. An SSO-only deployment now shows one "Sign in with SSO" button and
+  nothing else (#379).
+
 ## [0.7.9] — 2026-09-21
 
 ### Fixed

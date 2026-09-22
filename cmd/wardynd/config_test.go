@@ -709,6 +709,59 @@ func TestValidateMemberModePosture(t *testing.T) {
 	}
 }
 
+// TestValidateSSOOnlyPosture pins WARDYN_SSO_ONLY's precondition (#378): SSO
+// must actually be the only way in before boot may let /healthz's sso_only bit
+// claim it is. One case per way back into "not actually SSO-only", each
+// asserted to name the setting to remove, plus the clean pass.
+func TestValidateSSOOnlyPosture(t *testing.T) {
+	for _, tt := range []struct {
+		name                                       string
+		ssoOnly, oidcConfigured                    bool
+		adminToken                                 string
+		localMode, memberMode, allowNoOperatorList bool
+		wantErr                                    bool
+		wantNames                                  []string
+	}{
+		{name: "off: nothing asserted, nothing checked", adminToken: "tok", localMode: true},
+		{
+			name:    "on with oidc and everything else absent: passes",
+			ssoOnly: true, oidcConfigured: true,
+		},
+		{
+			name: "on with no oidc configured", ssoOnly: true,
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_OIDC_ISSUER"},
+		},
+		{
+			name: "on with an admin token set", ssoOnly: true, oidcConfigured: true, adminToken: "tok",
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_ADMIN_TOKEN"},
+		},
+		{
+			name: "on with local mode set", ssoOnly: true, oidcConfigured: true, localMode: true,
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_LOCAL_MODE"},
+		},
+		{
+			name: "on with member mode set", ssoOnly: true, oidcConfigured: true, memberMode: true,
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_MEMBER_MODE"},
+		},
+		{
+			name: "on with the no-operator-list override set", ssoOnly: true, oidcConfigured: true, allowNoOperatorList: true,
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSSOOnlyPosture(tt.ssoOnly, tt.oidcConfigured, tt.adminToken, tt.localMode, tt.memberMode, tt.allowNoOperatorList)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateSSOOnlyPosture(...) error = %v, want error: %v", err, tt.wantErr)
+			}
+			for _, want := range tt.wantNames {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err.Error(), want)
+				}
+			}
+		})
+	}
+}
+
 // ─── the O-10 kill switch, end to end through the real boot path ────────────────
 
 // THE ONE CONSTANT (general N-new-1). `awsSSOProxyInjectDefaultOn` in

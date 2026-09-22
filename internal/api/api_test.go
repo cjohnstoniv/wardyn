@@ -454,6 +454,67 @@ func TestHealthz_NetworkPolicy(t *testing.T) {
 	})
 }
 
+// TestHealthz_TokenLoginAndSSOOnly pins the two bits #378/#379 added to the
+// anonymous /healthz body: token_login (should the sign-in screen offer the
+// admin-token form?) and sso_only (mirrors Config.SSOOnly). token_login is
+// computed, never a plain field mirror, precisely so a token that CANNOT work
+// as a human sign-in path — sso-only's second front door, or member mode's
+// process credential (deploy/desktop/wardyn.env.m-prime.example) — is never
+// advertised as one.
+func TestHealthz_TokenLoginAndSSOOnly(t *testing.T) {
+	decode := func(t *testing.T, srv *Server) map[string]any {
+		t.Helper()
+		w := do(t, srv, http.MethodGet, "/healthz", "", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("healthz code = %d", w.Code)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body
+	}
+
+	for _, tc := range []struct {
+		name           string
+		cfg            Config
+		wantTokenLogin bool
+		wantSSOOnly    bool
+	}{
+		{
+			name:           "plain token deployment: token works, no sso_only",
+			cfg:            Config{AdminToken: "tok"},
+			wantTokenLogin: true,
+		},
+		{
+			name:           "no token, no sso, no member: nothing to offer (local-mode/misconfigured)",
+			cfg:            Config{},
+			wantTokenLogin: false,
+		},
+		{
+			name:           "sso-only: token forced off even if a token were somehow set",
+			cfg:            Config{AdminToken: "tok", SSOOnly: true},
+			wantTokenLogin: false,
+			wantSSOOnly:    true,
+		},
+		{
+			name:           "member mode: the token is a process credential, never a human sign-in path",
+			cfg:            Config{AdminToken: "tok", MemberMode: true},
+			wantTokenLogin: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := decode(t, New(tc.cfg))
+			if got := body["token_login"]; got != tc.wantTokenLogin {
+				t.Errorf("token_login = %v, want %v", got, tc.wantTokenLogin)
+			}
+			if got := body["sso_only"]; got != tc.wantSSOOnly {
+				t.Errorf("sso_only = %v, want %v", got, tc.wantSSOOnly)
+			}
+		})
+	}
+}
+
 func TestAdminAuthRequired(t *testing.T) {
 	h := newHarness(t)
 	// No token.

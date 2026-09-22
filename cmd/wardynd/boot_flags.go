@@ -66,8 +66,16 @@ type bootFlags struct {
 	// malformed entry, same WARN on a root so wide it bounds nothing — and
 	// unset means no host_path drive may be authored at all.
 	userDriveHostRoots *string
-	uiDir              *string
-	runnerSel          *string
+	// ssoOnly is WARDYN_SSO_ONLY (flag -sso-only): the operator's declaration
+	// that SSO is the ONLY way into this console. validateSSOOnlyPosture
+	// (boot_posture.go) enforces the precondition — OIDC configured, and the
+	// admin token / local mode / member mode / no-operator-list override all
+	// absent — before this ever reaches api.Config.SSOOnly, which /healthz
+	// publishes as sso_only so the sign-in screen stops offering a form that
+	// cannot work.
+	ssoOnly   *bool
+	uiDir     *string
+	runnerSel *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -278,6 +286,7 @@ func parseBootFlags() *bootFlags {
 		memberWritableRoots:     flagEnv("member-writable-roots", "WARDYN_MEMBER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a MEMBER may mark their own mount WRITABLE. Empty (the default) = no writable member mounts at all; a member's mounts are read-only. Operators keep their unrestricted per-source writable opt-in."),
 		memberWritableDeny:      flagEnv("member-writable-deny", "WARDYN_MEMBER_WRITABLE_DENY", "", "comma-separated absolute host directories carved OUT of -member-writable-roots. Deny WINS over allow, so a subtree inside a writable root can be pinned read-only for members."),
 		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a USER DRIVE of backend host_path may be registered inside — typically the mount point of an NFS/SMB share the operator mounted host-side. A drive's host_root is allowed only if its CANONICALIZED real path is inside one of these (symlink-resolved, the bind-mount deny-list applied, must exist on this host), and only that person's SUBDIRECTORY is ever bound into a run. Empty (the default) = no host_path drive may be registered at all; Wardyn-managed volume drives are unaffected. Point it at the share's mount point, NEVER $HOME or /."),
+		ssoOnly:                 flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the ONLY way into the console: refuses to start unless OIDC is configured and WARDYN_ADMIN_TOKEN, WARDYN_LOCAL_MODE, WARDYN_MEMBER_MODE and WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST are all unset (validateSSOOnlyPosture). Publishes sso_only on /healthz so the sign-in screen drops the admin-token form and the role-derivation caveat."),
 		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),
 		runnerTargetOverride:    flagEnv("runner-target", "WARDYN_RUNNER_TARGET", "", `substrate name STORED objects validate against when -runner is "none" ("docker" or "k8s"); TEST HARNESSES ONLY — it changes what may be REGISTERED (a user drive names the backend one target can mount), never what is dispatched, and is IGNORED whenever a runner is configured. Empty (the default) resolves the target "none", which refuses every drive backend`),
