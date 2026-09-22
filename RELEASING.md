@@ -198,6 +198,22 @@ another maintainer. Use the chosen version throughout this checklist.
    exception rather than as a rule change, and in the
    [CHANGELOG.md](CHANGELOG.md) section for 0.7.2 (`[Unreleased]` until step 1 of
    this checklist renames it). The rule above stands for every later line.
+
+   **Exception, by maintainer decision (2026-09-22):** 0.7.10 is developed on
+   `feature/0.7.10`, cut from `release/0.7`, and merged into `release/0.7` by
+   one release pull request, rather than landing on `main` first and being
+   cherry-picked — `main` carries a large amount of unrelated in-flight work,
+   so writing the change against `main` first and cherry-picking it onto
+   `release/0.7` would mean authoring it twice, against two different code
+   bases. It is forward-ported to `main` after that pull request merges. The
+   exception covers this patch line only; the rule above stands for every
+   later line.
+
+   The cut runs one guard before tagging: `git diff --quiet v0.7.9
+   release/0.7 -- internal/db/migrations go.mod go.sum` must be clean, and
+   any `ui/src` change is limited to the file list named in the release pull
+   request. `release/0.7` carries no branch protection, so that release pull
+   request is reviewed before merge rather than gated by required checks.
 4. **Tag the prepared release commit** on `release/X.Y`: `git tag vX.Y.Z`.
    Use the same `X.Y.Z` committed in step 2; do not recompute a patch number
    here. The version and CHANGELOG updates must already be committed, with

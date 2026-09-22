@@ -61,8 +61,21 @@ export const OTHER_ROLE = "DevPower";
 // A sandbox on a cluster is a pod: image pull, schedule, proxy sidecar, then a
 // device-code flow. Generous, and bounded — an unbounded wait is how a live
 // suite turns a failure into a hang.
-export const SANDBOX_UP = 300_000;
-export const LOGIN_DONE = 300_000;
+//
+// Both ceilings are ENVIRONMENT-OVERRIDABLE (WARDYN_LIVE_SANDBOX_UP_MS /
+// WARDYN_LIVE_LOGIN_DONE_MS), because the 300s default was tuned on a
+// developer box and is too tight for a hosted CI runner: the nightly kind SSO
+// walk schedules the CNI, Postgres, the daemon, Dex and every sandbox pod
+// concurrently on two vCPUs (#285 — the walk's first nightly dispatch timed
+// out here waiting for a freshly created sign-in sandbox). This is a timeout,
+// not a correctness bound, so raising it for slow CI hardware proves nothing
+// less than the same wait would on a fast box.
+function envMs(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+export const SANDBOX_UP = envMs("WARDYN_LIVE_SANDBOX_UP_MS", 300_000);
+export const LOGIN_DONE = envMs("WARDYN_LIVE_LOGIN_DONE_MS", 300_000);
 
 /**
  * Sign in through Dex's static-password form.

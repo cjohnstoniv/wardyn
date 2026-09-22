@@ -724,6 +724,7 @@ type dispatchLLMPlan struct {
 func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p dispatchParams,
 	policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant,
 	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig, siteCfgOK bool,
+	adoInject bool,
 ) (dispatchLLMPlan, bool) {
 	// WHOSE credential, decided from a roster we could actually READ. A failed
 	// read yields a zero siteCfg — perUser=false, owner="" — which is the
@@ -757,12 +758,14 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
 	// when ANY consumer needs one — intercept_tls content inspection,
 	// subscription/managed credential injection, artifact-token injection, or
-	// Bedrock bearer injection. The PRIVATE key reaches ONLY the proxy sidecar
-	// (ProxyConfig below); the sandbox trusts the PUBLIC cert. See
-	// provisionDispatchMITMCA for the trust-store wiring.
+	// Bedrock bearer injection, or the per-person Azure DevOps credential
+	// (authorADOEntraInjection, which REFUSES a run that reaches it without
+	// one). The PRIVATE key reaches ONLY the proxy sidecar (ProxyConfig below);
+	// the sandbox trusts the PUBLIC cert. See provisionDispatchMITMCA for the
+	// trust-store wiring.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.injectSub || llm.injectManaged || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO {
+	if llm.injectSub || llm.injectManaged || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject {
 		var ok bool
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false

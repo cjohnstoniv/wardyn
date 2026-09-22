@@ -489,6 +489,258 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sign-in tears the old sandbox down inside the new launch request rather than after the response —
   tracked separately from this list. Still open at 0.8.
 
+## [0.7.10] — 2026-09-22
+
+### Added
+
+- **An operator can declare SSO the only way into the console** (`WARDYN_SSO_ONLY`, chart
+  `auth.ssoOnly`). The daemon refuses to start if anything contradicts the posture — an admin token,
+  local mode, member mode, or the override that makes every signed-in human an admin — and the chart
+  refuses to render the same combinations. The sign-in screen then offers one SSO button: no
+  admin-token field, and none of the role-derivation caveat that the posture makes untrue (#378, #379).
+- **Per-person Azure DevOps access on Entra ID.** An Azure DevOps provider row can now use a new
+  `entra` lane with `credential_source: per_user`: each person's runs reach Azure DevOps as that
+  person, with their own Entra sign-in, instead of on a shared token. The row names the tenant, the
+  app registration and a capability ceiling in plain terms (`read`, `code_write`, `pr`,
+  `policy_bypass`, `repo_admin`, and so on); every ceiling includes `read`. The lane is accepted only
+  on `dev.azure.com` and `<org>.visualstudio.com`. An empty `lanes` list on a provider row still means
+  the app, PAT and SSH lanes only, so no existing row is opted into the new lane (#400).
+- **Wardyn checks every Azure DevOps REST call on that lane against what the run was granted.** An
+  Entra token carries every scope the person ever consented to, so the token does not limit a run.
+  Wardyn does: it pins the organisation, works out which capability each request needs, and forwards
+  only what the run holds. A refusal answers in Azure DevOps' own error shape (#407).
+- **The person's Azure DevOps credential is set up when a run starts and never enters the sandbox.**
+  Wardyn redeems the person's stored sign-in at dispatch and the egress proxy adds it to each
+  request; the sandbox holds nothing it could copy out. A run is refused at dispatch if its profile
+  asks for more than the row's ceiling (#408).
+- **git on that lane goes through Wardyn's git broker with the person's own credential.** Clone and
+  fetch need `read`; a push to the run's own `wardyn/<run-id>/` branches needs `code_write`, and a push
+  to any other branch needs `policy_bypass`. A push the run was not granted is held for approval
+  instead of failing, and git prints why in its own output when it is refused. This includes
+  exec-mode tasks on the published `agent-base` image, which previously could not reach the run's
+  own organisation over git (#409, #425).
+- **A request beyond what the run holds is held for a person to approve** rather than refused
+  outright. The person (or an admin) can allow it once, for this one request, or for the rest of the
+  run; nobody can approve past the row's ceiling. The request resumes on the same connection when
+  approved (#411).
+- **Wardyn reports whether you are connected to Azure DevOps, and a run that needs it waits for you.**
+  `GET /api/v1/me/scm-access` reports the calling person's connection state (also in
+  `/setup/status` and in the launch preflight as `git_credential`). Creating a run on a per-person
+  Azure DevOps repository with no sign-in on file is refused with a 422 (`reason: git_credential`);
+  the New Run form opens a Connect Azure DevOps dialog and relaunches once you are connected.
+  Building, scanning and recording a workspace are gated the same way, since each clones the
+  repository on the server. Getting started and Settings show the connection too (#415).
+- **Held Azure DevOps requests appear as approval cards.** The run's live approvals strip and the
+  Approvals screen show what the request needs, on which organisation and repository, with allow
+  once, allow for this run and deny. When the person's Entra consent is missing, the card points
+  them to reconnect instead. Run detail and the run card show a consent chip (#419).
+- **A Bedrock model call refused by an AWS policy or throttled now says so on the failed run.** A
+  403 `AccessDeniedException` (an Organizations SCP or IAM deny) or a 429 `ThrottlingException` on a
+  call the proxy relays is recorded on the egress decision and written to the run's failure hint; a
+  later clean call clears it. The response itself still passes through unchanged. Lanes where the
+  sandbox signs Bedrock calls itself over an opaque tunnel are not covered (#418).
+- An opt-in live test harness for Entra sign-in, Azure DevOps, Bedrock and AWS SSO against real
+  services, described in `docs/LIVE-TESTS.md`. It never runs in CI (#422).
+
+### Fixed
+
+- **Recordings past the thousandth were unreachable** in the console; the screen now pages (#296).
+- **An Azure DevOps request on the per-person lane could be sent through the proxy's plain lane,
+  skipping the organisation and capability checks while still carrying the person's credential.**
+  The plain lane now refuses every request to a host the run's Azure DevOps grant covers; REST goes
+  only through the checked, intercepted path and git only through the broker. Moving an annotated
+  tag and syncing a fork now need `policy_bypass`, like every other REST ref move; an import into a
+  repository needs `repo_admin`; and publishing to a package feed is recognised as `packaging_write`
+  instead of being refused as unrecognised (#413).
+- **A denied Azure DevOps request is refused for the rest of the run** instead of asking again, and an
+  approved request is no longer stuck until a restart when the proxy's check with the control plane
+  fails once (#414).
+- **Azure DevOps refusals now say what happened.** A 203 sign-in page becomes a 401 saying the person
+  is not signed in to Azure DevOps; a 401 names an expired, revoked or insufficient credential as the
+  likely causes; a 403 or 404 from Azure DevOps says the person's account lacks access. The same
+  messages reach git on the broker (#421).
+- **An Azure DevOps sign-in that expires or is blocked by Conditional Access mid-run no longer fails
+  the run's request outright.** The request is held and the person is asked to sign in again; it
+  resumes once they do, and is refused if they have not within `WARDYN_CREDENTIAL_REAUTH_TIMEOUT`. A
+  sign-in that is already dead when the run starts fails the run with a hint to sign in again. A
+  refused renewal is recorded, so Settings and Getting started show the sign-in as expired with a
+  connect button, and the next launch is refused as "connection ended" and offers the sign-in.
+  Widening a row's capability ceiling no longer breaks renewal of existing sign-ins: renewal asks
+  only for scopes the person already consented to, a newly added capability asks for consent when a
+  run first needs it, and a person whose sign-in does not cover the row's default profile is asked to
+  sign in again (#428).
+- **Large Azure DevOps package publishes and wiki attachments now work.** Wardyn reads a request
+  body only on the routes whose classification depends on it (pull-request updates, ref updates and
+  pushes, and work-item `$batch`); everything else streams through unread. A `$batch` operation must
+  be organisation-relative or name the pinned organisation first; a project-relative operation is
+  refused until it is shown to resolve inside the pinned organisation. The REST gate and the git
+  broker apply one rule for which ref names are valid, and the proxy sidecar refuses a configuration
+  that carries Azure DevOps grants without an interception CA (#426).
+- **Locking or unlocking an Azure DevOps branch through the REST API now needs the policy-bypass
+  permission.** That request names its branch in the address rather than the body, so a run could
+  not be held to the per-branch rule there; any non-POST request on a repository's refs is now
+  treated as administrative. An Azure DevOps consent request no longer counts against the budget a
+  run has for asking its owner to sign in again (#429).
+- **A drive-share probe could report its answer before it had cleared its own in-flight mark**, so an
+  immediate second probe could see a stale mark. The mark is now cleared before the answer is sent
+  (#423).
+- **A decision-log line could interleave with another and corrupt the record.** The proxy mirrors
+  decisions concurrently, and a line longer than the pipe buffer is not an atomic write; writes are
+  now locked. The first-use "approval pending" refusal body now spells it `approval-pending`, as the
+  header already did, and a panic in the audit webhook flush loop is contained instead of taking the
+  control plane down (#261).
+- **`/metrics` could answer with a truncated body and a healthy status.** The exposition is composed
+  before anything is written, so a failure mid-read is a failure, not a plausible-looking scrape (#336).
+- **A run reaped before it was ever dispatched died with no reason recorded** anywhere its owner
+  could read (#256).
+- **A clamped policy shared memory with its input**, so mutating one silently edited the other (#322).
+- **A tab refocus fired a duplicate poll during an in-flight read**, leaving the console showing
+  stale status (#314).
+- **The `not_applicable` model-access state rendered as nothing** — a blank cell where a status chip
+  belongs (#292).
+- **An HTTP/2 answer on a clone was reported as a dial failure.** The git and PAT brokers now classify
+  it as a protocol mismatch, like every other lane already did (#382).
+- **An org-scoped provider row with the SSH lane admitted the whole host.** An SSH URL carries no org
+  path, so the addresses an admin set were not the restriction they appeared to be. `PUT
+  /workspace-providers` (the console) now refuses a row that explicitly selects the SSH lane when its
+  own addresses carry an organisation path; an empty lanes list is unaffected. `PUT /site-config` (the
+  CLI/MDM door a laptop re-applies on every boot) does **not** refuse it: a stored document written
+  before this rule existed keeps applying, with the affected rows named in the response
+  (`ssh_lane_wide_past_path`) and a startup warning, rather than losing the rest of the document to a
+  hard 400 with no migration path. **This closes the hole only for configurations WRITTEN after this
+  upgrade** — a row saved under 0.7.9 or earlier keeps admitting SSH host-level at runtime exactly as
+  it does today until an operator re-saves it through the console. The console also now disables the
+  SSH checkbox (with its own reason) rather than letting an admin reach the same refusal at Save — on
+  Azure DevOps, whose org segment is mandatory, that lane is never explicitly selectable (#380).
+- **The PAT lane was labelled "in-sandbox" although the broker keeps the token out of the sandbox**
+  since 0.7; the label and residency now follow the deployment's real `WARDYN_GIT_PAT_BROKER` switch,
+  projected as `git_pat_broker_enabled` on `GET`/`PUT /workspace-providers` and `GET`/`PUT
+  /site-config` (both PUT responses too, so the label can't flip after Save and back before the next
+  reload). The git_pat approval card has no access to that switch and is member-facing, so it now
+  describes both postures rather than asserting one it can't verify; the Secrets page and the
+  Integrations rollup read the real value when they have it (#381).
+- The compose file **documented a writable member mount it did not provide** (#309).
+- The CLI **printed internal tracking identifiers** in user-facing output (#259), and
+  `--devcontainer-repo` **pointed at a command that does not do the job** (#354).
+- **A 5xx response could echo database or substrate error text to the caller.** Server errors now log
+  the detail and answer with the action alone, and a guard test fails the build on a reintroduced
+  site (#294, #295).
+- **The sign-in screen advertised the demo admin token** and told a locked-out reader to edit server
+  settings; it now says what belongs in the field and points them at their Wardyn admin (#267).
+- The GPL source offer's image list is **derived from what the release actually publishes** rather
+  than a hand-maintained list that drifts (#284).
+- **Four console DTOs closed against their Go wire types.** `AgentRun` was missing `agent_exec_id`,
+  `auto_stop_after_sec` and `source_id`; `AuditEvent` was missing `prev_hash` and `row_hash` — the two
+  fields the audit screen's own integrity story rests on. `ui_apps` — sent only by `GET /runs/{id}` —
+  moved off the shared `AgentRun` onto a new `RunDetail` type, so a list consumer (the board, the
+  table) is no longer typed for a field it never receives. `runs.wire.fields.test.ts`'s parity pattern
+  now also covers `AuditEvent`, closing the gap the hand-maintained TypeScript mirror had opened
+  against the Go structs it mirrors.
+- **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
+  status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
+  while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
+- **A corporate CA staged for `deploy/compose/Dockerfile.proxy`'s build never reached the running
+  proxy.** The builder stage trusted it for `go mod download`; the distroless runtime stage was
+  COPY-only and never carried it, so wardyn-proxy's own outbound TLS never saw it — indistinguishable
+  from a network fault to an operator, and the same failure class 0.7.9 already patched on the
+  control-plane side. The runtime stage now copies the builder's regenerated
+  `/etc/ssl/certs/ca-certificates.crt` (system roots **plus** the corporate CA, never the CA alone),
+  and the builder refuses to build if that bundle isn't actually larger than the bare CA. An install
+  with no corporate CA staged is unaffected. `wardyn-proxy`'s config validation now also warns at
+  boot when an upstream proxy is configured and an AWS SSO injection host has no
+  `upstream_proxy_no_proxy` entry covering it, and `wardyn support-bundle` now reports the upstream
+  proxy's host (never any embedded credential), its compiled bypass list, and whether a trusted CA
+  was loaded (#286).
+- **The nightly kind SSO walk's sandbox-up and login-done ceilings are now environment-overridable
+  (`WARDYN_LIVE_SANDBOX_UP_MS` / `WARDYN_LIVE_LOGIN_DONE_MS`).** The walk's first hosted-runner
+  dispatch timed out at `ui/e2e/live/helpers.ts`'s hardcoded 300s `SANDBOX_UP` ceiling waiting for a
+  freshly created sign-in sandbox: a hosted runner schedules the CNI, Postgres, the daemon, Dex and
+  every sandbox pod concurrently on two vCPUs, and that budget was tuned on a developer box.
+  `LOGIN_DONE` shares the same constant and the same code path, so it gets the same treatment.
+  `scripts/kind-sso-walk.sh` now raises both to 720s when `GITHUB_ACTIONS` is set; every other
+  caller keeps the unchanged 300s default. This is a slower-CI-hardware knob, not a flakiness
+  workaround — no assertion, skip or retry changed (#331).
+- **wardynd now warns at boot when a configured upstream proxy has no `upstream_proxy_no_proxy`
+  entry covering an internal model gateway host.** The per-target direct-dial bypass this warns
+  about already shipped (`Proxy.bypassUpstream` covers the gateway route too, via
+  `Proxy.gatewayTarget`) — ROADMAP.md wrongly still listed it as unbuilt, which is now corrected.
+  The new warning (`warnUpstreamProxyNoBypass`, `cmd/wardynd/trusted_ca.go`) says explicitly that
+  it is a boot-time read: `SiteConfig` is admin-editable afterwards, so the upstream proxy and its
+  bypass list can both change without a restart (#307).
+- **`wardyn attach` now tells you when a session is read-only, instead of silently discarding the
+  keystrokes.** The CLI used to skip every non-binary frame from the attach WebSocket, including the
+  server's `attach-mode` control frame — someone attached while another client held the terminal saw
+  no output and no explanation. It now decodes that frame: a read-only dial prints one line to STDERR
+  naming the holder and where they attached from. stdout is untouched in every case — it stays
+  exactly the PTY output it always was. (The CLI also handles a later promotion frame on the same
+  socket, re-sending the window size — forward-compatible, but 0.7.10's server has one call site for
+  `writeAttachMode` and never sends that second frame, so in-place promotion is not yet reachable
+  here) (#312).
+
+### Changed
+
+- `docs/adoption/azure-devops-entra.md` documents per-person Azure DevOps access on Entra ID.
+- **`/healthz` now always reports `token_login` and `sso_only`**, so the sign-in screen can decide
+  what to offer before anyone signs in. Anyone who can reach `/healthz` can read them: `sso_only` is
+  new, and `token_login` reflects whether member mode is on, which `/healthz` did not previously
+  disclose (#378, #379).
+
+
+### Security
+
+- **Console SSO sign-in now asks for Azure DevOps access and keeps a refresh token per person** when
+  an Azure DevOps Entra row names the console's own app registration in the sign-in tenant. The
+  sign-in request adds the row's scopes and `offline_access`, and Wardyn stores each person's refresh
+  token in its encrypted secret store under that person, so runs can reach Azure DevOps without
+  another sign-in. A tenant that refuses the extra scopes does not block the console sign-in: Wardyn
+  retries once without them. A deployment with no such row sends exactly the sign-in request it sent
+  before. A dedicated Azure DevOps sign-in is also available for anyone the console sign-in did not
+  connect (#401).
+- **A handler that builds a 5xx body's `(status, message)` pair and hands it to a helper could still
+  forward driver/substrate error text into it, past the guard added for #173.** The guard only read
+  direct `writeError` call sites, so a helper's own call site — where the message had already
+  collapsed into one opaque string argument — reported clean. Seven sites did this: `refuseCapture`'s
+  four callers in `ssotoken.go` (the AWS SSO capture path — the door the sandbox itself talks to),
+  `driveBindFailureHere`'s runner-capabilities-unavailable arm (`user_drives_run.go`), and `uiFail`'s
+  two callers in `uigateway.go`, which forwarded `sshExecStreamErrorMessage`'s own raw-error fallback.
+  All seven now log the error and send a fixed sentence; their `reason` codes are unchanged, since the
+  SDK reads them as a wire contract. The guard (`TestNoDriverTextInServerErrorBody`) now follows one
+  hop into a known forwarder (`refuseCapture`, `uiFail`, and the `*driveBindFailure` composite-literal
+  shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
+  `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
+  handler written in this indirect style no longer passes CI clean.
+
+## [0.7.9] — 2026-09-21
+
+### Fixed
+
+- **The egress proxy offered HTTP/2 it could not speak, on every install with a corporate CA.**
+  `NewServer` built one `*tls.Config` for the corporate CA pool and shared it between the sidecar's
+  control-plane client and the proxy's own transports. Enabling HTTP/2 on the first of those edits
+  that config in place, adding `h2` to the protocols offered, so the egress transport — which had no
+  HTTP/2 support — began offering HTTP/2 to every TLS peer. A peer that accepted the offer answered
+  with HTTP/2 frames the HTTP/1.1 reader could not parse, and the request failed. This is what broke
+  the AWS SSO lane behind `upstream_proxy_url` (`mode: sso-inject-proxy`) on a corporate-CA estate,
+  where every re-originated request failed. Each transport now gets its own copy (#360).
+- **The egress proxy could not talk to a TLS peer that speaks HTTP/2.** It now offers
+  `h2,http/1.1` and uses HTTP/2 when a peer selects it. A peer that speaks HTTP/2 without
+  negotiating it is recognised from its first bytes: that host is remembered for the run, and the
+  request is resent over HTTP/2 rather than failing (#360).
+- **An HTTP/2 answer was recorded as a dial failure and retried until the SDK gave up.** When a
+  request cannot be completed over HTTP/2 either, it now carries its own
+  `builtin:upstream-protocol-mismatch` rule source with a cause that names the mismatch instead of
+  raw frame bytes, and it is answered with a 400 so SDKs stop retrying (#359).
+
+- A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
+  so a write still finishing from the failed attempt can never interleave with the resend (#368).
+
+### Changed
+
+- The egress proxy offers HTTP/2 to TLS peers and uses it when a peer selects it, on every lane
+  including the git and PAT brokers. It previously spoke HTTP/1.1 only (#360).
+- `docs/OPERATIONS.md` states that `upstream_proxy_no_proxy` CIDR entries match destinations written
+  as IP literals, never a hostname that resolves into the range (#361).
+
 ## [0.7.8] — 2026-09-19
 
 ### Added
