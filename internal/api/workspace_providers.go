@@ -45,6 +45,7 @@ const (
 	providers400Kind        = "git[%d].kind: %q is not a git provider kind — want one of: %s"
 	providers400BaseURLNone = "git[%d].base_urls: name at least one address (at most %d)"
 	providers400LaneKind    = "git[%d].lanes: %q is not a lane — want one of: %s"
+	providers400LaneSSHPath = "git %q: the SSH lane has no org path to bound, so it would admit the whole host — drop the SSH lane or widen this row's addresses to the bare host"
 	providers400Negative    = "%s: %d is not a size in MiB — use 0 for unset"
 	providers412Stale       = "providers changed since you loaded them — reload and retry"
 
@@ -338,10 +339,50 @@ func validateProviderLanes(i int, row types.GitProvider) error {
 	if slices.Contains(row.Lanes, types.GitLaneApp) && !hasGitHubCom {
 		return fmt.Errorf(providers400Lane, string(types.GitLaneApp), string(row.Kind), laneAppReason)
 	}
-	if slices.Contains(row.Lanes, types.GitLaneSSH) && !hasSSHEndpoint {
-		return fmt.Errorf(providers400Lane, string(types.GitLaneSSH), string(row.Kind), laneSSHReason)
+	if slices.Contains(row.Lanes, types.GitLaneSSH) {
+		if !hasSSHEndpoint {
+			return fmt.Errorf(providers400Lane, string(types.GitLaneSSH), string(row.Kind), laneSSHReason)
+		}
+		// EXPLICIT SSH only: an empty Lanes list also carries the SSH lane
+		// (laneAllowed's default-allow), and that case keeps admitting host-level
+		// with only the admitSSHHostLevel WARNING, exactly as it does today — an
+		// operator who never touched Lanes must not have a stored row start
+		// refusing writes or PUTs on managed-desktop re-apply. An operator who
+		// TICKED the SSH lane on a row an org path also scopes gets refused here
+		// instead: SSH carries no path to bound (cloneTarget, sshAdmittedAbovePath),
+		// so the org scoping the row's own addresses claim to have is fiction for
+		// that lane, and admitting it silently is the bug #380 reports.
+		if sshLaneExceedsPathScope(row) {
+			return fmt.Errorf(providers400LaneSSHPath, row.ID)
+		}
 	}
 	return nil
+}
+
+// sshLaneExceedsPathScope reports whether row's own base URLs would leave the
+// SSH lane wider than they read: true when every base URL matching an
+// SSH-over-443 host (sshOver443Endpoint) carries a path. SSH scoping is
+// host-level only (cloneTarget), so a bare-host base URL for that host means the
+// row already claims the whole host and the SSH lane widens nothing; a path on
+// every matching entry means the SSH lane silently drops the path the https
+// lanes enforce.
+func sshLaneExceedsPathScope(row types.GitProvider) bool {
+	sawSSHHost := false
+	for _, raw := range row.BaseURLs {
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" {
+			continue
+		}
+		host := strings.ToLower(u.Hostname())
+		if _, ok := sshOver443Endpoint(host); !ok {
+			continue
+		}
+		sawSSHHost = true
+		if strings.Trim(u.Path, "/") == "" {
+			return false // this entry already bounds the whole host
+		}
+	}
+	return sawSSHHost
 }
 
 // validateStorageProviders holds the two storage halves to the one invariant

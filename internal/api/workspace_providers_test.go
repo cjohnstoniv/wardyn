@@ -139,7 +139,7 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 		}), true},
 
 		{"app on github.com", ok(types.GitProvider{
-			ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com/acme"},
+			ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com"},
 			Lanes: []types.GitLane{types.GitLaneApp, types.GitLanePAT, types.GitLaneSSH},
 		}), false},
 		{"app on a GHES row is refused", ok(types.GitProvider{
@@ -150,14 +150,18 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 			ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
 			Lanes: []types.GitLane{types.GitLaneApp},
 		}), true},
-		{"ssh on dev.azure.com", ok(types.GitProvider{
-			ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
-			Lanes: []types.GitLane{types.GitLaneSSH},
-		}), false},
 		{"ssh on an ADO Server row is refused", ok(types.GitProvider{
 			ID: "ados", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://tfs.corp.example/acme"},
 			Lanes: []types.GitLane{types.GitLaneSSH},
 		}), true},
+		{"#380: explicit ssh lane on an org-scoped row is refused", ok(types.GitProvider{
+			ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
+			Lanes: []types.GitLane{types.GitLaneSSH},
+		}), true},
+		{"#380: empty lanes on an org-scoped row is admitted (host-level SSH warns, not refuses)",
+			ok(types.GitProvider{
+				ID: "ado", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://dev.azure.com/acme"},
+			}), false},
 		{"pat needs no host", ok(types.GitProvider{
 			ID: "ghes", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://git.corp.example/acme"},
 			Lanes: []types.GitLane{types.GitLanePAT},
