@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -616,8 +617,18 @@ func (i *injector) headerFor(host string) (injectedHeader, bool) {
 // a hard startup failure: we fail closed rather than start a proxy that
 // silently forwards uncredentialed requests.
 func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID, client *http.Client) (types.ResolvedInjection, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		base+"/api/v1/internal/injection/"+grantID.String(), nil)
+	return resolveInjectionQuery(ctx, base, token, grantID, nil, client)
+}
+
+// resolveInjectionQuery is resolveInjection with a query — the Azure DevOps
+// capability hold's per-(host, capability) ask (ado_hold.go). nil is the plain
+// resolve, byte-identical on the wire.
+func resolveInjectionQuery(ctx context.Context, base, token string, grantID uuid.UUID, query url.Values, client *http.Client) (types.ResolvedInjection, error) {
+	target := base + "/api/v1/internal/injection/" + grantID.String()
+	if len(query) > 0 {
+		target += "?" + query.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return types.ResolvedInjection{}, err
 	}
@@ -644,7 +655,7 @@ func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID
 				return types.ResolvedInjection{}, pending
 			}
 		}
-		return types.ResolvedInjection{}, fmt.Errorf("injection status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return types.ResolvedInjection{}, injectionStatusError{status: resp.StatusCode, body: strings.TrimSpace(string(b))}
 	}
 	var ri types.ResolvedInjection
 	if err := json.NewDecoder(resp.Body).Decode(&ri); err != nil {

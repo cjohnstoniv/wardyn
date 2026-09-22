@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -65,7 +67,35 @@ const (
 	// (a read racing the row's own insert), and forever is the bug: a row that
 	// has really gone is a hold waiting on nothing.
 	reauth404Reads = 3
+	// maxCapabilityHolds bounds Azure DevOps capability ESCALATIONS per run, on
+	// their own budget so a run that asks for more access cannot spend the
+	// sign-in budget above (or the reverse). The control plane keeps its own cap
+	// of the same kind (maxADOCapabilityHoldsPerRun); this one alone is not a
+	// limit, because a restarted sidecar starts it at zero.
+	maxCapabilityHolds = 16
+	// maxCapabilityHoldTimeout clamps a capability hold BELOW the MITM inner
+	// server's 5-minute ReadTimeout, which bounds the whole request including
+	// its body: a longer hold would fail an approved POST on the body read that
+	// follows the approval.
+	maxCapabilityHoldTimeout = 240 * time.Second
 )
+
+// capabilityHoldBudget is the re-auth knob, clamped to the capability ceiling.
+func capabilityHoldBudget() time.Duration {
+	return min(credentialReauthBudget(), maxCapabilityHoldTimeout)
+}
+
+// injectionStatusError is the plain resolve's non-200, kept typed so a caller
+// that needs the status (the capability hold) need not parse the text. Error()
+// is the sentence resolveInjection has always returned.
+type injectionStatusError struct {
+	status int
+	body   string
+}
+
+func (e injectionStatusError) Error() string {
+	return fmt.Sprintf("injection status %d: %s", e.status, e.body)
+}
 
 // credentialReauthBudget is the operator's ceiling for ONE hold, clamped.
 // Unparseable or non-positive keeps the default — this knob is reached in a
@@ -81,7 +111,16 @@ func credentialReauthBudget() time.Duration {
 // errReauthPending is what a 423 from the injection resolve becomes: the
 // control plane is not refusing, it is asking for a human. It carries the id of
 // the request to poll.
-type errReauthPending struct{ approvalID uuid.UUID }
+type errReauthPending struct {
+	approvalID uuid.UUID
+	// state is the 423 body's own word: reauth_pending (a sign-in or a consent
+	// is wanted) or capability_pending (a person is deciding an escalation).
+	state string
+}
+
+// capabilityPendingState is the 423 state the Azure DevOps capability arm
+// answers while a person decides an escalation.
+const capabilityPendingState = "capability_pending"
 
 func (e errReauthPending) Error() string {
 	return "credential re-auth pending: approval " + e.approvalID.String()
@@ -199,6 +238,12 @@ type reauthWorkflow struct {
 	stop chan struct{}
 	// reported claims the ONE decision row for this workflow's expiry.
 	reported atomic.Bool
+	// query is the capability hold's re-resolve ask (nil on the re-auth hold).
+	query url.Values
+	// onceTaken is claimed by the ONE waiter that forwards on a `once`
+	// approval: every request parked on the same approval shares this
+	// workflow, and "once" is one request, not one per waiter.
+	onceTaken atomic.Bool
 }
 
 // finished reports whether the workflow already has its terminal result.
@@ -244,7 +289,7 @@ func (w *reauthWorkflow) run(base string, token *tokenSource, grantID uuid.UUID,
 	// still signing in for.
 	ctx, cancel := context.WithDeadline(context.Background(), w.deadline)
 	defer cancel()
-	w.resolved, w.err = holdForReauth(ctx, w.poll, w.stop, base, token, grantID, client, approvals, w.approvalID)
+	w.resolved, w.err = holdForReauth(ctx, w.poll, w.stop, base, token, grantID, w.query, client, approvals, w.approvalID)
 	close(w.done)
 }
 
@@ -263,6 +308,12 @@ type reauthCoordinator struct {
 	// counted is how many LIFECYCLES this run has opened, ever — never
 	// decremented: the cap is a budget for the run, not a concurrency limit.
 	counted int
+	// capCounted is the same budget for capability escalations, counted
+	// separately (maxCapabilityHolds).
+	capCounted int
+	// standing is what a person approved "for this run" mid-run, on top of the
+	// run's dispatch-time grant. Only ever grows.
+	standing map[adoscope.Capability]bool
 }
 
 func newReauthCoordinator() *reauthCoordinator {
@@ -283,21 +334,58 @@ func (c *reauthCoordinator) stop() {
 // refuses a NEW lifecycle; an EXISTING one is always joinable, because refusing
 // a caller for arriving late would punish it for the cadence of its own SDK.
 func (c *reauthCoordinator) admit(approvalID uuid.UUID, budget time.Duration) (wf *reauthWorkflow, fresh, ok bool) {
+	return c.admitWith(approvalID, budget, nil)
+}
+
+// admitCapability is admit for an Azure DevOps escalation: its own budget, and
+// the re-resolve ask the workflow ends with.
+func (c *reauthCoordinator) admitCapability(approvalID uuid.UUID, query url.Values) (wf *reauthWorkflow, fresh, ok bool) {
+	return c.admitWith(approvalID, capabilityHoldBudget(), query)
+}
+
+func (c *reauthCoordinator) admitWith(approvalID uuid.UUID, budget time.Duration, query url.Values) (wf *reauthWorkflow, fresh, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if existing, found := c.workflows[approvalID]; found {
-		return existing, false, true
+		// A capability hold that ran out while its request was still open is
+		// the one exception to "terminal is sticky": the person may answer
+		// after the budget, and the retry must wait again (counted), not be
+		// told at once that nobody answered.
+		if query == nil || !existing.finished() || !errors.Is(existing.err, errReauthTimedOut) {
+			return existing, false, true
+		}
 	}
-	if c.counted >= maxReauthHolds {
+	counter, limit := &c.counted, maxReauthHolds
+	if query != nil {
+		counter, limit = &c.capCounted, maxCapabilityHolds
+	}
+	if *counter >= limit {
 		return nil, false, false
 	}
-	c.counted++
+	*counter++
 	wf = &reauthWorkflow{
 		approvalID: approvalID, deadline: time.Now().Add(budget),
-		done: make(chan struct{}), poll: holdPollInterval, stop: c.quit,
+		done: make(chan struct{}), poll: holdPollInterval, stop: c.quit, query: query,
 	}
 	c.workflows[approvalID] = wf
 	return wf, true, true
+}
+
+// widen records a capability approved for the rest of this run.
+func (c *reauthCoordinator) widen(capability adoscope.Capability) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.standing == nil {
+		c.standing = map[adoscope.Capability]bool{}
+	}
+	c.standing[capability] = true
+}
+
+// holds reports whether capability was approved for the rest of this run.
+func (c *reauthCoordinator) holds(capability adoscope.Capability) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.standing[capability]
 }
 
 // approvalReader is the one control-plane read a hold makes. An interface so
@@ -309,8 +397,15 @@ type approvalReader interface {
 
 // holdForReauth polls the APPROVAL until it is answered, the budget ends or the
 // caller disconnects, then re-resolves the injection exactly once.
+//
+// query is the capability hold's re-resolve ask (nil = the re-auth hold). On
+// that hold a re-resolve may answer a NEW 423 — the approved capability needs a
+// consent the person has not given — and the loop then polls THAT request,
+// under the same deadline, and re-resolves once more when it is answered. The
+// ask itself does not change: it still names the escalation approval, which is
+// spent only by the re-resolve that finally succeeds.
 func holdForReauth(ctx context.Context, poll time.Duration, stop <-chan struct{},
-	base string, token *tokenSource, grantID uuid.UUID,
+	base string, token *tokenSource, grantID uuid.UUID, query url.Values,
 	client *http.Client, approvals approvalReader, approvalID uuid.UUID,
 ) (types.ResolvedInjection, error) {
 	tick := time.NewTicker(poll)
@@ -363,8 +458,13 @@ func holdForReauth(ctx context.Context, poll time.Duration, stop <-chan struct{}
 			// bound instead, so the hold ends on a resolve that either landed
 			// or did not.
 			rctx, rcancel := context.WithTimeout(context.Background(), reauthFinalResolveTimeout)
-			out, rerr := resolveInjection(rctx, base, token.Get(), grantID, client)
+			out, rerr := resolveInjectionQuery(rctx, base, token.Get(), grantID, query, client)
 			rcancel()
+			var next errReauthPending
+			if query != nil && errors.As(rerr, &next) && next.approvalID != approvalID {
+				approvalID, notFound = next.approvalID, 0
+				continue
+			}
 			if rerr != nil {
 				return types.ResolvedInjection{}, reauthEndedResolve
 			}
@@ -517,7 +617,7 @@ func reauthPendingFrom(body []byte) (errReauthPending, bool) {
 	if err != nil || id == uuid.Nil {
 		return errReauthPending{}, false
 	}
-	return errReauthPending{approvalID: id}, true
+	return errReauthPending{approvalID: id, state: p.State}, true
 }
 
 // reauthHoldError renders a hold failure for a log line. Never for the sandbox:
