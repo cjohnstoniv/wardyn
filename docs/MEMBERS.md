@@ -258,8 +258,10 @@ their own inline policy.
   or by adding the org path your repository sits under to a row that already
   covers it. Give them the repository's full clone URL: the rows are matched by
   host and by URL prefix, so `https://dev.azure.com/acme` and
-  `https://dev.azure.com/acme-labs` are two different answers. If instead the
-  refusal says your work may not come from that provider, ask for a
+  `https://dev.azure.com/acme-labs` are two different answers. On an Azure DevOps organisation
+  backed by Entra ID you may be asked to sign in with your own identity instead of an admin's shared
+  token — see [azure-devops-entra.md](adoption/azure-devops-entra.md) for what that looks like. If
+  instead the refusal says your work may not come from that provider, ask for a
   `workspace_provider` capability grant naming it.
 - **A custom sandbox image** — an `image` capability grant.
 - **A workspace root**, if you don't have one yet.
