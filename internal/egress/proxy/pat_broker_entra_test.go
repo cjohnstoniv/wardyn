@@ -53,6 +53,14 @@ type adoGitHarness struct {
 
 func newADOGitHarness(t *testing.T, caps ...adoscope.Capability) *adoGitHarness {
 	t.Helper()
+	return newADOGitHarnessWith(t, nil, caps...)
+}
+
+// newADOGitHarnessWith runs setup against the proxy BEFORE its server starts
+// serving, so anything setup writes happens-before every request — git reaches
+// the proxy from a subprocess, which the race detector cannot order otherwise.
+func newADOGitHarnessWith(t *testing.T, setup func(p *Proxy, token string), caps ...adoscope.Capability) *adoGitHarness {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
@@ -97,6 +105,9 @@ func newADOGitHarness(t *testing.T, caps ...adoscope.Capability) *adoGitHarness 
 		TLSClientConfig: testInsecureTLSConfig,
 		ADOGrants:       adoGrantMap{"dev.azure.com": grant, "acme.visualstudio.com": grant},
 	})
+	if setup != nil {
+		setup(p, token)
+	}
 	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
 

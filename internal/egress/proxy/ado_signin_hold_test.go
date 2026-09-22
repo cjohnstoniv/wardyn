@@ -104,10 +104,10 @@ func TestADOSignInHold_EndedHoldIsAnAzureDevOpsShaped403(t *testing.T) {
 
 // git gets the same refusal in plain text, which it prints as "remote: …".
 func TestADOSignInHold_GitGetsPlainText(t *testing.T) {
-	h := newADOGitHarness(t, adoscope.CapRead)
 	fastPolls(t, 5*time.Millisecond)
-	cp := newSignInControlPlane(t, h.bearer)
-	lapse(t, h.p.inject, "dev.azure.com", cp, &fakeApprovalReader{steps: steps(types.ApprovalCancelled)})
+	h := newADOGitHarnessWith(t, func(p *Proxy, token string) {
+		lapse(t, p.inject, "dev.azure.com", newSignInControlPlane(t, token), &fakeApprovalReader{steps: steps(types.ApprovalCancelled)})
+	}, adoscope.CapRead)
 	out, err := h.git(t, "clone", "https://dev.azure.com/acme/proj/_git/app", t.TempDir()+"/c")
 	mustBeGitRefusal(t, out, err, "the request ended before a sign-in arrived")
 }
