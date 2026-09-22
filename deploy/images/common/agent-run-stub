@@ -14,14 +14,20 @@
 # far worse to debug than a sentence.
 set -euo pipefail
 source /usr/local/bin/agent-run-lib.sh
-# ponytail: exec task mode only — no clone/credential prep, since the probe
-# policy never grants those. install_mitm_ca IS called: it is a no-op unless
-# dispatch delivered a WARDYN_MITM_CA_PEM bundle, and when it did (a corporate
+# ponytail: exec task mode only — no clone/credential prep beyond the git
+# rewrites below, since the probe policy never grants those. install_mitm_ca
+# IS called: it is a no-op unless dispatch delivered a WARDYN_MITM_CA_PEM bundle, and when it did (a corporate
 # CA via WARDYN_TRUSTED_CA_FILE, or intercept_tls) dispatch also pointed
 # CURL_CA_BUNDLE/SSL_CERT_FILE/REQUESTS_CA_BUNDLE at the bundle it writes —
 # skipping it here left curl pointed at a file that never existed, and the
 # setup connectivity probe (which runs on THIS image) read "no internet".
 install_mitm_ca
+# The git rewrites too: each is a no-op unless dispatch set its host list, and
+# when it did, git's ONLY credentialed route to that host is the proxy's
+# /wardyn/git/ broker. On a per-person Azure DevOps lane the intercepted
+# connection refuses git outright, so an exec task that skipped this could not
+# run git against the run's own organisation at all.
+configure_git_broker_insteadof; configure_git_pat_broker_insteadof
 [ "${1:-}" = "--idle" ] || maybe_exec_task_mode "${1:-}"
 cat >&2 <<'MSG'
 agent-run: this is wardyn/agent-base, which ships no coding agent.
