@@ -27,7 +27,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -114,16 +113,9 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusUnauthorized {
-		// Azure DevOps refused the person's credential. Relayed as a 401, git
-		// would prompt for a username instead of saying so.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		slog.Warn("proxy: Azure DevOps refused the brokered git credential", "host", host)
-		writeADOGitRefusal(w, push,
-			"Wardyn's git broker: Azure DevOps refused this run's Azure DevOps sign-in (401). The owner may need to sign in to Azure DevOps again.")
-		return
+	if !p.refuseADOGitUpstream(w, r, host, rest, push, resp) {
+		relay(w, resp)
 	}
-	relay(w, resp)
 }
 
 // refuseADOGit is the ONE refusal point for git on the Azure DevOps Entra
