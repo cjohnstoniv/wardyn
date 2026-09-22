@@ -480,7 +480,7 @@ outputs of the walk, not operator inputs; nothing external should set them. The
 last three are the cluster coordinates the recovery spec's cold-start case needs
 to taint the node and read the run pod's phase back: passing them rather than
 letting the spec guess is what makes that case RED on a renamed cluster instead
-of vacuous.
+of vacuous. `WARDYN_LIVE_ROLES_RENDER` (`sso` / `sso-only` / `mprime` / `compose-sso`) is the same kind of handoff to `ui/e2e/live/sso-roles.spec.ts`: the render that role leg runs on. `scripts/compose-sso-roles.sh` runs that spec on the two compose shapes (the desktop member-mode envelope and `--profile sso`) and self-skips unless `WARDYN_TEST_SSO_ROLES=1`; `WARDYN_ROLES_WARDYND_IMAGE` / `WARDYN_ROLES_PROXY_IMAGE` (default the `:quickstart` tags) and `WARDYN_ROLES_EVIDENCE` (default `local/evidence/compose-sso-roles`) are its only other inputs.
 
 `WARDYN_LIVE_SANDBOX_UP_MS` / `WARDYN_LIVE_LOGIN_DONE_MS` (int ms; default
 `300000`, unset) are the one pair of operator inputs in this group:
