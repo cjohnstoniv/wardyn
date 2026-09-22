@@ -62,6 +62,11 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 // regardless of what the (untrusted-input-driven) analyzer OR a member's own
 // hand-authored inline_policy proposed.
 //
+// The returned spec OWNS its memory: it shares no backing array and no pointee
+// with EITHER argument, so an in-place mutation of the caller's proposal (or of
+// the clamped spec) can never move a ceiling this function already enforced.
+// See cloneProposal.
+//
 // Clamps applied:
 //   - confinement raised to the operator's minimum class if the proposal is weaker;
 //   - allow_all_egress forced off unless the ceiling permits it;
@@ -118,7 +123,7 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 // request-less run the ceiling as its size and the docker driver fails a create
 // closed on overlay2-over-ext4 (every laptop) the moment DiskMiB is non-zero.
 func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (types.RunPolicySpec, []string) {
-	out := proposed
+	out := cloneProposal(proposed)
 	var warns []string
 
 	// Confinement floor.
@@ -324,6 +329,65 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	}
 
 	return out, warns
+}
+
+// cloneProposal takes OWNERSHIP of the caller's proposal: the returned spec
+// shares no backing array and no pointee with it, so nothing Clamp hands back
+// can later be widened by a mutation of the original (or the reverse).
+//
+// `out := proposed` is a SHALLOW copy, and a ceiling with no opinion on a field
+// leaves that field's slice header or pointer untouched — so the clamped spec
+// aliased the caller's allowed_domains, denied_domains, allowed_methods,
+// ui_apps, workspace_repos, each grant's Scope bytes, and (whenever the
+// resource cap was already inside the ceiling) the very *ResourceLimits the
+// clamp exists to bound. An in-place write through either side then moved a
+// ceiling that had already been enforced. No caller mutates one today; that is
+// a property of today's callers, not of this function, and it is the clamp's
+// job to hold regardless.
+//
+// slices.Clone, not Clone's `append([]T(nil), ...)` idiom: it preserves nil vs
+// non-nil-empty, so a clamped spec's JSON keeps saying `[]` where it said `[]`.
+// types.RunPolicySpec.Clone is not used for the same reason, plus it copies
+// GrantSpec.Scope and WorkspaceMount.ReadOnly only one level deep.
+//
+// Every reference field is copied, including the three Clamp itself later
+// drops or rebuilds: workspace_mounts (dropped outright), llm_inspection
+// (inherited from the ceiling or cleared) and a non-empty tool_rules (rebuilt
+// by clampToolRules). Those three copies are unobservable through Clamp today,
+// but a helper whose contract is "shares nothing" must not depend on a
+// caller's later step to be true — TestCloneProposal_SharesNothingWithItsInput
+// pins them directly, since no test written against Clamp can.
+func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
+	out := s
+	out.AllowedDomains = slices.Clone(s.AllowedDomains)
+	out.DeniedDomains = slices.Clone(s.DeniedDomains)
+	out.AllowedMethods = slices.Clone(s.AllowedMethods)
+	out.UIApps = slices.Clone(s.UIApps)
+	out.ToolRules = slices.Clone(s.ToolRules)
+	out.WorkspaceRepos = slices.Clone(s.WorkspaceRepos)
+	out.WorkspaceMounts = slices.Clone(s.WorkspaceMounts)
+	for i := range out.WorkspaceMounts {
+		if ro := s.WorkspaceMounts[i].ReadOnly; ro != nil {
+			v := *ro
+			out.WorkspaceMounts[i].ReadOnly = &v
+		}
+	}
+	out.EligibleGrants = slices.Clone(s.EligibleGrants)
+	for i := range out.EligibleGrants {
+		out.EligibleGrants[i].Scope = slices.Clone(s.EligibleGrants[i].Scope)
+	}
+	if s.Resources != nil {
+		r := *s.Resources
+		out.Resources = &r
+	}
+	if s.LLMInspection != nil {
+		li := *s.LLMInspection
+		li.WorkspaceSecretNames = slices.Clone(s.LLMInspection.WorkspaceSecretNames)
+		li.WorkspaceSecretValues = slices.Clone(s.LLMInspection.WorkspaceSecretValues)
+		li.ClassifiedMarkers = slices.Clone(s.LLMInspection.ClassifiedMarkers)
+		out.LLMInspection = &li
+	}
+	return out
 }
 
 // clampUIApps bounds a proposal's UI apps. The ceiling's list is an ALLOWLIST of (name, port) pairs when it

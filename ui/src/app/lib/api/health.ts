@@ -287,6 +287,19 @@ export const health = {
     // OIDC is configured, so GET /auth/login exists — the sign-in screen only
     // offers the SSO link when the server says the flow is actually mounted.
     sso?: boolean;
+    // token_login (#378/#379): whether the sign-in screen should offer the
+    // admin-token form at all — a token is actually configured, and neither
+    // sso_only nor member mode is set (internal/api/healthz.go's
+    // handleHealthz). Absent on an older daemon, which must read the same as
+    // `true` — the form is today's only path there and dropping it would be
+    // the wrong default, not a safer one.
+    token_login?: boolean;
+    // sso_only mirrors WARDYN_SSO_ONLY (cmd/wardynd's validateSSOOnlyPosture):
+    // true only when OIDC is configured and every other way in is refused at
+    // boot, so the sign-in screen can safely drop SIGNIN.ROLE_SOURCE's
+    // "everyone is an admin" caveat. Absent on an older daemon, which must
+    // read the same as `false`.
+    sso_only?: boolean;
     // SSH gateway discovery (run-detail's "Connect via SSH" pane): absent /
     // undefined on a deployment with the gateway off (WARDYN_SSH_LISTEN
     // unset) or an older daemon — both must read as "no pane", never a

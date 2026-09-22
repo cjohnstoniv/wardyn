@@ -59,6 +59,60 @@ func validateMemberModePosture(memberMode, localMode, oidcConfigured bool) error
 	return nil
 }
 
+// validateSSOOnlyPosture enforces WARDYN_SSO_ONLY's precondition: SSO must
+// actually be the ONLY way in before the daemon may claim it is — and before
+// /healthz's sso_only bit, which the sign-in screen reads to drop the
+// admin-token form and the role-derivation caveat, may say so either.
+//
+// Five ways back into "not actually SSO-only", each refused by name:
+//
+//  1. No OIDC issuer configured — sso-only with no SSO at all would leave the
+//     console with no usable sign-in whatsoever.
+//  2. WARDYN_ADMIN_TOKEN set — a live shared bearer token is a second front
+//     door the posture claims does not exist.
+//  3. WARDYN_LOCAL_MODE set — local mode bypasses public-API auth entirely,
+//     which is precisely what sso-only asserts is impossible.
+//  4. WARDYN_MEMBER_MODE set — member mode's own precondition
+//     (validateMemberModePosture above) already requires OIDC, but its
+//     desktop profile (deploy/desktop/wardyn.env.m-prime.example) relies on
+//     the admin token as a PROCESS credential the daemon authenticates
+//     itself with, which sso-only forbids outright.
+//  5. WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set — the override that makes
+//     "every signed-in human is an admin" reachable is exactly the ambiguity
+//     sso-only exists to close off; refusing it is what lets the sign-in
+//     screen safely drop SIGNIN.ROLE_SOURCE's caveat.
+func validateSSOOnlyPosture(ssoOnly, oidcConfigured bool, adminToken string, localMode, memberMode, allowNoOperatorList bool) error {
+	if !ssoOnly {
+		return nil
+	}
+	if !oidcConfigured {
+		return errors.New("refusing to start: WARDYN_SSO_ONLY is set but no OIDC issuer is configured — " +
+			"sso-only asserts SSO is the only way into the console, and with no issuer there is no SSO at all; " +
+			"configure WARDYN_OIDC_ISSUER (plus WARDYN_OIDC_OPERATOR_EMAILS or WARDYN_OIDC_ROLE_MAP) or unset WARDYN_SSO_ONLY")
+	}
+	if adminToken != "" {
+		return errors.New("refusing to start: WARDYN_SSO_ONLY is set but WARDYN_ADMIN_TOKEN is also set — " +
+			"a live admin bearer token is a second way into the console, which sso-only asserts does not exist; " +
+			"unset WARDYN_ADMIN_TOKEN or unset WARDYN_SSO_ONLY")
+	}
+	if localMode {
+		return errors.New("refusing to start: WARDYN_SSO_ONLY is set but so is WARDYN_LOCAL_MODE — " +
+			"local mode bypasses public-API auth entirely, which is precisely what sso-only asserts is impossible; " +
+			"unset WARDYN_LOCAL_MODE or unset WARDYN_SSO_ONLY")
+	}
+	if memberMode {
+		return errors.New("refusing to start: WARDYN_SSO_ONLY is set but so is WARDYN_MEMBER_MODE — " +
+			"member mode requires the admin token as a process credential (see deploy/desktop/wardyn.env.m-prime.example), " +
+			"which sso-only forbids outright; unset WARDYN_MEMBER_MODE or unset WARDYN_SSO_ONLY")
+	}
+	if allowNoOperatorList {
+		return errors.New("refusing to start: WARDYN_SSO_ONLY is set but so is WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST — " +
+			"that override is what makes the \"every signed-in human is an admin\" role-derivation branch reachable, " +
+			"which sso-only exists to forbid; unset WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST or unset WARDYN_SSO_ONLY")
+	}
+	return nil
+}
+
 // validateOperatorPosture is the second boot-time fail-closed rule, kept beside
 // validateConfig (and pure, for the same reason) but applied later: OIDC is not
 // built until boot_deps.go, well after validateConfig runs at the top of run().

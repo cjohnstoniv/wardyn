@@ -792,7 +792,7 @@ func retryQuick(ctx context.Context, fn func() error) error {
 func (s *Server) handleSweepSandboxes(w http.ResponseWriter, r *http.Request) {
 	swept, err := s.SweepTerminalSandboxes(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "sandbox sweep failed: "+err.Error())
+		writeServerError(w, r, "sandbox sweep failed", err)
 		return
 	}
 	// NOT `sandbox.sweep`: that action is documented as emitted on FAILED

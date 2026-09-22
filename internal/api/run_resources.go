@@ -191,7 +191,13 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 			// The human sentence AND the sentinel: the UI shows the first, an
 			// operator reading a response body needs the second to tell this
 			// apart from the no-runner-configured guard above, which produces
-			// the same status and the same first half.
+			// the same status and the same first half. err here is always
+			// runner.ErrExecStreamUnsupported (just matched above) — a fixed
+			// sentinel string ("runner: ExecStream not supported"), never
+			// driver/substrate text, so #173 does not apply: see
+			// server_error_driver_text_guard_test.go's allowlist entry for
+			// this line, and TestRunResources_ExecStreamUnsupported_Returns501,
+			// which pins the sentinel staying in the body.
 			writeError(w, http.StatusNotImplemented, runResourcesUnsupportedMsg+": "+err.Error())
 			return
 		}

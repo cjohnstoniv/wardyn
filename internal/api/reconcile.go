@@ -706,6 +706,18 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	if !applied {
 		return // someone else won the transition
 	}
+	if to == types.RunFailed && reason != "" {
+		// Optional-interface, best-effort, in the shape failAndRevoke already
+		// uses: reconcileFinalize also finalizes successful terminal states, so
+		// the hint write is gated strictly on the FAILED transition — writing it
+		// unconditionally would paint a red reason chip on a completed run.
+		if setter, ok := s.cfg.Store.(runFailureHintSetter); ok {
+			if herr := setter.SetRunFailureHint(ctx, runID, reason); herr != nil {
+				slog.WarnContext(ctx, "wardynd: could not persist reconciled run failure hint",
+					slog.String("run_id", runID.String()), slog.Any("err", herr))
+			}
+		}
+	}
 	// Shared terminal tail (audit run.reconcile → revoke cascade → sandbox
 	// teardown with a teardown_error audit on failure → workspace/record
 	// settlement). The completion watcher runs the IDENTICAL sequence via

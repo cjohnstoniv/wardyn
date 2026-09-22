@@ -729,12 +729,15 @@ describe("AgentsTab — the per_user sign-in banner", () => {
   });
 });
 
-// Appendix A finding 5, agents-tab half: not_applicable is the admin-token
-// principal's own answer and carries no chip label — the whole claude-code
-// block (chip + ADMIN_OWN_CHIP_NOTE + sign-in CTA) must not render at all,
-// never an empty chip with the note still underneath it.
-describe("AgentsTab — not_applicable renders no model-access block at all", () => {
-  it("no chip, no ADMIN_OWN_CHIP_NOTE, no sign-in CTA", async () => {
+// #158 (Appendix A finding 5, agents-tab half, rewritten): not_applicable now
+// carries a real, neutral chip label (MODEL_ACCESS_CHIP_LABEL.not_applicable)
+// — the whole claude-code block renders, chip + ADMIN_OWN_CHIP_NOTE, same as
+// any other state. It still offers NO sign-in CTA: there is no person here
+// to sign in as. Further not_applicable cases (tone, prominence) live in
+// agents-tab-model-access.test.tsx (agents-tab.test.tsx sits at the
+// file-size cap).
+describe("AgentsTab — not_applicable renders its own chip, never a sign-in CTA", () => {
+  it("chip + ADMIN_OWN_CHIP_NOTE render, no sign-in CTA, no per-user banner", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
       etag: '"na1"',
@@ -742,7 +745,8 @@ describe("AgentsTab — not_applicable renders no model-access block at all", ()
     const modelAccess: SetupModelAccess = { state: "not_applicable" };
     render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).queryByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).not.toBeInTheDocument();
+    expect(within(row).getByText(AGENTS.MODEL_ACCESS_NOT_APPLICABLE)).toBeInTheDocument();
+    expect(within(row).getByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
     expect(within(row).queryByTestId("per-user-sign-in-banner")).not.toBeInTheDocument();
   });

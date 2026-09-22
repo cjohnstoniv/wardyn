@@ -80,7 +80,7 @@ func policyCmd(client clientFn) *cobra.Command {
 		Short: "Show the control plane's configured default (ceiling) policy",
 		Long: "Show the control plane's configured default policy — the ceiling applied to any run\n" +
 			"created without a policy_id, and the same ceiling a member's inline policy is clamped\n" +
-			"against (W14-S1-6: previously unexposed by UI, CLI or API).",
+			"against. Previously this ceiling was not visible through the UI, CLI or API.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			spec, err := client().GetDefaultPolicy(cmd.Context())

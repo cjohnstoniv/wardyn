@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, 'release/**']
+    branches: [main, master, 'release/**', 'feature/**']
   pull_request:
-    branches: [main, master, 'release/**']
+    branches: [main, master, 'release/**', 'feature/**']
 
 # Least-privilege default: CI only needs to read the repo — nothing here writes
 # back. Mirrors nightly.yml, which already sets this.
@@ -687,6 +687,7 @@ jobs:
   # shipped to a public registry having never been scanned at all, and the stated
   # rationale (distroless, no OS package surface) was true of two of them.
   trivy:
+    name: trivy (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:

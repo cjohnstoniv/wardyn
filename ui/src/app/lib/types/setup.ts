@@ -270,9 +270,10 @@ export interface SetupHarnessTool {
 //   not_configured → AGENTS.MODEL_ACCESS_NOT_CONFIGURED, warning, SIGN_IN_AWS
 //   shared_expired → AGENTS.MODEL_ACCESS_SHARED_EXPIRED, warning, NO button —
 //                    there is nothing the member can do but ask their admin
-//   not_applicable → the caller is a mechanism, not a person (the shared admin
-//                    bearer token under a per_user row) — no credential to
-//                    grade, no sign-in it could complete, NO action
+//   not_applicable → AGENTS.MODEL_ACCESS_NOT_APPLICABLE, neutral, NO action —
+//                    the caller is a mechanism, not a person (the shared
+//                    admin bearer token under a per_user row), so there is no
+//                    credential to grade and no sign-in it could complete
 export interface SetupModelAccess {
   state:
     | "live"

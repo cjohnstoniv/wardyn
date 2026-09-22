@@ -895,6 +895,11 @@ a row above or a filed entry here.
 
 ### Who writes the provider policy: console vs CLI/MDM
 
+On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
+can be set to per-user sign-in instead of one shared PAT — see
+[docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
+row's fields, and what a member sees.
+
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
 ephemeral/drive storage ceilings) and `agent_providers` (which agents this
@@ -4074,7 +4079,10 @@ dial (the gateway included) is CONNECTed through the corp proxy by the transport
 never dialled directly. A gateway the corp proxy cannot reach — an internal one,
 typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address.
+other internal address. wardynd also warns at boot when an upstream proxy is
+configured but no `upstream_proxy_no_proxy` entry covers a configured gateway
+host — a snapshot taken at boot only, since `SiteConfig` is admin-editable
+afterwards and either setting can change without a restart.
 
 **Scope: the api-key lane only.** A subscription or Wardyn-managed-token run
 still talks to `api.anthropic.com` directly — the published agent images
