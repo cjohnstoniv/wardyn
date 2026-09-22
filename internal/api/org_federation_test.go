@@ -146,7 +146,9 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 	// Each dispatches a row one of the gated launchers above just created.
 	wantDispatchers := []string{
 		"harnesscred_launch.go:finishHarnessLoginLaunch",
-		"runs.go:handleCreateRun",
+		// 0.7.10 moved handleCreateRun's blocking half out of runs.go; the
+		// gated createRun call it dispatches for stayed in handleCreateRun.
+		"runs_create_launch.go:finishCreateRunLaunch",
 		"site_config_probe.go:runSiteConfigProbe",
 		"workspace_run_launch.go:dispatchAndSettle",
 	}
