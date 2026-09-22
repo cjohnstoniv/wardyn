@@ -37,6 +37,9 @@ const maxJSONDepth = 64
 //     bound, means the body continues past what we can see — and the flag that
 //     matters may be in the part we cannot.
 func peekBody(req Request) ([]byte, error) {
+	if req.BodyWithheld {
+		return nil, ErrNeedsBody
+	}
 	if enc, err := singleHeader(req.Header, "Content-Encoding"); err != nil {
 		return nil, err
 	} else if enc != "" && !strings.EqualFold(enc, "identity") {
@@ -272,15 +275,8 @@ func refNames(body []byte) ([]string, error) {
 		if name == "" {
 			continue
 		}
-		// A backslash in a ref name is REFUSED, not passed through. The caller
-		// checks each name against a protected-branch cache keyed by the
-		// forward-slash spelling, so "refs\\heads\\main" misses the cache for
-		// "refs/heads/main" and reads as an unprotected push — while the
-		// service, which treats "\\" as a separator, may resolve it to the very
-		// branch the cache protects. Git's own ref-name rules forbid the byte,
-		// so refusing it costs no legitimate ref anything.
-		if strings.ContainsRune(name, '\\') {
-			return nil, fmt.Errorf("adoscope: ref name %q holds a backslash — it cannot be checked against a protected-branch list", name)
+		if err := CheckRefName(name); err != nil {
+			return nil, err
 		}
 		out = append(out, name)
 	}
@@ -288,6 +284,30 @@ func refNames(body []byte) ([]string, error) {
 		return nil, fmt.Errorf("adoscope: a ref update naming no branch cannot be gated")
 	}
 	return out, nil
+}
+
+// CheckRefName refuses a ref name that is not one git would accept as it
+// reads, or that a protected-ref check could read differently from the
+// service. It is the ONE ref-name rule both Azure DevOps doors apply — the REST
+// refs/pushes body here and the git broker's receive-pack command — so a name
+// one door refuses cannot move a ref through the other.
+//
+//   - ".." is a traversal: "refs/heads/wardyn/<run>/../../main" passes a
+//     run-namespace prefix test and names main;
+//   - a backslash is a separator to the service but not to a protected-branch
+//     cache keyed by the forward-slash spelling;
+//   - space, tab, "^", "~", ":", "?", "*" and "[" are forbidden by git's own
+//     check-ref-format, so refusing them costs no legitimate ref anything;
+//   - a control byte (an LF or CR above all) is how a second command rides a
+//     line-oriented reader.
+func CheckRefName(ref string) error {
+	if strings.Contains(ref, "..") || strings.ContainsAny(ref, " \t\\^~:?*[") {
+		return fmt.Errorf("refusing malformed refname %q", ref)
+	}
+	if i := strings.IndexFunc(ref, func(r rune) bool { return r < 0x20 || r == 0x7f }); i >= 0 {
+		return fmt.Errorf("refusing refname %q: control character at byte %d", ref, i)
+	}
+	return nil
 }
 
 // batchOp is the one field of a $batch operation this catalogue reads.
@@ -326,11 +346,23 @@ func batchIsWorkItemsOnly(req Request) error {
 // outer request is held to: it is under the work-item area, and it is on the
 // organisation the row pinned.
 //
-// The ORGANISATION half was the hole. An operation may be written relative to
-// the organisation root ("/_apis/wit/…") or may name the organisation itself
-// ("/acme/proj/_apis/wit/…"), and nothing checked which organisation that was
-// — so a batch POSTed to the pinned organisation carried writes into another
-// one under a work_write the row had granted.
+// An operation URI is resolved by the batch door RELATIVE TO THE ORGANISATION
+// the batch was POSTed to — Microsoft's own examples write both
+// "/_apis/wit/workItems/284" and the project-relative
+// "/Fabrikam-Fiber-Git/_apis/wit/workItems/$Task" (WIT Batch, TFS REST API
+// reference). So the accepted shapes are positional, with _apis at a fixed
+// depth:
+//
+//	/_apis/wit/…                 organisation-relative
+//	/{project}/_apis/wit/…       project-relative, under the pinned organisation
+//	/{org}/_apis/wit/…           the pinned organisation named (same shape)
+//	/{org}/{project}/_apis/wit/… the pinned organisation named, then a project
+//
+// A first segment that is not the pinned organisation is a PROJECT only where
+// _apis follows it directly; with a second segment before _apis it can only be
+// an organisation, and another organisation is refused — that was the hole: a
+// batch POSTed to the pinned organisation carrying writes into another one
+// under a work_write the row had granted. _apis anywhere deeper is refused.
 //
 // An ABSOLUTE URI is refused outright: it could name another host or another
 // service entirely, and the batch door is not a place to re-run host
@@ -345,14 +377,11 @@ func batchOpIsWorkItem(uri, org string) error {
 	if err != nil {
 		return err
 	}
-	if len(segs) > 0 && segs[0] != "_apis" {
-		if !strings.EqualFold(segs[0], strings.TrimSpace(org)) {
-			return fmt.Errorf("names organisation %q, row pins %q", segs[0], org)
-		}
-		segs = segs[1:]
-	}
 	i := slices.Index(segs, "_apis")
-	if i < 0 || i+1 >= len(segs) || segs[i+1] != "wit" {
+	switch {
+	case i == 2 && segs[0] != strings.ToLower(strings.TrimSpace(org)):
+		return fmt.Errorf("names organisation %q, row pins %q", segs[0], org)
+	case i < 0 || i > 2 || i+1 >= len(segs) || segs[i+1] != "wit":
 		return fmt.Errorf("is not a work-item URL")
 	}
 	return nil

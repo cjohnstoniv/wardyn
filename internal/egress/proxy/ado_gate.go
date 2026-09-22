@@ -15,12 +15,13 @@ package proxy
 //
 // Everything that cannot be classified honestly is refused: a classification
 // error, a write the catalogue does not recognize, a denied area, a body the
-// peek cannot see whole, and git-over-HTTP (git uses the broker path, never the
+// classification reads but the peek cannot see whole, and git-over-HTTP (git uses the broker path, never the
 // intercepted connection).
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -119,19 +120,29 @@ func adoCheck(r *http.Request, host string, grant ADOGrant, refProtected func(st
 	if adoGitPath(path) {
 		return "Wardyn refused this Azure DevOps request: git must use Wardyn's git broker, not the API connection.", nil
 	}
-	peek, msg := adoPeekBody(r)
-	if msg != "" {
-		return msg, nil
-	}
-	v, err := adoscope.Classify(adoscope.Request{
+	// The path classifies first with the body withheld. Only a route whose
+	// capability depends on the body (a pull-request completion, a ref move, a
+	// work-item $batch, OPTIONS) answers ErrNeedsBody and is peeked; every
+	// other body — a package publish, a wiki attachment — streams through
+	// untouched, at whatever size.
+	req := adoscope.Request{
 		Method:       r.Method,
 		Host:         host,
 		Path:         path,
 		Header:       r.Header,
-		BodyPeek:     peek,
 		Org:          grant.Organization,
 		RefProtected: refProtected,
-	})
+		BodyWithheld: true,
+	}
+	v, err := adoscope.Classify(req)
+	if errors.Is(err, adoscope.ErrNeedsBody) {
+		peek, msg := adoPeekBody(r)
+		if msg != "" {
+			return msg, nil
+		}
+		req.BodyWithheld, req.BodyPeek = false, peek
+		v, err = adoscope.Classify(req)
+	}
 	if err != nil {
 		return "Wardyn refused this Azure DevOps request: it could not tell what access the request needs.", nil
 	}

@@ -65,6 +65,12 @@ func adoRequestDetail(r *http.Request) adoAsk {
 
 // adoRepoOf is the repository a REST path addresses under
 // `_apis/git/repositories/{repo}`, lower-cased, or "".
+//
+// It is the SPELLING the sandbox chose — a repository name or its GUID — not a
+// resolved identity, and the approval's canonical scope (and so a sticky deny)
+// is keyed on it. A denied repo re-asked under its other spelling is a new ask.
+// That is bounded, not closed: every ask spends one of the run's
+// maxCapabilityHolds (16), and a person answers each.
 func adoRepoOf(path string) string {
 	segs := strings.Split(strings.ToLower(strings.Trim(path, "/")), "/")
 	for i := 0; i+3 < len(segs); i++ {

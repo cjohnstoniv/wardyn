@@ -208,12 +208,16 @@ func TestADOGate_GitSmartHTTPOnTheInterceptedConnectionIsRefused(t *testing.T) {
 }
 
 func TestADOGate_BodyThePeekCannotSeeIsRefused(t *testing.T) {
+	// A pull-request update is a body route: its capability depends on
+	// completionOptions.bypassPolicy, so a body the peek cannot see whole is
+	// refused rather than classified.
+	const pr = "/acme/proj/_apis/git/repositories/app/pullrequests/5"
 	h := newADOHarness(t, adoscope.GrantableCapabilities()...)
-	h.mustRefuse(t, h.do(t, http.MethodPatch, "/acme/proj/_apis/wit/workitems/1", `[]`,
+	h.mustRefuse(t, h.do(t, http.MethodPatch, pr, `{}`,
 		map[string]string{"Content-Encoding": "gzip"}), "encoded body")
 
 	h = newADOHarness(t, adoscope.GrantableCapabilities()...)
-	req := httptest.NewRequest(http.MethodPatch, "/acme/proj/_apis/wit/workitems/1", strings.NewReader("[]"))
+	req := httptest.NewRequest(http.MethodPatch, pr, strings.NewReader("{}"))
 	req.ContentLength = adoscope.MaxBodyPeek + 1
 	rec := httptest.NewRecorder()
 	h.p.serveMITMRequest(rec, req, adoHost, 443)
