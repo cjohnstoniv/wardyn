@@ -177,7 +177,21 @@ type adoEntraBlob struct {
 	// RenewedAt is when the stored refresh token was last rotated. Absent on a
 	// credential that has never been redeemed.
 	RenewedAt time.Time `json:"renewed_at,omitempty"`
+	// DeadAt is when a renewal last met a refusal no renewal gets past: the
+	// refresh token is gone, or a Conditional Access policy wants the person
+	// present. It lives on the blob, not in a table, so /me/scm-access and the
+	// launch gate can say expired_signin before the next run fails at its
+	// sidecar's boot. A fresh capture writes a blob without it; a renewal that
+	// succeeds later clears it.
+	DeadAt time.Time `json:"dead_at,omitzero"`
+	// DeadReason is the class that set DeadAt (dead_credential or
+	// interaction_required).
+	DeadReason ADOEntraFailure `json:"dead_reason,omitempty"`
 }
+
+// signInEnded reports whether the last renewal found this sign-in unusable
+// until the person signs in again.
+func (b adoEntraBlob) signInEnded() bool { return !b.DeadAt.IsZero() }
 
 // adoEntraSourceSignIn is the only capture source in 0.7.10: the interactive
 // browser sign-in this package serves.
@@ -393,6 +407,7 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 		"scope":         {strings.Join(scopes, " ")},
 	})
 	if err != nil {
+		s.noteADOEntraSignInEnded(ctx, owner, cfg.RowID, blob, ADOEntraClassify(err))
 		return ADOEntraAccess{}, err
 	}
 
@@ -418,18 +433,37 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	}
 
 	// Persist the ROTATION. An absent refresh token in the response means keep
-	// the one we hold — never blank it.
-	if resp.RefreshToken != "" && resp.RefreshToken != blob.RefreshToken {
+	// the one we hold — never blank it. A recorded end the authority has just
+	// contradicted is cleared the same way.
+	if (resp.RefreshToken != "" && resp.RefreshToken != blob.RefreshToken) || blob.signInEnded() {
 		next := blob
-		next.RefreshToken = resp.RefreshToken
+		if resp.RefreshToken != "" {
+			next.RefreshToken = resp.RefreshToken
+		}
 		next.ExpiresAt = access.ExpiresAt
 		next.RenewedAt = s.cfg.Now().UTC()
+		next.DeadAt, next.DeadReason = time.Time{}, ""
 		if perr := s.storeADOEntraBlob(ctx, owner, cfg.RowID, next); perr != nil {
 			slog.ErrorContext(ctx, "wardynd: persisting the rotated azure devops refresh token failed; serving this caller from memory",
 				slog.String("row", cfg.RowID), slog.Any("err", perr))
 		}
 	}
 	return access, nil
+}
+
+// noteADOEntraSignInEnded records, on the stored blob, a renewal refusal only a
+// new sign-in can answer. Best-effort: the caller's own answer does not depend
+// on it, and a failed write only means the next launch learns it at boot.
+// Called under the redemption lock, so it cannot overwrite a rotation.
+func (s *Server) noteADOEntraSignInEnded(ctx context.Context, owner, rowID string, blob adoEntraBlob, class ADOEntraFailure) {
+	if class != ADOEntraFailureDeadCredential && class != ADOEntraFailureInteractionRequired {
+		return
+	}
+	blob.DeadAt, blob.DeadReason = s.cfg.Now().UTC(), class
+	if err := s.storeADOEntraBlob(ctx, owner, rowID, blob); err != nil {
+		slog.WarnContext(ctx, "wardynd: could not record that an azure devops sign-in has ended",
+			slog.String("row", rowID), slog.Any("err", err))
+	}
 }
 
 // adoEntraCheckRequestedScopes holds a caller's subset to the two rules that

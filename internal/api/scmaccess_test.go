@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -71,6 +72,18 @@ type scmTestStore struct {
 func (s *scmTestStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, nil }
 
 const scmTestRowID = "ado-row-1"
+
+// scmTestBaseline is what a sign-in on these rows must cover to be live: the
+// scopes of the default (read) profile.
+func scmTestBaseline(t *testing.T) []string {
+	t.Helper()
+	scopes, err := adoscope.ScopesFor(adoscope.ProfileRead())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return scopes
+}
+
 const scmTestADORepo = "https://dev.azure.com/contoso/proj/_git/repo"
 const scmTestADOOrg = "https://dev.azure.com/contoso"
 
@@ -161,7 +174,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		s := newSCMTestServer(t, sc, true)
 		ctx := context.Background()
 		if err := s.storeADOEntraBlob(ctx, "alice", scmTestRowID, adoEntraBlob{
-			RefreshToken: "rt", Scopes: []string{"vso.code"}, TenantID: "tenant-1", ClientID: "client-1",
+			RefreshToken: "rt", Scopes: scmTestBaseline(t), TenantID: "tenant-1", ClientID: "client-1",
 			Subject: "alice", Source: adoEntraSourceLogin,
 		}); err != nil {
 			t.Fatalf("store blob: %v", err)
@@ -177,7 +190,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		s := newSCMTestServer(t, sc, true)
 		ctx := context.Background()
 		if err := s.storeADOEntraBlob(ctx, "bob", scmTestRowID, adoEntraBlob{
-			RefreshToken: "rt", Scopes: []string{"vso.code"}, TenantID: "tenant-1", ClientID: "client-1",
+			RefreshToken: "rt", Scopes: scmTestBaseline(t), TenantID: "tenant-1", ClientID: "client-1",
 			Subject: "bob", Source: adoEntraSourceSignIn,
 		}); err != nil {
 			t.Fatalf("store blob: %v", err)
@@ -324,7 +337,7 @@ func TestGitCredentialRefusal(t *testing.T) {
 		s := newSCMTestServer(t, sc, true)
 		ctx := context.Background()
 		if err := s.storeADOEntraBlob(ctx, "alice", scmTestRowID, adoEntraBlob{
-			RefreshToken: "rt", Scopes: []string{"vso.code"}, TenantID: "tenant-1", ClientID: "client-1",
+			RefreshToken: "rt", Scopes: scmTestBaseline(t), TenantID: "tenant-1", ClientID: "client-1",
 			Subject: "alice", Source: adoEntraSourceSignIn,
 		}); err != nil {
 			t.Fatalf("store blob: %v", err)
@@ -523,7 +536,7 @@ func TestGitCredentialGate_ResolvedSpecChokepoint(t *testing.T) {
 		srv, st, fr := adoRunHarness(t, true)
 		adoCreateWorkspace(t, st, types.WorkspaceSource{Type: types.WorkspaceSourceTypeRepo, Source: scmTestADORepo})
 		if err := srv.storeADOEntraBlob(context.Background(), "sub-ado-op", scmTestRowID, adoEntraBlob{
-			RefreshToken: "rt", Scopes: []string{"vso.code"}, TenantID: "tenant-1", ClientID: "client-1",
+			RefreshToken: "rt", Scopes: scmTestBaseline(t), TenantID: "tenant-1", ClientID: "client-1",
 			Subject: "sub-ado-op", Source: adoEntraSourceSignIn,
 		}); err != nil {
 			t.Fatalf("store blob: %v", err)

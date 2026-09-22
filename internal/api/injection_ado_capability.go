@@ -31,7 +31,7 @@ package api
 // person consented to. If the capability's scopes are outside the person's
 // consent (Entra refuses the whole redemption — AADSTS65001 — or grants less
 // than asked), the answer is a credential_reauth 423 the proxy chains onto, and
-// the person's next sign-in resolves it (reconcileADOConsentOnRead).
+// the person's next sign-in resolves it (reconcileADOReauthOnRead).
 
 import (
 	"context"
@@ -411,12 +411,13 @@ func (s *Server) raiseADOConsent(w http.ResponseWriter, r *http.Request, claims 
 	return true
 }
 
-// reconcileADOConsentOnRead resolves a PENDING consent request once the person
-// has signed in again, after it was raised, with every scope it needs — on the
-// read the proxy's hold is already making. The capture is the resolution; this
-// writes it down, through the same one-transaction seam the AWS lane uses.
-func (s *Server) reconcileADOConsentOnRead(ctx context.Context, ap types.ApprovalRequest) types.ApprovalRequest {
-	sc, ok := adoConsentScope(ap)
+// reconcileADOReauthOnRead resolves a PENDING Azure DevOps consent or sign-in
+// request once the person has signed in again, after it was raised, with every
+// scope it needs — on the read the proxy's hold is already making, and from
+// the capture itself (resolvePendingADOReauth). The capture is the resolution;
+// this writes it down, through the same one-transaction seam the AWS lane uses.
+func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.ApprovalRequest) types.ApprovalRequest {
+	sc, ok := adoReauthScope(ap)
 	if !ok || ap.State != types.ApprovalPending || s.cfg.Approvals == nil {
 		return ap
 	}
@@ -424,8 +425,10 @@ func (s *Server) reconcileADOConsentOnRead(ctx context.Context, ap types.Approva
 	if !ok {
 		return ap
 	}
+	// Generation: only a sign-in captured AFTER the raise answers it, and only
+	// one no renewal has since found ended.
 	blob, found, err := s.readADOEntraBlob(ctx, sc.Owner, sc.ProviderID)
-	if err != nil || !found || !blob.CapturedAt.After(ap.RequestedAt) {
+	if err != nil || !found || !blob.CapturedAt.After(ap.RequestedAt) || blob.signInEnded() {
 		return ap
 	}
 	for _, need := range sc.Scopes {
@@ -438,10 +441,11 @@ func (s *Server) reconcileADOConsentOnRead(ctx context.Context, ap types.Approva
 			"approval_id": ap.ID, "owner": sc.Owner, "resolved_by": sc.Owner, "provider": adoApprovalLane,
 		}))
 	if _, err := resolver.ResolveReauthApproval(ctx, ap.ID, types.ApprovalDecision{
-		State: types.ApprovalApproved, DecidedBy: sc.Owner, Reason: "signed in with the consent this run needs",
+		State: types.ApprovalApproved, DecidedBy: sc.Owner, Reason: "signed in again",
 	}, ev); err != nil {
 		return ap
 	}
+	s.metrics.credentialReauthResolved(s.cfg.Now().Sub(ap.RequestedAt))
 	if fresh, gerr := s.cfg.Approvals.Get(ctx, ap.ID); gerr == nil {
 		return fresh
 	}

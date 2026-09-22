@@ -126,6 +126,30 @@ func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owne
 	return a, nil
 }
 
+// adoRequestScopes is what a resolve asks the authority for: the row's
+// ceiling narrowed to the scopes owner's stored sign-in was captured with.
+// A ceiling an administrator widened after the capture must not fail the
+// redemption whole (RedeemADOEntraAccess refuses a scope outside the capture);
+// a capability that needs the new scope goes through the consent chain. With
+// no stored sign-in, or no overlap, the ceiling is asked for unchanged and the
+// redemption names the failure.
+func (s *Server) adoRequestScopes(ctx context.Context, cfg ADOEntraConfig, owner string) []string {
+	blob, found, err := s.readADOEntraBlob(ctx, owner, cfg.RowID)
+	if err != nil || !found {
+		return cfg.Scopes
+	}
+	var out []string
+	for _, sc := range cfg.Scopes {
+		if slices.Contains(blob.Scopes, sc) {
+			out = append(out, sc)
+		}
+	}
+	if len(out) == 0 {
+		return cfg.Scopes
+	}
+	return out
+}
+
 // resolveADOInjection is the per-person Azure DevOps arm of
 // handleInternalInjection. handled=false means this grant is not ours and the
 // generic path must run; handled=true means a response has been written.
@@ -209,25 +233,32 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		responseCaps = capAsk.standing
 	}
 
-	// REQUEST THE ROW'S CONSENTED CEILING, not a subset computed from this run's
-	// capabilities. Two measured facts decide it: Entra ignores a narrower
-	// request for this resource and returns every consented scope anyway, so a
-	// subset buys nothing; and a request naming even ONE scope the person has
-	// not consented to fails whole (AADSTS65001, classified consent_required)
-	// with no token at all — so a computed subset is a way to fail, never a way
-	// to narrow. The run's capabilities bound it at the proxy, not here.
+	// REQUEST WHAT THE PERSON CONSENTED TO, inside the row's ceiling
+	// (adoRequestScopes), not a subset computed from this run's capabilities.
+	// Two measured facts decide it: Entra ignores a narrower request for this
+	// resource and returns every consented scope anyway, so a subset buys
+	// nothing; and a request naming even ONE scope the person has not
+	// consented to fails whole (AADSTS65001, classified consent_required) with
+	// no token at all — so asking for the whole ceiling after an administrator
+	// widened it would fail every run of everyone who signed in before. The
+	// run's capabilities bound it at the proxy, not here; a capability outside
+	// the consent goes through the consent chain below.
 	if capAsk.capability != "" && s.adoConsentRefusedRecently(ctx, cfg, snapshot.OwnerSubject, need) {
 		return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
 	}
-	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, cfg.Scopes, false)
+	scopes := s.adoRequestScopes(ctx, cfg, snapshot.OwnerSubject)
+	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, false)
 	if err == nil && capAsk.capability != "" && !adoScopesWithin(need, access.Scopes) {
-		access, err = s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, cfg.Scopes, true)
+		access, err = s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, true)
 	}
 	if err != nil {
 		class := ADOEntraClassify(err)
 		if capAsk.capability != "" && class == ADOEntraFailureConsentRequired {
 			s.adoConsentRefused(cfg, snapshot.OwnerSubject, need)
 			return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
+		}
+		if s.answerADOSignInEnded(w, r, claims, snapshot, class, fail) {
+			return true
 		}
 		status, body := adoResolveFailureAnswer(class)
 		return fail(status, string(class), body, map[string]any{"owner": snapshot.OwnerSubject})
@@ -279,8 +310,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 }
 
 // adoResolveFailureAnswer maps a redemption failure class onto its answer. Each
-// class answers differently because each has a different remedy — a later
-// slice turns the ones a person can fix into holds.
+// class answers differently because each has a different remedy. The two a new
+// sign-in fixes are answered first by answerADOSignInEnded (a hold mid-run, a
+// failure hint at boot); their rows here are the sentences that answer uses.
 func adoResolveFailureAnswer(class ADOEntraFailure) (int, string) {
 	switch class {
 	case ADOEntraFailureNotCaptured:

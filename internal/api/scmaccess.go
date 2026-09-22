@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -34,14 +35,13 @@ import (
 //
 // WHAT IS AND ISN'T KNOWABLE TODAY, for a row this file CAN grade. Microsoft
 // Entra publishes no refresh-token expiry (ado_entra_store.go's
-// adoEntraBlob.ExpiresAt doc comment: "Entra publishes none"), and this
-// package captures no live "known dead" signal the way AWS SSO's
-// ssoRefreshSpent map does — that lands with dispatch-time redemption
-// (#387+). So `expiring` and `expired_signin` are part of the vocabulary
-// this file exports but are NOT REACHABLE from today's local signals: only
-// `live` (a found, valid blob) and `not_configured` (none) are. A future
-// caller that learns a credential actually died (a failed redemption) can
-// widen adoAccessState's inputs without changing its shape or its callers.
+// adoEntraBlob.ExpiresAt doc comment: "Entra publishes none"), so `expiring`
+// is not reachable. `expired_signin` is, from two stored facts: a renewal
+// recorded the sign-in dead or blocked by Conditional Access
+// (adoEntraBlob.DeadAt), or the sign-in does not cover the scopes a run on
+// the row's default profile needs (an administrator widened the row after
+// the person signed in). Otherwise a found, valid blob is `live` and none is
+// `not_configured`.
 //
 // THE ADMIN ROW MODEL THIS READS AGAINST (`entra` lane, `credential_source`
 // on GitProvider) IS #383's, not yet landed. This file never assumes those
@@ -74,6 +74,16 @@ const (
 // guessing at the other three.
 const scmAccessCauseRowIsNewer = "row_is_newer"
 
+// The two `expired_signin` causes. scmAccessCauseEnded: a renewal found the
+// stored sign-in dead or blocked by Conditional Access (adoEntraBlob.DeadAt).
+// scmAccessCauseConsentNeeded: the sign-in was captured before an
+// administrator widened the row, and no longer covers the access a run on the
+// row's default profile is dispatched with.
+const (
+	scmAccessCauseEnded         = "ended"
+	scmAccessCauseConsentNeeded = "consent_needed"
+)
+
 // SCMAccess is THIS PRINCIPAL's Azure DevOps access answer for ONE row — the
 // shape the Getting-started chip, the Settings connected panel, the New Run
 // rail's preflight line, and GET /me/scm-access all read instead of each
@@ -88,9 +98,11 @@ const scmAccessCauseRowIsNewer = "row_is_newer"
 type SCMAccess struct {
 	// State is one of the six modelaccess.go values.
 	State string `json:"state"`
-	// Source is "org" or "separate" — set only for a live per-user connection.
+	// Source is "org" or "separate" — set for a per-user connection that is
+	// live or expired_signin (which door to go back through).
 	Source string `json:"source,omitempty"`
-	// Cause narrows `not_configured` — see scmAccessCauseRowIsNewer.
+	// Cause narrows `not_configured` (scmAccessCauseRowIsNewer) and
+	// `expired_signin` (scmAccessCauseEnded, scmAccessCauseConsentNeeded).
 	Cause string `json:"cause,omitempty"`
 	// Org is the Azure DevOps address this row clones from (the row's first
 	// base URL) — the {org} the connect and launch dialogs name.
@@ -207,23 +219,34 @@ func scmAccessSourceFor(blobSource string) string {
 // (perUserADORows / perUserADORowsAdmitting), for subject.
 func (s *Server) scmAccessForRow(ctx context.Context, row types.GitProvider, cfg ADOEntraConfig, subject string) SCMAccess {
 	isMechanism := subject == ""
+	var blob adoEntraBlob
 	var found bool
-	var source string
 	if !isMechanism {
-		if blob, ok, _ := s.readADOEntraBlob(ctx, subject, cfg.RowID); ok {
-			found = true
-			source = scmAccessSourceFor(blob.Source)
-		}
+		blob, found, _ = s.readADOEntraBlob(ctx, subject, cfg.RowID)
 	}
-	state := adoAccessState(isMechanism, found)
-	out := SCMAccess{State: state, Org: adoOrgDisplay(row), Kind: string(row.Kind)}
-	if state == modelAccessLive {
-		out.Source = source
-	}
-	if state == modelAccessNotConfigured {
+	out := SCMAccess{State: adoAccessState(isMechanism, found), Org: adoOrgDisplay(row), Kind: string(row.Kind)}
+	switch {
+	case out.State == modelAccessNotConfigured:
 		out.Cause = scmAccessCauseRowIsNewer
+	case out.State != modelAccessLive:
+	case blob.signInEnded():
+		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseEnded
+	case !adoBlobCoversBaseline(blob, row):
+		out.State, out.Cause = modelAccessExpiredSignin, scmAccessCauseConsentNeeded
+	}
+	if out.State == modelAccessLive || out.State == modelAccessExpiredSignin {
+		out.Source = scmAccessSourceFor(blob.Source)
 	}
 	return out
+}
+
+// adoBlobCoversBaseline reports whether a stored sign-in was consented for
+// every scope a run on the row's default profile is dispatched with (Profile
+// is nil-safe: no profile is the read profile). A profile the catalogue cannot
+// map covers nothing honestly, so false.
+func adoBlobCoversBaseline(blob adoEntraBlob, row types.GitProvider) bool {
+	need, err := adoscope.ScopesFor(row.Entra.Profile())
+	return err == nil && adoScopesWithin(need, blob.Scopes)
 }
 
 // adoOrgDisplay is the row's own address, for the {org} the connect/launch
@@ -329,14 +352,17 @@ const gitCredentialRefusalReason = "git_credential"
 // gitCredentialNotConnectedRefusal is §7.1's composed sentence, BYTE-EXACT
 // including its "git_credential: " prefix (review finding F7 — pinned by
 // TestGitCredentialRefusalMatchesCanon, which parses the canon table the way
-// ado-entra-copy.test.ts parses §7). It is the ONE cause this file can
-// actually tell apart today (adoAccessState's doc comment): the person has
-// never captured a session for the row. The doc also freezes a second
-// sentence for "your connection ended" — that needs a live-failure signal
-// this issue's merged code does not yet produce (see the file doc comment),
-// so it is not emitted here; a future caller that learns a credential died
-// can add that branch without moving this one.
+// ado-entra-copy.test.ts parses §7): the person has never captured a session
+// for the row.
 const gitCredentialNotConnectedRefusal = "git_credential: you are not connected to Azure DevOps — connect and start the run again"
+
+// gitCredentialEndedRefusal / gitCredentialConsentRefusal are §7.1's two
+// expired_signin sentences, by cause (scmAccessCauseEnded /
+// scmAccessCauseConsentNeeded) — pinned by the same canon test.
+const (
+	gitCredentialEndedRefusal   = "git_credential: your Azure DevOps connection ended — connect and start the run again"
+	gitCredentialConsentRefusal = "git_credential: your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
+)
 
 // errGitCredentialRefused is gitCredentialRefusalForLauncher's sentinel —
 // errRepoNotAdmitted's shape (workspace_admission.go), for the launchers
@@ -349,9 +375,9 @@ var errGitCredentialRefused = errors.New(gitCredentialRefusalReason)
 // gitCredentialErrorBody needs (the org) through an error return — Unwrap
 // makes it match errGitCredentialRefused for a caller that only wants to
 // know WHICH refusal this is, errors.As for one that wants the org too.
-type gitCredentialRefusalError struct{ Org string }
+type gitCredentialRefusalError struct{ Org, Sentence string }
 
-func (e *gitCredentialRefusalError) Error() string { return gitCredentialNotConnectedRefusal }
+func (e *gitCredentialRefusalError) Error() string { return e.Sentence }
 func (e *gitCredentialRefusalError) Unwrap() error { return errGitCredentialRefused }
 
 // gitCredentialRefusalForLauncher is the git_credential GATE (#386's launch
@@ -379,10 +405,16 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 		if !ok {
 			continue // defensive only — perUserADORowsAdmitting already proved this
 		}
-		if _, found, _ := s.readADOEntraBlob(ctx, subject, cfg.RowID); found {
+		access := s.scmAccessForRow(ctx, row, cfg, subject)
+		switch {
+		case access.State == modelAccessLive:
 			continue
+		case access.Cause == scmAccessCauseEnded:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialEndedRefusal}
+		case access.Cause == scmAccessCauseConsentNeeded:
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialConsentRefusal}
 		}
-		return &gitCredentialRefusalError{Org: adoOrgDisplay(row)}
+		return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialNotConnectedRefusal}
 	}
 	return nil
 }
@@ -412,7 +444,7 @@ func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, re
 	// unaudited; only a run that actually DISPATCHES and then fails audits,
 	// under run.create.
 	writeJSON(w, http.StatusUnprocessableEntity, gitCredentialErrorBody{
-		Error: gitCredentialNotConnectedRefusal, Reason: gitCredentialRefusalReason, Org: gcErr.Org,
+		Error: gcErr.Sentence, Reason: gitCredentialRefusalReason, Org: gcErr.Org,
 	})
 	return true
 }

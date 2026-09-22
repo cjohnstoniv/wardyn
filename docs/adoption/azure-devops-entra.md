@@ -39,7 +39,7 @@ what the ceiling needs, not every scope Azure DevOps offers:
 | `vso.serviceendpoint_manage` | Read, create, and manage service connections |
 
 Also add `openid` and `offline_access` — Wardyn holds a refresh token per person, not a one-time
-code, so it can renew an access token at dispatch without asking anyone to sign in again for every
+code, so it can renew an access token as runs need one without asking anyone to sign in again for every
 run.
 
 Microsoft's own scope reference flags `vso.code_write`, `vso.code_manage`, `vso.build_execute`,
@@ -191,18 +191,26 @@ reasons, both load-bearing:
 ## Conditional Access and token lifetime
 
 An Azure DevOps access token issued this way is short-lived — on the order of an hour, up to about
-ninety minutes — and Wardyn's control plane renews it from the stored refresh token at dispatch,
-without the person doing anything, for as long as that refresh token keeps redeeming.
+ninety minutes — and Wardyn's control plane renews it from the stored refresh token when a run's
+proxy starts and again as each access token nears expiry, without the person doing anything, for as
+long as that refresh token keeps redeeming.
 
-Two things that surface as a sign-in prompt rather than a hard failure:
+When a renewal is refused — the refresh token has been revoked or has expired, or a Conditional Access
+policy requires the person to sign in interactively — what happens depends on when:
 
-- **A Conditional Access policy that blocks the control plane's server-side token refresh** shows up
-  as a held request inside a run, asking the person to sign in again — not as a run that fails
-  outright. The run resumes once they do.
-- **Revoking someone's Entra sessions ends their Wardyn access at the next refresh**, not
-  immediately. Wardyn holds a refresh token, not a live session; the next time it tries to redeem
-  that refresh token, Entra refuses it, and the person is asked to sign in again before their run
-  continues.
+- **While a run is working**, the request that needed the new token is held, and the person is asked
+  to sign in to Azure DevOps again (the run's approvals show the request). Signing in — through the
+  Wardyn sign-in or the separate Azure DevOps connection — answers it, and the held request goes
+  through. Nothing is substituted. If nobody signs in before the hold's time runs out
+  (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, ten minutes by default), the request is refused, and the run's
+  next Azure DevOps request goes through once the person has signed in.
+- **When a run starts**, there is no request to hold yet, so the run fails, with a reason that says
+  to sign in to Azure DevOps again. The refusal is also recorded against the person's stored
+  sign-in, so Settings and Getting started show the connection as ended and the next launch asks
+  them to connect before it starts.
+
+Revoking someone's Entra sessions therefore ends their Wardyn access at the next renewal, not
+immediately: Wardyn holds a refresh token, not a live session.
 
 ## Why there is no minted-token mode
 

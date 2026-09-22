@@ -335,7 +335,7 @@ func TestADOCapability_ConsentChainsAndTheSignInResolvesIt(t *testing.T) {
 		t.Fatal("the once approval was spent on a resolve that granted nothing")
 	}
 	// Not yet signed in again: reading it changes nothing.
-	if got := f.srv.reconcileADOConsentOnRead(context.Background(), consent); got.State != types.ApprovalPending {
+	if got := f.srv.reconcileADOReauthOnRead(context.Background(), consent); got.State != types.ApprovalPending {
 		t.Fatalf("resolved before any sign-in: %s", got.State)
 	}
 
@@ -345,7 +345,7 @@ func TestADOCapability_ConsentChainsAndTheSignInResolvesIt(t *testing.T) {
 	if w := f.capture(t, f.subject); w.Code != http.StatusFound {
 		t.Fatalf("re-sign-in: %d %s", w.Code, w.Body.String())
 	}
-	if got := f.srv.reconcileADOConsentOnRead(context.Background(), f.row(b)); got.State != types.ApprovalApproved {
+	if got := f.srv.reconcileADOReauthOnRead(context.Background(), f.row(b)); got.State != types.ApprovalApproved {
 		t.Fatalf("after the sign-in the consent request is %s, want APPROVED", got.State)
 	}
 	granted(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath))

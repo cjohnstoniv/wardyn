@@ -428,3 +428,36 @@ describe("AdoCapabilityCard — the Entra-consent state", () => {
     expect(within(card).queryByRole("link")).not.toBeInTheDocument();
   });
 });
+
+// holdForADOSignIn's mid-run sign-in request: the same card, with the
+// "connection ended mid-run" copy — never the consent sentences.
+function signIn(): ApprovalRequest {
+  return consent({
+    id: "apr_3",
+    requested_scope: { lane: "azure_devops", mechanism: "entra_signin", reason: "signin", owner: "dana@acme.example", provider_id: "row_1" },
+  });
+}
+
+describe("AdoCapabilityCard — the mid-run sign-in state", () => {
+  it("the owner sees the connection-ended copy and the connect door, and nothing about consent", async () => {
+    renderCard(
+      <AdoCapabilityCard item={signIn()} securityOperator={false} run={null} viewerPrincipal="dana@acme.example" busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-consent-card");
+    expect(within(card).getByText("Connection ended")).toBeInTheDocument();
+    expect(within(card).getByText("Your Azure DevOps connection ended mid-run")).toBeInTheDocument();
+    expect(within(card).getByText(/held while you sign in again/)).toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: "Connect Azure DevOps" })).toHaveAttribute("href", "/settings");
+    expect(card.textContent).not.toMatch(/consent|four minutes/i);
+  });
+
+  it("someone who is not the owner sees who can sign in, and no door", async () => {
+    renderCard(
+      <AdoCapabilityCard item={signIn()} securityOperator={false} run={null} viewerPrincipal="priya@acme.example" busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-consent-card");
+    expect(within(card).getByText("Waiting for dana@acme.example")).toBeInTheDocument();
+    expect(within(card).getByText(/Only dana@acme.example can sign in again/)).toBeInTheDocument();
+    expect(within(card).queryByRole("link")).not.toBeInTheDocument();
+  });
+});

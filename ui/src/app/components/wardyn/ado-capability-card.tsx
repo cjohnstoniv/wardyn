@@ -438,12 +438,21 @@ function AdoConsentCard({
 }) {
   const owner = item.requested_scope.owner;
   const isOwner = !!viewerPrincipal && viewerPrincipal === owner;
+  // A mid-run sign-in request (holdForADOSignIn) is the same card with its
+  // own copy: nothing about it is a consent, and "four minutes" (§7.6's
+  // REQ_REAUTH_BODY) is not this hold's bound, so §10.6 carries its body.
+  const signIn = item.requested_scope.mechanism === "entra_signin";
+  const copy = signIn
+    ? { chip: ADO.REQ_REAUTH_CHIP, heading: ADO.REQ_REAUTH_TITLE, body: ADO.REQ_REAUTH_HELD_BODY,
+        other: ADO.REQ_REAUTH_OTHER_BODY, cta: ADO.CONNECT_ADO }
+    : { chip: ADO.REQ_CONSENT_CHIP, heading: ADO.REQ_CONSENT_HEADING, body: ADO.REQ_CONSENT_BODY,
+        other: ADO.REQ_CONSENT_OTHER_BODY, cta: ADO.REQ_CONSENT_CTA };
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4" data-testid="ado-consent-card">
       <div className="flex flex-wrap items-center gap-2">
-        <Chip tone="warning">{isOwner ? ADO.REQ_CONSENT_CHIP : ADO.REQ_WAITING_OTHER(owner)}</Chip>
+        <Chip tone="warning">{isOwner ? copy.chip : ADO.REQ_WAITING_OTHER(owner)}</Chip>
         <div className="min-w-0">
-          <h4 className="text-sm font-semibold text-foreground">{ADO.REQ_CONSENT_HEADING}</h4>
+          <h4 className="text-sm font-semibold text-foreground">{copy.heading}</h4>
           <span className="text-meta text-muted-foreground">{ADO.REQ_SOURCE(relativeAbsolute(item.requested_at))}</span>
         </div>
       </div>
@@ -455,12 +464,12 @@ function AdoConsentCard({
         </dd>
       </dl>
       <p className="mt-3 border-t border-border/60 pt-3 text-sm text-muted-foreground">
-        {isOwner ? ADO.REQ_CONSENT_BODY : ADO.REQ_CONSENT_OTHER_BODY(owner)}
+        {isOwner ? copy.body : copy.other(owner)}
       </p>
       {isOwner && (
         <div className="mt-3">
           <Button asChild size="sm" variant="info">
-            <Link to="/settings">{ADO.REQ_CONSENT_CTA}</Link>
+            <Link to="/settings">{copy.cta}</Link>
           </Button>
         </div>
       )}

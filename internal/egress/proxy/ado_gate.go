@@ -244,15 +244,31 @@ func (p *Proxy) refuseADO(w http.ResponseWriter, r *http.Request, host string, p
 	if p.sink != nil {
 		p.sink.emit(decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceADODenied))
 	}
+	writeADORefusal(w, http.StatusForbidden, "CapabilityNotGrantedException", msg)
+	return false
+}
+
+// writeADORefusal answers in Azure DevOps' own error shape (adoRefusal).
+func writeADORefusal(w http.ResponseWriter, status int, typeKey, msg string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusForbidden)
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(adoRefusal{
 		ID:        "1",
 		Message:   msg,
-		TypeName:  "Wardyn.Egress.CapabilityNotGrantedException, Wardyn",
-		TypeKey:   "CapabilityNotGrantedException",
+		TypeName:  "Wardyn.Egress." + typeKey + ", Wardyn",
+		TypeKey:   typeKey,
 		ErrorCode: 0,
 		EventID:   3000,
 	})
-	return false
+}
+
+// isADOLane reports whether host is covered by the run's Azure DevOps grant —
+// the hosts whose refusals are spelled in Azure DevOps' terms rather than the
+// AWS or plain-text ones.
+func (p *Proxy) isADOLane(host string) bool {
+	if p.adoGrants == nil {
+		return false
+	}
+	_, ok := p.adoGrants.ADOGrantFor(host)
+	return ok
 }
