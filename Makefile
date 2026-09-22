@@ -306,19 +306,20 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required; needs wardyn/wardyn-proxy:local + wardyn/agent-claude-code:local)..."
 	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 20m ./test/conformance/...
 
-# 25m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
+# 30m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
 # (7m) waiting for the kubelet ONCE PER FILL TARGET, and 0.7.5 gave it two (/tmp and the
-# agent's workdir), plus one more operation timeout for the oversized sub-case — 17m of worst
-# case before any other case in the suite runs at all. A -timeout expiry is a panic that
-# discards every verdict already produced, so this is headroom for slow evictions, not a
-# licence for a slower suite (pinned by TestEphemeralCaseBudgetFitsTheMakefileTimeout, which
-# reads BOTH numbers). The 5m over that 17m is the REST of the suite: a green k8s run is
-# 457 s of other cases (local/v075/evidence/k8s-emptydir/green-conformance-k8s.log), and a
-# ceiling set to the eviction case alone loses the whole run whenever the pathological case
-# and an ordinary suite land together.
+# agent's workdir); #164 gave it a third (the toolchain cache root), plus one more operation
+# timeout for the oversized sub-case — 24m of worst case before any other case in the suite runs
+# at all. A -timeout expiry is a panic that discards every verdict already produced, so this is
+# headroom for slow evictions, not a licence for a slower suite (pinned by
+# TestEphemeralCaseBudgetFitsTheMakefileTimeout, which reads BOTH numbers). The margin over that
+# 24m is the REST of the suite: a green k8s run is 457 s of other cases
+# (local/v075/evidence/k8s-emptydir/green-conformance-k8s.log), and a ceiling set to the eviction
+# case alone loses the whole run whenever the pathological case and an ordinary suite land
+# together.
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
 	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
-	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 25m ./test/conformance/...
+	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 30m ./test/conformance/...
 
 # H1 (review round 2): the conformance agent image MUST carry wardyn-rec —
 # k8s's SessionRecording is unconditionally true (exec.go's recordCmd has no
@@ -722,6 +723,26 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.$$k=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses env.$$k on Kubernetes — local mode bypasses public-API authentication entirely, and a shared subscription credential serves one person's Claude subscription to every user's run"; exit 1; }; \
 		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set extraEnv[0].name=$$k --set extraEnv[0].value=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses $$k via extraEnv — a refusal that only reads .Values.env leaves the documented secret-bearing door wide open"; exit 1; }; \
 	done
+	@# #378: auth.ssoOnly mirrors validateSSOOnlyPosture's boot refusal at render
+	@# time — but a render-time refusal proves the VALUES are consistent, not
+	@# that the DAEMON ever learns the posture. Three separate, independently
+	@# failing checks on the one complete recipe (issuer + operator allowlist,
+	@# no admin token): it must actually render (not just avoid the ADMIN_TOKEN
+	@# string because the render died outright), it must carry WARDYN_SSO_ONLY
+	@# (deployment.yaml's emission is what makes /healthz's sso_only real), and
+	@# it must NOT carry WARDYN_ADMIN_TOKEN — the default render a few lines
+	@# above already proves the token DOES render when ssoOnly is unset.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com 2>&1); \
+	echo "$$out" | grep -q "kind: Deployment" || { echo "the sso-only recipe (issuer + operator allowlist, no admin token) no longer renders at all: $$out"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_SSO_ONLY" || { echo "auth.ssoOnly=true rendered no WARDYN_SSO_ONLY — the daemon this manifest boots would never learn the posture, so /healthz would report sso_only=false and the boot refusal would never fire"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" && { echo "auth.ssoOnly=true rendered a WARDYN_ADMIN_TOKEN — sso-only asserts SSO is the only way in, and a rendered admin bearer is a second one"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "no OIDC issuer is configured" || { echo "chart no longer refuses auth.ssoOnly=true with no OIDC issuer — sso-only with no SSO at all would leave the console with no usable sign-in"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com 2>&1 | grep -q "auth.ssoOnly is set together with an admin token" || { echo "chart no longer refuses auth.ssoOnly=true alongside an admin token"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com --set env.WARDYN_MEMBER_MODE=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_MEMBER_MODE" || { echo "chart no longer refuses auth.ssoOnly=true alongside WARDYN_MEMBER_MODE — member mode relies on the admin token as a process credential, which sso-only forbids outright"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST" || { echo "chart no longer refuses auth.ssoOnly=true alongside WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST — that override is exactly the ambiguity sso-only exists to close off"; exit 1; }
+	@# A WARDYN_SSO_ONLY=true set straight in env (not auth.ssoOnly) declares the same posture to the
+	@# daemon, so it must hit the same refusals — otherwise it renders clean and crash-loops at boot.
+	@helm template wardyn ./deploy/helm/wardyn --set env.WARDYN_SSO_ONLY=true --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com 2>&1 | grep -q "WARDYN_SSO_ONLY=true in env/extraEnv is set together with an admin token" || { echo "chart no longer refuses env.WARDYN_SSO_ONLY=true alongside an admin token — the daemon reads that variable as the sso-only posture and would refuse to boot"; exit 1; }
 	@# ── R5 W4-deploy: refusals and invariants added in the 0.7 hardening wave ──
 	@# F018/F193: ssh + the UI-sandbox gateway are OPERATOR/HUMAN ports, and
 	@# k8s.runsNamespace defaults to EMPTY — runs land in THIS namespace, so the

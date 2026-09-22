@@ -235,6 +235,9 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 			return capErr
 		}
 	}
+	if err := d.deliverManagedFilesOrReap(ctx, ref, created.ID, p.managed); err != nil {
+		return err
+	}
 	_, startErr := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{})
 	// The container now exists on the daemon, so re-check the claim: a teardown
 	// that ran during the create found NO container to remove and reported

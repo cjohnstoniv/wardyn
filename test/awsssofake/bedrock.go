@@ -6,6 +6,7 @@ package awsssofake
 import (
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -64,6 +65,10 @@ func (s *Server) handleBedrockRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	model := rest[:i]
 
+	if s.writeBedrockFault(w, r.Header.Get(bedrockFaultHeader)) {
+		return
+	}
+
 	s.mu.Lock()
 	s.bedrockCalls++
 	s.bedrockModel = model
@@ -88,3 +93,65 @@ func (s *Server) handleBedrockRuntime(w http.ResponseWriter, r *http.Request) {
 // RoleCredentialsSeen: every caller — in-process and on-cluster alike — reads
 // the counter through /_seen, which is the one answer a test driving a POD can
 // get. A second spelling with no caller is a second thing to keep true.
+
+// bedrockFaultHeader asks the stub to answer the way the real data plane does
+// when it refuses a model call AFTER dispatch:
+//
+//   - "deny": 403 AccessDeniedException, the shape an AWS Organizations SCP
+//     deny returns (the message is IAM's own "explicit deny in a service
+//     control policy" wording).
+//   - "throttle:N": 429 ThrottlingException for the first N calls carrying the
+//     header, then the ordinary 200 — N at or above the SDK's retry budget is
+//     an exhausted throttle, below it a transient one.
+//
+// Both are REST-JSON errors (bedrock-runtime's protocol): the class rides
+// x-amzn-ErrorType with the Coral namespace suffix AWS appends, and the body is
+// {"message": ...} alone. Nothing in the sandbox can set this header on a real
+// run; it exists for in-process tests that drive the proxy with their own
+// requests.
+const bedrockFaultHeader = "X-Fake-Bedrock-Fault"
+
+const (
+	bedrockDenyBody = `{"message":"User: arn:aws:sts::111111111111:assumed-role/AWSReservedSSO_AdministratorAccess_0123456789abcdef/wardyn ` +
+		`is not authorized to perform: bedrock:InvokeModel on resource: ` +
+		`arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0 ` +
+		`with an explicit deny in a service control policy"}`
+	bedrockThrottleBody = `{"message":"Too many requests, please wait before trying again."}`
+)
+
+// writeBedrockFault answers the fault fault names, if any, and reports whether
+// it wrote a response. An unknown value is ignored rather than refused: the
+// stub's job is the happy path unless a test asks otherwise.
+func (s *Server) writeBedrockFault(w http.ResponseWriter, fault string) bool {
+	var status int
+	var errType, body string
+	switch {
+	case fault == "deny":
+		status, errType, body = http.StatusForbidden,
+			"AccessDeniedException:http://internal.amazon.com/coral/com.amazon.coral.service/", bedrockDenyBody
+	case strings.HasPrefix(fault, "throttle:"):
+		n, err := strconv.Atoi(strings.TrimPrefix(fault, "throttle:"))
+		if err != nil {
+			return false
+		}
+		s.mu.Lock()
+		throttle := s.bedrockThrottled < n
+		if throttle {
+			s.bedrockThrottled++
+		}
+		s.mu.Unlock()
+		if !throttle {
+			return false
+		}
+		status, errType, body = http.StatusTooManyRequests,
+			"ThrottlingException:http://internal.amazon.com/coral/com.amazon.bedrock/", bedrockThrottleBody
+	default:
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("x-amzn-ErrorType", errType)
+	w.Header().Set("x-amzn-RequestId", "00000000-0000-4000-8000-"+randHex(6))
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+	return true
+}

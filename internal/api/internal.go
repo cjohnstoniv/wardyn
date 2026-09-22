@@ -87,6 +87,11 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Via != "" {
 		fields["via"] = dl.Via
 	}
+	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
+	if dl.UpstreamFault != "" {
+		fields["upstream_fault"] = dl.UpstreamFault
+		s.noteBedrockDataPlaneFault(r.Context(), runID, dl.UpstreamFault)
+	}
 	data, _ := json.Marshal(fields)
 	outcome := decisionOutcome(dl.Decision)
 	ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID,
@@ -428,6 +433,15 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "requested_scope is required")
 		return
 	}
+	// `lane` names a control-plane-raised escalation (the Azure DevOps
+	// capability hold). Decidability does not key off it — it keys off
+	// grant_id, which this route never sets — but a sidecar that tries to
+	// write it is probing that boundary, so it is refused and recorded.
+	if scopeNamesLane(body.RequestedScope) {
+		s.auditAuthFailedAs(r, internalApprovalActor, "reserved_scope_key")
+		writeError(w, http.StatusBadRequest, "requested_scope may not name a lane")
+		return
+	}
 
 	// Per-run cap, checked BEFORE the raise. Fail CLOSED on a count
 	// error: an unbounded raise path is the thing being bounded, so "we could not
@@ -453,6 +467,21 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+// scopeNamesLane reports whether a top-level `lane` key, in any letter case
+// (encoding/json matches keys case-insensitively), is present.
+func scopeNamesLane(scope json.RawMessage) bool {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(scope, &top) != nil {
+		return false
+	}
+	for k := range top {
+		if strings.EqualFold(k, "lane") {
+			return true
+		}
+	}
+	return false
 }
 
 // handleInternalGetApproval lets a sidecar poll the state of an approval it
@@ -489,6 +518,9 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	// derivable from capture provenance, and gated on exactly what the eager
 	// path checks. A no-op for every other kind and state.
 	ap = s.reconcileReauthOnRead(r.Context(), ap)
+	// The same repair for an Azure DevOps consent or sign-in request: the
+	// person's new sign-in is the resolution (injection_ado_signin.go).
+	ap = s.reconcileADOReauthOnRead(r.Context(), ap)
 	writeJSON(w, http.StatusOK, ap)
 }
 

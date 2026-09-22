@@ -49,8 +49,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		enforced = types.CC1
 	}
 
-	if d.cfg.ProxyImage == "" {
-		return runner.Sandbox{}, errProxyImageUnset
+	if err := d.preflightSpec(spec); err != nil {
+		return runner.Sandbox{}, err
 	}
 
 	// Best-effort image presence: pull the agent image if absent.
@@ -285,7 +285,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		ensureEnv(&agentCfg.Env, "HOME", agentImageHome)
 		name := agentContainerName(spec.RunID)
 		d.mu.Lock()
-		d.pending[name] = &pendingAgent{cfg: agentCfg, host: agentHost, netcfg: agentNetCfg}
+		d.pending[name] = &pendingAgent{cfg: agentCfg, host: agentHost, netcfg: agentNetCfg, managed: spec.ManagedFiles}
 		d.mu.Unlock()
 		return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: enforced}, nil
 	}
@@ -323,8 +323,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		}
 	}
 
-	if _, err := d.cli.ContainerStart(ctx, agentResp.ID, client.ContainerStartOptions{}); err != nil {
-		return fail(fmt.Errorf("docker: start agent: %w", err))
+	if err := d.deliverManagedFilesAndStart(ctx, agentResp.ID, spec.ManagedFiles); err != nil {
+		return fail(err)
 	}
 
 	// Recording requires two agent-writable directories that do NOT exist

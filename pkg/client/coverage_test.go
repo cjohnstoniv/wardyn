@@ -42,6 +42,14 @@ var (
 	_ client.DecisionOpts
 	_ []client.SSHPublicKey
 	_ client.RunFiles
+	_ client.DrivesDocument
+	_ client.UserDrive
+	_ []client.UserDriveListItem
+	_ []client.UserDriveGrant
+	_ client.DriveBackend
+	_ client.HomeTemplate
+	_ client.DriveReclaim
+	_ client.CapabilitySubjectType
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family
@@ -59,6 +67,7 @@ func routeFamilies() map[string][]string {
 		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents"},
 		"secrets":     {"ListSecrets", "SetSecret", "DeleteSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig"},
+		"drives":      {"GetDrives", "ApplyDrives"},
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},

@@ -218,9 +218,12 @@ stay the admin's; only the value is yours.
 
 Bounds: this is API-key mode only — the resident Claude-subscription mount
 stays operator-only (see [DESKTOP.md § Model access on
-m′](DESKTOP.md#model-access-on-m)), and `bedrock-api-key`/AWS credential
-names are refused for a member's own `PUT /secrets` regardless: on THAT door
-Bedrock stays the MDM-managed lane. Your own row is visible only to you and to
+m′](DESKTOP.md#model-access-on-m)), and the three AWS SigV4 names
+(`aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`) are refused
+for your own `PUT /secrets` regardless: on THAT door Bedrock stays the
+MDM-managed lane. A `bedrock-api-key` bearer is the exception — you may store
+your own, and under a `per_user` agent row it is the only one your runs use.
+Your own row is visible only to you and to
 your own runs — another member can never read or inject it, even by naming it in
 their own inline policy.
 
@@ -258,8 +261,10 @@ their own inline policy.
   or by adding the org path your repository sits under to a row that already
   covers it. Give them the repository's full clone URL: the rows are matched by
   host and by URL prefix, so `https://dev.azure.com/acme` and
-  `https://dev.azure.com/acme-labs` are two different answers. If instead the
-  refusal says your work may not come from that provider, ask for a
+  `https://dev.azure.com/acme-labs` are two different answers. On an Azure DevOps organisation
+  backed by Entra ID you may be asked to sign in with your own identity instead of an admin's shared
+  token — see [azure-devops-entra.md](adoption/azure-devops-entra.md) for what that looks like. If
+  instead the refusal says your work may not come from that provider, ask for a
   `workspace_provider` capability grant naming it.
 - **A custom sandbox image** — an `image` capability grant.
 - **A workspace root**, if you don't have one yet.

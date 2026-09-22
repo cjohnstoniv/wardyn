@@ -48,6 +48,17 @@ export function isPerUserSsoRow(h: SetupHarnessTool): boolean {
   return h.enabled !== false && h.mechanism === "bedrock_sso" && h.credential_source === "per_user";
 }
 
+// isPerUserBearerRow is isPerUserSsoRow's bedrock_bearer twin (#337): the row
+// under which a MEMBER's own Bedrock bearer key is the credential their runs
+// actually authenticate with (bedrockBearerFor, runs_bedrock.go), so the
+// Settings card's bearer field may be theirs to edit. Same `enabled !== false`
+// reasoning as isPerUserSsoRow — a disabled row is not per_user to the server
+// either (validateAgentCredentialSource never looks at Disabled, but the
+// injection sink's namespace resolve does).
+export function isPerUserBearerRow(h: SetupHarnessTool): boolean {
+  return h.enabled !== false && h.mechanism === "bedrock_bearer" && h.credential_source === "per_user";
+}
+
 // The agent whose model-access lane the server grades. Mirrors
 // internal/api/modelaccess.go's modelAccessAgent: bedrock_sso is claude-code's
 // lane alone, so there is exactly one row to read.
