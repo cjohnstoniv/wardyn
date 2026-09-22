@@ -116,8 +116,8 @@ func runFieldCharsAllowed(v string, multiline bool) bool {
 // referenced workspace's requirements contract.
 //
 // The folds themselves are audit-FREE by design — preflight calls the same ones
-// and persists nothing — so the rows are emitted here, at the one caller that
-// has a run id to bind them to. Extracted because handleCreateRun sits at the
+// and persists nothing — so the rows are emitted here, by the callers that
+// have a run id to bind them to (POST /runs and the record launch). Extracted because handleCreateRun sits at the
 // funlen ratchet (.golangci.yml), which is what its neighbours' own comments ask
 // the next lane to do.
 func (s *Server) recordCreateFolds(ctx context.Context, runID uuid.UUID,
