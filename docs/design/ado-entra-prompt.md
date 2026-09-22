@@ -4,8 +4,8 @@ This is the mock round for the Azure DevOps surfaces of 0.7.10 — the design ga
 code (owner law: the mock is UI source of truth; canon strings are app strings). The model is decided
 in `~/.claude/plans/bubbly-stargazing-duckling.md` (workstream A, §§1–10) and corrected by live
 measurement against a real Microsoft Entra tenant (`FINDINGS.md`, F-LIVE-1 to F-LIVE-4). Nothing here
-is open for re-design, only for drawing. **Every string in §7.2–§7.8 is a DRAFT the owner freezes at
-this gate**; the drawing-level calls are Q1–Q9 in §9, with an Adjudication section at the end.
+is open for re-design, only for drawing. **§7.2–§7.8 are FROZEN** (2026-09-22); the
+drawing-level calls Q1–Q11 are resolved in §9, with the owner's answers in Adjudication.
 
 One round covers five surfaces:
 
@@ -24,7 +24,7 @@ Static mock: `docs/design/ado-entra-mock/index.html` (ten state blocks, one page
 states side by side, so there is no clickable prototype); `mock.css` is the workspace-providers
 round's stylesheet verbatim plus four listed idioms. Frozen strings: §7 below. No TS copy module
 exists yet. The implementation stage creates `ui/src/app/lib/ado-entra-copy.ts` **from §7 verbatim**;
-every product string in the mock matches §7 byte-for-byte, and §7.2 onwards is exactly two columns,
+every product string in the mock matches §7 byte-for-byte (checked mechanically, see §7's freeze note), and §7.2 onwards is exactly two columns,
 `Key` and `String`, so `parseFrozenTables()` clones over it the way `user-drives-copy.test.ts` does.
 
 ---
@@ -56,7 +56,11 @@ case and warning tone otherwise (mock State 2).
 
 **The credential is acquired at Wardyn sign-in, not by a separate errand.** When an enabled `entra`
 row exists in the login tenant, the Wardyn sign-in's own authorization request carries the Azure
-DevOps scopes, so a person who signs in to Wardyn is already connected. With directory-wide
+DevOps scopes, so a person who signs in to Wardyn is already connected. **Measured, F-LIVE-5:** one
+authorization-code round trip requesting `openid profile offline_access` alongside the Azure DevOps
+resource's `vso.*` scopes returns, in a single response, an `id_token` audienced to the application,
+an `access_token` audienced to `499b84ac-1321-427f-aa17-267ca6975798`, and a `refresh_token`. The
+whole of this section rests on that measurement rather than on an inference from F-LIVE-1. With directory-wide
 administrator consent there is no extra screen at all; without it, Microsoft's consent screen appears
 once, at that person's first sign-in after the row was turned on. Every `vso.*` scope this design uses
 is user-consentable (F-LIVE-2), so the administrator's consent is an option that removes a prompt, not
@@ -197,11 +201,21 @@ follows; Wardyn does not restate or paraphrase it.
 **Disconnect is honest about not being final.** Removing the stored connection is undone by the next
 Wardyn sign-in; the confirm says so and points at the Microsoft page that actually withdraws it.
 
-**The row surfaces consent, because it is the difference between "no prompt" and "one prompt".** It is
-a field on the row with three states — nobody has been prompted, each person is asked once, nothing
-seen yet — plus the administrator action that closes the second. **Wardyn reports what it observes at
-sign-in and says so**: it does not read the directory's consent settings and cannot claim to. The
-count it shows (connected of signed-in, and how many were prompted) is a fact from Wardyn's own store.
+**The row surfaces consent, bounded by what Wardyn can actually observe.** Two things are knowable:
+who holds a connection, and who Microsoft refused with a consent-required error. One thing is **not**:
+how many people were shown a consent screen and accepted it — from the application's side a sign-in
+that was consented to and one that never needed consent are identical, and consent-required is only
+visible when it *fails*. So the field has three states — everyone who has signed in is connected;
+`{n}` people aren't connected (with the refusal count that explains it); nothing seen yet — and the
+honesty line says exactly which half Wardyn can see. The administrator action is offered in **every**
+state, because it is the same action regardless.
+
+An administrator-declared "I granted consent for the directory" flag was considered and rejected: a
+self-declaration can go stale the moment someone edits the grant in Entra, Wardyn could never tell,
+and §5 forbids rendering an unverifiable claim as a fact. Reading the directory through Microsoft
+Graph was also rejected (Q10) — asking an operator to consent to a directory-read permission so the
+product can talk about consent is a bad trade, and it would make Wardyn hold a permission it
+otherwise never needs.
 
 The Azure DevOps service principal may be **absent** from a tenant until someone creates it
 (F-LIVE-3); that is an adoption-doc problem, not a console state. Device code is not used: it is
@@ -343,8 +357,11 @@ These are the load-bearing ones. A string that breaks one of these is a defect, 
 7. **Never claim a minted token is safer than a sign-in.** It is bounded by the forge and *more*
    exposed, because it exists at Azure DevOps until revoked. Both halves are said together.
 8. **Never claim revocation ends a connection already open.** Azure DevOps does not promise it.
-9. **Never claim to know the directory's consent state.** The row reports what Wardyn observed at
-   sign-in, in those words. It never renders "admin consent granted" as though it had read Entra.
+9. **Never claim to know the directory's consent state, and never count consent prompts.** The row
+   reports two observable things — who is connected, and who Microsoft refused for consent — and
+   says which half it cannot see. It never renders "admin consent granted" as though it had read
+   Entra, and it never shows "{n} people were prompted", because a successful authorization looks
+   identical whether a consent screen appeared or was never needed.
 10. **Never tell a member to sign in to something they are already signed in to.** The member's verb
     is *connect*. "Sign in to Azure DevOps" is the wrong sentence for a person whose Wardyn sign-in
     already covers it.
@@ -382,16 +399,27 @@ These are the load-bearing ones. A string that breaks one of these is a defect, 
 6. **Run detail** — a new widget, `AFTER_TITLE` / `AFTER_LEAD`, the request table, and the two
    honest notes.
 
-## 7. Canonical strings — DRAFT, frozen by the owner at this gate
+## 7. Canonical strings — FROZEN
 
 A backticked substring inside a string (a host, a ref, a wire value, a field) renders `font-mono`; the
 frozen string is plain text and the parser strips backticks. A `{placeholder}` is substituted by the
-caller. Every row from §7.2 on is DRAFT — the heading says so once. The namespace is `ADO`.
+caller. The namespace is `ADO`.
+
+**Frozen 2026-09-22.** Every row from §7.2 on is now canon: the implementation transcribes it
+verbatim into `ui/src/app/lib/ado-entra-copy.ts` and does not retype copy from anywhere else. The
+mock draws these strings byte-for-byte, and `docs/design/ado-entra-mock/index.html` is checked
+against this section rather than being a second source of truth. A change to a string here is a
+change to the module and its test, in the same commit.
 
 ### 7.1 Reused canon — referenced, never re-frozen
 
 | Key | Lives in | String |
 |---|---|---|
+| `PROVIDERS.TITLE` / `LEAD` | `workspace-providers-copy.ts` | Workspace providers / Where work can come from, and how big it can get. Enable a git provider to bound which repositories a run may clone; set the storage ceilings every run and every drive is held to. |
+| `S.GIT_FOOTER` | `settings/connection-cards.tsx` | Only the GitHub App lane keeps its token outside the sandbox — a PAT or SSH key enters it for the clone, then is wiped. Public repos clone with no credential at all. |
+| Settings Model provider card | `settings-screen.tsx` | Model provider / Agent runs need one. Governed commands don't. |
+| The two sentences §7.8 replaces | `approvals.tsx`, `secrets.tsx` | No backend component enforces a tool_call approval. · Wardyn cannot expire or down-scope a PAT. — quoted so the replacement can be diffed against the exact bytes |
+| `/approvals` header | `approvals.tsx` | Approvals / What runs asked for, and what was decided. — the screen's existing header, drawn for context. The implementation renders whatever ships there; this round does not re-freeze it. |
 | `PROVIDERS.FIELD_ENABLED` / `FIELD_BASE_URLS` / `BASE_URLS_HINT` / `FIELD_LANES` / `LANES_HINT` | `workspace-providers-copy.ts` | Enabled / Allowed addresses / One per line, over HTTPS. A repository is admitted when its URL starts with one of these. / Permitted lanes / Which credential a run may use for this provider. Turning one off does not delete its stored secret. |
 | `PROVIDERS.SAVE_CTA` / `SAVE_REFUSED_TITLE` / `SAVED_TOAST` / `SAVE_ERROR` | `workspace-providers-copy.ts` | Save providers / These providers can't be saved as written / Providers saved. / Couldn't save these providers. |
 | `PROVIDERS.LANE_APP_UNAVAILABLE` | `workspace-providers-copy.ts` | Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent. |
@@ -427,7 +455,7 @@ the Go constants block.
 | Capability refused after a decision (403, proxy) | `proxy/ado_gate.go` | {capability} was denied for this run |
 | Org policy refuses a mint | `ADO_PAT.*`, `api/ado_pat.go` | your organization's policy refuses this token: {policy} |
 
-### 7.2 `ADO` — the provider row (every row DRAFT)
+### 7.2 `ADO` — the provider row
 
 | Key | String |
 |---|---|
@@ -450,15 +478,15 @@ the Go constants block.
 | `FIELD_CLIENT` | Application (client) ID |
 | `CLIENT_HINT` | Filled from the application this console signs in with. Wardyn can only tie an Azure DevOps sign-in to the person's own Wardyn session when both use one application. |
 | `CONSENT_TITLE` | Consent |
-| `CONSENT_NONE_PROMPTED` | Nobody has been prompted |
-| `CONSENT_NONE_PROMPTED_BODY(connected, total)` | {connected} of {total} people who have signed in are connected to Azure DevOps, and none of them were asked to consent. That is what a directory-wide consent looks like from here. |
-| `CONSENT_EACH_ASKED` | Each person is asked once |
-| `CONSENT_EACH_ASKED_BODY(connected, total, prompted)` | {connected} of {total} people who have signed in are connected to Azure DevOps. {prompted} were asked to consent by Microsoft at sign-in — that is one screen, once per person, and it is what happens when your directory hasn't consented on everyone's behalf. |
+| `CONSENT_ALL_CONNECTED` | Everyone who has signed in is connected |
+| `CONSENT_ALL_CONNECTED_BODY(connected, total)` | {connected} of {total} people who have signed in are connected to Azure DevOps, and nobody has been refused for consent. |
+| `CONSENT_SOME_MISSING(n)` | {n} person isn't connected / {n} people aren't connected |
+| `CONSENT_SOME_MISSING_BODY(connected, total, refused)` | {connected} of {total} people who have signed in are connected to Azure DevOps. {refused} were refused by Microsoft for consent and haven't connected since. |
 | `CONSENT_NOTHING_SEEN` | Nothing seen yet |
-| `CONSENT_NOTHING_SEEN_BODY` | Nobody has signed in since this row was turned on, so there is nothing to report. The first sign-in will say whether Microsoft asked them. |
+| `CONSENT_NOTHING_SEEN_BODY` | Nobody has signed in since this row was turned on, so there is nothing to report yet. |
 | `CONSENT_GRANT_TITLE` | Grant it for everyone |
-| `CONSENT_GRANT_BODY(directory, pending)` | In Microsoft Entra, open this application's API permissions and choose “Grant admin consent for {directory}”. After that nobody sees a consent screen, including the {pending} who haven't signed in yet. |
-| `CONSENT_HONESTY` | Wardyn reports what it sees when people sign in. It does not read your directory's consent settings, and it cannot consent on your behalf. |
+| `CONSENT_GRANT_BODY(directory)` | In Microsoft Entra, open this application's API permissions and choose “Grant admin consent for {directory}”. After that nobody is asked, including people who haven't signed in yet. |
+| `CONSENT_HONESTY` | Wardyn can tell you who is connected, and who Microsoft refused for consent. It cannot tell you whether someone saw a consent screen and accepted it — from here, a sign-in that was consented to and one that never needed consent look identical. It does not read your directory's settings and cannot consent on your behalf. |
 | `CAPS_TITLE` | What a run may do here |
 | `CAPS_LEAD` | Two lists, and the difference between them matters: the ceiling is what a run may ever ask for, the defaults are what it starts with. |
 | `CEILING_TITLE` | Capability ceiling |
@@ -475,7 +503,7 @@ the Go constants block.
 | `MINTED_REVOKE_NOTE` | Azure DevOps does not promise that revoking a token ends a connection already open with it. Revoking is what stops the next request, not necessarily the one in flight. |
 | `SAVED_NARROWED_RUNS(n, capability)` | {n} run was granted {capability} and no longer holds it — its next request for it is refused. / {n} runs were granted {capability} and no longer hold it — their next request for it is refused. |
 
-### 7.3 `ADO` — the enforcement panel (every row DRAFT)
+### 7.3 `ADO` — the enforcement panel
 
 | Key | String |
 |---|---|
@@ -496,7 +524,7 @@ the Go constants block.
 | `ENF_TOKEN_MEMBER_LABEL` | The connection's own reach |
 | `ENF_TOKEN_MEMBER` | It covers everything you consented to for Azure DevOps — Wardyn doesn't make it smaller. That is why the check above exists, and why every one of these is recorded. |
 
-### 7.4 `ADO` — capability labels (every row DRAFT)
+### 7.4 `ADO` — capability labels
 
 Q8: on the provider row's **ceiling column only**, the wire capability name renders in mono beside the
 plain label (`Read` `read`, `Push` `code_write`, `Branch policies` `policy_admin`, and so on) — the
@@ -523,8 +551,9 @@ renders in the defaults column nowhere, and outside the row nowhere.
 | `CAP_WORK_WRITE_HINT` | Create and edit work items. |
 | `CAP_WIKI_WRITE` | Wiki |
 | `CAP_WIKI_WRITE_HINT` | Create and edit wiki pages. |
+| `CAP_TOKENS` | Create an Azure DevOps token |
 
-### 7.5 `ADO` — the member's connection and the six access states (every row DRAFT)
+### 7.5 `ADO` — the member's connection and the six access states
 
 The chip and the remedy vary with **where the connection came from** — the Wardyn sign-in, or a
 separate connect. That is a second fact on the same row, not a seventh state (§2.6).
@@ -540,6 +569,7 @@ separate connect. That is a second fact on the same row, not a seventh state (§
 | `ACCESS_EXPIRED_SEPARATE_ACTION` | Your Azure DevOps connection ended. Runs that clone from it are refused until you connect again. |
 | `ACCESS_NOT_CONNECTED` | Azure DevOps · Not connected |
 | `ACCESS_NEEDS_CONSENT` | Azure DevOps · Needs your consent |
+| `ACCESS_SHARED_LIVE` | Azure DevOps · Provided by your admin |
 | `ACCESS_SHARED_EXPIRED` | Azure DevOps · Your admin's credential expired |
 | `ACCESS_SHARED_EXPIRED_ACTION` | Your admin's Azure DevOps token expired — ask them to replace it. There is nothing for you to connect. |
 | `CAUSE_ROW_IS_NEWER` | You signed in to Wardyn before your admin turned Azure DevOps on, so your sign-in doesn't cover it yet. Connect now, or sign out and back in — either works. |
@@ -574,12 +604,16 @@ separate connect. That is a second fact on the same row, not a seventh state (§
 | `DISCONNECT_CONFIRM_BODY` | Runs you start after this can't reach Azure DevOps. Runs already going keep the connection they started with. Signing in to Wardyn again reconnects you — to stop that, withdraw the permission from your Microsoft account's My Apps page. |
 | `ACCESS_SHARED_NOTE` | Rendered when the row uses a shared token and that token works. It is deliberately not a per-person claim: the run does not act as this person. |
 
+A ref's policy summary on the card ("Protected: 2 reviewers required, build must pass") is rendered
+from what Azure DevOps reports about that ref. It is not frozen here, because it is the forge's
+description of the forge's own configuration and Wardyn does not author it.
+
 `ACCESS_LIVE_ORG` renders with **no action line and no button** — that is the point of the whole
 surface. `ACCESS_NOT_CONNECTED` never renders alone: it always carries one of the four `CAUSE_*`
 lines. The member-facing verb is **connect** throughout, because "sign in" names something they have
 already done (§5 #10).
 
-### 7.6 `ADO` — the capability request card (every row DRAFT)
+### 7.6 `ADO` — the capability request card
 
 | Key | String |
 |---|---|
@@ -599,6 +633,14 @@ already done (§5 #10).
 | `REQ_UNPROTECTED_REF` | No branch policy protects this branch. |
 | `REQ_PROTECTED_REF_TITLE(ref)` | `{ref}` is protected by a branch policy |
 | `REQ_PROTECTED_REF_BODY(person)` | Allowing this moves it anyway. The policy that requires a reviewed pull request will not stop it, because {person}'s Azure DevOps account is allowed to bypass it. |
+| `REQ_WHAT_CODE_WRITE(repo, person)` | the run pushes this branch to {repo}, as {person}. |
+| `REQ_BLAST_CODE_WRITE(repo)` | commits, and creating or moving branches no policy protects, anywhere in {repo}. Not a protected branch, not completing a pull request, not changing a policy — each of those asks separately. |
+| `REQ_WHAT_POLICY_BYPASS(ref, person)` | the run moves {ref} past the policy protecting it, as {person}. |
+| `REQ_BLAST_POLICY_BYPASS(repo)` | moving any policy-protected branch in {repo}, and completing a pull request with its policies bypassed. |
+| `REQ_WHAT_POLICY_ADMIN(ref, person)` | the run lowers the reviewer count on {ref}, as {person}. |
+| `REQ_BLAST_POLICY_ADMIN(repo)` | creating, changing and deleting branch policies anywhere in {repo} — including the ones that would hold back its own pushes. |
+| `REQ_WHAT_PR(pr, person)` | the run completes pull request {pr}, as {person}. |
+| `REQ_BLAST_PR(repo)` | opening, updating, commenting on and completing pull requests anywhere in {repo}. Completing one past its own policies is a separate ask. |
 | `REQ_HELD(thing)` | The {thing} is held at the proxy for up to four minutes while you answer. Nothing has reached Azure DevOps. |
 | `REQ_SCOPE_READOUT(scope)` | Scope: {scope} |
 | `REQ_APPROVING_ONCE(thing)` | Approving lets this one {thing} through. The next one asks again. |
@@ -631,7 +673,6 @@ already done (§5 #10).
 | `REQ_REAUTH_BODY` | This run's next Azure DevOps request is held for up to four minutes while you reconnect. Reconnect and it goes through on its own — the run doesn't have to start over. |
 | `LIST_ENDED_CHIP` | This run has ended |
 | `LIST_ENDED_BODY` | There's nothing to allow — the request went away with the run. It's here so you can see what it asked for. |
-| `LIST_OPEN_RUN_HINT` | Watch it live instead. |
 | `OUTCOME_ALLOWED_ONCE` | Allowed once |
 | `OUTCOME_ALLOWED_RUN` | Allowed for this run |
 | `OUTCOME_DENIED` | Denied |
@@ -645,7 +686,7 @@ already done (§5 #10).
 | `COL_WHERE` | Where |
 | `COL_OUTCOME` | Outcome |
 
-### 7.7 `ADO` — the launch door and the after view (every row DRAFT)
+### 7.7 `ADO` — the launch door and the after view
 
 | Key | String |
 |---|---|
@@ -676,7 +717,7 @@ already done (§5 #10).
 | `AFTER_FORGE_TITLE` | Azure DevOps has its own record |
 | `AFTER_FORGE_BODY(person)` | Every request that went through appears in your organisation's audit log and in the repository's push history, under {person} — not under Wardyn, and not under a shared account. |
 
-### 7.8 Sentences this design falsifies — rewritten in the same change (every row DRAFT)
+### 7.8 Sentences this design falsifies — rewritten in the same change
 
 | Key | String |
 |---|---|
@@ -715,7 +756,9 @@ legibility three buttons buy. The consequence sentences survive the change — t
 under the control**, where they change with the selected scope, rather than under three buttons. The
 scope menu offers `Once` and `This run` and shows `Until…` and `Always` disabled with their reason;
 Deny takes the same scope, one caret governing both, as it does today. The three-button drawing stays
-in the mock as the labelled losing variant.
+in the mock as the labelled losing variant — the three button labels and their consequence lines in
+that block are **retired copy, deliberately not frozen**, and are the only product-looking strings on
+the page that are absent from §7.
 
 **Q3 — teal on the card. RESOLVED (a), and re-read onto the new control:** `Approve` is teal on an
 ordinary card; on a `policy_bypass` card **nothing is teal and Deny is `destructive`**. The ruling was
@@ -745,24 +788,26 @@ mono beside the plain label, in the **ceiling column only** (§7.4). Nowhere els
 **Q9 — where the member's connected panel lives. RESOLVED (b):** Getting started **and** Settings,
 one component in two homes.
 
-### Still open
+### Q10 and Q11 — RESOLVED at the same gate
 
-**Q10 — how the row learns about consent.** Drawn as **observation**: Wardyn reports what it saw at
-sign-in ("{n} of {m} connected, {p} were prompted") and says in so many words that it does not read
-the directory. The alternative is to **read it** — query the Azure DevOps service principal's
-`oauth2PermissionGrants` for an `AllPrincipals` grant — which would let the row say "granted for your
-whole directory" as a fact rather than an inference, at the cost of a Microsoft Graph permission this
-design does not currently ask for, and one more thing an administrator must consent to.
-**Recommend the drawn version** for 0.7.10: it is honest, it needs no new permission, and the
-administrator action it offers is the same either way. Worth the owner's eyes because "we could just
-check" is the obvious question.
+**Q10 — how the row learns about consent. RESOLVED: observation, and no Graph read.** Asking an
+operator to consent to a directory-read permission so the product can talk about consent is a bad
+trade, and it would leave Wardyn holding a permission it otherwise never needs.
 
-**Q11 — whether `Disconnect` should exist for a member connected through the Wardyn sign-in.** Drawn
-with the button present and a confirm that admits the next sign-in reconnects them, pointing at the
-Microsoft page that actually withdraws the permission. The alternative is **no button** in that state,
-on the grounds that a control whose effect the product immediately undoes is theatre.
-**Recommend keeping it**: a person who wants their runs to stop reaching Azure DevOps right now should
-have a way to do that from here, and the confirm is honest about what it does and does not achieve.
+**The ruling also corrected the drawing.** The first version showed "{n} were asked to consent at
+sign-in". Wardyn cannot know that: from the application's side a successful authorization looks
+identical whether a consent screen appeared or consent was never needed, and consent-required is only
+visible when it **fails** (`AADSTS65001`). That count is now removed. The field draws the two things
+Wardyn can observe — who is connected, and who was refused for consent — and the honesty line names
+the half it cannot see. An administrator-declared flag was considered as the honest source for the
+stronger statement and rejected: it can go stale the moment the grant is edited in Entra, Wardyn
+could never tell, and §5 #9 forbids rendering an unverifiable claim as a fact. The administrator
+action renders in every state, because it is the same action either way.
+
+**Q11 — `Disconnect` for someone connected through their Wardyn sign-in. RESOLVED: keep it**, with
+the honest confirm. A control that exists and says plainly that the next Wardyn sign-in will
+reconnect you — and points at the Microsoft page that actually withdraws the permission — is more
+useful than no control, and it matches what the product can truthfully do.
 
 ## Adjudication
 
@@ -779,16 +824,21 @@ everyone through their existing SSO. A person may have to allow Wardyn once; a p
 to set up their own Azure DevOps connectivity. §0.1 records the model that follows, §2.2 is rewritten
 around it, and the member's verb changed from *sign in* to *connect* throughout.
 
+**Q10 and Q11 were ruled at the same gate** — see §9. Q10's ruling also corrected the drawing: the
+"{n} were prompted" count came out, because Wardyn cannot know it. **§7 is frozen as of 2026-09-22.**
+
 **Carried back to the implementation, not settled here:** §0.1's last paragraph. Acquiring the
 credential at sign-in means the login callback gains a credential-capture side effect, which plan §2
 explicitly said it would not have. That is a change to a security-relevant path, and it needs its own
-slice, its own tests and a cross-tier review — it is named here so it cannot be discovered late, but
-it is not a copy decision and this document does not settle it.
+slice, its own tests and a cross-tier review. **That slice is now being built separately, with an
+independent cross-tier review**; the sentence stays here because it belongs in the design record and
+not only in a lane's commit message. It is not a copy decision and this document does not settle it.
 
 ### Round notes (author, 2026-09-22)
 
-0. **Every §7.2–§7.8 row is DRAFT.** The word sits in each heading rather than in each row because a
-   marker in the key cell would break `parseFrozenTables`' clone.
+0. **§7.2–§7.8 were frozen at the 2026-09-22 gate.** The DRAFT marker sat in each heading rather
+   than in each row, because a marker in the key cell would break `parseFrozenTables`' clone; the
+   owner froze by deleting the word from the headings, which is what happened.
 1. **§0 is new for this round** and is the reason the round exists in this shape: the plan as approved
    promised a per-run down-scoped token, and the live tenant refused to produce one. Every surface
    was re-drawn around that, not patched.
@@ -804,7 +854,9 @@ it is not a copy decision and this document does not settle it.
    characters and by the entire decision.
 6. **The mock is one page, not three.** The providers round split its mock so no file passed the
    1000-line gate; that gate covers `.go`, `ui/src` and `scripts`, not documentation, and the owner
-   reviews these states side by side. One page wins; it sits just under 1000 lines anyway.
+   reviews these states side by side. One page wins. It is now just over 1000 lines, which the gate
+   does not police for documentation; if it grows much further, split it the way the providers round
+   did rather than letting one file carry every surface.
 7. **`.dec` survives in the stylesheet for the losing variant only.** Q2 retired it from every real
    card; it is kept so the rejected drawing still renders beside the accepted one.
 8. **The consent field is a row field, not a docs footnote**, because it is the difference between a

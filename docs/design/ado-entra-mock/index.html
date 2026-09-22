@@ -119,15 +119,19 @@
           </div>
         </div>
 
-        <!-- ===== Consent. The difference between "nobody is prompted" and "one prompt at first
-             sign-in" is the whole of the member's experience, so it is a field on the row and not a
-             docs footnote. Wardyn reports what it OBSERVES at sign-in; it does not read the
-             directory, and the honesty line says so. ===== -->
+        <!-- ===== Consent. Whether people meet a Microsoft screen is the whole of the member's
+             experience, so it is a field on the row and not a docs footnote.
+             What this field may say is bounded by what Wardyn can OBSERVE: who holds a connection,
+             and who was refused with AADSTS65001. It may NOT say how many people were prompted —
+             a successful authorization looks identical whether consent was shown or never needed,
+             so that number would be invented. The admin action is offered in every state, because
+             it is the same action either way. ===== -->
         <div class="pad" style="padding:0 14px 14px">
           <div style="font-size:12px;font-weight:500;margin-bottom:4px">Consent</div>
-          <div class="chips" style="margin-top:0"><span class="chip success"><i class="dot"></i>Nobody has been prompted</span></div>
-          <p class="secsub" style="margin-top:6px">12 of 12 people who have signed in are connected to Azure DevOps, and none of them were asked to consent. That is what a directory-wide consent looks like from here.</p>
-          <div class="note plain" style="max-width:none"><span>Wardyn reports what it sees when people sign in. It does not read your directory's consent settings, and it cannot consent on your behalf.</span></div>
+          <div class="chips" style="margin-top:0"><span class="chip success"><i class="dot"></i>Everyone who has signed in is connected</span></div>
+          <p class="secsub" style="margin-top:6px">12 of 12 people who have signed in are connected to Azure DevOps, and nobody has been refused for consent.</p>
+          <div class="note plain" style="max-width:none"><b>Grant it for everyone</b><span>In Microsoft Entra, open this application's API permissions and choose “Grant admin consent for Acme”. After that nobody is asked, including people who haven't signed in yet.</span></div>
+          <div class="note plain" style="max-width:none"><span>Wardyn can tell you who is connected, and who Microsoft refused for consent. It cannot tell you whether someone saw a consent screen and accepted it — from here, a sign-in that was consented to and one that never needed consent look identical. It does not read your directory's settings and cannot consent on your behalf.</span></div>
         </div>
 
         <!-- ===== The ceiling / profile pair. The two labels are the whole point of the
@@ -236,20 +240,21 @@
       <div class="note plain" style="max-width:none"><span>Azure DevOps does not promise that revoking a token ends a connection already open with it. Revoking is what stops the next request, not necessarily the one in flight.</span></div>
     </div>
 
-    <div class="varlabel"><b>Consent, the other two states</b> — the difference between “nobody is prompted” and “one screen, once per person”, and the action that closes it. Wardyn reports what it sees at sign-in; it never claims to have read the directory</div>
+    <div class="varlabel"><b>Consent, the other two states</b> — drawn as the two things Wardyn can actually know: who is connected, and who Microsoft refused for consent. A “{n} were prompted” count is NOT drawn, because a successful sign-in looks the same whether or not a consent screen appeared</div>
     <div class="pad" style="padding-bottom:0">
       <div class="card">
         <div style="font-size:12px;font-weight:500;margin-bottom:4px">Consent</div>
-        <div class="chips" style="margin-top:0"><span class="chip warning">Each person is asked once</span></div>
-        <p class="secsub" style="margin-top:6px">9 of 12 people who have signed in are connected to Azure DevOps. 9 were asked to consent by Microsoft at sign-in — that is one screen, once per person, and it is what happens when your directory hasn't consented on everyone's behalf.</p>
-        <div class="note plain" style="max-width:none"><b>Grant it for everyone</b><span>In Microsoft Entra, open this application's API permissions and choose “Grant admin consent for Acme”. After that nobody sees a consent screen, including the three who haven't signed in yet.</span></div>
-        <div class="note plain" style="max-width:none"><span>Wardyn reports what it sees when people sign in. It does not read your directory's consent settings, and it cannot consent on your behalf.</span></div>
+        <div class="chips" style="margin-top:0"><span class="chip warning">3 people aren't connected</span></div>
+        <p class="secsub" style="margin-top:6px">9 of 12 people who have signed in are connected to Azure DevOps. 3 were refused by Microsoft for consent and haven't connected since.</p>
+        <div class="note plain" style="max-width:none"><b>Grant it for everyone</b><span>In Microsoft Entra, open this application's API permissions and choose “Grant admin consent for Acme”. After that nobody is asked, including people who haven't signed in yet.</span></div>
+        <div class="note plain" style="max-width:none"><span>Wardyn can tell you who is connected, and who Microsoft refused for consent. It cannot tell you whether someone saw a consent screen and accepted it — from here, a sign-in that was consented to and one that never needed consent look identical. It does not read your directory's settings and cannot consent on your behalf.</span></div>
       </div>
       <div class="card" style="margin-top:14px">
         <div style="font-size:12px;font-weight:500;margin-bottom:4px">Consent</div>
         <div class="chips" style="margin-top:0"><span class="chip neutral">Nothing seen yet</span></div>
-        <p class="secsub" style="margin-top:6px">Nobody has signed in since this row was turned on, so there is nothing to report. The first sign-in will say whether Microsoft asked them.</p>
-        <div class="note plain" style="max-width:none"><span>Wardyn reports what it sees when people sign in. It does not read your directory's consent settings, and it cannot consent on your behalf.</span></div>
+        <p class="secsub" style="margin-top:6px">Nobody has signed in since this row was turned on, so there is nothing to report yet.</p>
+        <div class="note plain" style="max-width:none"><b>Grant it for everyone</b><span>In Microsoft Entra, open this application's API permissions and choose “Grant admin consent for Acme”. After that nobody is asked, including people who haven't signed in yet.</span></div>
+        <div class="note plain" style="max-width:none"><span>Wardyn can tell you who is connected, and who Microsoft refused for consent. It cannot tell you whether someone saw a consent screen and accepted it — from here, a sign-in that was consented to and one that never needed consent look identical. It does not read your directory's settings and cannot consent on your behalf.</span></div>
       </div>
     </div>
 
@@ -315,6 +320,17 @@
           <div class="r none"><b>The connection's own reach</b><span>It covers everything you consented to for Azure DevOps — Wardyn doesn't make it smaller. That is why the check above exists, and why every one of these is recorded.</span></div>
         </div>
         <div style="margin-top:14px;display:flex;gap:8px"><button class="btn sm ghost" type="button">Disconnect Azure DevOps</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>The panel's How row, connected separately</b> — the fallback's variant of the one row that differs. Everything else on the card is identical</div>
+    <div class="pad">
+      <div class="card">
+        <div class="chips" style="margin-top:0"><span class="chip success"><i class="dot"></i>Azure DevOps · Your connection</span></div>
+        <dl class="kv" style="margin-top:10px">
+          <dt>Connected as</dt><dd>dana.okafor@acme.com</dd>
+          <dt>How</dt><dd>You connected it<span class="sub">Your Wardyn sign-in doesn't cover Azure DevOps, so this is a connection you made yourself.</span></dd>
+        </dl>
       </div>
     </div>
 
@@ -516,6 +532,8 @@
             <dt>Command</dt><dd class="mono">git push origin HEAD:main</dd>
             <dt>Acts as</dt><dd>Dana Okafor<span class="sub">Whatever you allow happens as Dana on Azure DevOps, and Azure DevOps records it that way.</span></dd>
           </dl>
+          <p style="margin-top:12px"><b style="font-weight:600;color:var(--foreground)">What you're approving:</b> the run moves <span class="mono">refs/heads/main</span> past the policy protecting it, as Dana.</p>
+          <p style="margin-top:6px"><b style="font-weight:600;color:var(--foreground)">Blast radius:</b> moving any policy-protected branch in <span class="mono">acme/payments-api</span>, and completing a pull request with its policies bypassed.</p>
         </div>
         <div class="ft">
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
@@ -524,7 +542,7 @@
             <button class="btn danger" type="button">Deny</button>
             <span class="secsub" style="margin-left:6px">Scope: This run</span>
           </div>
-          <p class="secsub" style="margin-top:10px"><b style="font-weight:600;color:var(--foreground)">Approving</b> lets every push past a branch policy from this run through until it ends.</p>
+          <p class="secsub" style="margin-top:10px"><b style="font-weight:600;color:var(--foreground)">Approving</b> lets every push past a branch policy from this run through until it ends. Nothing carries to the next run.</p>
           <p class="secsub" style="margin-top:2px"><b style="font-weight:600;color:var(--foreground)">Denying</b> refuses this push and tells the tool why. The run keeps going and may ask again.</p>
           <p class="secsub" style="margin-top:10px">The push is held at the proxy for up to four minutes while you answer. Nothing has reached Azure DevOps.</p>
         </div>
@@ -556,8 +574,9 @@
             <button class="btn danger" type="button">Deny</button>
             <span class="secsub" style="margin-left:6px">Scope: This run</span>
           </div>
-          <p class="secsub" style="margin-top:10px"><b style="font-weight:600;color:var(--foreground)">Approving</b> lets every branch-policy change from this run through until it ends.</p>
-          <p class="secsub" style="margin-top:2px"><b style="font-weight:600;color:var(--foreground)">Denying</b> refuses this change and tells the tool why.</p>
+          <p class="secsub" style="margin-top:10px"><b style="font-weight:600;color:var(--foreground)">Approving</b> lets every branch-policy change from this run through until it ends. Nothing carries to the next run.</p>
+          <p class="secsub" style="margin-top:2px"><b style="font-weight:600;color:var(--foreground)">Denying</b> refuses this change and tells the tool why. The run keeps going and may ask again.</p>
+          <p class="secsub" style="margin-top:10px">The change is held at the proxy for up to four minutes while you answer. Nothing has reached Azure DevOps.</p>
         </div>
       </div>
       <div class="req hold">
@@ -582,13 +601,14 @@
             <button class="btn " type="button">Deny</button>
             <span class="secsub" style="margin-left:6px">Scope: This run</span>
           </div>
-          <p class="secsub" style="margin-top:10px"><b style="font-weight:600;color:var(--foreground)">Approving</b> lets every pull request action from this run through until it ends.</p>
-          <p class="secsub" style="margin-top:2px"><b style="font-weight:600;color:var(--foreground)">Denying</b> refuses this action and tells the tool why.</p>
+          <p class="secsub" style="margin-top:10px"><b style="font-weight:600;color:var(--foreground)">Approving</b> lets every pull request action from this run through until it ends. Nothing carries to the next run.</p>
+          <p class="secsub" style="margin-top:2px"><b style="font-weight:600;color:var(--foreground)">Denying</b> refuses this action and tells the tool why. The run keeps going and may ask again.</p>
+          <p class="secsub" style="margin-top:10px">The action is held at the proxy for up to four minutes while you answer. Nothing has reached Azure DevOps.</p>
         </div>
       </div>
     </div>
 
-    <div class="varlabel"><b>Q2 resolved: the shipped control</b> — the scope menu, drawn open. Two scopes are offered and two are refused with their reason; the consequence sentences move under the control, where they change with the scope</div>
+    <div class="varlabel"><b>Q2 resolved: the shipped control</b> — the scope menu, drawn open. Two scopes are offered and two are refused with their reason. The consequence sentences move under the control, where they change with the scope: the pair on the right is what they read with <b>Once</b> selected instead of <b>This run</b>. Deny takes the same scope as Approve — one caret governs both, as it does today</div>
     <div class="pad" style="padding-top:12px">
       <div class="grid2">
         <div class="opts" style="max-width:46ch">
@@ -598,9 +618,7 @@
           <div class="o off">Always<span class="why">Refused for Azure DevOps capabilities: nothing here is saved to the workspace.</span></div>
         </div>
         <div>
-          <p class="secsub" style="margin-top:0">With <b style="font-weight:600;color:var(--foreground)">Once</b> selected, the two sentences under the control read instead:</p>
-          <div class="note plain" style="max-width:none"><span><b style="font-weight:600">Approving</b> lets this one push through. The next one asks again.</span><span><b style="font-weight:600">Denying</b> refuses this push and tells the tool why. The run keeps going and may ask again.</span></div>
-          <p class="secsub" style="margin-top:10px">Deny takes the same scope as Approve — one caret governs both, as it does today.</p>
+          <div class="note plain" style="max-width:none;margin-top:0"><span><b style="font-weight:600">Approving</b> lets this one push through. The next one asks again.</span><span><b style="font-weight:600">Denying</b> refuses this push and tells the tool why. The run keeps going and may ask again.</span></div>
         </div>
       </div>
     </div>
@@ -849,7 +867,7 @@
         </div>
       </div>
       <div class="card" style="margin-top:14px">
-        <div class="chips" style="margin-top:0"><span class="chip warning">Azure DevOps · your sign-in ends at 17:40</span></div>
+        <div class="chips" style="margin-top:0"><span class="chip warning">Azure DevOps · your connection ends at 17:40</span></div>
         <p class="secsub" style="margin-top:6px">A run going when it ends holds its next Azure DevOps request for up to four minutes while you reconnect. Reconnecting now avoids that.</p>
         <div style="margin-top:10px;display:flex;gap:8px"><button class="btn sm" type="button">Connect again</button><button class="btn sm ghost" type="button">Launch anyway</button></div>
       </div>
@@ -909,7 +927,7 @@
         <div class="note plain" style="max-width:none;margin-top:14px">
           <b>What the connection itself covered</b>
           <span>Azure DevOps issued this run a token covering: Read code · Write code · Manage code · Build · Run builds · Work items · Write work items · Wiki · Packaging · Project and team · Security · Service endpoints · Tokens · Profile.</span>
-          <span>That is what the token carried, not what the run was allowed to do. Wardyn's own check is what held it to the five decisions above; a Microsoft Entra token can't be issued narrower than what the person has consented to.</span>
+          <span>That is what the token carried, not what the run was allowed to do. Wardyn's own check is what held it to the decisions above; a Microsoft Entra token can't be issued narrower than what the person has consented to.</span>
         </div>
 
         <div class="note plain" style="max-width:none"><b>Azure DevOps has its own record</b><span>Every request that went through appears in your organisation's audit log and in the repository's push history, under Dana Okafor — not under Wardyn, and not under a shared account.</span></div>
@@ -938,31 +956,42 @@
 <!-- =================================================================== -->
 <!-- ===== STATE 10 ===== Sentences that stop being true -->
 <!-- =================================================================== -->
+<!-- The three pairs are drawn as varlabel-separated frames rather than with
+     explanatory lines INSIDE the frame: "today" and "replaced by" are review
+     scaffolding, and the convention is that everything inside a .frame is the
+     product. -->
 <section class="state">
-  <div class="tag"><span>State 10</span><b>Three shipped sentences this design falsifies, drawn beside their replacements so the owner can freeze both halves at once</b></div>
+  <div class="tag"><span>State 10</span><b>Three shipped sentences this design falsifies, each drawn beside its replacement so the owner can freeze both halves at once</b></div>
   <div class="frame">
-    <div class="pad" style="display:flex;flex-direction:column;gap:16px;padding-bottom:22px">
-      <div>
-        <div class="secsub" style="margin-bottom:6px">On <span class="mono">/approvals</span>, today:</div>
-        <div class="note red" style="max-width:none;margin-top:0"><span>No backend component enforces a <span class="mono">tool_call</span> approval.</span></div>
-        <div class="secsub" style="margin:8px 0 6px">Replaced by:</div>
-        <div class="note plain" style="max-width:none;margin-top:0"><span>An Azure DevOps capability request is held at the proxy until someone decides it — nothing reaches Azure DevOps first, and a denial is a refusal, not a note. Every other kind of tool-call approval is a record of what a run said it was about to do; nothing stops it.</span></div>
-      </div>
-      <div>
-        <div class="secsub" style="margin-bottom:6px">On the Secrets page, today, over an Azure DevOps token:</div>
-        <div class="note red" style="max-width:none;margin-top:0"><span>Wardyn cannot expire or down-scope a PAT.</span></div>
-        <div class="secsub" style="margin:8px 0 6px">Replaced, for a row where each person signs in, by:</div>
-        <div class="note plain" style="max-width:none;margin-top:0"><span>This row stores no Azure DevOps token: each person's sign-in is their own, and removing them from your directory ends it. Wardyn holds every run to its granted capabilities at the proxy.</span></div>
-        <div class="secsub" style="margin:8px 0 6px">Kept, unchanged, for a row with a stored token:</div>
-        <div class="note plain" style="max-width:none;margin-top:0"><span>Wardyn cannot expire or down-scope a PAT.</span></div>
-      </div>
-      <div>
-        <div class="secsub" style="margin-bottom:6px">The lane chip, today:</div>
-        <div class="chips" style="margin-top:0"><span class="chip info">PAT · in-sandbox</span></div>
-        <div class="secsub" style="margin:8px 0 6px">With the broker on, which is what these rows run:</div>
-        <div class="chips" style="margin-top:0"><span class="chip info">PAT · brokered</span> <span class="chip success">Microsoft Entra · brokered</span></div>
-        <p class="secsub" style="margin-top:8px">“In-sandbox” is still the true word when the broker is off, so the chip reads from the switch rather than being renamed outright.</p>
-      </div>
+    <div class="varlabel" style="border-top:0"><b>On <span class="mono">/approvals</span>, today</b> — false the moment the control plane holds a request on a tool-call approval</div>
+    <div class="pad" style="padding-bottom:0">
+      <div class="note red" style="max-width:none;margin-top:0"><span>No backend component enforces a <span class="mono">tool_call</span> approval.</span></div>
+    </div>
+    <div class="varlabel"><b>Replaced by</b> — <span class="mono">TOOL_CALL_NOTE</span></div>
+    <div class="pad" style="padding-bottom:0">
+      <div class="note plain" style="max-width:none;margin-top:0"><span>An Azure DevOps capability request is held at the proxy until someone decides it — nothing reaches Azure DevOps first, and a denial is a refusal, not a note. Every other kind of tool-call approval is a record of what a run said it was about to do; nothing stops it.</span></div>
+    </div>
+
+    <div class="varlabel"><b>On the Secrets page, today</b> — over an Azure DevOps token</div>
+    <div class="pad" style="padding-bottom:0">
+      <div class="note red" style="max-width:none;margin-top:0"><span>Wardyn cannot expire or down-scope a PAT.</span></div>
+    </div>
+    <div class="varlabel"><b>Replaced on a row where each person signs in</b> — <span class="mono">SECRETS_PER_USER_NOTE</span></div>
+    <div class="pad" style="padding-bottom:0">
+      <div class="note plain" style="max-width:none;margin-top:0"><span>This row stores no Azure DevOps token: each person's sign-in is their own, and removing them from your directory ends it. Wardyn holds every run to its granted capabilities at the proxy.</span></div>
+    </div>
+    <div class="varlabel"><b>Kept, unchanged, on a row with a stored token</b> — it is still true there</div>
+    <div class="pad" style="padding-bottom:0">
+      <div class="note plain" style="max-width:none;margin-top:0"><span>Wardyn cannot expire or down-scope a PAT.</span></div>
+    </div>
+
+    <div class="varlabel"><b>The lane chip, today</b></div>
+    <div class="pad" style="padding-bottom:0">
+      <div class="chips" style="margin-top:0"><span class="chip info">PAT · in-sandbox</span></div>
+    </div>
+    <div class="varlabel"><b>With the broker on, which is what these rows run</b> — “in-sandbox” is still the true word when the broker is off, so the chip reads from the <span class="mono">WARDYN_GIT_PAT_BROKER</span> switch rather than being renamed outright</div>
+    <div class="pad" style="padding-bottom:20px">
+      <div class="chips" style="margin-top:0"><span class="chip info">PAT · brokered</span> <span class="chip success">Microsoft Entra · brokered</span></div>
     </div>
   </div>
 </section>
