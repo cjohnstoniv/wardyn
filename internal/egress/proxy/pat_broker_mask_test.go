@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -39,7 +40,10 @@ func TestBrokeredCredentialsAreMaskRegistered(t *testing.T) {
 	t.Run("gitPAT", func(t *testing.T) {
 		// Unique per lane and per run so the process-global registry another test
 		// in this package populated can never make this pass by accident.
-		const pat = "glpat-F123-ONLY-THIS-TEST-MINTS-THIS"
+		// Unique per ITERATION too: procRegistry is process-global and never
+		// evicted, so a constant would be registered already on a second
+		// `-count` iteration and fail its own precondition.
+		pat := "glpat-F123-ONLY-THIS-TEST-MINTS-THIS-" + uuid.NewString()
 		if !bytes.Contains(maskDecisionBytes(row(pat)), []byte(pat)) {
 			t.Fatal("precondition failed: this value is registered before the broker ever minted it")
 		}
@@ -63,7 +67,7 @@ func TestBrokeredCredentialsAreMaskRegistered(t *testing.T) {
 	})
 
 	t.Run("githubToken", func(t *testing.T) {
-		const tok = "ghs_F100_ONLY_THIS_TEST_MINTS_THIS"
+		tok := "ghs_F100_ONLY_THIS_TEST_MINTS_THIS_" + strings.ReplaceAll(uuid.NewString(), "-", "_")
 		if !bytes.Contains(maskDecisionBytes(row(tok)), []byte(tok)) {
 			t.Fatal("precondition failed: this value is registered before the broker ever minted it")
 		}

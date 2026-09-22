@@ -179,7 +179,11 @@ func TestWaitReady_TransientFilesStatusesAreRetried(t *testing.T) {
 			srv, counts := countingReadyServer(t, runID, tc.status, tc.body)
 			c := &sdk.Client{BaseURL: srv.URL}
 
-			_, err := waitForRunReady(context.Background(), c, runID, 30*time.Millisecond, false)
+			// The deadline has to outlast TWO polls on a loaded runner, not one:
+			// this case asserts the status was retried, and `make release-check`
+			// runs several suites at once, where a single poll can outlast a
+			// 30 ms budget and leave one poll behind.
+			_, err := waitForRunReady(context.Background(), c, runID, 500*time.Millisecond, false)
 			var ee *exitError
 			if !errors.As(err, &ee) || ee.code != 124 {
 				t.Fatalf("err = %v, want exit 124: a %d is transient and must be retried to the deadline", err, tc.status)
