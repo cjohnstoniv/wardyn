@@ -194,7 +194,19 @@ func foldsPathCase(host string) bool {
 // validateWorkspaceProviders is the ONE write-boundary gate both doors run
 // (PUT /workspace-providers and PUT /site-config) — a nil block is valid (legacy
 // open mode), so the common "not configured" case costs nothing.
-func validateWorkspaceProviders(p *types.WorkspaceProviders) error {
+//
+// refuseSSHPathScope (#380 F2) is the ONE rule this shared gate does NOT apply
+// identically at both doors: an explicit SSH lane on a path-scoped row is
+// refused on the console door (a human is choosing, in the moment, with an
+// undo) but NOT on the site-config door (an unattended MDM/CLI re-apply of
+// /etc/wardyn/site-config.json on every boot). A managed desktop that cannot
+// re-apply its own stored document is a worse failure than the over-admission
+// #380 closes — that config predates the rule and has no migration path, so
+// the site-config door calls this with false, keeps applying the rest of the
+// document, and reports the affected rows instead (sshLaneWidePastPathRows,
+// surfaced by handlePutSiteConfig and warned about there) rather than 400ing
+// the whole write. handlePutWorkspaceProviders (the console) calls with true.
+func validateWorkspaceProviders(p *types.WorkspaceProviders, refuseSSHPathScope bool) error {
 	if p == nil {
 		return nil
 	}
@@ -217,7 +229,7 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders) error {
 		if err := validateProviderBaseURLs(i, row); err != nil {
 			return err
 		}
-		if err := validateProviderLanes(i, row); err != nil {
+		if err := validateProviderLanes(i, row, refuseSSHPathScope); err != nil {
 			return err
 		}
 	}
@@ -319,7 +331,7 @@ func validateProviderHostForKind(j int, kind types.GitProviderKind, host string,
 // github.com alone, and the SSH lane reaches only the two hosts publishing an
 // SSH-over-443 endpoint (sshOver443Endpoint; a port-22 GHES/ADO-Server host is
 // the documented ceiling).
-func validateProviderLanes(i int, row types.GitProvider) error {
+func validateProviderLanes(i int, row types.GitProvider, refuseSSHPathScope bool) error {
 	for _, lane := range row.Lanes {
 		if !lane.Valid() {
 			return fmt.Errorf(providers400LaneKind, i, string(lane),
@@ -352,37 +364,16 @@ func validateProviderLanes(i int, row types.GitProvider) error {
 		// instead: SSH carries no path to bound (cloneTarget, sshAdmittedAbovePath),
 		// so the org scoping the row's own addresses claim to have is fiction for
 		// that lane, and admitting it silently is the bug #380 reports.
-		if sshLaneExceedsPathScope(row) {
+		//
+		// refuseSSHPathScope is false ONLY on the site-config door (see
+		// validateWorkspaceProviders's doc) — a stored document written before
+		// this rule existed must keep re-applying; the console door always
+		// passes true.
+		if refuseSSHPathScope && sshLaneExceedsPathScope(row) {
 			return fmt.Errorf(providers400LaneSSHPath, row.ID)
 		}
 	}
 	return nil
-}
-
-// sshLaneExceedsPathScope reports whether row's own base URLs would leave the
-// SSH lane wider than they read: true when every base URL matching an
-// SSH-over-443 host (sshOver443Endpoint) carries a path. SSH scoping is
-// host-level only (cloneTarget), so a bare-host base URL for that host means the
-// row already claims the whole host and the SSH lane widens nothing; a path on
-// every matching entry means the SSH lane silently drops the path the https
-// lanes enforce.
-func sshLaneExceedsPathScope(row types.GitProvider) bool {
-	sawSSHHost := false
-	for _, raw := range row.BaseURLs {
-		u, err := url.Parse(raw)
-		if err != nil || u.Hostname() == "" {
-			continue
-		}
-		host := strings.ToLower(u.Hostname())
-		if _, ok := sshOver443Endpoint(host); !ok {
-			continue
-		}
-		sawSSHHost = true
-		if strings.Trim(u.Path, "/") == "" {
-			return false // this entry already bounds the whole host
-		}
-	}
-	return sawSSHHost
 }
 
 // validateStorageProviders holds the two storage halves to the one invariant
@@ -802,7 +793,9 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 	if block != nil {
 		block.GitPatBrokerEnabled = nil
 	}
-	if err := validateWorkspaceProviders(block); err != nil {
+	// true: the console door — a human is choosing this write, in the moment,
+	// with an undo (validateWorkspaceProviders's doc, #380 F2).
+	if err := validateWorkspaceProviders(block, true); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid workspace providers: "+err.Error())
 		return
 	}
@@ -843,6 +836,16 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		"workspace_provider.write", "workspace_providers", "success",
 		mustJSON(workspaceProviderAuditData(savedBlock, refused))))
 	w.Header().Set("ETag", computeETag(savedBlock))
+	// GitPatBrokerEnabled is projected onto the RESPONSE the same way GET
+	// projects it (#381 F4) — AFTER the ETag above, which must hash the stored
+	// shape. Without this the console's post-Save setDraft(result.providers)
+	// dropped the field, `?? true` silently took over, and a broker-off
+	// install showed the right label until Save and the wrong one after, until
+	// the next reload re-fetched it from GET.
+	if providersConfigured(saved) {
+		on := !s.cfg.DisableGitPATBroker
+		savedBlock.GitPatBrokerEnabled = &on
+	}
 	writeJSON(w, http.StatusOK, workspaceProvidersPutResponse{
 		WorkspaceProviders: savedBlock, SourcesNoLongerAdmitted: refused,
 	})
