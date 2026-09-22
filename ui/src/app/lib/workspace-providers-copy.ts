@@ -96,16 +96,24 @@ export const PROVIDERS = {
   BASE_URLS_REQUIRED: "Name at least one address. A row with none admits nothing and is refused at save.",
   FIELD_LANES: "Permitted lanes",
   LANES_HINT: "Which credential a run may use for this provider. Turning one off does not delete its stored secret.",
-  LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent.",
+  // #381: Azure DevOps DOES publish a token-lifecycle API (it's the PAT lane's
+  // path there) — the stale claim was that no comparable API exists at all.
+  // What's actually true today: Wardyn hasn't built a repo-scoped App-style
+  // broker against it, so say that without promising a lane that isn't built.
+  LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped tokens for github.com only — Wardyn doesn't broker Azure DevOps's own token API this way (yet). Use the PAT lane there.",
   LANE_SSH_UNAVAILABLE:
     "Not available: SSH over port 443 is offered for github.com and dev.azure.com only — a self-hosted host clones over HTTPS.",
-  // The SSH scoping CEILING, said on the surface that writes the policy: an SSH
-  // clone URL carries no path, so a row scoped to an org bounds HTTPS clones
-  // only (internal/api/workspace_providers.go's cloneTarget). Shown under the
-  // lanes field when this row has a path AND permits ssh — the two facts that
-  // together make the row look narrower than it is.
-  SSH_HOST_LEVEL_HINT:
-    "SSH clones are admitted for the whole host: an SSH URL carries no org path to bound. Drop SSH here to keep this row's addresses binding.",
+  // #380 F5: the CONSOLE half of the SSH path-scoping ceiling — an SSH clone
+  // URL carries no org path, so it admits the whole host regardless of what
+  // this row's addresses declare (internal/api/workspace_providers.go's
+  // sshLaneExceedsPathScope, the same server rule that refuses this at save).
+  // Shown as the checkbox's OWN disabled-reason (never a raw server 400)
+  // whenever the row's SSH-capable addresses all carry a path — which, for
+  // Azure DevOps, is EVERY legal row: its org segment is mandatory, so this
+  // lane is never selectable there. Leaving lanes at their default still
+  // clones over SSH host-wide, with the runtime warning unaffected.
+  LANE_SSH_PATH_SCOPED:
+    "Not available: this row's addresses carry an organisation path, and SSH has none to bound — it would admit the whole host. Leave lanes at their default, or drop the path.",
   // The credential lanes are keyed by the host of the row's FIRST address. With
   // no parseable address there is no host, so there is no secret name to store
   // under: every lane renders disabled with this reason rather than defaulting

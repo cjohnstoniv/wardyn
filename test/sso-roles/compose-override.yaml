@@ -1,0 +1,13 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# TEST-ONLY: swaps the role walk's Dex config (test/sso-roles/dex.yaml) in for
+# the compose stack's demo one. Compose merges volumes by container path, so
+# this entry replaces deploy/compose/docker-compose.yaml's ./dex.yaml mount and
+# nothing else changes. The path comes in absolute: a relative one would
+# resolve against deploy/compose/, the project directory. Used only by
+# scripts/compose-sso-roles.sh.
+services:
+  dex:
+    volumes:
+      - ${ROLES_DEX_CONFIG:?set by scripts/compose-sso-roles.sh}:/etc/dex/config.yaml:ro

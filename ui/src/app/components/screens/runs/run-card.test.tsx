@@ -14,7 +14,7 @@ import { approvalSignals, type RunSignals } from "./board-groups";
 import { RUN } from "../../wardyn/copy";
 import { CLONE_LOAD_FAILED } from "../new-run/wizard-types";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { waitingReauth } from "../../../lib/reauth-waiting-copy";
+import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
 
 // review C-01/C-06/C-07 — cloneRun's own behaviour, not just the menu item's
 // gating. listAudit is stubbed; createRequestFromAudit stays REAL so the
@@ -71,6 +71,21 @@ const reauthSignals = (runId: string) =>
     },
   ]);
 
+// S10 round 2 (F13) — the Azure DevOps twin of reauthSignals: same wire kind
+// (credential_reauth), a DIFFERENT provider, so the board chip must read
+// "Azure DevOps", never "AWS".
+const adoConsentSignals = (runId: string) =>
+  approvalSignals([
+    {
+      id: "a-ado-consent",
+      run_id: runId,
+      kind: "credential_reauth",
+      requested_scope: { lane: "azure_devops", mechanism: "entra_consent", owner: "me", provider_id: "row_1", scopes: [] },
+      state: "PENDING",
+      requested_at: new Date().toISOString(),
+    },
+  ]);
+
 // CONSOLE-RULES §5: every actor on a row is two adjacent glyphs, never fused —
 // WHO (the agent monogram) and WHAT (the state). The state's WORD moved to
 // row 2, but it stays in the DOM: the e2e suite reads state off that text.
@@ -98,6 +113,37 @@ describe("RunCard — two-row anatomy", () => {
     renderCard(run(), reauthSignals("run_3b7f10c4aa99"), "admin@corp");
     expect(screen.getByText(waitingReauth(1, false))).toBeInTheDocument();
     expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
+  });
+
+  // S10 round 2 (F13) — the Azure DevOps consent chip must never say "AWS".
+  it("a run held on an Azure DevOps consent request names Azure DevOps, never AWS, by the reader", () => {
+    renderCard(run(), adoConsentSignals("run_3b7f10c4aa99"), "me");
+    expect(screen.getByText(waitingAdoConsent(1))).toBeInTheDocument();
+    expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
+    expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
+  });
+
+  // A mid-run Azure DevOps SIGN-IN request is the same chip, never the AWS one.
+  it("a run held on an Azure DevOps sign-in request names Azure DevOps, never AWS", () => {
+    const signals = approvalSignals([
+      {
+        id: "a-ado-signin",
+        run_id: "run_3b7f10c4aa99",
+        kind: "credential_reauth",
+        requested_scope: { lane: "azure_devops", mechanism: "entra_signin", reason: "signin", owner: "me", provider_id: "row_1" },
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+      },
+    ]);
+    renderCard(run(), signals, "me");
+    expect(screen.getByText(waitingAdoConsent(1))).toBeInTheDocument();
+    expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
+  });
+
+  it("…and the same card read by somebody else says the owner's Azure DevOps sign-in", () => {
+    renderCard(run(), adoConsentSignals("run_3b7f10c4aa99"), "admin@corp");
+    expect(screen.getByText(waitingAdoConsent(1, false))).toBeInTheDocument();
+    expect(screen.queryByText(waitingAdoConsent(1))).not.toBeInTheDocument();
   });
 
   it("row 2 carries repo, barrier, short id and age", () => {

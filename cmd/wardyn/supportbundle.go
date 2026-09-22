@@ -7,10 +7,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,10 +63,11 @@ func supportBundleCmd(client clientFn) *cobra.Command {
 				files["healthz.json"] = prettyJSON(raw)
 			}
 
-			if raw, err := c.SetupStatus(ctx); err != nil {
-				files["setup-status.error.txt"] = []byte(err.Error() + "\n")
+			setupRaw, setupErr := c.SetupStatus(ctx)
+			if setupErr != nil {
+				files["setup-status.error.txt"] = []byte(setupErr.Error() + "\n")
 			} else {
-				files["setup-status.json"] = prettyJSON(raw)
+				files["setup-status.json"] = prettyJSON(setupRaw)
 			}
 
 			if events, err := c.RecentAuditEvents(ctx, sdk.ListOpts{Limit: auditLimit}); err != nil {
@@ -77,6 +80,12 @@ func supportBundleCmd(client clientFn) *cobra.Command {
 				files["compose-config.redacted.yaml"] = redactSecrets(cfg)
 			} else {
 				files["compose-config.note.txt"] = []byte(note + "\n")
+			}
+
+			if diag, note := gatherProxyDiagnostics(ctx, c, setupRaw); diag != nil {
+				files["proxy-config.json"] = diag
+			} else {
+				files["proxy-config.note.txt"] = []byte(note + "\n")
 			}
 
 			if outPath == "" {
@@ -158,6 +167,54 @@ func gatherComposeConfig(path string) ([]byte, string) {
 		return nil, fmt.Sprintf("compose config not gathered: %v (looked for %s; pass --compose-file, or run `docker compose -f <file> config` yourself and attach it)", err, path)
 	}
 	return raw, ""
+}
+
+// proxyDiagnostics is the corporate-proxy field-report triad #144 exists to
+// stop an operator guessing at: is an upstream configured, what bypasses it,
+// and did a trusted CA actually load. Named fields only — UpstreamProxyHost
+// is a host[:port], never the full URL, so an operator's UpstreamProxySecretRef
+// credential (or any userinfo a future UpstreamProxyURL might carry) can never
+// ride along even if validation upstream of this command ever loosens.
+type proxyDiagnostics struct {
+	UpstreamProxyHost   string   `json:"upstream_proxy_host,omitempty"`
+	UpstreamProxyBypass []string `json:"upstream_proxy_bypass,omitempty"`
+	TrustedCAPresent    bool     `json:"trusted_ca_present"`
+}
+
+// gatherProxyDiagnostics returns the corporate-proxy diagnostic to include, or
+// nil plus an explanatory note — gatherComposeConfig's own shape, so a piece
+// this command can't reach (no operator token, site-config unset) lands as a
+// note rather than aborting the bundle. UpstreamProxyURL/UpstreamProxyNoProxy
+// live in site-config (GET /api/v1/site-config, operator-only), not the
+// compose file — see config.go's "SOURCE vs TRANSPORT" — so this is a second
+// network call, not a compose-file parse. trusted_ca_present is read back out
+// of the setup-status JSON already gathered above (setup.go's TrustedCACerts,
+// a bare count with no PEM/host content) rather than fetched twice.
+func gatherProxyDiagnostics(ctx context.Context, c *sdk.Client, setupStatusRaw []byte) ([]byte, string) {
+	siteCfg, err := c.GetSiteConfig(ctx)
+	if err != nil {
+		return nil, fmt.Sprintf("proxy config not gathered: %v", err)
+	}
+	diag := proxyDiagnostics{UpstreamProxyBypass: siteCfg.UpstreamProxyNoProxy}
+	if siteCfg.UpstreamProxyURL != "" {
+		// url.URL.Host never carries userinfo (that lives in the separate
+		// .User field, left untouched here) — safe by construction, not by
+		// stripping.
+		if u, err := url.Parse(siteCfg.UpstreamProxyURL); err == nil {
+			diag.UpstreamProxyHost = u.Host
+		}
+	}
+	var setup struct {
+		TrustedCACerts int `json:"trusted_ca_certs"`
+	}
+	_ = json.Unmarshal(setupStatusRaw, &setup)
+	diag.TrustedCAPresent = setup.TrustedCACerts > 0
+
+	b, err := json.MarshalIndent(diag, "", "  ")
+	if err != nil {
+		return nil, fmt.Sprintf("proxy config not gathered: %v", err)
+	}
+	return b, ""
 }
 
 // secretMarkers is THE vocabulary of key-name substrings that mark a value as

@@ -68,8 +68,7 @@ jobs:
       # (v-prefix stripped, matching Chart.yaml's appVersion) added on a
       # vX.Y.Z tag. Hand-rolled in a few lines rather than pulling in
       # docker/metadata-action for three strings. Via env, not `${{ }}`
-      # inside the script body (ci.yml's screenshots-fresh job sets this
-      # precedent).
+      # inside the script body.
       - name: Compute image tags
         id: tags
         env:

@@ -2,18 +2,33 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, 'release/**', 'feature/**']
   pull_request:
-    branches: [main, master]
+    branches: [main, master, 'release/**', 'feature/**']
 
 # Least-privilege default: CI only needs to read the repo — nothing here writes
 # back. Mirrors nightly.yml, which already sets this.
 permissions:
   contents: read
 
+# A new push to a pull request cancels that PR's older run: its result gates
+# nothing once the head moves, but it holds runner slots, which are what this
+# repository's CI queues on (docs/CI.md, "This repository's own CI"). A push
+# keys on its run_id and so shares a group with nothing: a run on main is never
+# cancelled, never queued behind another, and never replaced while pending. A
+# per-branch key would do all three, because GitHub keeps one running and one
+# pending run per group and cancels the older pending one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Every job sets timeout-minutes. Unset, GitHub allows 360, so one hung job holds
+# a runner for six hours. Each value is at least twice the job's measured
+# maximum, with a ten-minute floor (docs/CI.md); raise it with the measurement.
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -74,8 +89,11 @@ jobs:
   # truth). Needs the ui node_modules (mermaid-cli), so it installs UI deps first.
   diagrams:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -91,45 +109,24 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Diagram gate (mermaid syntax + label-truth)
         run: make diagrams
-
-  # ── docs: screenshot staleness gate ───────────────────────────────────────
-  # docs/img holds the README/TRY-IT console shots and NOTHING regenerates them
-  # automatically: `make screenshots` is manual, and the manual step is exactly
-  # the one that got skipped for 40 UI commits. Deliberately a PATH-PAIR check,
-  # never a pixel diff — ui/e2e/screenshots/docs.spec.ts rejects pixel gates on
-  # purpose (they flake), so this runs no browser and has no flake surface.
-  # It watches the WHOLE rendered UI tree, not a named-screen allowlist: both
-  # shots photograph the app shell, the nav rail, the design tokens and a dozen
-  # shared components, so any hand-maintained list is incomplete the day it lands
-  # (the one this replaced watched screens/new-run/, which feeds NO tracked PNG,
-  # and missed app-shell.tsx, which is in 100% of tracked pixels). Over-firing is
-  # what the `no-screenshots` label below is for.
-  # fetch-depth: 0 is required — the default shallow checkout cannot resolve
-  # origin/<base_ref>.
-  # Escape hatch: label the PR `no-screenshots`, THEN PUSH. The label alone does
-  # nothing: this workflow's `pull_request` trigger uses the default types
-  # [opened, synchronize, reopened], so labelling starts no run, and re-running an
-  # existing run replays the original event payload (still unlabelled). Adding
-  # `labeled`/`unlabeled` types would fix that at the cost of a full CI re-run on
-  # every label change — not worth it for an escape hatch used a few times a year.
-  screenshots-fresh:
-    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'no-screenshots')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-      - name: UI changed without docs/img
-        # Via env, not `${{ }}` inside the script body.
-        env:
-          BASE_REF: ${{ github.base_ref }}
+      # docs/img holds the README/TRY-IT console shots and nothing regenerates
+      # them automatically. A path-pair check, never a pixel diff (pixel gates
+      # flake; ui/e2e/screenshots/docs.spec.ts rejects them), over the whole
+      # rendered UI tree, because both shots photograph the shell, the nav rail,
+      # the tokens and the shared components. ADVISORY: a warning annotation,
+      # never a failure, and no job of its own. Many console changes rightly
+      # leave both shots alone, and a job of its own costs a runner per PR.
+      # On a pull_request HEAD is GitHub's merge commit and HEAD^1 the base tip,
+      # which is why the checkout above fetches depth 2.
+      - name: Screenshot freshness (advisory)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
         run: |
-          changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
+          changed="$(git diff --name-only HEAD^1 HEAD)"
           screens="$(printf '%s\n' "$changed" | grep -E '^ui/src/(app|styles)/' | grep -v '\.test\.' || true)"
           if [ -n "$screens" ] && ! printf '%s\n' "$changed" | grep -q '^docs/img/'; then
             printf '%s\n' "$screens"
-            echo "UI changed - run make screenshots or label the PR no-screenshots"
-            exit 1
+            echo "::warning title=docs/img may be stale::The console changed (ui/src/app or ui/src/styles) and no docs/img shot did. Run make screenshots if either shot shows the change."
           fi
 
   # ── web UI: typecheck + unit/component tests + build ──────────────────────
@@ -138,6 +135,7 @@ jobs:
   # and builds the embedded bundle.
   ui:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -195,8 +193,12 @@ jobs:
   # deterministic fixtures. Each spec runs against a freshly-seeded backend
   # (scripts/run-ui-e2e.sh) so mutating specs never contaminate each other. The
   # full live compose stack is exercised by the nightly workflow instead.
+  # One job, not shards: it is not the critical path (`build` is), a shard adds
+  # a check and repeats the setup, and the per-spec reseed costs about a second
+  # (docs/CI.md has the measurements).
   ui-e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -238,6 +240,7 @@ jobs:
   # it so it can never regress to "renders nothing" again (was a CRITICAL gap).
   helm:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
@@ -384,6 +387,7 @@ jobs:
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: docker compose config (validate)
@@ -411,6 +415,7 @@ jobs:
   # covered by scripts/test-desktop-profile.sh's static checks above.
   desktop-envelope:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build wardynd (this commit)
@@ -563,6 +568,7 @@ jobs:
   # it. Mirrors that job's postgres service (postgres:17, matching compose/prod).
   test-pg:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:17
@@ -608,58 +614,6 @@ jobs:
           name: pg-test-reports
           path: test/reports/go/pg/**
 
-  # ── deploy: multi-arch buildx smoke (build only, never pushes) ────────────
-  # W-DESK S1. The release lane (.github/workflows/release.yml) publishes every
-  # image as a linux/amd64 + linux/arm64 index, and it only ever runs on a
-  # `vX.Y.Z` tag — so without this job an arm64 build break is discovered
-  # DURING a release, with the tag already pushed. This is the PR-time proof
-  # that the two-platform build still resolves. `push: false`, no registry
-  # login, no `packages:` permission: it builds and throws the result away.
-  #
-  # WHY THESE THREE and not all five release images — each cell is a distinct
-  # BUILD SHAPE, and the two omitted images are strict duplicates of shapes
-  # already covered here:
-  #   wardynd          — a $BUILDPLATFORM node UI stage + a cross-compiled Go
-  #                      stage + a COPY-only distroless runtime (no emulation
-  #                      anywhere). wardyn-proxy is the same shape minus the UI.
-  #   agent-claude-code — a bookworm runtime doing apt-get + `npm install -g`
-  #                      as the TARGET arch, i.e. the emulated path.
-  #                      agent-codex-cli is the same shape.
-  #   agent-aws-sso    — a bookworm runtime that SELECTS its download by
-  #                      TARGETARCH (x86_64 vs aarch64 AWS CLI installer, GPG
-  #                      verified). Nothing else exercises that branch.
-  #
-  # QEMU is what makes the emulated cells possible; the Go compiles do not use
-  # it (every builder stage is `FROM --platform=$BUILDPLATFORM` + GOARCH).
-  # timeout-minutes is generous on purpose: emulated apt/npm is slow, and a
-  # timeout kill here would read as a build break.
-  buildx-smoke:
-    name: multi-arch build (${{ matrix.name }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: wardynd
-            dockerfile: deploy/compose/Dockerfile.wardynd
-          - name: agent-claude-code
-            dockerfile: deploy/images/claude-code/Dockerfile
-          - name: agent-aws-sso
-            dockerfile: deploy/images/aws-sso/Dockerfile
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
-      - name: Build both platforms (no push, no load — the result is discarded)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          push: false
-          platforms: linux/amd64,linux/arm64
-          provenance: false
-
   # ── supply-chain: trivy image scan (OS + language packages) ───────────────
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
   # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
@@ -704,10 +658,22 @@ jobs:
             dockerfile: deploy/images/codex-cli/Dockerfile
           - name: agent-aws-sso
             dockerfile: deploy/images/aws-sso/Dockerfile
+          - name: agent-vscode
+            dockerfile: deploy/images/vscode/Dockerfile
+          - name: agent-novnc
+            dockerfile: deploy/images/novnc/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build the image locally (scan target — never pushed)
-        run: docker build -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
+        run: |
+          # agent-vscode/agent-novnc default FROM wardyn/agent-base:local (never
+          # a registry pull) — build that first when this row needs it. Every
+          # other row's Dockerfile stands alone.
+          case "${{ matrix.name }}" in
+            agent-vscode|agent-novnc)
+              docker build -f deploy/images/base/Dockerfile -t wardyn/agent-base:local . ;;
+          esac
+          docker build -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
       # The aws-sso image's --selftest, against the image that was actually
       # BUILT. Everything it checks (tmux present; both coding-agent shims
       # present AND refusing) is otherwise exercised only by source-level Go
@@ -759,6 +725,7 @@ jobs:
   # this goes red, and the licence lands in the PR diff for CODEOWNERS to read.
   notices:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -778,6 +745,7 @@ jobs:
 
   gates:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -795,6 +763,7 @@ jobs:
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

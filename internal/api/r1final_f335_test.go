@@ -83,7 +83,7 @@ func TestF335_ForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
 		WithContext(operatorCtx(ownerOtherSub, "other@corp.example", oidc.RoleMember))
 	w := httptest.NewRecorder()
 
-	if _, ok := srv.seedAndAdmitWorkspace(r.Context(), w, r, &spec, &req); ok {
+	if _, ok := srv.seedAndAdmitWorkspace(r.Context(), w, r, &spec, &req, true); ok {
 		t.Fatalf("ADMITTED: a run held another member's onboarded dir %q; the member-mount re-check gates it against the OWNER's roots, so per-principal roots constrain the caller not at all", project)
 	}
 	if w.Code != http.StatusUnprocessableEntity {

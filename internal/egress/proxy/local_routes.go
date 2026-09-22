@@ -207,9 +207,19 @@ type toolCallScope struct {
 // for a host it was never allowed to reach — and, approved, teach the workspace
 // an allow-list entry nothing ever asked for.
 func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxToolApprovalBody))
 	var body toolApprovalRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, maxToolApprovalBody)).Decode(&body); err != nil {
+	if err != nil || json.Unmarshal(raw, &body) != nil {
 		http.Error(w, "invalid tool approval request", http.StatusBadRequest)
+		return
+	}
+	// `lane` names a control-plane-raised escalation (the Azure DevOps
+	// capability hold). The typed re-marshal below would drop it anyway, but a
+	// sandbox that tries to say it is refused out loud rather than silently
+	// cleaned: the control plane refuses the same key on its own route.
+	if sandboxNamesLane(raw) {
+		p.emitLocalDecision(r, egress.Deny, ruleSourceApprovals, nil)
+		http.Error(w, "wardyn: a tool approval may not name a lane", http.StatusBadRequest)
 		return
 	}
 	if body.Kind != string(types.ApprovalToolCall) {
@@ -244,6 +254,31 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 	// raised this hold" to the approval it raised, without parsing the response.
 	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/approvals",
 		fwd, "application/json", ruleSourceApprovals, approvalIDAlways)
+}
+
+// sandboxNamesLane reports whether the body, or its payload, carries a `lane`
+// key in any letter case (encoding/json matches keys case-insensitively).
+func sandboxNamesLane(raw []byte) bool {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(raw, &top) != nil {
+		return false
+	}
+	for k, v := range top {
+		if strings.EqualFold(k, "lane") {
+			return true
+		}
+		if strings.EqualFold(k, "payload") {
+			var inner map[string]json.RawMessage
+			if json.Unmarshal(v, &inner) == nil {
+				for ik := range inner {
+					if strings.EqualFold(ik, "lane") {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // clampToolField bounds a sandbox-supplied string for storage and marks any

@@ -151,7 +151,7 @@ func TestEffectiveToolApprovals(t *testing.T) {
 func TestGovernanceToolApprovalsOnCreate(t *testing.T) {
 	toolApprovalsOf := func(t *testing.T, audit *recRecorder) string {
 		t.Helper()
-		for _, ev := range audit.events {
+		for _, ev := range audit.snapshot() {
 			if ev.Action != "run.create" {
 				continue
 			}
@@ -489,7 +489,7 @@ func TestSeededImageCapabilityBypass(t *testing.T) {
 func TestCreatePathWiresCeilingToDispatch(t *testing.T) {
 	reassertProfile := func(t *testing.T, audit *recRecorder) (string, bool) {
 		t.Helper()
-		for _, ev := range audit.events {
+		for _, ev := range audit.snapshot() {
 			if ev.Action != "run.ceiling.reassert" {
 				continue
 			}
@@ -773,7 +773,7 @@ func integFixture(t *testing.T, cs *capStore, rows []types.Integration, wss []ty
 // the integration it named, or "" when nothing bound.
 func foldedIntegrationRef(t *testing.T, audit *recRecorder) string {
 	t.Helper()
-	for _, ev := range audit.events {
+	for _, ev := range audit.snapshot() {
 		if ev.Action != "run.workspace.creds" {
 			continue
 		}
