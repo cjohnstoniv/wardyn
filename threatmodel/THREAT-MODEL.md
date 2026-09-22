@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.8)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.10)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -2347,24 +2347,26 @@ why this switch is not one to turn on for a single-dev machine.
 ### Coalesced `auth.failed` rows: the peer address is not the bound
 
 Since 0.7.2 the control plane folds IDENTICAL consecutive `auth.failed` audit rows
-— same refusing boundary, same `reason`, same request path, same peer IP — into
-the first row plus one **new** summary row carrying `count`/`first_seen`/
-`last_seen` (`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off). The key
-holds the peer IP WITHOUT the ephemeral port: keying on the port meant a client
-that opens a connection per request — a scanner, or anything without keep-alive —
-folded nothing at all, which made the instrument a no-op on exactly the estates
-this section is about. It exists
+— same refusing boundary, same `reason`, same request path — into the first row
+plus one **new** summary row carrying `count`/`peers`/`first_seen`/`last_seen`
+(`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off). The peer is NOT in the
+key: until 0.8 it was, and a caller that rotated its source address (or its
+ephemeral port, before that) opened a new streak and wrote a new row on every
+request, up to the rate limit. The summary carries the opening peer as
+`SourceIP`, `peers`, the number of distinct peer IPs folded (saturating at
+100, so the set a streak holds is bounded), `peer_ips`, those addresses (capped
+at 100), and `peers_truncated`. It exists
 because a self-inflicted drip evicted everything else: one sidecar retrying a
 renew the control plane would never grant wrote one row a minute, forever, past a
 rate limiter set at 1/sec, and pushed every real security event out of the
 console's 1000-row window mid-investigation.
 
-**`SourceIP` being in that key does NOT separate principals on a Kubernetes
-deployment.** Wardyn deliberately does not install a `RealIP` middleware (an
-`X-Forwarded-For` a client can set is not an identity), so behind an ingress or a
-load balancer `SourceIP` is the proxy's address and every caller shares it. A
-credential-stuffing run against the public lane therefore arrives under ONE
-coalescing key, and the fold is what a defender is reading.
+**`SourceIP` does not separate principals on a Kubernetes deployment either.**
+Wardyn deliberately does not install a `RealIP` middleware (an `X-Forwarded-For` a
+client can set is not an identity), so behind an ingress or a load balancer
+`SourceIP` is the proxy's address and every caller shares it. A
+credential-stuffing run against one path and reason therefore arrives as ONE
+streak on any deployment, and the fold is what a defender is reading.
 
 What bounds that is the window, the count and the rate limiter, not the key: a
 streak closes after `WARDYN_AUDIT_COALESCE_WINDOW` of silence AND at 1000 rows, so
@@ -2528,6 +2530,28 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   answer the same refusal. An unevaluated rule never reads as a pass; the cost
   is that a client which ignores the `no-thin` the broker advertises cannot
   push at all while rules are set.
+### Hold-lane settings sources: user scope is still agent-writable
+
+Claude Code resolves `permissions.allow` rules before it asks the
+`--permission-prompt-tool`, so on a `tool_approvals=hold` run a matching rule runs
+the tool and `wardyn-toolgate` is never consulted (#358). Since 0.8 the hold lane
+in `deploy/images/claude-code/agent-run` passes `--setting-sources user`, which
+keeps the workspace's `.claude/settings.json` and `.claude/settings.local.json`
+out. Managed settings (`/etc/claude-code/managed-settings.json`) are not a
+selectable source and still load.
+
+**What the flag does NOT cover:** user scope, `~/.claude/settings.json` inside
+the sandbox, is still loaded, and the agent runs as the uid that owns it. An agent
+that writes its own `permissions.allow` rule there is un-gated for every later
+`claude` process that reads it, such as a child `claude` it starts, exactly as a
+repository rule was. The flag narrows
+the route to a file the agent must write itself, rather than one a cloned
+repository can ship. What closes it is #333's root-owned managed settings with
+`allowManagedPermissionRulesOnly: true`, which applies only to runs with a resolved
+autonomy level. The flag is on the hold lane only: the autonomous lane already runs
+every tool (`--dangerously-skip-permissions`), and the interactive lanes have no
+Wardyn gate in the path. The approver there is the human in the pane. codex-cli has
+no hold lane, so there is no gate for a repository config to pre-empt.
 
 ### Known latent vulnerabilities
 

@@ -77,8 +77,16 @@ type bootFlags struct {
 	// malformed entry, same WARN on a root so wide it bounds nothing — and
 	// unset means no host_path drive may be authored at all.
 	userDriveHostRoots *string
-	uiDir              *string
-	runnerSel          *string
+	// ssoOnly is WARDYN_SSO_ONLY (flag -sso-only): the operator's declaration
+	// that SSO is the ONLY way into this console. validateSSOOnlyPosture
+	// (boot_posture.go) enforces the precondition — OIDC configured, and the
+	// admin token / local mode / member mode / no-operator-list override all
+	// absent — before this ever reaches api.Config.SSOOnly, which /healthz
+	// publishes as sso_only so the sign-in screen stops offering a form that
+	// cannot work.
+	ssoOnly   *bool
+	uiDir     *string
+	runnerSel *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -124,8 +132,22 @@ type bootFlags struct {
 	// above — never a SiteConfig field, never agent-reachable.
 	anthropicBaseURL *string
 	openaiBaseURL    *string
-	ageKey           *string
-	proxyImage       *string
+	// anthropicGatewayHeader / anthropicGatewayFormat (WARDYN_ANTHROPIC_GATEWAY_HEADER
+	// / _FORMAT) and their OpenAI pair below are the injection header name and
+	// value format a gateway configured via anthropicBaseURL/openaiBaseURL wants
+	// instead of the harness catalog's compile-time vendor convention
+	// (harness.go's Gateway field: x-api-key bare / Authorization: Bearer %s).
+	// Each is independent and optional — set the header alone, the format
+	// alone, or neither — validated at boot by api.ValidateLLMGateways
+	// (exactly one %s in the format, a valid HTTP header token) and applied in
+	// (*Server).llmProviderFor. Both empty (default) = the vendor convention,
+	// byte-identical to today.
+	anthropicGatewayHeader *string
+	anthropicGatewayFormat *string
+	openaiGatewayHeader    *string
+	openaiGatewayFormat    *string
+	ageKey                 *string
+	proxyImage             *string
 
 	recordingDir       *string
 	recordingRetention *int
@@ -292,6 +314,7 @@ func parseBootFlags() *bootFlags {
 		orgEnrolToken:           flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url. Setting it with no -org-url is REFUSED at boot — a token with nowhere to send it is a misconfiguration, not a no-op."),
 		orgDeviceName:           flagEnv("org-device-name", "WARDYN_ORG_DEVICE_NAME", "", "human-readable name this device registers under at -org-url (e.g. a hostname or asset tag). Empty is fine while -org-url is unset; it carries no posture of its own."),
 		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a USER DRIVE of backend host_path may be registered inside — typically the mount point of an NFS/SMB share the operator mounted host-side. A drive's host_root is allowed only if its CANONICALIZED real path is inside one of these (symlink-resolved, the bind-mount deny-list applied, must exist on this host), and only that person's SUBDIRECTORY is ever bound into a run. Empty (the default) = no host_path drive may be registered at all; Wardyn-managed volume drives are unaffected. Point it at the share's mount point, NEVER $HOME or /."),
+		ssoOnly:                 flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the ONLY way into the console: refuses to start unless OIDC is configured and WARDYN_ADMIN_TOKEN, WARDYN_LOCAL_MODE, WARDYN_MEMBER_MODE and WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST are all unset (validateSSOOnlyPosture). Publishes sso_only on /healthz so the sign-in screen drops the admin-token form and the role-derivation caveat."),
 		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),
 		runnerTargetOverride:    flagEnv("runner-target", "WARDYN_RUNNER_TARGET", "", `substrate name STORED objects validate against when -runner is "none" ("docker" or "k8s"); TEST HARNESSES ONLY — it changes what may be REGISTERED (a user drive names the backend one target can mount), never what is dispatched, and is IGNORED whenever a runner is configured. Empty (the default) resolves the target "none", which refuses every drive backend`),
@@ -307,6 +330,10 @@ func parseBootFlags() *bootFlags {
 		daemonNoProxy:           flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-spelled bypass list for WARDYN_DAEMON_PROXY_URL (host, .suffix, CIDR, *). wardynd auto-appends three hosts: KUBERNETES_SERVICE_HOST, the WARDYN_AWS_SSO_ENDPOINT_OVERRIDE host, and the WARDYN_OIDC_INTERNAL_ISSUER host. Ignored when the proxy URL is unset"),
 		anthropicBaseURL:        flagEnv("anthropic-base-url", "WARDYN_ANTHROPIC_BASE_URL", "", "operator-set internal model gateway base URL (https://, RFC1918/CGNAT literal allowed) re-pointing Anthropic's brokered upstream instead of api.anthropic.com. Empty (default) = the public host, byte-identical to today. Covers the api-key lane AND subscription/Wardyn-managed runs: setting this sends the operator's live OAuth token to the configured gateway instead of only ever api.anthropic.com. The harness-login (claude setup-token) lane is exempt and always stays on the public host"),
 		openaiBaseURL:           flagEnv("openai-base-url", "WARDYN_OPENAI_BASE_URL", "", "same as -anthropic-base-url, for OpenAI's api-key lane (api.openai.com)"),
+		anthropicGatewayHeader:  flagEnv("anthropic-gateway-header", "WARDYN_ANTHROPIC_GATEWAY_HEADER", "", "injection header name -anthropic-base-url's gateway wants instead of x-api-key. Empty (default) = x-api-key, byte-identical to today. Must be a valid HTTP header token; a malformed value refuses boot"),
+		anthropicGatewayFormat:  flagEnv("anthropic-gateway-format", "WARDYN_ANTHROPIC_GATEWAY_FORMAT", "", `value format -anthropic-base-url's gateway wants instead of the bare key ("%s"), e.g. "Bearer %s". Empty (default) = the bare key, byte-identical to today. Must contain exactly one %s and no other verb; a malformed value refuses boot`),
+		openaiGatewayHeader:     flagEnv("openai-gateway-header", "WARDYN_OPENAI_GATEWAY_HEADER", "", "same as -anthropic-gateway-header, for OpenAI's gateway (default Authorization)"),
+		openaiGatewayFormat:     flagEnv("openai-gateway-format", "WARDYN_OPENAI_GATEWAY_FORMAT", "", `same as -anthropic-gateway-format, for OpenAI's gateway (default "Bearer %s")`),
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 

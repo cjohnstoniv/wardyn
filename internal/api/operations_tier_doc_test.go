@@ -151,6 +151,11 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/admin/sandboxes/sweep", "`POST /admin/sandboxes/sweep`"},
 	{"POST /api/v1/setup/onboarding-complete", "`POST /setup/onboarding-complete`"},
 	{"GET /api/v1/runs/{id}/attach", "`GET /runs/{id}/attach`"},
+	// Hybrid enrolment (0.8): the mint is SUPER, the inventory and revoke are
+	// the security tier's inventory-then-revoke pair.
+	{"POST /api/v1/admin/devices/enrolment-tokens", "`POST /admin/devices/enrolment-tokens`"},
+	{"GET /api/v1/admin/devices", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
+	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each

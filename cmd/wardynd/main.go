@@ -298,7 +298,7 @@ func run() error {
 	// policy's allowed_domains does not list a configured gateway's host — the
 	// operator must add it, or every run under that policy 404s on its first
 	// model call once ensureLLMGrant/reconcileLLMAccess point at the gateway.
-	llmGateways, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
+	llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
 	if err != nil {
 		return err
 	}
@@ -354,6 +354,12 @@ func run() error {
 	// The roster half of the model-identity posture, WARNED at boot beside the
 	// model-ARN one above (validateModelEndpoints). See warnBedrockSSOPinPosture.
 	warnBedrockSSOPinPosture(bootCtx, st, *f.bedrockModel)
+	// The SiteConfig half of warnMissingGatewayHosts above: that call (line
+	// ~305) runs before st exists (SiteConfig lives in Postgres), so its
+	// sibling — no upstream_proxy_no_proxy entry covering a configured
+	// gateway host — reads st here instead, against the same llmGateways.
+	// See warnUpstreamProxyNoBypass.
+	warnUpstreamProxyNoBypass(bootCtx, st, llmGateways)
 
 	srv := api.New(api.Config{
 		Store:     st,
@@ -375,6 +381,8 @@ func run() error {
 		Runner:                    run,
 		AdminToken:                *f.adminToken,
 		LocalMode:                 lm.enabled,
+		MemberMode:                *f.memberMode,
+		SSOOnly:                   *f.ssoOnly,
 		SubscriptionPostureOK:     subPostureOK,
 		SubscriptionPostureReason: subPostureReason,
 		LocalOperator:             lm.operator,
@@ -382,6 +390,7 @@ func run() error {
 		DefaultPolicy:             defaultPolicy,
 		TrustedCAPEM:              trustedCAPEM,
 		LLMGateways:               llmGateways,
+		LLMGatewayAuth:            llmGatewayAuth,
 		RunnerTarget:              runnerTarget,
 		UIDir:                     *f.uiDir,
 		ControlPlaneURL:           *f.controlURL,
@@ -414,6 +423,7 @@ func run() error {
 		ProxyURL:                  *f.proxyURL,
 		Secrets:                   secrets,
 		MaskRegistry:              maskReg,
+		ADOEntra:                  adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		SubscriptionToken:         feats.subToken,
 		ManagedToken:              feats.managedToken,
 		DisableSubscriptionInject: feats.disableSubInject,
@@ -453,6 +463,13 @@ func run() error {
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
 		BaseCtx: rootCtx,
 	})
+
+	// The login-grant edge, joined after both sides exist and before anything is
+	// served, because they form a cycle (see attachLoginGrantSink). It is a
+	// NO-OP for every deployment without an Azure DevOps Entra row: the sink
+	// answers "nothing to add", the authorization request is not widened and the
+	// callback stores nothing (internal/api/ado_entra_login.go).
+	attachLoginGrantSink(feats.authn, srv)
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).

@@ -610,15 +610,15 @@ door, so they are keyed (§7.4, `PROVIDER_MEMBER`) the way `DRIVE_MEMBER`'s refu
 | `BASE_URLS_REQUIRED` | Name at least one address. A row with none admits nothing and is refused at save. |
 | `FIELD_LANES` | Permitted lanes |
 | `LANES_HINT` | Which credential a run may use for this provider. Turning one off does not delete its stored secret. |
-| `LANE_APP_UNAVAILABLE` | Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent. |
+| `LANE_APP_UNAVAILABLE` | Not available: the App broker mints repository-scoped tokens for github.com only — Wardyn doesn't broker Azure DevOps's own token API this way (yet). Use the PAT lane there. |
 | `LANE_SSH_UNAVAILABLE` | Not available: SSH over port 443 is offered for `github.com` and `dev.azure.com` only — a self-hosted host clones over HTTPS. |
-| `SSH_HOST_LEVEL_HINT` | SSH clones are admitted for the whole host: an SSH URL carries no org path to bound. Drop SSH here to keep this row's addresses binding. |
+| `LANE_SSH_PATH_SCOPED` | Not available: this row's addresses carry an organisation path, and SSH has none to bound — it would admit the whole host. Leave lanes at their default, or drop the path. |
 | `LANES_NEED_ADDRESS` | Add an allowed address first — a credential is stored under its host. |
 | `LEGACY_OPEN_TITLE` | No git provider rows |
 | `LEGACY_OPEN_BODY` | Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name. |
 | `LEGACY_OPEN_OTHER_HOSTS` | A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page. |
 | `SAVED_ELSEWHERE_TITLE` | Someone else saved providers since you loaded this page |
-| `SAVED_ELSEWHERE_BODY` | Reload to see their version before saving yours. |
+| `SAVED_ELSEWHERE_BODY` | Your changes are still here and still unsaved. Copy them first — reloading replaces them with the saved version. |
 | `SAVED_TOAST` | Providers saved. |
 | `SAVED_NARROWED(n)` | {n} onboarded source is now outside every enabled provider — runs can't clone it until an admin widens the addresses or turns its host on. / {n} onboarded sources are now outside every enabled provider — runs can't clone them until an admin widens the addresses or turns their host on. |
 | `SAVE_CTA` | Save providers |

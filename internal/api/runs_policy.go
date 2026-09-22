@@ -553,6 +553,11 @@ func localPrincipalOverride(r *http.Request) string {
 // fact never human-gated (breaks invariant 4 per-run identity and invariant 6
 // non-repudiation). A token action is recorded as system/admin-token, not human.
 func actorFromRequest(r *http.Request) (types.ActorType, string) {
+	// A device request is the device, never the admin-token fallback at the
+	// bottom (which is what a context with no human would otherwise read as).
+	if d, ok := deviceFromContext(r.Context()); ok {
+		return types.ActorSystem, deviceActor(d.ID)
+	}
 	// Attach-ticket auth (ticketOrHumanAuth): the ticket carries the actor that
 	// MINTED it through the normal authenticated surface — strongest available
 	// attribution for a WS handshake that cannot carry a credential itself.

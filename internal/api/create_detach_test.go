@@ -172,14 +172,25 @@ func TestCreateRun_ClientDisconnectDuringBuild_StillCompensates(t *testing.T) {
 	r.Host = "127.0.0.1"
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r.WithContext(ctx))
+	panicFails(t, srv.Handler()).ServeHTTP(w, r.WithContext(ctx))
 
-	if len(st.runs) != 1 {
-		t.Fatalf("expected exactly one run row, got %d", len(st.runs))
+	// The 201 answers as soon as the run row exists; the build runs detached
+	// after it (runs_create_launch.go), so the body is the PENDING run and the
+	// FAILED outcome is read once the launch has written its build row.
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 	}
-	var runID uuid.UUID
-	for id := range st.runs {
-		runID = id
+	var body createRunResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body: %v (body=%s)", err, w.Body.String())
+	}
+	runID := body.ID
+	waitForRecAudit(t, audit, runID, "run.build", "failure")
+	st.mu.Lock()
+	rows := len(st.runs)
+	st.mu.Unlock()
+	if rows != 1 {
+		t.Fatalf("expected exactly one run row, got %d", rows)
 	}
 
 	// The build ctx must be detached from the client's, and carry its own deadline
@@ -200,20 +211,7 @@ func TestCreateRun_ClientDisconnectDuringBuild_StillCompensates(t *testing.T) {
 	if revs := brk.revocations(runID); revs != 1 {
 		t.Errorf("the FAILED run's credentials must be revoked exactly once (cascade-on-every-stop); got %d", revs)
 	}
-	if ev := findAudit(audit.events, runID, "run.build", "failure"); ev == nil {
-		t.Errorf("the build failure must be audited; events=%s", auditDump(audit.events, runID))
-	}
-
-	// The 201 body itself must carry the refreshed FAILED state, not the
-	// PENDING snapshot taken before the build ran — resolveCreateRunImage no
-	// longer writes the response itself (it must stay callable off-request),
-	// so the refresh+answer moved to the handler one frame up; a regression
-	// there would silently answer 201 with a stale PENDING run.
-	var body createRunResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode response body: %v (body=%s)", err, w.Body.String())
-	}
-	if body.State != types.RunFailed {
-		t.Fatalf("response body state = %q, want %q (FAILED) — the 201 must answer the refreshed run, not a stale PENDING snapshot", body.State, types.RunFailed)
+	if body.State != types.RunPending {
+		t.Errorf("response body state = %q, want %q — the 201 answers before the build runs", body.State, types.RunPending)
 	}
 }

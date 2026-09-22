@@ -872,6 +872,8 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
 | `POST /admin/sandboxes/sweep` — force-reaping sandboxes across every workspace, not just the caller's own | ⛔ admin only |
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
+| `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
+| `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
@@ -895,6 +897,11 @@ completeness check still blocks any new gated route from landing without either
 a row above or a filed entry here.
 
 ### Who writes the provider policy: console vs CLI/MDM
+
+On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
+can be set to per-user sign-in instead of one shared PAT — see
+[docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
+row's fields, and what a member sees.
 
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
@@ -2144,7 +2151,7 @@ admin walking the member path, not an incident.
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
-| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. Five causes, one per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), and — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
@@ -2370,8 +2377,8 @@ Sign in as a second, real person. This is strictly more faithful than the
 toggle — it exercises the server's own role derivation, its own session, and
 its own ownership namespace.
 
-- **kind quickstart** — the bundled Dex already ships two logins:
-  `admin@wardyn.local` and `member@wardyn.local` (`deploy/kind/sso/dex.yaml`,
+- **kind quickstart** — the bundled Dex ships one login per role path:
+  `admin@`, `member@`, `member2@`, `secadmin@`, `operator@` and `stranger@wardyn.local` (`deploy/kind/sso/dex.yaml`,
   role map in `deploy/kind/sso/values.yaml`).
 - **Entra** — the walk provisions `wardyn-admin`, `wardyn-member` and
   `wardyn-outsider` (`deploy/azure-entra-sso/03-people.sh`).
@@ -2942,6 +2949,12 @@ the estate needs both.
   "100.64.0.0/10"           // CIDR, matched against a literal-IP destination
 ]
 ```
+
+Suffix entries match names; CIDR entries match only a destination written as
+an IP literal, never a hostname that resolves into the range — the same rule as
+Go's `NO_PROXY` (`bypassUpstream`, `internal/egress/proxy/egress_target.go`).
+So on an estate where AWS resolves into CGNAT, `100.64.0.0/10` bypasses
+nothing for `portal.sso.<region>.amazonaws.com`; list the name or its suffix.
 
 Wildcards are refused at write time: "bypass everything" is spelled by clearing
 `upstream_proxy_url`, not by one character in a list. An entry that is neither a
@@ -3795,8 +3808,8 @@ and no real credential anywhere in the loop.
 `wardyn/agent-aws-sso:local` login image and refuses to start without it), then
 `WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322
 make kind-quickstart`, then `make kind-sso` (see `deploy/kind/sso/README.md`).
-The overlay adds Dex with two static principals —
-`admin@wardyn.local` and `member@wardyn.local`, password `password` — plus
+The overlay adds Dex with one static principal per role path —
+`admin@wardyn.local`, `member@wardyn.local` and four more, password `password` — plus
 `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services
 (`sso-oidc` and the `sso` portal) and a bedrock-runtime stub, all on one
 in-cluster Service. `make kind-sso-down` removes the overlay; the cluster itself
@@ -4136,7 +4149,10 @@ dial (the gateway included) is CONNECTed through the corp proxy by the transport
 never dialled directly. A gateway the corp proxy cannot reach — an internal one,
 typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address.
+other internal address. wardynd also warns at boot when an upstream proxy is
+configured but no `upstream_proxy_no_proxy` entry covers a configured gateway
+host — a snapshot taken at boot only, since `SiteConfig` is admin-editable
+afterwards and either setting can change without a restart.
 
 **A subscription or Wardyn-managed-token run honors a configured Anthropic
 gateway too** — the published `agent-claude-code` image's `agent-run` only
@@ -5604,36 +5620,44 @@ driver, not a guess:
   kubelet `podPidsLimit` (or your distribution's
   `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb
   backstop — coarser but real, and the only lever this substrate has today.
-- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 it reaches an AUTONOMOUS run's `/tmp`
-  and workdir writes — a narrowing, not a close.** All of this describes AUTONOMOUS (task-mode)
+- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 (further narrowed by #164 in 0.8) it
+  reaches an AUTONOMOUS run's `/tmp`, workdir and toolchain-cache writes — a narrowing, not a
+  close.** All of this describes AUTONOMOUS (task-mode)
   runs. An interactive run's agent runs in the pod's main container, whose whole writable layer —
   `$HOME` and the toolchain caches included — the kubelet has counted against `disk_mib` since
   0.7.2; there nothing is outside the cap, so size an interactive run's budget for its caches too.
   A run's `disk_mib` is the agent container's
-  `resources.limits[ephemeral-storage]` and the `sizeLimit` of the two `emptyDir` volumes mounted
-  on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp` and
-  `wardyn-work` at `/home/agent/work`. The ephemeral container `Exec` attaches for the agent
+  `resources.limits[ephemeral-storage]` and the `sizeLimit` of the three `emptyDir` volumes mounted
+  on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp`,
+  `wardyn-work` at `/home/agent/work`, and `wardyn-cache` at `/home/agent/.cache`. The ephemeral
+  container `Exec` attaches for the agent
   process (`internal/runner/k8s/exec.go`) copies the main container's mounts verbatim, so writes
-  to those two paths land in volumes the kubelet meters as the pod's local ephemeral storage.
+  to those paths land in volumes the kubelet meters as the pod's local ephemeral storage.
   Before 0.7.5 they landed on the ephemeral container's own writable layer, which the kubelet
   meters not at all: the limit evicted writes by the pod's idle main container only, and the
   conformance case `EphemeralDiskLimit/OverTheLimitTheRunIsEvicted` was red from 0.7.2 for exactly
-  that reason (0.7.4 disclosed it; it now runs for BOTH fill targets and passes). The two
-  `sizeLimit`s are one budget, not two: `emptyDir` usage counts toward the pod's
-  `ephemeral-storage` total as well, so filling both volumes halfway still evicts. **Upgrade
+  that reason (0.7.4 disclosed it; it now runs for all fill targets and passes). The three
+  `sizeLimit`s are one budget, not three: `emptyDir` usage counts toward the pod's
+  `ephemeral-storage` total as well, so filling every volume partway still evicts. **Upgrade
   note:** an operator's `default_disk_mib` or policy `disk_mib` did not bind an autonomous k8s run
-  before 0.7.5 and does now — size it for the clone plus installs before upgrading, or a run that
-  used to finish will be evicted with its in-flight work lost. **What is still OUTSIDE the cap:**
-  everything the agent writes beyond those two paths — the rest of `$HOME`, including the
-  toolchain caches a build actually fills (`/home/agent/go`, `~/.cache/go-build`, `~/.gotmp`,
-  `~/.npm`, `~/.cache/pip`; `internal/api/runs_dispatch_mounts.go` sets the Go ones) and the
+  before 0.7.5 and does now — size it for the clone, installs and toolchain caches before
+  upgrading, or a run that used to finish will be evicted with its in-flight work lost. **What is
+  still OUTSIDE the cap:**
+  everything the agent writes beyond those three paths — the rest of `$HOME` (`/home/agent/go` —
+  GOPATH itself is unmoved, so the installed tool binaries under its `bin/` stay reachable; only
+  `GOMODCACHE` moved under the cache volume — and `~/.cache/pip`) and the
   dotfiles (`~/.wardyn`, `~/.ssh`, `~/.claude`); `/opt/rust`; and any authored `workspace_repos`
   or ephemeral-source target outside `/home/agent/work`, since an authored target may legally sit
   at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed
   target prefixes). Nothing is mounted at `/home/agent` itself, because a volume there would
   shadow each image's baked `.bashrc`, swallow the reserved drive target `/home/agent/drive`, and
-  hide the read-only `~/.claude` bind the subscription path mounts; pointing the cache env under
-  the workdir on this substrate, or a third cache volume, is the 0.7.6 follow-up. **What the proof
+  hide the read-only `~/.claude` bind the subscription path mounts. **Risk carried by the cache
+  volume specifically:** an `emptyDir` at `/home/agent/.cache` shadows the full image's
+  pre-created, agent-owned `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`) with a
+  fresh directory whose ownership the kubelet decides — `FSGroup` is only applied to a pod with a
+  drive attached (`internal/runner/k8s/drives.go`), so a run with `disk_mib` set and no drive can
+  get a root-owned mount the uid-1000 agent cannot write into; only the conformance "Cache" fill
+  target, run against a real cluster, catches this. **What the proof
   does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
   runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and
   Kata. The live kind SSO walk separately exercises a real `agent-run` boot — the aws-sso sign-in

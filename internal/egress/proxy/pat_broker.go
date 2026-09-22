@@ -136,7 +136,8 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// GitHub lane: a host this run was not granted 403s before any upstream URL
 	// is formed, so a traversal or an extra segment cannot reach the network.
 	grant, granted := p.patGrants[host]
-	if !granted {
+	ado, adoLane := p.adoGitGrant(host)
+	if !granted && !adoLane {
 		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
 		http.Error(w, "host not granted to this run", http.StatusForbidden)
 		return
@@ -160,6 +161,13 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	if !patForwardSafe(rest, r.URL.RawQuery) || !validGitRest(r.Method, verb, r.URL.Query().Get("service")) {
 		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
 		http.Error(w, "unsupported git request", http.StatusForbidden)
+		return
+	}
+	// A host the run's Azure DevOps Entra grant covers takes that lane: the
+	// person's bearer, the organisation pin and the capability gate
+	// (pat_broker_entra.go). Every other host continues below exactly as before.
+	if adoLane {
+		p.serveADOGit(w, r, host, rest, verb, ado)
 		return
 	}
 
@@ -220,6 +228,43 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Content rules need a pack they can read, and a client only sends one when
+	// the server asks. The advertisement this lane relays gets the same no-thin
+	// rewrite the App lane's does, under the same condition, because this lane
+	// enforces the same rules — advertising on one lane only would make the
+	// rules a false-refusal machine on the other (push_advert.go). The header
+	// rides the lane's own authorize hook, which is where forwardBrokeredGit
+	// lets a lane touch the outbound request; the advertisement must be
+	// PARSEABLE to be rewritten, so identity is asked for explicitly rather
+	// than merely deleting the header.
+	noThin := p.noThinAdvert(r, verb)
+	resp, ok := p.forwardBrokeredGit(w, r, host, rest, reqBody, allowSrc, ruleSourcePATDenied,
+		func(out *http.Request) {
+			if noThin {
+				out.Header.Set("Accept-Encoding", "identity")
+			}
+			out.SetBasicAuth(username, token)
+		})
+	if !ok {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if noThin {
+		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
+		return
+	}
+	relay(w, resp)
+}
+
+// forwardBrokeredGit is the outbound leg both /wardyn/git/ lanes share: it
+// re-originates the validated request to the granted forge over HTTPS with the
+// sandbox's own credential headers stripped and the lane's credential set by
+// authorize, recording denySrc on a pre-flight failure and allowSrc only after a
+// successful round trip. On ok=false it has already answered the sandbox.
+func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host, rest string, reqBody io.Reader,
+	allowSrc, denySrc string, authorize func(*http.Request),
+) (*http.Response, bool) {
 	// Build the upstream URL from the MATCHED allowlist key + the validated rest
 	// and let net/url do the escaping — never a raw concatenation of the decoded
 	// path, which re-parses as a NEW url whose Path is whatever a '#'/'?' left in
@@ -232,18 +277,18 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// is a credential path, not a bypass of the IP guard.
 	target, _, err := p.egressTarget(host, 443)
 	if err != nil {
-		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
+		p.emitPATDecision(r, host, egress.Deny, denySrc)
 		p.httpError(w, "vet git host", err, http.StatusForbidden)
-		return
+		return nil, false
 	}
 
 	outReq, err := http.NewRequestWithContext(
 		context.WithValue(r.Context(), vettedIPKey{}, target),
 		r.Method, upstream, reqBody)
 	if err != nil {
-		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
+		p.emitPATDecision(r, host, egress.Deny, denySrc)
 		p.httpError(w, "build git request", err, http.StatusBadGateway)
-		return
+		return nil, false
 	}
 	outReq.ContentLength = r.ContentLength
 	copyHeader(outReq.Header, r.Header)
@@ -259,33 +304,19 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// request beside the brokered Basic auth, so the FORGE chose which
 	// credential won while the decision row still read as brokered egress.
 	stripSandboxCredentials(outReq.Header, "")
-	// Content rules need a pack they can read, and a client only sends one when
-	// the server asks. The advertisement this lane relays gets the same no-thin
-	// rewrite the App lane's does, under the same condition, because this lane
-	// enforces the same rules — advertising on one lane only would make the
-	// rules a false-refusal machine on the other (push_advert.go).
-	noThin := p.noThinAdvert(r, verb)
-	if noThin {
-		outReq.Header.Set("Accept-Encoding", "identity")
-	}
-	outReq.SetBasicAuth(username, token)
+	authorize(outReq)
 	outReq.Host = host
 	outReq.Header.Del("Host")
 
-	p.emitPATDecision(r, host, egress.Allow, allowSrc)
-
-	resp, err := p.transport.RoundTrip(outReq)
+	// roundTripUpstream, not the transport directly: see the GitHub lane
+	// (git_broker.go) — the same HTTP/2 fallback applies to a forge.
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
-		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
-		return
+		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, 443)}, host, "git upstream error")
+		return nil, false
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if noThin {
-		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
-		return
-	}
-	relay(w, resp)
+	p.emitPATDecision(r, host, egress.Allow, allowSrc)
+	return resp, true
 }
 
 // patToken returns the brokered PAT with the git username the host expects.

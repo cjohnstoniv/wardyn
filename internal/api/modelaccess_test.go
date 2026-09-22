@@ -733,7 +733,7 @@ func TestHandleHarnessLogin_LocalDevHeaderDoesNotTripTheRefusal(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:54321"
 	req.Header.Set("X-Wardyn-Principal", adminTokenPrincipal)
 	w := httptest.NewRecorder()
-	local.Handler().ServeHTTP(w, req)
+	panicFails(t, local.Handler()).ServeHTTP(w, req)
 	if w.Code == http.StatusUnprocessableEntity {
 		t.Fatalf("the dev header must not trip the refusal — runIdentitySubject ignores it in LocalMode, got 422: %s", w.Body.String())
 	}
@@ -757,7 +757,7 @@ func TestRedactSetupStatusForMember_KeepsModelAccess(t *testing.T) {
 		Checks:  []SetupCheck{{ID: "runner", Detail: "operator detail"}},
 		Secrets: SetupSecrets{Present: []string{"bedrock-api-key"}},
 	}
-	out := redactSetupStatusForMember(in, false)
+	out := redactSetupStatusForMember(in, false, false)
 	if out.ModelAccess != in.ModelAccess {
 		t.Fatalf("ModelAccess = %+v, want it kept verbatim (%+v)", out.ModelAccess, in.ModelAccess)
 	}

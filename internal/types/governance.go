@@ -287,17 +287,27 @@ type AutonomyPosture struct {
 }
 
 // AutonomyResolution is what resolveRunAutonomy (#97) decides for one run: the
-// level, the posture that produced it, and which rubric field bound the
+// level, the posture that produced it, and every rubric field that bound the
 // result — the "level, the posture and what bound it" #77 asks to be
 // provenance on the create audit row, the frozen AgentRun.AutonomyLevel, and
-// the preflight response. Bound is empty when nothing capped the level (no
-// profile, no rubric, or a posture the rubric left unset) — the zero value
-// throughout, matching every other GovernanceLimits field's "empty means
-// unrestricted" rule.
+// the preflight response.
+//
+// BoundBy is a LIST, and that is a wire decision rather than a convenience.
+// The fold is a min() over three axes, so rows TIE at the resolved level
+// routinely — a sealed, grant-less CC3 run under a rubric that caps all three
+// of those postures at L1 is bound by all three. Naming one of them in a fixed
+// order would send an admin to edit a row they can raise without the level
+// moving, still capped by the causes they were never shown. Every tied cause
+// is named, in the fixed field order internal/composer/autonomy.go folds in,
+// so the sentence is complete and identical at both doors.
+//
+// Empty when nothing capped the level (no profile, no rubric, or a posture the
+// rubric left unset) — the zero value throughout, matching every other
+// GovernanceLimits field's "empty means unrestricted" rule.
 type AutonomyResolution struct {
 	Level   AutonomyLevel   `json:"level"`
 	Posture AutonomyPosture `json:"posture"`
-	Bound   string          `json:"bound,omitempty"`
+	BoundBy []string        `json:"bound_by,omitempty"`
 }
 
 // GovernanceProfile is one named, assignable ceiling (migration 0052's

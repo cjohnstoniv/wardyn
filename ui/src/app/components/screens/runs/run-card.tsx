@@ -37,7 +37,7 @@ import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import { RUN, RUN_COCKPIT, RUNS_WAIT } from "../../wardyn/copy";
 // THE LEAF, not wardyn/model-access-copy: this card is on the eager graph and
 // that module is lazy-side (see lib/reauth-waiting-copy.ts).
-import { waitingReauth } from "../../../lib/reauth-waiting-copy";
+import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSignals } from "./board-groups";
@@ -247,15 +247,19 @@ export function RunCard({
           <span className={cn("whitespace-nowrap", stale ? "text-muted-foreground" : "text-warning")}>
             {stale
               ? RUNS_WAIT.STALE_CARD
-              : s.reauth
-                ? /* Whose sign-in — the board shows an admin every run, and a
-                     member the shared-lane rows their own runs raised (W6-U
-                     SHOULD-1). An unresolved /me reads as "not mine", the same
-                     fail-closed direction the cockpit's door takes. */
-                  waitingReauth(s.pending, !!principal && run.created_by === principal)
-                : s.held
-                  ? RUN_COCKPIT.waitingHeld(s.pending)
-                  : RUN_COCKPIT.waiting(s.pending)}
+              : s.adoConsent
+                ? // Azure DevOps, never AWS (F13) — checked ahead of s.reauth,
+                  // same "whose sign-in" ownership rule.
+                  waitingAdoConsent(s.pending, !!principal && run.created_by === principal)
+                : s.reauth
+                  ? /* Whose sign-in — the board shows an admin every run, and a
+                       member the shared-lane rows their own runs raised (W6-U
+                       SHOULD-1). An unresolved /me reads as "not mine", the same
+                       fail-closed direction the cockpit's door takes. */
+                    waitingReauth(s.pending, !!principal && run.created_by === principal)
+                  : s.held
+                    ? RUN_COCKPIT.waitingHeld(s.pending)
+                    : RUN_COCKPIT.waiting(s.pending)}
           </span>
         )}
         <span className="ml-auto flex items-center gap-2.5">

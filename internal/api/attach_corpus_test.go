@@ -43,7 +43,7 @@ import (
 func TestAttachCorpus_TakeoverPromotesWebObserverOverSSHHolder(t *testing.T) {
 	t.Run("the taker's own web observer is promoted in place", func(t *testing.T) {
 		srv, _, fr, audit, run := holderTestServer(t)
-		ts := httptest.NewServer(srv.Handler())
+		ts := httptest.NewServer(panicFails(t, srv.Handler()))
 		defer ts.Close()
 		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
 
@@ -120,7 +120,7 @@ func TestAttachCorpus_TakeoverPromotesWebObserverOverSSHHolder(t *testing.T) {
 
 		// ...while a bystander watches from the browser, and an ADMIN with no
 		// observer socket of its own does the taking over.
-		ts := httptest.NewServer(srv.Handler())
+		ts := httptest.NewServer(panicFails(t, srv.Handler()))
 		defer ts.Close()
 		c2 := dialAttach(t, ts, srv, run.ID, holderSecond, "")
 		if m := readAttachMode(t, c2); !m.ReadOnly {
@@ -189,7 +189,7 @@ func TestAttachCorpus_ReconnectAfterDaemonRebuildSharesStore(t *testing.T) {
 	// ── the first daemon process: a writer attaches and registers ──
 	fr1 := &holderTestRunner{}
 	srv1 := build(fr1)
-	ts1 := httptest.NewServer(srv1.Handler())
+	ts1 := httptest.NewServer(panicFails(t, srv1.Handler()))
 
 	c1 := dialAttach(t, ts1, srv1, run.ID, holderOwner, "&cols=80&rows=24")
 	if m := readAttachMode(t, c1); m.ReadOnly {
@@ -204,7 +204,7 @@ func TestAttachCorpus_ReconnectAfterDaemonRebuildSharesStore(t *testing.T) {
 	// ── the daemon restarts: a NEW Server, the SAME store, a fresh registry ──
 	fr2 := &holderTestRunner{}
 	srv2 := build(fr2)
-	ts2 := httptest.NewServer(srv2.Handler())
+	ts2 := httptest.NewServer(panicFails(t, srv2.Handler()))
 	defer ts2.Close()
 
 	if got := srv2.attachHolderFor(run.ID); got != nil {

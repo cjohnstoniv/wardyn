@@ -96,16 +96,24 @@ export const PROVIDERS = {
   BASE_URLS_REQUIRED: "Name at least one address. A row with none admits nothing and is refused at save.",
   FIELD_LANES: "Permitted lanes",
   LANES_HINT: "Which credential a run may use for this provider. Turning one off does not delete its stored secret.",
-  LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent.",
+  // #381: Azure DevOps DOES publish a token-lifecycle API (it's the PAT lane's
+  // path there) — the stale claim was that no comparable API exists at all.
+  // What's actually true today: Wardyn hasn't built a repo-scoped App-style
+  // broker against it, so say that without promising a lane that isn't built.
+  LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped tokens for github.com only — Wardyn doesn't broker Azure DevOps's own token API this way (yet). Use the PAT lane there.",
   LANE_SSH_UNAVAILABLE:
     "Not available: SSH over port 443 is offered for github.com and dev.azure.com only — a self-hosted host clones over HTTPS.",
-  // The SSH scoping CEILING, said on the surface that writes the policy: an SSH
-  // clone URL carries no path, so a row scoped to an org bounds HTTPS clones
-  // only (internal/api/workspace_providers.go's cloneTarget). Shown under the
-  // lanes field when this row has a path AND permits ssh — the two facts that
-  // together make the row look narrower than it is.
-  SSH_HOST_LEVEL_HINT:
-    "SSH clones are admitted for the whole host: an SSH URL carries no org path to bound. Drop SSH here to keep this row's addresses binding.",
+  // #380 F5: the CONSOLE half of the SSH path-scoping ceiling — an SSH clone
+  // URL carries no org path, so it admits the whole host regardless of what
+  // this row's addresses declare (internal/api/workspace_providers.go's
+  // sshLaneExceedsPathScope, the same server rule that refuses this at save).
+  // Shown as the checkbox's OWN disabled-reason (never a raw server 400)
+  // whenever the row's SSH-capable addresses all carry a path — which, for
+  // Azure DevOps, is EVERY legal row: its org segment is mandatory, so this
+  // lane is never selectable there. Leaving lanes at their default still
+  // clones over SSH host-wide, with the runtime warning unaffected.
+  LANE_SSH_PATH_SCOPED:
+    "Not available: this row's addresses carry an organisation path, and SSH has none to bound — it would admit the whole host. Leave lanes at their default, or drop the path.",
   // The credential lanes are keyed by the host of the row's FIRST address. With
   // no parseable address there is no host, so there is no secret name to store
   // under: every lane renders disabled with this reason rather than defaulting
@@ -115,7 +123,11 @@ export const PROVIDERS = {
   LEGACY_OPEN_BODY: "Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name.",
   LEGACY_OPEN_OTHER_HOSTS: "A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page.",
   SAVED_ELSEWHERE_TITLE: "Someone else saved providers since you loaded this page",
-  SAVED_ELSEWHERE_BODY: "Reload to see their version before saving yours.",
+  // #217: the old sentence ("Reload to see their version before saving
+  // yours.") described the only offered exit — discard and reload — as if it
+  // were the only one. It no longer is: Copy my changes
+  // (PROVIDERS_DRAFT.CONFLICT_COPY) reads the edits out first.
+  SAVED_ELSEWHERE_BODY: "Your changes are still here and still unsaved. Copy them first — reloading replaces them with the saved version.",
   SAVED_TOAST: "Providers saved.",
   // Inline pluralisation — the PERM.ENFORCE_ON_BODY shape, not a second
   // helper (§5 #9). Stays on the page as an amber note until the next save,
@@ -390,10 +402,19 @@ export const AGENTS_DRAFT = {
 // AGENTS out of the doc).
 export const PROVIDERS_DRAFT = {
   // F4-F3 (Appendix A V8, corrected verdict): the keep-draft-mounted 412
-  // banner's ONE control — discards the admin's own unsaved edits and reloads
-  // the server's version. NO "Save over theirs" arm: a security document is
-  // never last-writer-wins from this banner.
+  // banner's SECOND control — discards the admin's own unsaved edits and
+  // reloads the server's version. NO "Save over theirs" arm: a security
+  // document is never last-writer-wins from this banner. #217: now a ghost
+  // button, not the banner's only exit — Copy my changes sits before it.
   DISCARD_AND_RELOAD: "Discard mine and reload",
+  // #217: the 412 banner's FIRST control — the changed fields, as readable
+  // text (lib/readable-diff.ts), never the whole draft as JSON (issue #217's
+  // binding default: the person is about to paste this somewhere human).
+  CONFLICT_COPY: "Copy my changes",
+  CONFLICT_COPIED_TOAST: "Copied — your changes are on the clipboard.",
+  // #217: beside Save whenever the draft differs from what loaded — the same
+  // fact the unsaved-navigation guard (lib/use-unsaved-guard.tsx) is armed on.
+  UNSAVED_MARKER: "Unsaved changes",
   // F6-F6: PUT /site-config's dangling_secret_refs, surfaced in the
   // Corporate-network save toast — an ADDITIONAL warning beside whatever
   // success toast the saving step already shows, never a replacement for it.

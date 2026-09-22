@@ -58,6 +58,16 @@ func TestRequestDTOs_ZeroValueOmitOptionals(t *testing.T) {
 		// `"push_rules":{}` that would read as "rules set, none of them" —
 		// distinct from the nil pointer itself, which never marshals at all.
 		{"PushRulesSpec", client.PushRulesSpec{}, []string{}},
+		// The device name is the whole request and is required.
+		{"DeviceEnrolmentTokenRequest", client.DeviceEnrolmentTokenRequest{}, []string{"name"}},
+		// name/backend are always on the wire (a drive with no name or backend
+		// is not a request); every other field defaults to the zero value a new
+		// drive would otherwise want, so must be omitempty.
+		{"DriveRequest", client.DriveRequest{}, []string{"backend", "name"}},
+		// subject_type/subject/drive_id/priority are always on the wire — the
+		// natural key plus the one non-pointer override, which has no "unset"
+		// value of its own (0 already means "no override").
+		{"DriveGrantRequest", client.DriveGrantRequest{}, []string{"drive_id", "priority", "subject", "subject_type"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := json.Marshal(tc.req)

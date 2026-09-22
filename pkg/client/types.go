@@ -33,6 +33,15 @@ type (
 	// AddSSHKey.
 	SSHPublicKey = types.SSHPublicKey
 
+	// Device is one enrolled laptop in the organisation's inventory (no
+	// credential material). Returned by ListDevices.
+	Device = types.Device
+
+	// DeviceEnrolmentToken is a minted single-use enrolment token; Token holds
+	// the plaintext on the mint response only. Returned by
+	// MintDeviceEnrolmentToken.
+	DeviceEnrolmentToken = types.DeviceEnrolmentToken
+
 	// RunPolicy is a declarative policy attached to runs. Returned by the
 	// policy methods (ListPolicies, GetPolicy, CreatePolicy, UpdatePolicy).
 	RunPolicy = types.RunPolicy
@@ -128,6 +137,18 @@ type (
 	// ArtifactOverride: GetSiteConfig returns a nil slice when unconfigured, so
 	// without a nameable element type a caller could not author one at all.
 	EgressRedirect = types.EgressRedirect
+
+	// UserDrive is one admin-registered drive (migration 0054's user_drives
+	// row), embedded in UserDriveListItem. Written via DriveRequest.
+	UserDrive = types.UserDrive
+
+	// UserDriveListItem is one DrivesDocument.Drives row: the drive plus how
+	// many grants allocate it. Returned by GetDrives and ApplyDrives.
+	UserDriveListItem = types.UserDriveListItem
+
+	// UserDriveGrant allocates one drive to one subject (DrivesDocument.Grants).
+	// Written via DriveGrantRequest.
+	UserDriveGrant = types.UserDriveGrant
 )
 
 // Enumerated string types named in exported signatures and struct fields.
@@ -178,6 +199,23 @@ type (
 	// (Workspace.Status, Source.Status): not-yet-scanned, mid-scan, scanned
 	// (ready to use), or errored.
 	WorkspaceStatus = types.WorkspaceStatus
+
+	// DriveBackend names where a drive's bytes live and therefore which
+	// runner can mount it (DriveRequest.Backend, UserDrive.Backend).
+	DriveBackend = types.DriveBackend
+
+	// HomeTemplate names which identity a drive's per-user home name is
+	// derived from (DriveRequest.HomeTemplate, UserDrive.HomeTemplate).
+	HomeTemplate = types.HomeTemplate
+
+	// DriveReclaim is the declared intent for a drive's storage objects when
+	// an allocation is removed (DriveRequest.Reclaim, UserDrive.Reclaim).
+	DriveReclaim = types.DriveReclaim
+
+	// CapabilitySubjectType is the user/group/all vocabulary a drive grant's
+	// subject is drawn from (DriveGrantRequest.SubjectType,
+	// UserDriveGrant.SubjectType).
+	CapabilitySubjectType = types.CapabilitySubjectType
 )
 
 // SourceKind values (the tier-1 library's two onboardable kinds).
@@ -273,4 +311,32 @@ const (
 	WorkspaceScanning    = types.WorkspaceScanning
 	WorkspaceScanned     = types.WorkspaceScanned
 	WorkspaceError       = types.WorkspaceError
+)
+
+// DriveBackend values.
+const (
+	DriveBackendDockerVolume = types.DriveBackendDockerVolume
+	DriveBackendHostPath     = types.DriveBackendHostPath
+	DriveBackendK8sPVC       = types.DriveBackendK8sPVC
+	DriveBackendK8sPVCStatic = types.DriveBackendK8sPVCStatic
+)
+
+// HomeTemplate values.
+const (
+	HomeTemplateHash       = types.HomeTemplateHash
+	HomeTemplateSub        = types.HomeTemplateSub
+	HomeTemplateEmailLocal = types.HomeTemplateEmailLocal
+)
+
+// DriveReclaim values.
+const (
+	DriveReclaimRetain = types.DriveReclaimRetain
+	DriveReclaimDelete = types.DriveReclaimDelete
+)
+
+// CapabilitySubjectType values.
+const (
+	CapabilitySubjectUser  = types.CapabilitySubjectUser
+	CapabilitySubjectGroup = types.CapabilitySubjectGroup
+	CapabilitySubjectAll   = types.CapabilitySubjectAll
 )
