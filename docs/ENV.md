@@ -493,3 +493,32 @@ sandbox, and the 300s default was tuned on a developer box (#285: the nightly
 walk's first hosted-runner dispatch timed out here). `scripts/kind-sso-walk.sh`
 raises both to `720000` (12m) itself when `GITHUB_ACTIONS` is set, unless the
 caller already exported one; nothing else in this file changes.
+
+### Live-local harness (opt-in, never in CI)
+
+Read only by the live-local suites (`internal/testlive/` under `-tags live`,
+and `ui/playwright.live-local.config.ts`), which reach a real Entra tenant,
+Azure DevOps organisation and AWS account. [LIVE-TESTS.md](LIVE-TESTS.md) is
+the setup and run guide. Every suite skips unless its gate is `1`. Secrets are
+never env values: the `_FILE` variables hold a path to a file outside the
+repository.
+
+| Var | Type | Default | Meaning |
+|---|---|---|---|
+| `WARDYN_LIVE_ENTRA` | bool | (unset = skip) | Gate for LL1, the Entra roles suite (Playwright) |
+| `WARDYN_LIVE_ADO` | bool | (unset = skip) | Gate for LL2, the Azure DevOps suite (Go) |
+| `WARDYN_LIVE_BEDROCK` | bool | (unset = skip) | Gate for LL3, the Bedrock suite (Go) |
+| `WARDYN_LIVE_AWS_SSO` | bool | (unset = skip) | Gate for LL4, the AWS SSO through Entra suite (Playwright) |
+| `WARDYN_LIVE_BASE_URL` | URL | (none) | The running Wardyn console the suites sign in to |
+| `WARDYN_LIVE_IDENTITIES_FILE` | path | (none) | JSON file of test identities: each role's recorded storage state, and the member's API token |
+| `WARDYN_LIVE_ADO_ORG` | string | (none) | Azure DevOps test organisation |
+| `WARDYN_LIVE_ADO_PROJECT` | string | (none) | Project in that organisation |
+| `WARDYN_LIVE_ADO_REPO` | string | (none) | Repository the member can read |
+| `WARDYN_LIVE_AWS_SSO_START_URL` | URL | (none) | IAM Identity Center start URL (LL4) |
+| `WARDYN_LIVE_AWS_SSO_REGION` | string | (none) | IAM Identity Center region (LL3, LL4) |
+| `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in is a skip |
+| `WARDYN_LIVE_BEDROCK_ACCOUNT_ID` | string | (none) | The capped member account. LL3 refuses unless STS places its credentials in exactly this account |
+| `WARDYN_LIVE_BEDROCK_ROLE_NAME` | string | (none) | Identity Center permission set whose role credentials LL3 uses |
+| `WARDYN_LIVE_BEDROCK_REGION` | string | (none) | Bedrock and STS region |
+| `WARDYN_LIVE_BEDROCK_MODEL` | string | Claude Haiku 4.5 (`us.` profile) | Refused unless the base model is Claude Haiku 4.5 or Amazon Nova Micro |
+| `WARDYN_LIVE_BEDROCK_MAX_CALLS` | int | `5` | Model calls allowed per test process; `1`–`20`, anything else is refused |
