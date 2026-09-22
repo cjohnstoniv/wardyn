@@ -357,6 +357,21 @@ func TestClassifyRefMove(t *testing.T) {
 			want:     CapPolicyBypass,
 			wantRefs: []string{"refs/heads/topic", "refs/heads/main"},
 		},
+		{
+			name:    "a ref name spelled with backslashes cannot be checked against the cache",
+			req:     protect(adoReq(http.MethodPost, refs, `[{"name":"refs\\heads\\main"}]`), "refs/heads/main"),
+			wantErr: true,
+		},
+		{
+			name:    "and its push twin",
+			req:     protect(adoReq(http.MethodPost, pushes, `{"refUpdates":[{"name":"refs\\heads\\main"}]}`), "refs/heads/main"),
+			wantErr: true,
+		},
+		{
+			name:    "one backslashed ref among plain ones still refuses the whole update",
+			req:     protect(adoReq(http.MethodPost, refs, `[{"name":"refs/heads/topic"},{"name":"refs/heads\\main"}]`), "refs/heads/main"),
+			wantErr: true,
+		},
 		{name: "a ref update naming no branch cannot be gated", req: adoReq(http.MethodPost, refs, `[]`), wantErr: true},
 		{name: "a ref update with no body cannot be gated", req: adoReq(http.MethodPost, refs, ""), wantErr: true},
 		{
@@ -383,6 +398,8 @@ func TestClassifyOrgPinning(t *testing.T) {
 		},
 		{name: "a pinned organisation written in another case", req: onHost("dev.azure.com", "/acme/_apis/projects", "ACME"), want: CapRead},
 		{name: "another organisation is refused", req: onHost("dev.azure.com", "/other/proj/_apis/git/repositories", "acme"), wantErr: true},
+		{name: "another organisation behind a backslash is refused", req: onHost("dev.azure.com", `\other\proj/_apis/git/repositories`, "acme"), wantErr: true},
+		{name: "a backslash-led path still names the pinned organisation", req: onHost("dev.azure.com", `\acme\proj\_apis\git\repositories`, "acme"), want: CapRead},
 		{name: "a legacy host names the organisation in the label", req: onHost("acme.visualstudio.com", "/proj/_apis/git/repositories", "acme"), want: CapRead},
 		{name: "a legacy host for another organisation is refused", req: onHost("other.visualstudio.com", "/proj/_apis/git/repositories", "acme"), wantErr: true},
 		{name: "a legacy service subdomain still names it first", req: onHost("acme.vssps.visualstudio.com", "/_apis/graph/users", "acme"), want: CapRead},
@@ -412,8 +429,23 @@ func TestClassifyDeniedAreas(t *testing.T) {
 			want: CapDeniedTokens,
 		},
 		{
+			name: "a percent-hidden _apis behind a backslash is still the token area",
+			req:  adoReq(http.MethodGet, `/acme/%5Fapis\tokens\pats`, ""),
+			want: CapDeniedTokens,
+		},
+		{
 			name:    "a segment that decodes into two segments is refused, not guessed",
 			req:     adoReq(http.MethodGet, "/acme/proj%2F_apis/tokens/pats", ""),
+			wantErr: true,
+		},
+		{
+			name:    "and its backslash twin — an encoded backslash is a separator too",
+			req:     adoReq(http.MethodGet, "/acme/proj%5C_apis/tokens/pats", ""),
+			wantErr: true,
+		},
+		{
+			name:    "and in lower case",
+			req:     adoReq(http.MethodGet, "/acme/proj%5c_apis/tokens/pats", ""),
 			wantErr: true,
 		},
 		{
@@ -466,7 +498,7 @@ func TestClassifyWriteAreas(t *testing.T) {
 		{name: "a write with no _apis at all", req: adoReq(http.MethodPost, "/acme/proj/_admin/whatever", `{}`), want: CapUnclassifiedWrite},
 		{name: "an ordinary read", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/r1/items", ""), want: CapRead},
 		{name: "a HEAD is a read", req: adoReq(http.MethodHead, "/acme/proj/_apis/build/definitions", ""), want: CapRead},
-		{name: "an OPTIONS is a read", req: adoReq(http.MethodOptions, "/acme/_apis", ""), want: CapRead},
+		{name: "an OPTIONS is a read", req: adoReq(http.MethodOptions, "/acme/_apis/projects", ""), want: CapRead},
 	})
 }
 

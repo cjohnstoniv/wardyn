@@ -97,6 +97,66 @@ type LoginGrantSink interface {
 type loginGrantHook struct {
 	mu   sync.RWMutex
 	sink LoginGrantSink
+	// timeout overrides loginGrantSinkTimeout for tests. Zero means the
+	// constant; nothing in the daemon sets it.
+	timeout time.Duration
+}
+
+// loginGrantSinkTimeout bounds EACH sink call. It is enforced here rather than
+// trusted to the sink, because this package is the one promising that the
+// login is never at risk: a sink that reads a provider row, waits behind a
+// per-person lock a redemption can hold across a network round trip, and
+// writes a secret store has three ways to stall, and the person waiting on it
+// has already been approved but has no session yet.
+//
+// Three seconds is long enough for a healthy row read and store write and
+// short enough that a stalled one reads to a human as a slow login, not a
+// broken one.
+const loginGrantSinkTimeout = 3 * time.Second
+
+func (a *Authenticator) sinkTimeout() time.Duration {
+	a.grants.mu.RLock()
+	defer a.grants.mu.RUnlock()
+	if a.grants.timeout > 0 {
+		return a.grants.timeout
+	}
+	return loginGrantSinkTimeout
+}
+
+// boundedSinkCall runs fn with a deadline and RETURNS when the deadline does,
+// whether or not fn has. ok=false means it did not finish in time (or
+// panicked); the caller then proceeds as if the sink had declined.
+//
+// fn runs on its own goroutine for exactly that reason — a context only bounds
+// a callee that honours it, and a sink is not trusted to. fn is handed the
+// deadline context so a well-behaved sink stops promptly; one that ignores it
+// runs to completion in the background with nobody waiting on it.
+//
+// A panic is RECOVERED here. The sink contract forbids one, but on its own
+// goroutine a panic is no longer the request's to catch — it would take the
+// whole daemon down with it.
+func (a *Authenticator) boundedSinkCall(ctx context.Context, what string, fn func(context.Context)) bool {
+	ctx, cancel := context.WithTimeout(ctx, a.sinkTimeout())
+	defer cancel()
+	done := make(chan bool, 1)
+	go func() {
+		defer func() {
+			if p := recover(); p != nil {
+				slog.Error("oidc: the login-grant sink panicked; the login proceeds without it", "step", what, "panic", p)
+				done <- false
+			}
+		}()
+		fn(ctx)
+		done <- true
+	}()
+	select {
+	case ok := <-done:
+		return ok
+	case <-ctx.Done():
+		slog.Warn("oidc: the login-grant sink did not answer in time; the login proceeds without it",
+			"step", what, "timeout", a.sinkTimeout().String())
+		return false
+	}
 }
 
 // AttachLoginGrantSink joins the sink to this Authenticator. Called once at
@@ -132,7 +192,14 @@ func (a *Authenticator) extraLoginScopes(ctx context.Context) []string {
 	if sink == nil {
 		return nil
 	}
-	asked := sink.LoginScopes(ctx)
+	// Bounded: a timeout means "no widening", and the login goes out unwidened.
+	result := make(chan []string, 1)
+	if !a.boundedSinkCall(ctx, "compose the login request", func(ctx context.Context) {
+		result <- sink.LoginScopes(ctx)
+	}) {
+		return nil
+	}
+	asked := <-result
 	if len(asked) == 0 {
 		return nil
 	}
@@ -180,11 +247,46 @@ func (a *Authenticator) captureLoginGrant(ctx context.Context, subject string, t
 		return
 	}
 	scope, _ := token.Extra("scope").(string)
-	sink.CaptureLoginGrant(ctx, subject, LoginGrant{
+	grant := LoginGrant{
 		RefreshToken: token.RefreshToken,
 		Scope:        scope,
 		Expiry:       token.Expiry,
+	}
+	// Bounded: this runs BEFORE the session cookie is written, so a stalled
+	// capture would hold an approved human at a blank page. On timeout the
+	// login proceeds and the capture is abandoned — its context is cancelled,
+	// so a sink that honours it stores nothing.
+	a.boundedSinkCall(ctx, "capture the login grant", func(ctx context.Context) {
+		sink.CaptureLoginGrant(ctx, subject, grant)
 	})
+}
+
+// expireWidenedMarker deletes the widened marker through loginCookie, so the
+// deletion carries the same Secure posture as every cookie the login writes.
+// Callers invoke it only when the browser presented a marker, which is what
+// keeps an unwidened login's Set-Cookie headers exactly what they always were.
+func (a *Authenticator) expireWidenedMarker(w http.ResponseWriter) {
+	stale := a.loginCookie(widenedCookieName, "")
+	stale.MaxAge = -1
+	http.SetCookie(w, stale)
+}
+
+// maxLoggedErrorDescription bounds the IdP-supplied text logUnretriedRefusal
+// writes. It is the provider's prose, not ours, and a log line is not the
+// place for an unbounded string an external party chose.
+const maxLoggedErrorDescription = 256
+
+// logUnretriedRefusal names an identity-provider refusal the callback is NOT
+// retrying. The response is unchanged — the handler still answers as it always
+// has — but the cause reaches the log, which is where an operator whose tenant
+// refuses with a code outside widenRetryableError's set will look first.
+func (a *Authenticator) logUnretriedRefusal(r *http.Request, widened bool, code string) {
+	desc := r.URL.Query().Get("error_description")
+	if len(desc) > maxLoggedErrorDescription {
+		desc = desc[:maxLoggedErrorDescription] + "…"
+	}
+	slog.Warn("oidc: the identity provider refused the sign-in",
+		"issuer", a.cfg.IssuerURL, "error", code, "error_description", desc, "widened", widened)
 }
 
 // widenRetryableError reports whether an authorization refusal is one the EXTRA

@@ -8,10 +8,12 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"net/url"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -270,6 +272,29 @@ func (c *Config) applyDefaultsAndValidate() error {
 	for i, e := range c.UpstreamProxyNoProxy {
 		if !ValidNoProxyEntry(e) {
 			return fmt.Errorf("config: upstream_proxy_no_proxy[%d]: %q is neither a CIDR nor a host/domain suffix", i, e)
+		}
+	}
+	// Warn (never fail boot — the operator may genuinely want the portal
+	// proxied) when a corp upstream is configured and this run carries an AWS
+	// SSO injection host (isAWSSSOPortalHost) with no bypass entry covering
+	// it: every SSO call on that host then CONNECTs through the corporate
+	// upstream, which a corp forward proxy frequently cannot reach (it is a
+	// PrivateLink-style host resolving into CGNAT/private space — see
+	// mitm_upstream_test.go) and which times out looking exactly like a
+	// network fault instead of a routing gap the operator can name. Shares
+	// noProxyRulesCoverHost with the live routing decision (bypassUpstream)
+	// so the two can never disagree about what counts as covered.
+	if c.UpstreamProxyURL != "" {
+		rules := compileNoProxy(c.UpstreamProxyNoProxy)
+		for _, inj := range c.Injection {
+			h := strings.ToLower(strings.TrimSpace(inj.Host))
+			if h == "" || !isAWSSSOPortalHost(h) {
+				continue
+			}
+			if !noProxyRulesCoverHost(rules, h) {
+				slog.Warn("wardyn-proxy: upstream proxy is configured with an AWS SSO injection host not covered by any upstream_proxy_no_proxy entry — every SSO call on this host will CONNECT through the corporate upstream",
+					slog.String("host", inj.Host))
+			}
 		}
 	}
 	// Validate (but do not retain) the trusted CA PEM, same shape as the
