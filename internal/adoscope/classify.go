@@ -99,6 +99,9 @@ func Classify(req Request) (Verdict, error) {
 	// The denied areas are checked BEFORE the method: a GET of the token area
 	// lists an organisation's personal access tokens, which is a read of
 	// exactly the thing no lane may see.
+	if r.orgless {
+		return discoveryRead(method, r)
+	}
 	if c, ok := deniedAreas[r.area]; ok {
 		return Verdict{Capability: c}, nil
 	}
@@ -142,6 +145,9 @@ var readAreas = map[string]string{
 	"distributedtask/variablegroups": "vso.variablegroups_read",
 	"distributedtask/securefiles":    "vso.securefiles_read",
 	"connectiondata":                 "", "resourceareas": "",
+	// The signed-in person's profile and organisation list — the two
+	// discovery reads, also admitted unpinned on discoveryHost.
+	"profile": "vso.profile", "accounts": "vso.profile",
 }
 
 // readScope is the scope a read of r needs, and whether r is a read this
@@ -236,6 +242,9 @@ type route struct {
 	area string
 	// res is the segment after the area, or "".
 	res string
+	// orgless marks a request to discoveryHost, which carries no organisation
+	// and is therefore never pinned — see discoveryRead.
+	orgless bool
 }
 
 // at is the segment n positions after _apis — at(1) is the area, at(2) the
@@ -294,11 +303,39 @@ func parseRoute(host, rawPath, org string) (route, error) {
 	if slices.Contains(segs, "_git") {
 		return route{}, fmt.Errorf("adoscope: %q is a git-over-HTTP endpoint — the transport is gated on its own, not classified here", rawPath)
 	}
+	if h == discoveryHost {
+		r := splitAtAPIs(h, segs)
+		r.orgless = true
+		return r, nil
+	}
 	segs, err = pinOrg(h, segs, org)
 	if err != nil {
 		return route{}, err
 	}
 	return splitAtAPIs(h, segs), nil
+}
+
+// discoveryHost is where the Azure CLI makes its first two calls — the
+// signed-in person's profile and their organisation list. Its paths carry NO
+// organisation, so the pin in pinOrg cannot apply, and refusing it outright
+// fails every `az devops` / `az repos` command on its first request.
+const discoveryHost = "app.vssps.visualstudio.com"
+
+// discoveryAreas are the ONLY areas admitted on discoveryHost.
+var discoveryAreas = []string{"profile", "accounts"}
+
+// discoveryRead is the whole policy for discoveryHost, and it is narrow on
+// purpose: an unpinned host is an exception to the rule every other request is
+// held to, so it admits exactly the two reads the CLI needs and refuses
+// everything else — any write, any other area (the token area included), and
+// any path that does not START at _apis, which is how an organisation would be
+// smuggled into a host that has none. A refusal here is an error, like an
+// organisation mismatch, not a classified capability.
+func discoveryRead(method string, r route) (Verdict, error) {
+	if !slices.Contains(readMethods, method) || r.apis != 0 || !slices.Contains(discoveryAreas, r.area) {
+		return Verdict{}, fmt.Errorf("adoscope: %s admits reads of %s only", discoveryHost, strings.Join(discoveryAreas, " and "))
+	}
+	return Verdict{Capability: CapRead}, nil
 }
 
 // azureDevOpsHost reports whether h is one of the hosts that accept Entra
