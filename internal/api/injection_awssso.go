@@ -303,6 +303,11 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		if rows[i].Kind != types.ApprovalCredentialReauth {
 			continue
 		}
+		// An Azure DevOps consent row is credential_reauth too, but it has its
+		// own cap (maxADOCapabilityHoldsPerRun) and never spends this budget.
+		if _, consent := adoConsentScope(rows[i]); consent {
+			continue
+		}
 		workflows++
 		switch rows[i].State {
 		case types.ApprovalPending:
@@ -380,26 +385,38 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 }
 
 // awsSSOGrantSnapshot reads the IMMUTABLE dispatch-time credential scope off
-// the grant itself. It looks the grant up through the RUN's own grant list,
-// which re-proves run binding (I1) independently of the broker's own check.
+// the grant itself (grantSnapshot).
 func (s *Server) awsSSOGrantSnapshot(ctx context.Context, runID, grantID uuid.UUID) (awsSSOScopeSnapshot, bool) {
+	var sn awsSSOScopeSnapshot
+	if !s.grantSnapshot(ctx, runID, grantID, &sn) || !sn.authored() {
+		return awsSSOScopeSnapshot{}, false
+	}
+	return sn, true
+}
+
+// grantSnapshot decodes the dispatch-time "snapshot" a grant's scope carries
+// into dst, false when the grant or its snapshot is absent. It looks the grant
+// up through the RUN's own grant list, which re-proves run binding (I1)
+// independently of the broker's own check.
+func (s *Server) grantSnapshot(ctx context.Context, runID, grantID uuid.UUID, dst any) bool {
+	if s.cfg.Store == nil {
+		return false
+	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
 	if err != nil {
-		return awsSSOScopeSnapshot{}, false
+		return false
 	}
 	for _, g := range grants {
 		if g.ID != grantID {
 			continue
 		}
 		var sc struct {
-			Snapshot awsSSOScopeSnapshot `json:"snapshot"`
+			Snapshot json.RawMessage `json:"snapshot"`
 		}
-		if json.Unmarshal(g.Spec.Scope, &sc) != nil || !sc.Snapshot.authored() {
-			return awsSSOScopeSnapshot{}, false
-		}
-		return sc.Snapshot, true
+		return json.Unmarshal(g.Spec.Scope, &sc) == nil && len(sc.Snapshot) > 0 &&
+			json.Unmarshal(sc.Snapshot, dst) == nil
 	}
-	return awsSSOScopeSnapshot{}, false
+	return false
 }
 
 // authored reports whether a snapshot is present at all. OwnerSubject is

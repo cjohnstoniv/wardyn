@@ -877,7 +877,8 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
-| the `/drives` routes — registering a **user drive**, allocating it to people or groups, previewing whose drive resolves (`mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| the `/drives` routes that NAME A HOST PATH — creating, listing, updating, and removing the **user drive** itself (`GET`/`POST /drives`, `PUT`/`DELETE /drives/{id}`, `mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| allocating a drive to people or groups, revoking that allocation, or previewing whose drive resolves — `POST /drives/grants`, `DELETE /drives/grants/{id}`, `POST /drives/preview` (0.8, issue #168) | ⛔ admin or `security_admin`: none of the three names a host path — a security admin's authority over drives is the `DenyUserDrive` door on a governance profile, reached through `/governance` above |
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | signing in to YOUR OWN model provider (`POST /setup/harness-login`) — the container-login sandbox that captures an AWS SSO session | 🟡 any signed-in human, but ONLY under a `per_user` agent row: the agent roster must declare that each person signs in themselves, and the caller must hold the `agent` capability for that row's agent. Otherwise ⛔ admin only. An admin always reaches it, and under a `per_user` row captures their OWN session like anyone else. The start URL is the ADMIN'S — a sign-in can never choose another portal |
@@ -894,6 +895,11 @@ completeness check still blocks any new gated route from landing without either
 a row above or a filed entry here.
 
 ### Who writes the provider policy: console vs CLI/MDM
+
+On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
+can be set to per-user sign-in instead of one shared PAT — see
+[docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
+row's fields, and what a member sees.
 
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
@@ -1011,11 +1017,17 @@ migration `0050`)** are the second and third owned nouns after runs.
   (`secretOwnerFromRequest`: `""` for an operator, their own principal for a
   member). A member's `DELETE` of another principal's row is structurally
   unreachable (`secretstore.Store.For(owner)` never resolves it) and answers the
-  byte-identical 204 a never-set name gets. The four Bedrock/SigV4 names
-  (`aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`/
-  `bedrock-api-key`) stay refused (403) for every non-operator PUT: Bedrock always
-  resolves from the operator namespace, so a member row under one of those names
-  would read as configured in setup while dispatch never uses it.
+  byte-identical 204 a never-set name gets. The three AWS SigV4 names
+  (`aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`) stay
+  refused (403) for every non-operator PUT: SigV4 is always signed out of the
+  operator namespace, so a member row under one of those names would read as
+  configured in setup while dispatch never uses it. `bedrock-api-key` is NOT one
+  of them, so a member may store their own: under a `per_user` agent row the
+  bearer is injected from the run owner's own namespace, under `shared` from the
+  operator's. Dispatch records that choice on the grant it authors, and the
+  injection sink resolves the key from exactly that record
+  (`resolveBedrockBearerInjection`) — a member's own key never stands in for
+  the operator's, nor the operator's for a member's.
 - **`GET /secrets` returns `{names, mine}`.** `mine` is always the queried
   namespace's own rows (reserved names filtered out). `names` keeps its pre-0.7
   meaning for an admin — the operator namespace, or one member's own rows with
@@ -1944,22 +1956,22 @@ recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` i
 a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
 effort and is the signal for "which of these are dead"; revoke those.
 
-**The role is a stamp re-checked at login; the GROUP SNAPSHOT is not checked at
-all.** A token carries the role AND the group snapshot its owner held when they
-minted it, and every request it authenticates republishes them, so downstream it
-is that human as they were at mint time.
+**Both halves are stamps re-checked at login.** A token carries the role AND
+the group snapshot its owner held when they minted it, and every request it
+authenticates republishes them, so downstream it is that human as they were at
+mint time, or at their most recent sign-in since — whichever is later.
 
-The two halves age differently, and only one of them ages. Their next successful
-sign-in **re-stamps the role** on every unrevoked token they hold — the same
-`OnLogin` hook that has re-stamped their SSH keys since 0.6 — so a demotion does
-reach outstanding tokens, at that human's own next login rather than
-immediately. **The group snapshot is never refreshed**, by that hook or anything
-else. And nothing ages either half out on its own: `api_tokens` has
+Their next successful sign-in **re-stamps the role, the group snapshot, and the
+snapshot's own completeness bit** on every unrevoked token they hold — the same
+`OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to
+carry groups too — so a demotion, or a group membership change, reaches
+outstanding tokens at that human's own next login rather than immediately. And
+nothing ages either half out on its own short of that sign-in: `api_tokens` has
 `created_at`, `last_used_at` and `revoked_at` and **no expiry column**, there is
 no TTL on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human
-who is demoted and never signs in again keeps the role their tokens were minted
-with indefinitely. **Explicit revocation is the only thing that ends it on your
-schedule.**
+who is demoted and never signs in again keeps the role and groups their tokens
+were minted with indefinitely. **Explicit revocation is the only thing that
+ends it on your schedule** rather than waiting for that next login.
 
 A demotion made on the People page is now one of those explicit revocations:
 when a role-mapping write or delete takes a tier away from a value, Wardyn
@@ -2005,10 +2017,11 @@ matched nobody, not that there was nothing to revoke — sessions are stateless,
 that half cannot be counted, and only this half can tell you. Both
 `token.create` and `token.revoke` are audited
 ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
-owner. Offboarding a person means revoking their tokens explicitly — the row
-outlives their access to your IdP, and it is published as a residual
-(`threatmodel/THREAT-MODEL.md` §5, "A per-user API token's role and group
-snapshot are frozen at mint").
+owner. Offboarding a person means revoking their tokens explicitly — a demoted
+or departed human who never signs in again is not caught by the login-time
+re-stamp, and the row outlives their access to your IdP either way. It is
+published as a residual (`threatmodel/THREAT-MODEL.md` §5, "A per-user API
+token's role AND group snapshot are bounded-stale, not frozen").
 
 ### Three roles, and who sets the walls
 
@@ -2362,8 +2375,8 @@ Sign in as a second, real person. This is strictly more faithful than the
 toggle — it exercises the server's own role derivation, its own session, and
 its own ownership namespace.
 
-- **kind quickstart** — the bundled Dex already ships two logins:
-  `admin@wardyn.local` and `member@wardyn.local` (`deploy/kind/sso/dex.yaml`,
+- **kind quickstart** — the bundled Dex ships one login per role path:
+  `admin@`, `member@`, `member2@`, `secadmin@`, `operator@` and `stranger@wardyn.local` (`deploy/kind/sso/dex.yaml`,
   role map in `deploy/kind/sso/values.yaml`).
 - **Entra** — the walk provisions `wardyn-admin`, `wardyn-member` and
   `wardyn-outsider` (`deploy/azure-entra-sso/03-people.sh`).
@@ -2934,6 +2947,12 @@ the estate needs both.
   "100.64.0.0/10"           // CIDR, matched against a literal-IP destination
 ]
 ```
+
+Suffix entries match names; CIDR entries match only a destination written as
+an IP literal, never a hostname that resolves into the range — the same rule as
+Go's `NO_PROXY` (`bypassUpstream`, `internal/egress/proxy/egress_target.go`).
+So on an estate where AWS resolves into CGNAT, `100.64.0.0/10` bypasses
+nothing for `portal.sso.<region>.amazonaws.com`; list the name or its suffix.
 
 Wildcards are refused at write time: "bypass everything" is spelled by clearing
 `upstream_proxy_url`, not by one character in a list. An entry that is neither a
@@ -3787,8 +3806,8 @@ and no real credential anywhere in the loop.
 `wardyn/agent-aws-sso:local` login image and refuses to start without it), then
 `WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322
 make kind-quickstart`, then `make kind-sso` (see `deploy/kind/sso/README.md`).
-The overlay adds Dex with two static principals —
-`admin@wardyn.local` and `member@wardyn.local`, password `password` — plus
+The overlay adds Dex with one static principal per role path —
+`admin@wardyn.local`, `member@wardyn.local` and four more, password `password` — plus
 `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services
 (`sso-oidc` and the `sso` portal) and a bedrock-runtime stub, all on one
 in-cluster Service. `make kind-sso-down` removes the overlay; the cluster itself
@@ -4128,7 +4147,10 @@ dial (the gateway included) is CONNECTed through the corp proxy by the transport
 never dialled directly. A gateway the corp proxy cannot reach — an internal one,
 typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address.
+other internal address. wardynd also warns at boot when an upstream proxy is
+configured but no `upstream_proxy_no_proxy` entry covers a configured gateway
+host — a snapshot taken at boot only, since `SiteConfig` is admin-editable
+afterwards and either setting can change without a restart.
 
 **A subscription or Wardyn-managed-token run honors a configured Anthropic
 gateway too** — the published `agent-claude-code` image's `agent-run` only
@@ -5596,36 +5618,44 @@ driver, not a guess:
   kubelet `podPidsLimit` (or your distribution's
   `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb
   backstop — coarser but real, and the only lever this substrate has today.
-- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 it reaches an AUTONOMOUS run's `/tmp`
-  and workdir writes — a narrowing, not a close.** All of this describes AUTONOMOUS (task-mode)
+- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 (further narrowed by #164 in 0.8) it
+  reaches an AUTONOMOUS run's `/tmp`, workdir and toolchain-cache writes — a narrowing, not a
+  close.** All of this describes AUTONOMOUS (task-mode)
   runs. An interactive run's agent runs in the pod's main container, whose whole writable layer —
   `$HOME` and the toolchain caches included — the kubelet has counted against `disk_mib` since
   0.7.2; there nothing is outside the cap, so size an interactive run's budget for its caches too.
   A run's `disk_mib` is the agent container's
-  `resources.limits[ephemeral-storage]` and the `sizeLimit` of the two `emptyDir` volumes mounted
-  on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp` and
-  `wardyn-work` at `/home/agent/work`. The ephemeral container `Exec` attaches for the agent
+  `resources.limits[ephemeral-storage]` and the `sizeLimit` of the three `emptyDir` volumes mounted
+  on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp`,
+  `wardyn-work` at `/home/agent/work`, and `wardyn-cache` at `/home/agent/.cache`. The ephemeral
+  container `Exec` attaches for the agent
   process (`internal/runner/k8s/exec.go`) copies the main container's mounts verbatim, so writes
-  to those two paths land in volumes the kubelet meters as the pod's local ephemeral storage.
+  to those paths land in volumes the kubelet meters as the pod's local ephemeral storage.
   Before 0.7.5 they landed on the ephemeral container's own writable layer, which the kubelet
   meters not at all: the limit evicted writes by the pod's idle main container only, and the
   conformance case `EphemeralDiskLimit/OverTheLimitTheRunIsEvicted` was red from 0.7.2 for exactly
-  that reason (0.7.4 disclosed it; it now runs for BOTH fill targets and passes). The two
-  `sizeLimit`s are one budget, not two: `emptyDir` usage counts toward the pod's
-  `ephemeral-storage` total as well, so filling both volumes halfway still evicts. **Upgrade
+  that reason (0.7.4 disclosed it; it now runs for all fill targets and passes). The three
+  `sizeLimit`s are one budget, not three: `emptyDir` usage counts toward the pod's
+  `ephemeral-storage` total as well, so filling every volume partway still evicts. **Upgrade
   note:** an operator's `default_disk_mib` or policy `disk_mib` did not bind an autonomous k8s run
-  before 0.7.5 and does now — size it for the clone plus installs before upgrading, or a run that
-  used to finish will be evicted with its in-flight work lost. **What is still OUTSIDE the cap:**
-  everything the agent writes beyond those two paths — the rest of `$HOME`, including the
-  toolchain caches a build actually fills (`/home/agent/go`, `~/.cache/go-build`, `~/.gotmp`,
-  `~/.npm`, `~/.cache/pip`; `internal/api/runs_dispatch_mounts.go` sets the Go ones) and the
+  before 0.7.5 and does now — size it for the clone, installs and toolchain caches before
+  upgrading, or a run that used to finish will be evicted with its in-flight work lost. **What is
+  still OUTSIDE the cap:**
+  everything the agent writes beyond those three paths — the rest of `$HOME` (`/home/agent/go` —
+  GOPATH itself is unmoved, so the installed tool binaries under its `bin/` stay reachable; only
+  `GOMODCACHE` moved under the cache volume — and `~/.cache/pip`) and the
   dotfiles (`~/.wardyn`, `~/.ssh`, `~/.claude`); `/opt/rust`; and any authored `workspace_repos`
   or ephemeral-source target outside `/home/agent/work`, since an authored target may legally sit
   at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed
   target prefixes). Nothing is mounted at `/home/agent` itself, because a volume there would
   shadow each image's baked `.bashrc`, swallow the reserved drive target `/home/agent/drive`, and
-  hide the read-only `~/.claude` bind the subscription path mounts; pointing the cache env under
-  the workdir on this substrate, or a third cache volume, is the 0.7.6 follow-up. **What the proof
+  hide the read-only `~/.claude` bind the subscription path mounts. **Risk carried by the cache
+  volume specifically:** an `emptyDir` at `/home/agent/.cache` shadows the full image's
+  pre-created, agent-owned `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`) with a
+  fresh directory whose ownership the kubelet decides — `FSGroup` is only applied to a pod with a
+  drive attached (`internal/runner/k8s/drives.go`), so a run with `disk_mib` set and no drive can
+  get a root-owned mount the uid-1000 agent cannot write into; only the conformance "Cache" fill
+  target, run against a real cluster, catches this. **What the proof
   does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
   runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and
   Kata. The live kind SSO walk separately exercises a real `agent-run` boot — the aws-sso sign-in

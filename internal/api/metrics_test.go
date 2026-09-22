@@ -231,3 +231,62 @@ func (s *apiTokenErrStore) GetAPITokenByRaw(context.Context, string) (types.APIT
 	return types.APIToken{}, s.err
 }
 func (s *apiTokenErrStore) Ping(context.Context) error { return nil }
+
+// …and the scrape's OTHER read answers too, for the same reason the ping does:
+// this double is scraped, and the sensor heartbeat is read immediately after
+// wardyn_store_up. ErrNotFound is the no-sensor deployment (#323).
+func (s *apiTokenErrStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+	return types.AuditEvent{}, store.ErrNotFound
+}
+
+// scrapePanicStore answers everything the /metrics route needs to REACH the
+// handler and then panics at the first live store read the exposition makes. It
+// is the reintroduction fixture for #323: the nil-embedded-interface double that
+// dereferences a nil store.Store panics in exactly this position.
+type scrapePanicStore struct{ noGovernanceStore }
+
+func (scrapePanicStore) Ping(context.Context) error {
+	panic("store read from a scrape")
+}
+
+// TestMetricsScrapeIsAllOrNothing is #323's durable half, and it pins the
+// property that let a nil dereference on the scrape path live in this package
+// unnoticed: a panic PAST the counter block used to leave a committed 200 whose
+// body stopped mid-file, recovered into a 500 that could no longer be written.
+// `go test` exited 0, every existing /metrics assertion still matched (they read
+// series the truncated prefix still carried), and the only trace was a recovered
+// stack in `-v` output nobody reads.
+//
+// So the assertion is not "wardyn_store_up is present" — that was true of the
+// truncated body too. It is that a half-built exposition never reaches the wire
+// at all: an operator gets a failed scrape, which `up` shows, instead of a
+// healthy one that has quietly shed half its series.
+func TestMetricsScrapeIsAllOrNothing(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, scrapePanicStore{}))
+
+	w := do(t, srv, http.MethodGet, "/metrics", adminToken, "")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("a scrape that panicked half-way = %d, want 500. A 200 here is the defect: Prometheus records "+
+			"the truncated body as the whole truth and `up` stays 1, so nothing anywhere reports the failure",
+			w.Code)
+	}
+	if body := w.Body.String(); strings.Contains(body, "wardyn_runs_total") {
+		t.Errorf("the failed scrape still shipped the counter block it had already built:\n%s\n"+
+			"Half an exposition is not a smaller exposition — it is a set of series that read as DELETED.", body)
+	}
+
+	// THE CONTROL: the ordinary double — the one TestPreviewUnmountableDrive-
+	// CountsNoRefusal scrapes — answers both live reads and its scrape arrives
+	// whole, health gauges and all. Take Ping off noGovernanceStore and this
+	// half goes 500 while the half above goes green.
+	ok := New(baseTestConfig(h, noGovernanceStore{}))
+	c := do(t, ok, http.MethodGet, "/metrics", adminToken, "")
+	if c.Code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200: %s", c.Code, c.Body.String())
+	}
+	if body := c.Body.String(); !strings.Contains(body, "wardyn_store_up 1") ||
+		!strings.Contains(body, "wardyn_audit_spool_lines") {
+		t.Errorf("the scrape stopped before the health gauges, which is the truncation this test exists for:\n%s", body)
+	}
+}

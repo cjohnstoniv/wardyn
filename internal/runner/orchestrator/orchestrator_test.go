@@ -27,6 +27,7 @@ type fakeSubstrate struct {
 	structural bool
 	recording  bool
 	drives     bool
+	managed    bool
 	diskEnf    types.StorageEnforcement
 	refPrefix  string
 
@@ -46,6 +47,7 @@ func (f *fakeSubstrate) Classes(context.Context) (substrate.ClassSupport, error)
 		StructuralEgress:         f.structural,
 		SessionRecording:         f.recording,
 		UserDrives:               f.drives,
+		ManagedFiles:             f.managed,
 		EphemeralDiskEnforcement: f.diskEnf,
 	}, nil
 }
@@ -373,6 +375,52 @@ func TestCapabilitiesUserDrivesIsAConjunction(t *testing.T) {
 	}
 	if caps.UserDrives {
 		t.Error("UserDrives = true with no substrates wired")
+	}
+}
+
+// TestCapabilitiesManagedFilesIsAConjunction pins the second non-union flag,
+// for UserDrives' reason: whether a run gets its root-owned ceiling is decided
+// BEFORE a substrate is picked, so a union would let a deployment promise a
+// file one of its substrates cannot deliver. The failure that would cause is
+// worse than a refused mount — the control plane would record the ceiling as
+// delivered on a run that never got one.
+func TestCapabilitiesManagedFilesIsAConjunction(t *testing.T) {
+	ctx := context.Background()
+	sub := func(name string, managed bool) *fakeSubstrate {
+		return &fakeSubstrate{name: name, classes: []types.ConfinementClass{types.CC1}, managed: managed}
+	}
+
+	for _, tc := range []struct {
+		name string
+		subs []*fakeSubstrate
+		want bool
+	}{
+		{name: "every substrate can deliver", subs: []*fakeSubstrate{sub("a", true), sub("b", true)}, want: true},
+		{name: "one cannot, so the deployment cannot", subs: []*fakeSubstrate{sub("a", true), sub("b", false)}, want: false},
+		{name: "order does not matter", subs: []*fakeSubstrate{sub("a", false), sub("b", true)}, want: false},
+		{name: "a single capable substrate can", subs: []*fakeSubstrate{sub("a", true)}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var subs []substrate.Substrate
+			for _, s := range tc.subs {
+				subs = append(subs, s)
+			}
+			caps, err := New(subs...).Capabilities(ctx)
+			if err != nil {
+				t.Fatalf("Capabilities: %v", err)
+			}
+			if caps.ManagedFiles != tc.want {
+				t.Errorf("ManagedFiles = %v, want %v", caps.ManagedFiles, tc.want)
+			}
+		})
+	}
+
+	caps, err := New().Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities (no substrates): %v", err)
+	}
+	if caps.ManagedFiles {
+		t.Error("ManagedFiles = true with no substrates wired")
 	}
 }
 

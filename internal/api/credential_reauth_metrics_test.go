@@ -63,7 +63,7 @@ func TestCredentialReauthMetrics_TimeoutIsNotAPolicyDenial(t *testing.T) {
 		t.Error("credential:reauth-timeout counts as a policy denial; a person not signing in would page security")
 	}
 	// The exclusion is narrow: every genuine denial still counts.
-	for _, src := range []string{"policy:denied", "policy:default-deny", "approval:denied", "builtin:private-ip", "policy:tool-deny"} {
+	for _, src := range []string{"policy:denied", "policy:default-deny", "approval:denied", "builtin:private-ip", "builtin:upstream-protocol-mismatch", "policy:tool-deny"} {
 		if !isPolicyDeny(src) {
 			t.Errorf("%q stopped counting as a policy denial — the exclusion is too wide", src)
 		}

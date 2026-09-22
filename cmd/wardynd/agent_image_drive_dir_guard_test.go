@@ -166,11 +166,19 @@ func TestAgentImagesPreCreateDriveDir(t *testing.T) {
 
 // dockerfileStages splits a Dockerfile into its stages: each FROM starts one,
 // and the instructions after it belong to it. ARG lines before the first FROM
-// are global and belong to no stage, so they are dropped.
+// are global and belong to no stage — but their defaults are kept, because a
+// `FROM ${VAR}` base is resolved against them (resolveArgRef).
 func dockerfileStages(src string) []dockerStage {
 	var out []dockerStage
+	globals := map[string]string{}
 	for _, in := range dockerfileInstructions(src) {
 		fields := strings.Fields(in)
+		if len(out) == 0 && len(fields) >= 2 && strings.EqualFold(fields[0], "ARG") {
+			if k, v, ok := strings.Cut(fields[1], "="); ok {
+				globals[k] = v
+			}
+			continue
+		}
 		if len(fields) < 2 || !strings.EqualFold(fields[0], "FROM") {
 			if len(out) > 0 {
 				last := &out[len(out)-1]
@@ -186,13 +194,29 @@ func dockerfileStages(src string) []dockerStage {
 		if len(rest) == 0 {
 			continue
 		}
-		st.base = strings.ToLower(rest[0])
+		st.base = strings.ToLower(resolveArgRef(rest[0], globals))
 		if len(rest) >= 3 && strings.EqualFold(rest[1], "AS") {
 			st.alias = strings.ToLower(rest[2])
 		}
 		out = append(out, st)
 	}
 	return out
+}
+
+// resolveArgRef resolves a BuildKit `FROM ${VAR}` / `FROM $VAR` base against
+// the Dockerfile's own global `ARG VAR=default`, the same resolution
+// scripts/check-image-pins.sh applies. Only the default is knowable here. A
+// ref that does not resolve is returned unchanged, so the FROM-chain check
+// still fails loudly on it rather than passing an image it never traced.
+func resolveArgRef(ref string, globals map[string]string) string {
+	if !strings.HasPrefix(ref, "$") {
+		return ref
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(ref, "$"), "{"), "}")
+	if v, ok := globals[name]; ok && v != "" {
+		return v
+	}
+	return ref
 }
 
 // stageByAlias returns the index of the stage answering to ref, or -1.
@@ -442,6 +466,29 @@ func TestDriveDirGuard_RefusesLookalikes(t *testing.T) {
 		t.Run("chown/"+tc.name, func(t *testing.T) {
 			if got := chownsAgentHomeAfter(tc.instr); got != tc.want {
 				t.Errorf("chownsAgentHomeAfter(%q) = %v, want %v", tc.instr, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDockerfileStagesResolvesArgBase pins the FROM ${VAR} resolution: a UI
+// image built `FROM ${BASE_IMAGE}` must trace to the image its ARG default
+// names, or the drive-dir chain dead-ends at a literal "${base_image}".
+func TestDockerfileStagesResolvesArgBase(t *testing.T) {
+	for _, tc := range []struct{ name, src, want string }{
+		{"braced", "ARG BASE_IMAGE=wardyn/agent-base:local\nFROM ${BASE_IMAGE}\nRUN true\n", "wardyn/agent-base:local"},
+		{"bare", "ARG BASE_IMAGE=wardyn/agent-base:local\nFROM $BASE_IMAGE\n", "wardyn/agent-base:local"},
+		{"literal untouched", "FROM wardyn/agent-base:local\n", "wardyn/agent-base:local"},
+		{"unresolvable stays loud", "FROM ${NOPE}\n", "${nope}"},
+		{"stage ARG is not global", "FROM debian AS b\nARG BASE_IMAGE=x\nFROM ${BASE_IMAGE}\n", "${base_image}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := dockerfileStages(tc.src)
+			if len(st) == 0 {
+				t.Fatalf("parsed to zero stages")
+			}
+			if got := st[len(st)-1].base; got != tc.want {
+				t.Errorf("final stage base = %q, want %q", got, tc.want)
 			}
 		})
 	}

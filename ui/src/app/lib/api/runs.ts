@@ -15,6 +15,7 @@ import type {
   PolicyGrade,
   PreflightResult,
   ProfileProposal,
+  RunDetail,
   RunFilesResult,
   RunPolicySpec,
   RunResources,
@@ -138,6 +139,16 @@ export function isCredentialRefusal(e: unknown): boolean {
   return e instanceof HttpError && e.status === 422 && e.reason === "model_credential";
 }
 
+// The create-time git-credential refusal (#386's launch door) —
+// gitCredentialRefusal's 422 carrying reason `git_credential`: a repository
+// admitted onto a per-user Azure DevOps row with no usable captured sign-in
+// for this caller. The New Run rail answers it with the Connect Azure DevOps
+// dialog and launches again once the connection lands — isCredentialRefusal's
+// twin, for a second credential.
+export function isGitCredentialRefusal(e: unknown): boolean {
+  return e instanceof HttpError && e.status === 422 && e.reason === "git_credential";
+}
+
 // #159: the Recordings screen paginates instead of stopping at LIST_LIMIT
 // (1000). unwrapList discards the response object, so it can never carry
 // X-Wardyn-Truncated — the caller needs it FROM listRuns, not from a second
@@ -180,11 +191,11 @@ export const runs = {
   // overload above.
   listRuns,
 
-  // GET /api/v1/runs/{id}
-  async getRun(id: string): Promise<AgentRun | undefined> {
+  // GET /api/v1/runs/{id} — the ONE endpoint that sends ui_apps (RunDetail).
+  async getRun(id: string): Promise<RunDetail | undefined> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "GET" });
     if (res.status === 404) return undefined;
-    return asJson<AgentRun>(res);
+    return asJson<RunDetail>(res);
   },
 
   // POST /api/v1/runs/{id}/attach-ticket — mint a single-use, short-TTL ticket
