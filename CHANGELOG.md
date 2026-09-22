@@ -34,10 +34,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **An HTTP/2 answer on a clone was reported as a dial failure.** The git and PAT brokers now classify
   it as a protocol mismatch, like every other lane already did (#382).
 - **An org-scoped provider row with the SSH lane admitted the whole host.** An SSH URL carries no org
-  path, so the addresses an admin set were not the restriction they appeared to be. The combination is
-  now refused where it is chosen (#380).
+  path, so the addresses an admin set were not the restriction they appeared to be. `PUT
+  /workspace-providers` (the console) now refuses a row that explicitly selects the SSH lane when its
+  own addresses carry an organisation path; an empty lanes list is unaffected. `PUT /site-config` (the
+  CLI/MDM door a laptop re-applies on every boot) does **not** refuse it: a stored document written
+  before this rule existed keeps applying, with the affected rows named in the response
+  (`ssh_lane_wide_past_path`) and a startup warning, rather than losing the rest of the document to a
+  hard 400 with no migration path. **This closes the hole only for configurations WRITTEN after this
+  upgrade** — a row saved under 0.7.9 or earlier keeps admitting SSH host-level at runtime exactly as
+  it does today until an operator re-saves it through the console. The console also now disables the
+  SSH checkbox (with its own reason) rather than letting an admin reach the same refusal at Save — on
+  Azure DevOps, whose org segment is mandatory, that lane is never explicitly selectable (#380).
 - **The PAT lane was labelled "in-sandbox" although the broker keeps the token out of the sandbox**
-  since 0.7; the label now follows the real broker switch (#381).
+  since 0.7; the label and residency now follow the deployment's real `WARDYN_GIT_PAT_BROKER` switch,
+  projected as `git_pat_broker_enabled` on `GET`/`PUT /workspace-providers` and `GET`/`PUT
+  /site-config` (both PUT responses too, so the label can't flip after Save and back before the next
+  reload). The git_pat approval card has no access to that switch and is member-facing, so it now
+  describes both postures rather than asserting one it can't verify; the Secrets page and the
+  Integrations rollup read the real value when they have it (#381).
 - The compose file **documented a writable member mount it did not provide** (#309).
 - The CLI **printed internal tracking identifiers** in user-facing output (#259), and
   `--devcontainer-repo` **pointed at a command that does not do the job** (#354).
