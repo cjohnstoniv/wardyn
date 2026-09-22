@@ -6,6 +6,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -331,4 +333,154 @@ func TestADOGitBroker_StoredPATLaneUnchanged(t *testing.T) {
 	if want := "Basic " + base64.StdEncoding.EncodeToString([]byte("oauth2:T")); up.gitAuth != want {
 		t.Fatalf("upstream Authorization = %q, want %q", up.gitAuth, want)
 	}
+}
+
+// withHold points the harness's injector at a scripted control plane and
+// approval reader, so a push beyond the grant is held instead of refused.
+func (h *adoGitHarness) withHold(t *testing.T, cp *capControlPlane, reader approvalReader) {
+	t.Helper()
+	fastPolls(t, 5*time.Millisecond)
+	tok := &tokenSource{}
+	tok.Set("run-token")
+	inj := h.p.inject
+	inj.base, inj.token, inj.client = cp.srv.URL, tok, cp.srv.Client()
+	inj.reauth, inj.approvals = newReauthCoordinator(), reader
+	t.Cleanup(inj.reauth.stop)
+}
+
+// push commits on branch in dir and pushes it.
+func (h *adoGitHarness) push(t *testing.T, dir, branch string) (string, error) {
+	t.Helper()
+	h.commit(t, dir, branch)
+	return h.git(t, "-C", dir, "push", "origin", branch)
+}
+
+// countEndpoint is how many requests the fake answered for e whose query
+// contains q.
+func (h *adoGitHarness) countEndpoint(e adofake.Endpoint, q string) int {
+	n := 0
+	for _, r := range h.fake.Requests() {
+		if r.Endpoint == e && strings.Contains(r.Query, q) {
+			n++
+		}
+	}
+	return n
+}
+
+// A PUSH BEYOND THE GRANT IS HELD, and one `once` approval covers the whole
+// push: the advertisement is a read and asks nothing, the pack upload asks and
+// spends it. The next push asks again.
+func TestADOGitBroker_HeldPushApprovedOnceThenAsksAgain(t *testing.T) {
+	h := newADOGitHarness(t, adoscope.CapRead)
+	cp := newCapControlPlane(t)
+	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
+	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+
+	if out, err := h.push(t, dir, h.runBranch()); err != nil {
+		t.Fatalf("held push, approved once: %v\n%s", err, out)
+	}
+	if _, raised := cp.snapshot(); len(raised) != 1 {
+		t.Fatalf("one push raised %d approvals, want 1 — the advertisement must not ask or spend", len(raised))
+	}
+	if a, p := h.countEndpoint(adofake.EndpointGitAdvertise, "git-receive-pack"), h.countEndpoint(adofake.EndpointGitReceivePack, ""); a != 1 || p != 1 {
+		t.Fatalf("Azure DevOps saw %d receive-pack advertisements and %d pack uploads, want 1 and 1", a, p)
+	}
+	if asks, _ := cp.snapshot(); asks[0].Get("capability") != string(adoscope.CapCodeWrite) || asks[0].Get("ref_class") != "" || asks[0].Get("repo") != "app" {
+		t.Errorf("the ask = %v, want code_write for repo app and no protected ref class", asks[0])
+	}
+
+	if out, err := h.push(t, dir, h.runBranch()); err != nil {
+		t.Fatalf("second push: %v\n%s", err, out)
+	}
+	if _, raised := cp.snapshot(); len(raised) != 2 {
+		t.Errorf("the second push raised %d approvals in total, want 2 — a once approval covers one push", len(raised))
+	}
+	h.finish(t)
+}
+
+// A DENIED PUSH is refused in git's receive-pack terms and git exits non-zero.
+func TestADOGitBroker_HeldPushDenied(t *testing.T) {
+	h := newADOGitHarness(t, adoscope.CapRead)
+	cp := newCapControlPlane(t)
+	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalDenied)})
+	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+
+	out, err := h.push(t, dir, h.runBranch())
+	mustBeGitRefusal(t, out, err, "it was not approved")
+	if !strings.Contains(out, "remote rejected") {
+		t.Errorf("git did not report the rejected ref:\n%s", out)
+	}
+	if n := h.countEndpoint(adofake.EndpointGitReceivePack, ""); n != 0 {
+		t.Errorf("a denied pack reached Azure DevOps %d times", n)
+	}
+	h.finish(t)
+}
+
+// APPROVED FOR THE RUN: later pushes go through with no new approval.
+func TestADOGitBroker_HeldPushApprovedForTheRun(t *testing.T) {
+	h := newADOGitHarness(t, adoscope.CapRead)
+	cp := newCapControlPlane(t)
+	cp.forRun = true
+	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
+	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+
+	for i := 0; i < 3; i++ {
+		if out, err := h.push(t, dir, h.runBranch()); err != nil {
+			t.Fatalf("push %d: %v\n%s", i, err, out)
+		}
+	}
+	if _, raised := cp.snapshot(); len(raised) != 1 {
+		t.Errorf("three pushes raised %d approvals, want 1 — the run was not widened", len(raised))
+	}
+	h.finish(t)
+}
+
+// A REF OUTSIDE THE RUN'S BRANCH NAMESPACE asks for policy_bypass, as a
+// protected ref, not code_write.
+func TestADOGitBroker_HeldNonRunRefAsksPolicyBypass(t *testing.T) {
+	h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	cp := newCapControlPlane(t)
+	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalDenied)})
+	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+
+	out, err := h.push(t, dir, "main")
+	mustBeGitRefusal(t, out, err, "it was not approved")
+	asks, _ := cp.snapshot()
+	if len(asks) == 0 || asks[0].Get("capability") != string(adoscope.CapPolicyBypass) || asks[0].Get("ref_class") != "protected" {
+		t.Errorf("asks = %v, want policy_bypass for a protected ref", asks)
+	}
+	h.finish(t)
+}
+
+// A PACK LARGER THAN http.postBuffer makes git send an empty probe POST to
+// git-receive-pack before the real one (remote-curl's probe_rpc). The probe
+// moves no ref, so it neither asks nor spends: one approval still covers the
+// push.
+func TestADOGitBroker_HeldLargePushProbeDoesNotSpend(t *testing.T) {
+	h := newADOGitHarness(t, adoscope.CapRead)
+	cp := newCapControlPlane(t)
+	h.withHold(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalPending, types.ApprovalApproved)})
+	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+
+	blob := make([]byte, 256<<10) // incompressible, so the pack exceeds the buffer
+	_, _ = rand.Read(blob)
+	if err := os.WriteFile(filepath.Join(dir, "big.bin"), blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := h.git(t, "-C", dir, "add", "big.bin"); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	h.commit(t, dir, h.runBranch())
+	// The push itself ends in a 400 here, and that is the FAKE: net/http/cgi
+	// refuses a chunked request body, and git streams a pack above
+	// http.postBuffer chunked. What this pins is upstream of that — both POSTs
+	// were forwarded, under one approval.
+	_, _ = h.git(t, "-C", dir, "-c", "http.postBuffer=65536", "push", "origin", h.runBranch())
+	if n := h.countEndpoint(adofake.EndpointGitReceivePack, ""); n != 2 {
+		t.Fatalf("Azure DevOps saw %d pack POSTs, want 2 (the probe and the pack) — the probe did not happen", n)
+	}
+	if _, raised := cp.snapshot(); len(raised) != 1 {
+		t.Errorf("one large push raised %d approvals, want 1 — the probe spent the approval", len(raised))
+	}
+	h.finish(t)
 }

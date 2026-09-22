@@ -65,7 +65,7 @@ type adoGitPush struct {
 // git-upload-pack or git-receive-pack) for a host the Entra grant covers.
 func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, verb string, grant ADOGrant) {
 	if !adoOrgMatches(host, rest, grant.Organization) {
-		p.refuseADOGit(w, r, host, "", nil, fmt.Sprintf(
+		p.refuseADOGit(w, r, host, nil, nil, fmt.Sprintf(
 			"Wardyn refused this git request: this run is granted the %q Azure DevOps organisation only.", grant.Organization))
 		return
 	}
@@ -76,19 +76,24 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	if verb == "git-receive-pack" {
 		head, pp, msg := readADOGitPush(r)
 		if msg != "" {
-			p.refuseADOGit(w, r, host, "", nil, msg)
+			p.refuseADOGit(w, r, host, nil, nil, msg)
 			return
 		}
 		push, body = pp, io.MultiReader(bytes.NewReader(head), r.Body)
-		need = adoscope.CapCodeWrite
-		if slices.ContainsFunc(push.refs, p.adoGitRefProtected) {
+		// A command section that moves no ref is git's auth probe ahead of a
+		// large pack (remote-curl's probe_rpc): it writes nothing, so it is a
+		// read and never raises, or spends, an approval meant for the push.
+		switch {
+		case slices.ContainsFunc(push.refs, p.adoGitRefProtected):
 			need = adoscope.CapPolicyBypass
+		case len(push.refs) > 0:
+			need = adoscope.CapCodeWrite
 		}
 	}
-	if !adoscope.Permits(grant.Capabilities, adoscope.Verdict{Capability: need, Refs: pushRefs(push)}) {
-		p.refuseADOGit(w, r, host, need, push, fmt.Sprintf(
+	if v := adoGitVerdict(need, push); !adoscope.Permits(grant.Capabilities, v) &&
+		!p.refuseADOGit(w, r, host, &v, push, fmt.Sprintf(
 			"Wardyn refused this git request: it needs %q (%s), and this run was not granted it.",
-			adoscope.Label(need), need))
+			adoscope.Label(need), need)) {
 		return
 	}
 
@@ -121,19 +126,55 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	relay(w, resp)
 }
 
-// refuseADOGit is the ONE refusal point for git on the Azure DevOps Entra lane.
-// need is the capability the request lacks ("" when the refusal is not about a
-// capability — another organisation, an unreadable push); a later slice that
-// turns capability refusals into holds replaces this body.
-func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string, need adoscope.Capability, push *adoGitPush, msg string) {
+// refuseADOGit is the ONE refusal point for git on the Azure DevOps Entra
+// lane, and its hold point. held is non-nil only for a capability the run does
+// not hold; that request is escalated (awaitADOCapability) and, if a person
+// approves it in time, refuseADOGit reports true and the caller forwards.
+// Every other refusal, and an escalation that ends without an approval, is
+// answered here in git's own terms.
+//
+// Only a pack upload or an upload-pack/advertisement the run cannot read ever
+// reaches the hold: the receive-pack advertisement is a read (F-LIVE-8), so a
+// `once` approval raised for a push is spent by its pack upload and never by
+// the advertisement in front of it.
+func (p *Proxy) refuseADOGit(w http.ResponseWriter, r *http.Request, host string, held *adoscope.Verdict, push *adoGitPush, msg string) bool {
+	if held != nil {
+		var ok bool
+		if ok, msg = p.awaitADOCapability(r.Context(), host, *held, adoGitAsk(r), msg); ok {
+			return true
+		}
+	}
 	p.emitPATDecision(r, host, egress.Deny, ruleSourceADOGitDenied)
-	slog.Info("proxy: Azure DevOps git request refused", "host", host, "needs", string(need))
 	if push != nil {
 		// The pack is still on the wire: read it so git gets the answer rather
 		// than a reset connection.
 		_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, adoGitDrainLimit))
 	}
 	writeADOGitRefusal(w, push, msg)
+	return false
+}
+
+// adoGitVerdict is the verdict a git request is held to. Refs ride only a
+// policy_bypass verdict: the control plane reads refs as a protected-ref move,
+// which a push inside the run's own namespace is not.
+func adoGitVerdict(need adoscope.Capability, push *adoGitPush) adoscope.Verdict {
+	v := adoscope.Verdict{Capability: need}
+	if need == adoscope.CapPolicyBypass {
+		v.Refs = push.refs
+	}
+	return v
+}
+
+// adoGitAsk describes a held git request for the approval: its method, the
+// broker-stripped path, and the repository — the segment after _git.
+func adoGitAsk(r *http.Request) adoAsk {
+	_, rest, _ := parsePATBrokerPath(r.URL.Path)
+	ask := adoAsk{method: r.Method, path: rest}
+	segs := strings.Split(strings.ToLower(strings.Trim(rest, "/")), "/")
+	if i := slices.Index(segs, "_git"); i >= 0 && i+1 < len(segs) {
+		ask.repo = segs[i+1]
+	}
+	return ask
 }
 
 // writeADOGitRefusal answers git in its own terms, never as a 401.
@@ -230,11 +271,4 @@ func (p *Proxy) adoGitRefProtected(ref string) bool {
 		return false
 	}
 	return adoRefProtected(ref)
-}
-
-func pushRefs(push *adoGitPush) []string {
-	if push == nil {
-		return nil
-	}
-	return push.refs
 }
