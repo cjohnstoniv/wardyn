@@ -49,10 +49,12 @@ import { ModelAccessBanner } from "../../wardyn/model-access-banner";
 import { ModelAccessProvider, useModelAccessDoor } from "../../wardyn/model-access-context";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { ADO } from "../../../lib/ado-entra-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type {
   ModelCredential,
   PreflightResult,
+  SCMAccess,
   SetupHarnessTool,
   SetupModelAccess,
 } from "../../../lib/types";
@@ -98,6 +100,14 @@ function railTree(props: {
   launchError?: string | null;
   /** The server refused the launch for the caller's own model credential. */
   credentialRefused?: boolean;
+  gitCredential?: SCMAccess;
+  adoDialogOpen?: boolean;
+  adoConnecting?: boolean;
+  adoOrg?: string;
+  adoBlockedUrl?: string | null;
+  onAdoConfirm?: () => void;
+  onAdoFallbackClick?: () => void;
+  onAdoCancel?: () => void;
   /** Mounted as a sibling INSIDE the same ModelAccessProvider — a test-only
    *  stand-in for a surface elsewhere in the shell that can close the shared
    *  door. */
@@ -130,8 +140,26 @@ function railTree(props: {
         warnings: [],
         onOpenRun: null,
       }}
-      preflight={{ error: null, result: props.preflightResult ?? null }}
+      preflight={{
+        error: null,
+        // gitCredential rides the SAME preflight verdict as model_credential
+        // does (RunRail derives both from preflight.result) — a synthetic
+        // one when the test names only gitCredential, so the case reads as
+        // "a preflight verdict carrying this fact" either way.
+        result: props.gitCredential
+          ? { setup_items: [], enforced_confinement_class: "CC1", ...props.preflightResult, git_credential: props.gitCredential }
+          : (props.preflightResult ?? null),
+      }}
       agentRow={props.agentRow}
+      adoDialog={{
+        open: props.adoDialogOpen ?? false,
+        connecting: props.adoConnecting ?? false,
+        org: props.adoOrg ?? "",
+        blockedUrl: props.adoBlockedUrl ?? null,
+        onConfirm: props.onAdoConfirm ?? (() => {}),
+        onFallbackClick: props.onAdoFallbackClick ?? (() => {}),
+        onCancel: props.onAdoCancel ?? (() => {}),
+      }}
     />
   );
   if (props.modelAccess === undefined) {
@@ -721,5 +749,98 @@ describe("the launch door — the server's credential refusal opens the sign-in,
     // re-open it with a relaunch armed.
     await afterFocusSettles();
     expect(dialog()).toBeNull();
+  });
+});
+
+// #386's launch door — the Azure DevOps twin of the block above, but the
+// rail here is presentational (adoDialog is screen-owned, see
+// new-run-screen.test.tsx for the auto-open-on-422 + relaunch behaviour).
+// These tests cover what the rail itself renders and wires.
+describe("the Azure DevOps connect dialog and the git_credential preflight line", () => {
+  it("renders nothing extra when there is no git_credential fact", () => {
+    renderRail({});
+    expect(screen.queryByText(ADO.PREFLIGHT_MISSING)).toBeNull();
+    expect(screen.queryByRole("dialog", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull();
+  });
+
+  // Review finding F4: on a deployment with no per-user Azure DevOps row (or
+  // no Azure DevOps row at all), preflight never sends git_credential — a
+  // shell run there must render no "Credentials" section, not an empty one.
+  it("F4: a shell run with no git_credential fact renders no Credentials heading at all", () => {
+    renderRail({});
+    expect(screen.queryByText("Credentials")).toBeNull();
+  });
+
+  it("states PREFLIGHT_MISSING for a not_configured connection, before Launch is pressed", () => {
+    renderRail({ gitCredential: { state: "not_configured" } });
+    expect(screen.getByText(ADO.PREFLIGHT_MISSING)).toBeInTheDocument();
+    expect(screen.getByText(ADO.PREFLIGHT_MISSING_SUB)).toBeInTheDocument();
+  });
+
+  it("says nothing for a live connection — no person name to compose PREFLIGHT_LIVE with", () => {
+    renderRail({ gitCredential: { state: "live", source: "org" } });
+    expect(screen.queryByText(ADO.PREFLIGHT_MISSING)).toBeNull();
+  });
+
+  // Review follow-up N5: a `live` gitCredential fact rendered nothing
+  // (above), but showCredentials used to key on `!!gitCredential` — truthy
+  // for `live` too — so a shell run with a live Azure DevOps connection and
+  // no other credential to describe got an empty "Credentials" heading.
+  it("N5: a live shell run with no other credential renders no empty Credentials heading", () => {
+    renderRail({ gitCredential: { state: "live", source: "org" } });
+    expect(screen.queryByText("Credentials")).toBeNull();
+  });
+
+  it("the dialog names the row's org (from the 422 body — F1) and offers Continue to Microsoft / Cancel", () => {
+    // No preflight verdict at all — F1: the org comes from the 422 itself,
+    // never from a git_credential fact that may not exist yet.
+    renderRail({ adoDialogOpen: true, adoOrg: "https://dev.azure.com/contoso" });
+    expect(screen.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeInTheDocument();
+    expect(screen.getByText(ADO.LAUNCH_DIALOG_BODY("https://dev.azure.com/contoso"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ADO.CONNECT_CTA })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("a blocked popup shows the canon sentence and a plain fallback link to the sign-in URL (F9)", () => {
+    renderRail({ adoDialogOpen: true, adoBlockedUrl: "/api/v1/scm/azure-devops/signin" });
+    expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: ADO.CONNECT_CTA });
+    expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  // Review follow-up N1: clicking the fallback link ALSO starts the poll
+  // (alongside its own href navigation), so the dialog advances on return.
+  it("N1: clicking the fallback link fires onFallbackClick", async () => {
+    const onAdoFallbackClick = vi.fn();
+    renderRail({
+      adoDialogOpen: true,
+      adoBlockedUrl: "/api/v1/scm/azure-devops/signin",
+      onAdoFallbackClick,
+    });
+    await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_CTA }));
+    expect(onAdoFallbackClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("Continue to Microsoft calls onAdoConfirm; Cancel calls onAdoCancel", async () => {
+    const onAdoConfirm = vi.fn();
+    const onAdoCancel = vi.fn();
+    renderRail({ adoDialogOpen: true, onAdoConfirm, onAdoCancel });
+    await userEvent.click(screen.getByRole("button", { name: ADO.CONNECT_CTA }));
+    expect(onAdoConfirm).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onAdoCancel).toHaveBeenCalled();
+  });
+
+  it("closing the dialog (Escape) calls onAdoCancel too", async () => {
+    const onAdoCancel = vi.fn();
+    renderRail({ adoDialogOpen: true, onAdoCancel });
+    await userEvent.keyboard("{Escape}");
+    expect(onAdoCancel).toHaveBeenCalled();
+  });
+
+  it("the confirm button shows a spinner and disables while connecting", () => {
+    renderRail({ adoDialogOpen: true, adoConnecting: true });
+    expect(screen.getByRole("button", { name: ADO.CONNECT_CTA })).toBeDisabled();
   });
 });

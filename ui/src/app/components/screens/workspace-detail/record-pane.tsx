@@ -512,6 +512,13 @@ function SessionCard({
             reasonDeny="rejected in replay"
             idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
             hasWorkspace
+            // No AgentRun in hand on this pane (confinedRR is a Recording,
+            // not a run) — an Azure DevOps escalation is not expected here
+            // (record/verify uses the pat/ssh lane, not live per-user Entra
+            // dispatch); if one ever appears, a security operator still
+            // decides it, and this component's own null-run handling shows
+            // an honest "couldn't load this run" instead of a false claim.
+            run={null}
           />
           <p className="text-meta leading-snug text-muted-foreground">{VERIFY_APPROVE_LEARNS_HINT}</p>
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(confinedRR.run_id)}>
@@ -616,6 +623,8 @@ function OrphanedSessionCard({
             reasonDeny="rejected in replay"
             idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
             hasWorkspace
+            // See this pane's other LiveApprovals mount for why `run` is null.
+            run={null}
           />
           <p className="text-meta leading-snug text-muted-foreground">{VERIFY_APPROVE_LEARNS_HINT}</p>
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(rr.run_id)} disabled={busy}>

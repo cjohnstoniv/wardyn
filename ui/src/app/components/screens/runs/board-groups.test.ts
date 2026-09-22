@@ -93,6 +93,28 @@ describe("approvalSignals — held vs passive", () => {
     expect(s.get("run-1")).toEqual({ pending: 1, passiveHold: true });
   });
 
+  // S10 round 2 (F13): an Azure DevOps consent row is credential_reauth too,
+  // but a DIFFERENT provider — it must set adoConsent, never reauth, so the
+  // board chip never says "AWS" for it.
+  it("marks an Azure DevOps consent row as adoConsent, not reauth", () => {
+    const s = approvalSignals([
+      approval({
+        kind: "credential_reauth",
+        requested_scope: { lane: "azure_devops", mechanism: "entra_consent", owner: "dana", provider_id: "row_1", scopes: [] },
+      }),
+    ]);
+    expect(s.get("run-1")?.adoConsent).toBe(true);
+    expect(s.get("run-1")?.reauth).toBeUndefined();
+  });
+
+  it("still marks a plain AWS credential_reauth row as reauth, not adoConsent", () => {
+    const s = approvalSignals([
+      approval({ kind: "credential_reauth", requested_scope: { mechanism: "bedrock_sso", owner: "dana" } }),
+    ]);
+    expect(s.get("run-1")?.reauth).toBe(true);
+    expect(s.get("run-1")?.adoConsent).toBeUndefined();
+  });
+
   // #160 — isHeld's 60-minute stale-hold ceiling on tool_call/credential_reauth.
   it("a tool_call past the 60-minute ceiling is staleHeld, not held — and NOT reauth", () => {
     const old = new Date(Date.now() - 61 * 60_000).toISOString();
