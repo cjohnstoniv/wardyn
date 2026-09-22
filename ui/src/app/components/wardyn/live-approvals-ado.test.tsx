@@ -10,7 +10,7 @@
 // card, not a one-line row).
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
@@ -94,7 +94,7 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
     listApprovalsMock.mockResolvedValue([escalationRow()]);
     mount({ principal: "dana@acme.example" });
     const card = await screen.findByTestId("ado-capability-card");
-    expect(card).toHaveTextContent("Push");
+    await waitFor(() => expect(card).toHaveTextContent("Push"));
     expect(within(card).getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 

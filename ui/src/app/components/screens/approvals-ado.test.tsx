@@ -13,7 +13,7 @@
 // stack, one viewer per case.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
@@ -108,7 +108,7 @@ describe("ApprovalsScreen — the Azure DevOps capability card", () => {
     mockRow = escalationRow;
     renderScreen(false, false, "dana@acme.example");
     const card = await screen.findByTestId("ado-capability-card");
-    expect(card).toHaveTextContent("Push");
+    await waitFor(() => expect(card).toHaveTextContent("Push"));
     expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
     // F8 — Acts as, from the run fetch's own created_by.
     expect(card).toHaveTextContent("Acts as");
@@ -126,7 +126,7 @@ describe("ApprovalsScreen — the Azure DevOps capability card", () => {
     mockRow = escalationRow;
     renderScreen(false, false, "someone-else@acme.example");
     const card = await screen.findByTestId("ado-capability-card");
-    expect(card).toHaveTextContent("Not yours to decide");
+    await waitFor(() => expect(card).toHaveTextContent("Not yours to decide"));
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
 

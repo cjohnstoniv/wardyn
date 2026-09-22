@@ -13,7 +13,7 @@
 // gives for keeping that one self-contained.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -123,7 +123,7 @@ describe("RunDetailScreen — the Approvals tab's Azure DevOps capability card (
     await user.click(await screen.findByRole("tab", { name: /approvals/i }));
 
     const card = await screen.findByTestId("ado-capability-card");
-    expect(card).toHaveTextContent("Push");
+    await waitFor(() => expect(card).toHaveTextContent("Push"));
     const approveBtn = screen.getByRole("button", { name: "Approve" });
     expect(approveBtn).not.toBeDisabled();
     await user.click(approveBtn);
