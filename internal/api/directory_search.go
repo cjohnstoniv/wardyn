@@ -19,6 +19,7 @@
 package api
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/http"
@@ -175,17 +176,21 @@ const (
 
 // principalLimiter is a per-key token bucket, the per-principal twin of
 // http.go's process-global authFailedLimiter (same refill arithmetic, keyed).
-// Zero value is ready to use.
+// The zero value is the directory search's limiter; rate, burst and max
+// override its three constants for another route (the anonymous device
+// enrolment keys one on the TCP peer — devices_auth.go).
 //
-// ponytail: a plain map with a clear-when-full ceiling, not an LRU. Clearing
-// refills every bucket, i.e. it fails OPEN for one instant — acceptable because
-// reaching 1024 distinct SECURITY-ADMIN principals is not a load an attacker
-// can manufacture (they would each need a session first). Swap in per-entry
-// eviction if this limiter is ever reused on a route a member, or an
-// unauthenticated caller, can reach.
+// A full map evicts ONE entry, never all of them: every bucket that has
+// refilled (it carries no state a fresh one would not), or failing that the
+// least recently used. Clearing wholesale would refill every bucket at once,
+// failing open for the whole map — tolerable behind requireSecurityOperator,
+// not on a route an unauthenticated caller can reach.
 type principalLimiter struct {
 	mu      sync.Mutex
 	buckets map[string]*tokenBucket
+	rate    float64
+	burst   float64
+	max     int
 }
 
 type tokenBucket struct {
@@ -196,15 +201,19 @@ type tokenBucket struct {
 func (l *principalLimiter) allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.buckets == nil || len(l.buckets) >= dirLimiterMaxPrincipals {
+	rate, burst := cmp.Or(l.rate, dirRatePerSec), cmp.Or(l.burst, dirBurst)
+	if l.buckets == nil {
 		l.buckets = make(map[string]*tokenBucket)
 	}
 	b := l.buckets[key]
 	if b == nil {
-		b = &tokenBucket{tokens: dirBurst}
+		if len(l.buckets) >= cmp.Or(l.max, dirLimiterMaxPrincipals) {
+			l.evict(now, rate, burst)
+		}
+		b = &tokenBucket{tokens: burst}
 		l.buckets[key] = b
 	} else if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
-		b.tokens = min(b.tokens+elapsed*dirRatePerSec, dirBurst)
+		b.tokens = min(b.tokens+elapsed*rate, burst)
 	}
 	b.last = now
 	if b.tokens < 1 {
@@ -212,4 +221,20 @@ func (l *principalLimiter) allow(key string, now time.Time) bool {
 	}
 	b.tokens--
 	return true
+}
+
+// evict drops every refilled bucket, or the least recently used one when none
+// has refilled. O(max) per call, paid only while the map is full.
+func (l *principalLimiter) evict(now time.Time, rate, burst float64) {
+	oldest, found := "", false
+	for k, b := range l.buckets {
+		if b.tokens+now.Sub(b.last).Seconds()*rate >= burst {
+			delete(l.buckets, k)
+		} else if !found || b.last.Before(l.buckets[oldest].last) {
+			oldest, found = k, true
+		}
+	}
+	if len(l.buckets) >= cmp.Or(l.max, dirLimiterMaxPrincipals) {
+		delete(l.buckets, oldest)
+	}
 }

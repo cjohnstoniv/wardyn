@@ -155,6 +155,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **An organisation control plane can enrol managed laptops, list them, revoke one, and take in
+  their audit rows** (#102). An admin mints a single-use enrolment token
+  (`wardyn device enrol-token --name`, 72-hour expiry, shown once); the laptop's first boot trades
+  it at the anonymous, per-peer rate-limited `POST /api/v1/devices/enrol` for a `wdd_` device
+  credential; the device then pushes batches of up to 500 of its own chained audit rows to
+  `POST /api/v1/devices/{id}/audit` and sends a heartbeat when idle. `wardyn device list` and
+  `wardyn device revoke <id>` are the inventory-then-revoke pair, on the same tier as `/tokens`; a
+  revoked device's next push is 401. The device credential authenticates a daemon, never a person:
+  it has its own middleware that publishes a device and no human, every human route answers it
+  401, it cannot create a run, and a device request is never an operator. A forwarded row keeps
+  the laptop's claimed actor and action, marked by `data.device_origin`; its `source_ip` is the
+  peer the organisation saw (the claim is kept in `device_origin`), and a row naming one of the
+  organisation's own runs refuses the batch. A push that does not extend the chain the
+  organisation recorded is refused with 422 — its hashes are recomputed before the audit chain's
+  lock is taken, so a refused or replayed batch never delays the organisation's own audit writes —
+  and a purge on the laptop is accepted and audited as a chain reset. A device has at most one push
+  in flight (a concurrent one is 429), every accepted row's claim re-checks from the stored row, and
+  a value Postgres cannot store is a 400 the forwarder stops on rather than a 500 it retries.
+  Failure rows are coalesced like `auth.failed`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
+  (failures) and `device.audit.chain_reset`.
+
 - **`wardyn drive` reads and replaces admin-registered drives from the CLI.** `wardyn drive get`
   prints every drive and allocation as JSON; `wardyn drive apply <file>` (or stdin, `-`) upserts what
   the file names over the existing `POST /drives`, `PUT /drives/{id}` and `POST /drives/grants`
