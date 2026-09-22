@@ -212,18 +212,20 @@ function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAudience)
       const host = str(scope, "host");
       if (ck === "git_pat") {
         return {
-          // #381: since 0.7 WARDYN_GIT_PAT_BROKER defaults on, so the stored
-          // token is attached by the proxy rather than handed to git inside
-          // the sandbox (CAPABILITY.gitPatLine) — matches gitPatLine's own
-          // wording rather than a second copy of it, the same duplication
-          // ssh_key's "what"/"blast" already accept below.
-          what: `A stored git access token${host ? ` for ${host}` : ""} is attached to the request by the proxy on the outbound leg${ttl}.`,
+          // #381 F3: this card is MEMBER-facing and this screen has no access
+          // to the deployment's WARDYN_GIT_PAT_BROKER switch (the providers
+          // endpoint it would read from is operator-only) — so it must never
+          // assert a residency it cannot know. "authenticates" is true either
+          // way; CAPABILITY.gitPatLine is deliberately NOT reused here (that
+          // constant states the broker-ON default only).
+          what: `A stored git access token${host ? ` for ${host}` : ""} authenticates this clone${ttl}.`,
           // The git_pat nuance: unlike a minted/scoped credential, the PAT
           // itself is a long-lived operator secret Wardyn cannot expire or
           // down-scope from its side — never claim otherwise here, and say
           // "stored" so this reads as the stored-PAT lane's limit, not every
-          // credential kind's.
-          blast: `${CAPABILITY.gitPatLine} Wardyn can't expire or down-scope a stored PAT — it stays live until you revoke it on ${host ?? "the git host"}.`,
+          // credential kind's. The residency sentence names BOTH postures
+          // rather than picking one this screen can't verify (#381 F3).
+          blast: `Depending on this deployment's PAT broker setting, the token is attached to the request by the proxy on the outbound leg, or handed to git inside the sandbox where the process running there can read it. Either way, Wardyn can't expire or down-scope a stored PAT — it stays live until you revoke it on ${host ?? "the git host"}.`,
         };
       }
       if (ck === "ssh_key") {

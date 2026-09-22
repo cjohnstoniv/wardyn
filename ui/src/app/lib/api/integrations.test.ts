@@ -206,16 +206,28 @@ describe("deriveIntegrations — SCM hosts", () => {
     expect(data.scm[0].residency).not.toBe("notbuilt");
   });
 
-  it("a github-pat secret yields a proxy_injected row (#381 default), not the live-check row", () => {
+  it("a github-pat secret yields a proxy_injected row (#381 default) when the switch is unknown or on", () => {
     const data = deriveIntegrations(baseStatus(), { scm_hosts: ["github.com"] }, ["git-pat-github-com"]);
     const [row] = data.scm;
     // patLaneMeta's ON shape (scm-provider.ts): since 0.7 WARDYN_GIT_PAT_BROKER
     // defaults on, so a stored PAT is attached by the proxy, not resident in
-    // the sandbox — this rollup has no switch value in scope, so it shows the
-    // real default rather than the pre-0.7 residency.
+    // the sandbox — siteConfig here carries no workspace_providers block (a
+    // member caller, or an operator whose GET hasn't loaded it yet), so this
+    // shows the real 0.7.10 default rather than guessing the pre-0.7 one.
     expect(row.residency).toBe("proxy_injected");
     expect(row.isGithubApp).toBeFalsy();
     expect(row.canReCheck).toBeFalsy();
+  });
+
+  it("a github-pat secret yields a resident_env row when siteConfig reports the broker OFF (#381 F8)", () => {
+    const data = deriveIntegrations(
+      baseStatus(),
+      { scm_hosts: ["github.com"], workspace_providers: { git_pat_broker_enabled: false } },
+      ["git-pat-github-com"],
+    );
+    const [row] = data.scm;
+    expect(row.residency).toBe("resident_env");
+    expect(row.chips.find((c) => c.label === "PAT · in-sandbox")).toBeTruthy();
   });
 
   it("the GitHub App is Unknown until a later wave wires the real ref-confinement check, but Re-check is real", () => {

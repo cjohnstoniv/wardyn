@@ -6,10 +6,11 @@
 import * as React from "react";
 import { Lock, Plus, MoreHorizontal, Trash2, RotateCw, Loader2, KeyRound, AlertTriangle, GitBranch, Eye, EyeOff } from "lucide-react";
 import { secrets as secretsApi } from "../../lib/api/secrets";
+import { providers as providersApi } from "../../lib/api/providers";
 import { getErrorMessage } from "../../lib/format";
 import { useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
-import { LANE_META, laneOfName, type Lane } from "../../lib/scm-provider";
+import { LANE_META, laneOfName, patLaneMeta, type Lane } from "../../lib/scm-provider";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
@@ -89,6 +90,19 @@ export function SecretsScreen() {
   const [addOpen, setAddOpen] = React.useState(false);
   const [rotateName, setRotateName] = React.useState<string | null>(null);
   const [toDelete, setToDelete] = React.useState<string | null>(null);
+  // #381 F3: the real WARDYN_GIT_PAT_BROKER switch, read from the ONE door
+  // that projects it (GET /workspace-providers, operator-only). Defaults to
+  // the 0.7.10 default (on) for a non-operator viewer or before the fetch
+  // resolves — the same default git-tab.tsx's own patBrokerEnabled prop
+  // takes when it has no switch value in scope yet.
+  const [patBrokerEnabled, setPatBrokerEnabled] = React.useState(true);
+  React.useEffect(() => {
+    if (!operator) return;
+    providersApi
+      .getWorkspaceProviders()
+      .then((snap) => setPatBrokerEnabled(snap.providers.git_pat_broker_enabled ?? true))
+      .catch(() => {});
+  }, [operator]);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -108,7 +122,13 @@ export function SecretsScreen() {
     <div className="mx-auto max-w-[1400px] px-6 py-6">
       <PageHeader
         title="Secrets"
-        description={`Write-only: values go in and never come out. ${CAPABILITY.brokerLine} Exception: ${CAPABILITY.gitPatLine}`}
+        // #381 F3: "Exception" only reads true when the broker is OFF (the
+        // resident posture really is an exception to brokerLine's claim); on
+        // (the default), gitPatLine's own text just elaborates on the same
+        // claim, so the word is dropped rather than reading as a contradiction.
+        description={`Write-only: values go in and never come out. ${CAPABILITY.brokerLine} ${
+          patBrokerEnabled ? CAPABILITY.gitPatLine : `Exception: ${CAPABILITY.gitPatLineResident}`
+        }`}
         actions={
           <>
             {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
@@ -232,7 +252,13 @@ export function SecretsScreen() {
         )}
       </div>
 
-      <AddSecretDialog open={addOpen} onOpenChange={setAddOpen} onSaved={load} existingNames={names} />
+      <AddSecretDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onSaved={load}
+        existingNames={names}
+        patBrokerEnabled={patBrokerEnabled}
+      />
 
       <AddSecretDialog
         open={!!rotateName}
@@ -243,6 +269,7 @@ export function SecretsScreen() {
         }}
         existingNames={names}
         initialName={rotateName ?? ""}
+        patBrokerEnabled={patBrokerEnabled}
       />
 
       <DeleteConfirmDialog
@@ -290,6 +317,7 @@ export function AddSecretDialog({
   lockName,
   host,
   lane,
+  patBrokerEnabled = true,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -316,6 +344,11 @@ export function AddSecretDialog({
   // Which lane chip the fact block shows; defaults to laneOfName(name) so a
   // caller that already knows the locked name doesn't have to re-derive it.
   lane?: Lane;
+  // #381 F3: the real WARDYN_GIT_PAT_BROKER switch, for the pat lane's chip.
+  // Optional — a caller with no switch value in scope (corp-network-proxy.tsx,
+  // whose secret is never a git_pat) gets the 0.7.10 default (on), the same
+  // fallback every other unwired surface takes.
+  patBrokerEnabled?: boolean;
 }) {
   // This dialog is reused everywhere a secret gets written (this screen, the
   // SCM Provider step, the New Run wizard, the setup funnel) — gating its own
@@ -353,6 +386,8 @@ export function AddSecretDialog({
   const trimmed = name.trim();
   const isOverwrite = existingNames.includes(trimmed);
   const resolvedLane: Lane = lane ?? laneOfName(trimmed);
+  // #381 F3: pat's meta depends on the real switch; app/ssh keep LANE_META.
+  const resolvedLaneMeta = resolvedLane === "pat" ? patLaneMeta(patBrokerEnabled) : LANE_META[resolvedLane];
   // Editing the name clears any prior overwrite acknowledgement.
   React.useEffect(() => {
     setConfirmOverwrite(false);
@@ -410,8 +445,8 @@ export function AddSecretDialog({
                 <GitBranch className="size-4" />
               </div>
               <Mono className="text-sm text-foreground">{host}</Mono>
-              <Chip tone={LANE_META[resolvedLane].tone} title={LANE_META[resolvedLane].tooltip}>
-                {LANE_META[resolvedLane].label}
+              <Chip tone={resolvedLaneMeta.tone} title={resolvedLaneMeta.tooltip}>
+                {resolvedLaneMeta.label}
               </Chip>
             </div>
           )}

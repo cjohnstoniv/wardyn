@@ -93,12 +93,15 @@ describe("ApprovalsScreen — credentialKind banner per grant shape", () => {
       },
     ];
     renderScreen();
-    // #381: since 0.7 WARDYN_GIT_PAT_BROKER defaults on, so the "what" line
-    // says the token is attached by the proxy, not handed to git inside the
-    // sandbox — same duplication note as ssh_key above; match the
+    // #381 F3: the "what" line says "authenticates" rather than asserting a
+    // residency this screen has no switch value to verify (member-facing,
+    // no access to the operator-only providers endpoint) — match the
     // host-qualified "what" line specifically.
-    await screen.findByText(/token for gitlab\.example\.com is attached to the request/i);
+    await screen.findByText(/token for gitlab\.example\.com authenticates this clone/i);
     expect(screen.getByText(/grants git write/i)).toBeInTheDocument();
+    // The blast states BOTH possible postures rather than picking one.
+    expect(screen.getByText(/attached to the request by the proxy/i)).toBeInTheDocument();
+    expect(screen.getByText(/handed to git inside the sandbox/i)).toBeInTheDocument();
   });
 
   it("renders the github_token banner with a write chip when permissions grant write", async () => {
