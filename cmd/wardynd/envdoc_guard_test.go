@@ -157,6 +157,10 @@ var envDocShellOnly = map[string]bool{
 	// renamed cluster reds that case instead of making its 90 s hold vacuous.
 	"WARDYN_LIVE_KUBE_CONTEXT": true, "WARDYN_LIVE_KUBE_NAMESPACE": true,
 	"WARDYN_LIVE_KUBE_NODE": true,
+	// #285: the walk's two poll-ceiling overrides. Real operator inputs (unlike
+	// the exports just above), but read only by ui/e2e/live/helpers.ts
+	// (process.env) and set only by scripts/kind-sso-walk.sh — never by Go.
+	"WARDYN_LIVE_SANDBOX_UP_MS": true, "WARDYN_LIVE_LOGIN_DONE_MS": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)

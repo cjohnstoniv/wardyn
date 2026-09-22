@@ -605,9 +605,7 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 		// unwidened login still sets exactly the three cookies it always did.
 		// Expired through loginCookie rather than clearCookie so it carries
 		// the same Secure posture as every other cookie this handler writes.
-		stale := a.loginCookie(widenedCookieName, "")
-		stale.MaxAge = -1
-		http.SetCookie(w, stale)
+		a.expireWidenedMarker(w)
 	}
 	authURL := a.oauth2.AuthCodeURL(state, opts...)
 	http.Redirect(w, r, authURL, http.StatusFound)

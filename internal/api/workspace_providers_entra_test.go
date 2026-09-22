@@ -141,8 +141,11 @@ func TestValidateProviderEntra(t *testing.T) {
 		{"the bearer token mode", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = types.ADOTokenModeBearer
 		})), false},
-		{"the minted-PAT token mode is accepted", block(entraRow(func(r *types.GitProvider) {
+		{"the minted-PAT token mode is REFUSED — only Microsoft's own clients may mint", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = types.ADOTokenModeMintedPAT
+		})), true},
+		{"an empty token mode reads as bearer", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.TokenMode = ""
 		})), false},
 		{"an invented token mode", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.TokenMode = "oauth"
@@ -197,6 +200,9 @@ func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 		{"shared on the lane", entraRow(func(r *types.GitProvider) {
 			r.CredentialSource = types.CredentialSourceShared
 		}), "no such thing as a shared Entra sign-in"},
+		{"minted_pat", entraRow(func(r *types.GitProvider) {
+			r.Entra.TokenMode = types.ADOTokenModeMintedPAT
+		}), "only lets Microsoft's own clients mint"},
 		{"a ceiling that cannot read", entraRow(func(r *types.GitProvider) {
 			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeWrite}
 		}), "every profile starts from reads"},
@@ -325,7 +331,7 @@ func TestEntraBlockRoundTripsThroughBothDoors(t *testing.T) {
 	row := entraRow(func(r *types.GitProvider) {
 		r.CredentialSource = types.CredentialSourcePerUser
 		r.Entra.DefaultProfile = adoscope.ProfileRead()
-		r.Entra.TokenMode = types.ADOTokenModeMintedPAT
+		r.Entra.TokenMode = types.ADOTokenModeBearer
 		r.Entra.RESTAPI = &off
 	})
 	raw, err := json.Marshal(types.WorkspaceProviders{Git: []types.GitProvider{row}})

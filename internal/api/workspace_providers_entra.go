@@ -35,6 +35,7 @@ const (
 	providers400EntraRead = "git[%d].entra.capability_ceiling: name %q — every profile starts from reads, so a ceiling without it can serve nothing"
 	providers400EntraShar = "git[%d].credential_source: the %q lane needs per_user — there is no such thing as a shared Entra sign-in"
 	providers400EntraProf = "git[%d].entra.default_profile: %q is outside capability_ceiling"
+	providers400EntraMint = "git[%d].entra.token_mode: minted_pat is not available — Azure DevOps only lets Microsoft's own clients mint personal access tokens, so Wardyn cannot mint one per run; use bearer"
 	providers400EntraMode = "git[%d].entra.token_mode: %q is not a token mode — want one of: %s"
 	providers400Source    = "git[%d].credential_source: %q is not a credential source — want one of: %s"
 	providers400PerUser   = "git[%d].credential_source: per_user needs the %q lane — no other git lane authorizes a person as themselves"
@@ -144,10 +145,11 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 			return fmt.Errorf(providers400EntraProf, i, string(c))
 		}
 	}
-	// minted_pat is ACCEPTED. The scope it additionally needs is recorded on
-	// types.ADOTokenModeMintedPAT and is deliberately absent from every
-	// capability's scope set (adoscope.ScopeTokens), because the mint is the
-	// control plane's and never the run's.
+	// minted_pat is refused BY NAME, ahead of the generic closed-set check, so
+	// the admin reads why rather than "not a token mode".
+	if cfg.TokenMode == types.ADOTokenModeMintedPAT {
+		return fmt.Errorf(providers400EntraMint, i)
+	}
 	if cfg.TokenMode != "" && !cfg.TokenMode.Valid() {
 		return fmt.Errorf(providers400EntraMode, i, string(cfg.TokenMode),
 			strings.Join(types.ClosedADOTokenModeList(), ", "))

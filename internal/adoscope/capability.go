@@ -38,7 +38,14 @@ type Capability string
 // The GRANTABLE capabilities — the only values a provider row's ceiling or
 // profile may name, and the only ones ScopesFor turns into scopes.
 const (
-	// CapRead is any read: the floor every profile starts from.
+	// CapRead is a read of any area in readAreas: the floor every profile
+	// starts from, and a ceiling must include it.
+	//
+	// It is WIDER than "read the code". The read scope set covers every area
+	// the catalogue answers CapRead for, so the minimum Azure DevOps credential
+	// can also read service-connection configuration, the organisation's
+	// groups and users, and directory identities. That is inherent to minting
+	// by capability rather than by area, and the label says so.
 	CapRead Capability = "read"
 	// CapCodeWrite is a commit, a push or a ref move that no branch policy
 	// protects.
@@ -60,10 +67,12 @@ const (
 	// CapServiceEndpointAdmin is changing a service connection — the object
 	// that holds someone else's cloud credential.
 	CapServiceEndpointAdmin Capability = "serviceendpoint_admin"
-	// CapBuildExecute is queueing a pipeline run.
+	// CapBuildExecute is queueing a pipeline run — and, because the classic
+	// release area folds onto the build capabilities in this catalogue,
+	// creating, deploying and deleting releases. The label says both.
 	CapBuildExecute Capability = "build_execute"
-	// CapBuildAdmin is editing a pipeline definition — deciding what the next
-	// run will execute.
+	// CapBuildAdmin is editing a pipeline or release definition — deciding
+	// what every future run and release executes.
 	CapBuildAdmin Capability = "build_admin"
 	// CapWorkWrite is writing work items, including through the batch door.
 	CapWorkWrite Capability = "work_write"
@@ -98,6 +107,10 @@ const (
 	// CapUnclassifiedWrite is a write this catalogue does not recognize. It is
 	// the fail-closed answer, not a capability anyone can hold.
 	CapUnclassifiedWrite Capability = "unclassified_write"
+	// CapUnclassifiedRead is a read of an area outside readAreas — one whose
+	// read no scope in the read set could perform. Refused like its write
+	// twin, rather than classified as a read that 403s at the forge.
+	CapUnclassifiedRead Capability = "unclassified_read"
 )
 
 // grantableCapabilities is the closed grantable set — the only values a
@@ -126,7 +139,7 @@ func (c Capability) Denied() bool { return deniedCapabilities[c] }
 
 // Valid reports whether c is a value Classify can return at all.
 func (c Capability) Valid() bool {
-	return c.Grantable() || c.Denied() || c == CapUnclassifiedWrite
+	return c.Grantable() || c.Denied() || c == CapUnclassifiedWrite || c == CapUnclassifiedRead
 }
 
 // GrantableCapabilities is the grantable set in a stable order, for the
@@ -153,7 +166,7 @@ func GrantableCapabilityList() []string {
 // would be a second, drifting definition of what a capability permits, and the
 // label is the only part of a capability most people will ever read.
 var labels = map[Capability]string{
-	CapRead:                 "Read code, work items, pipelines and wikis",
+	CapRead:                 "Read code, work items, pipelines, releases, wikis and feeds — including service connection settings, the organisation's groups and users, and directory identities",
 	CapCodeWrite:            "Push commits and move branches that no policy protects",
 	CapPR:                   "Open, review and complete pull requests",
 	CapPolicyAdmin:          "Change the branch policies themselves",
@@ -161,8 +174,8 @@ var labels = map[Capability]string{
 	CapRepoAdmin:            "Create, rename and delete repositories",
 	CapSecurityAdmin:        "Change permissions and identities",
 	CapServiceEndpointAdmin: "Change service connections and the credentials they hold",
-	CapBuildExecute:         "Queue pipeline runs",
-	CapBuildAdmin:           "Change what pipelines execute",
+	CapBuildExecute:         "Queue pipeline runs, and create, deploy and delete releases",
+	CapBuildAdmin:           "Change pipeline and release definitions — what every future run and release executes",
 	CapWorkWrite:            "Create and update work items",
 	CapWikiWrite:            "Write wiki pages",
 	CapPackagingWrite:       "Publish packages to feeds",
@@ -173,6 +186,7 @@ var labels = map[Capability]string{
 	CapDeniedExtensions:   "Not available: installing extensions into the organisation",
 	CapDeniedInternal:     "Not available: the organisation's internal web API",
 	CapUnclassifiedWrite:  "Not available: a write this deployment does not recognize",
+	CapUnclassifiedRead:   "Not available: a read this deployment does not recognize",
 }
 
 // Label is c's plain-language rendering, or "" for a value outside the set —
