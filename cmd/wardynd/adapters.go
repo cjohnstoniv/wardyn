@@ -378,7 +378,8 @@ func buildAuditFanout(ctx context.Context, cfgJSON string) (*sinks.Fanout, error
 	// and serveAndShutdown calls it on every exit path.
 	for _, c := range children {
 		if runner, ok := c.(interface{ Run(context.Context) }); ok {
-			go runner.Run(context.WithoutCancel(ctx))
+			runCtx := context.WithoutCancel(ctx)
+			go goSafe("audit.sink.flush", func() { runner.Run(runCtx) })
 		}
 	}
 	return sinks.NewFanout(children...), nil

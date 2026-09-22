@@ -21,6 +21,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [0.7.9] — 2026-09-21
 
+### Added
+
+- **`scripts/gpl-source-offer.sh` covers a first-time image publish before it ships.** The image list
+  is now read straight out of `release.yml`'s publish matrix instead of a hand-maintained array that
+  had already drifted once (the retired `agent-claude-code` name stayed listed after 0.6.2 stopped
+  publishing it). For an image with no prior published digest to scan, a documented local-build path
+  (`BOOTSTRAP_IMAGES=`, or an automatic fallback once the image is in the matrix) scans the identical
+  build recipe instead, and the generated section says so in plain prose. A missing SBOM now fails
+  the script loudly rather than writing a silent "_No SBOM available._" section. `scripts/check-image-
+  pins.sh` gains a cross-check tying every published image to a section in `deploy/images/
+  THIRD-PARTY-GPL.md`, which nothing verified before (#284).
+
 ### Fixed
 
 - **The egress proxy offered HTTP/2 it could not speak, on every install with a corporate CA.**
@@ -39,9 +51,61 @@ and does not yet follow semantic versioning (interfaces are not stable).
   request cannot be completed over HTTP/2 either, it now carries its own
   `builtin:upstream-protocol-mismatch` rule source with a cause that names the mismatch instead of
   raw frame bytes, and it is answered with a 400 so SDKs stop retrying (#359).
+- **The Agents tab and member Getting Started now render a chip for the `not_applicable` model-access
+  state instead of nothing at all.** `not_applicable` — the admin-token principal's own answer under a
+  per_user row, "this caller is a mechanism, not a person" — had no entry in `MODEL_ACCESS_CHIP_LABEL`
+  and was excluded from both surfaces outright, so it read as unknown rather than as a deliberate
+  answer. It now has its own neutral label (`Model access · Not applicable`), rendered on the Agents
+  tab beside `ADMIN_OWN_CHIP_NOTE`, and beside member Getting Started's `llm_ready` fallback chip —
+  still with no action and no sign-in CTA, since there is no person here to sign in as (#292).
 
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
+- **A refocus that arrives while `usePoll` has a read in flight is no longer dropped.** The in-flight
+  guard correctly stops a burst of focus events from stacking requests, but the refocus it swallowed
+  was never retried, so a person returning to the tab mid-read got no refresh and kept seeing a stale
+  screen for the rest of the interval — up to five minutes on the setup gate. The hook now coalesces:
+  a refocus during an in-flight read is remembered and fires exactly one follow-up read when that read
+  settles, however many refocus events arrived while it was outstanding (#314).
+- **The compose file's writable-member-mount comment was wrong; `/srv/src` genuinely had no bind.**
+  0.7.2 documented (and repeated in its own CHANGELOG entry) that
+  `WARDYN_WORKSPACES_ROOT`'s `:ro` compose bind was what refused a writable member mount. It is
+  not: that bind only bounds what wardynd's own container can see (a read), while
+  `internal/runner/member_mount.go`'s writable check is pure root/deny-list matching, and the
+  sandbox bind itself is created by the HOST dockerd straight from the source path — never through
+  wardynd's mount namespace at all. A new test,
+  `TestCreateSandbox_MemberMountWritable_ReadOnlySourcePermissionIrrelevant`
+  (`internal/runner/docker/driver_member_mount_test.go`), proves it by binding writable against an
+  unwritable source. The compose comment and the 0.7.2 entry are corrected in place rather than
+  adding the `WARDYN_MEMBER_WRITABLE_ROOTS` volume the false claim implied was missing. Separately,
+  `/srv/src` — the Linux member root `deploy/desktop/wardyn.env.m-prime.example` names alongside
+  the macOS `/Users/Shared/src` — really had no bind: compose cannot expand a CSV into volume
+  lines, so only whichever one path `WARDYN_WORKSPACES_ROOT` is set to gets bound. A commented
+  example line now sits beside the existing bind, and `docs/ENV.md` states the limit (#135).
+- **The webhook sink's Close test no longer reds CI at random.** `TestWebhookSink_CloseFlushesAndAwaitsDrain`
+  decided whether `Close` had awaited the drain by sampling whether the goroutine running `Run` had
+  reached the statement after `Run` returned. Nothing orders that statement before `Close` returns —
+  `Run` signals its done channel from inside `Run` — so on a loaded runner the check failed although
+  the drain had completed, reding the required `build` check on unrelated pull requests. The test now
+  holds the final delivery open inside the HTTP handler and asserts `Close` is still blocked while the
+  batch is in flight, an ordering the code actually guarantees. `Close` itself is unchanged.
+- **The decision-log line printed to stdout is now written under its own mutex.** A line over
+  `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
+  could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
+  with a dedicated `outMu`, held only around the write itself.
+- **The first-use "approval pending" refusal body now spells it the same way as the header.** The
+  JSON body wrote `approval_pending`; `X-Wardyn-Egress` wrote `approval-pending`. The body now
+  matches the header's spelling, which is the wire contract `attach-bashrc` reads.
+- **A panic in the audit webhook flush loop no longer takes the control plane down.** The one
+  detached `go` statement that skipped the panic-safe wrapper (`buildAuditFanout`'s sink `Run`
+  loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
+  deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
+  cancellation on shutdown — is unchanged (#261).
+- **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
+  finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
+  `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
+  reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
+  FAILED so a run reaching a successful terminal state through the same path gets no hint (#256).
 
 ### Changed
 
@@ -49,6 +113,34 @@ and does not yet follow semantic versioning (interfaces are not stable).
   including the git and PAT brokers. It previously spoke HTTP/1.1 only (#360).
 - `docs/OPERATIONS.md` states that `upstream_proxy_no_proxy` CIDR entries match destinations written
   as IP literals, never a hostname that resolves into the range (#361).
+- **The Recordings screen pages instead of stopping at 1,000.** It fetched the whole run list in one
+  shot (capped at `LIST_LIMIT`), so an install past 1,000 runs silently lost every recording beyond
+  that window, with only a passive "truncated" note and nothing to press. `listRuns()` now takes an
+  optional `limit`/`offset` and, when both are given, returns `{ runs, truncated }` off the server's
+  own `?limit=&offset=` paging and its `X-Wardyn-Truncated` header — every other caller is unchanged.
+  The screen fetches 100 runs at a time; a "Load 100 more" text link (matching the Runs board's own
+  "Load N more") appears while more is known to exist, and a failed page keeps what already loaded
+  with a Retry that resumes from the same offset. No total is ever shown — the server doesn't send
+  one (#296).
+- **CLI help and an operator-facing log line no longer print internal campaign IDs.**
+  `wardyn policy default --help`, `wardyn-tetragon-ingest --help`, and the mint-refusal WARN log in
+  `internal/api/internal.go` cited review-package coordinates (`W14-S1-6`, `W24-S1-1`, `F098`) that
+  resolve to nothing outside this repository. Each now says the thing the coordinate stood for
+  instead (#259).
+
+### Security
+
+- **`composer.Clamp` hands back a spec that owns its memory.** The clamped spec began as a shallow
+  copy of the proposal, so every field the operator ceiling had no opinion on reached the caller as
+  the caller's own backing array or pointee: `allowed_domains`, `denied_domains`, `allowed_methods`,
+  `ui_apps`, `workspace_repos`, `tool_rules`, `workspace_mounts`, each eligible grant's `scope`
+  bytes, and — whenever the proposal's sizes already sat inside the ceiling — the very
+  `*ResourceLimits` the clamp exists to bound. A later in-place write through either side would
+  have moved a ceiling the clamp had already enforced, in the widening direction, with nothing to
+  notice; no caller mutates one today, which is a property of today's callers rather than of the
+  function. `Clamp` now reallocates every reference field on the way out (`llm_inspection` and each
+  mount's `read_only` pointee included, though the clamp replaces or drops those before they can
+  reach a caller). What the clamp permits is unchanged — no allowed-or-denied outcome moves.
 
 ## [0.7.8] — 2026-09-19
 
@@ -3231,10 +3323,14 @@ debt, owner-hardware debt, or a decision deliberately not taken.
   either `shared` or `per_user`. 0.7.2 narrows the blast radius to one person
   under `per_user`; it does not floor the class. That is a 0.7.3/0.8 call.
 - **Two Compose residuals remain beside the envelope fix above.** The
-  `WARDYN_WORKSPACES_ROOT` bind is mounted `:ro`, so a member root that is
-  supposed to be writable needs its own read-write volume; and the m′ envelope's
-  `/srv/src` root has no bind at all. Both are written down in
-  `docker-compose.yaml` at the forwards that this release added.
+  `WARDYN_WORKSPACES_ROOT` bind is mounted `:ro`
+  ([corrected by #135](https://github.com/cjohnstoniv/wardyn/issues/135): that
+  `:ro` bind is wardynd's own container-local view and has no bearing on a
+  member mount's writability, which `internal/runner/member_mount.go` decides
+  entirely by root/deny-list match — this bullet's writable-mount claim was
+  wrong); and the m′ envelope's `/srv/src` root has no bind at all. Both are
+  written down in `docker-compose.yaml` at the forwards that this release
+  added.
 - **Every user-facing string this release adds ships as a frozen DRAFT.** Said
   once at the top of this section and repeated here because it is the largest
   single caveat: the `400`/`412`/`422` bodies and the new console copy are
