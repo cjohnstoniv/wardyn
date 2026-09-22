@@ -150,6 +150,9 @@ ds-bundle/
 # twins (episodes.ts) — a permanent doc, not a mock round, same shape as
 # CONSOLE-RULES.md above.
 !/docs/design/demo-video-source-canon.md
+# terminal-escape-canon.md is a permanent doc (#133), not a mock round or a
+# proposal draft — it ships for the same reason CONSOLE-RULES.md does.
+!/docs/design/terminal-escape-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 

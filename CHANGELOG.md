@@ -28,6 +28,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin" — a reader here, sometimes not even signed in, cannot reach a chart value. The
   SSO-role-source caveat ("comes from your SSO role assignment") is removed entirely, with its
   tests. Frozen strings: docs/design/signin-first-contact-canon.md.
+- The cockpit terminal's escape chord is now Ctrl+Shift+Backspace, typeable on every keyboard
+  layout — the old Ctrl+] required AltGr to type `]` on DE/FR/ES layouts, which collided with the
+  chord itself. Ctrl+] still works silently on US layouts but no longer fires while AltGr (altKey)
+  is held (#133).
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
 - Azure DevOps projects and repositories whose names carry spaces or other permitted characters
@@ -72,22 +76,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
-- **Stored credentials are encrypted with AES-256-GCM, bound to their row, and can no longer be
-  forged (#562).** A `secrets` row was one age payload (X25519 + ChaCha20-Poly1305) with no
-  associated data: a database writer could move a ciphertext to another person or another name
-  undetected, and, age being public-key, anyone holding the deployment's public recipient could
-  write a row that decrypted. Every row is now envelope v1 (migration `0069_secret_envelope_v1`):
-  each save draws a fresh 32-byte data key, seals the value with AES-256-GCM bound to the row's
-  `(owned_by, name)`, and wraps the data key with AES-256-GCM under a key-encryption key.
-  `WARDYN_AGE_KEY` stays the only key input and is used through HKDF-SHA256 alone to derive that
-  key-encryption key, which is symmetric and so cannot be derived from the public recipient; age
-  itself is used only once, to convert legacy rows. A moved, forged or tampered row is refused with
-  an error that names the row, never its value, and is never read as missing, so a tampered boot
-  key fails boot rather than being replaced. `wardynd -rotate-age-key` now rewraps data keys only
-  and never decrypts a value (`secret.rekey` is unchanged). With `WARDYN_AGE_KEY` unset, wardynd
-  now refuses to start while any row is sealed under an age key, instead of minting an ephemeral
-  key that strands them. Still open: a database writer can copy an older row back into its own
-  slot (THREAT-MODEL residual 48).
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
@@ -124,20 +112,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
   `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
   handler written in this indirect style no longer passes CI clean.
-
-### Upgrading
-
-- **This upgrade is one-way: rolling back to 0.7.11 needs the pre-upgrade backup (#562).** The
-  first boot converts every stored secret to envelope v1 before it reads its boot keys: one
-  transaction, under its own advisory lock, so a second replica waits and then finds nothing to do,
-  and later boots convert nothing. A row that does not decrypt under `WARDYN_AGE_KEY` aborts the
-  conversion and the boot, naming the row; nothing is committed. Once a conversion commits, 0.7.11
-  and earlier can read none of the rows: going back means restoring the Postgres dump taken before
-  the upgrade, together with the same `WARDYN_AGE_KEY`. Keep `WARDYN_AGE_KEY` exactly as it is — it
-  remains the key input. There is no rolling upgrade: stop every older replica first. One still
-  running keeps writing pre-envelope payloads that are refused by name ("an older wardynd is still
-  writing"): a new name it wrote is converted at the next restart, but a name it replaced is
-  overwritten in place and must be set again. Runbook: `docs/OPERATIONS.md` § Upgrades.
 
 ### Fixed
 
