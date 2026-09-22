@@ -90,6 +90,9 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	if inj == nil || inj.reauth == nil || inj.approvals == nil {
 		return false, fallback
 	}
+	// A run-scoped widening is cached for the run. The live ceiling is held at
+	// each control-plane ask, so an administrator narrowing the row stops the
+	// NEXT escalation, not a capability this proxy already widened to.
 	if inj.reauth.holds(v.Capability) {
 		return true, ""
 	}

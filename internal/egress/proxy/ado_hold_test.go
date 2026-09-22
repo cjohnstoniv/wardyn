@@ -44,6 +44,11 @@ type capControlPlane struct {
 	// consent is answered to the FIRST re-resolve, as a reauth_pending 423.
 	consent    uuid.UUID
 	reResolves int
+	// failFirstReResolve answers the first re-resolve 503 (a transient failure).
+	failFirstReResolve bool
+	// firstAskOK answers a first ask 200 WITHOUT the capability — an older
+	// control plane that ignores the ask.
+	firstAskOK bool
 }
 
 func newCapControlPlane(t *testing.T) *capControlPlane {
@@ -56,6 +61,12 @@ func newCapControlPlane(t *testing.T) *capControlPlane {
 		cp.asks = append(cp.asks, q)
 		w.Header().Set("Content-Type", "application/json")
 		if q.Get("approval") == "" {
+			if cp.firstAskOK {
+				_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
+					Header: "Authorization", Value: "Bearer " + adoToken, Capabilities: []string{"read"},
+				})
+				return
+			}
 			if cp.refuse != "" {
 				w.WriteHeader(http.StatusForbidden)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": cp.refuse})
@@ -71,6 +82,10 @@ func newCapControlPlane(t *testing.T) *capControlPlane {
 			return
 		}
 		cp.reResolves++
+		if cp.failFirstReResolve && cp.reResolves == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		if cp.consent != uuid.Nil && cp.reResolves == 1 {
 			w.WriteHeader(http.StatusLocked)
 			_ = json.NewEncoder(w).Encode(map[string]string{"state": "reauth_pending", "approval_id": cp.consent.String()})
@@ -340,5 +355,38 @@ func TestADOHold_ATimedOutHoldIsNotStickyForTheRetry(t *testing.T) {
 	expire(swf)
 	if same, fresh, _ := coord.admit(sign, time.Second); fresh || same != swf {
 		t.Fatal("the sign-in hold lost its sticky terminal result")
+	}
+}
+
+// F1: a transient failure of the one re-resolve must not wedge an approved,
+// unspent `once`. The control plane keeps naming that approval to every retry;
+// the retry waits again and goes through once.
+func TestADOHold_AFailedReResolveDoesNotWedgeTheApproval(t *testing.T) {
+	cp := newCapControlPlane(t)
+	cp.sameID = uuid.New()
+	cp.failFirstReResolve = true
+	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
+
+	h.mustRefuse(t, h.patchWorkItem(t), "ended without one")
+	if rec := h.patchWorkItem(t); rec.Code != http.StatusOK {
+		t.Fatalf("retry: status %d body %s, want it to wait again and go through", rec.Code, rec.Body.String())
+	}
+	if n := len(h.fake.Requests()); n != 1 {
+		t.Errorf("upstream saw %d, want exactly one", n)
+	}
+	if cp.reResolves != 2 {
+		t.Errorf("re-resolves = %d, want 2 (the failed one and the retry's)", cp.reResolves)
+	}
+}
+
+// F3: a 200 to a first ask that does not name the capability is an older
+// control plane ignoring the ask — refused, never forwarded.
+func TestADOHold_AFirstAskAnsweredWithoutTheCapabilityIsRefused(t *testing.T) {
+	cp := newCapControlPlane(t)
+	cp.firstAskOK = true
+	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
+	h.mustRefuse(t, h.patchWorkItem(t), "this run was not granted it")
+	if h.p.inject.reauth.holds(adoscope.CapWorkWrite) {
+		t.Error("the run was widened to a capability nobody granted")
 	}
 }
