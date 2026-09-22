@@ -56,6 +56,15 @@ type preflightResponse struct {
 	// per_user member who has not signed in, where there is no response body to
 	// carry it. That is exactly why the status row exists as the default path.
 	ModelCredential *modelCredentialFacts `json:"model_credential,omitempty"`
+	// GitCredential is THIS CALLER's Azure DevOps access state (#386,
+	// scmaccess.go) — deployment-wide, not narrowed to whether this specific
+	// run's repository is on that row: the rail states it as informational
+	// context before Launch, the same way the setup checklist's other rows
+	// are deployment facts rather than per-run ones. The actual per-run GATE
+	// is gitCredentialRefusal, reached through requestRepoProviderRefusals
+	// above, which answers its own 422 before this field is ever computed.
+	// Absent when no Azure DevOps row is configured at all.
+	GitCredential *SCMAccess `json:"git_credential,omitempty"`
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -348,6 +357,13 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
+	}
+	// #386: the informational git_credential fact — best-effort, never
+	// blocking (this handler's own contract, doc comment above); the actual
+	// gate already ran, above, inside this handler's own
+	// requestRepoProviderRefusals call.
+	if gc, ok := s.computeSCMAccess(ctx, oidcHumanFromContext(ctx)); ok {
+		resp.GitCredential = &gc
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

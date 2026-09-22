@@ -40,6 +40,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
     isCredentialRefusal: actual.isCredentialRefusal,
+    isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
       createRun: (...a: unknown[]) => createRunMock(...a),
       listRuns: () => Promise.resolve([]),
@@ -62,6 +63,12 @@ vi.mock("./new-run-rail", async (importOriginal) => {
     },
   };
 });
+// The connect popup + poll (#386) — mocked so the launch-door tests below
+// drive the screen's own dialog-and-relaunch wiring without a real window.
+const adoConnectMock = vi.fn();
+vi.mock("../../../lib/hooks/use-ado-connect", () => ({
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock }),
+}));
 const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
   workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
@@ -86,6 +93,7 @@ import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
+import { ADO } from "../../../lib/ado-entra-copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -859,5 +867,63 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
     await user.click(launch);
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
     expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+});
+
+// #386's launch door: a 422 carrying reason git_credential opens the Connect
+// Azure DevOps dialog, and a completed connection launches again with the
+// form exactly as it stood — model_credential's own precedent, for a second
+// credential and a popup-driven connect instead of an in-page sign-in pane.
+describe("NewRunScreen — the git_credential refusal opens the Connect Azure DevOps dialog and relaunches", () => {
+  async function titled() {
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    return screen.getByRole("button", { name: /Launch run/ });
+  }
+
+  beforeEach(() => adoConnectMock.mockReset());
+
+  it("opens the dialog automatically, with no click on it", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "you are not connected to Azure DevOps", "git_credential"));
+    const launch = await titled();
+    await user.click(launch);
+    expect(await screen.findByText("you are not connected to Azure DevOps")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeInTheDocument();
+  });
+
+  it("confirming connects and launches again exactly once — the form as it stood", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
+    adoConnectMock.mockResolvedValueOnce(true);
+    createRunMock.mockResolvedValueOnce({ id: "run_ado" });
+    const launch = await titled();
+    await user.click(launch);
+    await screen.findByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE });
+    await user.click(screen.getByRole("button", { name: ADO.CONNECT_CTA }));
+    expect(adoConnectMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/runs/run_ado"));
+    expect(createRunMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull();
+  });
+
+  it("a popup that closes without connecting closes the dialog and launches nothing", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
+    adoConnectMock.mockResolvedValueOnce(false);
+    const launch = await titled();
+    await user.click(launch);
+    await screen.findByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE });
+    await user.click(screen.getByRole("button", { name: ADO.CONNECT_CTA }));
+    expect(adoConnectMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull());
+    expect(createRunMock).toHaveBeenCalledTimes(1); // the original refused attempt only
+  });
+
+  it("Cancel closes the dialog without ever calling connect", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
+    const launch = await titled();
+    await user.click(launch);
+    await screen.findByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(adoConnectMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull();
   });
 });

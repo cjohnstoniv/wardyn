@@ -1,0 +1,145 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import * as AdoEntraCopy from "./ado-entra-copy";
+import { ADO } from "./ado-entra-copy";
+
+// The mock round's whole value is that it stays CHECKABLE (the drives/providers
+// precedent, workspace-providers-copy.test.ts's parseFrozenTables()): this
+// suite does not hand-retype a sample of the canon — it PARSES
+// docs/design/ado-entra-prompt.md §7.2-§7.8 back out of the doc and compares
+// every key. A swapped hyphen, a dropped ellipsis, a reworded clause, a new
+// doc row or a deleted one all fail here rather than shipping.
+//
+// The doc's own freeze note (§0) says §7.2 onward is 217 rows, but warns that
+// is ITS OWN checker's count — this suite's parser is the one that matters,
+// and it agrees: 217.
+//
+// Two normalisations, both documented rules rather than fudges (the drives
+// precedent):
+//   - BACKTICKS ARE STRIPPED from the doc cell. §7's header note makes mono a
+//     DISPLAY concern applied by the consuming component; the frozen string
+//     itself is plain text.
+//   - A PARAMETERIZED key is called with its own placeholder text, so
+//     REQ_PROTECTED_REF_TITLE("{ref}") must reproduce the doc's `{ref}` is
+//     protected... character for character. The two pluralised keys
+//     (CONSENT_SOME_MISSING, SAVED_NARROWED_RUNS) can't be checked that way
+//     and get their own tests below.
+
+// process.cwd() is the vitest root — ui/ — for every entry point that runs
+// this suite (`pnpm vitest run`, `pnpm test`, make ci).
+const DOC = resolve(process.cwd(), "../docs/design/ado-entra-prompt.md");
+
+const unmono = (s: string) => s.replace(/`/g, "");
+
+/** key -> frozen string, for every row of §7.2-§7.8's tables. */
+function parseFrozenTables(): Map<string, string> {
+  const rows = new Map<string, string>();
+  let inSection = false;
+  for (const line of readFileSync(DOC, "utf8").split("\n")) {
+    if (line.startsWith("#")) {
+      // §7.2-§7.8 only — §7.1 is reused canon + the server-composed table
+      // (no Key column, and not this module's to carry).
+      inSection = /^### 7\.[2-8]\b/.test(line);
+      continue;
+    }
+    if (!inSection || !line.startsWith("|")) continue;
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (cells[0] === "Key") continue; // header
+    if (/^:?-+:?$/.test(cells[0])) continue; // separator
+    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
+  }
+  return rows;
+}
+
+const doc = parseFrozenTables();
+
+// The keys whose doc cell carries an "A / B" pluralisation alternation rather
+// than a single renderable string — checked in their own test below.
+const PLURALISED = ["CONSENT_SOME_MISSING(n)", "SAVED_NARROWED_RUNS(n, capability)"];
+
+/** `REQ_PROTECTED_REF_TITLE(ref)` -> ["REQ_PROTECTED_REF_TITLE", ["ref"]]. */
+function splitKey(docKey: string): [string, string[]] {
+  const m = /^([A-Z0-9_]+)\((.*)\)$/.exec(docKey);
+  return m ? [m[1], m[2].split(",").map((a) => a.trim())] : [docKey, []];
+}
+
+function render(docKey: string): string {
+  const [name, args] = splitKey(docKey);
+  const value = (ADO as Record<string, unknown>)[name];
+  if (value === undefined) throw new Error(`${docKey}: no such key in ADO`);
+  return typeof value === "function" ? (value as (...a: string[]) => string)(...args.map((a) => `{${a}}`)) : String(value);
+}
+
+const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
+
+describe("ado-entra-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
+  it("finds all 217 frozen keys in the doc", () => {
+    expect(doc.size).toBe(217);
+  });
+
+  it("covers every doc key, and freezes no key the doc doesn't", () => {
+    // BOTH directions: every doc row resolves to a module symbol, and every
+    // module symbol has a doc row. A key added to the module and forgotten in
+    // §7 fails here; a doc row with no module key fails too.
+    const docNames = [...doc.keys()].map((k) => splitKey(k)[0]).sort();
+    const moduleNames = Object.keys(ADO).sort();
+    expect(moduleNames).toEqual(docNames);
+  });
+
+  it.each(RENDERABLE)("%s is byte-exact", (key) => {
+    expect(render(key)).toBe(doc.get(key));
+  });
+
+  // The two pluralised keys. The doc cell spells BOTH arms separated by " / ";
+  // each module function uses the inline ternary the providers precedent
+  // uses, never a second pluralisation helper.
+  it("CONSENT_SOME_MISSING renders both arms of its doc cell", () => {
+    const [singular, plural] = doc.get("CONSENT_SOME_MISSING(n)")!.split(" / ");
+    expect(ADO.CONSENT_SOME_MISSING(1)).toBe(singular.replace(/\{n\}/g, "1"));
+    expect(ADO.CONSENT_SOME_MISSING(0)).toBe(plural.replace(/\{n\}/g, "0"));
+    expect(ADO.CONSENT_SOME_MISSING(2)).toBe(plural.replace(/\{n\}/g, "2"));
+  });
+
+  it("SAVED_NARROWED_RUNS renders both arms of its doc cell", () => {
+    const [singular, plural] = doc.get("SAVED_NARROWED_RUNS(n, capability)")!.split(" / ");
+    expect(ADO.SAVED_NARROWED_RUNS(1, "push")).toBe(singular.replace(/\{n\}/g, "1").replace(/\{capability\}/g, "push"));
+    expect(ADO.SAVED_NARROWED_RUNS(0, "push")).toBe(plural.replace(/\{n\}/g, "0").replace(/\{capability\}/g, "push"));
+    expect(ADO.SAVED_NARROWED_RUNS(3, "push")).toBe(plural.replace(/\{n\}/g, "3").replace(/\{capability\}/g, "push"));
+  });
+});
+
+describe("ado-entra-copy — the reuse and no-shadow rule §5 spells out", () => {
+  // §5 #10 / §7.1: the module exports one namespace, ADO, and carries no copy
+  // of §7.1's reused canon (PROVIDERS.*, APPROVAL_BANNER_LABEL.*, CAPABILITY.*,
+  // MEMBER_GETTING_STARTED.*, OPERATOR_ONLY_REASON, PEOPLE.CANCEL) or of §7.1's
+  // second table (the server-composed 400/422/403 refusals).
+  it("exports exactly one namespace, ADO", () => {
+    expect(Object.keys(AdoEntraCopy)).toEqual(["ADO"]);
+  });
+
+  it("carries no copy of the admin-facing server-composed refusals", () => {
+    const all = JSON.stringify(ADO);
+    for (const serverOnly of [
+      "is in default_profile but not in capability_ceiling",
+      "an Azure DevOps Server host signs in with a stored token",
+      "Wardyn ties an Azure DevOps sign-in to the person's own session by matching the two",
+      "tenant_id must be a GUID",
+      "per_user needs the entra lane on this row",
+      "creating and revoking Azure DevOps tokens is refused on every row",
+      "you are not connected to Azure DevOps — connect and start the run again",
+      "your Azure DevOps connection ended — connect and start the run again",
+      "this run may only reach",
+      "creating or revoking Azure DevOps tokens is refused for every run",
+      "was denied for this run",
+      "your organization's policy refuses this token",
+    ]) {
+      expect(all).not.toContain(serverOnly);
+    }
+  });
+});

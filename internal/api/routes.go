@@ -287,6 +287,7 @@ func (s *Server) routes() chi.Router {
 			// deliberately on r, not operatorOnly (see sshkeys.go's package doc).
 			// NOTE for the B2 route-group split: kept as this one small, localized
 			// block on purpose.
+			r.Get("/me/scm-access", s.handleGetSCMAccess) // #386, scmaccess.go: /me/ssh-keys' self-service shape
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)

@@ -1,0 +1,60 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { SetupStatus } from "../../../lib/types";
+import { ADO } from "../../../lib/ado-entra-copy";
+
+const adoConnectMock = vi.fn();
+vi.mock("../../../lib/hooks/use-ado-connect", () => ({
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock }),
+}));
+
+import { AdoConnectionCard } from "./ado-connection";
+
+function status(scm_access?: SetupStatus["scm_access"]): SetupStatus {
+  return { ready: true, checks: [], auth: { mode: "local" }, runner: { driver: "docker", confinement_classes: [] }, providers: [], secrets: { present: [] }, age_key: { durable: true }, has_runs: false, scm_access } as unknown as SetupStatus;
+}
+
+describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)", () => {
+  beforeEach(() => adoConnectMock.mockReset());
+
+  it("renders nothing with no Azure DevOps row configured", () => {
+    render(<AdoConnectionCard status={status(undefined)} onChanged={vi.fn()} />);
+    expect(screen.queryByText("Azure DevOps")).not.toBeInTheDocument();
+  });
+
+  it("live: the org, how it connected, and the renewal note — no button", () => {
+    render(
+      <AdoConnectionCard
+        status={status({ state: "live", source: "org", org: "https://dev.azure.com/contoso" })}
+        onChanged={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(ADO.ACCESS_LIVE_ORG)).toBeInTheDocument();
+    expect(screen.getByText("https://dev.azure.com/contoso")).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(ADO.PANEL_HOW_ORG))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(ADO.PANEL_ENDS_RENEWED))).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+  });
+
+  it("not_configured: the cause and the connect button, which reloads status on a real connection", async () => {
+    adoConnectMock.mockResolvedValueOnce(true);
+    const onChanged = vi.fn();
+    render(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={onChanged} />);
+    expect(screen.getByText(ADO.CAUSE_ROW_IS_NEWER)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: ADO.CONNECT_ADO }));
+    expect(adoConnectMock).toHaveBeenCalledTimes(1);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("shared_expired: the admin-facing action line, no button", () => {
+    render(<AdoConnectionCard status={status({ state: "shared_expired" })} onChanged={vi.fn()} />);
+    expect(screen.getByText(ADO.ACCESS_SHARED_EXPIRED_ACTION)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+  });
+});

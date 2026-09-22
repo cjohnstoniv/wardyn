@@ -7,6 +7,8 @@
 // All wire fields are snake_case (see lib/types.ts's barrel comment for the
 // one documented exception, in a different domain module).
 
+import type { SCMAccess } from "./setup";
+
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
 // (string) so label mapping can tolerate both forms; the literals below
@@ -497,6 +499,12 @@ export interface PreflightResult {
   // refusal has no verdict to publish). The status row is the default path for
   // exactly that reason.
   model_credential?: ModelCredential;
+  // THIS caller's Azure DevOps access state (internal/api.SCMAccess, #386) —
+  // deployment-wide, informational (the rail's "before you press Launch"
+  // line), never the gate itself: a run that actually needs it and has none
+  // 422s with reason "git_credential" instead. Absent when no Azure DevOps
+  // row is configured at all.
+  git_credential?: SCMAccess;
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

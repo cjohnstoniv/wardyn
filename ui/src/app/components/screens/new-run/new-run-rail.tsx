@@ -23,6 +23,7 @@ import type {
   ModelCredential,
   PreflightResult,
   RunPolicySpec,
+  SCMAccess,
   SetupHarnessTool,
 } from "../../../lib/types";
 import { Button } from "../../ui/button";
@@ -30,6 +31,8 @@ import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { ADO } from "../../../lib/ado-entra-copy";
+import { PEOPLE } from "../../../lib/people-access-copy";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
@@ -41,6 +44,7 @@ import {
   useModelAccessDoor,
   type ModelAccessDoorHandle,
 } from "../../wardyn/model-access-context";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 
 interface RunRailProps {
   /**
@@ -99,6 +103,14 @@ interface RunRailProps {
    * rendered "AWS credentials sign inside the sandbox" over a Claude sign-in.
    */
   agentRow?: SetupHarnessTool;
+  /** The Connect Azure DevOps launch-door dialog (§2.4, #386): owned by the screen
+   *  (which runs the popup + relaunch), rendered here. */
+  adoDialog: {
+    open: boolean;
+    connecting: boolean;
+    onConfirm: () => void;
+    onCancel: () => void;
+  };
 }
 
 // CredentialFacts states where the MODEL credential lands, and nothing wider —
@@ -287,6 +299,22 @@ function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSi
   );
 }
 
+// GitCredentialLine states what the rail knows about THIS caller's Azure
+// DevOps connection before Launch is pressed (§2.4). Mirrors ModelAccessLine's
+// "say nothing rather than invent" default: `live` needs no attention (and
+// this rail has no person NAME to compose PREFLIGHT_LIVE with, so it does not
+// try to), `shared_*`/`not_applicable` are nothing a launch-time line can fix,
+// and `expiring` needs a deadline this deployment cannot compute yet
+// (scmaccess.go's doc comment) — only `not_configured` renders.
+function GitCredentialLine({ cred }: { cred?: SCMAccess }) {
+  if (cred?.state !== "not_configured") return null;
+  return (
+    <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
+      <span>{ADO.PREFLIGHT_MISSING}</span> <span>{ADO.PREFLIGHT_MISSING_SUB}</span>
+    </p>
+  );
+}
+
 export function RunRail({
   governanceProfile,
   savedPolicy,
@@ -298,11 +326,13 @@ export function RunRail({
   launch,
   preflight,
   agentRow,
+  adoDialog,
 }: RunRailProps) {
   // Both of finding 1's facts, read rather than asserted: where the model
   // credential lands, and whether this deployment records anything at all.
   // `recordingDisabled` is TRI-STATE — undefined until /healthz answers.
   const cred = preflight.result?.model_credential;
+  const gitCredential = preflight.result?.git_credential; // #386, informational — see GitCredentialLine
   const recordingDisabled = useRecordingDisabled();
   // Finding 1: model_access grades the claude-code row alone, so a shell
   // command or a different agent (codex) never reads this line whatever the
@@ -360,7 +390,7 @@ export function RunRail({
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
   // has no Credentials section at all, rather than a heading over nothing.
-  const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess;
+  const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess || !!gitCredential;
   // U-5: with NO provider connected and nothing resolved, "Resolved at launch."
   // and the Preflight hint sat directly under "No model provider is connected.
   // This run launches; its first model call fails." Nothing resolves at launch
@@ -449,6 +479,7 @@ export function RunRail({
           {showCredentialFacts && (
             <CredentialFacts cred={cred} agentRow={agentRow} preflightRun={!!preflight.result} />
           )}
+          <GitCredentialLine cred={gitCredential} />
         </RailSection>
         )}
 
@@ -576,6 +607,31 @@ export function RunRail({
           )}
         </div>
       )}
+
+      {/* #386's launch door (§2.4): opened automatically on a git_credential
+          422, and closable without launching — the screen owns the popup +
+          relaunch (use-ado-connect.ts), this dialog only asks. */}
+      <Dialog open={adoDialog.open} onOpenChange={(open) => !open && adoDialog.onCancel()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{ADO.LAUNCH_DIALOG_TITLE}</DialogTitle>
+            <DialogDescription>{ADO.LAUNCH_DIALOG_BODY(gitCredential?.org ?? "")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={adoDialog.onCancel}>
+              {PEOPLE.CANCEL}
+            </Button>
+            <Button type="button" onClick={adoDialog.onConfirm} disabled={adoDialog.connecting}>
+              <Loader2 className={adoDialog.connecting ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
+              {ADO.CONNECT_CTA}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
+
+// Re-exported so new-run-screen.tsx's existing "./new-run-rail" import line
+// covers it too — that file sits at its own 1000-line gate.
+export { useAdoLaunchDoor } from "./use-ado-launch-door";

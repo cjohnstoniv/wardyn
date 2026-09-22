@@ -124,6 +124,11 @@ type SetupStatus struct {
 	// why a member whose own AWS session had lapsed read a green chip off it).
 	// Redaction-safe by construction and KEPT for a member: see SetupModelAccess.
 	ModelAccess SetupModelAccess `json:"model_access,omitzero"`
+	// SCMAccess is THIS PRINCIPAL's Azure DevOps access state — scmaccess.go's
+	// computeSCMAccess, ModelAccess's sibling for #386. Zero value (state "")
+	// when no Azure DevOps row is configured; safe for a member by
+	// construction (their own state, computed from their own OIDC subject).
+	SCMAccess SCMAccess `json:"scm_access,omitzero"`
 	// TrustedCACerts is the number of additional roots WARDYN_TRUSTED_CA_FILE
 	// loaded at boot (0 = unset). Derived from Config.TrustedCAPEM, never a
 	// second boot-time field — see handleSetupStatus. Go + test only: no
@@ -709,6 +714,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Harnesses:    setupHarnessTools(siteCfg, s.cfg.AgentImages),
 		LLMReady:     llmReady,
 		ModelAccess:  modelAccess,
+		SCMAccess:    s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),

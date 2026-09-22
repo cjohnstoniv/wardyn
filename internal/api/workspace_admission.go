@@ -369,7 +369,14 @@ func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Requ
 	if s.admitRepoSources(w, r, req.Repo, req.DevcontainerRepo) {
 		return true
 	}
-	return req.Repo != "" && s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo)
+	if req.Repo != "" && s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo) {
+		return true
+	}
+	// #386's launch door: a repo just admitted onto a per-user Azure DevOps row
+	// with no usable captured sign-in for this caller 422s here, the one place
+	// both launch (via decodeAndValidateCreateRun) and Review (preflight.go)
+	// call this function — see gitCredentialRefusal (scmaccess.go).
+	return s.gitCredentialRefusal(w, r, req.Repo, req.DevcontainerRepo)
 }
 
 // recordLaunchRefusals are the ORG-POLICY refusals a record session must clear
