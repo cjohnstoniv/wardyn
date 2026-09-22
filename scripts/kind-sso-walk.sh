@@ -370,7 +370,15 @@ AGENT_IMAGES="$(jq -cn --argjson cur "${CUR_AGENT_IMAGES}" \
 DEX_PORT="${WARDYN_KIND_SSO_DEX_PORT:-5557}"
 DEX_PF_PIDFILE="${TMPDIR:-/tmp}/wardyn-kind-sso-dex-${CLUSTER}.pid"
 step "refreshing the Dex cast (deploy/kind/sso/dex.yaml)"
-dex_apply="$(kubectl --context "${CONTEXT}" apply -f deploy/kind/sso/dex.yaml)" || die "could not apply deploy/kind/sso/dex.yaml"
+# RENDERED onto this cluster's ports exactly as overlay.sh renders it. Applying
+# the raw file re-points a non-default cluster's issuer and callback at the
+# DEFAULT ports, which on a shared box are another cluster's Dex and console —
+# so the walk's browser signs in THERE and every assertion reads the wrong
+# install.
+dex_apply="$(sed -e "s#http://localhost:5557#http://localhost:${DEX_PORT}#g" \
+                 -e "s#http://localhost:8280/auth/callback#http://localhost:${HTTP_PORT}/auth/callback#g" \
+                 deploy/kind/sso/dex.yaml | kubectl --context "${CONTEXT}" apply -f -)" \
+  || die "could not apply deploy/kind/sso/dex.yaml"
 echo "${dex_apply}"
 if grep -q "configmap/wardyn-dex configured" <<<"${dex_apply}"; then
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout restart deployment/wardyn-dex >/dev/null \
@@ -391,9 +399,17 @@ if ! curl -sf --max-time 3 "http://localhost:${DEX_PORT}/.well-known/openid-conf
     || die "Dex never answered on http://localhost:${DEX_PORT} (is ${DEX_PORT} taken?)"
 fi
 
+# The browser leg must land on THIS cluster's Dex and console: refuse a Dex
+# whose issuer names another port rather than walk someone else's install.
+dex_iss="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get configmap wardyn-dex -o jsonpath='{.data.config\.yaml}' | sed -n 's/^issuer: *//p')"
+[[ "${dex_iss}" == "http://localhost:${DEX_PORT}" ]] \
+  || die "this cluster's Dex issuer is '${dex_iss}', not http://localhost:${DEX_PORT} — the browser would sign in elsewhere"
+
 step "pointing wardynd at the fake AWS endpoints (helm upgrade --reuse-values; WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT})"
 helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   -n "${NAMESPACE}" --reuse-values -f deploy/kind/sso/values.yaml \
+  --set "env.WARDYN_OIDC_ISSUER=http://localhost:${DEX_PORT}" \
+  --set "env.WARDYN_OIDC_REDIRECT_URL=http://localhost:${HTTP_PORT}/auth/callback" \
   --set "auth.adminToken.value=${ADMIN_TOKEN}" \
   --set "env.WARDYN_ALLOW_TEST_ENDPOINTS=true" \
   --set "env.WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=${FAKE_URL}" \
