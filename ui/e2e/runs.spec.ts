@@ -160,9 +160,18 @@ test.describe("Runs board (default view)", () => {
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
     await search.fill("e2e fixture 4");
 
-    // Only the COMPLETED fixture-4 run should remain.
+    // Only the COMPLETED fixture-4 run should remain. The filter itself is
+    // synchronous client-side state (runs.tsx's `filtered` is re-derived from
+    // `runs` + `query` on every render — nothing async sits between the fill
+    // and the board reflecting it, so a longer timeout buys nothing a real
+    // stall wouldn't also blow through). The structural card count is the
+    // stronger signal: `getByText("e2e fixture 0")` without `exact` is a
+    // substring match, so it is provably watching the SAME "is fixture 0
+    // gone" fact as `run-card` count 1 — asserting both pins the invariant
+    // two independent ways instead of leaning on one text query alone.
     await expect(page.getByText("e2e fixture 4")).toBeVisible();
-    await expect(page.getByText("e2e fixture 0")).toHaveCount(0);
+    await expect(page.getByTestId("run-card")).toHaveCount(1);
+    await expect(page.getByText("e2e fixture 0", { exact: true })).toHaveCount(0);
   });
 
   test("a non-matching search shows the empty state, then recovers when cleared", async ({ page }) => {
@@ -175,9 +184,10 @@ test.describe("Runs board (default view)", () => {
     await expect(page.getByText("No runs match these filters.")).toBeVisible();
     await expect(page.getByText("Try a different search term or facet.")).toBeVisible();
 
-    // Clearing the filters restores the full board.
+    // Clearing the filters restores the full board. The board's own 3s poll
+    // can still be in flight when this re-render is checked.
     await page.getByRole("button", { name: "Clear filters" }).click();
-    await expect(page.getByText("e2e fixture 0")).toBeVisible();
+    await expect(page.getByText("e2e fixture 0")).toBeVisible({ timeout: 15_000 });
   });
 
   // The critical regression: a COMPLETED run must NOT crash the console.

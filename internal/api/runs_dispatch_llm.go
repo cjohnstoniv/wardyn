@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -565,13 +566,18 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 // leaf and the operator's Bearer injected onto whatever answered there.
 // The injection SCOPE below stays a bare host — buildInjector requires that —
 // only the MITM-eligibility set carries the port.
+//
+// The scope's snapshot records WHOSE key the resolve read (bedrockAuth's
+// bearerNamespace): the sink resolves the key from exactly that namespace and
+// refuses a grant without one — see resolveBedrockBearerInjection.
 func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.AgentRun, t llmTransport, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
 	mitmHosts := []string{net.JoinHostPort(t.bedrock.runtimeHost, strconv.Itoa(t.bedrock.runtimePort))}
-	beScope, _ := json.Marshal(map[string]string{
+	beScope, _ := json.Marshal(map[string]any{
 		"host":        t.bedrock.runtimeHost,
 		"header":      "Authorization",
 		"format":      "Bearer %s",
 		"secret_name": bedrockAPIKeySecret,
+		"snapshot":    bedrockBearerSnapshotOf(t.bedrock.bearerNamespace),
 	})
 	beGrantID := uuid.New()
 	if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
@@ -589,6 +595,30 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 		injections = append(injections, runner.InjectionGrant{GrantID: beGrantID, Rule: rule})
 	}
 	return injections, mitmHosts, true
+}
+
+// dropUnauthoredBedrockBearerInjections removes every injection naming
+// bedrock-api-key, auditing each one.
+//
+// The key has ONE author: authorBedrockBearerInjection, whose grant records the
+// namespace the key was read from. Any other injection naming it — a stored
+// policy's, a recorded profile that captured an earlier run's grant — carries
+// no record of THIS run's choice, and the sink refuses it, which would fail the
+// proxy's startup. Every drop is audited, as filterMemberGrants' and
+// persistRunGrants' are, so an operator whose policy named the key can see why
+// that injection is gone.
+func (s *Server) dropUnauthoredBedrockBearerInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant) []runner.InjectionGrant {
+	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
+		if ig.Rule.SecretName != bedrockAPIKeySecret {
+			return false
+		}
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.dropped",
+			ig.GrantID.String(), "denied", mustJSON(map[string]any{
+				"grant_id": ig.GrantID, "secret_name": bedrockAPIKeySecret, "host": ig.Rule.Host,
+				"reason": "bedrock_bearer_not_dispatch_authored",
+			})))
+		return true
+	})
 }
 
 // llmInspectMITMEnabled reports whether the policy's intercept_tls content
@@ -694,6 +724,7 @@ type dispatchLLMPlan struct {
 func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p dispatchParams,
 	policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant,
 	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig, siteCfgOK bool,
+	adoInject bool,
 ) (dispatchLLMPlan, bool) {
 	// WHOSE credential, decided from a roster we could actually READ. A failed
 	// read yields a zero siteCfg — perUser=false, owner="" — which is the
@@ -727,12 +758,14 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
 	// when ANY consumer needs one — intercept_tls content inspection,
 	// subscription/managed credential injection, artifact-token injection, or
-	// Bedrock bearer injection. The PRIVATE key reaches ONLY the proxy sidecar
-	// (ProxyConfig below); the sandbox trusts the PUBLIC cert. See
-	// provisionDispatchMITMCA for the trust-store wiring.
+	// Bedrock bearer injection, or the per-person Azure DevOps credential
+	// (authorADOEntraInjection, which REFUSES a run that reaches it without
+	// one). The PRIVATE key reaches ONLY the proxy sidecar (ProxyConfig below);
+	// the sandbox trusts the PUBLIC cert. See provisionDispatchMITMCA for the
+	// trust-store wiring.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.injectSub || llm.injectManaged || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO {
+	if llm.injectSub || llm.injectManaged || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject {
 		var ok bool
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
@@ -758,6 +791,10 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 			return dispatchLLMPlan{}, false
 		}
 	}
+
+	// The run's own bearer, if it has one, is authored below — the only
+	// injection naming bedrock-api-key the proxy is handed.
+	injections = s.dropUnauthoredBedrockBearerInjections(ctx, run, injections)
 
 	// Bedrock BEARER injection + its per-run MITM host (see
 	// authorBedrockBearerInjection). Same stop-on-failure contract; appends to

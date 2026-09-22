@@ -208,10 +208,8 @@ func govCreateAndDispatch(t *testing.T, srv *Server, st *govEscapeStore, audit *
 		runID = id
 	}
 	st.mu.Unlock()
-	ev := findAudit(audit.events, runID, "run.policy.effective", "success")
-	if ev == nil {
-		t.Fatalf("dispatch recorded no run.policy.effective envelope for %s", runID)
-	}
+	// Dispatch runs after the 201 (runs_create_launch.go): wait for its envelope.
+	ev := waitForRecAudit(t, audit, runID, "run.policy.effective", "success")
 	var spec types.RunPolicySpec
 	if err := json.Unmarshal(ev.Data, &spec); err != nil {
 		t.Fatalf("envelope is not a RunPolicySpec: %v (%s)", err, ev.Data)
@@ -622,6 +620,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		if !ok {
 			t.Fatal("the fixture's runner is no longer the recording double")
 		}
+		fr.waitForSandbox(t) // dispatch runs after the 201
 		if got := fr.lastSandboxEnv()["WARDYN_TOOL_APPROVALS"]; got != "hold" {
 			t.Errorf("WARDYN_TOOL_APPROVALS = %q, want hold — the member ran unsupervised under a rung that forbids it", got)
 		}
@@ -681,6 +680,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		if !ok {
 			t.Fatal("the fixture's runner is no longer the recording double")
 		}
+		fr.waitForSandbox(t) // dispatch runs after the 201
 		env := fr.lastSandboxEnv()
 		if got := env["WARDYN_TOOL_APPROVALS"]; got != "hold" {
 			t.Errorf("WARDYN_TOOL_APPROVALS = %q, want hold — the run reaches %q and was graded as if sealed", got, ghes)

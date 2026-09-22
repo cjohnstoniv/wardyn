@@ -75,7 +75,7 @@ func autonomyCreateAudit(t *testing.T, st *govEscapeStore, audit *recRecorder) m
 		runID = id
 	}
 	st.mu.Unlock()
-	ev := findAudit(audit.events, runID, "run.create", "success")
+	ev := findAudit(audit.snapshot(), runID, "run.create", "success")
 	if ev == nil {
 		t.Fatalf("no run.create audit row for %s", runID)
 	}

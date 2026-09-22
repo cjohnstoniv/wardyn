@@ -364,28 +364,42 @@ func (s *Server) sshHostLevelWarnings(ctx context.Context, runID uuid.UUID, repo
 //
 // One function for the pair because decodeAndValidateCreateRun sits at the
 // gocyclo ratchet, and because they are one question asked of one request.
-func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Request, req createRunRequest) bool {
+//
+// gate is #386's launch door: LAUNCH (decodeAndValidateCreateRun) passes
+// true, so a repo just admitted onto a per-user Azure DevOps row with no
+// usable captured sign-in for this caller 422s here (gitCredentialRefusal,
+// scmaccess.go). Review (preflight.go) passes false — review finding F2:
+// preflight reads the SAME fact through gitCredentialFactForRepos instead,
+// informationally, and never refuses on it.
+func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Request, req createRunRequest, gate bool) bool {
 	if s.admitRepoSources(w, r, req.Repo, req.DevcontainerRepo) {
 		return true
 	}
-	return req.Repo != "" && s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo)
+	if req.Repo != "" && s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo) {
+		return true
+	}
+	return gate && s.gitCredentialRefusal(w, r, req.Repo, req.DevcontainerRepo)
 }
 
 // recordLaunchRefusals are the ORG-POLICY refusals a record session must clear
-// before it claims anything: the agent roster (recordRosterRefusal) and provider
-// admission over the workspace's repo sources. They travel together because they
-// are one question — may this session start on this deployment? — and because
+// before it claims anything: the agent roster (recordRosterRefusal), provider
+// admission, and (review follow-up N4) the per-user Azure DevOps gate, all
+// over the workspace's repo sources. They travel together because they are
+// one question — may this session start on this deployment? — and because
 // they share every property that decides WHERE the check goes: a bare error, not
 // routed through abort(); sited before the CAS claim so a refusal costs no state;
 // and mapped by handleRecordWorkspace to the status its own door answers.
 //
-// ONE call site rather than two because launchRecordRun sits at the funlen
+// ONE call site rather than three because launchRecordRun sits at the funlen
 // ratchet, which is what its own comment there asks the next lane to do.
 func (s *Server) recordLaunchRefusals(ctx context.Context, ws types.Workspace, agent string) error {
 	if rerr := s.recordRosterRefusal(ctx, agent); rerr != nil {
 		return rerr
 	}
-	return s.admitLauncherRepo(ctx, repoSourceLocators(ws.Sources)...)
+	if rerr := s.admitLauncherRepo(ctx, repoSourceLocators(ws.Sources)...); rerr != nil {
+		return rerr
+	}
+	return s.gitCredentialRefusalForLauncher(ctx, oidcHumanFromContext(ctx), repoSourceLocators(ws.Sources)...)
 }
 
 // presentRepos drops the empty locators a call site would otherwise have to
@@ -415,10 +429,19 @@ func repoLocatorsOf(repos []types.WorkspaceRepo) []string {
 }
 
 // laneAllowed reports whether a provider row permits one credential lane. An
-// EMPTY Lanes list means every lane the kind supports — the field NARROWS, it
-// never widens, so an absent value is today's behaviour.
+// EMPTY Lanes list means every LEGACY lane — the field NARROWS, it never
+// widens, so an absent value is today's behaviour.
+//
+// "Legacy" and not "every lane in the closed set" is the load-bearing word.
+// This expansion is the one site where an unwritten field becomes permission,
+// so a lane added to the closed set would otherwise be granted retroactively
+// to every stored row on every install, with no admin having written it. A new
+// lane must be NAMED on the row (GitLane.Legacy).
 func laneAllowed(row types.GitProvider, lane types.GitLane) bool {
-	return len(row.Lanes) == 0 || slices.Contains(row.Lanes, lane)
+	if len(row.Lanes) == 0 {
+		return lane.Legacy()
+	}
+	return slices.Contains(row.Lanes, lane)
 }
 
 // admittingRows is the row that ADMITTED this repository — as a one-element

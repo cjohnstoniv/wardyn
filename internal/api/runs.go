@@ -21,7 +21,7 @@ import (
 // imageBuildTimeout bounds a per-run sandbox image build (BYOI wrap, devcontainer,
 // workspace profile). The build is detached from the request ctx so a client
 // disconnect cannot abort it — which leaves it needing a deadline of its own, or a
-// wedged docker pull would hold the create handler open forever. Generous: a cold
+// wedged docker pull would hold the detached launch forever. Generous: a cold
 // devcontainer build pulls a base image and runs the repo's full setup.
 const imageBuildTimeout = 30 * time.Minute
 
@@ -171,7 +171,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// Fold the named workspace onto the resolved spec, then re-run every check
 	// that seeding can invalidate. Writes its own error and stops on false.
-	ephemeralDirs, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req)
+	ephemeralDirs, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req, true) // true: launch, #386's gate applies
 	if !ok {
 		return
 	}
@@ -403,83 +403,21 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		warnings = append(warnings, repoDrops...)
 	}
 
-	// Client-disconnect isolation, same rationale as dispatchRun's own
-	// detach — which sits AFTER this block and so never covered it. From here on the
-	// run row exists and MUST be driven to a terminal state or dispatched. An image
-	// build is a multi-minute docker pull+build that honours cancellation, so a
-	// client Ctrl-C, closed tab, or LB read timeout would abort an otherwise-healthy
-	// build AND — far worse — take the FAILED-compensators below down with it: their
-	// CAS runs on this same ctx and cannot write the state it exists to write, so the
-	// run strands PENDING with no audit and no revoke until the next daemon boot.
-	// Detach from cancellation (values preserved); the build gets its own explicit
-	// deadline below instead of the client's connection being the de-facto one.
-	ctx = context.WithoutCancel(ctx)
-
-	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
-	// profile > convention image) and persist it for provenance. A failed
-	// BYOI/devcontainer build has already marked the run FAILED; this frame
-	// answers the 201 with the refreshed (FAILED) run, since
-	// resolveCreateRunImage itself must stay callable off-request. The one
-	// image lane that DEGRADES rather than refusing. With no ImageBuilder wired
-	// a workspace base_image fails closed (inside resolveCreateRunImage) but a
-	// devcontainer_repo silently falls through to the convention image —
-	// otherwise visible only as an INFO setup row no CLI or API caller ever
-	// reads. Said on the 201 instead, which is the only channel this door has.
-	// Appended BEFORE the call so the warning is already on the list the
-	// build-failed arm answers 201 with.
+	// The no-builder devcontainer fall-through is otherwise visible only as an
+	// INFO setup row no CLI or API caller ever reads, so it rides the 201 — the
+	// only channel this door has. See appendDevcontainerNoBuilderWarning.
 	warnings = s.appendDevcontainerNoBuilderWarning(warnings, req)
-	image, failed := s.resolveCreateRunImage(ctx, req, runID, wsRefs)
-	if failed {
-		created = s.refreshRun(ctx, runID, created)
-		writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
-		return
-	}
 
-	// Dispatch the sandbox if a runner is wired; otherwise stay PENDING.
-	if s.cfg.Runner != nil {
-		// The dispatch-time deny re-assertion's two inputs (runs_dispatch_ceiling.go).
-		// A create-time deny alone is not enough — the artifact-redirect phase INSIDE
-		// dispatch adds corporate hosts and authors token injections for them, AFTER
-		// this handler's clamp ran — so the profile's walls have to be re-asserted
-		// there. ceilingForDispatch owns the absent-row scoping (it answers a
-		// RESOLVED empty ceiling for anyone with no assigned profile, operators
-		// included), so the doctrine is decided once, in one function, and not
-		// re-decided here.
-		s.dispatchRun(ctx, created, ceilingForDispatch(ceiling), dispatchParams{
-			RunToken:           id.Token,
-			Image:              image,
-			Policy:             spec,
-			FirstGitHubGrantID: gw.firstGitHubGrantID,
-			GitGrants:          gw.gitGrants,
-			GitPATGrants:       gw.gitPATGrants,
-			SSHGrants:          gw.sshGrants,
-			Injections:         gw.injections,
-			Interactive:        req.Interactive,
-			TaskMode:           req.TaskMode,
-			InteractiveStart:   req.InteractiveStart,
-			SeedAutoTools:      req.SeedAutoTools,
-			ToolApprovals:      req.ToolApprovals,
-			BedrockRef:         bedrockRef,
-			EphemeralDirs:      ephemeralDirs,
-			Toolchains:         runToolchainNeeds(wsRefs),
-			// The member's own persistent storage, already resolved and narrowed
-			// at create (seedRequestDrive) — nil unless this run asked for it.
-			// Carried here rather than re-resolved inside dispatch for the reason
-			// the ceiling is: resolution keys on the caller's OIDC claims, which
-			// the run row does not hold, so dispatch has no identity to resolve
-			// FROM. See user_drives_run.go's own note.
-			Drive: driveMount,
-			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
-			// which case the driver re-checks that member's own binds against these
-			// roots immediately before ContainerCreate (memberMountPosture,
-			// workspace_refs.go).
-			MemberMounts: s.memberMountPosture(wsRefs),
-		})
-		// Re-read so the response reflects the post-dispatch state.
-		created = s.refreshRun(ctx, runID, created)
-	}
-
+	// The split point: the run row exists and every refusal above has answered.
+	// Nothing below can become a 4xx, so the caller gets its run now and the
+	// image build + dispatch continue server-side (runs_create_launch.go).
+	w.Header().Set("Location", "/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
+	go s.finishCreateRunLaunch(context.WithoutCancel(ctx), createRunLaunch{
+		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling), gw: gw,
+		wsRefs: wsRefs, driveMount: driveMount, ephemeralDirs: ephemeralDirs,
+		bedrockRef: bedrockRef, runToken: id.Token, created: created,
+	})
 }
 
 // seedAndAdmitWorkspace folds a named workspace onto the resolved spec and then
@@ -494,7 +432,15 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // gap a member-owned workspace could otherwise walk through. The onboarding gate runs
 // LAST because it is the single chokepoint on the RESOLVED spec, which is what
 // makes it un-bypassable by a hand-authored stored policy.
-func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) ([]string, bool) {
+//
+// gate is #386's launch door (review finding F5): LAUNCH (runs.go's own
+// caller) passes true, so gitCredentialRefusal runs here TOO — over
+// spec.WorkspaceRepos, the resolved set a workspace_id, a SECOND workspace,
+// a non-first repo, a stored policy or a hand-authored inline policy all
+// fold into, which requestRepoProviderRefusals' two free-text fields alone
+// never see. Review (preflight.go) passes false: see that gate's own doc
+// comment.
+func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest, gate bool) ([]string, bool) {
 	// First, before a single source is folded: authorize the SELECTION against
 	// the CALLER. Everything below this line reasons about host paths that are
 	// about to become binds, and until now nothing on the path asked whose
@@ -549,6 +495,9 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		return nil, false
 	}
 	if s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
+		return nil, false
+	}
+	if gate && s.gitCredentialRefusal(w, r, repos...) {
 		return nil, false
 	}
 	return ephemeralDirs, true

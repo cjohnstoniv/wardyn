@@ -282,3 +282,47 @@ func TestNewServer_ControlPlaneClientTrustsCorpCA(t *testing.T) {
 		t.Fatalf("without the corp CA the startup resolve must fail on x509; got %v", err)
 	}
 }
+
+// TestNewServer_CorpCAConfigNotMutatedByHTTP2 is the regression for the defect
+// that made an HTTP/2 answer reachable on the egress lane in the first place
+// (#360). The corp pool is built once and handed to several transports. The
+// sidecar's control-plane client keeps net/http's HTTP/2 support, and enabling
+// it PREPENDS "h2" to the transport's own TLSClientConfig.NextProtos on first
+// use. Shared rather than copied, that edit reached the proxy's forward
+// transport, which then offered h2 to every TLS peer with no way to speak it.
+// So: after a real control-plane round trip over TLS, the config the proxy
+// holds must still offer nothing.
+func TestNewServer_CorpCAConfigNotMutatedByHTTP2(t *testing.T) {
+	grant := uuid.New()
+	cp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{Header: "Authorization", Value: "Bearer tok"})
+	}))
+	defer cp.Close()
+	cfg := &Config{
+		RunID:           uuid.New(),
+		ControlPlaneURL: cp.URL,
+		RunToken:        "tok",
+		Listen:          "127.0.0.1:0",
+		Policy:          types.RunPolicySpec{AllowedDomains: []string{"example.com"}},
+		Injection:       []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "example.com"}, GrantID: grant}},
+		TrustedCAPEM:    string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cp.Certificate().Raw})),
+	}
+	if err := cfg.applyDefaultsAndValidate(); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	// NewServer resolves the injection grant over TLS before it returns, so the
+	// control-plane transport has been used by the time this test looks.
+	srv, err := NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+
+	if got := srv.proxy.controlTransport.TLSClientConfig.NextProtos; len(got) != 0 {
+		t.Fatalf("the shared corp-CA config now offers %v: a transport edited it in place instead of copying it", got)
+	}
+}

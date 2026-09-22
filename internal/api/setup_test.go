@@ -793,7 +793,7 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 		}},
 		Integrations: []SetupIntegration{{}},
 	}
-	got := redactSetupStatusForMember(full, false)
+	got := redactSetupStatusForMember(full, false, false)
 
 	if got.SCM != (setup.SCMPosture{}) {
 		t.Errorf("scm = %+v, want zero — host git-credential posture is not a member's business", got.SCM)

@@ -21,14 +21,16 @@ the only thing keeping that code away from the console's session storage and
 admin actions is that it arrives on a different browser origin. See
 [Bounds](#bounds) for what that separation does and does not buy.
 
-> **Not available on the desktop tier (0.7).** The relay is built and tested,
-> but no `agent-vscode` or noVNC image is published, and a managed laptop has no
-> repo and no build path — `wardyn-desktop.sh` runs `--no-build` on purpose. So
+> **Not available on the desktop tier.** The relay is built and tested, and
+> `agent-vscode`/`agent-novnc` publish starting with the next tagged release
+> (#141), but neither is wired into `WARDYN_AGENT_IMAGES` by default — they
+> are opt-in — and a managed laptop has no repo and no build path anyway —
+> `wardyn-desktop.sh` runs `--no-build` on purpose. So
 > `deploy/desktop/wardyn.env*.example` ship `WARDYN_UI_SANDBOX_LISTEN` commented
-> out rather than publishing a port with nothing to serve. This lane works on a
-> **developer checkout** (`make agent-images`, then `make test-e2e-ui-sandbox`).
-> Publishing the UI images is deferred to 0.8; see
-> [docs/DESKTOP.md](DESKTOP.md) "Named gap: the browser lane".
+> out rather than publishing a port with nothing pinned to serve it. This lane
+> works on a **developer checkout** (`make agent-images`, then
+> `make test-e2e-ui-sandbox`); see [docs/DESKTOP.md](DESKTOP.md) "Named gap:
+> the browser lane" for the desktop-tier detail.
 >
 > The **one-line installer** (`install.sh`) is the same: it writes
 > `WARDYN_UI_SANDBOX_PORT` but leaves the listener off, for the same reason.
@@ -49,10 +51,12 @@ for comparison — an X stack is simply expensive). Listening ~1s into the 20s
 `uiEnsureWaitSecs` budget. If a change pushes size past ~1.4 GB, drop `xterm`
 then `openbox` before raising the ceiling — a relayed app needs neither.
 
-**Local build only**, like `agent-vscode`. Publishing an X stack would drag in
-the trivy matrix, a per-image SBOM assertion and a GPL source offer for a whole
-desktop — a supply-chain workstream, not an image. It is therefore **not
-available on the desktop tier**; see the note at the top.
+**Publishes from the next tagged release**, like `agent-vscode` (#141) — the
+trivy matrix, a per-image SBOM assertion and a GPL source offer for a whole
+desktop turned out to be exactly the supply-chain workstream predicted here,
+now landed. It is still **not available on the desktop tier by default**
+(neither image is wired into `WARDYN_AGENT_IMAGES` automatically); see the
+note at the top.
 
 **Confinement: both images run under CC2 (gVisor).** Measured, on a daemon with
 `runsc` registered — note that is the **native** `dockerd`, not Docker Desktop's

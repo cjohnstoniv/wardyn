@@ -35,6 +35,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
     isCredentialRefusal: actual.isCredentialRefusal,
+    isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
       createRun: (...a: unknown[]) => createRunMock(...a),
       listRuns: () => Promise.resolve([]),

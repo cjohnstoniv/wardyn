@@ -15,7 +15,7 @@ import type { AgentRun, ApprovalRequest } from "../../../lib/types";
 // Import the predicate, not the strip: importing it from live-approvals.tsx
 // would hoist that whole module (and everything it imports) into the eager
 // entry chunk — see isHeld's own doc in lib/types/approvals.ts.
-import { isHeld, isStaleHold } from "../../../lib/types";
+import { isAdoConsentRequest, isHeld, isStaleHold } from "../../../lib/types";
 import {
   attentionFor,
   attentionRank,
@@ -41,6 +41,13 @@ interface RunApprovalSignals extends AttentionSignals {
    *  counts it live), but the group/card still owe a sentence for what
    *  happened here rather than going silent about it. */
   staleHeld?: boolean;
+  /** At least one pending row is an Azure DevOps Entra-consent request (S10
+   *  round 2, F13) — a DIFFERENT provider than `reauth` above, so the board
+   *  and cockpit header say "Azure DevOps sign-in", never "AWS sign-in",
+   *  for this one. Checked structurally (isAdoConsentRequest), never folded
+   *  into `reauth`: the two must never collapse into one string that names
+   *  the wrong provider. */
+  adoConsent?: boolean;
 }
 
 export type RunSignals = ReadonlyMap<string, RunApprovalSignals>;
@@ -78,8 +85,12 @@ export function approvalSignals(pending: readonly ApprovalRequest[]): RunSignals
       // directly, and the board and the cockpit header say so instead of the
       // generic "sandbox held" — which would send them looking for an
       // Approve button that does not exist for this kind. Only while fresh:
-      // once stale, `staleHeld` carries the fact instead.
-      if (a.kind === "credential_reauth") cur.reauth = true;
+      // once stale, `staleHeld` carries the fact instead. An Azure DevOps
+      // consent request is the SAME shape (kind credential_reauth) but a
+      // DIFFERENT provider — checked first and separately so it never falls
+      // into the AWS-named `reauth` bucket (F13).
+      if (isAdoConsentRequest(a)) cur.adoConsent = true;
+      else if (a.kind === "credential_reauth") cur.reauth = true;
     } else if (isStaleHold(a)) {
       cur.staleHeld = true;
     } else {
