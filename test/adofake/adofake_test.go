@@ -818,6 +818,11 @@ func runIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	// A CI runner has no global git identity; commits need one.
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=adofake", "GIT_AUTHOR_EMAIL=adofake@example.com",
+		"GIT_COMMITTER_NAME=adofake", "GIT_COMMITTER_EMAIL=adofake@example.com",
+	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v (in %s): %v\n%s", args, dir, err, out)
 	}
