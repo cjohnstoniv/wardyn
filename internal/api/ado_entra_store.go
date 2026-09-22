@@ -102,10 +102,10 @@ var (
 	// or already rotated away). Nothing Wardyn can do renews it.
 	ErrADOEntraDeadCredential = errors.New("the captured Azure DevOps sign-in can no longer be renewed")
 	// ErrADOEntraConsentRequired: the app is not consented for what was asked.
-	ErrADOEntraConsentRequired = errors.New("Azure DevOps access requires consent that has not been granted")
+	ErrADOEntraConsentRequired = errors.New("access to Azure DevOps requires consent that has not been granted")
 	// ErrADOEntraInteractionRequired: a Conditional Access policy wants the
 	// human present. A control-plane renewal structurally cannot satisfy it.
-	ErrADOEntraInteractionRequired = errors.New("Azure DevOps access requires interactive sign-in")
+	ErrADOEntraInteractionRequired = errors.New("access to Azure DevOps requires interactive sign-in")
 	// ErrADOEntraUnavailable: the request did not complete, or completed
 	// unusably. The credential is untouched and the next attempt redeems it
 	// normally.
