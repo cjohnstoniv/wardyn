@@ -145,6 +145,35 @@ describe("SignIn — renders only what the posture says can work (#378/#379)", (
     expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
   });
+
+  // The one cell that actually CHANGES behavior for an install that already
+  // exists: an ordinary OIDC deployment with no admin token configured (or
+  // member mode — either way token_login is false while sso stays true).
+  // Before #378/#379 this rendered the admin-token field regardless, so
+  // every submission there was refused with "admin token not configured".
+  it("OIDC configured with no usable token (token_login false, sso_only false): the admin-token field disappears", async () => {
+    healthMock.mockResolvedValue({ sso: true, sso_only: false, token_login: false });
+    renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.queryByLabelText(/admin token/i)).not.toBeInTheDocument();
+    // sso_only is false here, so the role-source caveat still belongs on screen.
+    expect(
+      screen.getByText(/comes from your SSO role assignment/i),
+    ).toBeInTheDocument();
+  });
+
+  // R4/F027's failure shape, replayed for the two new bits: health() resolves
+  // the EMPTY object on a network error or any non-2xx, and the gate must
+  // leave its LAST KNOWN state alone rather than read "no answer" as "nothing
+  // works" — that early-return path is exactly what once left an SSO-only
+  // deployment showing no way in at all when the daemon merely hadn't
+  // answered yet (see refreshSso's comment in sign-in.tsx).
+  it("a failed /healthz on mount does not hide the admin-token form or misreport the posture", async () => {
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
+  });
 });
 
 // W31-S1-2 regression: wardynd never prints an admin token on startup — it
