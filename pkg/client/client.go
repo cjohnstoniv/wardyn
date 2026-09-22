@@ -58,6 +58,11 @@
 //   - /api/v1/me             — beyond Me and ssh-keys: capabilities, run-layout, tokens
 //   - /api/v1/auth, /auth/login, /auth/callback — the browser SSO leg, plus the
 //     harness-login device flow. A redirect dance, not an API call.
+//   - /api/v1/scm            — the per-user Azure DevOps sign-in (0.7.10): a
+//     sign-in door and its identity-provider callback. Unwrapped for the same
+//     reason the SSO leg above is — it is a browser redirect dance whose whole
+//     point is a human at a keyboard consenting, and it binds to a browser
+//     session an SDK caller does not have.
 //   - the attach lane under /api/v1/runs/{id} — attach, attach-ticket,
 //     attach-holder, attach/takeover, resources. A WebSocket and its ticket.
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
