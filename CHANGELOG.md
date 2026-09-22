@@ -53,6 +53,43 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
   status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
   while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
+- **A corporate CA staged for `deploy/compose/Dockerfile.proxy`'s build never reached the running
+  proxy.** The builder stage trusted it for `go mod download`; the distroless runtime stage was
+  COPY-only and never carried it, so wardyn-proxy's own outbound TLS never saw it — indistinguishable
+  from a network fault to an operator, and the same failure class 0.7.9 already patched on the
+  control-plane side. The runtime stage now copies the builder's regenerated
+  `/etc/ssl/certs/ca-certificates.crt` (system roots **plus** the corporate CA, never the CA alone),
+  and the builder refuses to build if that bundle isn't actually larger than the bare CA. An install
+  with no corporate CA staged is unaffected. `wardyn-proxy`'s config validation now also warns at
+  boot when an upstream proxy is configured and an AWS SSO injection host has no
+  `upstream_proxy_no_proxy` entry covering it, and `wardyn support-bundle` now reports the upstream
+  proxy's host (never any embedded credential), its compiled bypass list, and whether a trusted CA
+  was loaded (#286).
+- **The nightly kind SSO walk's sandbox-up and login-done ceilings are now environment-overridable
+  (`WARDYN_LIVE_SANDBOX_UP_MS` / `WARDYN_LIVE_LOGIN_DONE_MS`).** The walk's first hosted-runner
+  dispatch timed out at `ui/e2e/live/helpers.ts`'s hardcoded 300s `SANDBOX_UP` ceiling waiting for a
+  freshly created sign-in sandbox: a hosted runner schedules the CNI, Postgres, the daemon, Dex and
+  every sandbox pod concurrently on two vCPUs, and that budget was tuned on a developer box.
+  `LOGIN_DONE` shares the same constant and the same code path, so it gets the same treatment.
+  `scripts/kind-sso-walk.sh` now raises both to 720s when `GITHUB_ACTIONS` is set; every other
+  caller keeps the unchanged 300s default. This is a slower-CI-hardware knob, not a flakiness
+  workaround — no assertion, skip or retry changed (#331).
+- **wardynd now warns at boot when a configured upstream proxy has no `upstream_proxy_no_proxy`
+  entry covering an internal model gateway host.** The per-target direct-dial bypass this warns
+  about already shipped (`Proxy.bypassUpstream` covers the gateway route too, via
+  `Proxy.gatewayTarget`) — ROADMAP.md wrongly still listed it as unbuilt, which is now corrected.
+  The new warning (`warnUpstreamProxyNoBypass`, `cmd/wardynd/trusted_ca.go`) says explicitly that
+  it is a boot-time read: `SiteConfig` is admin-editable afterwards, so the upstream proxy and its
+  bypass list can both change without a restart (#307).
+- **`wardyn attach` now tells you when a session is read-only, instead of silently discarding the
+  keystrokes.** The CLI used to skip every non-binary frame from the attach WebSocket, including the
+  server's `attach-mode` control frame — someone attached while another client held the terminal saw
+  no output and no explanation. It now decodes that frame: a read-only dial prints one line to STDERR
+  naming the holder and where they attached from. stdout is untouched in every case — it stays
+  exactly the PTY output it always was. (The CLI also handles a later promotion frame on the same
+  socket, re-sending the window size — forward-compatible, but 0.7.10's server has one call site for
+  `writeAttachMode` and never sends that second frame, so in-place promotion is not yet reachable
+  here) (#312).
 
 ### Changed
 

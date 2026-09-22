@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -407,10 +408,17 @@ func TestConsoleLoginSucceedsWhenAzureDevOpsConsentIsDeclined(t *testing.T) {
 	}
 }
 
-// TestConsoleLoginSucceedsWhenTheGrantOmitsTheScopes is the SOFTER shape of the
-// same failure, and the one Microsoft's partial-consent behaviour produces: the
-// authorization succeeds, the person is signed in, and the grant simply does
-// not carry the Azure DevOps scopes. No retry is involved; nothing is stored.
+// TestConsoleLoginSucceedsWhenTheGrantOmitsTheScopes: the row names one scope
+// the tenant consents to and one it does not. The fake refuses a request that
+// names an unconsented scope rather than granting partially, so this login
+// goes THROUGH THE RETRY: the widened request is refused, the unwidened retry
+// signs the person in, and nothing is stored.
+//
+// It does NOT exercise partial consent — a successful grant that merely omits
+// the Azure DevOps scopes. That branch is covered in isolation by
+// TestCaptureLoginGrant_StoresNothingWithoutAzureDevOpsScopes; whether a real
+// tenant answers this shape with a partial grant or an outright refusal is not
+// established here, and both are handled.
 func TestConsoleLoginSucceedsWhenTheGrantOmitsTheScopes(t *testing.T) {
 	lf := newLoginFixture(t, true)
 	// The row asks for a scope the tenant consents to, then the row is widened
@@ -472,6 +480,41 @@ func TestConsoleLoginWithoutTheSinkIsUnchanged(t *testing.T) {
 	}
 	if rows := lf.audit.find(adoSignInCapturedAction); len(rows) != 0 {
 		t.Fatalf("audit rows = %+v; want none", rows)
+	}
+	// The CALLBACK's headers are unchanged too, not only the request: an
+	// unwidened login must not write a Set-Cookie for the widened marker.
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "wardyn_oidc_widened" {
+			t.Fatalf("an unwidened callback wrote a Set-Cookie for the widened marker: %+v", c)
+		}
+	}
+}
+
+// TestConcurrentConsoleLoginsAreRaceClean: many people signing in at once all
+// cross the sink — its row read, its per-person lock and its store write — on
+// the request path. Under -race this pins that the seam, the bounded calls and
+// the capture share nothing unsafely, and that every one of them still ends in
+// a session.
+func TestConcurrentConsoleLoginsAreRaceClean(t *testing.T) {
+	lf := newLoginFixture(t, true)
+	const logins = 48
+	var wg sync.WaitGroup
+	sessions := make([]bool, logins)
+	for i := range logins {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sessions[i] = sessionIssued(lf.login(t))
+		}()
+	}
+	wg.Wait()
+	for i, ok := range sessions {
+		if !ok {
+			t.Fatalf("login %d of %d did not issue a session", i, logins)
+		}
+	}
+	if _, found := lf.stored(t, lf.fake.Subject()); !found {
+		t.Fatal("no credential was captured by any of the concurrent logins")
 	}
 }
 

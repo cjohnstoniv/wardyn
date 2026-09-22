@@ -746,8 +746,8 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   an unauthorized caller) · **R1-F289** (a DB-clock cookie `iat`; the shipped
   comparison-time fix is recorded as safe to leave standing).
 - **Deployment.** Subscription/managed runs through the internal model gateway ·
-  publishing the UI-sandbox images (`vscode`/`novnc`) · direct-dial bypass per
-  target · BYO-Bedrock for members · an air-gapped video mirror + config-driven CSP
+  publishing the UI-sandbox images (`vscode`/`novnc`) · BYO-Bedrock for members ·
+  an air-gapped video mirror + config-driven CSP
   · the gateway auth-scheme seam · `ssh_key` clone-only vs bind-mounted workspaces
   (F11) · age-key rotation (F12) · react-router 8 (F13) · the Kata/TPROXY/io_uring
   quick-hits (F14) · the k8s parity list (F23, on the v1.0 row below) · ADO
@@ -982,11 +982,6 @@ shipped behavior; none is scheduled.
   0.7 scopes the gateway to the api-key lane only; those lanes need
   `deploy/images/claude-code/agent-run` to honour an explicit operator-set
   base URL, which needs an image rebuild — 0.8.
-- **A per-target direct-dial bypass for a gateway behind a corporate
-  upstream proxy.** 0.7 dials the gateway THROUGH a configured upstream by
-  design (upstream-first); an operator who wants the gateway dialled
-  directly while everything else still goes through the upstream has no
-  knob for it.
 - **The Network step rendering "N trusted CA certs."** `/setup/status`
   carries the count (0.7); no console reader exists yet.
 
