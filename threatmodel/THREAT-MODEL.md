@@ -2432,12 +2432,13 @@ on the row that means "this install cannot tell you about its network".
 **On a healthy Helm install, none of the three blocking rows is ever set — the gate is
 effectively inert there.** `runner` fails only with no live confinement class at all;
 `confinement_floor` warns only when the configured floor is a class the runner does
-not advertise; `sso_rbac` warns only with OIDC configured and no role mapping — though that
-last one is not merely a misconfiguration: a single-operator deployment, or one whose
-operator allowlist already separates admins from members, is a perfectly fine install
-that this row still holds in the funnel until onboarding completes. A correctly
+not advertise; `sso_rbac` warns only with OIDC configured and neither a role mapping nor an
+operator allowlist (#484) — though that last one is not merely a misconfiguration: a
+single-operator deployment is a perfectly fine install that this row still holds in the
+funnel until onboarding completes. A correctly
 configured multi-user Kubernetes deployment (a registered RuntimeClass, a floor the
-chart's values actually advertise, `WARDYN_OIDC_ROLE_MAP` or a People-step mapping set)
+chart's values actually advertise, `WARDYN_OIDC_ROLE_MAP`, a People-step mapping or an
+operator allowlist set)
 never trips any of the three, so the funnel exists for the FIRST-run and
 misconfiguration cases this gate was built for, and simply never fires again once an
 install is healthy — which is the intended shape (the same "a place you go, not a wall

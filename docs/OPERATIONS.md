@@ -2125,6 +2125,33 @@ widening). Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
 
+### When everyone is an admin, and what a refused person is told
+
+**The everyone-is-an-admin warning.** With SSO configured, a person nobody has
+mapped derives `admin` only when there is **neither** a role map (the chart's
+`WARDYN_OIDC_ROLE_MAP` or a People-step row) **nor** an admin list (the operator
+allowlist, `WARDYN_OIDC_OPERATOR_EMAILS`). That one state — and only that one —
+grades the setup checklist's "Who is an admin" row `warn`, holds the console in
+the People step, and shows every admin a banner above every page until a mapping
+or an admin list exists. An admin list alone is enough: an unmatched person then
+derives `member`. Members see neither.
+
+**Request-access help (`sign_in_help_text`, `sign_in_help_url`).** Two optional
+SiteConfig fields, edited on the People step ("When someone can't sign in") or
+through `PUT /site-config`. The sign-in page shows them under Wardyn's own
+sentence — never instead of it — on the four refusals a person cannot clear
+alone: no role, an email domain that isn't allowed, too many groups to list, and
+a missing `email_verified` claim. Timeouts and configuration errors get nothing.
+**Both are public by design:** the anonymous `/healthz` publishes them, because
+the reader has, by definition, not signed in — so name your request process, not
+your internal systems. The text is plain text (at most 1,000 characters, no
+line breaks or other control characters; quotes are fine) and is rendered as
+text, never markup; the link must be `http://` or `https://` and always reads
+"Request access". A write outside those bounds is refused with a 400 naming the
+field, and a stored value that no longer passes is dropped from `/healthz`
+rather than published. Like the provider blocks, a body that does not name a
+field carries the stored value forward; name it as `""` to clear it.
+
 ### Every denial that isn't a 404
 
 (This section is the source of record for `authz.denied`'s `reason` values;

@@ -317,6 +317,9 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateUpstreamProxyNoProxy(cfg.UpstreamProxyNoProxy); err != nil {
 		return err
 	}
+	if err := validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL); err != nil {
+		return err
+	}
 	// The workspace-provider block, when the body carries one: ONE validator for
 	// both write doors (this one and PUT /workspace-providers), so an
 	// MDM-delivered document can never store a block the providers endpoint
@@ -568,7 +571,10 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // Add a key here when you add one to types.SiteConfig, and
 // TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName fails until you
 // have decided which side of this line it sits on.
-var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"}
+var siteConfigFieldsAfter066 = []string{
+	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
+	"sign_in_help_text", "sign_in_help_url",
+}
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
 // body did not MENTION, for the fields an older client cannot know about.
@@ -608,6 +614,14 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	// legacy open mode, which is the OPPOSITE of what the admin wrote down.
 	if !present["agent_providers"] {
 		cfg.AgentProviders = existing.AgentProviders
+	}
+	// The sign-in help pair, for the same MDM reason: a boot-time re-apply of a
+	// file written before these keys existed must not erase the admin's text.
+	if !present["sign_in_help_text"] {
+		cfg.SignInHelpText = existing.SignInHelpText
+	}
+	if !present["sign_in_help_url"] {
+		cfg.SignInHelpURL = existing.SignInHelpURL
 	}
 	// effective_scm_hosts is NOT carried forward: it is server-owned and
 	// PROJECTED on read (handleGetSiteConfig), never stored, so there is nothing

@@ -38,6 +38,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
+  is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
+  set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
+  page, with a link to the People step. Members see neither.
 - **One capability-grant resolver (#735): no decision change; an enforcement-read failure no longer fails a value the grant rows already settled.** `capBatch` now answers every
   capability question: `capAllowed`, `capGranted`, `capSeamAllowed` and `capScan` are one-value doors
   onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
@@ -59,6 +63,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Admins can tell a refused person what to do next (#484).** The People step has a new
+  "When someone can't sign in" card: a short plain-text message (up to 1,000 characters) and an
+  optional `http(s)` link, saved as the site-config fields `sign_in_help_text` and
+  `sign_in_help_url`. The sign-in page shows them under Wardyn's own sentence on the four refusals a
+  person cannot clear alone — no role, an email domain that isn't allowed, too many groups, and a
+  missing email claim — with the link labelled "Request access". Both are public: the anonymous
+  `/healthz` publishes them, and a stored value that no longer passes its check is left out.
+
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just
@@ -72,22 +84,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
-- **Stored credentials are encrypted with AES-256-GCM, bound to their row, and can no longer be
-  forged (#562).** A `secrets` row was one age payload (X25519 + ChaCha20-Poly1305) with no
-  associated data: a database writer could move a ciphertext to another person or another name
-  undetected, and, age being public-key, anyone holding the deployment's public recipient could
-  write a row that decrypted. Every row is now envelope v1 (migration `0069_secret_envelope_v1`):
-  each save draws a fresh 32-byte data key, seals the value with AES-256-GCM bound to the row's
-  `(owned_by, name)`, and wraps the data key with AES-256-GCM under a key-encryption key.
-  `WARDYN_AGE_KEY` stays the only key input and is used through HKDF-SHA256 alone to derive that
-  key-encryption key, which is symmetric and so cannot be derived from the public recipient; age
-  itself is used only once, to convert legacy rows. A moved, forged or tampered row is refused with
-  an error that names the row, never its value, and is never read as missing, so a tampered boot
-  key fails boot rather than being replaced. `wardynd -rotate-age-key` now rewraps data keys only
-  and never decrypts a value (`secret.rekey` is unchanged). With `WARDYN_AGE_KEY` unset, wardynd
-  now refuses to start while any row is sealed under an age key, instead of minting an ephemeral
-  key that strands them. Still open: a database writer can copy an older row back into its own
-  slot (THREAT-MODEL residual 48).
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
@@ -124,20 +120,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
   `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
   handler written in this indirect style no longer passes CI clean.
-
-### Upgrading
-
-- **This upgrade is one-way: rolling back to 0.7.11 needs the pre-upgrade backup (#562).** The
-  first boot converts every stored secret to envelope v1 before it reads its boot keys: one
-  transaction, under its own advisory lock, so a second replica waits and then finds nothing to do,
-  and later boots convert nothing. A row that does not decrypt under `WARDYN_AGE_KEY` aborts the
-  conversion and the boot, naming the row; nothing is committed. Once a conversion commits, 0.7.11
-  and earlier can read none of the rows: going back means restoring the Postgres dump taken before
-  the upgrade, together with the same `WARDYN_AGE_KEY`. Keep `WARDYN_AGE_KEY` exactly as it is — it
-  remains the key input. There is no rolling upgrade: stop every older replica first. One still
-  running keeps writing pre-envelope payloads that are refused by name ("an older wardynd is still
-  writing"): a new name it wrote is converted at the next restart, but a name it replaced is
-  overwritten in place and must be set again. Runbook: `docs/OPERATIONS.md` § Upgrades.
 
 ### Fixed
 
