@@ -6,7 +6,6 @@ package adoscope
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 )
@@ -19,14 +18,22 @@ import (
 // oracle for "is this ref protected". Both are properties of the ROW and the
 // RUN, not of the request, and neither can be guessed from the bytes.
 type Request struct {
-	// Method is the HTTP method as it arrived. An override header, if
-	// present, wins — see Classify.
+	// Method is the HTTP method as it arrived on the request line. An
+	// override header may RAISE it — see Classify.
 	Method string
-	// Host is the request's host, without a port.
+	// Host is the request's host WITHOUT a port: a caller holding
+	// "dev.azure.com:443" strips the port before it gets here, because a port
+	// would make the host match nothing and the request would be refused as
+	// not Azure DevOps.
 	Host string
-	// Path is the request's path, still percent-encoded.
+	// Path is the request's path, still percent-encoded and WITHOUT the query
+	// string. A query left on it would become a final path segment and could
+	// only ever make the route read as something it is not.
 	Path string
-	// Header is the request's headers. May be nil.
+	// Header is the request's headers. May be nil. The keys are compared
+	// case-insensitively here, so a map built by hand — or one that preserved
+	// the wire spelling instead of canonicalising it — is read the same way a
+	// net/http server's is.
 	Header http.Header
 	// BodyPeek is the first MaxBodyPeek bytes of the body, or nil when there
 	// is none. A route that needs the body and cannot see all of it is
@@ -36,10 +43,15 @@ type Request struct {
 	// unpinned request is refused, because "some Azure DevOps organisation"
 	// is not a policy.
 	Org string
-	// RefProtected answers whether one ref name (refs/heads/main) is covered
-	// by a branch policy. Optional — when nil, a ref move classifies as
-	// CapCodeWrite and the caller is handed the ref names in Verdict.Refs so
-	// it can re-decide against its own per-run cache.
+	// RefProtected answers whether one ref is covered by a branch policy. It
+	// is given the ref name EXACTLY as the request body spelled it, which on
+	// every documented Azure DevOps ref route is the full name
+	// ("refs/heads/main") and not a short one ("main"); an oracle whose cache
+	// is keyed differently normalizes on its own side.
+	//
+	// Optional — when nil, a ref move classifies as CapCodeWrite and the
+	// caller is handed the ref names in Verdict.Refs so it can re-decide
+	// against its own per-run cache.
 	RefProtected func(ref string) bool
 }
 
@@ -62,12 +74,18 @@ var writeMethods = []string{http.MethodPost, http.MethodPut, http.MethodPatch, h
 
 // Classify names the ONE capability req needs, or refuses req.
 //
-// It refuses — returns an error — only where no capability could be honest:
-// a host that is not Azure DevOps, an organisation that is not the row's, a
-// path whose structure is hidden behind percent-encoding, a method override
-// naming something that is not a method, or a body the peek cannot see whole.
-// Everything else classifies, and a write it does not recognize classifies as
-// CapUnclassifiedWrite, which is not grantable.
+// It refuses — returns an error — only where no capability could be honest: a
+// host that is not Azure DevOps, an organisation that is not the row's, a path
+// whose structure is hidden behind percent-encoding or dot segments, a method
+// override outside its documented shape, a git-over-HTTP endpoint, or a body
+// the peek cannot see whole. Everything else classifies, and a write it does
+// not recognize classifies as CapUnclassifiedWrite, which is not grantable.
+//
+// GIT-OVER-HTTP IS OUT OF SCOPE and is refused by name rather than classified.
+// The ref names a push carries live in a pack protocol this catalogue does not
+// parse, so no answer here could tell a clone from a push onto a protected
+// branch; both used to land on CapUnclassifiedWrite, which told a caller
+// nothing about which it had. The transport is gated on its own.
 func Classify(req Request) (Verdict, error) {
 	method, err := effectiveMethod(req.Method, req.Header)
 	if err != nil {
@@ -80,13 +98,10 @@ func Classify(req Request) (Verdict, error) {
 	// The denied areas are checked BEFORE the method: a GET of the token area
 	// lists an organisation's personal access tokens, which is a read of
 	// exactly the thing no lane may see.
-	if c, ok := deniedArea(r.area); ok {
+	if c, ok := deniedAreas[r.area]; ok {
 		return Verdict{Capability: c}, nil
 	}
-	if slices.Contains(readMethods, method) {
-		return Verdict{Capability: CapRead}, nil
-	}
-	if readWrite(r) {
+	if slices.Contains(readMethods, method) || readWrite(r) {
 		return Verdict{Capability: CapRead}, nil
 	}
 	return classifyWrite(method, r, req)
@@ -94,32 +109,55 @@ func Classify(req Request) (Verdict, error) {
 
 // effectiveMethod is the method the SERVER will act on, which is not always
 // the one on the request line: Azure DevOps honours X-HTTP-Method-Override, so
-// a GET carrying `X-HTTP-Method-Override: PATCH` is a PATCH. Classifying the
-// request line would hand a read's capability to a write.
+// a POST carrying `X-HTTP-Method-Override: PATCH` is a PATCH.
 //
-// A header naming something that is not a method, or repeated, is refused
-// rather than ignored — ignoring it means guessing which of the two the server
-// will pick.
+// AN OVERRIDE MAY ONLY RAISE. Microsoft documents the header for a POST
+// carrying PATCH or DELETE — a tunnel for clients that cannot send those verbs
+// — and says nothing about a POST carrying GET. Honouring a downward override
+// meant a POSTed push classified as a READ on the word of a header the caller
+// controls. Refusing is the same answer this package gives every other "which
+// of the two will the server act on" question: the header is accepted on a
+// POST only, it must name a write, and anything else is refused, not ignored.
 func effectiveMethod(method string, h http.Header) (string, error) {
 	base := strings.ToUpper(strings.TrimSpace(method))
 	if !knownMethod(base) {
 		return "", fmt.Errorf("adoscope: %q is not an HTTP method this catalogue classifies", method)
 	}
-	if h == nil {
-		return base, nil
-	}
-	ov := h.Values("X-HTTP-Method-Override")
+	ov := headerValues(h, "X-HTTP-Method-Override")
 	switch {
 	case len(ov) == 0:
 		return base, nil
 	case len(ov) > 1:
 		return "", fmt.Errorf("adoscope: %d X-HTTP-Method-Override values — which one the server acts on is not knowable", len(ov))
+	case base != http.MethodPost:
+		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override on a %s — the header is documented on a POST only", base)
 	}
 	over := strings.ToUpper(strings.TrimSpace(ov[0]))
-	if !knownMethod(over) {
+	switch {
+	case !knownMethod(over):
 		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override: %q is not an HTTP method", ov[0])
+	case !slices.Contains(writeMethods, over):
+		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override: %q would lower a POST to a read — an override may only raise", ov[0])
 	}
 	return over, nil
+}
+
+// headerValues is h's values for name, matched CASE-INSENSITIVELY against the
+// map's own keys.
+//
+// http.Header.Values canonicalises the key it is GIVEN but not the keys
+// already in the map, so a header map built by hand — or one that kept the
+// wire spelling — hid "x-http-method-override" from this package completely.
+// Reading the map directly is the only spelling that cannot be fooled by the
+// caller's choice of capitalisation.
+func headerValues(h http.Header, name string) []string {
+	var out []string
+	for k, v := range h {
+		if strings.EqualFold(k, name) {
+			out = append(out, v...)
+		}
+	}
+	return out
 }
 
 // knownMethod reports whether m is a method this catalogue has an opinion
@@ -135,22 +173,49 @@ type route struct {
 	host string
 	// segs is every decoded, lowercased path segment after the organisation.
 	segs []string
+	// apis is the index of "_apis" in segs, or -1.
+	apis int
 	// area is the segment after _apis ("git", "wit", …), or "".
 	area string
 	// res is the segment after the area, or "".
 	res string
-	// tail is the segments after res.
-	tail []string
+}
+
+// at is the segment n positions after _apis — at(1) is the area, at(2) the
+// resource, at(3) the resource's id, and so on — or "".
+//
+// EVERY route rule indexes through this rather than searching the segments,
+// and that is the fix for a whole class of evasion: a repository is named by
+// whoever created it, so a repository called "pullrequestquery" made every
+// write on it read as a query, and one called "items" made repository DELETION
+// read as a code write. A resource word counts only where the documented route
+// puts it.
+func (r route) at(n int) string {
+	if r.apis < 0 {
+		return ""
+	}
+	if i := r.apis + n; i >= 0 && i < len(r.segs) {
+		return r.segs[i]
+	}
+	return ""
 }
 
 // parseRoute decodes path, pins it to org, and splits it at _apis.
 //
-// The DECODING is the security-relevant half. Matching the raw path would let
-// "%5Fapis/tokens" slip past the denied-area check and land in the read floor,
-// so every segment is percent-decoded before it is matched. A segment that
-// decodes to something containing a separator is REFUSED rather than split:
-// "a%2Fb" is one segment to the router and two to the reader, and a classifier
-// that picks either answer is wrong for the other.
+// The DECODING is the security-relevant half, and it refuses three things
+// rather than resolving them:
+//
+//   - percent-encoding that hides the structure: matching the raw path would
+//     let "%5Fapis/tokens" slip past the denied-area check into the read floor;
+//   - a segment that decodes to contain a separator: "a%2Fb" is one segment to
+//     the router and two to the reader, and either answer is wrong for the
+//     other;
+//   - a "." or ".." segment. Azure DevOps RESOLVES these server-side, so
+//     "/acme/_apis/wit/../hooks/subscriptions" is a service-hook write that
+//     reads here as a work-item write, and "/acme/../evil/…" leaves the
+//     organisation the row pinned entirely. Refusing is both simpler than RFC
+//     3986 resolution and strictly safer — nothing legitimate on this API
+//     needs one.
 func parseRoute(host, rawPath, org string) (route, error) {
 	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	if !azureDevOpsHost(h) {
@@ -162,6 +227,9 @@ func parseRoute(host, rawPath, org string) (route, error) {
 	segs, err := decodeSegments(rawPath)
 	if err != nil {
 		return route{}, err
+	}
+	if slices.Contains(segs, "_git") {
+		return route{}, fmt.Errorf("adoscope: %q is a git-over-HTTP endpoint — the transport is gated on its own, not classified here", rawPath)
 	}
 	segs, err = pinOrg(h, segs, org)
 	if err != nil {
@@ -180,23 +248,68 @@ func azureDevOpsHost(h string) bool {
 		strings.HasSuffix(h, ".visualstudio.com")
 }
 
-// decodeSegments splits rawPath into decoded, lowercased, non-empty segments.
+// decodeSegments splits rawPath into decoded, lowercased, non-empty segments,
+// refusing the shapes parseRoute documents.
 func decodeSegments(rawPath string) ([]string, error) {
 	var out []string
 	for _, raw := range strings.Split(rawPath, "/") {
 		if raw == "" {
 			continue
 		}
-		seg, err := url.PathUnescape(raw)
+		seg, err := unescapeSegment(raw)
 		if err != nil {
-			return nil, fmt.Errorf("adoscope: path segment %q is not decodable", raw)
+			return nil, err
 		}
-		if strings.ContainsAny(seg, "/\\") {
-			return nil, fmt.Errorf("adoscope: path segment %q decodes to a second segment", raw)
+		if seg == "." || seg == ".." {
+			return nil, fmt.Errorf("adoscope: path segment %q is a dot segment — the service resolves it to a different route", raw)
 		}
-		out = append(out, strings.ToLower(seg))
+		out = append(out, seg)
 	}
 	return out, nil
+}
+
+// unescapeSegment percent-decodes one segment and lowercases it, refusing a
+// segment that decodes into a separator.
+//
+// It decodes by hand rather than through url.PathUnescape for one reason:
+// PathUnescape leaves an encoded "/" as a literal slash in its output, which
+// then has to be re-detected, and the two-step version of that rule is exactly
+// where a laundering bug hides. Here the byte is refused where it is decoded.
+func unescapeSegment(raw string) (string, error) {
+	var b strings.Builder
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '%' {
+			b.WriteByte(raw[i])
+			continue
+		}
+		if i+2 >= len(raw) {
+			return "", fmt.Errorf("adoscope: path segment %q is not decodable", raw)
+		}
+		hi, lo := unhex(raw[i+1]), unhex(raw[i+2])
+		if hi < 0 || lo < 0 {
+			return "", fmt.Errorf("adoscope: path segment %q is not decodable", raw)
+		}
+		c := byte(hi<<4 | lo)
+		if c == '/' || c == '\\' {
+			return "", fmt.Errorf("adoscope: path segment %q decodes to a second segment", raw)
+		}
+		b.WriteByte(c)
+		i += 2
+	}
+	return strings.ToLower(b.String()), nil
+}
+
+// unhex is one hex digit's value, or -1.
+func unhex(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
 }
 
 // pinOrg checks the request's organisation against the row's and returns the
@@ -222,39 +335,30 @@ func pinOrg(host string, segs []string, org string) ([]string, error) {
 }
 
 // splitAtAPIs finds the _apis boundary and names the area and resource after
-// it. A path with no _apis (a git-over-HTTP endpoint, or the web UI) yields an
-// empty area, which reads as the fail-closed answer for a write.
+// it. A path with no _apis (the web UI) yields an empty area, which reads as
+// the fail-closed answer for a write.
 func splitAtAPIs(host string, segs []string) route {
-	r := route{host: host, segs: segs}
-	i := slices.Index(segs, "_apis")
-	if i < 0 {
-		return r
-	}
-	if i+1 < len(segs) {
-		r.area = segs[i+1]
-	}
-	if i+2 < len(segs) {
-		r.res = segs[i+2]
-	}
-	if i+3 < len(segs) {
-		r.tail = segs[i+3:]
-	}
+	r := route{host: host, segs: segs, apis: slices.Index(segs, "_apis")}
+	r.area, r.res = r.at(1), r.at(2)
 	return r
-}
-
-// has reports whether the segments after the area include seg — the shape the
-// pull-request and ref routes need, where the interesting word sits at a depth
-// that varies with whether the URL named a project.
-func (r route) has(seg string) bool {
-	return r.res == seg || slices.Contains(r.tail, seg)
 }
 
 // deniedAreas is the area -> refusal table. These are refused for EVERY
 // method, including reads.
+//
+// The token family is deliberately WIDE: "tokens" is only the documented PAT
+// lifecycle door, while the session-token, delegated-authorization and
+// web-platform-auth areas each hand out a credential of their own. A lane that
+// can obtain a second credential is a lane that can leave the lane, whichever
+// area it left through.
 var deniedAreas = map[string]Capability{
 	"tokens":              CapDeniedTokens,
+	"token":               CapDeniedTokens,
 	"tokenadmin":          CapDeniedTokens,
 	"tokenadministration": CapDeniedTokens,
+	"accesstokens":        CapDeniedTokens,
+	"delegatedauth":       CapDeniedTokens,
+	"webplatformauth":     CapDeniedTokens,
 	"hooks":               CapDeniedServiceHooks,
 	"servicehooks":        CapDeniedServiceHooks,
 	"extensionmanagement": CapDeniedExtensions,
@@ -262,27 +366,23 @@ var deniedAreas = map[string]Capability{
 	"contribution":        CapDeniedInternal,
 }
 
-// deniedArea looks area up in the refusal table.
-func deniedArea(area string) (Capability, bool) {
-	c, ok := deniedAreas[area]
-	return c, ok
-}
-
 // readWrite reports whether r is one of the POSTs that only READ. Azure DevOps
 // uses POST for queries whose input is too big for a query string, so treating
 // method as intent would charge a work-item query the same capability as a
 // work-item edit — and an operator who granted "read" would watch reads fail.
 //
-// The list is closed and short by design: every entry is a documented query
-// endpoint with no write side. _apis/Contribution/HierarchyQuery is NOT here —
-// it is a query too, but one that reads every area at once, and it is refused
-// as a denied area before this is reached.
+// The list is closed, short and POSITIONAL: every entry is a documented query
+// endpoint matched where the route puts it, never wherever the word appears.
+// _apis/Contribution/HierarchyQuery is NOT here — it is a query too, but one
+// that reads every area at once, and it is refused as a denied area before
+// this is reached.
 func readWrite(r route) bool {
 	switch r.area {
 	case "wit":
 		return r.res == "wiql" || r.res == "workitemsbatch"
 	case "git":
-		return r.has("pullrequestquery")
+		// {project}/_apis/git/repositories/{repositoryId}/pullrequestquery
+		return r.res == "repositories" && r.at(4) == "pullrequestquery"
 	case "search":
 		// Code/work-item search lives on its own host; the area name alone is
 		// not enough to trust, since "search" under dev.azure.com is not a
@@ -349,28 +449,44 @@ var gitCodeWriteResources = []string{
 // one scope: the repository object (CapRepoAdmin), its policies
 // (CapPolicyAdmin), its pull requests (CapPR) and its refs (CapCodeWrite or
 // CapPolicyBypass, decided by the body).
+//
+// The split is POSITIONAL — _apis/git/{resource}/… — because the only other
+// way to read it is to search the segments, and one of those segments is a
+// repository name the caller chose.
 func gitWrite(method string, r route, req Request) (Verdict, error) {
-	switch {
-	case r.has("refs") || r.has("pushes"):
-		return refWrite(req)
-	case r.has("pullrequests") || r.has("pullrequest") || r.res == "pullrequests":
+	switch r.res {
+	case "repositories":
+		return gitRepositoryWrite(method, r, req)
+	case "pullrequests":
+		// The organisation/project-level pull-request route.
 		return pullRequestWrite(method, req)
-	case r.has("policyconfigurations") || r.has("policy"):
+	case "policy", "policyconfigurations":
 		return Verdict{Capability: CapPolicyAdmin}, nil
-	case r.has("permissions"):
-		return Verdict{Capability: CapSecurityAdmin}, nil
-	case slices.ContainsFunc(gitCodeWriteResources, r.has):
-		return Verdict{Capability: CapCodeWrite}, nil
-	case r.res == "repositories":
-		// repositories/{id} with nothing after it — creating, renaming or
-		// deleting the repository object.
-		return Verdict{Capability: CapRepoAdmin}, nil
 	}
-	// A git-over-HTTP write (_git/…/git-receive-pack) lands here, with no
-	// _apis area at all, and stays unclassified ON PURPOSE: the ref names a
-	// push carries are in a pack protocol this catalogue does not parse, so
-	// calling it CapCodeWrite would grant a push to a protected branch that
-	// the REST ref route above refuses.
+	return Verdict{Capability: CapUnclassifiedWrite}, nil
+}
+
+// gitRepositoryWrite splits _apis/git/repositories/{repositoryId}/{resource}.
+// With no {resource} the request is about the repository OBJECT itself —
+// creating, renaming or deleting it — whatever the repository happens to be
+// called.
+func gitRepositoryWrite(method string, r route, req Request) (Verdict, error) {
+	switch res := r.at(4); res {
+	case "":
+		return Verdict{Capability: CapRepoAdmin}, nil
+	case "refs", "pushes":
+		return refWrite(req)
+	case "pullrequests":
+		return pullRequestWrite(method, req)
+	case "policyconfigurations":
+		return Verdict{Capability: CapPolicyAdmin}, nil
+	case "permissions":
+		return Verdict{Capability: CapSecurityAdmin}, nil
+	default:
+		if slices.Contains(gitCodeWriteResources, res) {
+			return Verdict{Capability: CapCodeWrite}, nil
+		}
+	}
 	return Verdict{Capability: CapUnclassifiedWrite}, nil
 }
 
@@ -385,10 +501,11 @@ func buildWrite(r route) Capability {
 	return CapBuildAdmin
 }
 
-// pipelinesWrite is the YAML-pipelines area: POST …/pipelines/{id}/runs queues
-// a run, anything else edits a pipeline.
+// pipelinesWrite is the YAML-pipelines area: POST _apis/pipelines/{id}/runs
+// queues a run, anything else edits a pipeline.
 func pipelinesWrite(r route) Capability {
-	if r.has("runs") || r.has("preview") {
+	switch r.at(3) {
+	case "runs", "preview":
 		return CapBuildExecute
 	}
 	return CapBuildAdmin

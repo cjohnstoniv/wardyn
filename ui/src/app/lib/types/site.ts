@@ -189,19 +189,61 @@ export interface GitProvider {
   // scheme and host match one of these and its path equals that base URL's path
   // or extends it at a "/" boundary.
   base_urls: string[];
-  // The closed lane set (ClosedGitLanes). EMPTY MEANS EVERY LANE the kind
-  // supports — the field narrows, it never widens.
+  // The closed lane set (ClosedGitLanes). EMPTY MEANS EVERY LEGACY LANE
+  // (LegacyGitLane) — the field narrows, it never widens, and a lane added
+  // after that list was frozen must be NAMED here to be usable.
   lanes?: GitLane[];
+  // Whose credential this row's lanes use. Absent reads as "shared". The
+  // "entra" lane REQUIRES "per_user" — the server refuses anything else,
+  // because there is no such thing as a shared Entra sign-in.
+  credential_source?: CredentialSource;
+  // The Entra lane's configuration. Present only on a row whose lanes name
+  // "entra", and required on one: the server refuses an orphaned block, and
+  // refuses the lane without it.
+  entra?: ADOEntraConfig;
+}
+
+// Whose credential a provider row's lanes use.
+export type CredentialSource = "shared" | "per_user";
+
+// How an Entra-lane run presents itself to Azure DevOps. Absent reads as
+// "bearer".
+export type ADOTokenMode = "bearer" | "minted_pat";
+
+// The Entra lane's configuration (types.ADOEntraConfig). The capability
+// strings are the classifier's vocabulary (internal/adoscope) — the console
+// never invents one, and never re-words a capability's label.
+export interface ADOEntraConfig {
+  tenant_id: string;
+  client_id: string;
+  // The widest access a run on this row may ever hold. Non-empty, and it must
+  // include "read".
+  capability_ceiling?: string[];
+  // What a run gets when it asks for nothing. Empty reads as ["read"], and it
+  // must sit inside capability_ceiling.
+  default_profile?: string[];
+  token_mode?: ADOTokenMode;
+  // Whether REST calls are brokered on this lane. ABSENT MEANS TRUE, which is
+  // why it is optional rather than a plain boolean the console might write as
+  // false by omission.
+  rest_api?: boolean;
 }
 
 // The closed git-provider kinds. A self-hosted forge is not a third kind: it is
 // a "github" (GHES) or "azure_devops" (ADO Server) row naming its own host.
 export type GitProviderKind = "github" | "azure_devops";
 
-// The closed credential lanes a run may clone with. "app" is github.com only
-// (the broker has no Azure DevOps equivalent); "ssh" reaches only the two hosts
-// publishing an SSH-over-443 endpoint.
-export type GitLane = "app" | "pat" | "ssh";
+// The lanes an EMPTY `lanes` list admits — types.LegacyGitLanes, frozen at the
+// three that existed when "empty means every lane" was written down. The Git
+// tab renders exactly these; a lane outside the list is configured elsewhere
+// and must survive a toggle here untouched.
+export type LegacyGitLane = "app" | "pat" | "ssh";
+
+// The closed credential lanes a run may clone with (ClosedGitLanes). "app" is
+// github.com only (the broker has no Azure DevOps equivalent); "ssh" reaches
+// only the two hosts publishing an SSH-over-443 endpoint; "entra" is Azure
+// DevOps hosted only and authorizes each person as themselves.
+export type GitLane = LegacyGitLane | "entra";
 
 // The file-system half. Each absent sub-block is legacy behaviour for that half.
 export interface StorageProviders {

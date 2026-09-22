@@ -296,6 +296,60 @@ describe("GitTab", () => {
     });
   });
 
+  // The Git tab renders the three LEGACY lanes only; "entra" is configured
+  // elsewhere. Rewriting `lanes` from the rendered set alone DROPPED it, and a
+  // row left holding an entra block with no entra lane is refused by the
+  // server as an orphaned block — a 400 on Save that no admin could trace back
+  // to the checkbox they clicked.
+  describe("a lane this tab does not render survives a toggle", () => {
+    const entraRow: GitProvider = {
+      id: "ado",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/acme"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: {
+        tenant_id: "0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f",
+        client_id: "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+        capability_ceiling: ["read", "code_write"],
+      },
+    };
+
+    it("toggling pat on an entra row keeps entra", async () => {
+      let latest: GitProvider[] = [];
+      render(<Harness initial={[entraRow]} onLatest={(g) => (latest = g)} />);
+      const row = screen.getByTestId("provider-row-azure_devops");
+      await userEvent.click(within(row).getByRole("checkbox", { name: /PAT · in-sandbox/ }));
+      expect(latest[0].lanes).toContain("entra");
+      expect(latest[0].lanes).toContain("pat");
+      expect(latest[0].entra).toBeDefined();
+    });
+
+    it("and never collapses to the empty 'every legacy lane' form while entra is held", async () => {
+      let latest: GitProvider[] = [];
+      render(
+        <Harness
+          initial={[{ ...entraRow, lanes: ["pat", "entra"] }]}
+          onLatest={(g) => (latest = g)}
+        />,
+      );
+      const row = screen.getByTestId("provider-row-azure_devops");
+      // ssh is the other lane an Azure DevOps row can carry; ticking it makes
+      // every RENDERED lane checked, which used to write [] and take entra.
+      await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · resident/ }));
+      expect(latest[0].lanes).toEqual(expect.arrayContaining(["pat", "ssh", "entra"]));
+      expect(latest[0].lanes).not.toEqual([]);
+    });
+
+    it("an entra lane leaves the three legacy checkboxes unchecked — the field narrows", () => {
+      render(<Harness initial={[entraRow]} />);
+      const row = screen.getByTestId("provider-row-azure_devops");
+      for (const box of within(row).getAllByRole("checkbox")) {
+        expect(box).toHaveAttribute("aria-checked", "false");
+      }
+    });
+  });
+
   it("S.GIT_FOOTER renders once, as the plain note under the tab", () => {
     render(<Harness initial={[]} />);
     expect(

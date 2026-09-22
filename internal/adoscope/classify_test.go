@@ -76,35 +76,36 @@ func TestClassifyMethodOverride(t *testing.T) {
 	runCases(t, []caseT{
 		{name: "a plain GET is a read", req: adoReq(http.MethodGet, prPath, ""), want: CapRead},
 		{
-			name: "a GET overridden to PATCH is classified as the PATCH",
-			req:  overridden(http.MethodGet, prPath, "PATCH", `{"status":"completed"}`),
+			name: "a POST overridden to PATCH is classified as the PATCH",
+			req:  overridden(http.MethodPost, prPath, "PATCH", `{"status":"completed"}`),
 			want: CapPR,
 		},
 		{
 			name: "the override still reaches the body rules",
-			req:  overridden(http.MethodGet, prPath, "PATCH", `{"completionOptions":{"bypassPolicy":true}}`),
+			req:  overridden(http.MethodPost, prPath, "PATCH", `{"completionOptions":{"bypassPolicy":true}}`),
 			want: CapPolicyBypass,
 		},
 		{
 			name: "a lowercase override is still the method",
-			req:  overridden(http.MethodGet, prPath, "patch", `{"status":"active"}`),
+			req:  overridden(http.MethodPost, prPath, "patch", `{"status":"active"}`),
 			want: CapPR,
 		},
 		{
-			name: "a POST overridden to GET is a read",
+			name: "a POST overridden to GET is REFUSED — an override may only raise",
 			req:  overridden(http.MethodPost, "/acme/proj/_apis/wit/workitems/$task", "GET", ""),
-			want: CapRead,
+
+			wantErr: true,
 		},
 		{
 			name:    "an override that is not a method is refused, not ignored",
-			req:     overridden(http.MethodGet, prPath, "FROB", ""),
+			req:     overridden(http.MethodPost, prPath, "FROB", ""),
 			wantErr: true,
 		},
 		{
 			name: "two override values are refused — which one the server acts on is not knowable",
 			req: func() Request {
-				r := adoReq(http.MethodGet, prPath, "")
-				r.Header = hdr("X-HTTP-Method-Override", "GET", "X-HTTP-Method-Override", "DELETE")
+				r := adoReq(http.MethodPost, prPath, "")
+				r.Header = hdr("X-HTTP-Method-Override", "PATCH", "X-HTTP-Method-Override", "DELETE")
 				return r
 			}(),
 			wantErr: true,
@@ -363,11 +364,6 @@ func TestClassifyRefMove(t *testing.T) {
 			req:     adoReq(http.MethodPost, refs, `[{"name":"refs/heads/topic","name":"refs/heads/main"}]`),
 			wantErr: true,
 		},
-		{
-			name: "a git-over-HTTP push stays unclassified — the pack protocol names no ref here",
-			req:  adoReq(http.MethodPost, "/acme/proj/_git/repo/git-receive-pack", "PACK"),
-			want: CapUnclassifiedWrite,
-		},
 	})
 }
 
@@ -472,8 +468,11 @@ func TestUnclassifiedWriteIsNotGrantable(t *testing.T) {
 	if v.Capability.Grantable() {
 		t.Fatalf("%q is grantable — an unrecognized write must never be", v.Capability)
 	}
-	if got := ScopesFor([]Capability{v.Capability}); len(got) != 0 {
-		t.Fatalf("ScopesFor(%q) = %v, want no scopes", v.Capability, got)
+	if _, err := ScopesFor([]Capability{v.Capability}); err == nil {
+		t.Fatalf("ScopesFor(%q) = nil error — an empty scope set reads as permission to a subset gate", v.Capability)
+	}
+	if Permits(GrantableCapabilities(), v) {
+		t.Fatalf("Permits() allowed %q against EVERY grantable capability", v.Capability)
 	}
 }
 
@@ -483,8 +482,11 @@ func TestDeniedAreasAreNeverGrantable(t *testing.T) {
 		if c.Grantable() {
 			t.Errorf("%q is grantable — a denied area must never be", c)
 		}
-		if got := ScopesFor([]Capability{c}); len(got) != 0 {
-			t.Errorf("ScopesFor(%q) = %v, want no scopes", c, got)
+		if _, err := ScopesFor([]Capability{c}); err == nil {
+			t.Errorf("ScopesFor(%q) = nil error — a denied area must never resolve to a scope set", c)
+		}
+		if Permits(GrantableCapabilities(), Verdict{Capability: c}) {
+			t.Errorf("Permits() allowed %q against EVERY grantable capability", c)
 		}
 		if !strings.HasPrefix(Label(c), "Not available") {
 			t.Errorf("Label(%q) = %q, want a label that reads as unavailable", c, Label(c))

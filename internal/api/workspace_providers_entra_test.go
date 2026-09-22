@@ -21,6 +21,8 @@ func entraRow(mutate func(*types.GitProvider)) types.GitProvider {
 		Kind:     types.GitProviderAzureDevOps,
 		BaseURLs: []string{"https://dev.azure.com/acme"},
 		Lanes:    []types.GitLane{types.GitLaneEntra},
+		// per_user is not optional on this lane — see providers400EntraShar.
+		CredentialSource: types.CredentialSourcePerUser,
 		Entra: &types.ADOEntraConfig{
 			TenantID:          "0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f",
 			ClientID:          "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
@@ -70,6 +72,8 @@ func TestValidateProviderEntra(t *testing.T) {
 		{"a block with no lane", block(types.GitProvider{
 			ID: "ado", Kind: types.GitProviderAzureDevOps,
 			BaseURLs: []string{"https://dev.azure.com/acme"},
+			// No Lanes and no credential source: the orphan rule is what
+			// refuses this, not the per_user one.
 			Entra: &types.ADOEntraConfig{
 				TenantID:          "0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f",
 				ClientID:          "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
@@ -125,9 +129,13 @@ func TestValidateProviderEntra(t *testing.T) {
 			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapRead}
 			r.Entra.DefaultProfile = nil
 		})), false},
-		{"an empty profile against a ceiling that cannot read is a contradiction", block(entraRow(func(r *types.GitProvider) {
+		{"a ceiling that cannot read is refused whatever the profile says", block(entraRow(func(r *types.GitProvider) {
 			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeWrite}
 			r.Entra.DefaultProfile = nil
+		})), true},
+		{"and refused even when the profile names only what it does admit", block(entraRow(func(r *types.GitProvider) {
+			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeWrite}
+			r.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapCodeWrite}
 		})), true},
 
 		{"the bearer token mode", block(entraRow(func(r *types.GitProvider) {
@@ -140,9 +148,12 @@ func TestValidateProviderEntra(t *testing.T) {
 			r.Entra.TokenMode = "oauth"
 		})), true},
 
-		{"per_user on the entra lane", block(entraRow(func(r *types.GitProvider) {
-			r.CredentialSource = types.CredentialSourcePerUser
-		})), false},
+		{"the lane is refused with a SHARED credential source", block(entraRow(func(r *types.GitProvider) {
+			r.CredentialSource = types.CredentialSourceShared
+		})), true},
+		{"and refused with none at all, which reads as shared", block(entraRow(func(r *types.GitProvider) {
+			r.CredentialSource = ""
+		})), true},
 		{"per_user without the lane has no per-person path", withSource(block(adoRow("ado", false, "https://dev.azure.com/acme")), types.CredentialSourcePerUser), true},
 		{"shared without the lane is today's behaviour", withSource(block(adoRow("ado", false, "https://dev.azure.com/acme")), types.CredentialSourceShared), false},
 		{"an invented credential source", withSource(block(githubRow("gh", false, "https://github.com/acme")), "borrowed"), true},
@@ -183,6 +194,12 @@ func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 			r.CredentialSource = types.CredentialSourcePerUser
 			return r
 		}(), "needs the \"entra\" lane"},
+		{"shared on the lane", entraRow(func(r *types.GitProvider) {
+			r.CredentialSource = types.CredentialSourceShared
+		}), "no such thing as a shared Entra sign-in"},
+		{"a ceiling that cannot read", entraRow(func(r *types.GitProvider) {
+			r.Entra.CapabilityCeiling = []adoscope.Capability{adoscope.CapCodeWrite}
+		}), "every profile starts from reads"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateWorkspaceProviders(&types.WorkspaceProviders{Git: []types.GitProvider{tc.row}})
@@ -254,6 +271,19 @@ func TestStoredProviderBlockRoundTripsByteIdentical(t *testing.T) {
 	if err := json.Unmarshal([]byte(storedProviderBlock), &block); err != nil {
 		t.Fatalf("unmarshal the stored block: %v", err)
 	}
+	// The ETag FIRST, because it is the strictest form of the same claim: both
+	// doors' concurrency contract is sha256 over the marshalled document, so
+	// an unchanged document must hash to the value it hashed to before, or
+	// every open console 412s once on upgrade.
+	//
+	// The value is a LITERAL, not a second computation of the same input: an
+	// earlier version compared computeETag of two decodes of one string, which
+	// agree whatever the struct does and so could never fail. computeETag is
+	// untouched by this change, so the literal is the pre-change value; the day
+	// a field is added without omitempty, this is the line that breaks.
+	if got := computeETag(block); got != storedProviderETag {
+		t.Fatalf("ETag = %s, want the pre-change %s — the stored document now marshals differently", got, storedProviderETag)
+	}
 	again, err := json.Marshal(block)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -281,23 +311,11 @@ func TestStoredProviderBlockRoundTripsByteIdentical(t *testing.T) {
 			t.Errorf("row %q reads as REST-disabled — rest_api defaults to true", row.ID)
 		}
 	}
-	// The ETag both doors compute is over these bytes, so an unchanged
-	// document must keep an unchanged ETag — otherwise every open console
-	// would 412 once on upgrade.
-	if before, after := computeETag(mustUnmarshalProviders(t, storedProviderBlock)), computeETag(block); before != after {
-		t.Fatalf("ETag changed for an unchanged document: %q -> %q", before, after)
-	}
 }
 
-// mustUnmarshalProviders is the second decode the ETag comparison needs.
-func mustUnmarshalProviders(t *testing.T, raw string) types.WorkspaceProviders {
-	t.Helper()
-	var block types.WorkspaceProviders
-	if err := json.Unmarshal([]byte(raw), &block); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	return block
-}
+// storedProviderETag is computeETag(storedProviderBlock) — see the test above
+// for why it is written out rather than recomputed.
+const storedProviderETag = `"84e9d899b196e392908e4adc691c147e899ffd81ea655ff0cfd2babf26cbe9ec"`
 
 // TestEntraBlockRoundTripsThroughBothDoors proves the new block survives the
 // wire in the shape it was written, including the pointer-valued rest_api

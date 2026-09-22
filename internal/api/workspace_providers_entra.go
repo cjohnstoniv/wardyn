@@ -32,6 +32,8 @@ const (
 	providers400EntraGUID = "git[%d].entra.%s: %q is not a GUID — a tenant and a client are named by GUID, never by an alias"
 	providers400EntraCap  = "git[%d].entra.%s[%d]: %q is not a capability — want one of: %s"
 	providers400EntraCeil = "git[%d].entra.capability_ceiling: name at least one capability — an empty ceiling has no reading that is not a guess"
+	providers400EntraRead = "git[%d].entra.capability_ceiling: name %q — every profile starts from reads, so a ceiling without it can serve nothing"
+	providers400EntraShar = "git[%d].credential_source: the %q lane needs per_user — there is no such thing as a shared Entra sign-in"
 	providers400EntraProf = "git[%d].entra.default_profile: %q is outside capability_ceiling"
 	providers400EntraMode = "git[%d].entra.token_mode: %q is not a token mode — want one of: %s"
 	providers400Source    = "git[%d].credential_source: %q is not a credential source — want one of: %s"
@@ -76,6 +78,15 @@ func validateProviderEntra(i int, row types.GitProvider) error {
 	if err := entraLaneHosts(i, row); err != nil {
 		return err
 	}
+	// The lane REQUIRES per_user, rather than merely permitting it. An Entra
+	// sign-in is a person authenticating as themselves against their own
+	// tenant; "shared" would have to mean one person's identity silently
+	// backing everyone else's runs, which is the failure this lane exists to
+	// end. Refusing it here beats storing a row whose credential_source has no
+	// defined meaning.
+	if row.CredentialSource != types.CredentialSourcePerUser {
+		return fmt.Errorf(providers400EntraShar, i, string(types.GitLaneEntra))
+	}
 	if row.Entra == nil {
 		return fmt.Errorf(providers400EntraNone, i)
 	}
@@ -113,6 +124,13 @@ func validateEntraBlock(i int, cfg types.ADOEntraConfig) error {
 	}
 	if err := grantableCapabilities(i, "capability_ceiling", cfg.CapabilityCeiling); err != nil {
 		return err
+	}
+	// The ceiling must admit READS. Every profile starts from them — the
+	// default one IS them — so a ceiling without read describes a lane that
+	// would refuse the first request a run makes, and the contradiction is
+	// cheaper to catch at the write than to debug at the forge.
+	if !slices.Contains(cfg.CapabilityCeiling, adoscope.CapRead) {
+		return fmt.Errorf(providers400EntraRead, i, string(adoscope.CapRead))
 	}
 	if err := grantableCapabilities(i, "default_profile", cfg.DefaultProfile); err != nil {
 		return err

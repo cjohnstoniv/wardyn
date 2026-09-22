@@ -60,12 +60,10 @@ func peekBody(req Request) ([]byte, error) {
 
 // singleHeader is h's one value for name, refusing a repeated header: two
 // values mean two answers, and which one the server acts on is not knowable
-// from here.
+// from here. The lookup is headerValues', so a non-canonical key on the map
+// cannot hide a Content-Encoding any more than it can hide a method override.
 func singleHeader(h http.Header, name string) (string, error) {
-	if h == nil {
-		return "", nil
-	}
-	v := h.Values(name)
+	v := headerValues(h, name)
 	switch len(v) {
 	case 0:
 		return "", nil
@@ -305,26 +303,45 @@ func batchIsWorkItemsOnly(req Request) error {
 		return fmt.Errorf("adoscope: a $batch naming no operation cannot be classified")
 	}
 	for _, op := range ops {
-		if !underWorkItemAPI(op.URI) {
-			return fmt.Errorf("adoscope: $batch operation %q is not a work-item URL", op.URI)
+		if err := batchOpIsWorkItem(op.URI, req.Org); err != nil {
+			return fmt.Errorf("adoscope: $batch operation %q: %w", op.URI, err)
 		}
 	}
 	return nil
 }
 
-// underWorkItemAPI reports whether uri is a RELATIVE path under the work-item
-// area. An absolute URI is refused outright: it could name another
-// organisation, another host or another service entirely, and the batch door
-// is not a place to re-run host admission.
-func underWorkItemAPI(uri string) bool {
+// batchOpIsWorkItem holds ONE $batch operation URI to the same two rules the
+// outer request is held to: it is under the work-item area, and it is on the
+// organisation the row pinned.
+//
+// The ORGANISATION half was the hole. An operation may be written relative to
+// the organisation root ("/_apis/wit/…") or may name the organisation itself
+// ("/acme/proj/_apis/wit/…"), and nothing checked which organisation that was
+// — so a batch POSTed to the pinned organisation carried writes into another
+// one under a work_write the row had granted.
+//
+// An ABSOLUTE URI is refused outright: it could name another host or another
+// service entirely, and the batch door is not a place to re-run host
+// admission. The segment decode is the outer request's, so a dot segment or a
+// hidden separator inside an operation URI is refused here too.
+func batchOpIsWorkItem(uri, org string) error {
 	u, err := url.Parse(strings.TrimSpace(uri))
 	if err != nil || u.Scheme != "" || u.Host != "" || u.Opaque != "" {
-		return false
+		return fmt.Errorf("an operation URI is relative to the organisation, never absolute")
 	}
 	segs, err := decodeSegments(u.Path)
 	if err != nil {
-		return false
+		return err
+	}
+	if len(segs) > 0 && segs[0] != "_apis" {
+		if !strings.EqualFold(segs[0], strings.TrimSpace(org)) {
+			return fmt.Errorf("names organisation %q, row pins %q", segs[0], org)
+		}
+		segs = segs[1:]
 	}
 	i := slices.Index(segs, "_apis")
-	return i >= 0 && i+1 < len(segs) && segs[i+1] == "wit"
+	if i < 0 || i+1 >= len(segs) || segs[i+1] != "wit" {
+		return fmt.Errorf("is not a work-item URL")
+	}
+	return nil
 }
