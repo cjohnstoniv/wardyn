@@ -5,6 +5,7 @@ package oidc
 
 import (
 	"bufio"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,7 +29,9 @@ import (
 //
 // The two chart renders (SSO + admin token, and auth.ssoOnly) share one
 // values.yaml, so they share one derivation; what the API then allows each role
-// on each render is internal/api's TestSSOShapeRoleMatrix.
+// on each render is internal/api's TestSSOShapeRoleMatrix. The two compose
+// harness shapes are the shipped env file with test/sso-roles/<shape>.env
+// layered on, merged exactly as scripts/compose-sso-roles.sh merges them.
 func TestShippedShapeRoleDerivation(t *testing.T) {
 	const deny = "" // login refused: no_role
 
@@ -66,6 +69,32 @@ func TestShippedShapeRoleDerivation(t *testing.T) {
 				{email: "dev@example.com", roles: []string{"Wardyn.Member", "Wardyn.Admin"}, want: RoleAdmin},
 				{email: "platform-team@example.com", want: RoleAdmin}, // operator allowlist
 				{email: "dev@example.com", want: RoleMember},          // default role: the point of m′
+			},
+		},
+		{
+			name: "m′ harness (m-prime example + test/sso-roles/mprime.env)",
+			env:  overlay(envFile(t, "deploy/desktop/wardyn.env.m-prime.example"), envFile(t, "test/sso-roles/mprime.env")),
+			dex:  "test/sso-roles/dex.yaml",
+			ids: []id{
+				{email: "admin@wardyn.local", want: RoleAdmin},
+				{email: "operator@wardyn.local", want: RoleAdmin},
+				{email: "secadmin@wardyn.local", want: RoleSecurityAdmin},
+				{email: "member@wardyn.local", want: RoleMember},
+				{email: "member2@wardyn.local", want: RoleMember},  // default role
+				{email: "stranger@wardyn.local", want: RoleMember}, // default role, by design
+			},
+		},
+		{
+			name: "compose harness (.env.example + test/sso-roles/compose-sso.env)",
+			env:  overlay(envFile(t, "deploy/compose/.env.example"), envFile(t, "test/sso-roles/compose-sso.env")),
+			dex:  "test/sso-roles/dex.yaml",
+			ids: []id{
+				{email: "admin@wardyn.local", want: RoleAdmin},
+				{email: "operator@wardyn.local", want: RoleAdmin},
+				{email: "secadmin@wardyn.local", want: RoleSecurityAdmin},
+				{email: "member@wardyn.local", want: RoleMember},
+				{email: "member2@wardyn.local", want: RoleMember},
+				{email: "stranger@wardyn.local", want: deny},
 			},
 		},
 		{
@@ -138,6 +167,12 @@ func envFile(t *testing.T, rel string) map[string]string {
 	return env
 }
 
+// overlay returns base with every key of top replacing it.
+func overlay(base, top map[string]string) map[string]string {
+	maps.Copy(base, top)
+	return base
+}
+
 func helmEnv(t *testing.T, rel string) map[string]string {
 	t.Helper()
 	var v struct {
@@ -149,30 +184,32 @@ func helmEnv(t *testing.T, rel string) map[string]string {
 	return v.Env
 }
 
+// dexEmails reads the staticPasswords of a Dex config — a plain one, or the
+// first ConfigMap in a manifest carrying one under data."config.yaml".
 func dexEmails(t *testing.T, rel string) []string {
 	t.Helper()
 	dec := yaml.NewDecoder(strings.NewReader(string(repoFile(t, rel))))
 	for {
 		var doc struct {
-			Kind string            `yaml:"kind"`
-			Data map[string]string `yaml:"data"`
-		}
-		if err := dec.Decode(&doc); err != nil {
-			t.Fatalf("%s: no ConfigMap carrying config.yaml: %v", rel, err)
-		}
-		if doc.Kind != "ConfigMap" || doc.Data["config.yaml"] == "" {
-			continue
-		}
-		var cfg struct {
+			Kind            string            `yaml:"kind"`
+			Data            map[string]string `yaml:"data"`
 			StaticPasswords []struct {
 				Email string `yaml:"email"`
 			} `yaml:"staticPasswords"`
 		}
-		if err := yaml.Unmarshal([]byte(doc.Data["config.yaml"]), &cfg); err != nil {
-			t.Fatalf("%s config.yaml: %v", rel, err)
+		if err := dec.Decode(&doc); err != nil {
+			t.Fatalf("%s: no Dex config with staticPasswords: %v", rel, err)
+		}
+		if doc.Kind == "ConfigMap" && doc.Data["config.yaml"] != "" {
+			if err := yaml.Unmarshal([]byte(doc.Data["config.yaml"]), &doc); err != nil {
+				t.Fatalf("%s config.yaml: %v", rel, err)
+			}
+		}
+		if len(doc.StaticPasswords) == 0 {
+			continue
 		}
 		var out []string
-		for _, p := range cfg.StaticPasswords {
+		for _, p := range doc.StaticPasswords {
 			out = append(out, p.Email)
 		}
 		return out

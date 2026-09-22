@@ -6,12 +6,13 @@
 /*
  * THE ROLE WALK — every Dex identity, signed in for real, on one chart render.
  *
- * scripts/kind-sso-walk.sh runs this file TWICE after the AWS SSO walk: once on
- * the render that walk certifies (SSO + the admin token) and once on
- * auth.ssoOnly=true with the token removed, then restores the first render.
- * WARDYN_LIVE_ROLES_RENDER names which one this invocation runs against, and
- * the first case refuses to go on if /healthz disagrees — so every assertion
- * below is on the render its title names.
+ * Four renders, one file. scripts/kind-sso-walk.sh runs it TWICE after the AWS
+ * SSO walk: `sso` (the chart with SSO + the admin token) and `sso-only`
+ * (auth.ssoOnly=true, token removed). scripts/compose-sso-roles.sh runs it on
+ * `mprime` (the desktop member-mode envelope) and `compose-sso` (the compose
+ * --profile sso stack). WARDYN_LIVE_ROLES_RENDER names which one this
+ * invocation runs against, and the first case refuses to go on if /healthz
+ * disagrees — so every assertion below is on the render its title names.
  *
  * What it proves that the hermetic suite cannot: that a real Dex sign-in
  * DERIVES the role the chart's role map and operator allowlist say it should,
@@ -31,11 +32,20 @@ import { SIGNIN } from "../../src/app/lib/people-access-copy";
 import { GOVERNANCE } from "../../src/app/lib/governance-copy";
 import { ADMIN_EMAIL, ADMIN_TOKEN, MEMBER_EMAIL, dexSignIn, me } from "./helpers";
 
-test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
+test.skip(
+  process.env.WARDYN_TEST_K8S !== "1" && process.env.WARDYN_TEST_SSO_ROLES !== "1",
+  "live role walk: run scripts/kind-sso-walk.sh (WARDYN_TEST_K8S=1) or scripts/compose-sso-roles.sh (WARDYN_TEST_SSO_ROLES=1)",
+);
 test.describe.configure({ mode: "serial" });
 
 const RENDER = process.env.WARDYN_LIVE_ROLES_RENDER || "sso";
 const SSO_ONLY = RENDER === "sso-only";
+// Member mode (docs/DESKTOP.md) keeps the token as the MDM's process credential:
+// it still works as a bearer, but the console never offers it to a human.
+const TOKEN_LOGIN = RENDER === "sso" || RENDER === "compose-sso";
+// m′'s default role is member, by design: an unmapped login is a member there
+// and refused everywhere else.
+const UNMAPPED_IS_MEMBER = RENDER === "mprime";
 const DEX_PASSWORD = "password";
 
 const ADMIN_NAV = ["Policies", GOVERNANCE.TITLE, "Permissions", "Secrets", "Audit", "Recordings"];
@@ -81,11 +91,11 @@ test(`[${RENDER}] the render is the one this invocation claims, and the sign-in 
   const hz = await (await request.get("/healthz")).json();
   expect(hz.sso, "/healthz: SSO is not configured on this render").toBe(true);
   expect(hz.sso_only, `/healthz.sso_only does not match render ${RENDER}`).toBe(SSO_ONLY);
-  expect(hz.token_login).toBe(!SSO_ONLY);
+  expect(hz.token_login, `/healthz.token_login on render ${RENDER}`).toBe(TOKEN_LOGIN);
 
   await page.goto("/");
   await expect(ssoControl(page)).toBeVisible({ timeout: 60_000 });
-  await expect(page.locator("#token")).toHaveCount(SSO_ONLY ? 0 : 1);
+  await expect(page.locator("#token")).toHaveCount(TOKEN_LOGIN ? 1 : 0);
   await expect(page.getByText(SIGNIN.ROLE_SOURCE)).toHaveCount(SSO_ONLY ? 0 : 1);
 });
 
@@ -122,7 +132,12 @@ for (const [email, want] of CAST) {
   });
 }
 
-test(`[${RENDER}] a login that matches no role is refused, and holds no session`, async ({ page }) => {
+test(`[${RENDER}] a login that matches no role is ${UNMAPPED_IS_MEMBER ? "a member" : "refused"}`, async ({ page }) => {
+  if (UNMAPPED_IS_MEMBER) {
+    await dexSignIn(page, "stranger@wardyn.local");
+    expect(await me(page)).toMatchObject({ role: "member", operator: false, security_operator: false });
+    return;
+  }
   await page.goto("/");
   await ssoControl(page).click();
   await page.locator('input[type="password"]').waitFor({ timeout: 60_000 });

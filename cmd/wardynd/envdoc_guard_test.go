@@ -146,6 +146,10 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_KIND_SSO_SEEN_PORT": true, "WARDYN_LIVE_SEEN_URL": true,
 	"WARDYN_KIND_SSO_NODE":      true,
 	"WARDYN_KIND_SSO_TOKEN_TTL": true, "WARDYN_KIND_SSO_ROLE_CRED_TTL": true, "WARDYN_KIND_SSO_PROXY_INJECT": true,
+	// scripts/compose-sso-roles.sh's inputs (the compose SSO role walk), read
+	// only by that script and ui/e2e/live/sso-roles.spec.ts.
+	"WARDYN_TEST_SSO_ROLES": true, "WARDYN_ROLES_WARDYND_IMAGE": true,
+	"WARDYN_ROLES_PROXY_IMAGE": true, "WARDYN_ROLES_EVIDENCE": true,
 	// The walk's own EXPORTS to ui/e2e/live/sso-member.spec.ts and
 	// ui/e2e/live/sso-member-recovery.spec.ts (process.env, never Go) — outputs
 	// of the walk, not operator inputs.
