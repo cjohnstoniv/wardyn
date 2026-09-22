@@ -547,9 +547,9 @@ func TestGitCredentialGate_ResolvedSpecChokepoint(t *testing.T) {
 		if w.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
 		}
-		if fr.createCalls != 1 {
-			t.Errorf("CreateSandbox calls = %d, want 1", fr.createCalls)
-		}
+		// POST /runs answers once the run exists; dispatch continues
+		// server-side, so wait for the sandbox rather than reading it now.
+		fr.waitForCreates(t, 1)
 	})
 }
 

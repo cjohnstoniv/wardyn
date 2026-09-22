@@ -32,7 +32,12 @@ describe("useAdoConnect", () => {
     vi.useFakeTimers();
     getMineMock.mockReset();
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    // vitest 4 reuses an existing spy on a re-spied method, so window.open's
+    // calls would otherwise accumulate across tests.
+    vi.restoreAllMocks();
+  });
 
   it("opens about:blank, severs the opener, then navigates the popup to the sign-in URL", async () => {
     const popup = fakePopup();
