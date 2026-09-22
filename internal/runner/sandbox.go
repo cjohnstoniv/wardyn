@@ -231,6 +231,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		MITMLLM:              pc.MITMLLM,
 		GitGrants:            pc.GitGrants,
 		PATGrants:            pc.PATGrants,
+		ADOGrants:            pc.ADOGrants,
 		UpstreamProxyURL:     pc.UpstreamProxyURL,
 		TrustedCAPEM:         pc.TrustedCAPEM,
 		InternalHosts:        pc.InternalHosts,

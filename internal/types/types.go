@@ -354,6 +354,27 @@ const ManagedOAuthSecret = "anthropic-managed-oauth"
 // the sentinel arm never reads.
 const AWSSSOAccessTokenSecret = "aws-sso-access-token"
 
+// ADOEntraAccessTokenSecret is a SENTINEL secret name (NOT a stored secret),
+// the fourth of them, and it resolves to an Azure DevOps access token minted
+// from the RUN OWNER's own captured Entra sign-in (internal/api's
+// resolveADOInjection). Nothing is stored under this name: the credential in
+// the store is the person's refresh token, held in the reserved
+// `wardyn-harness-ado-<row>-oauth` blob, and the access token exists only for
+// the moment it is handed to the run's proxy sidecar.
+//
+// THE TOKEN DOES NOT BOUND THE RUN, and no reader of this name may assume it
+// does. Measured against a real tenant, Entra issues an Azure DevOps token
+// carrying EVERY scope the person consented to whatever subset is requested,
+// so what holds a run to its granted capabilities is Wardyn's own capability
+// check in front of the resource — the proxy — not the credential. The
+// granted scope string the authority reports is recorded on the audit row
+// because a token is opaque and that string is the only honest evidence of
+// what the credential can do.
+//
+// Deliberately NOT in sinkReservedSecret, for AWSSSOAccessTokenSecret's
+// reason: being resolved at that sink, host-pinned, is the whole point.
+const ADOEntraAccessTokenSecret = "azure-devops-entra-access-token"
+
 // GrantSpec is a credential scope description. The broker enforces the
 // invariant: a minted credential's scope is exactly the approved scope —
 // never wider (no scope-widening between request and mint).
@@ -406,6 +427,19 @@ type ResolvedInjection struct {
 	Value     string `json:"value"`
 	JTI       string `json:"jti"`
 	ExpiresAt int64  `json:"expires_at,omitempty"`
+	// Organisation is the Azure DevOps organisation a per-person Azure DevOps
+	// credential was dispatched for, on that lane's resolves only (empty on
+	// every other). The proxy needs it because the credential itself is not
+	// organisation-bound — an Entra access token carries no organisation claim
+	// at all, so only the request URL names one — which makes the proxy's
+	// per-request organisation pin the thing that binds it.
+	Organisation string `json:"organisation,omitempty"`
+	// Capabilities is the same lane's GRANTED capability set, in the
+	// internal/adoscope vocabulary, as the run was dispatched with it. It is what
+	// the proxy's capability gate holds each request to: the token itself
+	// carries every scope the person consented to and bounds nothing. Empty on
+	// every other lane.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // ApprovalKind enumerates what a human is being asked to approve.

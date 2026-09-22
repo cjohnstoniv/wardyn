@@ -86,6 +86,9 @@ type Config struct {
 	// with and Wardyn cannot narrow it — so a per-repo key here would imply a
 	// confinement the credential does not have. Empty => the route always 403s.
 	PATGrants map[string]PATGrant `json:"pat_grants,omitempty"`
+	// ADOGrants is the run's per-person Azure DevOps grant, which drives the
+	// REST gate (ado_gate.go, ado_grants.go). Empty == the gate is off.
+	ADOGrants []ADOGrantConfig `json:"ado_grants,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for

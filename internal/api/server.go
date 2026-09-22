@@ -814,6 +814,10 @@ type Server struct {
 	// (see ado_entra_store.go). Process-local for the same reason as the locks
 	// above, and its zero value is ready to use.
 	adoEntra adoEntraFlight
+	// adoEntraTokens reuses a minted Azure DevOps access token across the
+	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
+	// not rotate one person's refresh token once per host.
+	adoEntraTokens adoEntraAccessCache
 }
 
 // New constructs a Server and builds its router. It does not start listening.
