@@ -31,7 +31,7 @@ import {
   type DecisionOptions,
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
-import { ADO_CAPABILITY } from "../../lib/ado-capability-copy";
+import { ADO } from "../../lib/ado-entra-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
@@ -397,7 +397,7 @@ export function LiveApprovals({
   const heading = allAwsReauth
     ? REAUTH_HEADING
     : allAdoConsent
-      ? ADO_CAPABILITY.STRIP_HEADING_CONSENT
+      ? ADO.STRIP_HEADING_CONSENT
       : anyHeld
         ? "Sandbox is waiting — approve to let it through"
         : pending.every((a) => a.kind === "egress_domain")

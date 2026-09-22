@@ -701,7 +701,7 @@ already done (§5 #10).
   something.
 - `REQ_HELD` / `REQ_HELD_EXPIRED` (§10.3) claimed "up to four minutes" as if the card could always
   tell a still-held request from one whose hold already lapsed server-side and was refused. It cannot:
-  no expiry timestamp reaches the client (see ado-capability-copy.ts's own note), so `stillHeld`'s
+  no expiry timestamp reaches the client (see ado-capability-card.tsx's `stillHeld` comment), so its
   240s window is a CLIENT-SIDE ESTIMATE, not a read fact. Both rows are reworded to stop promising a
   number the card cannot verify, while still being honest that approving works either way (it lets a
   genuinely-still-held request through, or raises a fresh one if the old hold already lapsed).
@@ -908,7 +908,8 @@ consequence sentence's `{thing}` plugs in (§7.6 draws "push"/"change"/"action" 
 as a keyed row) — and a few small fields (Ref class, a consent-card heading) the card needs and the
 mock's own drawing doesn't isolate as text either. These rows are ADDED, not amended: §7.2–§7.8 stay
 exactly as frozen 2026-09-22 above. Every row below is pinned by the same parser
-(ado-capability-copy.test.ts) that checks §7.4/§7.6/§7.8.
+(ado-entra-copy.test.ts, N3 round 3 — originally ado-capability-copy.test.ts, before that file
+merged into this one's canon) that checks §7.4/§7.6/§7.8.
 
 ### 10.1 `ADO` — the consequence sentences' `{thing}`, per capability
 

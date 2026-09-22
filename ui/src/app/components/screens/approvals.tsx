@@ -48,7 +48,7 @@ import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
 import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
-import { ADO_CAPABILITY } from "../../lib/ado-capability-copy";
+import { ADO } from "../../lib/ado-entra-copy";
 import {
   APPROVAL,
   APPROVAL_BANNER_LABEL,
@@ -277,7 +277,7 @@ function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAudience)
       // STAYS TRUE HERE: an Azure DevOps escalation never reaches this
       // branch — isAdoCapabilityRequest routes it to AdoCapabilityCard
       // before deriveBanner is ever called (see PendingCard below), because
-      // for THAT one lane the claim above is false (ADO_CAPABILITY.
+      // for THAT one lane the claim above is false (ADO.
       // TOOL_CALL_NOTE, rendered once on this screen, says why). Every other
       // tool_call still lands here, and the sentence below is still honest
       // for all of them.
@@ -449,7 +449,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   };
 
   // The pending queue's own tool_call items, and only those — the screen-
-  // level honesty note (ADO_CAPABILITY.TOOL_CALL_NOTE) is worth a line only
+  // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
   // when a tool_call approval is actually in view.
   const anyToolCall = pendingItems.some((a) => a.kind === "tool_call") || decidedItems.some((a) => a.kind === "tool_call");
 
@@ -475,7 +475,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           the proxy until decided; every OTHER tool_call approval is still
           the record-only kind deriveBanner's tool_call case describes. */}
       {anyToolCall && (
-        <p className="mb-4 max-w-[72ch] text-xs text-muted-foreground">{ADO_CAPABILITY.TOOL_CALL_NOTE}</p>
+        <p className="mb-4 max-w-[72ch] text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
       )}
 
       <Tabs value={filter} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">

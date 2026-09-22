@@ -17,7 +17,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
-import { ADO_CAPABILITY } from "../../lib/ado-capability-copy";
+import { ADO } from "../../lib/ado-entra-copy";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
@@ -145,6 +145,6 @@ describe("ApprovalsScreen — the Azure DevOps capability card", () => {
     mockRow = escalationRow;
     renderScreen(false, false, "dana@acme.example");
     await screen.findByTestId("ado-capability-card");
-    expect(screen.getByText(ADO_CAPABILITY.TOOL_CALL_NOTE)).toBeInTheDocument();
+    expect(screen.getByText(ADO.TOOL_CALL_NOTE)).toBeInTheDocument();
   });
 });

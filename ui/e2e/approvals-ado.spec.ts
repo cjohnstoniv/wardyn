@@ -14,7 +14,7 @@
 // backend. Only a browser proves the caret-staged scope, the explicit
 // decision_scope on the wire, and the card leaving the list once decided.
 import { test, expect, gotoConsole, navTo, sql } from "./fixtures";
-import { ADO_CAPABILITY } from "../src/app/lib/ado-capability-copy";
+import { ADO } from "../src/app/lib/ado-entra-copy";
 
 const APPROVAL_ID = "e2e-ado-escalation-1";
 
@@ -81,7 +81,7 @@ test.describe("Approvals — the Azure DevOps capability card", () => {
     // it, unstaged, before either button is pressed.
     await card.getByRole("button", { name: "More options" }).click();
     await page.getByText("Once", { exact: true }).click();
-    await expect(card.getByText(ADO_CAPABILITY.REQ_SCOPE_READOUT("Once"))).toBeVisible();
+    await expect(card.getByText(ADO.REQ_SCOPE_READOUT("Once"))).toBeVisible();
 
     await card.getByRole("button", { name: "Approve" }).click();
 

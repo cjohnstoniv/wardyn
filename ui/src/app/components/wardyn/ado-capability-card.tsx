@@ -12,7 +12,9 @@
 // queue) and run-detail.tsx's Approvals tab — docs/design/ado-entra-prompt.md
 // §8 names the first two; the Approvals tab is round-2's own addition, so the
 // same explicit-scope rule applies there too. §7.6 is this card's frozen copy
-// source, plus §10 (ado-capability-copy.ts's own doc comment).
+// source, plus §10 — both live in ado-entra-copy.ts's ADO namespace (N3,
+// round 3: that file absorbed this card's own former copy subset,
+// ado-capability-copy.ts, once #415 — which owns ado-entra-copy.ts — merged).
 //
 // WHAT THIS CARD DOES NOT DRAW, AND WHY: the frozen mock (State 6) also draws
 // an above-ceiling card, an always-refused card, a governance-refused card and
@@ -21,8 +23,10 @@
 // raiseADOCapability's always_deny check all answer the SANDBOX synchronously
 // (a 403), before any ApprovalRequest row is created — see that file's own
 // comments. Drawing UI for an ApprovalRequest state the server cannot produce
-// would be dead code, not a card. ado-capability-copy.ts's own doc comment
-// lists every canon key this file does not carry for the same reason.
+// would be dead code, not a card — so this component simply never reads
+// ADO.REQ_CEILING_*/REQ_ALWAYS_DENIED_*/REQ_GOVERNANCE_*/REQ_UNCLASSIFIED_*,
+// though ado-entra-copy.ts itself carries the full §7 canon those keys are
+// part of (unlike this card's now-deleted former subset module).
 //
 // THE SCOPE ASYMMETRY THIS CARD MUST RESPECT: adoDecisionRule
 // (injection_ado_capability.go) treats a BODYLESS decide (no decision_scope
@@ -48,7 +52,7 @@ import { Check, CheckCircle2, ChevronDown, Loader2, X } from "lucide-react";
 import type { AgentRun, ApprovalRequest, DecisionOptions } from "../../lib/types";
 import { canDecideAdoCapability, isAdoConsentRequest, type AdoCapabilityScope, type AdoConsentScope } from "../../lib/types/approvals";
 import { isTerminalRunState } from "../../lib/types";
-import { ADO_CAPABILITY } from "../../lib/ado-capability-copy";
+import { ADO } from "../../lib/ado-entra-copy";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Chip } from "./primitives";
@@ -62,15 +66,15 @@ import { cn } from "../ui/utils";
 // grantable server-side, none yet given a §7.4 canon label) falls back to
 // its raw wire name in mono, never a guessed label.
 const CAP_LABEL: Record<string, string> = {
-  read: ADO_CAPABILITY.CAP_READ,
-  code_write: ADO_CAPABILITY.CAP_CODE_WRITE,
-  pr: ADO_CAPABILITY.CAP_PR,
-  policy_admin: ADO_CAPABILITY.CAP_POLICY_ADMIN,
-  policy_bypass: ADO_CAPABILITY.CAP_POLICY_BYPASS,
-  repo_admin: ADO_CAPABILITY.CAP_REPO_ADMIN,
-  build_execute: ADO_CAPABILITY.CAP_BUILD_EXECUTE,
-  work_write: ADO_CAPABILITY.CAP_WORK_WRITE,
-  wiki_write: ADO_CAPABILITY.CAP_WIKI_WRITE,
+  read: ADO.CAP_READ,
+  code_write: ADO.CAP_CODE_WRITE,
+  pr: ADO.CAP_PR,
+  policy_admin: ADO.CAP_POLICY_ADMIN,
+  policy_bypass: ADO.CAP_POLICY_BYPASS,
+  repo_admin: ADO.CAP_REPO_ADMIN,
+  build_execute: ADO.CAP_BUILD_EXECUTE,
+  work_write: ADO.CAP_WORK_WRITE,
+  wiki_write: ADO.CAP_WIKI_WRITE,
 };
 
 // §10.1's per-capability noun for the consequence sentences' {thing} — the
@@ -78,15 +82,15 @@ const CAP_LABEL: Record<string, string> = {
 // "action"), never the generic "request" round 1 used. A capability outside
 // this map falls back to "request", same reasoning as CAP_LABEL's fallback.
 const CAP_THING: Record<string, string> = {
-  read: ADO_CAPABILITY.CAP_THING_READ,
-  code_write: ADO_CAPABILITY.CAP_THING_CODE_WRITE,
-  pr: ADO_CAPABILITY.CAP_THING_PR,
-  policy_admin: ADO_CAPABILITY.CAP_THING_POLICY_ADMIN,
-  policy_bypass: ADO_CAPABILITY.CAP_THING_POLICY_BYPASS,
-  repo_admin: ADO_CAPABILITY.CAP_THING_REPO_ADMIN,
-  build_execute: ADO_CAPABILITY.CAP_THING_BUILD_EXECUTE,
-  work_write: ADO_CAPABILITY.CAP_THING_WORK_WRITE,
-  wiki_write: ADO_CAPABILITY.CAP_THING_WIKI_WRITE,
+  read: ADO.CAP_THING_READ,
+  code_write: ADO.CAP_THING_CODE_WRITE,
+  pr: ADO.CAP_THING_PR,
+  policy_admin: ADO.CAP_THING_POLICY_ADMIN,
+  policy_bypass: ADO.CAP_THING_POLICY_BYPASS,
+  repo_admin: ADO.CAP_THING_REPO_ADMIN,
+  build_execute: ADO.CAP_THING_BUILD_EXECUTE,
+  work_write: ADO.CAP_THING_WORK_WRITE,
+  wiki_write: ADO.CAP_THING_WIKI_WRITE,
 };
 
 // Q3 (mock §9): teal Approve / plain Deny on an ordinary card; on the two
@@ -102,7 +106,7 @@ function capabilityHeading(capability: string): React.ReactNode {
 }
 
 function capabilityThing(capability: string): string {
-  return CAP_THING[capability] ?? ADO_CAPABILITY.REQ_FIELD_REQUEST.toLowerCase();
+  return CAP_THING[capability] ?? ADO.REQ_FIELD_REQUEST.toLowerCase();
 }
 
 // adoDecisionArgs ALWAYS sends an explicit decision_scope — see this file's
@@ -223,7 +227,7 @@ export function AdoCapabilityCard({
   if (!securityOperator && !trusted && run === null) {
     return (
       <div className="rounded-xl border border-border bg-card p-4" data-testid="ado-capability-card">
-        <p className="text-sm text-muted-foreground">{ADO_CAPABILITY.REQ_RUN_UNAVAILABLE}</p>
+        <p className="text-sm text-muted-foreground">{ADO.REQ_RUN_UNAVAILABLE}</p>
       </div>
     );
   }
@@ -233,9 +237,9 @@ export function AdoCapabilityCard({
     return (
       <div className="rounded-xl border border-border bg-card p-4" data-testid="ado-capability-card">
         <div className="flex items-center gap-2">
-          <Chip tone="neutral">{ADO_CAPABILITY.LIST_ENDED_CHIP}</Chip>
+          <Chip tone="neutral">{ADO.LIST_ENDED_CHIP}</Chip>
         </div>
-        <p className="mt-2 text-sm text-muted-foreground">{ADO_CAPABILITY.LIST_ENDED_BODY}</p>
+        <p className="mt-2 text-sm text-muted-foreground">{ADO.LIST_ENDED_BODY}</p>
       </div>
     );
   }
@@ -248,14 +252,14 @@ export function AdoCapabilityCard({
   const isOwner = !!runOwner && runOwner === viewerPrincipal;
   const decidable = trusted || canDecideAdoCapability(securityOperator, isOwner);
   const where = scopeData.repo ? `${scopeData.org}/${scopeData.repo}` : scopeData.org;
-  const source = ADO_CAPABILITY.REQ_SOURCE(relativeAbsolute(item.requested_at));
+  const source = ADO.REQ_SOURCE(relativeAbsolute(item.requested_at));
   const held = stillHeld(item.requested_at);
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4" data-testid="ado-capability-card">
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone={decidable ? "warning" : "neutral"}>
-          {decidable ? ADO_CAPABILITY.REQ_WAITING : ADO_CAPABILITY.REQ_NOT_YOURS_CHIP}
+          {decidable ? ADO.REQ_WAITING : ADO.REQ_NOT_YOURS_CHIP}
         </Chip>
         <div className="min-w-0">
           <h4 className="text-sm font-semibold text-foreground">{heading}</h4>
@@ -264,7 +268,7 @@ export function AdoCapabilityCard({
       </div>
 
       <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-        <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_REPOSITORY}</dt>
+        <dt className="text-muted-foreground">{ADO.REQ_FIELD_REPOSITORY}</dt>
         <dd className="font-mono text-xs text-foreground">{where || "—"}</dd>
         {scopeData.ref_class === "protected" && (
           // No ref NAME reaches the client (the canonical scope carries only
@@ -273,18 +277,18 @@ export function AdoCapabilityCard({
           // case; this row states the fact §2.3 asks for without inventing
           // a ref.
           <>
-            <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_REF_CLASS}</dt>
-            <dd className="text-xs text-foreground">{ADO_CAPABILITY.REQ_REF_CLASS_PROTECTED}</dd>
+            <dt className="text-muted-foreground">{ADO.REQ_FIELD_REF_CLASS}</dt>
+            <dd className="text-xs text-foreground">{ADO.REQ_REF_CLASS_PROTECTED}</dd>
           </>
         )}
-        <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_COMMAND}</dt>
+        <dt className="text-muted-foreground">{ADO.REQ_FIELD_COMMAND}</dt>
         <dd className="font-mono text-xs text-foreground">{scopeData.cmd}</dd>
         {runOwner && (
           <>
-            <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_ACTS_AS}</dt>
+            <dt className="text-muted-foreground">{ADO.REQ_FIELD_ACTS_AS}</dt>
             <dd className="text-xs text-foreground">
               {runOwner}
-              <span className="mt-0.5 block text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_ACTS_AS_HINT(runOwner)}</span>
+              <span className="mt-0.5 block text-meta text-muted-foreground">{ADO.REQ_ACTS_AS_HINT(runOwner)}</span>
             </dd>
           </>
         )}
@@ -308,7 +312,7 @@ export function AdoCapabilityCard({
                 run regardless of which scope was staged (#414), so a reader
                 must never see "Scope: Once" positioned as if it governed
                 Deny too. */}
-            <span className="text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_SCOPE_READOUT(SCOPE_LABEL[scope])}</span>
+            <span className="text-meta text-muted-foreground">{ADO.REQ_SCOPE_READOUT(SCOPE_LABEL[scope])}</span>
             <Button
               size="sm"
               variant={destructive ? "destructive" : "outline"}
@@ -320,16 +324,16 @@ export function AdoCapabilityCard({
             </Button>
           </div>
           <p className="mt-2.5 text-meta text-muted-foreground">
-            {boldFirstWord(scope === "once" ? ADO_CAPABILITY.REQ_APPROVING_ONCE(thing) : ADO_CAPABILITY.REQ_APPROVING_RUN(thing))}
+            {boldFirstWord(scope === "once" ? ADO.REQ_APPROVING_ONCE(thing) : ADO.REQ_APPROVING_RUN(thing))}
           </p>
-          <p className="mt-0.5 text-meta text-muted-foreground">{boldFirstWord(ADO_CAPABILITY.REQ_DENYING(thing))}</p>
+          <p className="mt-0.5 text-meta text-muted-foreground">{boldFirstWord(ADO.REQ_DENYING(thing))}</p>
           <p className="mt-2.5 text-meta text-muted-foreground">
-            {held ? ADO_CAPABILITY.REQ_HELD(thing) : ADO_CAPABILITY.REQ_HELD_EXPIRED(thing)}
+            {held ? ADO.REQ_HELD(thing) : ADO.REQ_HELD_EXPIRED(thing)}
           </p>
         </div>
       ) : (
         <p className="mt-3 border-t border-border/60 pt-3 text-sm text-muted-foreground">
-          {ADO_CAPABILITY.REQ_NOT_YOURS_BODY(runOwner ?? "the run's owner")}
+          {ADO.REQ_NOT_YOURS_BODY(runOwner ?? "the run's owner")}
         </p>
       )}
     </div>
@@ -384,17 +388,17 @@ function AdoScopeMenu({
               {SCOPE_LABEL[s]}
             </span>
             <span className="text-meta text-muted-foreground">
-              {s === "once" ? ADO_CAPABILITY.REQ_SCOPE_ONCE_HINT(thing) : ADO_CAPABILITY.REQ_SCOPE_RUN_HINT(thing)}
+              {s === "once" ? ADO.REQ_SCOPE_ONCE_HINT(thing) : ADO.REQ_SCOPE_RUN_HINT(thing)}
             </span>
           </button>
         ))}
         <div className={SCOPE_ITEM_CLS} aria-disabled>
-          <span className="font-medium text-muted-foreground">{ADO_CAPABILITY.SCOPE_UNTIL_LABEL}</span>
-          <span className="text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_SCOPE_UNTIL_REFUSED}</span>
+          <span className="font-medium text-muted-foreground">{ADO.SCOPE_UNTIL_LABEL}</span>
+          <span className="text-meta text-muted-foreground">{ADO.REQ_SCOPE_UNTIL_REFUSED}</span>
         </div>
         <div className={SCOPE_ITEM_CLS} aria-disabled>
-          <span className="font-medium text-muted-foreground">{ADO_CAPABILITY.SCOPE_ALWAYS_LABEL}</span>
-          <span className="text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_SCOPE_ALWAYS_REFUSED}</span>
+          <span className="font-medium text-muted-foreground">{ADO.SCOPE_ALWAYS_LABEL}</span>
+          <span className="text-meta text-muted-foreground">{ADO.REQ_SCOPE_ALWAYS_REFUSED}</span>
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -415,12 +419,16 @@ function AdoScopeMenu({
 // capability name — flagged in the S10 handoff. REQ_CONSENT_BODY (round 2)
 // is a plain string, not a function: it no longer claims a capability name
 // (or "you allowed it") the wire scope cannot back on every path — see its
-// own doc note in ado-capability-copy.ts.
+// own doc note in ado-entra-copy.ts.
 //
-// "Allow and continue" (REQ_CONSENT_CTA) links to Settings rather than
-// starting a redemption: the actual Azure DevOps sign-in surface
-// (screens/settings/ado-connection.tsx, §8 "Member sign-in") is a separate,
-// not-yet-built slice on this branch.
+// "Allow and continue" (REQ_CONSENT_CTA) links to /settings, not a route of
+// its own or a deep anchor into it: F9 (S10 round 3) points it at the same
+// Azure DevOps connection surface #415 built (screens/settings/ado-
+// connection.tsx's AdoConnectionCard, mounted unconditionally on the one
+// settings-screen.tsx page — no tabs, no query param), and #415's own
+// new-run-rail.tsx launch door already links there the identical way (a
+// bare `<Link to="/settings">`), so this reuses that precedent rather than
+// inventing a second convention for reaching the same card.
 function AdoConsentCard({
   item,
   viewerPrincipal,
@@ -433,26 +441,26 @@ function AdoConsentCard({
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4" data-testid="ado-consent-card">
       <div className="flex flex-wrap items-center gap-2">
-        <Chip tone="warning">{isOwner ? ADO_CAPABILITY.REQ_CONSENT_CHIP : ADO_CAPABILITY.REQ_WAITING_OTHER(owner)}</Chip>
+        <Chip tone="warning">{isOwner ? ADO.REQ_CONSENT_CHIP : ADO.REQ_WAITING_OTHER(owner)}</Chip>
         <div className="min-w-0">
-          <h4 className="text-sm font-semibold text-foreground">{ADO_CAPABILITY.REQ_CONSENT_HEADING}</h4>
-          <span className="text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_SOURCE(relativeAbsolute(item.requested_at))}</span>
+          <h4 className="text-sm font-semibold text-foreground">{ADO.REQ_CONSENT_HEADING}</h4>
+          <span className="text-meta text-muted-foreground">{ADO.REQ_SOURCE(relativeAbsolute(item.requested_at))}</span>
         </div>
       </div>
       <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-        <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_ACTS_AS}</dt>
+        <dt className="text-muted-foreground">{ADO.REQ_FIELD_ACTS_AS}</dt>
         <dd className="text-xs text-foreground">
           {owner}
-          <span className="mt-0.5 block text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_ACTS_AS_HINT(owner)}</span>
+          <span className="mt-0.5 block text-meta text-muted-foreground">{ADO.REQ_ACTS_AS_HINT(owner)}</span>
         </dd>
       </dl>
       <p className="mt-3 border-t border-border/60 pt-3 text-sm text-muted-foreground">
-        {isOwner ? ADO_CAPABILITY.REQ_CONSENT_BODY : ADO_CAPABILITY.REQ_CONSENT_OTHER_BODY(owner)}
+        {isOwner ? ADO.REQ_CONSENT_BODY : ADO.REQ_CONSENT_OTHER_BODY(owner)}
       </p>
       {isOwner && (
         <div className="mt-3">
           <Button asChild size="sm" variant="info">
-            <Link to="/settings">{ADO_CAPABILITY.REQ_CONSENT_CTA}</Link>
+            <Link to="/settings">{ADO.REQ_CONSENT_CTA}</Link>
           </Button>
         </div>
       )}

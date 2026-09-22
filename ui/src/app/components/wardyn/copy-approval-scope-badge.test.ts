@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from "vitest";
 import { approvalScopeBadge } from "./copy";
-import { ADO_CAPABILITY } from "../../lib/ado-capability-copy";
+import { ADO } from "../../lib/ado-entra-copy";
 
 const adoItem = (over: Record<string, unknown> = {}) => ({
   kind: "tool_call" as const,
@@ -23,11 +23,11 @@ const adoItem = (over: Record<string, unknown> = {}) => ({
 
 describe("approvalScopeBadge — the Azure DevOps escalation badge", () => {
   it("reads 'Allowed once' for an approved once-scoped escalation", () => {
-    expect(approvalScopeBadge(adoItem({ decision_scope: "once" }))).toBe(ADO_CAPABILITY.OUTCOME_ALLOWED_ONCE);
+    expect(approvalScopeBadge(adoItem({ decision_scope: "once" }))).toBe(ADO.OUTCOME_ALLOWED_ONCE);
   });
 
   it("reads 'Allowed for this run' for an approved run-scoped escalation", () => {
-    expect(approvalScopeBadge(adoItem({ decision_scope: "run" }))).toBe(ADO_CAPABILITY.OUTCOME_ALLOWED_RUN);
+    expect(approvalScopeBadge(adoItem({ decision_scope: "run" }))).toBe(ADO.OUTCOME_ALLOWED_RUN);
   });
 
   it("carries no badge for a denied escalation — the state chip already says Denied", () => {
