@@ -28,10 +28,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin" — a reader here, sometimes not even signed in, cannot reach a chart value. The
   SSO-role-source caveat ("comes from your SSO role assignment") is removed entirely, with its
   tests. Frozen strings: docs/design/signin-first-contact-canon.md.
-- The cockpit terminal's escape chord is now Ctrl+Shift+Backspace, typeable on every keyboard
-  layout — the old Ctrl+] required AltGr to type `]` on DE/FR/ES layouts, which collided with the
-  chord itself. Ctrl+] still works silently on US layouts but no longer fires while AltGr (altKey)
-  is held (#133).
+- The cockpit terminal's way out is now Ctrl+Shift+Backspace, which works on every keyboard
+  layout. On DE/FR/ES layouts the old chord needed AltGr to reach `]`, so it never fired there and
+  keyboard users had no way out of the terminal without a pointer (#133).
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
 - Azure DevOps projects and repositories whose names carry spaces or other permitted characters

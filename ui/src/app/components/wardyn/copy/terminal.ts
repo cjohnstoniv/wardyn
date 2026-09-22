@@ -7,10 +7,10 @@
 // into the PTY, so a keyboard user needs an advertised way out and 2.1.2
 // requires it be advised ON ENTRY.
 //
-// Chord: Ctrl+Shift+Backspace (#133) — the M2 sheet's Ctrl+] made `]`
-// untypeable on DE/FR/ES layouts, where `]` is a level-2 (AltGr) character and
-// AltGr arrives at the browser as ctrlKey && altKey, so the chord and the
-// keystroke that types a bracket were indistinguishable. Backspace has no
+// Chord: Ctrl+Shift+Backspace (#133) — the earlier Ctrl+] never fired on
+// DE/FR/ES layouts, where `]` needs AltGr and AltGr arrives at the browser as
+// ctrlKey && altKey (which the binding must ignore, or AltGr+9 could not type
+// a bracket) — so those users had no way out at all. Backspace has no
 // AltGr shape on any layout this widget ships to. Ctrl+Shift+Esc (the
 // originally filed proposal) is still out: Windows intercepts it at OS level
 // (Task Manager) before the browser ever sees it.
@@ -23,10 +23,7 @@
 const ESCAPE_CHORD = "Ctrl+Shift+Backspace";
 export const TERMINAL = {
   ESCAPE_CHORD,
-  // DRAFT (M2) — DIVERGES from the §7.6 staging, which spells this
-  // `TERMINAL_ESCAPE_HINT(chord)` = "{chord} moves focus out of the terminal."
-  // This is the M2 sitting sheet's §2 wording; the chord is that sheet's ruled
-  // alternative to the filed Ctrl+Shift+Esc.
+  // Canon: docs/design/terminal-escape-canon.md (#133).
   ESCAPE_CHORD_HINT: `${ESCAPE_CHORD} leaves the terminal`,
 
   // #216 — connection state moves OUT of xterm's own scrollback (where `[closed]`,

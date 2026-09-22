@@ -741,8 +741,8 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
 // its announcement are one feature: either alone still fails the criterion.
 //
 // The advertised chord is Ctrl+Shift+Backspace (#133) — the earlier Ctrl+]
-// made `]` untypeable on DE/FR/ES layouts, where AltGr (needed to type `]`)
-// arrives at the browser as ctrlKey && altKey. Ctrl+] still works, silently,
+// never fired on DE/FR/ES layouts, where AltGr (needed to type `]`) arrives
+// at the browser as ctrlKey && altKey. Ctrl+] still works, silently,
 // as a US-only fallback, but must not fire when altKey is held — that is
 // AltGr typing a bracket, not the chord. The per-layout matrix lives in
 // attach-terminal-keys.test.ts; these tests pin the wiring into the widget.

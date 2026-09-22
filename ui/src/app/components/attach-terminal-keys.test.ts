@@ -7,9 +7,9 @@ import { describe, it, expect } from "vitest";
 import { decideKey } from "./attach-terminal-keys";
 
 // #133 — DE/FR/ES layouts type `]` via AltGr, which the browser reports as
-// ctrlKey && altKey. A chord bound to bare Ctrl+] is then untypeable: every
-// AltGr+9 (DE) / AltGr+) etc. also LOOKS like the escape chord and steals the
-// bracket. The table below pins the fix per layout "shape" (how a given
+// ctrlKey && altKey, so a Ctrl+] chord (which must ignore altKey, or AltGr+9
+// could not type a bracket) never fires there. The table below pins the
+// layout-independent chord and the bracket per layout "shape" (how a given
 // physical key event arrives, not real IME behavior).
 
 const base = {
@@ -39,6 +39,11 @@ describe("decideKey", () => {
 
   it("Ctrl+] with altKey true (DE AltGr+9 typing a bracket) reaches the PTY", () => {
     const e = { ...base, key: "]", code: "Digit9", ctrlKey: true, altKey: true };
+    expect(decideKey(e)).toBe("pty");
+  });
+
+  it("Ctrl+Shift+] reaches the PTY — no near-miss that also escapes", () => {
+    const e = { ...base, key: "]", code: "BracketRight", ctrlKey: true, shiftKey: true };
     expect(decideKey(e)).toBe("pty");
   });
 

@@ -26,11 +26,11 @@ Render sites: the title-bar strip and the grid's `aria-description`, both in
 ## Decisions
 
 **Q133-1 — the advertised chord is Ctrl+Shift+Backspace.**
-The prior chord, Ctrl+], made `]` untypeable on DE/FR/ES keyboard layouts: `]`
-is a level-2 (AltGr) character on those layouts, and AltGr arrives at the
-browser as `ctrlKey && altKey` — indistinguishable from the chord itself, so
-the binding stole the bracket on every AltGr keystroke that happened to also
-look like Ctrl+]. Ctrl+Shift+Esc (the originally filed proposal) was ruled
+The prior chord, Ctrl+], never fired on DE/FR/ES keyboard layouts: `]` is a
+level-2 (AltGr) character there, AltGr arrives at the browser as
+`ctrlKey && altKey`, and the binding (correctly) ignores a keystroke with
+`altKey` held — so those users had no working exit from the terminal, and the
+WCAG 2.1.2 keyboard trap stood for them. Ctrl+Shift+Esc (the originally filed proposal) was ruled
 out earlier because Windows intercepts it at OS level (Task Manager) before
 the browser ever sees it. Backspace has no AltGr shape on any layout this
 widget ships to, so Ctrl+Shift+Backspace is typeable everywhere and collides
