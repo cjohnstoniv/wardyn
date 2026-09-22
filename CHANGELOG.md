@@ -95,6 +95,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refused until it is shown to resolve inside the pinned organisation. The REST gate and the git
   broker apply one rule for which ref names are valid, and the proxy sidecar refuses a configuration
   that carries Azure DevOps grants without an interception CA (#426).
+- **Locking or unlocking an Azure DevOps branch through the REST API now needs the policy-bypass
+  permission.** That request names its branch in the address rather than the body, so a run could
+  not be held to the per-branch rule there; any non-POST request on a repository's refs is now
+  treated as administrative. An Azure DevOps consent request no longer counts against the budget a
+  run has for asking its owner to sign in again (#429).
 - **A drive-share probe could report its answer before it had cleared its own in-flight mark**, so an
   immediate second probe could see a stale mark. The mark is now cleared before the answer is sent
   (#423).

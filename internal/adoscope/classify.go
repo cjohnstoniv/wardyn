@@ -734,8 +734,10 @@ func gitRepositoryWrite(method string, r route, req Request) (Verdict, error) {
 		// whatever it touches — and it names its ref in the ?filter= query, which
 		// this catalogue never sees (Request.Path carries no query). A body naming
 		// a run-namespace ref would read as a code write while the service acts
-		// on the filter's branch, so the run-ref rule cannot apply here.
-		if method == http.MethodPatch {
+		// on the filter's branch, so the run-ref rule cannot apply here. Any
+		// other non-POST verb on refs is held to the same rule: only POST
+		// (Update Refs, which names its refs in the body) is read ref by ref.
+		if method != http.MethodPost {
 			return Verdict{Capability: CapPolicyBypass}, nil
 		}
 		return refWrite(req)

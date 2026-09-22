@@ -389,6 +389,7 @@ func TestClassifyRefMove(t *testing.T) {
 		},
 		{name: "a PATCH on refs with the documented lock body", req: adoReq(http.MethodPatch, refs, `{"isLocked":true}`), want: CapPolicyBypass},
 		{name: "a PATCH on refs with no body", req: adoReq(http.MethodPatch, refs, ""), want: CapPolicyBypass},
+		{name: "a PUT on refs is held to the same rule", req: adoReq(http.MethodPut, refs, `{"isLocked":true}`), want: CapPolicyBypass},
 		{
 			name: "a POST raised to PATCH by an override is policy_bypass too",
 			req: func() Request {
