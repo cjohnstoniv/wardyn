@@ -207,8 +207,9 @@ export interface GitProvider {
 export type CredentialSource = "shared" | "per_user";
 
 // How an Entra-lane run presents itself to Azure DevOps. Absent reads as
-// "bearer".
-export type ADOTokenMode = "bearer" | "minted_pat";
+// "bearer", the only accepted mode: the server refuses "minted_pat" because
+// Azure DevOps mints personal access tokens only for Microsoft's own clients.
+export type ADOTokenMode = "bearer";
 
 // The Entra lane's configuration (types.ADOEntraConfig). The capability
 // strings are the classifier's vocabulary (internal/adoscope) — the console

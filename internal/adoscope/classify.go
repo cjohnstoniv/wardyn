@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Request is ONE candidate Azure DevOps request, as much of it as a classifier
@@ -91,6 +92,11 @@ func Classify(req Request) (Verdict, error) {
 	if err != nil {
 		return Verdict{}, err
 	}
+	if method == http.MethodOptions {
+		if err := optionsCarriesNoBody(req); err != nil {
+			return Verdict{}, err
+		}
+	}
 	r, err := parseRoute(req.Host, req.Path, req.Org)
 	if err != nil {
 		return Verdict{}, err
@@ -98,13 +104,109 @@ func Classify(req Request) (Verdict, error) {
 	// The denied areas are checked BEFORE the method: a GET of the token area
 	// lists an organisation's personal access tokens, which is a read of
 	// exactly the thing no lane may see.
+	if r.orgless {
+		return discoveryRead(method, r)
+	}
 	if c, ok := deniedAreas[r.area]; ok {
 		return Verdict{Capability: c}, nil
 	}
+	if method == http.MethodOptions {
+		return locationDiscovery(r), nil
+	}
 	if slices.Contains(readMethods, method) || readWrite(r) {
-		return Verdict{Capability: CapRead}, nil
+		if _, ok := readScope(r); ok {
+			return Verdict{Capability: CapRead}, nil
+		}
+		return Verdict{Capability: CapUnclassifiedRead}, nil
 	}
 	return classifyWrite(method, r, req)
+}
+
+// locationDiscovery classifies an OPTIONS request.
+//
+// OPTIONS is the Azure DevOps SDK's API location-discovery call — MEASURED as
+// the azure-devops CLI extension's first request, `OPTIONS /{org}/_apis`, and
+// the Node SDK makes the same one. It returns route templates, not data, and
+// like connectionData it needs no scope. It is admitted on exactly the
+// discovery shapes — the API root, or one area's location, at the
+// organisation or project level — and is otherwise an unclassified read.
+//
+// Any area name is accepted here, including ones readAreas does not list: the
+// SDK asks for the location of whatever area it is about to call, and the
+// denied areas were already refused before this is reached. What makes it
+// safe to be that open is that OPTIONS cannot carry a write: a body and every
+// override header are refused before routing.
+func locationDiscovery(r route) Verdict {
+	if (r.apis == 0 || r.apis == 1) && r.at(2) == "" {
+		return Verdict{Capability: CapRead}
+	}
+	return Verdict{Capability: CapUnclassifiedRead}
+}
+
+// optionsCarriesNoBody refuses an OPTIONS request that carries, or declares,
+// a body. Discovery sends none, and a body is the only place a write could
+// hide on a method the service is otherwise told is a read.
+func optionsCarriesNoBody(req Request) error {
+	if len(req.BodyPeek) > 0 {
+		return fmt.Errorf("adoscope: an OPTIONS request carries a body — discovery sends none")
+	}
+	n, known, err := declaredLength(req.Header)
+	if err != nil {
+		return err
+	}
+	if known && n > 0 {
+		return fmt.Errorf("adoscope: an OPTIONS request declares a %d-byte body — discovery sends none", n)
+	}
+	if len(headerValues(req.Header, "Transfer-Encoding")) > 0 {
+		return fmt.Errorf("adoscope: an OPTIONS request declares a streamed body — discovery sends none")
+	}
+	return nil
+}
+
+// readAreas is EVERY area this catalogue answers CapRead for, with the scope a
+// token must carry to perform that read. An empty scope is an area the
+// service does not scope-gate at all (discovery, which every client calls
+// first). A key "area/resource" is a resource whose read scope differs from
+// its area's; the area alone is looked up only when no such key exists.
+//
+// It is a CLOSED table and the read scope set is DERIVED from it (see
+// readScopes), which is what keeps the two from drifting: the read floor used
+// to answer CapRead for any area at all, so an area whose read scope was
+// missing — variable groups, secure files, entitlements — classified as a read
+// the minted token could not perform. A read outside this table is
+// CapUnclassifiedRead, which is not grantable: an area no read scope covers
+// (ACLs, agent pools) is refused here instead of 403ing at the forge.
+var readAreas = map[string]string{
+	"git": "vso.code", "policy": "vso.code", "search": "vso.code",
+	"wit": "vso.work", "work": "vso.work",
+	"build": "vso.build", "pipelines": "vso.build",
+	"release":   "vso.release",
+	"wiki":      "vso.wiki",
+	"packaging": "vso.packaging", "packages": "vso.packaging",
+	"projects": "vso.project", "projectcollections": "vso.project",
+	"serviceendpoint": "vso.serviceendpoint",
+	"graph":           "vso.graph",
+	"identities":      "vso.identity",
+	"test":            "vso.test", "testplan": "vso.test", "testresults": "vso.test",
+	"analytics":        "vso.analytics",
+	"userentitlements": "vso.memberentitlementmanagement", "groupentitlements": "vso.memberentitlementmanagement",
+	"memberentitlements":             "vso.memberentitlementmanagement",
+	"distributedtask/variablegroups": "vso.variablegroups_read",
+	"distributedtask/securefiles":    "vso.securefiles_read",
+	"connectiondata":                 "", "resourceareas": "",
+	// The signed-in person's profile and organisation list — the two
+	// discovery reads, also admitted unpinned on discoveryHost.
+	"profile": "vso.profile", "accounts": "vso.profile",
+}
+
+// readScope is the scope a read of r needs, and whether r is a read this
+// catalogue knows at all.
+func readScope(r route) (string, bool) {
+	if s, ok := readAreas[r.area+"/"+r.res]; ok {
+		return s, true
+	}
+	s, ok := readAreas[r.area]
+	return s, ok
 }
 
 // effectiveMethod is the method the SERVER will act on, which is not always
@@ -117,7 +219,8 @@ func Classify(req Request) (Verdict, error) {
 // meant a POSTed push classified as a READ on the word of a header the caller
 // controls. Refusing is the same answer this package gives every other "which
 // of the two will the server act on" question: the header is accepted on a
-// POST only, it must name a write, and anything else is refused, not ignored.
+// POST only, it must name a write, and anything else on a POST is refused, not
+// ignored. Off a POST, see the case below.
 func effectiveMethod(method string, h http.Header) (string, error) {
 	base := strings.ToUpper(strings.TrimSpace(method))
 	if !knownMethod(base) {
@@ -129,13 +232,28 @@ func effectiveMethod(method string, h http.Header) (string, error) {
 		return base, nil
 	case len(ov) > 1:
 		return "", fmt.Errorf("adoscope: %d X-HTTP-Method-Override values — which one the server acts on is not knowable", len(ov))
-	case base != http.MethodPost:
-		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override on a %s — the header is documented on a POST only", base)
 	}
 	over := strings.ToUpper(strings.TrimSpace(ov[0]))
 	switch {
+	case base == http.MethodOptions:
+		// OPTIONS is admitted only as location discovery, which is a read
+		// precisely because nothing can ride on it. An override header — even
+		// a redundant one — is the one way a write could, so it is refused
+		// outright rather than weighed.
+		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override on an OPTIONS request — discovery takes no override")
 	case !knownMethod(over):
 		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override: %q is not an HTTP method", ov[0])
+	case base != http.MethodPost:
+		// Off a POST the header is undocumented. Some clients send it on every
+		// request whether or not it changes anything, so an override naming
+		// the method already on the line, or a read, is IGNORED — classifying
+		// on the base can only be the same answer or a higher one. An override
+		// that would turn this request into a DIFFERENT write is the one thing
+		// that could matter, and it is refused.
+		if over == base || slices.Contains(readMethods, over) {
+			return base, nil
+		}
+		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override: %q on a %s — the header raises only a POST", ov[0], base)
 	case !slices.Contains(writeMethods, over):
 		return "", fmt.Errorf("adoscope: X-HTTP-Method-Override: %q would lower a POST to a read — an override may only raise", ov[0])
 	}
@@ -179,6 +297,9 @@ type route struct {
 	area string
 	// res is the segment after the area, or "".
 	res string
+	// orgless marks a request to discoveryHost, which carries no organisation
+	// and is therefore never pinned — see discoveryRead.
+	orgless bool
 }
 
 // at is the segment n positions after _apis — at(1) is the area, at(2) the
@@ -216,6 +337,12 @@ func (r route) at(n int) string {
 //     organisation the row pinned entirely. Refusing is both simpler than RFC
 //     3986 resolution and strictly safer — nothing legitimate on this API
 //     needs one.
+//
+// "Segment" means what AZURE DEVOPS means by it, which is split on "\\" as
+// well as "/" — see isPathSeparator. Splitting on "/" alone left a backslash
+// inside what this package treated as one segment, so "..\\" walked through it
+// past every rule above; the dot-segment refusal held for exactly one of the
+// two spellings the service routes.
 func parseRoute(host, rawPath, org string) (route, error) {
 	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	if !azureDevOpsHost(h) {
@@ -231,11 +358,39 @@ func parseRoute(host, rawPath, org string) (route, error) {
 	if slices.Contains(segs, "_git") {
 		return route{}, fmt.Errorf("adoscope: %q is a git-over-HTTP endpoint — the transport is gated on its own, not classified here", rawPath)
 	}
+	if h == discoveryHost {
+		r := splitAtAPIs(h, segs)
+		r.orgless = true
+		return r, nil
+	}
 	segs, err = pinOrg(h, segs, org)
 	if err != nil {
 		return route{}, err
 	}
 	return splitAtAPIs(h, segs), nil
+}
+
+// discoveryHost is where the Azure CLI makes its first two calls — the
+// signed-in person's profile and their organisation list. Its paths carry NO
+// organisation, so the pin in pinOrg cannot apply, and refusing it outright
+// fails every `az devops` / `az repos` command on its first request.
+const discoveryHost = "app.vssps.visualstudio.com"
+
+// discoveryAreas are the ONLY areas admitted on discoveryHost.
+var discoveryAreas = []string{"profile", "accounts"}
+
+// discoveryRead is the whole policy for discoveryHost, and it is narrow on
+// purpose: an unpinned host is an exception to the rule every other request is
+// held to, so it admits exactly the two reads the CLI needs and refuses
+// everything else — any write, any other area (the token area included), and
+// any path that does not START at _apis, which is how an organisation would be
+// smuggled into a host that has none. A refusal here is an error, like an
+// organisation mismatch, not a classified capability.
+func discoveryRead(method string, r route) (Verdict, error) {
+	if !slices.Contains(readMethods, method) || r.apis != 0 || !slices.Contains(discoveryAreas, r.area) {
+		return Verdict{}, fmt.Errorf("adoscope: %s admits reads of %s only", discoveryHost, strings.Join(discoveryAreas, " and "))
+	}
+	return Verdict{Capability: CapRead}, nil
 }
 
 // azureDevOpsHost reports whether h is one of the hosts that accept Entra
@@ -248,20 +403,31 @@ func azureDevOpsHost(h string) bool {
 		strings.HasSuffix(h, ".visualstudio.com")
 }
 
+// isPathSeparator reports whether c ends a path segment to Azure DevOps.
+//
+// BACKSLASH IS ONE, and this is the whole reason the function exists rather
+// than a literal '/'. The service routes "\\" exactly as it routes "/" —
+// live-confirmed: "..\\" walks through it into a denied area and out of the
+// pinned organisation — so a classifier that splits on "/" alone is reading a
+// different path from the one the service will serve. Both the split and the
+// decoded-byte refusal ask this, so the two can never disagree about which
+// bytes are separators.
+func isPathSeparator(c rune) bool { return c == '/' || c == '\\' }
+
 // decodeSegments splits rawPath into decoded, lowercased, non-empty segments,
 // refusing the shapes parseRoute documents.
 func decodeSegments(rawPath string) ([]string, error) {
 	var out []string
-	for _, raw := range strings.Split(rawPath, "/") {
-		if raw == "" {
-			continue
-		}
+	for _, raw := range strings.FieldsFunc(rawPath, isPathSeparator) {
 		seg, err := unescapeSegment(raw)
 		if err != nil {
 			return nil, err
 		}
-		if seg == "." || seg == ".." {
-			return nil, fmt.Errorf("adoscope: path segment %q is a dot segment — the service resolves it to a different route", raw)
+		if hazard := segmentHazard(seg); hazard != "" {
+			return nil, fmt.Errorf("adoscope: path segment %q %s", raw, hazard)
+		}
+		if hidesStructure(seg) {
+			return nil, fmt.Errorf("adoscope: path segment %q is encoded more than once around structure — a layer that decodes again would route it differently", raw)
 		}
 		out = append(out, seg)
 	}
@@ -290,13 +456,93 @@ func unescapeSegment(raw string) (string, error) {
 			return "", fmt.Errorf("adoscope: path segment %q is not decodable", raw)
 		}
 		c := byte(hi<<4 | lo)
-		if c == '/' || c == '\\' {
+		if isPathSeparator(rune(c)) {
 			return "", fmt.Errorf("adoscope: path segment %q decodes to a second segment", raw)
 		}
 		b.WriteByte(c)
 		i += 2
 	}
 	return strings.ToLower(b.String()), nil
+}
+
+// segmentHazard names why a decoded segment would not be routed the way it
+// reads, or "" when it would.
+//
+// Every case is a spelling the SERVICE normalises before it routes, so the
+// text here and the route there disagree:
+//   - "." and ".." are resolved outright;
+//   - leading or trailing whitespace, and a trailing dot, are trimmed first —
+//     Windows path canonicalisation — so ".. " is "..", "..." is "..", and
+//     "hooks." is the denied "hooks" area. Refusing the edge characters is the
+//     fail-closed reading, and no name on this API legitimately ends in one;
+//   - a separator still inside the segment. While the split in decodeSegments
+//     is correct nothing reaches this case: the split removed every raw
+//     separator and unescapeSegment refuses every decoded one. It is a SECOND,
+//     INDEPENDENT LINE — with the split reverted to "/" alone and this kept,
+//     every separator evasion is still refused, and the only cost is that a
+//     legitimate backslash-delimited path is refused too.
+func segmentHazard(seg string) string {
+	switch {
+	case seg == "." || seg == "..":
+		return "is a dot segment — the service resolves it to a different route"
+	case strings.TrimFunc(seg, unicode.IsSpace) != seg:
+		return "has leading or trailing whitespace — the service trims it before routing"
+	case strings.HasSuffix(seg, "."):
+		return "ends in a dot — the service trims it before routing"
+	case strings.ContainsFunc(seg, isPathSeparator):
+		return "still holds a separator"
+	}
+	return ""
+}
+
+// maxDecodeDepth bounds hidesStructure. Nothing legitimate on this API is
+// percent-encoded more than once, so a segment still changing after this many
+// further rounds is refused rather than followed.
+const maxDecodeDepth = 4
+
+// hidesStructure reports whether decoding seg AGAIN — as any layer between here
+// and the service that decodes once more would — yields any segmentHazard at
+// any depth.
+//
+// It exists because "%252F" decodes once to the literal text "%2F": harmless
+// to a service that decodes once, and a separator to anything that decodes
+// twice. Whether such a layer sits in the path is not knowable from here, so
+// the answer that cannot be wrong is to refuse the segment.
+//
+// The re-decode is LENIENT on purpose — valid escapes decoded, malformed ones
+// kept as literal text — because that is the most dangerous decoder a request
+// could meet: a strict one refuses "%2F%zz" outright, a lenient one decodes it
+// to "/%zz". Assuming the lenient one is the fail-closed reading, and it costs
+// no legitimate name anything: "100%" and "50%off" reach a fixpoint unchanged.
+func hidesStructure(seg string) bool {
+	for range maxDecodeDepth {
+		next := percentDecodeLenient(seg)
+		if next == seg {
+			return false
+		}
+		if segmentHazard(next) != "" {
+			return true
+		}
+		seg = next
+	}
+	return true
+}
+
+// percentDecodeLenient decodes every valid %XY in s once and keeps every
+// malformed one as literal text. See hidesStructure for why lenient.
+func percentDecodeLenient(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) {
+			if hi, lo := unhex(s[i+1]), unhex(s[i+2]); hi >= 0 && lo >= 0 {
+				b.WriteByte(byte(hi<<4 | lo))
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // unhex is one hex digit's value, or -1.

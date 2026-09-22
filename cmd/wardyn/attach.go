@@ -23,12 +23,14 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// makeRawFn / restoreTerminalFn are seams over term.MakeRaw / term.Restore so
-// tests can drive the signal/cancel -> terminal-restore path without a real
-// tty backing os.Stdin.
+// makeRawFn / restoreTerminalFn / getSizeFn are seams over term.MakeRaw /
+// term.Restore / term.GetSize so tests can drive the signal/cancel ->
+// terminal-restore path, and a promotion's resend-the-window-size path,
+// without a real tty backing os.Stdin.
 var (
 	makeRawFn         = term.MakeRaw
 	restoreTerminalFn = term.Restore
+	getSizeFn         = term.GetSize
 )
 
 // attachCmd returns the cobra command for `wardyn attach <run-id>`.
@@ -240,6 +242,11 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	// errCh collects the first termination reason from either pump half.
 	errCh := make(chan error, 3)
 
+	// attachMode tracks the read/write state this socket has been told about
+	// across attach-mode frames (see handleAttachModeFrame) — read only by
+	// Half 1 below, so it needs no lock.
+	var attachMode attachModeState
+
 	// Half 1: server -> stdout (binary PTY output frames).
 	go func() {
 		for {
@@ -250,7 +257,13 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 				return
 			}
 			if typ != websocket.MessageBinary {
-				// Text frames from the server are unexpected but harmless; skip.
+				// The only TEXT frame the server ever sends is attach-mode
+				// (attach_holder.go's attachModeMsg); handle it and move on.
+				// stdout gets none of this — it stays byte-identical PTY
+				// output, never control JSON.
+				if typ == websocket.MessageText {
+					handleAttachModeFrame(pumpCtx, conn, fd, oldState, data, &attachMode)
+				}
 				continue
 			}
 			if _, werr := os.Stdout.Write(data); werr != nil {
@@ -321,6 +334,103 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 
 	fmt.Fprintln(os.Stderr, "detached")
 	return nil
+}
+
+// attachModeState tracks, across the lifetime of one attach session, what the
+// server's attach-mode text frames (internal/api/attach_holder.go's
+// attachModeMsg) have told this socket about its own read/write mode: the
+// frame sent on every connect, and — for an observer — a possible second one
+// on promotion. Read and written only from Half 1's goroutine, so it needs no
+// lock of its own.
+type attachModeState struct {
+	seenFirst bool
+	readOnly  bool
+}
+
+// clientAttachModeHolder is the CLI's own minimal decode of the "holder" half
+// of the server's attach-mode frame — only the two fields the notice below
+// prints.
+type clientAttachModeHolder struct {
+	Principal string `json:"principal"`
+	Source    string `json:"source"`
+}
+
+// clientAttachModeFrame is the CLI's own minimal decode of the server's
+// attach-mode text frame. Deliberately not internal/api's own attachModeMsg
+// type — the CLI talks to the server over the wire only (see
+// mintAttachTicket's doc comment on why attach's client-side calls stay
+// unwrapped), so it decodes just the fields it prints and ignores the rest.
+type clientAttachModeFrame struct {
+	Type     string                  `json:"type"`
+	ReadOnly bool                    `json:"read_only"`
+	Holder   *clientAttachModeHolder `json:"holder"`
+}
+
+// handleAttachModeFrame is Half 1's handler for a TEXT frame from the server.
+// stdout stays byte-identical PTY output — everything here goes to STDERR.
+//
+// A frame that fails to decode, or whose "type" is not "attach-mode", is
+// silently ignored: an unrecognised control frame must never crash the CLI
+// or print noise, since the protocol may grow more of them later.
+//
+// On the FIRST attach-mode frame (sent the instant the socket opens,
+// read_only=false included — see attachModeMsg's own doc comment), a
+// read-only dial prints one line naming the holder and where they attached
+// from. A writer dial prints nothing; being the writer is the normal case.
+//
+// A LATER frame only ever arrives on a promotion — attach_holder.go sends a
+// second attach-mode frame solely when this socket's observer was promoted
+// to writer — so any true->false transition after the first frame prints the
+// promotion line and re-sends this client's own window size (the promoted
+// socket never resized the shared PTY while it was only watching, so the
+// server still has the departed writer's geometry).
+func handleAttachModeFrame(ctx context.Context, conn *websocket.Conn, fd int, oldState *term.State, data []byte, state *attachModeState) {
+	var msg clientAttachModeFrame
+	if err := json.Unmarshal(data, &msg); err != nil || msg.Type != "attach-mode" {
+		return
+	}
+
+	if !state.seenFirst {
+		state.seenFirst = true
+		state.readOnly = msg.ReadOnly
+		if msg.ReadOnly {
+			fmt.Fprintln(os.Stderr, attachHolderNotice(msg.Holder))
+		}
+		return
+	}
+
+	promoted := state.readOnly && !msg.ReadOnly
+	state.readOnly = msg.ReadOnly
+	if !promoted {
+		return
+	}
+
+	fmt.Fprintln(os.Stderr, "attach: promoted — you can now type")
+	if oldState == nil {
+		return // piped stdin: no real tty to size from.
+	}
+	if cols, rows, szErr := getSizeFn(fd); szErr == nil {
+		_ = sendResize(ctx, conn, uint16(cols), uint16(rows))
+	}
+}
+
+// attachHolderNotice renders the "held by X (attached from Y)" fragment of
+// the read-only notice. holder is nil only in the impossible-in-practice case
+// attachModeMsg's own doc comment calls out (a holder that vanished between
+// registration and the write) — printed plainly rather than panicking on a
+// nil dereference.
+func attachHolderNotice(holder *clientAttachModeHolder) string {
+	if holder == nil || holder.Principal == "" {
+		return "read-only: another session holds the terminal"
+	}
+	switch holder.Source {
+	case "ssh":
+		return "read-only: held by " + holder.Principal + " (attached over SSH)"
+	case "web":
+		return "read-only: held by " + holder.Principal + " (attached from a browser)"
+	default:
+		return "read-only: held by " + holder.Principal
+	}
 }
 
 // sendResize writes a TEXT resize control frame to the server.
