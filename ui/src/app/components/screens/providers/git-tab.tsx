@@ -149,7 +149,7 @@ function Row({
   // The one lane whose meta depends on live server state — see
   // scm-provider.ts's patLaneMeta. app/ssh keep reading LANE_META directly.
   const patMeta = patLaneMeta(patBrokerEnabled);
-  const laneMeta = (lane: GitLane) => (lane === "pat" ? patMeta : LANE_META[lane]);
+  const laneMeta = (lane: GitLane) => (lane === "pat" ? patMeta : LANE_META[lane as keyof typeof LANE_META]);
   const [confirmRemove, setConfirmRemove] = React.useState(false);
   // The textarea's RAW text, held here rather than derived from
   // row.base_urls.join("\n") every render: splitting on every keystroke fed the

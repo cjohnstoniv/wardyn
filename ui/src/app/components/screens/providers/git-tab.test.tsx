@@ -344,7 +344,7 @@ describe("GitTab", () => {
       let latest: GitProvider[] = [];
       render(<Harness initial={[entraRow]} onLatest={(g) => (latest = g)} />);
       const row = screen.getByTestId("provider-row-azure_devops");
-      await userEvent.click(within(row).getByRole("checkbox", { name: /PAT · in-sandbox/ }));
+      await userEvent.click(within(row).getByRole("checkbox", { name: /PAT · brokered/ }));
       expect(latest[0].lanes).toContain("entra");
       expect(latest[0].lanes).toContain("pat");
       expect(latest[0].entra).toBeDefined();
@@ -352,17 +352,17 @@ describe("GitTab", () => {
 
     it("and never collapses to the empty 'every legacy lane' form while entra is held", async () => {
       let latest: GitProvider[] = [];
-      render(
-        <Harness
-          initial={[{ ...entraRow, lanes: ["pat", "entra"] }]}
-          onLatest={(g) => (latest = g)}
-        />,
-      );
+      render(<Harness initial={[{ ...entraRow, lanes: ["entra"] }]} onLatest={(g) => (latest = g)} />);
       const row = screen.getByTestId("provider-row-azure_devops");
-      // ssh is the other lane an Azure DevOps row can carry; ticking it makes
-      // every RENDERED lane checked, which used to write [] and take entra.
-      await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · resident/ }));
-      expect(latest[0].lanes).toEqual(expect.arrayContaining(["pat", "ssh", "entra"]));
+      // PAT is the only legacy lane an Azure DevOps row can tick (#380 makes ssh
+      // unselectable on every legal row, and app has no ADO equivalent). Ticking
+      // and then clearing it must leave entra held — never the empty list, which
+      // the server reads as "every legacy lane" and which drops entra.
+      const pat = within(row).getByRole("checkbox", { name: /PAT · brokered/ });
+      await userEvent.click(pat);
+      expect(latest[0].lanes).toEqual(expect.arrayContaining(["pat", "entra"]));
+      await userEvent.click(pat);
+      expect(latest[0].lanes).toEqual(["entra"]);
       expect(latest[0].lanes).not.toEqual([]);
     });
 

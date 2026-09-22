@@ -276,7 +276,7 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	if err != nil {
 		seen := &egress.DecisionLog{Request: p.reqOf(r, host, 443)}
 		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, "git upstream error") {
-			return
+			return nil, false
 		}
 		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
 		return nil, false

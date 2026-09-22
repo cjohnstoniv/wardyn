@@ -168,7 +168,7 @@ func TestValidateProviderEntra(t *testing.T) {
 		}), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateWorkspaceProviders(normalizeWorkspaceProviders(tc.block))
+			err := validateWorkspaceProviders(normalizeWorkspaceProviders(tc.block), true)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("validateWorkspaceProviders() error = %v, wantErr = %v", err, tc.wantErr)
 			}
@@ -208,7 +208,7 @@ func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 		}), "every profile starts from reads"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateWorkspaceProviders(&types.WorkspaceProviders{Git: []types.GitProvider{tc.row}})
+			err := validateWorkspaceProviders(&types.WorkspaceProviders{Git: []types.GitProvider{tc.row}}, true)
 			if err == nil {
 				t.Fatal("validateWorkspaceProviders() = nil, want a refusal")
 			}
@@ -297,7 +297,7 @@ func TestStoredProviderBlockRoundTripsByteIdentical(t *testing.T) {
 	if string(again) != storedProviderBlock {
 		t.Fatalf("a stored block did not round-trip:\n got %s\nwant %s", again, storedProviderBlock)
 	}
-	if err := validateWorkspaceProviders(&block); err != nil {
+	if err := validateWorkspaceProviders(&block, true); err != nil {
 		t.Fatalf("a stored block no longer validates: %v", err)
 	}
 	for _, row := range block.Git {
@@ -358,7 +358,7 @@ func TestEntraBlockRoundTripsThroughBothDoors(t *testing.T) {
 	if !strings.Contains(string(raw), `"rest_api":false`) {
 		t.Errorf("rest_api did not serialize: %s", raw)
 	}
-	if err := validateWorkspaceProviders(&back); err != nil {
+	if err := validateWorkspaceProviders(&back, true); err != nil {
 		t.Fatalf("the round-tripped row no longer validates: %v", err)
 	}
 }
