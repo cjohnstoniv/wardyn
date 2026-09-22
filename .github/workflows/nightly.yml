@@ -14,9 +14,13 @@ on:
 permissions:
   contents: read
 
+# Every job sets timeout-minutes, at least twice its measured maximum (docs/CI.md).
+# e2e-live and docker-tagged-live failed in every nightly measured, so no green
+# duration exists for them and theirs are wider still.
 jobs:
   e2e-live:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -57,6 +61,7 @@ jobs:
   # callback routes, so the recording-replay synthesis allowlist is populated too.
   task-e2e-live:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -99,6 +104,7 @@ jobs:
   # must not share a runner with the e2e jobs above.
   ssh-e2e-live:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -134,6 +140,7 @@ jobs:
   # `up` does not build.
   test-drive:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
@@ -152,6 +159,7 @@ jobs:
   # a task that exits 3 must fail the script with exit 3.
   ci-mode-dogfood:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
@@ -193,6 +201,7 @@ jobs:
   # internal/envbuild's integration_test.go) actually exercise a live daemon.
   docker-tagged-live:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -259,6 +268,7 @@ jobs:
   # one up, the same way ci.yml's desktop-envelope does.
   byoi-e2e-live:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
@@ -301,6 +311,7 @@ jobs:
   # above.
   ui-sandbox-e2e-live:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -323,6 +334,191 @@ jobs:
           path: test/reports/e2e/ui-sandbox-e2e.log
           if-no-files-found: error
 
+  # ── deploy: multi-arch buildx smoke (build only, never pushes) ────────────
+  # W-DESK S1. The release lane (.github/workflows/release.yml) publishes every
+  # image as a linux/amd64 + linux/arm64 index, and it only ever runs on a
+  # `vX.Y.Z` tag — so without this job an arm64 build break is discovered
+  # DURING a release, with the tag already pushed. This is the proof that the
+  # two-platform build still resolves: nightly, and dispatched on the commit to
+  # tag (RELEASING.md "Prerequisites"). Not per pull request: its three emulated
+  # builds cost about nine runner-minutes on every CI run for a break that one
+  # day's latency still catches before a tag. `push: false`, no registry login,
+  # no `packages:` permission: it builds and throws the result away.
+  #
+  # WHY THESE THREE and not all five release images — each cell is a distinct
+  # BUILD SHAPE, and the two omitted images are strict duplicates of shapes
+  # already covered here:
+  #   wardynd          — a $BUILDPLATFORM node UI stage + a cross-compiled Go
+  #                      stage + a COPY-only distroless runtime (no emulation
+  #                      anywhere). wardyn-proxy is the same shape minus the UI.
+  #   agent-claude-code — a bookworm runtime doing apt-get + `npm install -g`
+  #                      as the TARGET arch, i.e. the emulated path.
+  #                      agent-codex-cli is the same shape.
+  #   agent-aws-sso    — a bookworm runtime that SELECTS its download by
+  #                      TARGETARCH (x86_64 vs aarch64 AWS CLI installer, GPG
+  #                      verified). Nothing else exercises that branch.
+  #
+  # QEMU is what makes the emulated cells possible; the Go compiles do not use
+  # it (every builder stage is `FROM --platform=$BUILDPLATFORM` + GOARCH).
+  # timeout-minutes is generous on purpose: emulated apt/npm is slow, and a
+  # timeout kill here would read as a build break.
+  buildx-smoke:
+    name: multi-arch build (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: wardynd
+            dockerfile: deploy/compose/Dockerfile.wardynd
+          - name: agent-claude-code
+            dockerfile: deploy/images/claude-code/Dockerfile
+          - name: agent-aws-sso
+            dockerfile: deploy/images/aws-sso/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - name: Build both platforms (no push, no load — the result is discarded)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+
+  # ── Live Kubernetes AWS SSO walk (kind) ─────────────────────────────────────
+  # scripts/kind-sso-walk.sh only ever ran by hand, so the "a member signs in
+  # and their run gets THEIR OWN credentials" path (docs/OPERATIONS.md "Testing
+  # AWS SSO without an AWS tenant") could regress silently between releases.
+  # Nothing in it needs a particular machine — quickstart.sh builds its own
+  # Calico kind cluster and scripts/lib/common.sh degrades to the default
+  # Docker socket — so it runs on this hosted runner exactly as it does on a
+  # laptop.
+  #
+  # `make agent-images` (not agent-images-core): the SSO overlay loads
+  # wardyn/agent-aws-sso:local and refuses to start without it (see
+  # docs/OPERATIONS.md). quickstart.sh builds its own wardynd/proxy/
+  # claude-code/base images; `make kind-sso` builds the fake AWS estate image
+  # itself. azure/setup-helm and helm/kind-action (`install_only`, so it never
+  # creates a cluster of its own — quickstart.sh owns cluster create/delete,
+  # exactly as OPERATIONS.md's recipe assumes) give the `helm`/`kind` binaries
+  # the make targets below shell out to; this job pins the SAME action SHA
+  # ci.yml's kind jobs use.
+  #
+  # This job does NOT repoint KUBECONFIG at the node's internal IP the way
+  # ci.yml's conformance-k8s job does. That repoint exists because THAT job
+  # drives the k8s runner substrate straight from a Go test process running on
+  # the runner, which builds its own boot-time egress canary from ITS OWN
+  # (host) kubeconfig and hands the canary pod an address it must dial from
+  # inside the cluster — 127.0.0.1 there is the pod's own loopback, not the
+  # runner's. Here, wardynd is `helm install`-ed AS A POD (quickstart.sh step
+  # 4) and prefers `rest.InClusterConfig()` (internal/runner/k8s/config.go)
+  # whenever it finds itself running in one, so it never reads the runner's
+  # kubeconfig at all; every kubectl/helm call in quickstart.sh, overlay.sh and
+  # the walk already pins `--context`/`--kube-context` explicitly and reaches
+  # the console over the NodePort quickstart-kind-config.yaml publishes on
+  # 127.0.0.1 (same host, no pod-to-runner dial in that direction either). See
+  # quickstart-kind-config.yaml's own comment on why the walk's precedent is
+  # NodePort-on-loopback, not node-IP routing.
+  #
+  # WARDYN_KIND_SSO_REBUILD=1: certify the tip this workflow checked out, not
+  # whatever quickstart.sh's own image builds happened to cache.
+  # WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1: sso-reauth-hold.spec.ts's case K holds
+  # a credential for about ten minutes of wall clock by design — every other
+  # case in the walk does not, and that is too long for something nobody is
+  # watching. The self-skip guard, common.sh and the e2e-live job above are
+  # untouched by this job.
+  #
+  # WARDYN_TEST_K8S is set on THIS STEP, not the job: an unset one makes
+  # kind-sso-walk.sh print "skipping" and exit 0 before it ever creates its
+  # evidence directory — a permanently green job that proves nothing, which is
+  # worse than no job at all because it reads as coverage. The step after this
+  # one asserts the walk actually reached its own PASS line and reported at
+  # least one executed spec file, rather than trusting kind-sso-walk.sh's exit
+  # code alone.
+  kind-sso-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Install UI deps (run-ui-e2e.sh drives Playwright directly from ui/)
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright chromium
+        working-directory: ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build the agent images the SSO overlay needs (agent-aws-sso + the rest of agent-images-core)
+        run: make agent-images
+      - name: Bring up the kind quickstart cluster (SSO recipe's ports — see docs/OPERATIONS.md)
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+          WARDYN_QUICKSTART_SSH_PORT: "2322"
+        run: make kind-quickstart
+      - name: Add the SSO overlay (Dex + the fake AWS endpoints)
+        env:
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+          WARDYN_QUICKSTART_SSH_PORT: "2322"
+        run: make kind-sso
+      - name: Live kind AWS SSO walk (member + recovery; reauth-hold excluded — see job comment above)
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_KIND_SSO_REBUILD: "1"
+          WARDYN_KIND_SSO_SKIP_REAUTH_HOLD: "1"
+          WARDYN_KIND_SSO_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-sso
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          ./scripts/kind-sso-walk.sh 2>&1 | tee test/reports/e2e/kind-sso-walk.log
+      # THE LOAD-BEARING CHECK. kind-sso-walk.sh exits 0 in two shapes that
+      # look identical to `if: always()` below: a genuine PASS, and an unset
+      # WARDYN_TEST_K8S self-skip. Fail the job unless the log shows the walk
+      # actually ran specs and reached its own closing PASS line.
+      - name: Assert the walk actually executed specs (not a self-skip)
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/kind-sso-walk.log
+          if grep -q 'set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)' "$log"; then
+            echo "::error::kind-sso-walk.sh self-skipped — WARDYN_TEST_K8S did not reach the walk step"
+            exit 1
+          fi
+          if ! grep -qE 'UI e2e summary: [1-9][0-9]* spec file\(s\) passed' "$log"; then
+            echo "::error::no spec file was reported as executed and passed — see the uploaded log"
+            exit 1
+          fi
+          if ! grep -q '^kind-sso-walk: PASS' "$log"; then
+            echo "::error::the walk never reached its own closing PASS line — see the uploaded log"
+            exit 1
+          fi
+      - name: Upload walk evidence (log + manifest + per-spec results)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kind-sso-walk-results
+          path: |
+            test/reports/e2e/kind-sso-walk.log
+            test/reports/e2e/kind-sso/**
+          if-no-files-found: error
+
   # ── The notification this workflow never had ───────────────────────────────
   # Nothing in .github/workflows/ used `if: failure()`, opened an issue, or
   # notified anywhere, and no nightly job is a branch-protection context — so a
@@ -341,9 +537,10 @@ jobs:
   # A new lane joins this list; scripts/test-repo-guards.sh (in `make
   # test-scripts`) fails the build if one does not.
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk]
     if: failure()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       issues: write
     steps:
@@ -361,7 +558,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live or ui-sandbox-e2e-live." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build) or kind-sso-walk." \
               "" \
               "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
               "" \

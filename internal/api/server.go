@@ -185,6 +185,21 @@ type Config struct {
 	// LocalOperator is the principal stamped on runs/approvals/audit in
 	// LocalMode (e.g. "local:<os-user>"). Ignored unless LocalMode is true.
 	LocalOperator string
+	// MemberMode mirrors WARDYN_MEMBER_MODE (cmd/wardynd's validateMemberModePosture
+	// already enforces its precondition at boot). internal/api did not carry this
+	// bit before #378/#379: it exists here so handleHealthz can compute
+	// token_login — a member-mode desktop's admin token is a PROCESS credential
+	// (deploy/desktop/wardyn.env.m-prime.example), never a human sign-in path, so
+	// the console must not offer it as one.
+	MemberMode bool
+	// SSOOnly mirrors WARDYN_SSO_ONLY: the operator's declaration that SSO is the
+	// ONLY way into this console. cmd/wardynd's validateSSOOnlyPosture refuses
+	// boot unless that is actually true (OIDC configured, admin token/local
+	// mode/member mode/no-operator-list override all absent) before this field
+	// is ever set, so handleHealthz's sso_only bit — which the sign-in screen
+	// reads to drop the admin-token form and the role-derivation caveat — can
+	// never overclaim.
+	SSOOnly bool
 	// SubscriptionPostureOK reports whether this deployment may resolve a SHARED
 	// subscription credential (one operator's live Anthropic OAuth token) into an
 	// agent run. Decided once at boot by subscriptionInjectPosture (cmd/wardynd) —
@@ -224,9 +239,14 @@ type Config struct {
 	// (WARDYN_ANTHROPIC_BASE_URL / WARDYN_OPENAI_BASE_URL, validated by
 	// ValidateLLMGateways). Control-plane-authored, same trust boundary as
 	// TrustedCAPEM above — the sandbox cannot set this. nil/empty (the
-	// default) => every api-key lane dials the public host, byte-identical to
-	// today. Scope: the api-key lane only — see (*Server).llmProviderFor;
-	// subscription/managed runs still reach the public host directly.
+	// default) => every lane dials the public host, byte-identical to today.
+	// Consulted by (*Server).llmProviderFor (the api-key lane's host
+	// substitution) and, for Anthropic specifically, by
+	// (*Server).anthropicBaseURL/anthropicGatewayHost/anthropicGatewayHostPort
+	// (the subscription and Wardyn-managed lanes, runs_dispatch_llm.go) and the
+	// subscription-injection host allowlist (injection.go). The harness-login
+	// (`claude setup-token`) lane never consults it and always stays on the
+	// public host — that flow mints the OAuth token itself.
 	LLMGateways map[string]string
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
@@ -440,6 +460,12 @@ type Config struct {
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
 	MaskRegistry *secretmask.Registry
+	// ADOEntra resolves the Azure DevOps Entra app registration the per-user
+	// sign-in runs against (see ado_entra.go). Nil — the default — means this
+	// deployment offers no Azure DevOps sign-in and both of its routes refuse.
+	// A function rather than a value so the provider row stays the single
+	// source of truth and the sign-in never acts on a cached copy of it.
+	ADOEntra ADOEntraSource
 	// SubscriptionToken, when non-nil, yields the operator's LIVE Anthropic
 	// subscription OAuth access token from the resident ~/.claude credentials.
 	// The internal injection-resolve endpoint uses it to inject a fresh token
@@ -789,6 +815,15 @@ type Server struct {
 	ssoRefreshMu    sync.Mutex
 	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool
+	// adoEntra is the per-owner single-flight registry the Azure DevOps
+	// sign-in's redemption takes before it redeems a rotating refresh token
+	// (see ado_entra_store.go). Process-local for the same reason as the locks
+	// above, and its zero value is ready to use.
+	adoEntra adoEntraFlight
+	// adoEntraTokens reuses a minted Azure DevOps access token across the
+	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
+	// not rotate one person's refresh token once per host.
+	adoEntraTokens adoEntraAccessCache
 }
 
 // New constructs a Server and builds its router. It does not start listening.

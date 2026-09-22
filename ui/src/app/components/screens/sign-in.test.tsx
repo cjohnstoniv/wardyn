@@ -18,7 +18,12 @@ vi.mock("../../lib/api/health", () => ({
   health: { health: (...a: unknown[]) => healthMock(...a) },
 }));
 
-import { SignIn } from "./sign-in";
+import {
+  EMAIL_DOMAIN_REFUSAL,
+  SignIn,
+  TOKEN_HINT,
+  UNREACHABLE_ERROR,
+} from "./sign-in";
 import { SESSION_ENDED_REASON } from "../../lib/api/core";
 
 function renderSignIn() {
@@ -109,32 +114,94 @@ describe("SignIn — SSO entry point", () => {
   });
 });
 
-// Regression: wardynd never prints an admin token on startup — it
-// only ever READS WARDYN_ADMIN_TOKEN from the environment (cmd/wardynd's
-// boot_flags.go/main.go). The sign-in copy claiming otherwise was the gate's
-// only instruction AND part of the threat model's own token-provenance claim
-// (THREAT-MODEL.md's "Console auth token storage" section, fixed alongside
-// this file); a false instruction here is a bad-first-run trap that sends an
-// operator hunting server logs for output that will never appear.
-describe("SignIn — admin token instructions are honest about provenance", () => {
-  it("tells the operator to paste the token the control plane was STARTED WITH, not one wardynd printed", async () => {
-    healthMock.mockResolvedValue({});
+// #378/#379: the sign-in screen reads /healthz's new token_login/sso_only bits
+// and renders only what can work, in every combination the posture can report.
+describe("SignIn — renders only what the posture says can work (#378/#379)", () => {
+  it("SSO-only: one 'Sign in with SSO' button, no admin-token field, no role-source caveat", async () => {
+    healthMock.mockResolvedValue({ sso: true, sso_only: true, token_login: false });
     renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.queryByLabelText(/admin token/i)).not.toBeInTheDocument();
     expect(
-      await screen.findByText(/paste the token this control plane was started with/i),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/WARDYN_ADMIN_TOKEN/)).toBeInTheDocument();
-    expect(screen.queryByText(/wardynd printed/i)).not.toBeInTheDocument();
+      screen.queryByText(/comes from your SSO role assignment/i),
+    ).not.toBeInTheDocument();
   });
 
-  it("the token input's placeholder carries no fake fixed-prefix format", () => {
+  it("token + SSO both configured (today's combined deployment): unchanged", async () => {
+    healthMock.mockResolvedValue({ sso: true, sso_only: false, token_login: true });
+    renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.getByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/comes from your SSO role assignment/i),
+    ).toBeInTheDocument();
+  });
+
+  it("both bits false keeps the admin-token form (nothing says sign-in is unavailable)", async () => {
+    healthMock.mockResolvedValue({ sso: false, sso_only: false, token_login: false });
+    renderSignIn();
+    expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
+  });
+
+  it("local-mode cell: an older/local daemon reporting no posture bits keeps today's form", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    renderSignIn();
+    expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
+  });
+
+  // The one cell that actually CHANGES behavior for an install that already
+  // exists: an ordinary OIDC deployment with no admin token configured (or
+  // member mode — either way token_login is false while sso stays true).
+  // Before #378/#379 this rendered the admin-token field regardless, so
+  // every submission there was refused with "admin token not configured".
+  it("OIDC configured with no usable token (token_login false, sso_only false): the admin-token field disappears", async () => {
+    healthMock.mockResolvedValue({ sso: true, sso_only: false, token_login: false });
+    renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.queryByLabelText(/admin token/i)).not.toBeInTheDocument();
+    // sso_only is false here, so the role-source caveat still belongs on screen.
+    expect(
+      screen.getByText(/comes from your SSO role assignment/i),
+    ).toBeInTheDocument();
+  });
+
+  // R4/F027's failure shape, replayed for the two new bits: health() resolves
+  // the EMPTY object on a network error or any non-2xx, and the gate must
+  // leave its LAST KNOWN state alone rather than read "no answer" as "nothing
+  // works" — that early-return path is exactly what once left an SSO-only
+  // deployment showing no way in at all when the daemon merely hadn't
+  // answered yet (see refreshSso's comment in sign-in.tsx).
+  it("a failed /healthz on mount does not hide the admin-token form or misreport the posture", async () => {
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
+  });
+});
+
+// #212 (design/first-contact-prototype): the sign-in screen used to
+// advertise a working demo credential (`demo-admin-token`, in both the
+// placeholder and the hint) and named the env var it reads
+// (WARDYN_ADMIN_TOKEN) — internals a reader who has not authenticated has no
+// business seeing. The hint now says what belongs in the field and where the
+// person saw it, with neither the env var name nor the compose token.
+describe("SignIn — the token field advertises no working credential or env var (#212)", () => {
+  it("the hint says what belongs in the field and where it came from, naming no env var and no demo token", async () => {
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByText(TOKEN_HINT)).toBeInTheDocument();
+    expect(screen.queryByText(/WARDYN_ADMIN_TOKEN/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/demo-admin-token/)).not.toBeInTheDocument();
+  });
+
+  it("the token input's placeholder carries no working demo credential", () => {
     healthMock.mockResolvedValue({});
     renderSignIn();
     const input = screen.getByLabelText(/admin token/i);
-    // Real admin tokens are whatever the operator set WARDYN_ADMIN_TOKEN to
-    // (e.g. openssl rand -hex 32) — there is no "wardyn_admin_" value prefix;
-    // that string is only the UNRELATED localStorage key name (core.ts).
-    expect(input).toHaveAttribute("placeholder", "demo-admin-token");
+    expect(input).not.toHaveAttribute("placeholder", "demo-admin-token");
+    expect(input.getAttribute("placeholder") ?? "").toBe("");
   });
 });
 
@@ -178,10 +245,10 @@ describe("SignIn — submitToken tells a rejected token apart from a reachabilit
     expect(getToken()).toBe("sometoken");
   });
 
-  it("a network error (daemon down / unreachable) shows a reachability message, not the rejected-token copy", async () => {
+  it("a network error (daemon down / unreachable) shows a reachability message naming Wardyn and one thing to check, not the rejected-token copy (#212)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     await submit();
-    expect(await screen.findByText(/could not reach the control plane/i)).toBeInTheDocument();
+    expect(await screen.findByText(UNREACHABLE_ERROR)).toBeInTheDocument();
     expect(screen.queryByText(/that admin token was rejected/i)).not.toBeInTheDocument();
     expect(getToken()).toBe("sometoken");
   });
@@ -210,11 +277,13 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
     expect(window.location.search).toBe("");
   });
 
-  it("renders the email_domain message", async () => {
+  it("renders the email_domain message, pointing this locked-out reader at their admin rather than an env var they cannot reach (#212)", async () => {
     window.history.pushState({}, "", "/?auth_error=email_domain");
     healthMock.mockResolvedValue({});
     renderSignIn();
-    expect(await screen.findByRole("alert")).toHaveTextContent(/domain isn't allowed/i);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(EMAIL_DOMAIN_REFUSAL);
+    expect(alert).not.toHaveTextContent(/WARDYN_OIDC_EMAIL_DOMAINS/);
   });
 
   it("renders the email_unverified message", async () => {

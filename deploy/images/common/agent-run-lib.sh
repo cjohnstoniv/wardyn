@@ -379,17 +379,23 @@ configure_git_broker_insteadof() {
 # mean a broker failure silently reverts to a lane where the PAT is resident,
 # which is the posture this exists to remove. If the broker is unreachable the
 # clone fails and says so.
+#
+# An entry may also be `<user>@<host>`: the URL Azure DevOps' own Clone button
+# hands out is https://<org>@dev.azure.com/..., and git's insteadOf is a prefix
+# match, so that spelling needs its own rewrite onto the SAME broker path. The
+# user part is dropped — the broker supplies the credential.
 configure_git_pat_broker_insteadof() {
     [[ -n "${WARDYN_GIT_PAT_BROKER_HOSTS:-}" ]] || return 0
     command -v git >/dev/null 2>&1 || return 0
-    local base host
+    local base entry host
     base="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}"
     base="${base%/}"
-    for host in $WARDYN_GIT_PAT_BROKER_HOSTS; do
+    for entry in $WARDYN_GIT_PAT_BROKER_HOSTS; do
         # Host-shaped only. The value is server-set, but this is the string that
         # becomes a URL prefix, so it is validated here rather than trusted.
-        [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || continue
-        git config --global url."${base}/wardyn/git/${host}/".insteadOf "https://${host}/" || true
+        [[ "$entry" =~ ^([A-Za-z0-9-]+@)?[A-Za-z0-9.-]+$ ]] || continue
+        host="${entry#*@}"
+        git config --global --add url."${base}/wardyn/git/${host}/".insteadOf "https://${entry}/" || true
     done
 }
 

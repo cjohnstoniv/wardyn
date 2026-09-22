@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -328,4 +329,151 @@ func (c *Client) RunFiles(ctx context.Context, runID uuid.UUID) (RunFiles, error
 	var out RunFiles
 	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+runID.String()+"/files", nil, &out)
 	return out, err
+}
+
+// ── Drives (migration 0054) ─────────────────────────────────────────────────
+
+// DriveRequest is the POST /drives / PUT /drives/{id} body — one
+// admin-registered drive. ID/CreatedAt/UpdatedAt/CreatedBy are never accepted
+// from the wire: the id comes from the path (an update) or the server (a
+// create), and provenance is always server-assigned. Name and Backend are
+// always on the wire (no omitempty); the rest default to the zero value a new
+// drive would otherwise want.
+type DriveRequest struct {
+	Name    string       `json:"name"`
+	Backend DriveBackend `json:"backend"`
+	// HostRoot is the operator-mounted tree a host_path drive binds a
+	// subdirectory of. Meaningless for every other backend, and refused
+	// outright when it names a path outside this deployment's configured
+	// drive host roots.
+	HostRoot string `json:"host_root,omitempty"`
+	// StorageClass is the k8s_pvc provisioner to request; "" means the
+	// cluster default. Meaningless for every other backend.
+	StorageClass string `json:"storage_class,omitempty"`
+	// HomeTemplate is which identity a drive's per-user home name is derived
+	// from. "" means the server's default (HomeTemplateHash).
+	HomeTemplate HomeTemplate `json:"home_template,omitempty"`
+	// SizeMiB is the allocation, not a guarantee — see types.StorageEnforcement.
+	// Required (and enforced) on a k8s_pvc drive; advisory elsewhere.
+	SizeMiB int `json:"size_mib,omitempty"`
+	// Writable is the drive's DEFAULT posture and it defaults to false. A
+	// grant may narrow it and a run may narrow it again; neither may widen it.
+	Writable bool `json:"writable,omitempty"`
+	// Reclaim is the declared intent for the drive's storage objects once an
+	// allocation is removed. "" means the server's default (DriveReclaimRetain).
+	Reclaim DriveReclaim `json:"reclaim,omitempty"`
+}
+
+// DriveGrantRequest is the POST /drives/grants body — one allocation of a
+// drive to a subject, upserted by the natural key (subject_type, subject): a
+// second POST for the same subject repoints its single row rather than
+// accumulating another one.
+type DriveGrantRequest struct {
+	SubjectType CapabilitySubjectType `json:"subject_type"`
+	Subject     string                `json:"subject"`
+	DriveID     uuid.UUID             `json:"drive_id"`
+	// Priority breaks ties within a tier (higher wins) when a subject's
+	// membership qualifies it for more than one group-tier grant. It does not
+	// cross tiers (user beats group beats all).
+	Priority int `json:"priority"`
+	// SizeMiBOverride replaces the drive's allocation for this subject. 0
+	// means "use the drive's".
+	SizeMiBOverride int `json:"size_mib_override,omitempty"`
+	// WritableOverride is TRI-STATE: nil is "use the drive's posture", and an
+	// explicit false is "this subject reads only" even on a writable drive.
+	WritableOverride *bool `json:"writable_override,omitempty"`
+	// HomeOverride is TRI-STATE for the same reason: nil leaves a previously
+	// pinned directory name alone, and an explicit "" (or a name) states the
+	// field, which is itself the confirmation to change it. User-tier
+	// subjects only.
+	HomeOverride *string `json:"home_override,omitempty"`
+	// Enabled is TRI-STATE and defaults to true when nil: allocating a drive
+	// is a deliberate act, so omitting the field means "give it to them", not
+	// "pause it". An explicit false pauses the allocation without deleting it.
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// DrivesDocument is GET /drives's body and ApplyDrives's parameter: every
+// registered drive, a bounded page of allocations, and the deployment facts
+// an operator cannot derive from the rows alone (whether host_path drives are
+// even authorable here, which substrate this deployment dispatches to, and
+// whether the org switch is off). `wardyn drive get` prints this verbatim;
+// ApplyDrives strict-decodes it back — HostRootsConfigured, RunnerTarget,
+// Disabled and GrantTotal are read-only and ignored on write.
+type DrivesDocument struct {
+	Drives              []UserDriveListItem `json:"drives"`
+	Grants              []UserDriveGrant    `json:"grants"`
+	HostRootsConfigured bool                `json:"host_roots_configured"`
+	RunnerTarget        string              `json:"runner_target"`
+	Disabled            bool                `json:"disabled"`
+	GrantTotal          int                 `json:"grant_total"`
+}
+
+// GetDrives returns every registered drive and a bounded page of allocations.
+// GET /api/v1/drives.
+func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
+	var out DrivesDocument
+	err := c.do(ctx, http.MethodGet, "/api/v1/drives", nil, &out)
+	return out, err
+}
+
+// ApplyDrives upserts every drive and grant doc names, over the existing
+// POST /drives, PUT /drives/{id} and POST /drives/grants routes — there is no
+// bulk-write route, and none is added. A drive is routed by the id doc
+// carries: one already issued by GetDrives (non-nil) is REPLACED in place
+// (PUT), a zero id is CREATED (POST) — which is what makes `wardyn drive get
+// > f && wardyn drive apply f` a no-op: the ids `get` wrote back are exactly
+// what route the re-`apply` to an update of the same rows, not a second copy
+// under a fresh name. A grant carries no id of its own; every one is POSTed,
+// and the server's own (subject_type, subject) upsert repoints an existing
+// allocation rather than duplicating it.
+//
+// Nothing doc omits is touched and nothing is deleted — neither POST nor PUT
+// can express that, and this function does not attempt it by other means.
+// Every write's saved row replaces the caller's copy in place, so a partial
+// failure (returned as the second value) leaves doc's earlier entries holding
+// what was actually persisted. On success, the returned document is a fresh
+// GetDrives — the authoritative post-write state, including the derived
+// fields (grant counts, deployment facts) a write response cannot carry.
+func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDocument, error) {
+	for i, d := range doc.Drives {
+		req := DriveRequest{
+			Name: d.Name, Backend: d.Backend, HostRoot: d.HostRoot,
+			StorageClass: d.StorageClass, HomeTemplate: d.HomeTemplate,
+			SizeMiB: d.SizeMiB, Writable: d.Writable, Reclaim: d.Reclaim,
+		}
+		var saved UserDrive
+		var err error
+		if d.ID == uuid.Nil {
+			err = c.do(ctx, http.MethodPost, "/api/v1/drives", req, &saved)
+		} else {
+			err = c.do(ctx, http.MethodPut, "/api/v1/drives/"+d.ID.String(), req, &saved)
+		}
+		if err != nil {
+			return DrivesDocument{}, fmt.Errorf("apply drive %q: %w", d.Name, err)
+		}
+		doc.Drives[i].UserDrive = saved
+	}
+	for i, g := range doc.Grants {
+		req := DriveGrantRequest{
+			SubjectType: g.SubjectType, Subject: g.Subject, DriveID: g.DriveID,
+			Priority: g.Priority, SizeMiBOverride: g.SizeMiBOverride,
+			WritableOverride: g.WritableOverride,
+			// Always stated, never nil: HomeOverride and Enabled are the two
+			// fields the server treats "the client said nothing" as
+			// meaningfully different from "the client said this exact value"
+			// (see their doc comments on DriveGrantRequest) — a round trip
+			// that left either nil would either fail to restate a pinned
+			// home name (409, ErrConflict) or, worse, mean something
+			// different from what GetDrives just reported.
+			HomeOverride: &g.HomeOverride,
+			Enabled:      &g.Enabled,
+		}
+		var saved UserDriveGrant
+		if err := c.do(ctx, http.MethodPost, "/api/v1/drives/grants", req, &saved); err != nil {
+			return DrivesDocument{}, fmt.Errorf("apply drive grant (%s %q on drive %s): %w", g.SubjectType, g.Subject, g.DriveID, err)
+		}
+		doc.Grants[i] = saved
+	}
+	return c.GetDrives(ctx)
 }

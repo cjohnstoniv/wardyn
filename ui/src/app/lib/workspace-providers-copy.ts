@@ -96,16 +96,24 @@ export const PROVIDERS = {
   BASE_URLS_REQUIRED: "Name at least one address. A row with none admits nothing and is refused at save.",
   FIELD_LANES: "Permitted lanes",
   LANES_HINT: "Which credential a run may use for this provider. Turning one off does not delete its stored secret.",
-  LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent.",
+  // #381: Azure DevOps DOES publish a token-lifecycle API (it's the PAT lane's
+  // path there) — the stale claim was that no comparable API exists at all.
+  // What's actually true today: Wardyn hasn't built a repo-scoped App-style
+  // broker against it, so say that without promising a lane that isn't built.
+  LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped tokens for github.com only — Wardyn doesn't broker Azure DevOps's own token API this way (yet). Use the PAT lane there.",
   LANE_SSH_UNAVAILABLE:
     "Not available: SSH over port 443 is offered for github.com and dev.azure.com only — a self-hosted host clones over HTTPS.",
-  // The SSH scoping CEILING, said on the surface that writes the policy: an SSH
-  // clone URL carries no path, so a row scoped to an org bounds HTTPS clones
-  // only (internal/api/workspace_providers.go's cloneTarget). Shown under the
-  // lanes field when this row has a path AND permits ssh — the two facts that
-  // together make the row look narrower than it is.
-  SSH_HOST_LEVEL_HINT:
-    "SSH clones are admitted for the whole host: an SSH URL carries no org path to bound. Drop SSH here to keep this row's addresses binding.",
+  // #380 F5: the CONSOLE half of the SSH path-scoping ceiling — an SSH clone
+  // URL carries no org path, so it admits the whole host regardless of what
+  // this row's addresses declare (internal/api/workspace_providers.go's
+  // sshLaneExceedsPathScope, the same server rule that refuses this at save).
+  // Shown as the checkbox's OWN disabled-reason (never a raw server 400)
+  // whenever the row's SSH-capable addresses all carry a path — which, for
+  // Azure DevOps, is EVERY legal row: its org segment is mandatory, so this
+  // lane is never selectable there. Leaving lanes at their default still
+  // clones over SSH host-wide, with the runtime warning unaffected.
+  LANE_SSH_PATH_SCOPED:
+    "Not available: this row's addresses carry an organisation path, and SSH has none to bound — it would admit the whole host. Leave lanes at their default, or drop the path.",
   // The credential lanes are keyed by the host of the row's FIRST address. With
   // no parseable address there is no host, so there is no secret name to store
   // under: every lane renders disabled with this reason rather than defaulting
@@ -249,6 +257,10 @@ export const AGENTS = {
   MODEL_ACCESS_NOT_CONFIGURED: "Model access · Not signed in",
   MODEL_ACCESS_SHARED_EXPIRED: "Model access · Your admin's credential expired",
   MODEL_ACCESS_SHARED_EXPIRED_ACTION: "Your admin's model credential expired — ask them to reconnect it",
+  // #158: the admin-token principal's own answer ("this caller is a
+  // mechanism, not a person") — neutral tone, no action, since there is
+  // nothing for a mechanism to sign in as.
+  MODEL_ACCESS_NOT_APPLICABLE: "Model access · Not applicable",
   SIGN_IN_AWS: "Sign in to AWS",
   // Renders under the JSON policy field only when a parse succeeds and
   // min_confinement_class names no class; precedence is unchanged.
@@ -270,26 +282,29 @@ export const AGENTS = {
   AGENT_ROW_DISABLED_CHIP: "Off",
 } as const;
 
-// SetupModelAccess.state -> the AGENTS chip label. FIVE keys, not the six
+// SetupModelAccess.state -> the AGENTS chip label. SIX keys, not the seven
 // lifecycle states §7.7 names: `expired_renewable` folds into `live`
 // server-side (dispatch renews it) and never reaches a console surface.
 //
 // A lookup over frozen keys, not new copy — and ONE table rather than two,
 // because the two surfaces that render this chip (the member's Getting Started
 // and the Agents tab's admin-own chip) each fell back to
-// MODEL_ACCESS_NOT_CONFIGURED for a state outside the five, which paints
+// MODEL_ACCESS_NOT_CONFIGURED for a state outside the six, which paints
 // "Not signed in" over a credential nobody has any reading of. An ABSENT entry
 // is the honest answer: no chip, no CTA. Callers must treat a miss as "no
-// chip", never as a default label.
+// chip", never as a default label. `not_applicable` (#158) is the one entry
+// with no action either way — it is real, just never a claim about a
+// credential that has anything to sign in to.
 export const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
   live: AGENTS.MODEL_ACCESS_LIVE,
   expiring: AGENTS.MODEL_ACCESS_EXPIRING,
   expired_signin: AGENTS.MODEL_ACCESS_EXPIRED,
   not_configured: AGENTS.MODEL_ACCESS_NOT_CONFIGURED,
   shared_expired: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
+  not_applicable: AGENTS.MODEL_ACCESS_NOT_APPLICABLE,
 };
 
-// The same five labels WITHOUT the "Model access · " qualifier, for a chip
+// The same six labels WITHOUT the "Model access · " qualifier, for a chip
 // rendered INSIDE the "Your model key" card (U-15): the card's own heading
 // already says which credential is being described, so the qualifier read as a
 // second subject — "Model access · Your admin's credential expired" under a

@@ -106,12 +106,15 @@ function renderScreen(ui: Parameters<typeof render>[0], route = "/setup") {
 // E2 provenance is additive/optional. The substrate map (in the shared default)
 // names the concrete runtime each LIVE tier runs as; ready barrier cards render
 // it. This suite's own pin is its `checks` array (gvisor/loopback/kvm/macos-kvm),
-// reused across the review-step assertions below.
+// reused across the review-step assertions below. loopback carries `blocking:
+// true` on purpose — #161's own motivating case, a blocking WARN, so Review's
+// "Blocking" group is proven by `blocking`, not by grade; kvm's `fail` has no
+// `blocking` and lands under "Worth a look" for the same reason.
 function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return sharedBaseStatus({
     checks: [
       { id: "gvisor", label: "gVisor runtime", status: "ok", detail: "runsc detected" },
-      { id: "loopback", label: "Loopback bind", status: "warn", detail: "bound to 0.0.0.0" },
+      { id: "loopback", label: "Loopback bind", status: "warn", detail: "bound to 0.0.0.0", blocking: true },
       { id: "kvm", label: "/dev/kvm", status: "fail", detail: "missing", fix: "enable virtualization" },
       { id: "macos-kvm", label: "macOS note", status: "info", detail: "CC3 unavailable on macOS" },
     ],
@@ -739,13 +742,15 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("button", { name: /^next: review$/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
-    expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
-    expect(screen.getByText("/dev/kvm")).toBeInTheDocument(); // fail (Blocking)
+    expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // blocking warn (Blocking)
+    expect(screen.getByText("/dev/kvm")).toBeInTheDocument(); // non-blocking fail (Worth a look)
     expect(screen.getByText("macOS note")).toBeInTheDocument(); // info (Ready group)
     // the fail row's client-absent fix falls through to the backend-provided fix
     expect(screen.getByText(/enable virtualization/i)).toBeInTheDocument();
-    // grouped headings prove the rollup, not a flat dump
-    expect(screen.getByText("Blocking")).toBeInTheDocument();
+    // grouped headings prove the rollup, not a flat dump; a blocking WARN
+    // lands under "Blocking", not a graded-only "Worth a look" (#161).
+    expect(screen.getByText("Blocking").closest("section")).toHaveTextContent("Loopback bind");
+    expect(screen.getByText("Worth a look").closest("section")).toHaveTextContent("/dev/kvm");
 
     // Exactly 1 — the orchestrator's own mount, and nothing this walk touched
     // re-fetches the same status a second time.

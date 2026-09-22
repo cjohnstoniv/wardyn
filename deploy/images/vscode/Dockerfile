@@ -1,26 +1,38 @@
-# wardyn/agent-vscode: the claude-code agent image plus a pinned,
-# sha256-verified code-server, so a run's policy can declare a "vscode" UI app
-# (RunPolicySpec.ui_apps) and relay a real browser IDE over the governed UI
-# gateway (Workstream D, internal/api/uigateway.go) — no new substrate code,
-# no new network path out of the sandbox.
+# wardyn/agent-vscode: agent-base plus a pinned, sha256-verified code-server,
+# so a run's policy can declare a "vscode" UI app (RunPolicySpec.ui_apps) and
+# relay a real browser IDE over the governed UI gateway (Workstream D,
+# internal/api/uigateway.go) — no new substrate code, no new network path out
+# of the sandbox. The launcher below only execs code-server; it never calls a
+# coding-agent CLI.
 #
-# `FROM wardyn/agent-claude-code:local` (built by deploy/images/claude-code/
-# Dockerfile, NOT digest-pinned — a locally-built image tag, same convention
-# as deploy/images/full/Dockerfile): the agent harness, wardyn-rec,
-# wardyn-git-helper, agent-run and the git-credential wiring are all
-# inherited unchanged; this stage only adds code-server and its launcher.
+# `ARG BASE_IMAGE=wardyn/agent-base:local` (built by deploy/images/base/
+# Dockerfile, NOT digest-pinned — a locally-built image tag): agent-base is
+# the image contract with no vendor CLI, and it is what this project actually
+# publishes. `FROM wardyn/agent-claude-code:local` would bundle Anthropic's
+# proprietary Claude Code CLI, whose licence file ships in neither the image
+# nor this repository — LICENSING.md's claim that no published image bundles
+# one depends on this default staying agent-base. A developer checkout that
+# wants `claude` available in the vscode terminal restores it explicitly:
+#   make agent-image-vscode BASE_IMAGE=wardyn/agent-claude-code:local
+# (build the vendor base first with `make agent-images-core`).
 #
 # IMAGE CONTRACT (all agent images must satisfy these — see
 # deploy/images/README.md): inherited from the base image. This stage adds
 # nothing that changes it — no ENTRYPOINT, same USER agent (uid 1000).
-FROM wardyn/agent-claude-code:local
+ARG BASE_IMAGE=wardyn/agent-base:local
+FROM ${BASE_IMAGE}
 
-# Local build recipe only — never in release.yml's publish matrix (a gate in
-# scripts/check-image-pins.sh keeps it out). The licences label extends the
-# inherited base expression with what THIS stage adds: code-server (MIT).
+# Published (release.yml's images-ui-sandbox job, #141). agent-base already
+# carries these two COPYs, but scripts/check-image-pins.sh's licence-file gate
+# reads each PUBLISHED Dockerfile's own text, not what an inherited layer
+# happens to contain, so a published stage restates them. The licences label
+# extends the inherited base expression with what THIS stage adds: code-server
+# (MIT).
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/
+COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
 LABEL org.opencontainers.image.title="agent-vscode" \
-      org.opencontainers.image.description="Wardyn agent image: claude-code plus code-server (local build only)" \
-      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND MIT AND LicenseRef-Anthropic-Terms" \
+      org.opencontainers.image.description="Wardyn agent image: agent-base plus code-server" \
+      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND MIT" \
       org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn"
 
 USER root
