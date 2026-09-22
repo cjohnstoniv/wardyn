@@ -58,6 +58,10 @@ type metrics struct {
 	// this is precisely the shape that has to be graphable: audit rows flat and
 	// this series climbing IS the attack.
 	authFailedSuppressed int64
+	// deviceIngestSuppressed is authFailedSuppressed's twin for
+	// device.audit.ingest: a refusal whose row was folded into its device's
+	// streak or dropped by the per-device bucket (device_audit_bounds.go).
+	deviceIngestSuppressed int64
 	// authStoreErrors counts requests an authentication lane could not decide
 	// because its store read failed. Distinct from wardyn_store_up: that gauge
 	// answers a PING (see writeHealthGauges), which a healthy pool passes while
@@ -257,6 +261,13 @@ func (m *metrics) authFailedSuppressedInc() {
 	m.authFailedSuppressed++
 }
 
+// deviceIngestSuppressedInc records one device.audit.ingest row not written.
+func (m *metrics) deviceIngestSuppressedInc() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deviceIngestSuppressed++
+}
+
 // authStoreErrorInc records one authentication attempt abandoned on a store
 // failure.
 func (m *metrics) authStoreErrorInc() {
@@ -413,6 +424,8 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_credential_mints_total counter\nwardyn_credential_mints_total %d\n", m.mints)
 	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures whose auth.failed audit row was dropped by the rate limiter. Audit volume is capped at ~1/sec, so this series — not the audit trail — is what grows during a burst.\n"+
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
+	fmt.Fprintf(w, "# HELP wardyn_device_ingest_failures_suppressed_total Refused device audit pushes whose device.audit.ingest row was folded into a streak or dropped by the per-device rate limit.\n"+
+		"# TYPE wardyn_device_ingest_failures_suppressed_total counter\nwardyn_device_ingest_failures_suppressed_total %d\n", m.deviceIngestSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_auth_store_errors_total Requests an authentication lane could not decide because its store read failed (answered 500). Not covered by wardyn_store_up, which only pings.\n"+
 		"# TYPE wardyn_auth_store_errors_total counter\nwardyn_auth_store_errors_total %d\n", m.authStoreErrors)
 	fmt.Fprint(w, "# HELP wardyn_run_start_wait_seconds Time a sandbox still being created spent waiting on each substrate reason (pulling an image, waiting for a node, a reference that will not pull).\n"+

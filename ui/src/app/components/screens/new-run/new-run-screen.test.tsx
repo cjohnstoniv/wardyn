@@ -67,7 +67,13 @@ vi.mock("./new-run-rail", async (importOriginal) => {
 // drive the screen's own dialog wiring without a real window.
 const adoConnectMock = vi.fn();
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
-  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, connectFallback: adoConnectMock, blockedUrl: null }),
+  useAdoConnect: () => ({
+    connecting: false,
+    connect: adoConnectMock,
+    connectFallback: adoConnectMock,
+    cancel: vi.fn(),
+    blockedUrl: null,
+  }),
 }));
 const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
@@ -89,7 +95,7 @@ import { NewRunScreen } from "./new-run-screen";
 import type { Me } from "../../../lib/api/health";
 import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, MEMBER, AUTONOMY_RAIL } from "../../../lib/governance-copy";
 import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
@@ -872,6 +878,58 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
     await user.click(launch);
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
     expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+});
+
+// Finding 2 (#339 review): the server derives a hold (runs_autonomy.go's
+// autonomyDerive) at L1 when the run is non-interactive, the agent has a
+// hold lane (claude-code) and the request did NOT already ask for hold. The
+// rail's note used to render in the OPPOSITE case — only when hold was
+// already picked, which is exactly when nothing was derived.
+describe("NewRunScreen — the derived-hold note follows the server's own derivation case", () => {
+  function mockPreflightAtL1() {
+    preflightRunMock.mockResolvedValue({
+      setup_items: [],
+      enforced_confinement_class: "CC1",
+      overall_risk: "low",
+      warnings: [],
+      autonomy: {
+        level: "L1",
+        posture: { egress: "sealed", secrets: "powerful", confinement: "CC1" },
+        bound_by: ["secrets_powerful"],
+      },
+    });
+  }
+
+  it("auto chosen at L1, non-interactive: the note shows", async () => {
+    mockPreflightAtL1();
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
+    // toolApprovals defaults to "auto" — never touched.
+    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    expect(await screen.findByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeInTheDocument();
+  });
+
+  it("hold chosen: the note does not claim a derivation", async () => {
+    mockPreflightAtL1();
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
+    await user.click(screen.getByRole("radio", { name: /^Hold in Wardyn/ }));
+    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await screen.findByTestId("preflight-result");
+    expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();
+  });
+
+  it("interactive: no note, whatever tool approvals would hold", async () => {
+    mockPreflightAtL1();
+    renderScreen();
+    // Interactive is the default (initialWizardState) — left untouched.
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await screen.findByTestId("preflight-result");
+    expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();
   });
 });
 

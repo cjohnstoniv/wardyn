@@ -15,7 +15,7 @@ import { Check, Clock, Link as LinkIcon, RotateCcw, ShieldAlert, Skull, Terminal
 import type { AgentRun } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
-import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
+import { AgentBadge, AutonomyChip, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RunStateGlyph } from "../wardyn/run-state-glyph";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
@@ -313,6 +313,13 @@ export function SummaryHeader({
           runs.spec.ts's width loop measures 800px alongside 1024/1280/1536. */}
       <div className="flex shrink-0 items-center gap-2">
         <ConfinementChip value={run.confinement_class} />
+        {/* run.autonomy_level (#97) freezes the level resolveRunAutonomy
+            capped this run at, at create time. Empty for a run under no
+            profile, a profile with no rubric, or one created before this
+            field existed — the same absent-row rule every chip on this bar
+            follows, so an ordinary run's header is byte-for-byte what it
+            was. */}
+        {run.autonomy_level && <AutonomyChip level={run.autonomy_level} />}
         {run.interactive && (
           <Chip tone="info" className="gap-1">
             <TerminalSquare className="size-3" />

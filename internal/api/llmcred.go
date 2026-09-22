@@ -47,9 +47,26 @@ func (s *Server) llmProviderFor(agent string) (llmProvider, bool) {
 	if !ok {
 		return p, false
 	}
-	if base, has := s.cfg.LLMGateways[p.host]; has {
+	// vendorHost is the harness catalog's compile-time public host — the key
+	// BOTH override maps use, so it must be read before p.host is possibly
+	// rewritten below.
+	vendorHost := p.host
+	if base, has := s.cfg.LLMGateways[vendorHost]; has {
 		if h := gatewayHost(base); h != "" {
 			p.host = h
+		}
+	}
+	// The operator's own header/format override (WARDYN_<VENDOR>_GATEWAY_HEADER
+	// / _GATEWAY_FORMAT, validated by ValidateLLMGateways) — independent of
+	// whether a gateway base URL is also set. Each field applies only if the
+	// operator set it; otherwise the harness catalog's vendor convention
+	// (already in p.header/p.format) survives untouched.
+	if auth, has := s.cfg.LLMGatewayAuth[vendorHost]; has {
+		if auth.Header != "" {
+			p.header = auth.Header
+		}
+		if auth.Format != "" {
+			p.format = auth.Format
 		}
 	}
 	return p, true
