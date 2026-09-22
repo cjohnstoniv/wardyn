@@ -108,8 +108,9 @@ KIND_NODE="${WARDYN_KIND_SSO_NODE:-${CLUSTER}-control-plane}"
 # (wardynd/proxy/claude-code) and deploy/kind/sso/overlay.sh (aws-sso, the
 # fake), or step 1b rebuilds tags nothing on the node is running and the
 # provenance record names images the node never saw.
-WARDYND_IMAGE="wardyn/wardynd:quickstart"
-PROXY_IMAGE="wardyn/wardyn-proxy:quickstart"
+# The tag is per cluster (deploy/kind/quickstart.sh's WARDYN_QUICKSTART_IMAGE_TAG).
+WARDYND_IMAGE="wardyn/wardynd:${WARDYN_QUICKSTART_IMAGE_TAG:-quickstart}"
+PROXY_IMAGE="wardyn/wardyn-proxy:${WARDYN_QUICKSTART_IMAGE_TAG:-quickstart}"
 AGENT_IMAGE="wardyn/agent-claude-code:local"
 AWS_SSO_IMAGE="wardyn/agent-aws-sso:local"
 FAKE_IMAGE="wardyn/awsssofake:local"

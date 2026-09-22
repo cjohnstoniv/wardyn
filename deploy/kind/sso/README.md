@@ -49,6 +49,11 @@ helm --kube-context kind-wardyn-quickstart upgrade wardyn deploy/helm/wardyn \
 kubectl --context kind-wardyn-quickstart -n wardyn port-forward svc/wardyn-dex 5557:5556
 ```
 
+To run a second SSO cluster beside the first, give it its own cluster name,
+image tag and ports: `WARDYN_KIND_SSO_DEX_PORT` and `WARDYN_QUICKSTART_HTTP_PORT`
+are rendered into `dex.yaml`'s issuer and callback and into the chart's OIDC
+issuer and redirect at overlay time (the defaults leave the file unchanged).
+
 Sign in at http://localhost:8280 — `admin@wardyn.local` / `password` is the
 operator, `member@wardyn.local` / `password` a member (the chart's
 `WARDYN_OIDC_ROLE_MAP` decides which is which).
@@ -79,8 +84,13 @@ through `trustedCA` — the corporate-proxy posture Wardyn already supports, so
 no product code is re-pointed. Its `/authorize` is a picker with no password:
 `admin@wardyn.test` and `member@wardyn.test`.
 
+The profile builds `wardynd` and `wardyn-proxy` under its OWN tag (`kind-ado`,
+`WARDYN_QUICKSTART_IMAGE_TAG`) and pins the release to it, so it never retags
+the `:quickstart` images another cluster's overlay reloads. Give the quickstart
+the same tag, as below.
+
 ```sh
-WARDYN_QUICKSTART_CLUSTER=wardyn-ado WARDYN_QUICKSTART_HTTP_PORT=8580 WARDYN_QUICKSTART_SSH_PORT=2522 make kind-quickstart
+WARDYN_QUICKSTART_CLUSTER=wardyn-ado WARDYN_QUICKSTART_IMAGE_TAG=kind-ado WARDYN_QUICKSTART_HTTP_PORT=8580 WARDYN_QUICKSTART_SSH_PORT=2522 make kind-quickstart
 WARDYN_KIND_SSO_PROFILE=ado WARDYN_QUICKSTART_CLUSTER=wardyn-ado WARDYN_QUICKSTART_HTTP_PORT=8580 make kind-sso
 WARDYN_TEST_K8S=1 WARDYN_KIND_SSO_PROFILE=ado WARDYN_QUICKSTART_CLUSTER=wardyn-ado scripts/kind-sso-walk.sh
 ```
