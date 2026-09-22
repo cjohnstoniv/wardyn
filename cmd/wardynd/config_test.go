@@ -4,12 +4,19 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"flag"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/coreos/go-oidc/v3/oidc/oidctest"
+
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
 // ─── validateConfig: DSN required + TLS both-or-neither + Secure-cookie posture ──
@@ -760,6 +767,141 @@ func TestValidateSSOOnlyPosture(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ─── validateSSOOnlyPosture, end to end through the real boot path ──────────
+
+// memSecretStore is a minimal in-memory secretstore.Store good enough for
+// buildOptionalFeatures to construct a REAL oidc.Authenticator (session key
+// bootstrap) without a live Postgres-backed store. Pre-seeded by the caller,
+// so Get always finds the key and loadOrCreateSecret's not-found path (which
+// checks for pgx.ErrNoRows specifically) is never exercised.
+type memSecretStore struct{ vals map[string][]byte }
+
+func (s *memSecretStore) Name() string { return "mem-test" }
+func (s *memSecretStore) Put(_ context.Context, name string, value []byte) error {
+	s.vals[name] = value
+	return nil
+}
+func (s *memSecretStore) Get(_ context.Context, name string) ([]byte, error) {
+	if v, ok := s.vals[name]; ok {
+		return v, nil
+	}
+	return nil, secretstore.ErrNotFound
+}
+func (s *memSecretStore) Delete(_ context.Context, name string) error {
+	delete(s.vals, name)
+	return nil
+}
+func (s *memSecretStore) List(context.Context) ([]string, error) { return nil, nil }
+func (s *memSecretStore) For(string) secretstore.Store           { return s }
+
+// ssoOnlyBootFlags builds the *bootFlags a real buildOptionalFeatures call
+// needs to reach validateSSOOnlyPosture: a live OIDC issuer (so of.authn is
+// genuinely non-nil, not a hand-set bool) plus an operator allowlist (so
+// validateOperatorPosture — checked immediately before — passes and never
+// masks the assertion this test makes).
+func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
+	recordingSel, recordingDir := "off", ""
+	oidcInternalIss, oidcClientID, oidcClientSecret := "", "test-client", ""
+	oidcRedirectURL := "http://localhost/auth/callback"
+	oidcEmailDomains, oidcRoleMap, oidcDefaultRole := "", "", ""
+	oidcOperatorEmails := "ops@example.com"
+	allowOIDCNoOperatorList, localMode, memberMode := false, false, false
+	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
+	envbuild, scanAIAdvisor := false, false
+	sshListen, uiListen := "", ""
+	return &bootFlags{
+		recordingSel:            &recordingSel,
+		recordingDir:            &recordingDir,
+		oidcIssuer:              &issuerURL,
+		oidcInternalIss:         &oidcInternalIss,
+		oidcClientID:            &oidcClientID,
+		oidcClientSecret:        &oidcClientSecret,
+		oidcRedirectURL:         &oidcRedirectURL,
+		oidcEmailDomains:        &oidcEmailDomains,
+		oidcOperatorEmails:      &oidcOperatorEmails,
+		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
+		oidcRoleMap:             &oidcRoleMap,
+		oidcDefaultRole:         &oidcDefaultRole,
+		adminToken:              &adminToken,
+		localMode:               &localMode,
+		memberMode:              &memberMode,
+		ssoOnly:                 &ssoOnly,
+		// Read only past validateSSOOnlyPosture, on the path this test's
+		// "boots clean" case takes all the way to the function's return —
+		// every one of them off/empty so that path is a no-op, not a panic
+		// on a nil pointer this test never meant to exercise.
+		dirProvider:   &dirProvider,
+		dirTenant:     &dirTenant,
+		dirClientID:   &dirClientID,
+		dirSecret:     &dirSecret,
+		envbuild:      &envbuild,
+		scanAIAdvisor: &scanAIAdvisor,
+		sshListen:     &sshListen,
+		uiListen:      &uiListen,
+	}
+}
+
+// TestSSOOnlyPosture_WiredThroughTheRealBootPath is the #378 assertion the
+// pure-function table test (TestValidateSSOOnlyPosture above) cannot make on
+// its own: that boot actually CALLS validateSSOOnlyPosture with the real,
+// resolved "is OIDC configured" fact, on a path that constructs a genuine
+// oidc.Authenticator against a live (test) IdP — not a hand-set bool a caller
+// could drift out of sync with what actually mounted, the same drift class
+// TestAWSSSOProxyInject_BootDefaultIsTheKillSwitchConstant below exists to
+// catch for the AWS SSO kill switch.
+func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	oidcSrv := &oidctest.Server{PublicKeys: []oidctest.PublicKey{{
+		PublicKey: priv.Public(), KeyID: "test-key", Algorithm: "RS256",
+	}}}
+	httpSrv := httptest.NewServer(oidcSrv)
+	defer httpSrv.Close()
+	oidcSrv.SetIssuer(httpSrv.URL)
+
+	// Pre-seeded with a valid session key: loadOrCreateSecret's not-found path
+	// checks for pgx.ErrNoRows SPECIFICALLY (a Postgres sentinel), so a fake
+	// store's secretstore.ErrNotFound would trip its fail-CLOSED default
+	// branch instead — pre-seeding sidesteps that path entirely, which is
+	// all this test needs: a real Authenticator, not a real bootstrap.
+	newStore := func() *memSecretStore {
+		return &memSecretStore{vals: map[string][]byte{secretSessionKey: []byte("01234567890123456789012345678901")}}
+	}
+
+	t.Run("sso-only with an admin token set: refused", func(t *testing.T) {
+		f := ssoOnlyBootFlags(httpSrv.URL, "some-admin-token", true)
+		_, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false)
+		if err == nil {
+			t.Fatal("buildOptionalFeatures: want a refusal booting WARDYN_SSO_ONLY alongside WARDYN_ADMIN_TOKEN, got nil error")
+		}
+		for _, want := range []string{"WARDYN_SSO_ONLY", "WARDYN_ADMIN_TOKEN"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not mention %q", err.Error(), want)
+			}
+		}
+	})
+
+	t.Run("sso-only with nothing else set: boots clean, real OIDC configured", func(t *testing.T) {
+		f := ssoOnlyBootFlags(httpSrv.URL, "", true)
+		of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false)
+		if err != nil {
+			t.Fatalf("buildOptionalFeatures: unexpected error: %v", err)
+		}
+		if of.authn == nil {
+			t.Fatal("of.authn is nil — the real OIDC discovery round trip against the test IdP did not wire an Authenticator, so this test would have passed the sso-only checks vacuously (oidcConfigured=false)")
+		}
+	})
+
+	t.Run("an admin token alone (sso-only unset): unaffected", func(t *testing.T) {
+		f := ssoOnlyBootFlags(httpSrv.URL, "some-admin-token", false)
+		if _, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false); err != nil {
+			t.Fatalf("buildOptionalFeatures: unexpected error with sso-only unset: %v", err)
+		}
+	})
 }
 
 // ─── the O-10 kill switch, end to end through the real boot path ────────────────
