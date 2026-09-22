@@ -321,6 +321,13 @@ func (c *Config) applyDefaultsAndValidate() error {
 			}
 		}
 	}
+	// An Azure DevOps grant is enforced by the REST gate, which runs only on a
+	// connection the proxy terminates. Without the MITM CA nothing terminates,
+	// and the covered hosts would degrade to a credential-less tunnel no gate
+	// sees — so a config carrying ado_grants without the CA is refused at boot.
+	if len(c.ADOGrants) > 0 && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: ado_grants requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
+	}
 	// Parse-check (but do not retain a compiled form) each configured LLM
 	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these
 	// at boot without retaining a parsed form (same "validate at load, build
