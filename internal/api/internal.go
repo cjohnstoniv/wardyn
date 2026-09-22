@@ -279,7 +279,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		if ev.RunID != nil {
 			if _, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID); err != nil {
 				if !errors.Is(err, store.ErrNotFound) {
-					writeError(w, http.StatusInternalServerError, "validate run_id: "+err.Error())
+					writeServerError(w, r, "validate run_id", err)
 					return
 				}
 				ev.RunID = nil
@@ -316,7 +316,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 			// Propagate as a non-2xx so the sender retries (fail-closed
 			// durability). accepted so far is not reported as success: the caller
 			// re-sends the whole batch.
-			writeError(w, http.StatusBadGateway, "record ground-truth event: "+err.Error())
+			writeError(w, http.StatusBadGateway, loggedMsg(r.Context(), "record ground-truth event", err))
 			return
 		}
 		accepted++
@@ -436,7 +436,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	// tell how many this run has" must not read as "allow another one".
 	n, cerr := s.cfg.Approvals.CountForRun(r.Context(), claims.RunID)
 	if cerr != nil {
-		writeError(w, http.StatusServiceUnavailable, "count approvals for run: "+cerr.Error())
+		writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "count approvals for run", cerr))
 		return
 	}
 	if n >= maxApprovalsPerRun {
@@ -451,7 +451,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 	created, err := s.cfg.Approvals.Request(r.Context(), req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "request approval: "+err.Error())
+		writeServerError(w, r, "request approval", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
@@ -474,7 +474,7 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get approval: "+err.Error())
+		writeServerError(w, r, "get approval", err)
 		return
 	}
 	if ap.RunID != claims.RunID {
@@ -593,7 +593,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 
 	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, body.GrantID)
 	if err != nil {
-		s.writeMintError(w, err)
+		s.writeMintError(w, r, err)
 		return
 	}
 	s.metrics.credentialMinted()
@@ -708,7 +708,7 @@ const (
 // operation of an approval-gated run (which legitimately 409s with
 // ErrAlreadyMinted, docs/adoption/corp-network-onboarding-findings.md B2)
 // surfaced that confusing message instead of naming single-use as the cause.
-func (s *Server) writeMintError(w http.ResponseWriter, err error) {
+func (s *Server) writeMintError(w http.ResponseWriter, r *http.Request, err error) {
 	var pending broker.ErrApprovalPending
 	if errors.As(err, &pending) {
 		// Approval still open: 409 with the approval id so the caller can poll.
@@ -734,7 +734,7 @@ func (s *Server) writeMintError(w http.ResponseWriter, err error) {
 	case errors.Is(err, broker.ErrAlreadyMinted):
 		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictAlreadyMinted, "error": "credential already minted (single-use)"})
 	default:
-		writeError(w, http.StatusInternalServerError, "mint: "+err.Error())
+		writeServerError(w, r, "mint", err)
 	}
 }
 
@@ -807,7 +807,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		}
 		// Transient store failure: refuse (fail closed) but signal retryable, so a
 		// Postgres blip costs a renew attempt and not the run's credentials.
-		writeError(w, http.StatusServiceUnavailable, "read run: "+err.Error())
+		writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "read run", err))
 		return
 	}
 	if isTerminalRunState(run.State) {
@@ -818,7 +818,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 
 	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "renew run identity: "+err.Error())
+		writeServerError(w, r, "renew run identity", err)
 		return
 	}
 

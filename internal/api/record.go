@@ -401,7 +401,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeCeilingError(w, lerr)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "launch record run: "+lerr.Error())
+		writeServerError(w, r, "launch record run", lerr)
 		return
 	}
 
@@ -811,7 +811,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	res.EgressPromoted = priorPromoted || len(promoted) > 0
 	updated, applied, perr := s.putRecordResult(r.Context(), id, taskKey, res, recordStatusRecorded)
 	if perr != nil {
-		writeError(w, http.StatusInternalServerError, "persist promotion marker: "+perr.Error())
+		writeServerError(w, r, "persist promotion marker", perr)
 		return
 	}
 	if !applied {
@@ -836,7 +836,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 				writeError(w, http.StatusUnprocessableEntity, "promotion would exceed the requirements cap (max 256) — prune the contract first")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, "merge requirements: "+serr.Error())
+			writeServerError(w, r, "merge requirements", serr)
 			return
 		}
 		updated.Requirements = wsAfter.Requirements

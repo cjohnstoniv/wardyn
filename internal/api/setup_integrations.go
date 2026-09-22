@@ -397,7 +397,7 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 	defer s.siteConfigMu.Unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	now := s.cfg.Now().UTC()
@@ -419,7 +419,7 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 	sc.Integrations = rows
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, sc)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		writeServerError(w, r, "put site config", err)
 		return
 	}
 	// egress and header are the two facts an incident review actually needs
@@ -451,7 +451,7 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 	defer s.siteConfigMu.Unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	idx := slices.IndexFunc(sc.Integrations, func(x types.Integration) bool { return x.ID == id })
@@ -462,7 +462,7 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 	gone := sc.Integrations[idx]
 	sc.Integrations = slices.Delete(slices.Clone(sc.Integrations), idx, idx+1)
 	if _, err := s.cfg.Store.PutSiteConfig(ctx, sc); err != nil {
-		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		writeServerError(w, r, "put site config", err)
 		return
 	}
 	// Record what stopped being reachable — after the delete the row is gone,

@@ -37,7 +37,6 @@ what the ceiling needs, not every scope Azure DevOps offers:
 | `vso.wiki_write` | Read and update wiki pages |
 | `vso.security_manage` | Read and change Azure DevOps permission assignments |
 | `vso.serviceendpoint_manage` | Read, create, and manage service connections |
-| `vso.pats` | Mint and revoke the signed-in user's own personal access tokens — **add this only if you plan to turn on minted-token mode** ([Bearer or minted token](#bearer-or-minted-token)); a bearer-mode row never needs it |
 
 Also add `openid` and `offline_access` — Wardyn holds a refresh token per person, not a one-time
 code, so it can renew an access token at dispatch without asking anyone to sign in again for every
@@ -87,7 +86,7 @@ An administrator turns this on per git provider row, not globally. The fields th
     "client_id": "<the app registration above>",
     "capability_ceiling": ["read", "code_write", "pr", "policy_admin"],
     "default_profile": ["read"],                   // what a run starts with, before any escalation
-    "token_mode": "bearer"                          // "minted_pat" is the opt-in fallback
+    "token_mode": "bearer"
   }
 }
 ```
@@ -205,24 +204,28 @@ Two things that surface as a sign-in prompt rather than a hard failure:
   that refresh token, Entra refuses it, and the person is asked to sign in again before their run
   continues.
 
-## Bearer or minted token
+## Why there is no minted-token mode
 
-Two ways the injected credential can exist, and the honest trade-off between them:
+The credential is always a bearer: the control plane redeems an access token for the request and
+injects it on the wire. It is never written to the sandbox and never stored by the run.
 
-- **Bearer (the default).** The access token is redeemed by the control plane and injected on the
-  wire for that one request. It is never written to the sandbox, never stored, and does not outlive
-  the request it was minted for. This is the mode to prefer.
-- **Minted personal access token (opt-in fallback).** Some tools cannot take a bearer token at all —
-  only Basic auth with a PAT. For those, a row can opt into `token_mode: minted_pat`: Wardyn mints a
-  scoped, time-bounded PAT through Azure DevOps' own PAT Lifecycle API and injects that instead. The
-  honest difference: a minted PAT **exists at Azure DevOps until it is revoked**, unlike a bearer that
-  never exists outside the one request it rode in on. It is scoped to the run's own capabilities and
-  torn down when the run ends, but it is a real, standing credential for as long as it lives — which
-  is exactly why it is the fallback, off by default, rather than the default mode.
+A per-run personal access token — scoped to the run and revoked at its end — would let Azure DevOps
+itself enforce a run's capabilities, and it was designed in. It is not offered, because Azure DevOps
+does not allow it: the token lifecycle API mints personal access tokens only for Microsoft's own
+first-party clients. An application registration holding both `vso.pats` and `vso.tokens` is refused
+(`401 TF400813`); listing tokens works, minting does not. Wardyn will not impersonate a Microsoft
+client to get around that.
 
-Some Azure DevOps organisations restrict or forbid personal access token creation by policy. Where
-that is the case, Wardyn reports that policy as the reason a minted-token request was refused rather
-than retrying it — it does not attempt to work around an organisation's own PAT policy.
+Two consequences, stated plainly:
+
+- **Wardyn's request check is what bounds a run.** The bearer carries everything the person consented
+  to, not the run's subset, so the capability check in the proxy is the enforcing layer — see
+  [Two layers of enforcement](#two-layers-of-enforcement).
+- **A run cannot mint itself a second credential.** Azure DevOps refuses the mint independently of
+  Wardyn's own refusal of the token endpoints.
+
+Tools that accept only Basic authentication with a personal access token work unchanged: the sandbox
+holds an inert placeholder, and the proxy replaces the credential on the way out.
 
 ## Azure DevOps Server is out of scope
 

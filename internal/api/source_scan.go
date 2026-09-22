@@ -49,7 +49,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get source: "+err.Error())
+		writeServerError(w, r, "get source", err)
 		return
 	}
 	actorType, actor := actorFromRequest(r)
@@ -94,7 +94,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		if lerr != nil {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
-			writeError(w, http.StatusInternalServerError, "launch scan run: "+lerr.Error())
+			writeServerError(w, r, "launch scan run", lerr)
 			return
 		}
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor,

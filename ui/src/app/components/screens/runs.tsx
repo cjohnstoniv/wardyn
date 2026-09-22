@@ -95,7 +95,18 @@ export function RunsScreen() {
   // ListRuns plus a shell-out host sweep), so the poll stops rather than
   // running forever on the landing screen of every open tab.
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
-  const loadSetupStatus = React.useCallback(() => setupApi.getSetupStatus().then(setSetupStatus), []);
+  // getSetupStatus only ever REJECTS on a real 401 (every other failure —
+  // 404, 5xx, a dropped socket — degrades to READY_FALLBACK, see setup.ts).
+  // wfetch's 401 branch has already routed that rejection through the
+  // module-level onUnauthorized handler (App.tsx), which flips the shell to
+  // the sign-in screen and unmounts this one — so by the time this settles
+  // there is nothing left for the board to do with it. Without this .catch
+  // the rejection was unhandled: a lapsed session raised a floating
+  // unhandled-rejection right on the landing screen.
+  const loadSetupStatus = React.useCallback(
+    () => setupApi.getSetupStatus().then(setSetupStatus).catch(() => {}),
+    [],
+  );
   React.useEffect(() => {
     void loadSetupStatus();
   }, [loadSetupStatus]);
