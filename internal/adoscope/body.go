@@ -344,25 +344,20 @@ func batchIsWorkItemsOnly(req Request) error {
 
 // batchOpIsWorkItem holds ONE $batch operation URI to the same two rules the
 // outer request is held to: it is under the work-item area, and it is on the
-// organisation the row pinned.
-//
-// An operation URI is resolved by the batch door RELATIVE TO THE ORGANISATION
-// the batch was POSTed to — Microsoft's own examples write both
-// "/_apis/wit/workItems/284" and the project-relative
-// "/Fabrikam-Fiber-Git/_apis/wit/workItems/$Task" (WIT Batch, TFS REST API
-// reference). So the accepted shapes are positional, with _apis at a fixed
+// organisation the row pinned. The accepted shapes, with _apis at a fixed
 // depth:
 //
 //	/_apis/wit/…                 organisation-relative
-//	/{project}/_apis/wit/…       project-relative, under the pinned organisation
-//	/{org}/_apis/wit/…           the pinned organisation named (same shape)
+//	/{org}/_apis/wit/…           the pinned organisation named
 //	/{org}/{project}/_apis/wit/… the pinned organisation named, then a project
 //
-// A first segment that is not the pinned organisation is a PROJECT only where
-// _apis follows it directly; with a second segment before _apis it can only be
-// an organisation, and another organisation is refused — that was the hole: a
-// batch POSTed to the pinned organisation carrying writes into another one
-// under a work_write the row had granted. _apis anywhere deeper is refused.
+// Any other first segment is refused. Microsoft's WIT batch reference also
+// shows a project-relative "/{project}/_apis/wit/…", but whether the batch
+// door resolves that first segment as a project or as an ORGANISATION is not
+// verified: read as an organisation, a batch POSTed to the pinned one would
+// carry writes into another under a work_write the row granted. That shape
+// stays refused until a live two-organisation probe shows how it resolves.
+// _apis anywhere deeper is refused.
 //
 // An ABSOLUTE URI is refused outright: it could name another host or another
 // service entirely, and the batch door is not a place to re-run host
@@ -377,11 +372,14 @@ func batchOpIsWorkItem(uri, org string) error {
 	if err != nil {
 		return err
 	}
+	if len(segs) > 0 && segs[0] != "_apis" {
+		if !strings.EqualFold(segs[0], strings.TrimSpace(org)) {
+			return fmt.Errorf("names organisation %q, row pins %q", segs[0], org)
+		}
+		segs = segs[1:]
+	}
 	i := slices.Index(segs, "_apis")
-	switch {
-	case i == 2 && segs[0] != strings.ToLower(strings.TrimSpace(org)):
-		return fmt.Errorf("names organisation %q, row pins %q", segs[0], org)
-	case i < 0 || i > 2 || i+1 >= len(segs) || segs[i+1] != "wit":
+	if i < 0 || i > 1 || i+1 >= len(segs) || segs[i+1] != "wit" {
 		return fmt.Errorf("is not a work-item URL")
 	}
 	return nil

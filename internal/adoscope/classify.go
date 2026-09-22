@@ -729,7 +729,17 @@ func gitRepositoryWrite(method string, r route, req Request) (Verdict, error) {
 	case "", "importrequests":
 		// An import request replaces the repository's content wholesale.
 		return Verdict{Capability: CapRepoAdmin}, nil
-	case "refs", "pushes":
+	case "refs":
+		// PATCH on refs is Update Ref — a branch lock or unlock, administrative
+		// whatever it touches — and it names its ref in the ?filter= query, which
+		// this catalogue never sees (Request.Path carries no query). A body naming
+		// a run-namespace ref would read as a code write while the service acts
+		// on the filter's branch, so the run-ref rule cannot apply here.
+		if method == http.MethodPatch {
+			return Verdict{Capability: CapPolicyBypass}, nil
+		}
+		return refWrite(req)
+	case "pushes":
 		return refWrite(req)
 	case "pullrequests":
 		return pullRequestWrite(method, req)

@@ -90,10 +90,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sign in again (#428).
 - **Large Azure DevOps package publishes and wiki attachments now work.** Wardyn reads a request
   body only on the routes whose classification depends on it (pull-request updates, ref updates and
-  pushes, and work-item `$batch`); everything else streams through unread. Project-relative `$batch`
-  operations are accepted within the pinned organisation, the REST gate and the git broker apply one
-  rule for which ref names are valid, and the proxy sidecar refuses a configuration that carries
-  Azure DevOps grants without an interception CA (#426).
+  pushes, and work-item `$batch`); everything else streams through unread. A `$batch` operation must
+  be organisation-relative or name the pinned organisation first; a project-relative operation is
+  refused until it is shown to resolve inside the pinned organisation. The REST gate and the git
+  broker apply one rule for which ref names are valid, and the proxy sidecar refuses a configuration
+  that carries Azure DevOps grants without an interception CA (#426).
 - **A drive-share probe could report its answer before it had cleared its own in-flight mark**, so an
   immediate second probe could see a stale mark. The mark is now cleared before the answer is sent
   (#423).
