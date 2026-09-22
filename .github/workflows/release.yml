@@ -1,6 +1,6 @@
 name: Release images
 
-# Publishes the five images a Wardyn release actually ships, cosign-signed
+# Publishes the seven images a Wardyn release actually ships, cosign-signed
 # (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
 # (RELEASING.md's tagging convention). This is the "release" half of image
 # publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
@@ -10,7 +10,7 @@ name: Release images
 # to push the identical wardynd:X.Y.Z ref, one signed one not — see that
 # file's header for the current split).
 #
-# ── the five images, and why each ref is what it is (verified against the
+# ── the seven images, and why each ref is what it is (verified against the
 #    tree, not assumed) ──────────────────────────────────────────────────────
 #   ghcr.io/cjohnstoniv/wardynd
 #     deploy/helm/wardyn/values.yaml's `image.repository` default (line ~16)
@@ -34,6 +34,17 @@ name: Release images
 #     catalog sets ImageKey "claude-code"/"codex-cli" for exactly these two
 #     rows (the aws-sso login-only image ships in the matrix too, but names
 #     no --agent a run selects — see harness.go's own doc comment).
+#   ghcr.io/cjohnstoniv/agent-vscode, ghcr.io/cjohnstoniv/agent-novnc
+#     the UI-sandbox relay's two `ui_apps` (internal/api/uigateway.go) — NOT
+#     resolved by agentImage()'s automatic convention like the two rows above;
+#     a run reaches them only via an explicit `ui_apps` image ref or a
+#     WARDYN_AGENT_IMAGES override (deploy/images/vscode and novnc's own
+#     Dockerfile headers). Both build FROM the agent-base image THIS SAME
+#     workflow run just pushed, at the identical release tag — never from the
+#     unpublished agent-claude-code, which is the whole point of #140/#141:
+#     LICENSING.md's claim that no published image bundles the vendor CLI
+#     depends on that. See the images-ui-sandbox job below for why that
+#     dependency needs its own job rather than two more rows here.
 #
 # ── cosign (keyless) ─────────────────────────────────────────────────────────
 # No key material anywhere: `id-token: write` lets the job mint a short-lived
@@ -323,6 +334,145 @@ jobs:
           path: sbom-${{ matrix.name }}.cdx.json
           if-no-files-found: error
 
+  # The vscode/novnc UI-sandbox images (agent-vscode, agent-novnc, #141). Not
+  # two more rows on `images` above: both build-args need the agent-base ref
+  # THAT job just pushed, and a matrix row cannot `needs:` a sibling row in the
+  # same job — GitHub Actions has no per-row ordering, only per-job. So this
+  # job carries `needs: images` and waits for the whole matrix above (there is
+  # no way to wait on agent-base alone; wardynd/wardyn-proxy/agent-codex-cli/
+  # agent-aws-sso finish alongside it).
+  #
+  # BASE_IMAGE, on a real tag push, is the JUST-PUSHED ghcr ref at the SAME
+  # release tag — not `:local` (nothing `images` built is loaded into this
+  # job's runner; separate jobs are separate VMs with no shared docker
+  # daemon), and not agent-base's own `:latest` float there, because pinning
+  # the exact tag means a real vscode/novnc pull can never silently resolve
+  # an OLDER agent-base than the one this release actually cut.
+  #
+  # Under `workflow_dispatch -f dry_run=true`, though, `images` above pushes
+  # nothing (`push: false`), so the exact-tag ref never exists to pull — a
+  # dispatch off a branch has no `agent-base:<branch-name>` and a dispatch off
+  # an existing release tag still has no ref for a tag this job predates. The
+  # "Compute the base-image ref" step below switches to agent-base's real,
+  # always-pullable `:latest` float ONLY under dry_run, so the rehearsal
+  # actually builds these two images end to end instead of failing at the
+  # FROM pull; it does not thereby prove the exact-tag pin itself, which only
+  # a real tag push exercises.
+  images-ui-sandbox:
+    name: build, push, sign (${{ matrix.name }})
+    needs: images
+    runs-on: ubuntu-latest
+    # Same 60-minute floor as `images`, for the same reason (novnc alone is
+    # 1.22 GB across two platforms, one pass under arm64 emulation).
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing (Fulcio/Rekor OIDC exchange)
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent-vscode
+            dockerfile: deploy/images/vscode/Dockerfile
+          - name: agent-novnc
+            dockerfile: deploy/images/novnc/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # binfmt_misc handlers — see the `images` job's identical step for why.
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v2.6.4"
+      # Recomputed independently of the `images` job's own "Compute the release
+      # tag" step: jobs run on separate VMs with no shared state except explicit
+      # `needs:` outputs, and this value is pure function of github.ref_name, so
+      # recomputing it here is simpler than wiring a cross-job output for it.
+      - name: Compute the release tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "tag=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Compute the image tags
+        id: tags
+        env:
+          IMAGE_NAME: ghcr.io/cjohnstoniv/${{ matrix.name }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: echo "tags=${IMAGE_NAME}:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+      # See the job comment above: the exact release tag only exists to pull
+      # once `images` has actually pushed it, which a dry run never does.
+      - name: Compute the base-image ref
+        id: base
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "ref=ghcr.io/cjohnstoniv/agent-base:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=ghcr.io/cjohnstoniv/agent-base:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: ${{ inputs.dry_run != true }}
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          build-args: |
+            BASE_IMAGE=${{ steps.base.outputs.ref }}
+          tags: ${{ steps.tags.outputs.tags }}
+      - name: Sign the pushed image (keyless, by digest)
+        if: inputs.dry_run != true
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_REF}"
+      - name: SBOM for the pushed digest
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
+          SYFT_VERSION: v1.46.0
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
+            | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            # Nothing was pushed, so there is no digest to scan — see the job
+            # comment above for why a dry run off a branch cannot get further
+            # than this stub for these two rows.
+            echo '{"components":[]}' > "sbom-${{ matrix.name }}.cdx.json"
+            exit 0
+          fi
+          syft "registry:${IMAGE_REF}" -o cyclonedx-json > "sbom-${{ matrix.name }}.cdx.json"
+          # A scan that finds nothing is a scan that ran against the wrong thing.
+          test "$(jq '.components | length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
+            || { echo "SBOM for ${IMAGE_REF} has zero components — refusing to attest it"; exit 1; }
+      - name: Attest the SBOM to the digest
+        if: inputs.dry_run != true
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
+        run: cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.name }}.cdx.json" "${IMAGE_REF}"
+      - name: Attest build provenance
+        if: inputs.dry_run != true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/cjohnstoniv/${{ matrix.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Upload the SBOM for the release-assets job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sbom-${{ matrix.name }}
+          path: sbom-${{ matrix.name }}.cdx.json
+          if-no-files-found: error
+
   # Standalone CLI binaries. The images and the chart cover the two install paths,
   # but neither gives you just `wardyn` — for CI, for an air-gapped host, or for
   # anyone who wants the client without the stack. Static (CGO_ENABLED=0) so they
@@ -435,7 +585,7 @@ jobs:
   release-assets:
     name: Release assets (SBOMs, checksums, notices)
     if: inputs.dry_run != true
-    needs: [images, chart, binaries]
+    needs: [images, images-ui-sandbox, chart, binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

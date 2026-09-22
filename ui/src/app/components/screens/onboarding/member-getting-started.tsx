@@ -43,6 +43,9 @@ import {
   modelAccessActionLine,
 } from "../../../lib/workspace-providers-copy";
 import { HarnessLoginPane } from "../settings/harness-login-pane";
+import { ADO } from "../../../lib/ado-entra-copy";
+import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
+import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useMemberLocalDirRoot, useUserDrive } from "../../wardyn/operator-context";
@@ -253,6 +256,21 @@ export function MemberGettingStarted() {
     ? modelAccessChip(status.model_access.state, isPerUserModelAccess)
     : null;
 
+  // #386: the Azure DevOps chip + its fallback connect control — the same
+  // popup-driven flow the New Run rail's launch door uses.
+  const scmChip = status?.scm_access ? scmAccessChip(status.scm_access.state, status.scm_access.source, status.scm_access.cause) : null;
+  const { connecting: adoConnecting, connect: adoConnect, connectFallback: adoConnectFallback, blockedUrl: adoBlockedUrl } = useAdoConnect();
+  const handleAdoConnect = async () => {
+    if (await adoConnect()) setRetryTick((n) => n + 1);
+  };
+  // review follow-up N1: the fallback link opens sign-in in a new tab; this
+  // starts the SAME poll (bounded) so the chip still updates on return.
+  const handleAdoFallbackClick = () => {
+    void adoConnectFallback().then((ok) => {
+      if (ok) setRetryTick((n) => n + 1);
+    });
+  };
+
   // Shape C (approved mock round 2026-08-31): the member's own path leads
   // (every member-audience episode — which now includes 13, whose lesson is
   // the member terminal), then the core "watch first" set.
@@ -347,6 +365,10 @@ export function MemberGettingStarted() {
                 {status?.model_access?.state === "not_applicable" && (
                   <Chip tone="neutral">{AGENTS.MODEL_ACCESS_NOT_APPLICABLE}</Chip>
                 )}
+                {/* #386: one more chip from the six states, a second subject
+                    (§6.2 — "In the common case that is the whole of it: no
+                    action line, no button"). */}
+                {scmChip && <Chip tone={scmChip.tone}>{scmChip.label}</Chip>}
                 {status?.auth.mode === "sso" && (
                   <Chip tone="info">{T.SIGNIN_SSO_CHIP}</Chip>
                 )}
@@ -411,6 +433,43 @@ export function MemberGettingStarted() {
                     {AGENTS.SIGN_IN_AWS}
                   </Button>
                 ))}
+              {/* #386: `not_configured`'s cause line + CONNECT_ADO — the fallback
+                  states only (§2.2/§7.5); `live` (every source) and
+                  `shared_expired` render neither line nor button here, the
+                  common case spending nothing (§0.1). */}
+              {scmAccessNeedsConnect(status?.scm_access?.state) && status?.scm_access && (
+                <>
+                  <p className="mt-2 text-sm text-warning">{scmAccessCause(status.scm_access.cause)}</p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-3"
+                    disabled={adoConnecting}
+                    onClick={() => void handleAdoConnect()}
+                  >
+                    {ADO.CONNECT_ADO}
+                  </Button>
+                  {/* review finding F9: the browser refused the popup outright;
+                      N1: the fallback link's own click also starts the poll. */}
+                  {adoBlockedUrl && (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {ADO.CONNECT_POPUP_BLOCKED}{" "}
+                      <a
+                        href={adoBlockedUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-info hover:underline"
+                        onClick={handleAdoFallbackClick}
+                      >
+                        {ADO.CONNECT_ADO}
+                      </a>
+                    </p>
+                  )}
+                </>
+              )}
+              {status?.scm_access?.state === "shared_expired" && (
+                <p className="mt-2 text-sm text-warning">{ADO.ACCESS_SHARED_EXPIRED_ACTION}</p>
+              )}
               <p className="mt-3 text-sm text-muted-foreground">
                 {isPerUserModelAccess ? T.SETUP_SUMMARY_HELPER_PER_USER : T.SETUP_SUMMARY_HELPER}
               </p>

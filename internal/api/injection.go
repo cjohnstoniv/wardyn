@@ -227,6 +227,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if s.resolveAWSSSOInjection(w, r, claims, minted, grantID) {
 		return
 	}
+	// PER-PERSON AZURE DEVOPS (the fourth sentinel): the run owner's own
+	// captured Entra sign-in, redeemed for an access token, pinned to the
+	// dispatch-time snapshot and the organisation's own hosts — see
+	// resolveADOInjection.
+	if s.resolveADOInjection(w, r, claims, minted, grantID) {
+		return
+	}
 
 	// Defense-in-depth at the SINK: never resolve a sink-reserved secret (signing/
 	// session key or a resident AWS Bedrock SigV4 credential) into an injectable header

@@ -30,10 +30,8 @@ func autonomyDispatchedSpec(t *testing.T, st *govEscapeStore, audit *recRecorder
 		runID = id
 	}
 	st.mu.Unlock()
-	ev := findAudit(audit.events, runID, "run.policy.effective", "success")
-	if ev == nil {
-		t.Fatalf("no run.policy.effective")
-	}
+	// Dispatch runs after the 201 (runs_create_launch.go): wait for its envelope.
+	ev := waitForRecAudit(t, audit, runID, "run.policy.effective", "success")
 	var spec types.RunPolicySpec
 	_ = json.Unmarshal(ev.Data, &spec)
 	return spec
@@ -110,6 +108,9 @@ func TestAutonomyShellBootSeedRanksWithExec(t *testing.T) {
 			srv, _, _ := govEscapeFixture(t, autonomyCapStore(autonomyProfile(types.AutonomyL0)))
 			fr := srv.cfg.Runner.(*fakeRunner)
 			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, "sub-rv", []string{"eng"}, false), body)
+			if w.Code == http.StatusCreated {
+				fr.waitForSandbox(t) // dispatch runs after the 201
+			}
 			fr.mu.Lock()
 			env := fr.lastSpec.Env
 			fr.mu.Unlock()

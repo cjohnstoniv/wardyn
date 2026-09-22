@@ -26,11 +26,13 @@ function Harness({
   // the initial draft's own emptiness, which is what a fresh load looks like.
   loadedEmpty = initial.length === 0,
   onStatusRefresh = () => {},
+  patBrokerEnabled,
 }: {
   initial: GitProvider[];
   onLatest?: (git: GitProvider[]) => void;
   loadedEmpty?: boolean;
   onStatusRefresh?: () => void;
+  patBrokerEnabled?: boolean;
 }) {
   const [git, setGit] = React.useState(initial);
   onLatest?.(git);
@@ -42,6 +44,7 @@ function Harness({
       githubApp={false}
       operator
       loadedEmpty={loadedEmpty}
+      patBrokerEnabled={patBrokerEnabled}
       onStatusRefresh={onStatusRefresh}
     />
   );
@@ -78,6 +81,26 @@ describe("GitTab", () => {
     expect(screen.getByTestId("provider-row-github")).toBeInTheDocument();
   });
 
+  // #381 F8: the pat lane label/hint must actually flip when the loaded
+  // switch is off — every earlier assertion in this file exercises the
+  // default (on) shape only.
+  it("shows the PAT lane's OFF-switch label and hint when patBrokerEnabled is false", () => {
+    render(
+      <Harness
+        initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }]}
+        patBrokerEnabled={false}
+      />,
+    );
+    const row = screen.getByTestId("provider-row-github");
+    expect(within(row).getByText("PAT · in-sandbox")).toBeInTheDocument();
+    expect(within(row).queryByText("PAT · brokered")).not.toBeInTheDocument();
+    expect(
+      within(row).getByText(
+        "The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("an absent row (Azure DevOps) shows the ROW_ABSENT_HINT and an Add provider button", () => {
     render(
       <Harness
@@ -87,26 +110,28 @@ describe("GitTab", () => {
     expect(screen.getByText(PROVIDERS.ROW_ABSENT_HINT)).toBeInTheDocument();
   });
 
-  // The SSH scoping CEILING, said where the policy is written. An SSH clone
-  // URL carries no path, so an org-scoped row admits SSH for the whole host —
-  // visible exactly when the row has a path AND permits ssh.
-  it("an org-scoped row that permits ssh shows the host-level ceiling hint", () => {
+  // V1 lens A (medium) / #380 F5: the SSH scoping CEILING, said where the
+  // policy is written. An SSH clone URL carries no path, so an org-scoped
+  // row admits SSH for the whole host regardless of what it declares — the
+  // console REFUSES the explicit selection outright now (the checkbox's own
+  // disabled reason, LANE_SSH_PATH_SCOPED), matching the console door's 400,
+  // rather than letting an admin pick it and hit a raw server error at Save.
+  it("an org-scoped row disables the ssh checkbox with the path-scoped reason", () => {
     render(
       <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"], lanes: ["ssh"] }]} />,
     );
-    expect(screen.getByText(PROVIDERS.SSH_HOST_LEVEL_HINT)).toBeInTheDocument();
+    const row = screen.getByTestId("provider-row-github");
+    expect(within(row).getByRole("checkbox", { name: /SSH · resident/ })).toBeDisabled();
+    expect(within(row).getByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).toBeInTheDocument();
   });
 
-  it("...and stays quiet when the row drops ssh, or bounds the whole host anyway", () => {
-    const { unmount } = render(
-      <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"], lanes: ["pat"] }]} />,
-    );
-    expect(screen.queryByText(PROVIDERS.SSH_HOST_LEVEL_HINT)).not.toBeInTheDocument();
-    unmount();
+  it("...and stays available when the row bounds the whole host instead", () => {
     render(
-      <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com"], lanes: ["ssh"] }]} />,
+      <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com"], lanes: ["pat"] }]} />,
     );
-    expect(screen.queryByText(PROVIDERS.SSH_HOST_LEVEL_HINT)).not.toBeInTheDocument();
+    const row = screen.getByTestId("provider-row-github");
+    expect(within(row).getByRole("checkbox", { name: /SSH · resident/ })).not.toBeDisabled();
+    expect(screen.queryByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).not.toBeInTheDocument();
   });
 
   it("a disabled row collapses to the ROW_DISABLED_HINT — never removed", () => {
@@ -296,6 +321,60 @@ describe("GitTab", () => {
     });
   });
 
+  // The Git tab renders the three LEGACY lanes only; "entra" is configured
+  // elsewhere. Rewriting `lanes` from the rendered set alone DROPPED it, and a
+  // row left holding an entra block with no entra lane is refused by the
+  // server as an orphaned block — a 400 on Save that no admin could trace back
+  // to the checkbox they clicked.
+  describe("a lane this tab does not render survives a toggle", () => {
+    const entraRow: GitProvider = {
+      id: "ado",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/acme"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: {
+        tenant_id: "0f2c1f1e-9d3a-4b8c-8f2d-1a2b3c4d5e6f",
+        client_id: "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+        capability_ceiling: ["read", "code_write"],
+      },
+    };
+
+    it("toggling pat on an entra row keeps entra", async () => {
+      let latest: GitProvider[] = [];
+      render(<Harness initial={[entraRow]} onLatest={(g) => (latest = g)} />);
+      const row = screen.getByTestId("provider-row-azure_devops");
+      await userEvent.click(within(row).getByRole("checkbox", { name: /PAT · brokered/ }));
+      expect(latest[0].lanes).toContain("entra");
+      expect(latest[0].lanes).toContain("pat");
+      expect(latest[0].entra).toBeDefined();
+    });
+
+    it("and never collapses to the empty 'every legacy lane' form while entra is held", async () => {
+      let latest: GitProvider[] = [];
+      render(<Harness initial={[{ ...entraRow, lanes: ["entra"] }]} onLatest={(g) => (latest = g)} />);
+      const row = screen.getByTestId("provider-row-azure_devops");
+      // PAT is the only legacy lane an Azure DevOps row can tick (#380 makes ssh
+      // unselectable on every legal row, and app has no ADO equivalent). Ticking
+      // and then clearing it must leave entra held — never the empty list, which
+      // the server reads as "every legacy lane" and which drops entra.
+      const pat = within(row).getByRole("checkbox", { name: /PAT · brokered/ });
+      await userEvent.click(pat);
+      expect(latest[0].lanes).toEqual(expect.arrayContaining(["pat", "entra"]));
+      await userEvent.click(pat);
+      expect(latest[0].lanes).toEqual(["entra"]);
+      expect(latest[0].lanes).not.toEqual([]);
+    });
+
+    it("an entra lane leaves the three legacy checkboxes unchecked — the field narrows", () => {
+      render(<Harness initial={[entraRow]} />);
+      const row = screen.getByTestId("provider-row-azure_devops");
+      for (const box of within(row).getAllByRole("checkbox")) {
+        expect(box).toHaveAttribute("aria-checked", "false");
+      }
+    });
+  });
+
   it("S.GIT_FOOTER renders once, as the plain note under the tab", () => {
     render(<Harness initial={[]} />);
     expect(
@@ -325,7 +404,14 @@ describe("GitTab", () => {
   // must not write `["app","pat"]`, since the server 400s that and the
   // disabled `app` checkbox leaves no way to un-write it.
   describe("lane toggling never writes an unavailable lane (HIGH fix)", () => {
-    it("toggling ssh off an Azure DevOps row (app unavailable) never writes app", async () => {
+    // #380 F5: an Azure DevOps base URL's org segment is MANDATORY
+    // (validateProviderHostForKind), so no legal ADO row can ever present a
+    // bare dev.azure.com entry — the explicit ssh lane is therefore never
+    // selectable there (sshLaneExceedsPathScope is unconditionally true for
+    // it), the same way app already never is. The checkbox stays DISABLED
+    // with its own reason rather than 400ing on Save, and clicking it is a
+    // no-op — the row is never touched.
+    it("ssh is disabled with its own path-scoped reason on every Azure DevOps row, and clicking it is a no-op", async () => {
       let latest: GitProvider[] = [];
       render(
         <Harness
@@ -334,9 +420,11 @@ describe("GitTab", () => {
         />,
       );
       const row = screen.getByTestId("provider-row-azure_devops");
-      await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · resident/ }));
-      expect(latest[0].lanes).toEqual(["pat"]);
-      expect(latest[0].lanes).not.toContain("app");
+      const checkbox = within(row).getByRole("checkbox", { name: /SSH · resident/ });
+      expect(checkbox).toBeDisabled();
+      expect(within(row).getByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).toBeInTheDocument();
+      await userEvent.click(checkbox);
+      expect(latest[0].lanes).toBeUndefined();
     });
 
     it("toggling pat off a self-hosted GHES row (app + ssh unavailable) never writes app or ssh", async () => {
@@ -348,7 +436,7 @@ describe("GitTab", () => {
         />,
       );
       const row = screen.getByTestId("provider-row-github");
-      await userEvent.click(within(row).getByRole("checkbox", { name: /PAT · in-sandbox/ }));
+      await userEvent.click(within(row).getByRole("checkbox", { name: /PAT · brokered/ }));
       // pat was the only available lane; toggling it off leaves nothing
       // available permitted, and the empty-wire-convention never fires here
       // because it means "every AVAILABLE lane", not "every lane" — with pat
@@ -356,15 +444,20 @@ describe("GitTab", () => {
       expect(latest[0].lanes).toEqual([]);
     });
 
-    it("re-enabling every available lane on an Azure DevOps row stores [] (every lane the kind supports), never a 3-item array", async () => {
+    // #380 F5 moved this off Azure DevOps: with ssh now unconditionally
+    // unavailable there (see above), ADO has only ONE ever-available lane and
+    // can no longer exercise "re-enabling the last missing lane collapses
+    // back to []" — a bare github.com row still can (all three lanes stay
+    // available with no org path to scope any of them out).
+    it("re-enabling every available lane on a bare github.com row stores [] (every lane the kind supports), never a 3-item array", async () => {
       let latest: GitProvider[] = [];
       render(
         <Harness
-          initial={[{ id: "ado", kind: "azure_devops", base_urls: ["https://dev.azure.com/acme"], lanes: ["pat"] }]}
+          initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com"], lanes: ["app", "pat"] }]}
           onLatest={(g) => (latest = g)}
         />,
       );
-      const row = screen.getByTestId("provider-row-azure_devops");
+      const row = screen.getByTestId("provider-row-github");
       await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · resident/ }));
       expect(latest[0].lanes).toEqual([]);
     });
