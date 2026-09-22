@@ -150,6 +150,9 @@ ds-bundle/
 # twins (episodes.ts) — a permanent doc, not a mock round, same shape as
 # CONSOLE-RULES.md above.
 !/docs/design/demo-video-source-canon.md
+# announced-failures-canon.md is the shipped canon for #459's frozen strings
+# (RAIL.LAUNCH_ERROR_LABEL etc.) — the accompanying copy modules cite it.
+!/docs/design/announced-failures-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
