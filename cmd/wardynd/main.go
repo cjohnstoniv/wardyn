@@ -411,6 +411,7 @@ func run() error {
 		ProxyURL:                  *f.proxyURL,
 		Secrets:                   secrets,
 		MaskRegistry:              maskReg,
+		ADOEntra:                  adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		SubscriptionToken:         feats.subToken,
 		ManagedToken:              feats.managedToken,
 		DisableSubscriptionInject: feats.disableSubInject,

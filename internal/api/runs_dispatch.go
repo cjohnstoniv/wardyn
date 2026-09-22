@@ -317,6 +317,17 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	artifactInject := len(artifactPlan.injections) > 0
 
+	// THE PER-PERSON AZURE DEVOPS LANE, decided from the roster this dispatch
+	// already read and the run's own repositories (resolveADOEntraRun). Decided
+	// HERE, ahead of the LLM phase, only because that phase is where the per-run
+	// CA is minted and this lane cannot run without one; it is AUTHORED after it.
+	// A failed site-config read decides nothing — no row, no lane.
+	var adoRun adoEntraRun
+	var adoInject bool
+	if siteCfgErr == nil {
+		adoRun, adoInject = resolveADOEntraRun(siteCfg, repoLocatorsOf(policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
+	}
+
 	// LLM transport resolution (precedence: host-staged subscription > managed >
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
 	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
@@ -328,11 +339,15 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// subscription sentinel, the Bedrock bearer and the artifact tokens are all
 	// consequences of that one decision, each failing the run closed on its own
 	// authoring failure. ok=false means the run is already marked FAILED.
-	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject, siteCfg, siteCfgErr == nil)
+	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject, siteCfg, siteCfgErr == nil, adoInject)
 	if !ok {
 		return
 	}
 	llm, injections := plan.llm, plan.injections
+	injections, adoMITMHosts, ok := s.authorADOEntraLane(ctx, run, adoRun, adoInject, plan, &policy, sandboxEnv, injections)
+	if !ok {
+		return
+	}
 
 	// BROKERED GIT: make the broker route the only route to the managed host names.
 	// Last of the policy
@@ -432,7 +447,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: append(append([]string{}, artifactPlan.mitmHosts...), plan.bedrockMITMHosts...),
+			MITMHosts: append(append(append([]string{}, artifactPlan.mitmHosts...), plan.bedrockMITMHosts...), adoMITMHosts...),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so

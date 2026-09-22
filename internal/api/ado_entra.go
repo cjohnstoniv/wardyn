@@ -362,7 +362,7 @@ func ValidateEntraAuthorityOverride(raw string, allowTestEndpoints bool) (string
 // 404 that cannot be told apart from a wrong path.
 func (s *Server) mountAzureDevOpsSignInRoutes(r chi.Router) {
 	r.Get("/scm/azure-devops/signin", s.handleADOSignIn)
-	r.Get("/scm/azure-devops/callback", s.handleADOCallback)
+	r.Get(adoSignInCallbackRoute, s.handleADOCallback)
 }
 
 // resolveADOEntra resolves this deployment's Azure DevOps configuration and
@@ -733,3 +733,12 @@ func adoRandomToken() string {
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
+
+// adoSignInCallbackRoute is the callback's route inside the /api/v1 group, and
+// ADOEntraCallbackPath is the same route as the ABSOLUTE path a browser is sent
+// back to — exported for cmd/wardynd, which composes the registered redirect
+// URL from it rather than typing the path a second time.
+const (
+	adoSignInCallbackRoute = "/scm/azure-devops/callback"
+	ADOEntraCallbackPath   = "/api/v1" + adoSignInCallbackRoute
+)
