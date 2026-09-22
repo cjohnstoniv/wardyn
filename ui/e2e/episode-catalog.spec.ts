@@ -54,7 +54,12 @@ test.describe("episode catalog — Shape C path grouping", () => {
     await mockFreshInstall(page, { sso: true });
     await page.goto("/");
     await page.waitForURL(/\/setup/);
-    await expect(page.getByText("Your deployment — multi-user")).toBeVisible();
+    // CI-flake: waitForURL resolves on the client-side route change alone, not
+    // on the funnel's lazy chunk finishing or the mocked-but-real /setup/status
+    // round trip landing — both still outstanding at this point. The first
+    // paint-dependent assertion after the navigate is what has to absorb that
+    // on a loaded CI host; real slack via Playwright's own retry, not a sleep.
+    await expect(page.getByText("Your deployment — multi-user")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Your deployment — single-user")).toHaveCount(0);
     await expect(page.getByText(/^The single-user path — \d+ episodes$/)).toBeVisible();
     // The multi path's member-audience episodes carry the chip. DERIVED from
