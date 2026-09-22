@@ -709,3 +709,64 @@ func TestRunFiles_409Surfaces(t *testing.T) {
 		t.Errorf("Error() = %q, want the server's message", apiErr.Error())
 	}
 }
+
+// TestMintDeviceEnrolmentToken_RequestShapeAndDecodes pins the wire contract:
+// the body is exactly {name}, and the one-time plaintext decodes.
+func TestMintDeviceEnrolmentToken_RequestShapeAndDecodes(t *testing.T) {
+	expires := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/admin/devices/enrolment-tokens" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		checkAuth(t, r)
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("body not JSON: %v", err)
+		}
+		if len(body) != 1 || body["name"] != "alices-laptop" {
+			t.Errorf("body = %v, want exactly {name}", body)
+		}
+		writeJSON(w, http.StatusCreated, client.DeviceEnrolmentToken{
+			ID: uuid.New(), DeviceName: "alices-laptop", ExpiresAt: expires, Token: "wde_abc",
+		})
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).MintDeviceEnrolmentToken(context.Background(), "alices-laptop")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Token != "wde_abc" || got.DeviceName != "alices-laptop" || !got.ExpiresAt.Equal(expires) {
+		t.Errorf("got %+v, want the minted token decoded", got)
+	}
+}
+
+// TestListDevices_DecodesAndRevokeDeviceTargetsTheID covers the inventory read
+// and the revoke's DELETE path.
+func TestListDevices_DecodesAndRevokeDeviceTargetsTheID(t *testing.T) {
+	id := uuid.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		checkAuth(t, r)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/devices":
+			writeJSON(w, http.StatusOK, []client.Device{{ID: id, Name: "alices-laptop", LastSeq: 42}})
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/admin/devices/"+id.String():
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	got, err := c.ListDevices(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != id || got[0].LastSeq != 42 {
+		t.Errorf("got %+v, want one decoded device", got)
+	}
+	if err := c.RevokeDevice(context.Background(), id); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+}

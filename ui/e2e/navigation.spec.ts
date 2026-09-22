@@ -12,8 +12,10 @@ import { HEALTH_POLL_MS } from "../src/app/App";
 //
 // The shell (app-shell.tsx) renders a FLAT eight-item sidebar — Runs, Approvals,
 // Workspaces, Policies, Permissions, Secrets, Audit, Recordings — of react-router
-// <NavLink>s (role="link"), with no group headings. Settings, SSH keys and Demos
-// live in the account menu.
+// <NavLink>s (role="link"), with no group headings, plus Settings last under a
+// divider (#217 — it also keeps its long-standing account-menu entry, so
+// existing muscle memory doesn't break). SSH keys and Demos remain account-menu
+// only.
 // The top bar carries a "Toggle theme" button (aria-label) and no posture
 // chips (0.7.3 F6 removed the Fence/NetworkPolicy chips — posture lives on
 // the setup Environment step). Each screen supplies its own <h1> via
@@ -154,6 +156,23 @@ test.describe("navigation + shell", () => {
     await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toHaveCount(0);
   });
 
+  // #217 — Settings used to live ONLY in the account menu; it now sits last in
+  // the sidebar too, under a divider (the mock's binding default), and takes
+  // you to the same screen the account-menu entry does.
+  test("#217 — Settings is last in the sidebar, after Recordings, and opens the real screen", async ({ page }) => {
+    await gotoConsole(page);
+    // Order is the contract: within the desktop rail, Settings is the LAST
+    // link — one past Recordings — not merely present somewhere in the list.
+    const rail = page.locator("aside").getByRole("link");
+    const names = await rail.allTextContents();
+    expect(names[names.length - 1]).toMatch(/^Settings/);
+    expect(names[names.length - 2]).toMatch(/^Recordings/);
+
+    await navTo(page, "Settings");
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    await expect(page.getByText(/This host, what runs your agents/i)).toBeVisible();
+  });
+
   // B1 — the sidebar itself is the surface the fail-open bug widened: a
   // settled-but-unknown /me used to render the FULL admin nav (every item in
   // NAV_ITEMS) off a guess. The auth-flow assertions (the banner, Retry) are
@@ -170,7 +189,9 @@ test.describe("navigation + shell", () => {
     // landed.
     await page.goto("/");
     await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
-    for (const label of [...SIDEBAR_LABELS, "Workspaces"] as NavLabel[]) {
+    // #217 — the sidebar Settings link is gated on the same expression as the
+    // account menu's own entry, so it disappears here too.
+    for (const label of [...SIDEBAR_LABELS, "Workspaces", "Settings"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });

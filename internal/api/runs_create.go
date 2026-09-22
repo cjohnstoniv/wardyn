@@ -497,7 +497,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 					continue
 				}
 				gw.gitPATGrants[host] = grantID.String()
-				gw.gitPATEgress = append(gw.gitPATEgress, adoEgressDomains(host)...)
+				gw.gitPATEgress = append(gw.gitPATEgress, grantLaneEgress(g)...)
 			}
 		}
 		if g.Kind == types.GrantSSHKey {
@@ -512,9 +512,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 					continue
 				}
 				gw.sshGrants[host] = grantID.String()
-				if ep, ok := sshOver443Endpoint(host); ok {
-					gw.sshEgress = append(gw.sshEgress, ep)
-				}
+				gw.sshEgress = append(gw.sshEgress, grantLaneEgress(g)...)
 			}
 		}
 		// Approval-gated api_key grants are deliberately excluded: an unmet
@@ -532,6 +530,32 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 		}
 	}
 	return gw, true
+}
+
+// grantLaneEgress is the egress one grant's SCM lane needs beyond its own
+// host: a git_pat to an Azure DevOps host needs the dev.azure.com /
+// *.visualstudio.com bundle (adoEgressDomains), an ssh_key its PORT-QUALIFIED
+// SSH-over-443 endpoint (sshOver443Endpoint). Every other kind, and a scope
+// that does not parse, needs nothing.
+//
+// A function of the grant alone, BEFORE any veto, because two callers need
+// the same answer at different times: persistRunGrants builds the lanes from
+// it at launch, and the autonomy posture grades them on both doors before any
+// lane exists (autonomyPostureSpec).
+func grantLaneEgress(g types.GrantSpec) []string {
+	switch g.Kind {
+	case types.GrantGitPAT:
+		if host, _, _, err := gitPATScopeFields(g.Scope); err == nil {
+			return adoEgressDomains(host)
+		}
+	case types.GrantSSHKey:
+		if host, _, _, _, err := sshKeyScopeFields(g.Scope); err == nil {
+			if ep, ok := sshOver443Endpoint(host); ok {
+				return []string{ep}
+			}
+		}
+	}
+	return nil
 }
 
 // augmentGitBrokerGrants maps the run's DECLARED GitHub clone set (legacy run.Repo +
@@ -618,8 +642,13 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 // wsRefs is the run's referenced onboarded workspaces, resolved by the caller
 // (it also feeds the workspace cred binding + image resolution). legacyRepo is
 // the request's single `repo` field, which the declaresRepo gate below needs
-// and grantWiring cannot supply. Extracted verbatim from handleCreateRun.
-func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string) {
+// and grantWiring cannot supply. scmSite is the site-config snapshot the
+// autonomy gate graded the SCM-host lane from (resolveRunAutonomy), so the
+// hosts dispatched here are the hosts that were graded. Extracted verbatim
+// from handleCreateRun.
+func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string,
+	scmSite types.SiteConfig,
+) {
 	if added := unionWorkspaceEgress(spec, wsRefs); len(added) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.egress",
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
@@ -660,7 +689,7 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 		gw.firstGitHubGrantID != nil ||
 		len(gw.gitGrants) > 0 || len(gw.gitPATGrants) > 0 || len(gw.sshGrants) > 0
 	if declaresRepo {
-		if added := s.unionSiteConfigScmHosts(ctx, spec); len(added) > 0 {
+		if added := unionSiteConfigScmHosts(spec, scmSite); len(added) > 0 {
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.site_config.egress",
 				runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
 		}

@@ -16,7 +16,8 @@ import {
   sidebarLink,
   sql,
 } from "./fixtures";
-import { GOVERNANCE as GOV, MEMBER, PEOPLE, PERM, PREVIEW } from "../src/app/lib/governance-copy";
+import { GOVERNANCE as GOV, LIMITS_CHIP, MEMBER, PEOPLE, PERM, PREVIEW, RUBRIC } from "../src/app/lib/governance-copy";
+import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import type { Page } from "@playwright/test";
 
@@ -294,6 +295,57 @@ test.describe("governance — the security admin's authoring walk", () => {
     await expect(page.getByTestId("governance-add-assignment-collapsed")).toHaveCount(0);
     await expect(tealActions(page)).toHaveCount(1);
     await expect(page.getByRole("button", { name: GOV.ADD_CTA, exact: true })).toHaveClass(/bg-primary/);
+  });
+
+  // #93/#96 — the autonomy rubric round-trips through the editor: a saved row
+  // survives a reload, and the profiles-list chip names the STRICTEST cap
+  // (ruling 2, #96 review), not merely that a rubric exists.
+  //
+  // Its OWN profile, never "walled" — this walk is serial, and the later
+  // "the stored ceiling IS the wall" test asserts `walled`'s `limits` with a
+  // strict toEqual; adding a rubric onto that same profile would fail it for
+  // a reason that test's own diff cannot explain.
+  const RUBRIC_NAME = "autonomy-rubric-e2e";
+  test("the autonomy rubric round-trips through the editor, and the profiles list names the strictest cap", async ({
+    page,
+  }) => {
+    await gotoConsole(page);
+    await navTo(page, "Governance");
+
+    await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
+    let editor = page.getByTestId("governance-profile-editor");
+    await page.locator("#governance-profile-name").fill(RUBRIC_NAME);
+    await expect(editor.getByText(RUBRIC.HEADING)).toBeVisible();
+    // Untouched: every row reads No cap.
+    await expect(
+      editor.getByRole("combobox", { name: `${RUBRIC.ROWS.secrets_powerful[0]} caps autonomy at`, exact: true }),
+    ).toHaveText(RUBRIC.NOCAP);
+
+    // Two rows, at two different levels — the lower one is what the chip and
+    // the footer note must name.
+    await editor.getByRole("combobox", { name: `${RUBRIC.ROWS.secrets_powerful[0]} caps autonomy at`, exact: true }).click();
+    await page.getByRole("option", { name: AUTONOMY_META.L2.label, exact: true }).click();
+    await editor.getByRole("combobox", { name: `${RUBRIC.ROWS.confinement_cc1[0]} caps autonomy at`, exact: true }).click();
+    await page.getByRole("option", { name: AUTONOMY_META.L1.label, exact: true }).click();
+    await expect(editor.getByText(RUBRIC.SET_NOTE(2, AUTONOMY_META.L1.label))).toBeVisible();
+
+    await editor.getByRole("button", { name: GOV.SAVE, exact: true }).click();
+    await expect(editor).toHaveCount(0);
+
+    // The profiles list chip: the strictest cap, on the chip face itself.
+    const row = profilesTable(page).getByRole("row", { name: new RegExp(RUBRIC_NAME) });
+    await expect(row.getByText(LIMITS_CHIP.AUTONOMY(AUTONOMY_META.L1.label))).toBeVisible();
+
+    // It was a real write, not local state — reload and reopen the editor.
+    await page.reload();
+    await page.getByRole("button", { name: `${GOV.EDIT} ${RUBRIC_NAME}`, exact: true }).click();
+    editor = page.getByTestId("governance-profile-editor");
+    await expect(
+      editor.getByRole("combobox", { name: `${RUBRIC.ROWS.secrets_powerful[0]} caps autonomy at`, exact: true }),
+    ).toHaveText(AUTONOMY_META.L2.label);
+    await expect(
+      editor.getByRole("combobox", { name: `${RUBRIC.ROWS.confinement_cc1[0]} caps autonomy at`, exact: true }),
+    ).toHaveText(AUTONOMY_META.L1.label);
   });
 
   test("delete is REFUSED while assigned: pre-filled from the count, and the confirm never enables", async ({

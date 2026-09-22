@@ -55,7 +55,7 @@ const (
 	// which is right, but not that the operator's key is deliberately not
 	// standing in.
 	bedrockBearerNamespaceNotOwn = "this agent's model credential is one per person and your own Bedrock API key is not in the store " +
-		"(set it with `wardyn secret set bedrock-api-key`); the operator's key does not stand in for it"
+		"(store it under Settings → Model provider → AWS Bedrock → Bedrock bearer key); the operator's key does not stand in for it"
 	// bedrockBearerNotRecorded refuses a grant dispatch did not author.
 	bedrockBearerNotRecorded = "bedrock-api-key is injected only through the grant Wardyn authors when a run launches on the " +
 		"Bedrock bearer key, which records whose key the run uses; this grant carries no such record"

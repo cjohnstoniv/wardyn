@@ -11,9 +11,10 @@ import {
   mockMemberRole,
   mockSecurityAdminRole,
   navToRoute,
+  sidebarLink,
 } from "./fixtures";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
-import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
 // U-15: the starting sentence is a constant in a CSS-free module now — this
 // spec used to re-type its opening clause, so a reworded wait could move on
@@ -244,10 +245,15 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
   });
 
   // R-2 (blind review, LOW): F4-F3 keeps the draft MOUNTED on a 412 — the
-  // banner sits ABOVE the tabs rather than replacing them, with ONE control
-  // ("Discard mine and reload", never "Save over theirs"). No spec pinned
-  // this in a real browser before this pass.
-  test("a 412 keeps the edited textarea on screen, with exactly one banner control", async ({ page }) => {
+  // banner sits ABOVE the tabs rather than replacing them. #217: the banner's
+  // two controls are Copy my changes (first) and Discard mine and reload
+  // (second, now ghost) — never a "Save over theirs" arm.
+  test("a 412 keeps the edited textarea on screen; Copy my changes, then Discard", async ({ page, context }) => {
+    // Chromium refuses navigator.clipboard.writeText without this — the
+    // console's own useCopyToClipboard (lib/use-copy-to-clipboard.ts)
+    // degrades to a failure toast otherwise, which is real browser behavior
+    // this spec isn't testing.
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await gotoProviders(page);
     const row = page.getByTestId("provider-row-github");
     await expect(row).toBeVisible();
@@ -264,14 +270,23 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
 
     await expect(page.getByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeVisible();
+    await expect(page.getByText(PROVIDERS.SAVED_ELSEWHERE_BODY)).toBeVisible();
     // The draft is still mounted and readable — the edited line survives.
     await expect(row.locator("textarea")).toHaveValue("https://github.com/acme\nhttps://git.corp.example/team");
-    // ONE control on the banner: Discard mine and reload. No "Save over
-    // theirs" — the corrected verdict refuses a second re-PUT arm.
-    await expect(page.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeVisible();
     await expect(page.getByText(/save over theirs/i)).toHaveCount(0);
     // Save providers is STILL on screen — the draft is still there to save.
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeVisible();
+
+    // #217 — the changed field, as readable text (never the whole draft as
+    // JSON): the banner shows it before Copy is even pressed, then Copy
+    // confirms with a toast once it is.
+    await expect(page.getByText(/base_urls.*acme.*→.*acme.*corp\.example/s)).toBeVisible();
+    await page.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY }).click();
+    await expect(page.getByText(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST)).toBeVisible();
+
+    // Discard mine and reload is still there, now beside Copy, not the only
+    // exit.
+    await expect(page.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeVisible();
 
     // Clean up the route intercept and the in-memory draft edit before the
     // next serial test reads the real, unmodified stored document.
@@ -280,6 +295,69 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     const reloaded = page.getByTestId("provider-row-github");
     await expect(reloaded).toBeVisible();
     await expect(reloaded.locator("textarea")).toHaveValue("https://github.com/acme");
+  });
+
+  // #217 — the guard is armed the moment the draft differs from what loaded,
+  // and it is a BLOCKING confirm, not a banner: a sidebar click away from a
+  // dirty Providers draft must stop and ask before it navigates.
+  test("editing a field arms the unsaved-navigation guard; Keep editing stays, Discard changes leaves", async ({ page }) => {
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-github");
+    await expect(row).toBeVisible();
+    await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
+    // The dirty marker beside Save — the same fact the guard is armed on.
+    await expect(page.getByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toBeVisible();
+
+    await sidebarLink(page, "Settings").click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(UNSAVED_GUARD.TITLE)).toBeVisible();
+    await expect(dialog.getByText(UNSAVED_GUARD.BODY)).toBeVisible();
+    // The navigation did NOT happen — still on /providers.
+    await expect(page).toHaveURL(/\/providers$/);
+
+    // Keep editing: the dialog closes, the edit and the route both survive.
+    await dialog.getByRole("button", { name: UNSAVED_GUARD.STAY }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page).toHaveURL(/\/providers$/);
+    await expect(row.locator("textarea")).toHaveValue("https://github.com/acme\nhttps://git.corp.example/team");
+
+    // The same click, answered the other way, actually leaves.
+    await sidebarLink(page, "Settings").click();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await page.getByRole("button", { name: UNSAVED_GUARD.LEAVE }).click();
+    await expect(page).toHaveURL(/\/settings$/);
+
+    // The unmounted draft never reached the server — the next test's read of
+    // the stored document must see the ORIGINAL row, not this edit.
+    await page.reload();
+    await navToRoute(page, "/providers");
+    const reloaded = page.getByTestId("provider-row-github");
+    await expect(reloaded).toBeVisible();
+    await expect(reloaded.locator("textarea")).toHaveValue("https://github.com/acme");
+  });
+
+  // #217 — a disabled control states its reason BESIDE it, never only in a
+  // title tooltip. GET/PUT /workspace-providers are admin-only server-side
+  // (requireOperator), so a real security admin's read would 403 before this
+  // control ever paints — this spec's own documented ceiling (BROWSER VS API,
+  // top of file) is what makes the state reachable at all: the harness's
+  // bearer stays real admin, so the GET genuinely succeeds while the spliced
+  // client role reads !operator, exactly the race a stale /me can produce.
+  test("a security-admin session sees Save disabled WITH its reason beside it", async ({ page }) => {
+    await mockSecurityAdminRole(page);
+    // NOT gotoProviders(): the Settings card itself is operator-gated
+    // (ProvidersCard returns null for !operator — the sibling describe
+    // block's own test above), so that entry point is gone for this role.
+    // The GET still succeeds for real (the harness's bearer stays admin),
+    // so the route itself renders.
+    await gotoConsole(page);
+    await navToRoute(page, "/providers");
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+    const saveBtn = page.getByRole("button", { name: PROVIDERS.SAVE_CTA });
+    await expect(saveBtn).toBeVisible();
+    await expect(saveBtn).toBeDisabled();
+    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
   });
 
   test("the funnel step badge and Settings card both read the real enabled-provider count", async ({ page }) => {
@@ -364,6 +442,9 @@ async function spliceBedrockRow(
   page: Page,
   credentialSource: "per_user" | "shared",
   modelAccessState: string | null,
+  // #337: bedrock_bearer's twin call (below) is the ONLY caller that passes
+  // this — every existing call keeps splicing bedrock_sso, unchanged.
+  mechanism: "bedrock_sso" | "bedrock_bearer" = "bedrock_sso",
 ): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
     // /setup/status is POLLED by this screen, so a handler can still be mid
@@ -385,7 +466,7 @@ async function spliceBedrockRow(
     const row = {
       ...(idx >= 0 ? harnesses[idx] : { id: "claude-code" }),
       enabled: true,
-      mechanism: "bedrock_sso",
+      mechanism,
       credential_source: credentialSource,
     };
     if (idx >= 0) harnesses[idx] = row;
@@ -394,7 +475,7 @@ async function spliceBedrockRow(
     if (modelAccessState) {
       json.model_access = {
         state: modelAccessState,
-        mechanism: "bedrock_sso",
+        mechanism,
         action: modelAccessState === "live" || modelAccessState === "not_applicable" ? "" : "Sign in to AWS",
       };
     }
@@ -791,5 +872,130 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
+  });
+});
+
+// #337: a MEMBER on a per_user Bedrock BEARER row can edit their own bearer
+// field — the console's missing half of #153/#327's server-side write door
+// (member writes to bedrock-api-key are already admitted there).
+//
+// PR #352 review, finding 1: the FIRST version of this block called
+// mockMemberRole (fixtures.ts, splices GET /me's role/operator fields, plus
+// its own redacting **/api/v1/setup/status* route) and then spliceBedrockRow
+// on the SAME status pattern. spliceBedrockRow runs LAST-registered-wins
+// (Playwright routes are LIFO) and its handler calls route.fetch() itself —
+// which hits the network directly rather than falling through to
+// mockMemberRole's handler — so the redaction never ran; the test read the
+// RAW ADMIN body the whole time. That hid the real bug: `st.Bedrock =
+// SetupBedrock{Ready: st.Bedrock.Ready}` (internal/api/setup.go) zeroed
+// BearerPresent for every non-operator unconditionally, so a real member's
+// Save never showed Replace/Disconnect — the field looked stored under the
+// unredacted splice and came back empty under the real one.
+//
+// mockMemberBedrockRowRedacted below is this file's own composed splice
+// instead: ONE **/api/v1/setup/status* handler that mirrors
+// redactSetupStatusForMember's structural drops (the same shape
+// mockMemberSetupStatus, fixtures.ts, mirrors for every OTHER member spec in
+// this repo) AND injects the harnesses row, so nothing here can bypass the
+// redaction the way stacking two routes on the same pattern did.
+async function mockMemberBedrockRowRedacted(
+  page: Page,
+  credentialSource: "per_user" | "shared",
+  mechanism: "bedrock_sso" | "bedrock_bearer",
+  initialBearerPresent: boolean,
+): Promise<void> {
+  await page.route("**/api/v1/me", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.role = "member";
+    json.operator = false;
+    json.security_operator = false;
+    await route.fulfill({ response, json });
+  });
+
+  // Mutable, not cached-once: a member's real Save/Disconnect below hits the
+  // real backend (this harness's bearer token is admin server-side, so the
+  // write itself always succeeds — the point being proven is only that the
+  // CONSOLE re-reads a body shaped the way redaction really answers it, not a
+  // genuine per-member namespaced write, same ceiling as every mockMemberRole
+  // spec in this file). Flipped by the secrets-endpoint splice below so the
+  // NEXT poll reflects it, the way a real member's own redacted read would.
+  let bearerPresent = initialBearerPresent;
+  await page.route("**/api/v1/setup/status*", async (route) => {
+    const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+    // Mirrors redactSetupStatusForMember (internal/api/setup.go) — the same
+    // drop list mockMemberSetupStatus (fixtures.ts) applies for every other
+    // member spec, plus the #337 BearerPresent carve-out that function now
+    // applies under the caller's own per_user bearer row.
+    body.checks = [];
+    body.checks_redacted = true;
+    body.providers = [];
+    body.secrets = { present: [] };
+    const runner = (body.runner ?? {}) as { confinement_classes?: string[] };
+    body.runner = { confinement_classes: runner.confinement_classes ?? [] };
+    const ready = !!(body.bedrock as { ready?: boolean } | undefined)?.ready;
+    body.bedrock = { ready, creds_present: false, bearer_present: bearerPresent };
+    body.scm = {};
+    body.host_proxy = {};
+    body.deployment = {};
+    body.harnesses = [
+      {
+        id: "claude-code",
+        display: "Claude Code",
+        has_gateway: true,
+        has_login: true,
+        enabled: true,
+        mechanism,
+        credential_source: credentialSource,
+      },
+    ];
+    await route.fulfill({ json: body });
+  });
+
+  await page.route("**/api/v1/secrets/bedrock-api-key", async (route) => {
+    const response = await route.fetch();
+    if (response.ok()) {
+      if (route.request().method() === "PUT") bearerPresent = true;
+      if (route.request().method() === "DELETE") bearerPresent = false;
+    }
+    await route.fulfill({ response });
+  });
+}
+
+test.describe("providers — #337: a member's own Bedrock bearer field under a per_user bearer row", () => {
+  test("editable on a per_user bearer row", async ({ page }) => {
+    await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await expect(page.getByLabel("Bedrock bearer key")).toBeEditable();
+  });
+
+  test("still disabled on a shared row", async ({ page }) => {
+    await mockMemberBedrockRowRedacted(page, "shared", "bedrock_bearer", false);
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await expect(page.getByLabel("Bedrock bearer key")).toBeDisabled();
+  });
+
+  // PR #352 review, finding 1's own live-browser reproduction: a member's
+  // Save must lead to Replace/Disconnect, reading the body the way the
+  // server's redaction really answers it — not the raw admin body the first
+  // version of this block accidentally read (see the block comment above).
+  test("Save leads to Replace and Disconnect for a member, reading the redacted body", async ({ page }) => {
+    await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+
+    const field = page.getByLabel("Bedrock bearer key");
+    await expect(field).toBeEditable();
+    await field.fill("e2e-member-bearer-token");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await expect(page.getByText(/Saved bedrock-api-key/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Replace" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
   });
 });

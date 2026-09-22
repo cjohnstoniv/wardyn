@@ -303,6 +303,11 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		if rows[i].Kind != types.ApprovalCredentialReauth {
 			continue
 		}
+		// An Azure DevOps consent row is credential_reauth too, but it has its
+		// own cap (maxADOCapabilityHoldsPerRun) and never spends this budget.
+		if _, consent := adoConsentScope(rows[i]); consent {
+			continue
+		}
 		workflows++
 		switch rows[i].State {
 		case types.ApprovalPending:

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -152,33 +153,138 @@ func TestAuthFailedCoalesce_OneRowPerMinuteStillFolds(t *testing.T) {
 	}
 }
 
-// TestAuthFailedCoalesce_DistinctPrincipalsAreNotFolded is the bound that keeps
-// the fold from hiding an attack: a burst from many peers is many keys, so every
-// one of them keeps its own row. (SourceIP is in the key and does NOT separate
-// principals behind a Kubernetes ingress — THREAT-MODEL.md says so, and the
-// window+count bound is what covers that case, together with the rate limiter
-// every summary emit is charged to.)
-func TestAuthFailedCoalesce_DistinctPrincipalsAreNotFolded(t *testing.T) {
+// TestAuthFailedCoalesce_DistinctPeersFoldIntoOneCountedStreak: a burst from
+// many peers on one path and reason is ONE streak since #347 — the peer is no
+// longer in the key, because a caller that rotates its address otherwise wrote a
+// row per request. What keeps the burst readable is the summary: its count is
+// the real volume, and its peers field says how many addresses it came from,
+// saturating at maxAuthFailedPeers so the set a streak holds stays bounded.
+func TestAuthFailedCoalesce_DistinctPeersFoldIntoOneCountedStreak(t *testing.T) {
 	c := newCoalesceHarness(t, 5*time.Minute)
 	const principals = 500
 	for i := range principals {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/internal/approvals", nil)
-		// One address PER PRINCIPAL, and the address is what the key holds now:
-		// the port used to make these 500 requests 500 keys off two IPs, which
-		// meant this test passed while the fold was keyed on an ephemeral port
-		// (V1-r2-lensS #3).
+		// One address PER PRINCIPAL; the port varies too, and must not count.
 		r.RemoteAddr = "198.51." + itoa3(i/256) + "." + itoa3(i%256) + ":" + itoa3(10000+i%256)
-		// One second of clock per attempt so the ~1/sec limiter admits them all:
-		// this test is about the COALESCER, and a limiter drop would mask it.
 		c.advance(time.Second)
 		c.srv.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
 	}
 	c.flush()
 
 	rows := authFailedEvents(c.harness)
-	if len(rows) < principals {
-		t.Errorf("auth.failed rows = %d for %d DISTINCT peers, want at least one each — a credential-stuffing "+
-			"run must not collapse into a single row", len(rows), principals)
+	if len(rows) != 2 {
+		t.Fatalf("auth.failed rows = %d for %d peers on one path and reason, want 2 (the first + one summary)",
+			len(rows), principals)
+	}
+	if _, count, _, _ := coalesceData(t, rows[1]); count != principals {
+		t.Errorf("summary count = %d, want %d", count, principals)
+	}
+	if peers := coalescePeers(t, rows[1]); peers != maxAuthFailedPeers {
+		t.Errorf("summary peers = %d for %d distinct peers, want it saturated at %d", peers, principals, maxAuthFailedPeers)
+	}
+	if !strings.Contains(string(rows[1].Data), `"peers_truncated":true`) {
+		t.Errorf("summary data = %s, want peers_truncated:true past the cap", rows[1].Data)
+	}
+}
+
+// coalescePeers reads a summary row's distinct-peer count.
+func coalescePeers(t *testing.T, ev types.AuditEvent) int {
+	t.Helper()
+	var d struct {
+		Peers int `json:"peers"`
+	}
+	if err := json.Unmarshal(ev.Data, &d); err != nil {
+		t.Fatalf("decode auth.failed data: %v", err)
+	}
+	return d.Peers
+}
+
+// meFromPeer sends a bad-token GET /api/v1/me from peer and requires the 401.
+func meFromPeer(t *testing.T, srv *Server, peer string) {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	r.RemoteAddr = peer
+	r.Header.Set("Authorization", "Bearer not-the-admin-token")
+	w := httptest.NewRecorder()
+	// srv.router is what Handler() returns, so this raw drive gets the same
+	// panic catcher every other call site in the package has (#338).
+	panicFails(t, srv.router).ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("bad token from %s = %d, want 401", peer, w.Code)
+	}
+}
+
+// TestAuthFailedCoalesce_RotatingPeerDripFoldsIntoOneStreak is #347: a drip of
+// bad-token requests, one a second for two minutes, spread over ten rotating
+// source addresses. Keyed on the peer, every request opened a new streak and
+// wrote its own row — 120 rows, as many as the rate limiter allows. Keyed on
+// (reason, path), it is one streak: the opening row plus one summary.
+func TestAuthFailedCoalesce_RotatingPeerDripFoldsIntoOneStreak(t *testing.T) {
+	c := newCoalesceHarness(t, 5*time.Minute)
+	const refusals, peers = 120, 10
+	for i := range refusals {
+		c.advance(time.Second)
+		meFromPeer(t, c.srv, "198.51.100."+itoa3(i%peers)+":4000")
+	}
+	c.flush()
+
+	rows := authFailedEvents(c.harness)
+	if len(rows) != 2 {
+		t.Fatalf("auth.failed rows = %d for a %d-request drip over %d rotating peers, want 2 (the first + one summary)",
+			len(rows), refusals, peers)
+	}
+	if _, count, _, _ := coalesceData(t, rows[1]); count != refusals {
+		t.Errorf("summary count = %d, want %d", count, refusals)
+	}
+	if got := coalescePeers(t, rows[1]); got != peers {
+		t.Errorf("summary peers = %d, want %d", got, peers)
+	}
+	if rows[1].SourceIP != rows[0].SourceIP {
+		t.Errorf("summary source_ip = %q, want the opening peer %q", rows[1].SourceIP, rows[0].SourceIP)
+	}
+}
+
+// TestAuthFailedCoalesce_BurstFromANewPeerDuringADripIsCounted: folding on
+// (reason, path) must not hide a genuine burst that lands inside a slow drip.
+// The burst's refusals are in the summary's count and its peer is in the
+// summary's peer count.
+func TestAuthFailedCoalesce_BurstFromANewPeerDuringADripIsCounted(t *testing.T) {
+	c := newCoalesceHarness(t, 5*time.Minute)
+	const drip, burst = 10, 20
+	for i := range drip {
+		c.advance(time.Minute)
+		meFromPeer(t, c.srv, "10.0.0.9:5555")
+		if i == drip/2 {
+			for j := range burst {
+				meFromPeer(t, c.srv, "203.0.113.50:"+itoa3(40000+j))
+			}
+		}
+	}
+	c.advance(time.Minute) // refill the limiter, so the summary is not refused
+	c.flush()
+
+	rows := authFailedEvents(c.harness)
+	if len(rows) != 2 {
+		t.Fatalf("auth.failed rows = %d, want 2 (the first + one summary)", len(rows))
+	}
+	if _, count, _, _ := coalesceData(t, rows[1]); count != drip+burst {
+		t.Errorf("summary count = %d, want %d — the burst's refusals belong in it", count, drip+burst)
+	}
+	if got := coalescePeers(t, rows[1]); got != 2 {
+		t.Errorf("summary peers = %d, want 2 — the burst's peer must show in the summary", got)
+	}
+	var d struct {
+		PeerIPs        []string `json:"peer_ips"`
+		PeersTruncated bool     `json:"peers_truncated"`
+	}
+	if err := json.Unmarshal(rows[1].Data, &d); err != nil {
+		t.Fatalf("decode auth.failed data: %v", err)
+	}
+	if !slices.Equal(d.PeerIPs, []string{"10.0.0.9", "203.0.113.50"}) {
+		t.Errorf("summary peer_ips = %v, want [10.0.0.9 203.0.113.50] — the burst's address must be in the list", d.PeerIPs)
+	}
+	if d.PeersTruncated {
+		t.Error("summary peers_truncated = true for 2 peers, far under the cap")
 	}
 }
 

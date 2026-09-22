@@ -25,11 +25,13 @@
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
 //   - secrets (/api/v1/secrets):         ListSecrets, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig
+//   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/AddSSHKey
 //     (/api/v1/me/ssh-keys). The rest of /api/v1/me is NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
+//   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDevices, RevokeDevice
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -37,7 +39,6 @@
 // families 0.7 added were missing from BOTH halves, so docs/sdk.md's "the exact
 // list of what it wraps and what it does not" was exact about neither.
 //
-//   - /api/v1/drives         — user drives and their grants (0.7)
 //   - /api/v1/governance     — governance profiles and assignments (0.7)
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
@@ -51,13 +52,19 @@
 //     credential is shared or per-person (0.7.2). Admin-only, same page
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
-//   - /api/v1/admin          — operator maintenance (the sandbox sweep)
+//   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
+//   - /api/v1/devices        — an enrolled laptop's daemon routes (enrol, audit, heartbeat)
 //   - /api/v1/internal       — the AGENT-facing plane (mint, decisions, groundtruth,
 //     scan-results, token renew). Deliberately unwrapped: it is the sandbox's
 //     surface, not an operator's.
 //   - /api/v1/me             — beyond Me and ssh-keys: capabilities, run-layout, tokens
 //   - /api/v1/auth, /auth/login, /auth/callback — the browser SSO leg, plus the
 //     harness-login device flow. A redirect dance, not an API call.
+//   - /api/v1/scm            — the per-user Azure DevOps sign-in (0.7.10): a
+//     sign-in door and its identity-provider callback. Unwrapped for the same
+//     reason the SSO leg above is — it is a browser redirect dance whose whole
+//     point is a human at a keyboard consenting, and it binds to a browser
+//     session an SDK caller does not have.
 //   - the attach lane under /api/v1/runs/{id} — attach, attach-ticket,
 //     attach-holder, attach/takeover, resources. A WebSocket and its ticket.
 //   - /metrics, /readyz      — the operator's scrape and readiness probes

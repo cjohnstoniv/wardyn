@@ -114,6 +114,73 @@ describe("SignIn — SSO entry point", () => {
   });
 });
 
+// #378/#379: the sign-in screen reads /healthz's new token_login/sso_only bits
+// and renders only what can work, in every combination the posture can report.
+describe("SignIn — renders only what the posture says can work (#378/#379)", () => {
+  it("SSO-only: one 'Sign in with SSO' button, no admin-token field, no role-source caveat", async () => {
+    healthMock.mockResolvedValue({ sso: true, sso_only: true, token_login: false });
+    renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.queryByLabelText(/admin token/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/comes from your SSO role assignment/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("token + SSO both configured (today's combined deployment): unchanged", async () => {
+    healthMock.mockResolvedValue({ sso: true, sso_only: false, token_login: true });
+    renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.getByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/comes from your SSO role assignment/i),
+    ).toBeInTheDocument();
+  });
+
+  it("both bits false keeps the admin-token form (nothing says sign-in is unavailable)", async () => {
+    healthMock.mockResolvedValue({ sso: false, sso_only: false, token_login: false });
+    renderSignIn();
+    expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
+  });
+
+  it("local-mode cell: an older/local daemon reporting no posture bits keeps today's form", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    renderSignIn();
+    expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
+  });
+
+  // The one cell that actually CHANGES behavior for an install that already
+  // exists: an ordinary OIDC deployment with no admin token configured (or
+  // member mode — either way token_login is false while sso stays true).
+  // Before #378/#379 this rendered the admin-token field regardless, so
+  // every submission there was refused with "admin token not configured".
+  it("OIDC configured with no usable token (token_login false, sso_only false): the admin-token field disappears", async () => {
+    healthMock.mockResolvedValue({ sso: true, sso_only: false, token_login: false });
+    renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.queryByLabelText(/admin token/i)).not.toBeInTheDocument();
+    // sso_only is false here, so the role-source caveat still belongs on screen.
+    expect(
+      screen.getByText(/comes from your SSO role assignment/i),
+    ).toBeInTheDocument();
+  });
+
+  // R4/F027's failure shape, replayed for the two new bits: health() resolves
+  // the EMPTY object on a network error or any non-2xx, and the gate must
+  // leave its LAST KNOWN state alone rather than read "no answer" as "nothing
+  // works" — that early-return path is exactly what once left an SSO-only
+  // deployment showing no way in at all when the daemon merely hadn't
+  // answered yet (see refreshSso's comment in sign-in.tsx).
+  it("a failed /healthz on mount does not hide the admin-token form or misreport the posture", async () => {
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
+  });
+});
+
 // #212 (design/first-contact-prototype): the sign-in screen used to
 // advertise a working demo credential (`demo-admin-token`, in both the
 // placeholder and the hint) and named the env var it reads
