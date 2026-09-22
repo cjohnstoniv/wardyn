@@ -73,11 +73,12 @@ const (
 	// of the same kind (maxADOCapabilityHoldsPerRun); this one alone is not a
 	// limit, because a restarted sidecar starts it at zero.
 	maxCapabilityHolds = 16
-	// maxCapabilityHoldTimeout clamps a capability hold below the MITM inner
-	// server's 5-minute ReadTimeout. The gate has already read the body whole
-	// (adoPeekBody) before it holds, so this is a belt under that timeout —
-	// a held request must still be answered inside the connection's own
-	// deadline — not a guard for a body read after the approval.
+	// maxCapabilityHoldTimeout clamps a capability hold: how long a person's
+	// answer is waited for on a parked request (the console's HOLD_WINDOW_MS
+	// mirrors it). It is NOT what keeps a held request's body readable — a
+	// request whose body the gate did not peek is read after the hold, and
+	// ReadTimeout counts from its headers, so serveMITMRequest re-arms the
+	// read deadline after each point that can hold (rearmBodyDeadline).
 	maxCapabilityHoldTimeout = 240 * time.Second
 )
 

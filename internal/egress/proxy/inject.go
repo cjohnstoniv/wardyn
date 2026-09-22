@@ -128,7 +128,10 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 		// synchronously — a dead credential HERE is a race measured in seconds,
 		// not a person who needs to sign in, and holding would fight the canary.
 		// A 423 at boot is an error like any other: fail closed, exactly as today.
-		resolved, err := resolveInjection(ctx, base, token.Get(), r.GrantID, client)
+		// The resolve SAYS it is the boot one, so an arm that would otherwise
+		// raise a sign-in request (the Azure DevOps lane) fails the run with a
+		// hint instead of opening a request nothing will wait on.
+		resolved, err := resolveInjectionQuery(ctx, base, token.Get(), r.GrantID, bootResolveQuery, client)
 		if err != nil {
 			return nil, fmt.Errorf("resolve injection for %q: %w", host, err)
 		}
@@ -619,6 +622,10 @@ func (i *injector) headerFor(host string) (injectedHeader, bool) {
 func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID, client *http.Client) (types.ResolvedInjection, error) {
 	return resolveInjectionQuery(ctx, base, token, grantID, nil, client)
 }
+
+// bootResolveQuery marks the sidecar's boot-time resolves. Mirrors the control
+// plane's adoResolvePhase / adoResolvePhaseBoot.
+var bootResolveQuery = url.Values{"phase": {"boot"}}
 
 // resolveInjectionQuery is resolveInjection with a query — the Azure DevOps
 // capability hold's per-(host, capability) ask (ado_hold.go). nil is the plain

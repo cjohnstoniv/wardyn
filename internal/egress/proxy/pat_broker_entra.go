@@ -97,12 +97,21 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	}
 
 	hdr, ok, err := p.inject.resolveCtx(r.Context(), host)
-	if err != nil || !ok {
-		if err == nil {
-			err = fmt.Errorf("no Azure DevOps credential is configured for %s", host)
+	if err != nil && r.Context().Err() != nil {
+		return // the client is gone; the hold, if any, carries on without it
+	}
+	if err != nil {
+		msg, src := adoCredentialRefusalFor(err, ruleSourceADOGitDenied)
+		p.emitPATDecision(r, host, egress.Deny, src)
+		if push != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, adoGitDrainLimit))
 		}
+		writeADOGitRefusal(w, push, "Wardyn's git broker: "+msg)
+		return
+	}
+	if !ok {
 		p.emitPATDecision(r, host, egress.Deny, ruleSourceADOGitDenied)
-		p.httpError(w, "resolve Azure DevOps credential", err, http.StatusBadGateway)
+		p.httpError(w, "resolve Azure DevOps credential", fmt.Errorf("no Azure DevOps credential is configured for %s", host), http.StatusBadGateway)
 		return
 	}
 	registerHeaderCredential(hdr.value)

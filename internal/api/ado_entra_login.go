@@ -162,6 +162,8 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		"scopes": usable, "source": adoEntraSourceLogin,
 		"expires_at": blob.ExpiresAt.Format(time.RFC3339),
 	})
+	// After the capture row, never before: captured -> resolved -> retry.
+	s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
 }
 
 // adoEntraForLogin resolves the row for a LOGIN-TIME decision and applies the

@@ -164,14 +164,18 @@ export interface AdoCapabilityScope {
   cmd: string;
 }
 
-// The canonical scope of a credential_reauth raised by raiseADOConsent — the
-// Entra-consent-missing chain injection_ado_capability.go's doc names.
+// The canonical scope of an Azure DevOps credential_reauth: raiseADOConsent's
+// Entra-consent-missing chain (mechanism entra_consent, with the scopes still
+// needed) or holdForADOSignIn's mid-run sign-in request (mechanism
+// entra_signin, reason "signin", no scopes) — internal/api's
+// injection_ado_capability.go and injection_ado_signin.go.
 export interface AdoConsentScope {
   lane: "azure_devops";
-  mechanism: "entra_consent";
+  mechanism: "entra_consent" | "entra_signin";
+  reason?: "signin";
   owner: string;
   provider_id: string;
-  scopes: string[];
+  scopes?: string[];
 }
 
 // Structural, never scope-key-based (mirrors the server's own
@@ -195,7 +199,7 @@ export function isAdoConsentRequest(
   return (
     a.kind === "credential_reauth" &&
     a.requested_scope?.lane === "azure_devops" &&
-    a.requested_scope?.mechanism === "entra_consent"
+    (a.requested_scope?.mechanism === "entra_consent" || a.requested_scope?.mechanism === "entra_signin")
   );
 }
 

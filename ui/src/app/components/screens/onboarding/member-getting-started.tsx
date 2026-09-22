@@ -45,7 +45,7 @@ import {
 import { HarnessLoginPane } from "../settings/harness-login-pane";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
-import { scmAccessCause, scmAccessChip } from "../../../lib/scm-access-display";
+import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useMemberLocalDirRoot, useUserDrive } from "../../wardyn/operator-context";
@@ -258,7 +258,7 @@ export function MemberGettingStarted() {
 
   // #386: the Azure DevOps chip + its fallback connect control — the same
   // popup-driven flow the New Run rail's launch door uses.
-  const scmChip = status?.scm_access ? scmAccessChip(status.scm_access.state, status.scm_access.source) : null;
+  const scmChip = status?.scm_access ? scmAccessChip(status.scm_access.state, status.scm_access.source, status.scm_access.cause) : null;
   const { connecting: adoConnecting, connect: adoConnect, connectFallback: adoConnectFallback, blockedUrl: adoBlockedUrl } = useAdoConnect();
   const handleAdoConnect = async () => {
     if (await adoConnect()) setRetryTick((n) => n + 1);
@@ -437,7 +437,7 @@ export function MemberGettingStarted() {
                   states only (§2.2/§7.5); `live` (every source) and
                   `shared_expired` render neither line nor button here, the
                   common case spending nothing (§0.1). */}
-              {status?.scm_access?.state === "not_configured" && (
+              {scmAccessNeedsConnect(status?.scm_access?.state) && status?.scm_access && (
                 <>
                   <p className="mt-2 text-sm text-warning">{scmAccessCause(status.scm_access.cause)}</p>
                   <Button
