@@ -172,6 +172,7 @@ func TestCreateRun_ToolApprovals_Validation(t *testing.T) {
 		if w.Code != http.StatusCreated {
 			t.Fatalf("expected 201 for tool_approvals=hold on claude-code, got %d: %s", w.Code, w.Body.String())
 		}
+		fr.waitForSandbox(t)
 		if got := fr.lastSpec.Env["WARDYN_TOOL_APPROVALS"]; got != "hold" {
 			t.Errorf("Env[WARDYN_TOOL_APPROVALS] = %q, want hold", got)
 		}

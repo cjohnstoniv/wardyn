@@ -178,17 +178,20 @@ explicitly is not; and compose serves the console and the UI relay on a
 UI-in-container does not, and the envelope ships `WARDYN_UI_SANDBOX_LISTEN`
 commented out rather than pretending otherwise.
 
-The reason is images, not code. The relay itself is built and tested, but no
-`agent-vscode` or noVNC image is published — `release.yml`'s matrix is
-`wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli`, `agent-aws-sso` —
-and `deploy/images/vscode/Dockerfile` builds `FROM wardyn/agent-claude-code:local`,
-itself unpublished. A managed laptop has no repo and no build path: the launcher
-runs `--no-build` specifically so it "refuses to fall back to building from
-source on a laptop with no repo checkout". So enabling the listener here would
-publish a port with nothing to serve.
+The reason is wiring, not images. `agent-vscode` and `agent-novnc` publish
+starting with the next tagged release (`release.yml`'s `images-ui-sandbox`
+job, #141), both `FROM` `agent-base`, never the unpublished
+`agent-claude-code`. But the desktop envelope's `WARDYN_AGENT_IMAGES` does not
+register either by default — they are opt-in, not part of the installer's
+default catalog — and a managed laptop has no repo and no build path: the
+launcher runs `--no-build` specifically so it "refuses to fall back to
+building from source on a laptop with no repo checkout". So enabling the
+listener here would still publish a port with nothing pinned to serve it,
+until an operator adds `agent-vscode`/`agent-novnc` to `WARDYN_AGENT_IMAGES`
+themselves.
 
 It works today on a **developer checkout** (`make agent-images` then
-`make test-e2e-ui-sandbox`). Publishing the UI images is deferred to 0.8.
+`make test-e2e-ui-sandbox`).
 
 ## The member-mode profile (topology m′)
 
@@ -235,12 +238,22 @@ scoped to the caller's OWN namespace — `secretOwnerFromRequest` returns `""` f
 an operator and the caller's own principal for a member, so the developer writes
 their own row and can neither read, overwrite nor delete the operator's. Three
 things stay admin-only inside that: the operator's `""` namespace itself, the
-four Bedrock/SigV4 names (`aws-access-key-id`, `aws-secret-access-key`,
-`aws-session-token`, `bedrock-api-key`), which a non-operator `PUT`/`DELETE`
-refuses with a `403` because dispatch always resolves them from the operator
+three AWS SigV4 names (`aws-access-key-id`, `aws-secret-access-key`,
+`aws-session-token`), which a non-operator `PUT`/`DELETE`
+refuses with a `403` because dispatch always signs with them out of the operator
 namespace, and `?owner=<principal>` — the cross-namespace write — which answers
 `403 ?owner= is admin-only` to a member. A run resolves its own owner's row and
 falls back to the operator's, never to another member's.
+
+The fourth Bedrock name is the exception, and it is one name: a member may store
+their own `bedrock-api-key`. The BEARER is a static `Authorization` header the
+proxy injects per run, so under an agent row marked `per_user` a member's own
+key is a credential their runs really authenticate with rather than a row
+nothing reads — and it is the ONLY bearer their runs see: the operator's does
+not stand in for a member who has stored none. Under a `shared` row the
+operator's key serves every run and a member's own is not read. Which namespace
+a run uses is decided once, at dispatch, and recorded on the run's grant; the
+proxy is handed the key from exactly that namespace.
 See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
 
 **Mounting their own project directory.** The one power m′ adds that no other
@@ -482,14 +495,13 @@ What m′'s other two mechanisms still hold:
    vendor's terms prohibit. BYOK is unaffected by this: it is the api-key
    lane, never the resident-subscription mount.
 
-**Bedrock stays the MDM-managed lane — it is not a fallback BYOK replaces.**
-A member's own key is Claude/OpenAI API-key mode only; Bedrock needs its own
-AWS credential, which per-principal secrets deliberately does NOT extend to
-(`bedrock-api-key` and the AWS SigV4 pair are refused for a member's own
-`PUT /secrets` regardless of ownership — Bedrock member-BYO stays a Named
-gap). For a Bedrock-only fleet, or a member running `codex-cli` with no
-OpenAI key of their own, Bedrock is still the daemon-level, MDM-set path
-that needs no member secret write at all:
+**Bedrock is the MDM-managed lane, with one member-held key beside it.**
+A member may store their own `bedrock-api-key` bearer; the three AWS SigV4
+names (`aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`) are
+still refused for a member's own `PUT /secrets` regardless of ownership, so
+member-supplied SigV4 Bedrock stays a Named gap. For a Bedrock-only fleet, or a
+member running `codex-cli` with no OpenAI key of their own, Bedrock is still the
+daemon-level, MDM-set path that needs no member secret write at all:
 
 | Variable | Set by |
 |---|---|
@@ -735,8 +747,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.8|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.8|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.10|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.10|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

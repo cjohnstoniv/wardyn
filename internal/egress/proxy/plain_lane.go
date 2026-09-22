@@ -57,6 +57,16 @@ func defaultPortForScheme(scheme string) int {
 	return 80
 }
 
+// servePlain is the plain forward lane's entry. A host the run's Azure DevOps
+// grant covers is refused here, before evaluation or any injection, because
+// this lane never runs the REST gate (refuseADOPlain).
+func (p *Proxy) servePlain(w http.ResponseWriter, r *http.Request) {
+	if p.refuseADOPlain(w, r) {
+		return
+	}
+	p.handlePlain(w, r)
+}
+
 // handlePlain forwards an absolute-URI plain HTTP request.
 func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// A forward-proxy request carries an absolute URI; the host lives in the
@@ -185,8 +195,11 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// 6. Forward to the vetted target over the pinned transport. Its DialContext
 	// dials the vetted ip:port carried on the request context (vettedIPKey), so the
 	// host is never re-resolved. Invoked only post-allow+vet.
-	resp, err := p.transport.RoundTrip(outReq)
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
+		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, log, host, "upstream error") {
+			return
+		}
 		// The allow decision is emitted only AFTER a successful round-trip (same
 		// accuracy fix as handleConnect, E3): a failed upstream dial must NOT
 		// over-report an allow. Emit a dial-failed deny (carrying any scan
@@ -198,6 +211,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if log != nil {
+		log.UpstreamFault = p.bedrockUpstreamFault(host, r.URL.Path, resp)
 		p.sink.emit(*log)
 	}
 	defer func() { _ = resp.Body.Close() }()

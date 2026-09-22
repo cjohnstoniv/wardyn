@@ -6,6 +6,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import {
+  EMAIL_DOMAIN_REFUSAL,
+  UNREACHABLE_ERROR,
+} from "../src/app/components/screens/sign-in";
 
 // Auth / sign-in lane.
 //
@@ -237,6 +241,96 @@ test.describe("auth / sign-in gate", () => {
     await expect(signInToken(page)).toBeVisible();
     await expect(runsNav(page)).toHaveCount(0);
     expect(await readToken(page)).toBeNull();
+  });
+});
+
+// #378/#379 — the SSO-only screen shape, driven by a mocked /healthz.
+//
+// The server-side refusal (validateSSOOnlyPosture, cmd/wardynd/boot_posture.go)
+// is proven by the Kubernetes SSO walk, not hermetically here (#379's own
+// acceptance says so) — this spec instead pins what the CONSOLE does once the
+// daemon reports the posture: /healthz's token_login/sso_only bits, mocked at
+// the network boundary the same way the outage spec below mocks **/healthz.
+test.describe("SSO-only screen shape (#378/#379)", () => {
+  test("sso_only:true, token_login:false renders one 'Sign in with SSO' button and nothing else", async ({ page }) => {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", sso: true, sso_only: true, token_login: false }),
+      }),
+    );
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    const ssoLink = page.getByRole("link", { name: "Sign in with SSO" });
+    await expect(ssoLink).toBeVisible();
+    await expect(ssoLink).toHaveAttribute("href", "/auth/login");
+
+    // No admin-token form: neither the field nor its label/instructions.
+    await expect(signInToken(page)).toHaveCount(0);
+    await expect(page.getByText("Admin token", { exact: true })).toHaveCount(0);
+
+    // No role-source caveat — sso_only makes the "everyone is an admin"
+    // branch it describes unreachable.
+    await expect(page.getByText(/comes from your SSO role assignment/i)).toHaveCount(0);
+  });
+
+  test("sso:true, sso_only:false, token_login:false: the admin-token form is gone but the role-source caveat stays", async ({ page }) => {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", sso: true, sso_only: false, token_login: false }),
+      }),
+    );
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    await expect(page.getByRole("link", { name: "Sign in with SSO" })).toBeVisible();
+    await expect(signInToken(page)).toHaveCount(0);
+    await expect(page.getByText(/comes from your SSO role assignment/i)).toBeVisible();
+  });
+});
+
+// #212 (design/first-contact-prototype) — a sign-in refusal must not
+// advertise a working credential or hand an unauthenticated reader an
+// operator's remediation. These pin the words the person actually reads,
+// importing the constants sign-in.tsx exports rather than duplicating the
+// literal.
+test.describe("sign-in refusals name Wardyn and point this reader at what they can do (#212)", () => {
+  test("the admin-token field starts empty, with no working demo credential in the placeholder", async ({ page }) => {
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    const field = signInToken(page);
+    await expect(field).toBeVisible();
+    await expect(field).not.toHaveAttribute("placeholder");
+  });
+
+  test("an unreachable daemon names Wardyn and names the daemon to check, not a bare 'control plane' dead end", async ({ page }) => {
+    await clearTokenInit(page);
+    // Simulate a network failure on the token-probe request the same way a
+    // daemon that never answers would: the fetch itself never resolves ok.
+    await page.route("**/api/v1/runs?limit=1", (route) => route.abort());
+    await page.goto("/");
+
+    await signInToken(page).fill("sometoken");
+    await useTokenButton(page).click();
+
+    const alert = page.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveText(UNREACHABLE_ERROR);
+  });
+
+  test("the email_domain refusal points a locked-out reader at their admin, not an env var they cannot reach", async ({ page }) => {
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=email_domain");
+
+    const alert = page.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveText(EMAIL_DOMAIN_REFUSAL);
+    await expect(alert).not.toContainText("WARDYN_OIDC_EMAIL_DOMAINS");
   });
 });
 

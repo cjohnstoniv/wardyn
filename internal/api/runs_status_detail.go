@@ -125,6 +125,7 @@ func (s *Server) runStatusDetailWriter(ctx context.Context, runID uuid.UUID) (on
 //     presenting a stale wait as a cause is the misdiagnosis this whole field
 //     exists to end.
 func projectStatusDetail(runs []types.AgentRun) {
+	projectFailureHint(runs) // every route that serves a run comes through here
 	for i := range runs {
 		r := &runs[i]
 		reason := statusDetailReason(r.StatusDetail)

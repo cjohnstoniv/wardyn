@@ -58,10 +58,20 @@ func TestPG_UserDrive_TwoNamesThatFoldToOneObjectAreRefused(t *testing.T) {
 	t.Cleanup(func() { _ = st.DeleteUserDrive(ctx, first.ID) })
 
 	// THE PREMISE, asserted rather than assumed: two names UNIQUE(name) admits
-	// as different, minting ONE object for one home.
+	// as different, minting ONE object for one home under the SLUG scheme
+	// mintedDrive's zero-value ObjectScheme implies.
+	//
+	// Probed on a FRESH, unpersisted value (slugPremise) rather than on `first`
+	// itself: #163 gives every newly registered row object_scheme "id", so the
+	// value UpsertUserDrive just returned above no longer mints the slug-based
+	// name this premise is about, and comparing it against a pre-insert `clash`
+	// would be comparing two different schemes, not the fold this test pins.
+	// The database write below still goes through `first` — its ID, not its
+	// scheme, is what that half of the test needs.
+	slugPremise := mintedDrive(base + " nas")
 	clash := mintedDrive(strings.ToUpper(base[:1]) + base[1:] + "   NAS!")
-	if a, b := types.DriveObjectName(first, "bsmith"), types.DriveObjectName(clash, "bsmith"); a != b {
-		t.Fatalf("%q and %q mint %q and %q; the collision this test pins is gone", first.Name, clash.Name, a, b)
+	if a, b := types.DriveObjectName(slugPremise, "bsmith"), types.DriveObjectName(clash, "bsmith"); a != b {
+		t.Fatalf("%q and %q mint %q and %q; the collision this test pins is gone", slugPremise.Name, clash.Name, a, b)
 	}
 	if first.Name == clash.Name {
 		t.Fatalf("the two names are equal (%q); UNIQUE(name) would refuse this and the test would prove nothing", first.Name)

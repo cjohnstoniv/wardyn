@@ -112,8 +112,13 @@ RUN chmod -R a+rwX /opt/rust
 # /usr/bin which the default PATH includes; only go + rust need this).
 # GOTMPDIR: the sandbox mounts /tmp NOEXEC, but `go test` compiles each package's
 # test binary into $TMPDIR and then EXECS it — which fails "permission denied" on
-# a noexec /tmp. Point it at the agent's exec-allowed HOME instead.
-RUN install -d -o agent -g agent /home/agent/.gotmp /home/agent/go /home/agent/.cache/go-build
+# a noexec /tmp. Point it at the agent's exec-allowed HOME instead — under
+# .cache alongside GOCACHE and GOMODCACHE (not GOPATH itself, so the installed
+# tool binaries under go/bin stay put) so a k8s run's fill lands on the volume
+# ephemeralScratchVolumes mounts there (internal/runner/k8s/naming.go) and
+# counts against disk_mib instead of the pod's unmetered writable layer.
+RUN install -d -o agent -g agent /home/agent/go /home/agent/.cache/go-build \
+      /home/agent/.cache/gotmp /home/agent/.cache/go/mod /home/agent/.cache/npm
 
 # Maven proxy: unlike npm/pip/cargo/go/git, Maven does NOT honor the sandbox's
 # HTTP(S)_PROXY env vars — it resolves Maven Central directly and fails
@@ -133,15 +138,24 @@ RUN install -d -o agent -g agent /home/agent/.m2 && \
       '  </proxies>' \
       '</settings>' > /home/agent/.m2/settings.xml && \
     chown agent:agent /home/agent/.m2/settings.xml
+# These MUST match dispatch's own toolchain env (buildBaseSandboxEnv,
+# internal/api/runs_dispatch_mounts.go) byte-for-byte: a login shell (exec task
+# mode's `/bin/sh -lc`, sourced above) re-exports every one of these AFTER
+# dispatch's env lands, so a path named here that disagreed with dispatch would
+# silently win and undo the k8s cache-volume relocation (issue #164) the moment
+# a task ran in a login shell. GOPATH itself is unchanged (only GOMODCACHE
+# moves) so the installed tool binaries under its bin/ stay reachable.
 RUN printf '%s\n' \
       'export PATH=/usr/local/go/bin:/opt/rust/bin:/home/agent/go/bin:$PATH' \
       'export GOPATH=/home/agent/go' \
       'export GOCACHE=/home/agent/.cache/go-build' \
-      'export GOTMPDIR=/home/agent/.gotmp' \
+      'export GOTMPDIR=/home/agent/.cache/gotmp' \
+      'export GOMODCACHE=/home/agent/.cache/go/mod' \
       'export GOTOOLCHAIN=local' \
       'export CARGO_HOME=/opt/rust' \
       'export RUSTUP_HOME=/opt/rust' \
       'export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64' \
+      'export npm_config_cache=/home/agent/.cache/npm' \
       > /etc/profile.d/toolchains.sh
 
 # Sanity: every toolchain resolves under BOTH a plain and a LOGIN shell (the
@@ -152,5 +166,12 @@ RUN node --version && npm --version && python3 --version && go version \
     && sh -lc 'go version && cargo --version && mvn -v | head -1 && python3 --version'
 
 USER agent
-# Per-project package caches live under the agent's writable HOME.
-ENV GOCACHE=/home/agent/.cache/go-build CARGO_HOME=/opt/rust
+# Per-project package caches live under the agent's writable HOME — set again
+# here (not just in /etc/profile.d/toolchains.sh above) so a PLAIN shell run
+# outside Wardyn dispatch (which would otherwise set these itself, see
+# buildBaseSandboxEnv) still gets sane, disk_mib-eligible defaults.
+ENV GOCACHE=/home/agent/.cache/go-build \
+    GOTMPDIR=/home/agent/.cache/gotmp \
+    GOMODCACHE=/home/agent/.cache/go/mod \
+    npm_config_cache=/home/agent/.cache/npm \
+    CARGO_HOME=/opt/rust

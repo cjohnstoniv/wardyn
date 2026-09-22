@@ -44,7 +44,7 @@ func auditReasons(t *testing.T, srv *Server, action string) []string {
 		t.Fatalf("audit recorder = %T, want *recRecorder", srv.cfg.Audit)
 	}
 	var out []string
-	for _, ev := range rec.events {
+	for _, ev := range rec.snapshot() {
 		if ev.Action != action {
 			continue
 		}

@@ -715,8 +715,8 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 		t.Fatalf("get agent pod: %v", err)
 	}
 	// The drive is found BY NAME, not at index 0: since 0.7.5 a pod with a disk
-	// budget also carries the two scratch emptyDirs (ephemeralScratchVolumes),
-	// and this case is about the drive, not about volume ordering.
+	// budget also carries the scratch emptyDirs (ephemeralScratchVolumes), and
+	// this case is about the drive, not about volume ordering.
 	if len(pod.Spec.Volumes) != 1+len(wantScratch) {
 		t.Fatalf("agent pod volumes = %v, want the drive plus the %d scratch volumes", pod.Spec.Volumes, len(wantScratch))
 	}
