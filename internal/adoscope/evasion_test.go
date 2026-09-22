@@ -275,10 +275,9 @@ func TestEvasionResourceNamedRepository(t *testing.T) {
 }
 
 // F4 — THE $BATCH DOOR WAS NOT PINNED TO THE ORGANISATION. Every operation URI
-// is a route in its own right and gets the row's organisation applied to it.
-// "/{x}/_apis/wit/…" is the documented PROJECT-relative shape, resolved under
-// the pinned organisation, so another organisation is named as
-// "/{org}/{project}/_apis/…" — see TestBatchOperationURIShapes.
+// is a route in its own right and gets the row's organisation applied to it:
+// a first segment other than _apis must be the pinned organisation — see
+// TestBatchOperationURIShapes.
 func TestEvasionBatchCrossOrg(t *testing.T) {
 	batch := "/acme/_apis/wit/$batch"
 	runCases(t, []caseT{
@@ -296,6 +295,11 @@ func TestEvasionBatchCrossOrg(t *testing.T) {
 			name: "an organisation-relative operation",
 			req:  adoReq(http.MethodPost, batch, `[{"uri":"/_apis/wit/workitems/1?api-version=7.1"}]`),
 			want: CapWorkWrite,
+		},
+		{
+			name:    "an operation whose first segment is another organisation, or an unverified project",
+			req:     adoReq(http.MethodPost, batch, `[{"uri":"/evil/_apis/wit/workitems/1"}]`),
+			wantErr: true,
 		},
 		{
 			name:    "an operation aimed at another organisation through a backslash",
@@ -372,12 +376,13 @@ func TestGitOverHTTPIsOutOfScope(t *testing.T) {
 	})
 }
 
-// THE $BATCH OPERATION URI SHAPES. Microsoft's WIT batch reference writes an
-// operation URI relative to the organisation the batch is POSTed to — both
-// "/_apis/wit/workItems/284" and the project-relative
-// "/Fabrikam-Fiber-Git/_apis/wit/workItems/$Task". Each accepted shape stays
-// inside the pinned organisation; one naming another organisation, or hiding
-// a traversal, is refused.
+// THE $BATCH OPERATION URI SHAPES. An operation URI is accepted relative to
+// the organisation ("/_apis/wit/…") or naming the pinned organisation first.
+// The project-relative "/Fabrikam-Fiber-Git/_apis/wit/workItems/$Task" of
+// Microsoft's WIT batch reference is REFUSED: nothing has shown the batch door
+// reads that first segment as a project rather than an organisation (see
+// batchOpIsWorkItem). One naming another organisation, or hiding a traversal,
+// is refused.
 func TestBatchOperationURIShapes(t *testing.T) {
 	batch := func(uri string) Request {
 		return adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"method":"PATCH","uri":"`+uri+`"}]`)
@@ -386,9 +391,11 @@ func TestBatchOperationURIShapes(t *testing.T) {
 		{name: "organisation-relative", req: batch("/_apis/wit/workitems/284?api-version=7.1"), want: CapWorkWrite},
 		{name: "organisation named", req: batch("/acme/_apis/wit/workitems/284"), want: CapWorkWrite},
 		{name: "organisation and project named", req: batch("/acme/proj/_apis/wit/workitems/284"), want: CapWorkWrite},
-		{name: "project-relative create", req: batch("/proj/_apis/wit/workitems/$Bug?api-version=7.1"), want: CapWorkWrite},
-		{name: "project-relative, project named like the documented example", req: batch("/Fabrikam-Fiber-Git/_apis/wit/workItems/$Task"), want: CapWorkWrite},
+		{name: "organisation named in another case", req: batch("/ACME/proj/_apis/wit/workitems/284"), want: CapWorkWrite},
 
+		{name: "project-relative create, resolution unverified", req: batch("/proj/_apis/wit/workitems/$Bug?api-version=7.1"), wantErr: true},
+		{name: "project-relative, like the documented example", req: batch("/Fabrikam-Fiber-Git/_apis/wit/workItems/$Task"), wantErr: true},
+		{name: "another organisation, organisation-level", req: batch("/evil/_apis/wit/workitems/1"), wantErr: true},
 		{name: "another organisation, then a project", req: batch("/evil/loot/_apis/wit/workitems/1"), wantErr: true},
 		{name: "another organisation in upper case", req: batch("/EVIL/proj/_apis/wit/workitems/1"), wantErr: true},
 		{name: "_apis too deep to be a project route", req: batch("/acme/proj/extra/_apis/wit/workitems/1"), wantErr: true},

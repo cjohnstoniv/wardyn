@@ -265,3 +265,17 @@ func TestADOGate_NonRunRefPushNeedsPolicyBypass(t *testing.T) {
 	h.mustRefuse(t, h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pushes?api-version=7.1", body, nil),
 		string(adoscope.CapPolicyBypass))
 }
+
+// Update Ref names its branch in ?filter=, which the gate never classifies: a
+// PATCH on refs whose body names the run's own namespace is still a branch
+// lock, and needs policy_bypass with or without the filter.
+func TestADOGate_RefPatchNeedsPolicyBypassWhateverTheBodyNames(t *testing.T) {
+	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	body := `{"refUpdates":[{"name":"` + BranchNSPrefix(h.p.runID) + `work"}],"isLocked":true}`
+	for _, target := range []string{
+		"/acme/proj/_apis/git/repositories/app/refs?filter=heads/main&api-version=7.1",
+		"/acme/proj/_apis/git/repositories/app/refs?api-version=7.1",
+	} {
+		h.mustRefuse(t, h.do(t, http.MethodPatch, target, body, nil), string(adoscope.CapPolicyBypass))
+	}
+}

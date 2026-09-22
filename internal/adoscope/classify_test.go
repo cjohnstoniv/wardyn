@@ -379,6 +379,25 @@ func TestClassifyRefMove(t *testing.T) {
 			req:     adoReq(http.MethodPost, refs, `[{"name":"refs/heads/topic","name":"refs/heads/main"}]`),
 			wantErr: true,
 		},
+		// Update Ref (PATCH refs?filter=heads/main) names its ref in the query,
+		// which Request.Path never carries: a body naming an unprotected ref must
+		// not make a branch lock a code write.
+		{
+			name: "a PATCH on refs is policy_bypass whatever ref its body names",
+			req:  adoReq(http.MethodPatch, refs, `{"refUpdates":[{"name":"refs/heads/feature/x"}],"isLocked":true}`),
+			want: CapPolicyBypass,
+		},
+		{name: "a PATCH on refs with the documented lock body", req: adoReq(http.MethodPatch, refs, `{"isLocked":true}`), want: CapPolicyBypass},
+		{name: "a PATCH on refs with no body", req: adoReq(http.MethodPatch, refs, ""), want: CapPolicyBypass},
+		{
+			name: "a POST raised to PATCH by an override is policy_bypass too",
+			req: func() Request {
+				r := adoReq(http.MethodPost, refs, refsBody)
+				r.Header = hdr("X-HTTP-Method-Override", "PATCH")
+				return r
+			}(),
+			want: CapPolicyBypass,
+		},
 	})
 }
 

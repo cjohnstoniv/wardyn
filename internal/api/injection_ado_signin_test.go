@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -145,6 +146,80 @@ func TestADOSignIn_CountsTowardMaxReauthHolds(t *testing.T) {
 	w := f.resolveQ(t, "")
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "too many times") {
 		t.Fatalf("status %d body %s, want the per-run cap's 403", w.Code, w.Body.String())
+	}
+}
+
+// Consent rows are credential_reauth too, but they have their own cap
+// (maxADOCapabilityHoldsPerRun): a run that asked for consent maxReauthHolds
+// times can still be asked to sign in.
+func TestADOSignIn_ConsentRowsDoNotSpendTheSignInBudget(t *testing.T) {
+	f := newADOSignInFixture(t)
+	for i := range maxReauthHolds {
+		raw, _ := json.Marshal(adoConsentScopeBody{Lane: adoApprovalLane, Mechanism: adoConsentMechanism,
+			Owner: f.subject, ProviderID: f.cfg.RowID, Scopes: []string{"scope-" + strconv.Itoa(i)}})
+		if _, err := f.approvals.Request(context.Background(), types.ApprovalRequest{
+			RunID: f.runID, Kind: types.ApprovalCredentialReauth, RequestedScope: raw,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.fake.SetInvalidGrant(true)
+	f.at(time.Now().Add(time.Minute))
+	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
+	if _, ok := adoSignInScope(f.row(id)); !ok {
+		t.Fatalf("held on %+v, want a new sign-in request", f.row(id))
+	}
+}
+
+// A sign-in row on this run that names another owner is not this lapse's
+// request. A run's rows all carry its own owner in production, so this pins
+// the owner key in holdForADOSignIn's match rather than a reachable path: a
+// seeded foreign row must not be the one the run is held on.
+func TestADOSignIn_AnotherOwnersRowIsNotThisHold(t *testing.T) {
+	f := newADOSignInFixture(t)
+	raw, _ := json.Marshal(adoSignInScopeBody{Lane: adoApprovalLane, Mechanism: adoSignInMechanism,
+		Reason: adoSignInReason, Owner: "someone-else", ProviderID: f.cfg.RowID})
+	foreign, err := f.approvals.Request(context.Background(), types.ApprovalRequest{
+		RunID: f.runID, Kind: types.ApprovalCredentialReauth, RequestedScope: raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.fake.SetInvalidGrant(true)
+	f.at(time.Now().Add(time.Minute))
+	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
+	if sc, _ := adoSignInScope(f.row(id)); id == foreign.ID || sc.Owner != f.subject {
+		t.Fatalf("held on %s (owner %q), want a new request for the run's owner %q", id, sc.Owner, f.subject)
+	}
+}
+
+// A capture resolves only its OWN person's requests. Owner A's sign-in row
+// stays PENDING when B captures, even with a post-raise sign-in on record for
+// both; A's own capture then resolves it.
+func TestADOSignIn_AnotherPersonsCaptureResolvesNothing(t *testing.T) {
+	f := newADOSignInFixture(t)
+	ctx := context.Background()
+	f.fake.SetInvalidGrant(true)
+	f.at(time.Now().Add(time.Minute))
+	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
+
+	// Post-raise, usable sign-ins for A and for B, written without the eager
+	// resolve a capture door would run.
+	blob, _ := f.stored(t, f.subject)
+	blob.CapturedAt, blob.DeadAt = time.Now().Add(time.Hour), time.Time{}
+	const other = "someone-else"
+	for _, owner := range []string{f.subject, other} {
+		if err := f.srv.storeADOEntraBlob(ctx, owner, f.cfg.RowID, blob); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.srv.resolvePendingADOReauth(ctx, other, f.cfg.RowID)
+	if st := f.row(id).State; st != types.ApprovalPending {
+		t.Fatalf("after another person's capture the sign-in request is %s, want PENDING", st)
+	}
+	f.srv.resolvePendingADOReauth(ctx, f.subject, f.cfg.RowID)
+	if st := f.row(id).State; st != types.ApprovalApproved {
+		t.Fatalf("after the owner's capture the sign-in request is %s, want APPROVED", st)
 	}
 }
 

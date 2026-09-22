@@ -99,7 +99,9 @@ func (s *Server) answerADOSignInEnded(w http.ResponseWriter, r *http.Request, cl
 // holdForADOSignIn is holdOrRefuseCredentialReauth for this lane: 423 while a
 // sign-in request is open, 403 once one was refused, cancelled or aged out,
 // and a new request otherwise — counted against the SAME per-run budget,
-// maxReauthHolds, as every other credential_reauth workflow the run opens.
+// maxReauthHolds, as the run's AWS re-auth workflows. Consent rows are
+// credential_reauth too, but they have their own cap
+// (maxADOCapabilityHoldsPerRun) and are not counted here.
 func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
 	sn adoEntraScopeSnapshot, class ADOEntraFailure, fail adoFail,
 ) bool {
@@ -112,6 +114,9 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 	var terminal *types.ApprovalRequest
 	for i := range rows {
 		if rows[i].Kind != types.ApprovalCredentialReauth {
+			continue
+		}
+		if _, consent := adoConsentScope(rows[i]); consent {
 			continue
 		}
 		workflows++
