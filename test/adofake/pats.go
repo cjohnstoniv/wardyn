@@ -3,7 +3,11 @@
 
 package adofake
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+	"time"
+)
 
 // pat is one minted personal access token.
 type pat struct {
@@ -24,6 +28,32 @@ func patToMap(p *pat) map[string]any {
 		"allOrgs":         p.allOrgs,
 		"token":           p.token,
 	}
+}
+
+// parseValidTo parses the RFC3339 validTo a caller declared; a blank or
+// unparseable value means no expiry (zero time), matching a plain
+// RegisterToken grant rather than silently refusing every request the caller
+// makes with a PAT whose date they got wrong.
+func parseValidTo(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// grantForPat is the tokenGrant a minted/updated PAT registers into
+// s.tokens: the scopes it declares (Azure DevOps' scope field is a
+// space-separated list, e.g. "vso.code vso.work") and its validTo, honoured
+// by checkScope — an ALREADY-expired validTo therefore mints a token that
+// exists (patToMap/list still show it) but is refused the moment anything
+// tries to use it, rather than working forever because nothing ever
+// consulted the date.
+func grantForPat(p *pat) *tokenGrant {
+	return &tokenGrant{scopes: setOf(strings.Fields(p.scope)), validTo: parseValidTo(p.validTo)}
 }
 
 // PatTokenError is the real Azure DevOps Tokens API's patTokenError enum — the
@@ -64,6 +94,11 @@ func (s *Server) handlePatsList(w http.ResponseWriter, r *http.Request) {
 // authorizationId + token — unless SetPatCreateError has injected a policy
 // violation, in which case it answers exactly as the real service does: a nil
 // patToken and the violation's name in patTokenError.
+//
+// The minted token is registered into s.tokens with the scopes it declares
+// (and its validTo, if any): without this, the PAT this call hands back
+// could never actually authorize anything, and the whole lifecycle would
+// prove nothing beyond "the fake accepted a create call".
 func (s *Server) handlePatsCreate(w http.ResponseWriter, r *http.Request) {
 	body := decodeJSONMap(r)
 
@@ -90,6 +125,7 @@ func (s *Server) handlePatsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.pats[p.authorizationID] = p
+	s.tokens[p.token] = grantForPat(p)
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{"patToken": patToMap(p), "patTokenError": string(PatTokenErrorNone)})
@@ -98,7 +134,9 @@ func (s *Server) handlePatsCreate(w http.ResponseWriter, r *http.Request) {
 // handlePatsUpdate answers PUT .../_apis/tokens/pats: the body names the PAT
 // to change by authorizationId and carries the fields to overwrite, exactly
 // as CreatePat does; the real service rotates the token value on update, so
-// this fake does too.
+// this fake does too — and moves the s.tokens grant from the old token value
+// to the new one (with any updated scope/validTo), so the OLD token stops
+// working and the new one carries whatever the update actually declared.
 func (s *Server) handlePatsUpdate(w http.ResponseWriter, r *http.Request) {
 	body := decodeJSONMap(r)
 	authID, _ := body["authorizationId"].(string)
@@ -122,16 +160,23 @@ func (s *Server) handlePatsUpdate(w http.ResponseWriter, r *http.Request) {
 	if v, ok := body["allOrgs"].(bool); ok {
 		p.allOrgs = v
 	}
+	oldToken := p.token
 	p.token = "adofake-pat-" + randHex(16)
+	delete(s.tokens, oldToken)
+	s.tokens[p.token] = grantForPat(p)
 	writeJSON(w, http.StatusOK, map[string]any{"patToken": patToMap(p), "patTokenError": string(PatTokenErrorNone)})
 }
 
 // handlePatsRevoke answers DELETE .../_apis/tokens/pats?authorizationId=...,
-// the real API's revoke shape. Revoking an unknown id is a no-op success, as
-// on the real service.
+// the real API's revoke shape, and removes the PAT's grant from s.tokens —
+// without that, a "revoked" token kept authorizing every request forever.
+// Revoking an unknown id is a no-op success, as on the real service.
 func (s *Server) handlePatsRevoke(w http.ResponseWriter, r *http.Request) {
 	authID := r.URL.Query().Get("authorizationId")
 	s.mu.Lock()
+	if p, ok := s.pats[authID]; ok {
+		delete(s.tokens, p.token)
+	}
 	delete(s.pats, authID)
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)

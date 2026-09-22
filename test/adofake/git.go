@@ -13,10 +13,19 @@ import (
 	"testing"
 )
 
-// RegisterRepo makes barePath (a bare git repository — see NewFixtureRepo)
-// reachable at /{org}/{project}/_git/{repo}, the real Azure DevOps git
-// smart-HTTP URL shape.
+// RegisterRepo makes barePath (a bare git repository — see NewFixtureRepo, or
+// a caller-built one) reachable at /{org}/{project}/_git/{repo}, the real
+// Azure DevOps git smart-HTTP URL shape. It sets http.receivepack=true on
+// barePath: git http-backend refuses receive-pack for any repo that hasn't
+// opted in, regardless of GIT_HTTP_EXPORT_ALL, so a caller-supplied repo that
+// skipped this would be granted ScopeCodeWrite by the fake and then die 403
+// inside git for an unrelated config reason. Panics (loudly, at registration
+// time rather than at the first confusing push) if barePath isn't a git
+// directory git can configure.
 func (s *Server) RegisterRepo(org, project, repo, barePath string) {
+	if out, err := exec.Command("git", "-C", barePath, "config", "http.receivepack", "true").CombinedOutput(); err != nil {
+		panic("adofake: RegisterRepo(" + barePath + "): git config http.receivepack: " + err.Error() + "\n" + string(out))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.repos[org+"/"+project+"/"+repo] = barePath
@@ -35,43 +44,74 @@ func resolveGit() (string, error) {
 	return gitPathOnce.path, gitPathOnce.err
 }
 
+// gitOperation classifies a git smart-HTTP request into the Endpoint/scope it
+// needs. ok is false for anything real Azure DevOps' smart-HTTP-only surface
+// 404s: the dumb protocol (bare .../HEAD, .../objects/..., an info/refs with
+// no service), and an info/refs carrying more than one ?service= value.
+//
+// The more-than-one case is not a style nicety: net/http's
+// url.Values.Get reads the FIRST value of a repeated query parameter, while
+// git http-backend itself reads the LAST. A request built as
+// "?service=git-upload-pack&service=git-receive-pack" would therefore be
+// scope-checked here as a read (Get sees "git-upload-pack") and then handed
+// to http-backend, which would serve a REAL receive-pack advertisement (the
+// value it reads is "git-receive-pack") to a read-only token. Refusing
+// outright when more than one value is present closes that gap regardless of
+// which value either side would have picked.
+func gitOperation(r *http.Request, restPath string) (endpoint Endpoint, scope string, ok bool) {
+	switch restPath {
+	case "info/refs":
+		services := r.URL.Query()["service"]
+		switch {
+		case len(services) != 1:
+			return "", "", false
+		case services[0] == "git-receive-pack":
+			return EndpointGitAdvertise, ScopeCodeWrite, true
+		case services[0] == "git-upload-pack":
+			return EndpointGitAdvertise, ScopeCodeRead, true
+		default:
+			return "", "", false
+		}
+	case "git-upload-pack":
+		return EndpointGitUploadPack, ScopeCodeRead, true
+	case "git-receive-pack":
+		return EndpointGitReceivePack, ScopeCodeWrite, true
+	default:
+		return "", "", false
+	}
+}
+
 // handleGit serves real git smart-HTTP for a registered repository via `git
 // http-backend` (net/http/cgi), so a clone or a push is driven against an
 // ACTUAL git implementation rather than a reimplementation of the protocol.
-// The advertisement (GET info/refs?service=...) requires read scope for
-// upload-pack and write scope for receive-pack; POST git-receive-pack always
-// requires write; everything else (POST git-upload-pack, dumb-protocol object
-// fetches) requires read.
 func (s *Server) handleGit(w http.ResponseWriter, r *http.Request) {
 	org, project, repo := r.PathValue("org"), r.PathValue("project"), r.PathValue("repo")
 	rest := r.PathValue("path")
 
-	var endpoint Endpoint
-	var scope string
-	switch {
-	case rest == "info/refs" && r.URL.Query().Get("service") == "git-receive-pack":
-		endpoint, scope = EndpointGitAdvertise, ScopeCodeWrite
-	case rest == "info/refs":
-		endpoint, scope = EndpointGitAdvertise, ScopeCodeRead
-	case rest == "git-receive-pack":
-		endpoint, scope = EndpointGitReceivePack, ScopeCodeWrite
-	default: // git-upload-pack, and any dumb-protocol object fetch
-		endpoint, scope = EndpointGitUploadPack, ScopeCodeRead
+	endpoint, scope, ok := gitOperation(r, rest)
+	if !ok {
+		// Real Azure DevOps is smart-HTTP only; a fake that answered 200 to
+		// the dumb protocol or an ambiguous advertisement request would let a
+		// lane "prove" a read through a path production can never use.
+		http.NotFound(w, r)
+		return
 	}
+
+	// The scope decision is always computed and recorded, even under a
+	// SetOverride — a lane asserting on Requests() must see what WOULD have
+	// happened, not a decision that never ran.
+	token, granted := s.checkScope(r, scope)
+	s.record(endpoint, scope, r, token, granted)
 
 	s.mu.Lock()
 	ov, overridden := s.overrides[endpoint]
 	s.mu.Unlock()
 	if overridden {
-		s.record(endpoint, scope, r, tokenFromRequest(r), false)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(ov.status)
 		_, _ = w.Write(ov.body)
 		return
 	}
-
-	token, granted := s.checkScope(r, scope)
-	s.record(endpoint, scope, r, token, granted)
 	if !granted {
 		writeADOUnauthorized(w)
 		return

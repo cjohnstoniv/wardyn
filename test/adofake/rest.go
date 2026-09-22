@@ -29,6 +29,19 @@ func decodeJSONMap(r *http.Request) map[string]any {
 	return body
 }
 
+// copyMap returns a shallow copy of m. Used wherever a map is both stored
+// (and later mutated in place by another handler, e.g. a PR PATCH) and
+// returned to THIS caller for JSON encoding after the lock is released —
+// without a copy, the encoder's unsynchronized read races the next handler's
+// unsynchronized write to the same map.
+func copyMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 // scopeFromPolicyBody extracts the repositoryId/refName a policy configuration
 // applies to from settings.scope[0], the real API's shape for a single-branch
 // scoped policy.
@@ -109,7 +122,11 @@ func (s *Server) handlePolicyPut(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePullRequestsPost creates a pull request, assigning it the next
-// pullRequestId.
+// pullRequestId. The map stored for later PATCHes is a COPY of the one
+// encoded into this response: without that, a concurrent PATCH on the same
+// id can mutate the very map this handler is still JSON-encoding after
+// releasing the lock — an unsynchronized write racing an unsynchronized read
+// on the same map, exactly the shape -race is built to catch.
 func (s *Server) handlePullRequestsPost(w http.ResponseWriter, r *http.Request) {
 	body := decodeJSONMap(r)
 
@@ -120,7 +137,7 @@ func (s *Server) handlePullRequestsPost(w http.ResponseWriter, r *http.Request) 
 	if _, ok := body["status"]; !ok {
 		body["status"] = "active"
 	}
-	s.pullRequests[id] = body
+	s.pullRequests[id] = copyMap(body)
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusCreated, body)
@@ -167,16 +184,24 @@ func (s *Server) handleRefsPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(out), "value": out})
 }
 
-// handlePushesGet lists every push handlePushesPost has recorded.
+// handlePushesGet lists every push handlePushesPost has recorded. Each
+// element is copied out under the lock, for the same reason
+// handlePullRequestsPost copies on the way in — nothing mutates a push after
+// creation today, but a stored map returned by reference is one future PATCH
+// away from the same race.
 func (s *Server) handlePushesGet(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	out := append([]map[string]any(nil), s.pushes...)
+	out := make([]map[string]any, len(s.pushes))
+	for i, p := range s.pushes {
+		out[i] = copyMap(p)
+	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(out), "value": out})
 }
 
 // handlePushesPost records a push made through the REST API (as opposed to
-// git-receive-pack, which git.go serves directly).
+// git-receive-pack, which git.go serves directly). Stores a copy, same
+// reasoning as handlePullRequestsPost.
 func (s *Server) handlePushesPost(w http.ResponseWriter, r *http.Request) {
 	body := decodeJSONMap(r)
 
@@ -185,7 +210,7 @@ func (s *Server) handlePushesPost(w http.ResponseWriter, r *http.Request) {
 	s.nextPushID++
 	body["pushId"] = id
 	body["date"] = time.Now().UTC().Format(time.RFC3339)
-	s.pushes = append(s.pushes, body)
+	s.pushes = append(s.pushes, copyMap(body))
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusCreated, body)
