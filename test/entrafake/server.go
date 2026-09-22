@@ -50,6 +50,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -113,6 +115,7 @@ type codeGrant struct {
 	scopes      []string
 	nonce       string
 	redirectURI string
+	who         *Identity
 }
 
 // refreshGrant is one live refresh token. scopes is the CONSENTED set, and it
@@ -126,11 +129,31 @@ type codeGrant struct {
 type refreshGrant struct {
 	scopes  []string
 	retired bool
+	who     *Identity
+}
+
+// Identity is one person the picker offers (SetIdentities). Username is what
+// the id_token carries as preferred_username and email; Subject is its `sub`.
+type Identity struct {
+	Username string
+	Subject  string
+}
+
+// IssuedToken is what an OnIssue hook is told about each access token minted:
+// the token, the subject it was minted for ("" without identities) and the
+// scopes it carries.
+type IssuedToken struct {
+	AccessToken string
+	Subject     string
+	Scopes      []string
 }
 
 // Server is the fake Entra tenant. Zero value is not usable; use New.
 type Server struct {
 	httpSrv *httptest.Server
+	// baseURL, when set, is the authority this fake answers AS (SetBaseURL):
+	// what discovery advertises and the id_token's `iss` is built from.
+	baseURL string
 
 	// signer + jwks are fixed at construction: one RSA key, published as the
 	// tenant's only signing key.
@@ -172,6 +195,12 @@ type Server struct {
 	codes   map[string]codeGrant
 	access  map[string][]string
 	refresh map[string]*refreshGrant
+
+	// identities is the picker's list. Empty (the default) keeps the
+	// single-subject behaviour every in-process test relies on.
+	identities []Identity
+	// onIssue is told about every access token minted (OnIssue).
+	onIssue func(IssuedToken)
 }
 
 // New starts a fake Entra tenant on an ephemeral port.
@@ -234,6 +263,9 @@ func NewHandler() (*Server, http.Handler) {
 // URL is the fake's base URL — the AUTHORITY, in Entra's own vocabulary. "" on
 // an unstarted fake from NewHandler.
 func (s *Server) URL() string {
+	if b := s.get(func() string { return s.baseURL }); b != "" {
+		return b
+	}
 	if s.httpSrv == nil {
 		return ""
 	}
@@ -278,6 +310,26 @@ func (s *Server) get(f func() string) string {
 	defer s.mu.Unlock()
 	return f()
 }
+
+// SetBaseURL makes the fake answer AS base (e.g. https://login.microsoftonline.com)
+// when it is served behind a front that owns that name: discovery, the
+// endpoints it advertises and the id_token's `iss` are all built from it.
+func (s *Server) SetBaseURL(base string) {
+	s.set(func() { s.baseURL = strings.TrimRight(base, "/") })
+}
+
+// SetIdentities turns on the sign-in PICKER, TEST ONLY: /authorize without a
+// login_hint answers a page listing these people, and with login_hint=<username>
+// signs that person in — the id_token carries their subject, and their
+// username as preferred_username and email. Nothing is asked for a password.
+func (s *Server) SetIdentities(ids ...Identity) {
+	s.set(func() { s.identities = slices.Clone(ids) })
+}
+
+// OnIssue registers f to be told about every access token this fake mints,
+// so a resource-server fake in the same process can trust exactly those
+// tokens. f runs outside the fake's lock.
+func (s *Server) OnIssue(f func(IssuedToken)) { s.set(func() { s.onIssue = f }) }
 
 // SetClientSecret makes this a CONFIDENTIAL client: /token then requires the
 // secret. "" (the default) is a public client authenticating with PKCE alone.
@@ -473,6 +525,11 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	who, picked := s.pickIdentity(w, r)
+	if !picked {
+		return
+	}
+
 	code := randHex(16)
 	s.mu.Lock()
 	s.codes[code] = codeGrant{
@@ -480,6 +537,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		scopes:      requested,
 		nonce:       q.Get("nonce"),
 		redirectURI: redirectURI,
+		who:         who,
 	}
 	s.mu.Unlock()
 
@@ -488,6 +546,44 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		dest += "&state=" + url.QueryEscape(state)
 	}
 	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+// pickIdentity is the test-only sign-in picker (SetIdentities). With no
+// identities it picks nobody and the fake's single subject signs in. With
+// them, login_hint names the person; without one the picker page is the
+// answer, one link per person, each the same request plus that login_hint.
+func (s *Server) pickIdentity(w http.ResponseWriter, r *http.Request) (*Identity, bool) {
+	s.mu.Lock()
+	ids := slices.Clone(s.identities)
+	s.mu.Unlock()
+	if len(ids) == 0 {
+		return nil, true
+	}
+	hint := r.URL.Query().Get("login_hint")
+	if hint == "" {
+		var b strings.Builder
+		b.WriteString("<!doctype html><title>Pick an account</title><h1>Pick an account</h1><ul>\n")
+		for _, id := range ids {
+			q := r.URL.Query()
+			q.Set("login_hint", id.Username)
+			fmt.Fprintf(&b, "<li><a href=\"%s\">%s</a></li>\n",
+				html.EscapeString(r.URL.Path+"?"+q.Encode()), html.EscapeString(id.Username))
+		}
+		b.WriteString("</ul>\n")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, b.String())
+		return nil, false
+	}
+	for i := range ids {
+		if strings.EqualFold(ids[i].Username, hint) {
+			return &ids[i], true
+		}
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error":             ErrInvalidRequest,
+		"error_description": "AADSTS50034: the user account " + hint + " does not exist in this directory",
+	})
+	return nil, false
 }
 
 // redirectError bounces an OAuth error back to the redirect URI, which is how
@@ -571,7 +667,7 @@ func (s *Server) tokenFromCode(w http.ResponseWriter, r *http.Request) {
 			"AADSTS50011: the redirect URI does not match the one the code was issued for")
 		return
 	}
-	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, true)
+	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, true, grant.who)
 }
 
 // tokenFromRefresh redeems a refresh token, and is where the two properties the
@@ -631,7 +727,7 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	s.refresh[presented].retired = true
 	s.mu.Unlock()
 
-	s.issueTokens(w, consented, consented, "", false)
+	s.issueTokens(w, consented, consented, "", false, grant.who)
 }
 
 // issueTokens mints the access/refresh/id triple and answers with the GRANTED
@@ -643,14 +739,21 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 // withIDToken is false on a refresh: the real service only returns an id_token
 // when `openid` is in the request, and a control-plane renewal has no use for
 // one — the identity was bound once, at capture.
-func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string, nonce string, withIDToken bool) {
+func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string, nonce string, withIDToken bool, who *Identity) {
 	access := "fake-entra-access-" + randHex(16)
 	refresh := "fake-entra-refresh-" + randHex(16)
 
 	s.mu.Lock()
 	s.access[access] = slices.Clone(granted)
-	s.refresh[refresh] = &refreshGrant{scopes: slices.Clone(consented)}
+	s.refresh[refresh] = &refreshGrant{scopes: slices.Clone(consented), who: who}
+	onIssue, subject := s.onIssue, s.subject
 	s.mu.Unlock()
+	if who != nil {
+		subject = who.Subject
+	}
+	if onIssue != nil {
+		onIssue(IssuedToken{AccessToken: access, Subject: subject, Scopes: slices.Clone(granted)})
+	}
 
 	body := map[string]any{
 		"token_type":     "Bearer",
@@ -664,7 +767,7 @@ func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string,
 		"scope": strings.Join(granted, " "),
 	}
 	if withIDToken {
-		idToken, err := s.signIDToken(nonce)
+		idToken, err := s.signIDToken(nonce, who)
 		if err != nil {
 			writeTokenError(w, http.StatusInternalServerError, "server_error", "signing the id_token failed: "+err.Error())
 			return
@@ -680,7 +783,7 @@ func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string,
 // claim an authorization binding may use. preferred_username rides along
 // BECAUSE it is documented as mutable and unusable for authorization — a
 // consumer that compares it has a token here that will let it.
-func (s *Server) signIDToken(nonce string) (string, error) {
+func (s *Server) signIDToken(nonce string, who *Identity) (string, error) {
 	s.mu.Lock()
 	sub, clientID, tenant := s.subject, s.clientID, s.tenantID
 	issOverride, audOverride, tidOverride := s.issuerOverride, s.audienceOverride, s.tenantClaimOverride
@@ -711,6 +814,12 @@ func (s *Server) signIDToken(nonce string) (string, error) {
 		"name":               "Fake Person",
 		"preferred_username": "fake.person@example.invalid",
 		"oid":                "00000000-1111-2222-3333-444444444444",
+	}
+	if who != nil {
+		claims["sub"] = who.Subject
+		claims["preferred_username"] = who.Username
+		claims["email"] = who.Username
+		claims["name"] = who.Username
 	}
 	if nonce != "" {
 		claims["nonce"] = nonce

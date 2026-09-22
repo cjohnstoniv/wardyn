@@ -69,6 +69,16 @@ if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
   exit 0
 fi
 
+# WARDYN_KIND_SSO_PROFILE=ado is a DIFFERENT walk on a different install: the
+# console signs in against a fake Entra tenant instead of Dex, and the member's
+# login captures an Azure DevOps credential their run then redeems. It shares
+# nothing below this line, so it lives in its own file.
+case "${WARDYN_KIND_SSO_PROFILE:-default}" in
+  default) ;;
+  ado) exec "$(dirname "${BASH_SOURCE[0]}")/lib/kind-sso-walk-ado.sh" ;;
+  *) echo "ERROR: WARDYN_KIND_SSO_PROFILE must be default or ado (got ${WARDYN_KIND_SSO_PROFILE})" >&2; exit 1 ;;
+esac
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 

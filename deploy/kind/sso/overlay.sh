@@ -61,6 +61,17 @@ FAKE_IMAGE="wardyn/awsssofake:local"
 # never reaches its terminal, i.e. exactly the P1 symptom this overlay exists to
 # let you disprove.
 AWS_SSO_IMAGE="wardyn/agent-aws-sso:local"
+# WHICH OVERLAY. `default` is Dex + the fake AWS endpoints. `ado` is the Azure
+# DevOps profile: the console signs in against a fake Entra tenant, and a fake
+# Azure DevOps serves the run (deploy/kind/sso/adofake.yaml, values-ado.yaml).
+# Two profiles, not one overlay with two issuers: the console has ONE issuer,
+# and the Azure DevOps sign-in only binds to an Entra one.
+PROFILE="${WARDYN_KIND_SSO_PROFILE:-default}"
+case "${PROFILE}" in default|ado) ;; *) echo "ERROR: WARDYN_KIND_SSO_PROFILE must be default or ado (got ${PROFILE})" >&2; exit 1 ;; esac
+# The ado profile's TEST image and the Secret holding the CA its TLS front
+# signs leaves with. Never published: built here, `kind load`ed, nothing else.
+ADO_FAKE_IMAGE="wardyn/test-adofake:local"
+ADO_CA_SECRET="wardyn-test-adofake-ca"
 
 step() { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -75,6 +86,13 @@ stop_port_forward() {
   fi
 }
 
+if [[ "${1:-}" == "--down" && "${PROFILE}" == "ado" ]]; then
+  step "deleting the Azure DevOps profile's objects (the fake + its CA Secret)"
+  kubectl --context "${CONTEXT}" delete -f deploy/kind/sso/adofake.yaml --ignore-not-found=true || true
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" delete secret "${ADO_CA_SECRET}" --ignore-not-found=true || true
+  echo "Overlay removed. The cluster and the helm release are untouched."
+  exit 0
+fi
 if [[ "${1:-}" == "--down" ]]; then
   step "stopping the Dex port-forward"
   stop_port_forward
@@ -112,6 +130,60 @@ health="$(curl -sf --max-time 3 "http://localhost:${HTTP_PORT}/healthz" || true)
 compose stack on that port? Body: ${health}) — this overlay is about
 to print that as the console URL. Re-run the quickstart on the SAME port:
     WARDYN_QUICKSTART_HTTP_PORT=${HTTP_PORT} WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart"
+
+# ── the Azure DevOps profile ────────────────────────────────────────────────
+if [[ "${PROFILE}" == "ado" ]]; then
+  # The fake's one accepted redirect and values-ado.yaml's OIDC callback are
+  # both http://localhost:8580 — a demo literal, like dex.yaml's 8280.
+  [[ "${HTTP_PORT}" == "8580" ]] || die "the ado profile's callback is pinned to http://localhost:8580 (adofake.yaml, values-ado.yaml); run the quickstart and this overlay with WARDYN_QUICKSTART_HTTP_PORT=8580"
+  command -v openssl >/dev/null 2>&1 || die "openssl not found on PATH (the ado profile mints its walk CA with it)"
+  step "building the fake Microsoft image (${ADO_FAKE_IMAGE}) — TEST ONLY, never published"
+  docker build -f test/adofake/cmd/Dockerfile -t "${ADO_FAKE_IMAGE}" .
+  if [[ "${WARDYN_KIND_SSO_REBUILD:-}" == "1" ]]; then
+    step "rebuilding wardynd + wardyn-proxy from this tree"
+    docker build -f deploy/compose/Dockerfile.wardynd -t "${WARDYND_IMAGE}" .
+    docker build -f deploy/compose/Dockerfile.proxy   -t "${PROXY_IMAGE}"   .
+  fi
+  step "loading images into ${CLUSTER} (no registry pull)"
+  for img in "${ADO_FAKE_IMAGE}" "${WARDYND_IMAGE}" "${PROXY_IMAGE}"; do
+    kind load docker-image "${img}" --name "${CLUSTER}"
+  done
+  # THE WALK CA, minted once per cluster and kept in a Secret, so a restart of
+  # the fake (which every walk does) signs with the same CA wardynd trusts.
+  ca_dir="$(mktemp -d)"
+  trap 'rm -rf "${ca_dir}"' EXIT
+  if ! kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get secret "${ADO_CA_SECRET}" >/dev/null 2>&1; then
+    step "minting the walk CA (Secret ${ADO_CA_SECRET})"
+    openssl ecparam -name prime256v1 -genkey -noout 2>/dev/null | openssl pkcs8 -topk8 -nocrypt -out "${ca_dir}/ca.key"
+    openssl req -x509 -new -key "${ca_dir}/ca.key" -subj "/CN=wardyn kind ado walk CA" -days 30 \
+      -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign -out "${ca_dir}/ca.crt"
+    kubectl --context "${CONTEXT}" -n "${NAMESPACE}" create secret generic "${ADO_CA_SECRET}" \
+      --from-file=ca.crt="${ca_dir}/ca.crt" --from-file=ca.key="${ca_dir}/ca.key"
+  fi
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get secret "${ADO_CA_SECRET}" \
+    -o jsonpath='{.data.ca\.crt}' | base64 -d > "${ca_dir}/ca.crt"
+  step "applying the fake Microsoft"
+  kubectl --context "${CONTEXT}" apply -f deploy/kind/sso/adofake.yaml
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/wardyn-test-adofake --timeout=180s
+  step "helm upgrade ${RELEASE} onto the fake Entra tenant (trusting the walk CA)"
+  helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
+    -n "${NAMESPACE}" --reuse-values -f deploy/kind/sso/values-ado.yaml \
+    --set-file trustedCA="${ca_dir}/ca.crt" \
+    --set-file defaultPolicy=deploy/kind/sso/default-policy.json
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=300s
+  cat <<EOF
+
+The Azure DevOps profile is up.
+
+  URL:     http://localhost:${HTTP_PORT}
+  Sign in: admin@wardyn.test or member@wardyn.test (a picker, no password)
+  Fake Microsoft: wardyn-test-adofake.${NAMESPACE}.svc.cluster.local:3128 (a forward proxy, in-cluster only)
+
+  WARDYN_KIND_SSO_PROFILE=ado scripts/kind-sso-walk.sh   # the Azure DevOps walk against this cluster
+  WARDYN_KIND_SSO_PROFILE=ado make kind-sso-down          # remove the overlay (the cluster stays)
+EOF
+  exit 0
+fi
 
 # ── 0. images ───────────────────────────────────────────────────────────────
 # awsssofake is built every time: it is small, it is this tree's own code, and a

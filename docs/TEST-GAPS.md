@@ -246,6 +246,17 @@ result for them is evidence only for the tip somebody actually ran it on.
     including the back-off schedule's "immediate tick" wake channel and the
     once-only race between the marker path and the watch. Deferred to a future
     live case; genuinely not covered anywhere live today.
+- `WARDYN_KIND_SSO_PROFILE=ado scripts/kind-sso-walk.sh` — **the Azure DevOps
+  walk** (0.7.10, `scripts/lib/kind-sso-walk-ado.sh`). The console signs in
+  against a fake Entra tenant (`test/adofake/cmd`, a TLS-terminating forward
+  proxy trusted through a walk CA) instead of Dex. The admin signs in before any
+  Azure DevOps row exists and writes the row; the member's login is then widened
+  and captures one blob, the member's (`ado_entra_login.go`); the member's exec
+  run resolves its injection (`injection_ado.go`) and reads REST and runs
+  `git ls-remote` through the proxy's gate and broker; and the fake's `/_seen`
+  records the member's subject and never the admin's. Prereqs: `make
+  kind-quickstart` on port 8580 + `WARDYN_KIND_SSO_PROFILE=ado make kind-sso`;
+  recipe in deploy/kind/sso/README.md.
 - `scripts/run-e2e-ssh-k8s.sh` (`make test-e2e-ssh-k8s`) — the SSH gateway over
   the k8s exec lane: `internal/runner/k8s`'s Attach/Close/ExecStream/Read/
   Resize/Write, every one of them listed in the K8S-gated bucket above.
