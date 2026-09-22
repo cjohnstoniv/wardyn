@@ -279,3 +279,23 @@ func TestADOGate_RefPatchNeedsPolicyBypassWhateverTheBodyNames(t *testing.T) {
 		h.mustRefuse(t, h.do(t, http.MethodPatch, target, body, nil), string(adoscope.CapPolicyBypass))
 	}
 }
+
+// The plain forward lane refuses a host with an Azure DevOps grant outright: an
+// absolute-form https:// request sent without CONNECT would otherwise reach
+// applyInjection with no organisation or capability check. REST belongs in the
+// intercepted tunnel and git in the broker — never here.
+func TestADOGate_PlainLaneRefusesACoveredHost(t *testing.T) {
+	h := newADOHarness(t)
+	req := httptest.NewRequest(http.MethodGet, "https://"+adoHost+"/acme/_apis/projects?api-version=7.1", nil)
+	rec := httptest.NewRecorder()
+	h.p.servePlain(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "HTTPS tunnel (CONNECT)") {
+		t.Fatalf("status %d body %s, want the plain-lane refusal", rec.Code, rec.Body.String())
+	}
+	if n := len(h.fake.Requests()); n != 0 {
+		t.Fatalf("upstream saw %d request(s), want none", n)
+	}
+	if log := h.log(); !strings.Contains(log, `"`+ruleSourceADODenied+`"`) {
+		t.Fatalf("decision log lacks %s: %s", ruleSourceADODenied, log)
+	}
+}
