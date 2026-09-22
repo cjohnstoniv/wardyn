@@ -14,7 +14,7 @@
 // (providers-screen.tsx) holds; every edit calls `onChange` with the next
 // array, and the parent's single Save button PUTs the whole document.
 import * as React from "react";
-import type { GitLane, GitProvider, GitProviderKind } from "../../../lib/api/providers";
+import type { GitLane, GitProvider, GitProviderKind, LegacyGitLane } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { PERM } from "../../../lib/permissions-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
@@ -38,7 +38,7 @@ import {
 } from "../../ui/alert-dialog";
 import { appLaneAvailable, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable } from "./display";
 
-const ALL_LANES: GitLane[] = ["app", "pat", "ssh"];
+const ALL_LANES: LegacyGitLane[] = ["app", "pat", "ssh"];
 const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
 
 // The lanes THIS row's kind + base URLs can actually carry — never `app` on
@@ -49,8 +49,22 @@ const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
 // into a lane the kind cannot carry — the bug where toggling `ssh` off an
 // Azure DevOps row wrote `["app","pat"]`, which the server 400s and the
 // disabled `app` checkbox then leaves no way to un-write.
-function availableLanes(kind: GitProviderKind, baseUrls: string[]): GitLane[] {
+function availableLanes(kind: GitProviderKind, baseUrls: string[]): LegacyGitLane[] {
   return ALL_LANES.filter((l) => !laneUnavailableReason(l, kind, baseUrls));
+}
+
+// The lanes this tab does not render at all — today just "entra", which is
+// configured elsewhere and is not one of ALL_LANES.
+//
+// They are PRESERVED across every toggle here. Rewriting `lanes` from the
+// rendered set alone dropped them, and the drop was not cosmetic: a row whose
+// only lane was "entra" lost it the moment anyone ticked "pat", leaving an
+// entra BLOCK with no entra lane — which the server then refuses as an
+// orphaned block, with a 400 on a Save the admin had no way to connect to the
+// checkbox they clicked.
+function unrenderedLanes(row: GitProvider): GitLane[] {
+  const available = availableLanes(row.kind, row.base_urls);
+  return (row.lanes ?? []).filter((l) => !(available as GitLane[]).includes(l));
 }
 
 // The one derivation of base_urls from textarea bytes — used BOTH to commit a
@@ -59,22 +73,31 @@ function normalizeBaseURLText(text: string): string[] {
   return text.split("\n").map((l) => l.trim()).filter(Boolean);
 }
 
-function permittedLanes(row: GitProvider): Set<GitLane> {
+// The lanes to render as CHECKED. It narrows to the rendered set on purpose —
+// a lane this tab does not draw has no checkbox to check — so it is never the
+// thing that writes `lanes` back; withLaneToggled is.
+function permittedLanes(row: GitProvider): Set<LegacyGitLane> {
   const available = availableLanes(row.kind, row.base_urls);
-  const stored = row.lanes && row.lanes.length > 0 ? row.lanes : available;
-  return new Set(stored.filter((l) => available.includes(l)));
+  const stored: GitLane[] = row.lanes && row.lanes.length > 0 ? row.lanes : available;
+  return new Set(available.filter((l) => stored.includes(l)));
 }
 
-// Wire convention: empty means every lane the kind supports — never a
-// three-item array (GitProvider.Lanes' doc comment) — "every lane" meaning
-// every AVAILABLE one, not literally all three.
-function withLaneToggled(row: GitProvider, lane: GitLane): GitLane[] {
+// Wire convention: empty means every LEGACY lane — never a three-item array
+// (GitProvider.lanes' doc comment) — "every lane" meaning every AVAILABLE one,
+// not literally all three.
+//
+// The empty form can only be written when there is nothing else to preserve:
+// with an "entra" lane on the row, an empty list would mean the three legacy
+// lanes and NOT entra, silently dropping it.
+function withLaneToggled(row: GitProvider, lane: LegacyGitLane): GitLane[] {
   const available = availableLanes(row.kind, row.base_urls);
   const next = permittedLanes(row);
   if (next.has(lane)) next.delete(lane);
   else next.add(lane);
+  const kept = unrenderedLanes(row);
   const filtered = available.filter((l) => next.has(l));
-  return filtered.length === available.length ? [] : filtered;
+  if (kept.length === 0 && filtered.length === available.length) return [];
+  return [...filtered, ...kept];
 }
 
 // The one credential-host GitHostCard used to key its lanes by, now the row's

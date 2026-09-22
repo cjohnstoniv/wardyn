@@ -232,6 +232,9 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders, refuseSSHPathScope 
 		if err := validateProviderLanes(i, row, refuseSSHPathScope); err != nil {
 			return err
 		}
+		if err := validateProviderEntra(i, row); err != nil {
+			return err
+		}
 	}
 	return validateStorageProviders(p.Storage)
 }
