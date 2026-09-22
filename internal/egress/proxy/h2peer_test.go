@@ -74,6 +74,32 @@ func startH2Peer(t *testing.T) *h2Peer {
 	return startTunnel(t, startTLSPeer(t, &tls.Config{Certificates: []tls.Certificate{selfSignedCert(t)}}, serveH2Frames))
 }
 
+// startH2MismatchPeer is a bare (no CONNECT tunnel) field-report peer for the
+// two git brokers (#382): they dial straight to the vetted target, the same
+// shape newGitBrokerUpstream's TLS server takes, so the mismatch peer needs no
+// tunnel in front of it either.
+func startH2MismatchPeer(t *testing.T) string {
+	t.Helper()
+	return startTLSPeer(t, &tls.Config{Certificates: []tls.Certificate{selfSignedCert(t)}}, serveH2Frames)
+}
+
+// splitDial routes a dial by the vetted target's PORT rather than discarding
+// it the way redirectDial does: port 443 (the forge, both brokers'
+// p.egressTarget(host, 443)) goes to forgeAddr, anything else (the
+// control-plane mint call, ControlPlaneURL's own port) goes to controlAddr.
+// This is what lets one test proxy hold a normal mint server AND a
+// broken-HTTP/2 forge peer at once, where redirectDial's single fixed
+// address cannot tell the two calls apart.
+func splitDial(controlAddr, forgeAddr string) func(ctx context.Context, network, target string) (net.Conn, error) {
+	return func(ctx context.Context, network, target string) (net.Conn, error) {
+		addr := controlAddr
+		if _, port, err := net.SplitHostPort(target); err == nil && port == "443" {
+			addr = forgeAddr
+		}
+		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, addr)
+	}
+}
+
 // startTLSPeer runs a TLS listener with cfg and hands each handshaken conn to
 // serve, closing it afterwards. A cfg without NextProtos negotiates no ALPN
 // whatever the client offers.
@@ -878,4 +904,3 @@ func TestResendableRebuildsBeforeReusingTheShield(t *testing.T) {
 		t.Error("a body already read must not be resent")
 	}
 }
-

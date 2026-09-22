@@ -36,6 +36,22 @@ type WorkspaceProviders struct {
 	// Storage is the file-system half — ephemeral scratch and user drives. A
 	// nil block is legacy behaviour for that half.
 	Storage *StorageProviders `json:"storage,omitempty"`
+	// GitPatBrokerEnabled is READ-ONLY and SERVER-OWNED, exactly like
+	// SiteConfig.EffectiveScmHosts: projected onto every GET from this
+	// deployment's own WARDYN_GIT_PAT_BROKER switch (Config.DisableGitPATBroker),
+	// never stored and never taken from a PUT body (handlePutWorkspaceProviders
+	// clears it before validating, the same way the SiteConfig door clears
+	// EffectiveScmHosts). It is the console's one way to know which of the PAT
+	// lane's two honesty postures (brokered vs. in-sandbox) THIS install is
+	// actually running under (#381) — a boot-time env switch, not a stored
+	// provider row, so it lives here rather than as an eighth GitProvider field.
+	//
+	// A POINTER, not a bool: the switch is off by exception, so a plain
+	// omitempty bool would render identically for "off" and "never projected
+	// (no providers configured)" — the one distinction a console rendering the
+	// PAT lane's label actually needs. nil is genuinely absent (no lanes UI to
+	// annotate); a present pointer is the real value, true or false.
+	GitPatBrokerEnabled *bool `json:"git_pat_broker_enabled,omitempty"`
 }
 
 // Empty reports whether p carries no policy at all — the shape a caller PUTs to
