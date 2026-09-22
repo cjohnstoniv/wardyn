@@ -88,7 +88,7 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "persist source profile: "+err.Error())
+		writeServerError(w, r, "persist source profile", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,

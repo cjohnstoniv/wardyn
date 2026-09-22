@@ -43,6 +43,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `--devcontainer-repo` **pointed at a command that does not do the job** (#354).
 - The GPL source offer's image list is **derived from what the release actually publishes** rather
   than a hand-maintained list that drifts (#284).
+- **Four console DTOs closed against their Go wire types.** `AgentRun` was missing `agent_exec_id`,
+  `auto_stop_after_sec` and `source_id`; `AuditEvent` was missing `prev_hash` and `row_hash` — the two
+  fields the audit screen's own integrity story rests on. `ui_apps` — sent only by `GET /runs/{id}` —
+  moved off the shared `AgentRun` onto a new `RunDetail` type, so a list consumer (the board, the
+  table) is no longer typed for a field it never receives. `runs.wire.fields.test.ts`'s parity pattern
+  now also covers `AuditEvent`, closing the gap the hand-maintained TypeScript mirror had opened
+  against the Go structs it mirrors.
+- **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
+  status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
+  while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
 
 ### Changed
 
@@ -59,6 +69,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin-token form when a token is actually usable, and the SSO role-derivation caveat only when
   SSO is not the only way in. An SSO-only deployment now shows one "Sign in with SSO" button and
   nothing else (#379).
+
+### Security
+
+- **A handler that builds a 5xx body's `(status, message)` pair and hands it to a helper could still
+  forward driver/substrate error text into it, past the guard added for #173.** The guard only read
+  direct `writeError` call sites, so a helper's own call site — where the message had already
+  collapsed into one opaque string argument — reported clean. Seven sites did this: `refuseCapture`'s
+  four callers in `ssotoken.go` (the AWS SSO capture path — the door the sandbox itself talks to),
+  `driveBindFailureHere`'s runner-capabilities-unavailable arm (`user_drives_run.go`), and `uiFail`'s
+  two callers in `uigateway.go`, which forwarded `sshExecStreamErrorMessage`'s own raw-error fallback.
+  All seven now log the error and send a fixed sentence; their `reason` codes are unchanged, since the
+  SDK reads them as a wire contract. The guard (`TestNoDriverTextInServerErrorBody`) now follows one
+  hop into a known forwarder (`refuseCapture`, `uiFail`, and the `*driveBindFailure` composite-literal
+  shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
+  `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
+  handler written in this indirect style no longer passes CI clean.
 
 ## [0.7.9] — 2026-09-21
 
@@ -99,6 +125,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
   answer. It now has its own neutral label (`Model access · Not applicable`), rendered on the Agents
   tab beside `ADMIN_OWN_CHIP_NOTE`, and beside member Getting Started's `llm_ready` fallback chip —
   still with no action and no sign-in CTA, since there is no person here to sign in as (#292).
+- **5xx responses no longer echo driver/substrate error text to the caller.** ~90 handlers across
+  `internal/api` built a 500 (or other 5xx) body by concatenating `err.Error()` onto an action
+  string, so a transient Postgres or runner failure could hand an unprivileged-adjacent caller the
+  database host, port, SQLSTATE and constraint name, or similar substrate detail. Every such site
+  now goes through `writeServerError`/`loggedMsg` (`internal/api/writeservererror.go`), which log
+  the error with method and path and answer the caller with the action alone; a source-walking guard
+  test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
+  which are already caller-facing by design, are unchanged.
+- **The decision-log line printed to stdout is now written under its own mutex.** A line over
+  `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
+  could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
+  with a dedicated `outMu`, held only around the write itself.
+- **The first-use "approval pending" refusal body now spells it the same way as the header.** The
+  JSON body wrote `approval_pending`; `X-Wardyn-Egress` wrote `approval-pending`. The body now
+  matches the header's spelling, which is the wire contract `attach-bashrc` reads.
+- **A panic in the audit webhook flush loop no longer takes the control plane down.** The one
+  detached `go` statement that skipped the panic-safe wrapper (`buildAuditFanout`'s sink `Run`
+  loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
+  deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
+  cancellation on shutdown — is unchanged.
 
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
@@ -168,6 +214,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `internal/api/internal.go` cited review-package coordinates (`W14-S1-6`, `W24-S1-1`, `F098`) that
   resolve to nothing outside this repository. Each now says the thing the coordinate stood for
   instead (#259).
+- **The sign-in screen stops advertising the demo admin token.** The admin-token field's
+  placeholder no longer carries `demo-admin-token`, and its hint no longer names
+  `WARDYN_ADMIN_TOKEN` or the compose demo token — it says what belongs in the field and where the
+  person saw it. The unreachable-daemon refusal now names Wardyn and names the `wardynd` daemon to
+  check, instead of a bare "Could not reach the control plane." with no next step. The email-domain
+  refusal no longer tells a locked-out, unauthenticated reader to go set `WARDYN_OIDC_EMAIL_DOMAINS`
+  themselves — it points them at their Wardyn admin instead. `sign-in.tsx` (Closes #212).
 
 ### Security
 

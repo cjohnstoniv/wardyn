@@ -718,7 +718,7 @@ type workspaceProvidersPutResponse struct {
 func (s *Server) handleGetWorkspaceProviders(w http.ResponseWriter, r *http.Request) {
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	block := storedWorkspaceProviders(sc)
@@ -758,7 +758,7 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 	ctx := r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	if !ifMatchSatisfied(r, computeETag(storedWorkspaceProviders(existing))) {
@@ -769,7 +769,7 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 	candidate.WorkspaceProviders = block
 	refused, err := s.sourcesNoLongerAdmitted(ctx, candidate)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "count sources this block refuses: "+err.Error())
+		writeServerError(w, r, "count sources this block refuses", err)
 		return
 	}
 	// EffectiveScmHosts is projected on read and never stored — a value that
@@ -777,7 +777,7 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 	candidate.EffectiveScmHosts = nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		writeServerError(w, r, "put site config", err)
 		return
 	}
 	savedBlock := storedWorkspaceProviders(saved)

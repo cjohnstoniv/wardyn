@@ -377,7 +377,7 @@ func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.Resolv
 		caps, cerr := s.cfg.Runner.Capabilities(ctx)
 		if cerr != nil {
 			return &driveBindFailure{status: http.StatusServiceUnavailable,
-				member: "runner capabilities unavailable: " + cerr.Error()}
+				member: loggedMsg(ctx, "runner capabilities unavailable", cerr)}
 		}
 		if !caps.UserDrives {
 			return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalRunnerCannotMount,

@@ -777,7 +777,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
 	raw, _ := json.Marshal(blob)
 	if err := s.cfg.Secrets.Put(r.Context(), hl.secretName, raw); err != nil { // operator-wide route (operatorOnly), not per-principal
-		writeError(w, http.StatusInternalServerError, "store managed credential: "+err.Error())
+		writeServerError(w, r, "store managed credential", err)
 		return
 	}
 	// Register the token PROCESS-GLOBALLY so it is masked out of every run's PTY
@@ -844,7 +844,7 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if err := st.Delete(r.Context(), hl.secretName); err != nil {
-		writeError(w, http.StatusInternalServerError, "delete managed credential: "+err.Error())
+		writeServerError(w, r, "delete managed credential", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

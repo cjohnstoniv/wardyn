@@ -528,7 +528,7 @@ func danglingSiteConfigSecretRefs(sc types.SiteConfig, present map[string]bool) 
 func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	// The ETag hashes the STORED document, before the projection below: PUT
@@ -675,7 +675,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	defer s.siteConfigMu.Unlock()
 	existing, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get existing site config: "+err.Error())
+		writeServerError(w, r, "get existing site config", err)
 		return
 	}
 	// Checked under siteConfigMu, against the SAME read this handler's own
@@ -724,14 +724,14 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	if present["workspace_providers"] {
 		n, cerr := s.sourcesNoLongerAdmitted(r.Context(), cfg)
 		if cerr != nil {
-			writeError(w, http.StatusInternalServerError, "count sources this block refuses: "+cerr.Error())
+			writeServerError(w, r, "count sources this block refuses", cerr)
 			return
 		}
 		narrowed = &n
 	}
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		writeServerError(w, r, "put site config", err)
 		return
 	}
 	logWarnInternalHostsDeclared(saved.InternalHosts)

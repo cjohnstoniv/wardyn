@@ -53,7 +53,7 @@ func validateBaseImageWrite(b types.BaseImageEntry) string {
 func (s *Server) handleListBaseImages(w http.ResponseWriter, r *http.Request) {
 	list, err := s.cfg.Store.ListBaseImages(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list base images: "+err.Error())
+		writeServerError(w, r, "list base images", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"base_images": list})
@@ -89,7 +89,7 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := s.cfg.Store.UpsertBaseImage(r.Context(), entry)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert base image: "+err.Error())
+		writeServerError(w, r, "upsert base image", err)
 		return
 	}
 	status := http.StatusCreated
@@ -103,7 +103,7 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 		if explicitName != "" {
 			updated, uerr := s.cfg.Store.UpdateBaseImageName(r.Context(), created.ID, explicitName)
 			if uerr != nil {
-				writeError(w, http.StatusInternalServerError, "apply name to existing base image: "+uerr.Error())
+				writeServerError(w, r, "apply name to existing base image", uerr)
 				return
 			}
 			created = updated
@@ -134,7 +134,7 @@ func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
 	force := r.URL.Query().Get("force") == "1"
 	names, err := s.cfg.Store.WorkspacesUsingBaseImage(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "check base image use: "+err.Error())
+		writeServerError(w, r, "check base image use", err)
 		return
 	}
 	if err := s.cfg.Store.DeleteBaseImage(r.Context(), id, force); err != nil {
@@ -148,7 +148,7 @@ func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "no such base image")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "delete base image: "+err.Error())
+		writeServerError(w, r, "delete base image", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
