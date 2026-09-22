@@ -25,10 +25,10 @@
 import * as React from "react";
 import { Box, FileDiff, Fingerprint, Globe, KeyRound, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
 import type {
-  AgentRun,
   AuditEvent,
   CredentialGrant,
   EgressDecision,
+  RunDetail,
 } from "../../../lib/types";
 import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layout";
 import { createRequestFromAudit } from "../../../lib/api/audit";
@@ -64,7 +64,9 @@ export type WidgetId =
 // their own props — this is only the bag the registry destructures from, so a
 // widget's signature never has to know about the canvas.
 export type WidgetContext = {
-  run: AgentRun;
+  // RunDetail, not AgentRun: the ssh widget (ConnectSSHCard below) reads
+  // run.ui_apps, which only GET /runs/{id} — this screen's own fetch — sends.
+  run: RunDetail;
   /** The run has stopped (isTerminalRunState). Inverted for the polling
    *  widgets' `live` prop, which asks the opposite question. */
   finished: boolean;

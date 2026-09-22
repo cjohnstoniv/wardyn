@@ -68,7 +68,7 @@ is *about* would record it in the one place already under suspicion.
 | `run.record.synthesize` | Record→Promote profile synthesis | `allowed_domains`, `anomalies`, `eligible_grants` | `internal/api/profile.go:168` | internal |
 | `run.revoke` | Credential/identity revoked on stop (API path), or the lifecycle reaper's revoke attempt fails. `approval_cancel_error` is the terminal cascade's approval half failing (`cancelRunApprovals`, `internal/api/runs_lifecycle.go:266`) — the run is already terminal by then, so like every other field here it is reported rather than propagated, and the stale-PENDING sweeper is the backstop | `approval_cancel_error`, `broker_error`, `identity_error`, `runner_error` | `internal/api/runs_lifecycle.go:231`; reaper failure at `internal/lifecycle/lifecycle.go:393` | internal |
 | `run.autostop` | Idle-timeout autostop fires | `idle_for_sec`, `reason`, `threshold_sec` | `internal/lifecycle/lifecycle.go:365` | internal |
-| `run.reconcile` | The orphan-sandbox reconciler acts on a run at boot | (reconcile outcome) | `internal/api/reconcile.go:717` | internal |
+| `run.reconcile` | The orphan-sandbox reconciler acts on a run at boot | (reconcile outcome) | `internal/api/reconcile.go:729` | internal |
 | `sandbox.orphan_sweep` | The boot-time orphan reconciler (`reconcileOrphanedSandbox`) FAILS to tear down a terminal run's still-live sandbox — emitted on failed teardown only; a still-failing teardown leaves the ref set for the next boot to retry | `sandbox_ref`, `teardown_error` | `internal/api/reconcile.go:252` (`stopSandboxOrAudit`, `internal/api/reconcile.go:252`) | internal |
 | `sandbox.sweep_requested` | An OPERATOR triggered a sandbox sweep via `POST /api/v1/admin/sandboxes/sweep` — emitted on SUCCESS, recording who asked and how many were swept. Distinct from `sandbox.sweep`, which the primitive emits on failed teardown only. The boot pass runs the same primitive without this row, since nobody asked for it | `swept` | `internal/api/runs_lifecycle.go:803` | operator |
 | `sandbox.sweep` | `SweepTerminalSandboxes` (the callable sweep primitive over terminal runs with a live probed sandbox) FAILS to tear one down — emitted on failed teardown only, like its boot-time sibling | `sandbox_ref`, `teardown_error` | `internal/api/runs_lifecycle.go:368` (`stopSandboxOrAudit`, `internal/api/runs_lifecycle.go:368`) | internal |
@@ -166,10 +166,10 @@ Data is unchanged.
 | `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:479` | **stable** (documented) |
 | `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:160` | internal |
 | `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:193` | internal |
-| `ui.auth` | A UI-sandbox relay session is authorized or denied | `app`, `host`, `port`, `reason` | `internal/api/uigateway.go:218`, `internal/api/uigateway_session.go:297` | internal |
-| `ui.open` | A UI-sandbox relay session is opened | `app`, `port` | `internal/api/uigateway.go:608` | internal |
-| `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:614` | internal |
-| `ui.start` | The relay starts (or fails to start) the sandbox-side app process | `app`, `launcher`, `port`, `reason` | `internal/api/uigateway.go:720` | internal |
+| `ui.auth` | A UI-sandbox relay session is authorized or denied | `app`, `host`, `port`, `reason` | `internal/api/uigateway.go:219`, `internal/api/uigateway_session.go:297` | internal |
+| `ui.open` | A UI-sandbox relay session is opened | `app`, `port` | `internal/api/uigateway.go:625` | internal |
+| `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:631` | internal |
+| `ui.start` | The relay starts (or fails to start) the sandbox-side app process | `app`, `launcher`, `port`, `reason` | `internal/api/uigateway.go:737` | internal |
 
 ## Secrets, credentials & identity
 
@@ -354,7 +354,7 @@ is `types.ActorSystem` and `Actor` is a fixed component name
 
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
-| `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `docs/ENV.md:47` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/adapters.go:848` | internal |
+| `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `docs/ENV.md:47` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/adapters.go:849` | internal |
 | `k8s.netpol_unenforced` | Boot-time NetworkPolicy canary verdict (`k8sNetpolVerdict`, also published on the anonymous `/healthz`'s `network_policy` field) grades this k8s substrate `unenforced` or `acknowledged` — every sandbox on it runs without a proven default-deny NetworkPolicy. Nil run id (deployment-wide, not tied to a run); silent on `enforced` and on every non-k8s driver | `verdict`, `driver` | `internal/api/reconcile.go:158` (`auditK8sNetpolIfUnenforced`) | internal |
 
 ## Notes on completeness

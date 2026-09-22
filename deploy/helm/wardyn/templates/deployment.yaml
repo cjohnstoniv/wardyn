@@ -6,9 +6,12 @@ wiring. The bind address is the -listen arg; env uses cmd/wardynd/main.go's
 flagEnv names. WARDYN_PG_DSN and WARDYN_ADMIN_TOKEN come from Secrets (external
 or chart-created, chosen independently), WARDYN_AGE_KEY only when the referenced
 Secret is known to carry it (otherwise wardynd generates an ephemeral key at
-boot), and WARDYN_RECORDING_STORE/WARDYN_RECORDING_DIR follow persistence so the
-chart's own defaults boot on a read-only root FS and record nothing anywhere
-until an operator asks for it. Secret-bearing extras go through .Values.extraEnv;
+boot), auth.ssoOnly emits WARDYN_SSO_ONLY=true (validateSSOOnlyPosture,
+cmd/wardynd/boot_posture.go — secret.yaml's render-time refusal proves the
+VALUES are consistent, this is what makes the daemon actually see the
+posture), and WARDYN_RECORDING_STORE/WARDYN_RECORDING_DIR follow persistence so
+the chart's own defaults boot on a read-only root FS and record nothing
+anywhere until an operator asks for it. Secret-bearing extras go through .Values.extraEnv;
 .Values.env renders inline. k8s.* wires the k8s runner substrate
 (WARDYN_RUNNER/WARDYN_K8S_NAMESPACE/WARDYN_PROXY_IMAGE/WARDYN_CONFINEMENT_MAP/
 WARDYN_CONTROL_PLANE_URL — refused at render if serviceAccount.automount is
@@ -179,6 +182,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "wardyn.authSecretName" . }}
                   key: {{ .Values.auth.adminToken.key }}
+            {{- end }}
+            {{- if and .Values.auth.ssoOnly (not (hasKey .Values.env "WARDYN_SSO_ONLY")) }}
+            # Declare SSO the only way into the console (validateSSOOnlyPosture,
+            # cmd/wardynd/boot_posture.go). secret.yaml's render-time refusal
+            # above only proves auth.ssoOnly is consistent with the REST of
+            # values.yaml — wardynd itself never learns the posture unless it
+            # actually reaches the pod as WARDYN_SSO_ONLY, which is what this
+            # emits. An .Values.env entry overrides (last-defined-wins), the
+            # same precedent WARDYN_AWS_SSO_PROXY_INJECT sets below.
+            - name: WARDYN_SSO_ONLY
+              value: "true"
             {{- end }}
             {{- if $ageRef.name }}
             # age secret-store identity, wired from a SEPARATE Secret this

@@ -202,14 +202,24 @@ test.describe("setup gate — forced on access, never a prison", () => {
     // FIRST, the fix itself: a warn the daemon did not mark blocking — the very
     // row that used to throw this admin onto Getting started — survives a
     // background refresh with the person still on New Run.
+    // The waiter is created BEFORE the event that triggers the refetch: the
+    // refocus tick refetches immediately, so registering the waiter afterwards
+    // races it and waits out the full timeout whenever the response wins.
+    const refreshed = page.waitForResponse((r) => r.url().includes("/setup/status"));
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await page.waitForResponse((r) => r.url().includes("/setup/status"));
+    await refreshed;
     await expect(page).toHaveURL(/\/runs\/new$/);
 
     // THEN the positive: the install now fails a genuinely blocking check — as
     // it would seconds after the owner clicked Launch — and the NEXT read gates.
     blocking = true;
+    // Same reason as above, one step further: waitForURL polls, so it cannot
+    // race a waiter — but nothing here waited for the second refetch to happen
+    // at all, so the assertion jumped to the navigation that refetch is meant
+    // to cause. Wait for the read, then assert what it did.
+    const gated = page.waitForResponse((r) => r.url().includes("/setup/status"));
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await gated;
     await page.waitForURL(/\/setup/);
   });
 

@@ -370,6 +370,8 @@ func run() error {
 		Runner:                    run,
 		AdminToken:                *f.adminToken,
 		LocalMode:                 lm.enabled,
+		MemberMode:                *f.memberMode,
+		SSOOnly:                   *f.ssoOnly,
 		SubscriptionPostureOK:     subPostureOK,
 		SubscriptionPostureReason: subPostureReason,
 		LocalOperator:             lm.operator,

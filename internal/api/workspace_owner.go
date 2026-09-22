@@ -56,7 +56,7 @@ func (s *Server) handleReassignWorkspace(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "reassign workspace: "+err.Error())
+		writeServerError(w, r, "reassign workspace", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
