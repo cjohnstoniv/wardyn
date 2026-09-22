@@ -470,6 +470,9 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if !p.isLLMHost(host) {
 		mitmSource = ruleSourceArtifactMITM
 	}
+	if mitmSource = p.gateADO(w, r, host, port, mitmSource); mitmSource == "" {
+		return
+	}
 
 	// Dial target: through the corp proxy (by hostname) when an upstream is
 	// configured — the transport's egressDial chains the CONNECT and TLS then
