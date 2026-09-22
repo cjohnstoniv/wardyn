@@ -357,6 +357,21 @@ func TestClassifyRefMove(t *testing.T) {
 			want:     CapPolicyBypass,
 			wantRefs: []string{"refs/heads/topic", "refs/heads/main"},
 		},
+		{
+			name:    "a ref name spelled with backslashes cannot be checked against the cache",
+			req:     protect(adoReq(http.MethodPost, refs, `[{"name":"refs\\heads\\main"}]`), "refs/heads/main"),
+			wantErr: true,
+		},
+		{
+			name:    "and its push twin",
+			req:     protect(adoReq(http.MethodPost, pushes, `{"refUpdates":[{"name":"refs\\heads\\main"}]}`), "refs/heads/main"),
+			wantErr: true,
+		},
+		{
+			name:    "one backslashed ref among plain ones still refuses the whole update",
+			req:     protect(adoReq(http.MethodPost, refs, `[{"name":"refs/heads/topic"},{"name":"refs/heads\\main"}]`), "refs/heads/main"),
+			wantErr: true,
+		},
 		{name: "a ref update naming no branch cannot be gated", req: adoReq(http.MethodPost, refs, `[]`), wantErr: true},
 		{name: "a ref update with no body cannot be gated", req: adoReq(http.MethodPost, refs, ""), wantErr: true},
 		{
@@ -383,6 +398,8 @@ func TestClassifyOrgPinning(t *testing.T) {
 		},
 		{name: "a pinned organisation written in another case", req: onHost("dev.azure.com", "/acme/_apis/projects", "ACME"), want: CapRead},
 		{name: "another organisation is refused", req: onHost("dev.azure.com", "/other/proj/_apis/git/repositories", "acme"), wantErr: true},
+		{name: "another organisation behind a backslash is refused", req: onHost("dev.azure.com", `\other\proj/_apis/git/repositories`, "acme"), wantErr: true},
+		{name: "a backslash-led path still names the pinned organisation", req: onHost("dev.azure.com", `\acme\proj\_apis\git\repositories`, "acme"), want: CapRead},
 		{name: "a legacy host names the organisation in the label", req: onHost("acme.visualstudio.com", "/proj/_apis/git/repositories", "acme"), want: CapRead},
 		{name: "a legacy host for another organisation is refused", req: onHost("other.visualstudio.com", "/proj/_apis/git/repositories", "acme"), wantErr: true},
 		{name: "a legacy service subdomain still names it first", req: onHost("acme.vssps.visualstudio.com", "/_apis/graph/users", "acme"), want: CapRead},
@@ -412,8 +429,23 @@ func TestClassifyDeniedAreas(t *testing.T) {
 			want: CapDeniedTokens,
 		},
 		{
+			name: "a percent-hidden _apis behind a backslash is still the token area",
+			req:  adoReq(http.MethodGet, `/acme/%5Fapis\tokens\pats`, ""),
+			want: CapDeniedTokens,
+		},
+		{
 			name:    "a segment that decodes into two segments is refused, not guessed",
 			req:     adoReq(http.MethodGet, "/acme/proj%2F_apis/tokens/pats", ""),
+			wantErr: true,
+		},
+		{
+			name:    "and its backslash twin — an encoded backslash is a separator too",
+			req:     adoReq(http.MethodGet, "/acme/proj%5C_apis/tokens/pats", ""),
+			wantErr: true,
+		},
+		{
+			name:    "and in lower case",
+			req:     adoReq(http.MethodGet, "/acme/proj%5c_apis/tokens/pats", ""),
 			wantErr: true,
 		},
 		{
@@ -436,6 +468,9 @@ func TestClassifyWriteAreas(t *testing.T) {
 		{name: "deleting a repository", req: adoReq(http.MethodDelete, "/acme/proj/_apis/git/repositories/r1", ""), want: CapRepoAdmin},
 		{name: "writing a file", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/items", `{}`), want: CapCodeWrite},
 		{name: "reverting a commit", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/reverts", `{}`), want: CapCodeWrite},
+		{name: "an annotated tag is a ref move", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/annotatedtags", `{}`), want: CapPolicyBypass},
+		{name: "a fork sync is a ref move", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/forksyncrequests", `{}`), want: CapPolicyBypass},
+		{name: "an import replaces the repository", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/importrequests", `{}`), want: CapRepoAdmin},
 		{name: "an access control list", req: adoReq(http.MethodPost, "/acme/_apis/accesscontrollists/ns1", `{}`), want: CapSecurityAdmin},
 		{name: "a directory identity", req: onHost("vssps.dev.azure.com", adoReq(http.MethodPost, "/acme/_apis/graph/users", `{}`)), want: CapSecurityAdmin},
 		{name: "a service connection", req: adoReq(http.MethodPost, "/acme/proj/_apis/serviceendpoint/endpoints", `{}`), want: CapServiceEndpointAdmin},
@@ -448,12 +483,22 @@ func TestClassifyWriteAreas(t *testing.T) {
 		{name: "a work item", req: adoReq(http.MethodPatch, "/acme/proj/_apis/wit/workitems/12", `{}`), want: CapWorkWrite},
 		{name: "a wiki page", req: adoReq(http.MethodPut, "/acme/proj/_apis/wiki/wikis/w1/pages", `{}`), want: CapWikiWrite},
 		{name: "publishing a package", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/_apis/packaging/feeds/f1/npm/p/-/p-1.0.0.tgz", `{}`)), want: CapPackagingWrite},
+		{name: "an npm publish on the feed route", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/_packaging/f1/npm/registry/p", `{}`)), want: CapPackagingWrite},
+		{name: "a project-scoped nuget push", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/proj/_packaging/f1/nuget/v2", `{}`)), want: CapPackagingWrite},
+		{name: "a pypi upload", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPost, "/acme/_packaging/f1/pypi/upload", `{}`)), want: CapPackagingWrite},
+		{name: "a maven deploy", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/proj/_packaging/f1/maven/v1/g/a/1/a-1.jar", `{}`)), want: CapPackagingWrite},
+		{name: "a universal package delete", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodDelete, "/acme/_packaging/f1/upack/packages/p/versions/1", "")), want: CapPackagingWrite},
+		{name: "a feed-route PATCH on the legacy host", req: onHost("acme.pkgs.visualstudio.com", adoReq(http.MethodPatch, "/_packaging/f1/npm/registry/p", `{}`)), want: CapPackagingWrite},
+		{name: "a feed-route read", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodGet, "/acme/_packaging/f1/npm/registry/p", "")), want: CapRead},
+		{name: "a feed route with an unknown protocol", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/_packaging/f1/cargo/p", `{}`)), want: CapUnclassifiedWrite},
+		{name: "a feed route off the packages host", req: adoReq(http.MethodPut, "/acme/_packaging/f1/npm/registry/p", `{}`), want: CapUnclassifiedWrite},
+		{name: "_packaging deeper than a project", req: onHost("pkgs.dev.azure.com", adoReq(http.MethodPut, "/acme/proj/x/_packaging/f1/npm/p", `{}`)), want: CapUnclassifiedWrite},
 		{name: "creating a project", req: adoReq(http.MethodPost, "/acme/_apis/projects", `{}`), want: CapProjectAdmin},
 		{name: "an area with no opinion is refused, not guessed", req: adoReq(http.MethodPost, "/acme/proj/_apis/distributedtask/pools", `{}`), want: CapUnclassifiedWrite},
 		{name: "a write with no _apis at all", req: adoReq(http.MethodPost, "/acme/proj/_admin/whatever", `{}`), want: CapUnclassifiedWrite},
 		{name: "an ordinary read", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/r1/items", ""), want: CapRead},
 		{name: "a HEAD is a read", req: adoReq(http.MethodHead, "/acme/proj/_apis/build/definitions", ""), want: CapRead},
-		{name: "an OPTIONS is a read", req: adoReq(http.MethodOptions, "/acme/_apis", ""), want: CapRead},
+		{name: "an OPTIONS is a read", req: adoReq(http.MethodOptions, "/acme/_apis/projects", ""), want: CapRead},
 	})
 }
 

@@ -424,7 +424,12 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		p.httpErrorAWSAware(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
-	p.emitLLMDecision(r, host, port, egress.Allow, ruleSource, scanSummary)
+	if p.sink != nil {
+		log := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSource)
+		log.Scan = scanSummary
+		log.UpstreamFault = p.bedrockUpstreamFault(host, "/"+rest, resp)
+		p.sink.emit(log)
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	relay(w, resp)

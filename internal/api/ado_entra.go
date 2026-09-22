@@ -376,7 +376,7 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 	}
 	cfg, found, err := s.cfg.ADOEntra(r.Context())
 	if err != nil {
-		writeServerError(w, r, "read the Azure DevOps sign-in configuration", err)
+		writeServerError(w, r, "reading the Azure DevOps sign-in configuration failed", err)
 		return ADOEntraConfig{}, false
 	}
 	if !found {
@@ -384,7 +384,7 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 		return ADOEntraConfig{}, false
 	}
 	if err := cfg.validate(); err != nil {
-		writeServerError(w, r, "validate the Azure DevOps sign-in configuration", err)
+		writeServerError(w, r, "the Azure DevOps sign-in configuration is unusable", err)
 		return ADOEntraConfig{}, false
 	}
 	// THE 0.7.10 BOUNDARY, checked before anything is set in motion: a foreign
@@ -398,7 +398,7 @@ func (s *Server) resolveADOEntra(w http.ResponseWriter, r *http.Request) (ADOEnt
 	// a deployment carrying it without the acknowledgement is refused at the
 	// door rather than halfway through a flow.
 	if _, err := cfg.authority(); err != nil {
-		writeServerError(w, r, "resolve the Azure DevOps sign-in authority", err)
+		writeServerError(w, r, "the Azure DevOps sign-in authority is refused", err)
 		return ADOEntraConfig{}, false
 	}
 	return cfg, true
@@ -439,7 +439,7 @@ func (s *Server) handleADOSignIn(w http.ResponseWriter, r *http.Request) {
 	authURL, err := cfg.authorizeURL(state, nonce, oauth2.S256ChallengeFromVerifier(verifier),
 		append(asked, entraOfflineAccessScope, entraOpenIDScope))
 	if err != nil {
-		writeServerError(w, r, "compose the Azure DevOps authorization request", err)
+		writeServerError(w, r, "composing the Azure DevOps authorization request failed", err)
 		return
 	}
 	http.SetCookie(w, s.adoCookie(adoStateCookieName, state))

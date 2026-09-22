@@ -1,0 +1,49 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# TEST-ONLY Dex for scripts/compose-sso-roles.sh: the compose stack's own Dex
+# service with this config swapped in (compose-override.yaml). Same cast as
+# deploy/kind/sso/dex.yaml, one identity per role path; password "password"
+# (the demo bcrypt literal, kept literal for the reason deploy/compose/dex.yaml
+# gives). Ports are the harness's own (15576 issuer, 18480 console) so it never
+# collides with a developer stack on 5556/8080. Keyed by email: Dex v2.40's
+# password DB emits no groups claim.
+issuer: http://localhost:15576
+storage:
+  type: memory
+web:
+  http: 0.0.0.0:5556
+oauth2:
+  skipApprovalScreen: true
+staticClients:
+  - id: wardyn
+    name: Wardyn
+    secret: wardyn-roles-oidc-secret
+    redirectURIs:
+      - http://localhost:18480/auth/callback
+enablePasswordDB: true
+staticPasswords:
+  - email: "admin@wardyn.local"
+    hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+    username: "admin"
+    userID: "roles-admin-0001"
+  - email: "operator@wardyn.local"
+    hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+    username: "operator"
+    userID: "roles-operator-0001"
+  - email: "secadmin@wardyn.local"
+    hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+    username: "secadmin"
+    userID: "roles-secadmin-0001"
+  - email: "member@wardyn.local"
+    hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+    username: "member"
+    userID: "roles-member-0001"
+  - email: "member2@wardyn.local"
+    hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+    username: "member2"
+    userID: "roles-member-0002"
+  - email: "stranger@wardyn.local"
+    hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+    username: "stranger"
+    userID: "roles-stranger-0001"

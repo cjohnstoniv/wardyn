@@ -84,7 +84,9 @@ func consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, veri
 	clearCookie(w, stateCookieName)
 	clearCookie(w, nonceCookieName)
 	clearCookie(w, pkceCookieName)
-	clearCookie(w, widenedCookieName)
+	// The widened marker is NOT cleared here: the caller expires it only when
+	// one was presented (expireWidenedMarker), so an unwidened login's callback
+	// writes exactly the Set-Cookie headers it always did.
 	return nonceCookie.Value, pkceCookie.Value, widened, true
 }
 
@@ -208,6 +210,9 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	if widened {
+		a.expireWidenedMarker(w)
+	}
 
 	// A refusal of the EXTRA scopes must not cost this person the console. When
 	// (and only when) this browser's authorization request was widened by an
@@ -219,6 +224,11 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		if a.retryLoginUnwidened(w, r, widened, idpErr) {
 			return
 		}
+		// Not retried: the response below is unchanged, but the cause is no
+		// longer discarded. Without this line an operator whose tenant refuses
+		// with a code outside the retry set saw a bare 400 and nothing in the
+		// log naming why.
+		a.logUnretriedRefusal(r, widened, idpErr)
 	}
 
 	// (2) Exchange code for tokens, supplying the PKCE verifier.

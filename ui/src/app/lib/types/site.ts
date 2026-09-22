@@ -173,6 +173,12 @@ export interface AgentProvider {
 export interface WorkspaceProviders {
   git?: GitProvider[];
   storage?: StorageProviders;
+  // git_pat_broker_enabled is READ-ONLY and SERVER-PROJECTED (#381): the
+  // deployment's own WARDYN_GIT_PAT_BROKER switch, present only once at least
+  // one git row is configured (absent on a never-configured install), never
+  // sent on a PUT (the server clears it if one does). true/false, never a
+  // bare boolean default — see scm-provider.ts's patLaneMeta.
+  git_pat_broker_enabled?: boolean;
 }
 
 // One git-provider row. `disabled` is negative-sense so the zero value is
@@ -207,8 +213,9 @@ export interface GitProvider {
 export type CredentialSource = "shared" | "per_user";
 
 // How an Entra-lane run presents itself to Azure DevOps. Absent reads as
-// "bearer".
-export type ADOTokenMode = "bearer" | "minted_pat";
+// "bearer", the only accepted mode: the server refuses "minted_pat" because
+// Azure DevOps mints personal access tokens only for Microsoft's own clients.
+export type ADOTokenMode = "bearer";
 
 // The Entra lane's configuration (types.ADOEntraConfig). The capability
 // strings are the classifier's vocabulary (internal/adoscope) — the console

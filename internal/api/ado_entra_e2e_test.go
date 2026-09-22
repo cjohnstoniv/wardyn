@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,7 +63,8 @@ func TestADOEntraLane_EndToEnd(t *testing.T) {
 	fake.AddProject("fabrikam", "", "loot")
 
 	upstreamCA := newTestUpstreamCA(t, "dev.azure.com")
-	corp := newTLSTerminatingCorpProxy(t, upstreamCA.leaf, fake.URL())
+	upstream, seen := countingUpstream(t, fake.URL())
+	corp := newTLSTerminatingCorpProxy(t, upstreamCA.leaf, upstream)
 
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/v1/internal/injection/") {
@@ -171,6 +173,88 @@ func TestADOEntraLane_EndToEnd(t *testing.T) {
 	if n := len(fake.Requests()); n != 1 {
 		t.Errorf("upstream saw %d requests, want only the granted read", n)
 	}
+	// 4. The plain forward lane: the same requests as absolute-form https://
+	// request-lines with no CONNECT are refused before any byte leaves.
+	assertADOPlainLaneRefused(t, cfg.Listen, seen)
+}
+
+// adoPlainLaneCases are absolute-form `https://` requests written straight to
+// the proxy port with no CONNECT, which the proxy serves on its plain forward
+// lane. That lane never runs the REST gate, so every one must be refused there.
+var adoPlainLaneCases = []struct{ name, method, target, body string }{
+	{"another organisation", http.MethodGet, "https://dev.azure.com/fabrikam/_apis/projects?api-version=7.1", ""},
+	{"an ungranted write", http.MethodPatch, "https://dev.azure.com/contoso/proj/_apis/wit/workitems/1?api-version=7.1",
+		`[{"op":"add","path":"/fields/System.Title","value":"x"}]`},
+	{"the token area", http.MethodGet, "https://dev.azure.com/contoso/_apis/tokens/pats?api-version=7.1-preview.1", ""},
+	{"a git push", http.MethodPost, "https://dev.azure.com/contoso/proj/_git/app/git-receive-pack", "0000"},
+	{"a granted read, host spelled with case, a trailing dot and a port", http.MethodGet,
+		"https://DEV.Azure.com.:443/contoso/_apis/projects?api-version=7.1", ""},
+}
+
+// assertADOPlainLaneRefused sends every adoPlainLaneCases request over raw TCP
+// to the proxy at addr and asserts the Azure DevOps-shaped 403 and that the
+// upstream counter did not move.
+func assertADOPlainLaneRefused(t *testing.T, addr string, seen *atomic.Int64) {
+	t.Helper()
+	for _, tc := range adoPlainLaneCases {
+		before := seen.Load()
+		code, body := sendRawToProxy(t, addr, tc.method, tc.target, tc.body)
+		if code != http.StatusForbidden || !strings.Contains(body, "CapabilityNotGranted") {
+			t.Errorf("plain lane, %s: status %d body %s, want the Azure DevOps 403", tc.name, code, body)
+		}
+		if n := seen.Load() - before; n != 0 {
+			t.Errorf("plain lane, %s: the upstream saw %d request(s), want none", tc.name, n)
+		}
+	}
+}
+
+// sendRawToProxy writes one absolute-form request-line to the proxy listener
+// over raw TCP, the way a sandbox process that ignores CONNECT would.
+func sendRawToProxy(t *testing.T, addr, method, target, body string) (int, string) {
+	t.Helper()
+	var c net.Conn
+	var err error
+	for i := 0; i < 50; i++ { // wait for the listener
+		if c, err = net.DialTimeout("tcp", addr, 2*time.Second); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	req := method + " " + target + " HTTP/1.1\r\nHost: dev.azure.com\r\nConnection: close\r\n" +
+		"Authorization: Basic " + adoEntraPlaceholderValue + "\r\n"
+	if body != "" {
+		req += "Content-Type: application/json-patch+json\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n"
+	}
+	if _, err := io.WriteString(c, req+"\r\n"+body); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	return resp.StatusCode, string(b)
+}
+
+// countingUpstream fronts the fake with a server that counts every request that
+// reaches Azure DevOps' side of the wire, matched route or not.
+func countingUpstream(t *testing.T, fakeURL string) (string, *atomic.Int64) {
+	t.Helper()
+	target, _ := url.Parse(fakeURL)
+	rp := httputil.NewSingleHostReverseProxy(target)
+	var n atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		rp.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, &n
 }
 
 func freeLoopbackPort(t *testing.T) int {

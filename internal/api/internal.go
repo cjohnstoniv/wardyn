@@ -87,6 +87,11 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Via != "" {
 		fields["via"] = dl.Via
 	}
+	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
+	if dl.UpstreamFault != "" {
+		fields["upstream_fault"] = dl.UpstreamFault
+		s.noteBedrockDataPlaneFault(r.Context(), runID, dl.UpstreamFault)
+	}
 	data, _ := json.Marshal(fields)
 	outcome := decisionOutcome(dl.Decision)
 	ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID,

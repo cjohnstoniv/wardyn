@@ -32,7 +32,7 @@ import { toast } from "sonner";
 import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type CreateRunResult, type PreflightResult, type RunPolicySpec, type SetupHarnessTool, type Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
 import { ccRank as rank, SectionCard, Seg } from "./new-run-primitives";
-import { RunRail } from "./new-run-rail";
+import { RunRail, useAdoLaunchDoor } from "./new-run-rail";
 import { AgentPicker } from "./agent-picker";
 import { isCredentialRefusal, runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
@@ -387,12 +387,9 @@ export function NewRunScreen() {
   // the merged document on the custom lane, the stored one on the saved lane.
   // Null when there are no rules, so a policy written before the field existed
   // grows no empty rail section.
-  const toolRules = React.useMemo(() => {
-    const spec = useSaved ? selectedPolicy?.spec : merged?.spec;
-    return spec ? toolRulesSummary(spec) : null;
-  }, [useSaved, selectedPolicy, merged]);
-  const hasAdditions =
-    !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
+  const specForRules = useSaved ? selectedPolicy?.spec : merged?.spec;
+  const toolRules = React.useMemo(() => (specForRules ? toolRulesSummary(specForRules) : null), [specForRules]);
+  const hasAdditions = !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
 
   // Editing the spec text DETACHES a picked saved policy: the body on screen is
   // no longer the stored one, and launching by reference would ship a policy
@@ -465,9 +462,11 @@ export function NewRunScreen() {
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");
       setCredentialRefused(isCredentialRefusal(e));
+      adoDoor.notifyLaunchError(e);
       setLaunching(false);
     }
   };
+  const adoDoor = useAdoLaunchDoor(); // #386's launch door — F8: never relaunches
 
   // A dry-run of launch's own resolution: same body, same 4xx surface, but
   // mints/dispatches nothing. Renders the member-clamp warnings, the risk
@@ -981,6 +980,7 @@ export function NewRunScreen() {
               : { error: null, result: null }
           }
           agentRow={isAgent ? harnesses?.find((h) => h.id === state.agent) : undefined}
+          adoDialog={adoDoor.dialog}
         />
       </div>
 

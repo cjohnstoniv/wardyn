@@ -26,6 +26,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/test/adofake"
 )
 
 // adoTestStore is the store double both halves of the lane need: grant writes
@@ -103,7 +104,6 @@ var adoContosoHosts = []string{
 	"contoso.visualstudio.com",
 	"contoso.vssps.visualstudio.com", "contoso.vsrm.visualstudio.com", "contoso.feeds.visualstudio.com",
 	"contoso.pkgs.visualstudio.com", "contoso.almsearch.visualstudio.com",
-	"app.vssps.visualstudio.com",
 }
 
 func TestResolveADOEntraRun_Golden(t *testing.T) {
@@ -215,6 +215,12 @@ func TestAuthorADOEntraInjection_Golden(t *testing.T) {
 	}
 	if env[adoEntraPlaceholderEnv] != adoEntraPlaceholderValue {
 		t.Errorf("sandbox %s = %q, want the inert placeholder", adoEntraPlaceholderEnv, env[adoEntraPlaceholderEnv])
+	}
+	// git goes through the broker: agent-run rewrites exactly these onto
+	// /wardyn/git/ (the proxy's pat_broker_entra_test.go drives the same list
+	// through the real agent-run-lib.sh).
+	if got, want := env["WARDYN_GIT_PAT_BROKER_HOSTS"], "contoso.visualstudio.com contoso@dev.azure.com dev.azure.com"; got != want {
+		t.Errorf("WARDYN_GIT_PAT_BROKER_HOSTS = %q, want %q", got, want)
 	}
 
 	if len(injections) != len(adoContosoHosts) || len(st.grants) != len(adoContosoHosts) {
@@ -340,6 +346,15 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	}))
 	t.Cleanup(cp.Close)
 
+	// The upstream leg runs through a TLS-terminating stand-in for Azure DevOps
+	// that counts every request reaching it, so "nothing was forwarded" is
+	// measured rather than inferred from the status code.
+	fake := adofake.New()
+	t.Cleanup(fake.Close)
+	upstreamCA := newTestUpstreamCA(t, "dev.azure.com")
+	upstream, seen := countingUpstream(t, fake.URL())
+	corp := newTLSTerminatingCorpProxy(t, upstreamCA.leaf, upstream)
+
 	certPEM, keyPEM, err := generateRunCA(time.Now())
 	if err != nil {
 		t.Fatalf("generateRunCA: %v", err)
@@ -348,8 +363,8 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	s, _ := newADODispatchServer(st)
 	policy := types.RunPolicySpec{}
 	runID := uuid.New()
-	injections, mitm, ok := s.authorADOEntraInjection(context.Background(), types.AgentRun{ID: runID},
-		adoTestRun(t), string(certPEM), string(keyPEM), &policy, map[string]string{}, nil)
+	lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: runID}, adoTestRun(t), true,
+		dispatchLLMPlan{mitmCACertPEM: string(certPEM), mitmCAKeyPEM: string(keyPEM)}, &policy, map[string]string{}, nil)
 	if !ok {
 		t.Fatal("authoring refused")
 	}
@@ -361,8 +376,9 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
-		RunToken: "run-token", ControlPlaneURL: cp.URL, Policy: policy, Injection: injections,
-		MITMCACertPEM: string(certPEM), MITMCAKeyPEM: string(keyPEM), MITMHosts: mitm,
+		RunToken: "run-token", ControlPlaneURL: cp.URL, Policy: policy, Injection: lane.injections,
+		MITMCACertPEM: string(certPEM), MITMCAKeyPEM: string(keyPEM), MITMHosts: lane.mitmHosts,
+		ADOGrants: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCA.caPEM,
 	}, port)
 	if err != nil {
 		t.Fatalf("BuildProxyConfig: %v", err)
@@ -400,9 +416,8 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden || resp.Header.Get("X-Wardyn-Egress-Reason") != "policy:require-tls" {
-		t.Errorf("cleartext http:// on :443: status %d reason %q, want 403 policy:require-tls",
-			resp.StatusCode, resp.Header.Get("X-Wardyn-Egress-Reason"))
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "CapabilityNotGranted") {
+		t.Errorf("cleartext http:// on :443: status %d body %s, want the Azure DevOps 403", resp.StatusCode, body)
 	}
 	if strings.Contains(string(body), marker) {
 		t.Fatal("the credential reached the refusal body")
@@ -417,6 +432,13 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden || strings.Contains(string(body), marker) {
 		t.Errorf("cleartext http:// on :80: status %d, want 403 with no credential", resp.StatusCode)
 	}
+	if n := seen.Load(); n != 0 {
+		t.Errorf("the upstream saw %d cleartext request(s), want none", n)
+	}
+
+	// Absolute-form https:// on the same lane: the transport is not cleartext,
+	// so require_tls does not refuse it, and the lane never runs the REST gate.
+	assertADOPlainLaneRefused(t, cfg.Listen, seen)
 }
 
 // THE WIRED SOURCE ON A DEPLOYMENT WITH NO ENTRA ROW IS INDISTINGUISHABLE FROM
@@ -436,5 +458,16 @@ func TestADOSignIn_UnconfiguredSourceAnswersLikeNoSource(t *testing.T) {
 	if c0 != c1 || b0 != b1 || l0 || l1 {
 		t.Fatalf("nil source: %d %q widened=%v; unconfigured source: %d %q widened=%v — want identical, never widened",
 			c0, b0, l0, c1, b1, l1)
+	}
+}
+
+// The two lanes that write WARDYN_GIT_PAT_BROKER_HOSTS merge rather than
+// overwrite: a stored-PAT host already on the list keeps its entry.
+func TestAddGitBrokerHosts_Merges(t *testing.T) {
+	env := map[string]string{"WARDYN_GIT_PAT_BROKER_HOSTS": "gitlab.com"}
+	addGitBrokerHosts(env, adoEntraGitHosts("contoso")...)
+	addGitBrokerHosts(env, "dev.azure.com")
+	if got, want := env["WARDYN_GIT_PAT_BROKER_HOSTS"], "contoso.visualstudio.com contoso@dev.azure.com dev.azure.com gitlab.com"; got != want {
+		t.Errorf("WARDYN_GIT_PAT_BROKER_HOSTS = %q, want %q", got, want)
 	}
 }

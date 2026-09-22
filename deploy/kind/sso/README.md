@@ -51,7 +51,10 @@ kubectl --context kind-wardyn-quickstart -n wardyn port-forward svc/wardyn-dex 5
 
 Sign in at http://localhost:8280 — `admin@wardyn.local` / `password` is the
 operator, `member@wardyn.local` / `password` a member (the chart's
-`WARDYN_OIDC_ROLE_MAP` decides which is which).
+`WARDYN_OIDC_ROLE_MAP` decides which is which). The role walk adds
+`member2@`, `secadmin@`, `operator@` and `stranger@` (same password): a second
+member, a security admin, an allowlist-only admin, and a login that matches no
+role and is refused.
 
 ## The AWS SSO walk
 

@@ -90,6 +90,9 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	if inj == nil || inj.reauth == nil || inj.approvals == nil {
 		return false, fallback
 	}
+	// A run-scoped widening is cached for the run. The live ceiling is held at
+	// each control-plane ask, so an administrator narrowing the row stops the
+	// NEXT escalation, not a capability this proxy already widened to.
 	if inj.reauth.holds(v.Capability) {
 		return true, ""
 	}
@@ -106,9 +109,9 @@ func (p *Proxy) awaitADOCapability(ctx context.Context, host string, v adoscope.
 	if ask.repo != "" {
 		q.Set("repo", ask.repo)
 	}
-	if len(v.Refs) > 0 {
-		// Every ref counts as protected until a grant carries a list
-		// (adoRefProtected), so a ref move is always this class.
+	if v.Capability == adoscope.CapPolicyBypass {
+		// A protected-ref move (adoRunRefProtected). A ref inside the run's
+		// own namespace classifies as code_write and is not this class.
 		q.Set("ref_class", "protected")
 	}
 	out, err := resolveInjectionQuery(ctx, inj.base, inj.token.Get(), grantID, q, inj.client)

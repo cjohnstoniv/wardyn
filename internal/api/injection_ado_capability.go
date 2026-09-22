@@ -41,6 +41,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/google/uuid"
@@ -77,6 +78,7 @@ const (
 	adoCapAlwaysDenyRefusal    = "Wardyn refused this Azure DevOps request: it needs %q, and this run's policy refuses more access without asking."
 	adoCapReviewRefusal        = "Wardyn refused this Azure DevOps request and asked a person to approve %q (approval %s). Retry once it is approved."
 	adoCapDeniedRefusal        = "Wardyn refused this Azure DevOps request: a person denied the access it needs."
+	adoCapDeniedForRunRefusal  = "Wardyn refused this Azure DevOps request: a person denied this access for the rest of the run (approval %s)."
 	adoCapClosedRefusal        = "Wardyn refused this Azure DevOps request: its approval request has closed."
 	adoCapMismatchRefusal      = "Wardyn refused this Azure DevOps request: the approval it named is not this request's."
 	adoCapTooManyRefusal       = "Wardyn refused this Azure DevOps request: this run has asked for more access too many times."
@@ -206,10 +208,18 @@ func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, cla
 				map[string]any{"capability": c, "approval_id": ap.ID})
 		}
 	}
+	// A DENY STICKS for the rest of the run, as an egress deny does: the same
+	// canonical request is refused naming that decision, and nothing is raised.
+	want := adoScopeFor(sn, grantID, c, q)
+	for _, ap := range rows {
+		if got, ok := adoEscalationScope(ap); ok && got == want && ap.State == types.ApprovalDenied {
+			return adoCapabilityGrant{}, !fail(http.StatusForbidden, "capability_denied",
+				fmt.Sprintf(adoCapDeniedForRunRefusal, ap.ID), map[string]any{"capability": c, "approval_id": ap.ID})
+		}
+	}
 	// The same request, already approved once and not yet spent — its hold ran
 	// out before the answer, and this is the retry. Point it at that approval;
 	// the proxy's re-resolve spends it.
-	want := adoScopeFor(sn, grantID, c, q)
 	for _, ap := range rows {
 		if got, ok := adoEscalationScope(ap); ok && got == want && ap.State == types.ApprovalApproved &&
 			ap.DecisionScope == types.ScopeOnce && ap.MintedJTI == "" {
@@ -236,8 +246,9 @@ func adoScopeFor(sn adoEntraScopeSnapshot, grantID uuid.UUID, c adoscope.Capabil
 
 // adoStanding is the run's standing capability set: the dispatch grant, plus
 // every capability a person approved "for this run" on this provider row and
-// organisation — each held to the LIVE ceiling, so an administrator narrowing
-// the row takes a mid-run approval back.
+// organisation — held to the live ceiling at each control-plane ask. The proxy
+// caches a run-scoped widening for the run, so narrowing the row stops the
+// next ask, not a capability that proxy has already widened to.
 func adoStanding(sn adoEntraScopeSnapshot, ceiling []adoscope.Capability, rows []types.ApprovalRequest) []adoscope.Capability {
 	out := slices.Clone(sn.Capabilities)
 	for _, ap := range rows {
@@ -500,4 +511,78 @@ func (s *Server) adoDecisionRule(w http.ResponseWriter, r *http.Request, ap type
 		return scope, true, false
 	}
 	return scope, true, true
+}
+
+// adoConsentRefusalTTL is how long a consent_required answer is reused before
+// the authority is asked again. Without it, a stored sign-in listing a scope
+// Entra no longer grants would cost a fresh redemption — a refresh-token
+// rotation — on every refused request.
+const adoConsentRefusalTTL = 60 * time.Second
+
+func adoConsentKey(cfg ADOEntraConfig, owner string, need []string) string {
+	return strings.Join([]string{owner, cfg.RowID, cfg.TenantID, cfg.ClientID, strings.Join(need, " ")}, "\x00")
+}
+
+// adoConsentRefused records a consent_required answer for (owner, row, need).
+func (s *Server) adoConsentRefused(cfg ADOEntraConfig, owner string, need []string) {
+	c := &s.adoEntraTokens
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.refused == nil {
+		c.refused = map[string]time.Time{}
+	}
+	c.refused[adoConsentKey(cfg, owner, need)] = s.cfg.Now()
+}
+
+// adoConsentRefusedRecently reports whether the same consent was refused within
+// adoConsentRefusalTTL AND the person has not signed in since — a sign-in is
+// the thing that can change the answer, so it always earns a fresh redemption.
+func (s *Server) adoConsentRefusedRecently(ctx context.Context, cfg ADOEntraConfig, owner string, need []string) bool {
+	c := &s.adoEntraTokens
+	c.mu.Lock()
+	at, ok := c.refused[adoConsentKey(cfg, owner, need)]
+	c.mu.Unlock()
+	if !ok || s.cfg.Now().Sub(at) >= adoConsentRefusalTTL {
+		return false
+	}
+	blob, found, err := s.readADOEntraBlob(ctx, owner, cfg.RowID)
+	return err == nil && found && !blob.CapturedAt.After(at)
+}
+
+// settleADOCapability finishes a capability resolve once a token is in hand:
+// the consent the capability needs, then the `once` spend. handled=true means a
+// response has been written and the resolve must stop.
+func (s *Server) settleADOCapability(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
+	snapshot adoEntraScopeSnapshot, cfg ADOEntraConfig, grantID uuid.UUID, jti string,
+	capAsk adoCapabilityGrant, need []string, access ADOEntraAccess, fail adoFail,
+) bool {
+	ctx := r.Context()
+	// The authority's GRANTED set is the person's whole consent for the
+	// resource (measured), so a capability whose scope is missing from it is
+	// one they have not consented to — whoever approved it here.
+	if !adoScopesWithin(need, access.Scopes) {
+		s.adoConsentRefused(cfg, snapshot.OwnerSubject, need)
+		return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
+	}
+	if capAsk.once == nil {
+		return false
+	}
+	spender, ok := s.cfg.Store.(approvalOnceSpender)
+	if !ok {
+		return fail(http.StatusServiceUnavailable, "once_unspendable", adoCapUnspendableBody, nil)
+	}
+	spent, serr := spender.SpendApprovalOnce(ctx, capAsk.once.ID, jti)
+	if serr != nil {
+		return fail(http.StatusServiceUnavailable, "once_unspendable", adoCapUnspendableBody, nil)
+	}
+	if spent {
+		return false
+	}
+	// Another request spent it first: this one is a new attempt.
+	rows, rerr := s.runApprovals(ctx, claims.RunID, "")
+	if rerr != nil {
+		return fail(http.StatusServiceUnavailable, "approvals_unreadable", adoCapApprovalsUnreadable, nil)
+	}
+	s.raiseADOCapability(w, r, claims, snapshot, grantID, capAsk.capability, rows, fail)
+	return true
 }

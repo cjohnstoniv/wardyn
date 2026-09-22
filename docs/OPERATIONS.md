@@ -2312,8 +2312,8 @@ Sign in as a second, real person. This is strictly more faithful than the
 toggle — it exercises the server's own role derivation, its own session, and
 its own ownership namespace.
 
-- **kind quickstart** — the bundled Dex already ships two logins:
-  `admin@wardyn.local` and `member@wardyn.local` (`deploy/kind/sso/dex.yaml`,
+- **kind quickstart** — the bundled Dex ships one login per role path:
+  `admin@`, `member@`, `member2@`, `secadmin@`, `operator@` and `stranger@wardyn.local` (`deploy/kind/sso/dex.yaml`,
   role map in `deploy/kind/sso/values.yaml`).
 - **Entra** — the walk provisions `wardyn-admin`, `wardyn-member` and
   `wardyn-outsider` (`deploy/azure-entra-sso/03-people.sh`).
@@ -3742,8 +3742,8 @@ and no real credential anywhere in the loop.
 `wardyn/agent-aws-sso:local` login image and refuses to start without it), then
 `WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322
 make kind-quickstart`, then `make kind-sso` (see `deploy/kind/sso/README.md`).
-The overlay adds Dex with two static principals —
-`admin@wardyn.local` and `member@wardyn.local`, password `password` — plus
+The overlay adds Dex with one static principal per role path —
+`admin@wardyn.local`, `member@wardyn.local` and four more, password `password` — plus
 `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services
 (`sso-oidc` and the `sso` portal) and a bedrock-runtime stub, all on one
 in-cluster Service. `make kind-sso-down` removes the overlay; the cluster itself
@@ -4079,7 +4079,10 @@ dial (the gateway included) is CONNECTed through the corp proxy by the transport
 never dialled directly. A gateway the corp proxy cannot reach — an internal one,
 typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address.
+other internal address. wardynd also warns at boot when an upstream proxy is
+configured but no `upstream_proxy_no_proxy` entry covers a configured gateway
+host — a snapshot taken at boot only, since `SiteConfig` is admin-editable
+afterwards and either setting can change without a restart.
 
 **Scope: the api-key lane only.** A subscription or Wardyn-managed-token run
 still talks to `api.anthropic.com` directly — the published agent images

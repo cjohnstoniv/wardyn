@@ -75,6 +75,12 @@ type DecisionLog struct {
 	// must not reopen that hole beside it. Empty on every decision that is not
 	// a dial-shaped refusal.
 	Via string `json:"via,omitempty"`
+	// UpstreamFault names the AWS error class when Bedrock's data plane refused
+	// a call the proxy ALLOWED and relayed (AccessDeniedException,
+	// ThrottlingException), or "recovered" on the first clean model call after
+	// such a refusal. Empty everywhere else. It is read off the response status
+	// and x-amzn-ErrorType header only — never a body.
+	UpstreamFault string `json:"upstream_fault,omitempty"`
 	// Scan, when non-nil, carries the OUTBOUND content-inspection summary for an
 	// LLM route decision (off-by-default; nil when inspection is disabled). It
 	// makes per-decision coverage honest: a tunneled-opaque LLM CONNECT is

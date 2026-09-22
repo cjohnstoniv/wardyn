@@ -83,10 +83,22 @@ export const CAPABILITY = {
   // with mint/TTL claims there. cloud_sts can't be minted at all (needs SPIRE).
   brokerLine:
     "The run works through a short-lived, scoped credential — your stored key stays in Wardyn.",
-  // Honest exception: a git PAT grant is injected into git INSIDE the sandbox as
-  // the credential, so whatever's running there can read it. Screens rendering a
-  // git_pat grant must use THIS line, not brokerLine.
+  // #381: since 0.7 WARDYN_GIT_PAT_BROKER defaults ON, so a git_pat grant's
+  // stored token is rewritten to a broker path and attached by the proxy on
+  // the outbound leg — it never enters the sandbox, the same posture
+  // brokerLine describes. It still isn't brokerLine's line, though: a PAT is
+  // exactly as long-lived and unscoped as the value the operator stored, never
+  // the "short-lived, scoped" credential brokerLine promises, so it keeps its
+  // own honesty line rather than borrowing that one. This is the DEFAULT
+  // (broker-on) shape; gitPatLineResident below is what remains true with the
+  // switch off.
   gitPatLine:
+    "A stored git access token is attached to the request by the proxy on the outbound leg — it never enters the sandbox.",
+  // gitPatLineResident is gitPatLine's pre-0.7 shape: still exactly correct
+  // for an operator who set WARDYN_GIT_PAT_BROKER=off, where a git_pat grant
+  // reverts to being injected into git INSIDE the sandbox as the credential,
+  // so whatever's running there can read it.
+  gitPatLineResident:
     "A git access token is handed to git inside the sandbox — the process running there can read it.",
   // Honest exception (same shape as gitPatLine): an ssh_key grant writes a
   // RESIDENT private key file for the sandbox's git-over-SSH client to read —

@@ -44,6 +44,22 @@ type WorkspaceProviders struct {
 	// Storage is the file-system half — ephemeral scratch and user drives. A
 	// nil block is legacy behaviour for that half.
 	Storage *StorageProviders `json:"storage,omitempty"`
+	// GitPatBrokerEnabled is READ-ONLY and SERVER-OWNED, exactly like
+	// SiteConfig.EffectiveScmHosts: projected onto every GET from this
+	// deployment's own WARDYN_GIT_PAT_BROKER switch (Config.DisableGitPATBroker),
+	// never stored and never taken from a PUT body (handlePutWorkspaceProviders
+	// clears it before validating, the same way the SiteConfig door clears
+	// EffectiveScmHosts). It is the console's one way to know which of the PAT
+	// lane's two honesty postures (brokered vs. in-sandbox) THIS install is
+	// actually running under (#381) — a boot-time env switch, not a stored
+	// provider row, so it lives here rather than as an eighth GitProvider field.
+	//
+	// A POINTER, not a bool: the switch is off by exception, so a plain
+	// omitempty bool would render identically for "off" and "never projected
+	// (no providers configured)" — the one distinction a console rendering the
+	// PAT lane's label actually needs. nil is genuinely absent (no lanes UI to
+	// annotate); a present pointer is the real value, true or false.
+	GitPatBrokerEnabled *bool `json:"git_pat_broker_enabled,omitempty"`
 }
 
 // Empty reports whether p carries no policy at all — the shape a caller PUTs to
@@ -160,28 +176,31 @@ func ClosedGitLaneList() []string {
 func (l GitLane) Valid() bool { return ClosedGitLanes[l] }
 
 // ADOTokenMode is HOW an Entra-lane run presents itself to Azure DevOps.
+//
+// It has ONE legal value today and is kept anyway. Both write doors decode
+// site config strictly (unknown fields are a 400), so dropping the field would
+// turn a document that says `"token_mode": "bearer"` — explicitly, as an MDM
+// profile might — into an opaque "unknown field" refusal; and a named field is
+// where a refused mode can be refused with its REASON rather than as noise.
 type ADOTokenMode string
 
 const (
 	// ADOTokenModeBearer sends the Entra access token itself. The zero value,
-	// so an unset field is the bearer mode.
+	// so an unset field is the bearer mode, and the only mode accepted.
 	ADOTokenModeBearer ADOTokenMode = "bearer"
-	// ADOTokenModeMintedPAT exchanges the Entra token for a short-lived
-	// personal access token on the control plane, and the run sees only the
-	// PAT. It exists because some Azure DevOps endpoints and every git
-	// credential helper take a PAT and not a bearer token.
-	//
-	// The MINT needs the token-lifecycle scope (adoscope.ScopeTokens), which is
-	// over an area the classifier ALWAYS DENIES to a run. The two are
-	// consistent only because the mint happens on the control plane, before a
-	// run exists — a run's own token never carries that scope, so a run can
-	// never mint itself a second credential.
+	// ADOTokenModeMintedPAT would have exchanged the Entra token for a
+	// short-lived personal access token per run. It is REFUSED at the write
+	// boundary and is not in ClosedADOTokenModes: Azure DevOps mints personal
+	// access tokens only for Microsoft's own first-party clients — measured,
+	// an app registration holding both token scopes gets 401 TF400813 on the
+	// mint — so no Wardyn install can build it. It stays NAMED so the refusal
+	// can say why.
 	ADOTokenModeMintedPAT ADOTokenMode = "minted_pat"
 )
 
 // ClosedADOTokenModes is the closed token-mode set — see ClosedGitLanes.
 var ClosedADOTokenModes = map[ADOTokenMode]bool{
-	ADOTokenModeBearer: true, ADOTokenModeMintedPAT: true,
+	ADOTokenModeBearer: true,
 }
 
 // ClosedADOTokenModeList is ClosedADOTokenModes in a stable order, for a
@@ -195,7 +214,7 @@ func ClosedADOTokenModeList() []string {
 	return out
 }
 
-// Valid reports whether m is one of the two modes.
+// Valid reports whether m is an accepted mode.
 func (m ADOTokenMode) Valid() bool { return ClosedADOTokenModes[m] }
 
 // ADOEntraConfig is the Entra lane's configuration on one Azure DevOps row:
@@ -228,7 +247,7 @@ type ADOEntraConfig struct {
 	// as adoscope.ProfileRead.
 	DefaultProfile []adoscope.Capability `json:"default_profile,omitempty"`
 	// TokenMode is how the token reaches the run. Empty reads as
-	// ADOTokenModeBearer.
+	// ADOTokenModeBearer, the only accepted mode.
 	TokenMode ADOTokenMode `json:"token_mode,omitempty"`
 	// RESTAPI is whether Azure DevOps REST calls are brokered on this lane at
 	// all, or only git traffic. A POINTER because the default is TRUE and a

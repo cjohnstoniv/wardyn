@@ -223,6 +223,7 @@ export function ProvidersScreen() {
               githubApp={githubApp}
               operator={operator}
               loadedEmpty={loadedEmpty}
+              patBrokerEnabled={draft.git_pat_broker_enabled ?? true}
               onStatusRefresh={refreshSetupStatus}
             />
           )}

@@ -431,6 +431,13 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
 		return
 	}
+	// #386 review follow-up N4: this door clones a repo server-side too, so
+	// the same per-user Azure DevOps gate the New Run door answers with
+	// applies here — a member who isn't connected must not have this button
+	// clone as them regardless.
+	if s.gitCredentialRefusal(w, r, repoSourceLocators(ws.Sources)...) {
+		return
+	}
 	if s.cfg.ImageBuilder == nil {
 		writeJSON(w, http.StatusOK, view) // honest "none" + detail; not an error
 		return

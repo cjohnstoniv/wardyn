@@ -583,6 +583,7 @@ separate connect. That is a second fact on the same row, not a seventh state (§
 | `CONNECT_CONSENT_BODY` | Microsoft may ask you to allow it once. What you allow is what Wardyn is able to ask Azure DevOps for at all. What any one run may actually do is smaller, and Wardyn holds it there: |
 | `CONNECT_APP_NOTE(app)` | The application asking is {app} — the same one you signed in to this console with. You can withdraw this at any time from your Microsoft account's My Apps page; doing so stops your runs reaching Azure DevOps. |
 | `CONNECT_CTA` | Continue to Microsoft |
+| `CONNECT_POPUP_BLOCKED` | Your browser blocked the popup. |
 | `GROUP_STARTS_WITH` | Starts with |
 | `GROUP_CAN_ASK` | Can ask you for |
 | `GROUP_NEVER` | Never |
@@ -890,6 +891,10 @@ not only in a lane's commit message. It is not a copy decision and this document
    administrator can actually change.
 9. **Nothing on the page says "agent".** The subject is "the run", throughout, including in the
    sentences that replace shipped copy.
+10. **`CONNECT_POPUP_BLOCKED` was added to §7.5 after the freeze** (implementation review, #386): a
+    popup a browser refuses to open needs a plain-link fallback wherever CONNECT_CTA's popup can be
+    blocked, and the fallback line was shipping as three copies of hand-typed, unfrozen text before
+    this row existed. One sentence, approved at the same gate as the rest of §7.5.
 
 Not drawn, deliberately: a second forge, a second identity provider, multi-party approval, a
 per-capability application registration, device code, a "tell my admin" action on the above-ceiling
