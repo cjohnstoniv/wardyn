@@ -458,14 +458,11 @@ func run() error {
 		BaseCtx: rootCtx,
 	})
 
-	// The login-grant edge, joined here because it is a CYCLE: oidc.Config is
-	// built before the server (the server's Config holds the Authenticator), and
-	// the capture is the server's to perform. Attaching it after both exist, and
-	// before anything is served, is the only order that works.
-	//
-	// It is a NO-OP for every deployment without an Azure DevOps Entra row: the
-	// sink answers "nothing to add", the authorization request is not widened
-	// and the callback stores nothing (internal/api/ado_entra_login.go).
+	// The login-grant edge, joined after both sides exist and before anything is
+	// served, because they form a cycle (see attachLoginGrantSink). It is a
+	// NO-OP for every deployment without an Azure DevOps Entra row: the sink
+	// answers "nothing to add", the authorization request is not widened and the
+	// callback stores nothing (internal/api/ado_entra_login.go).
 	attachLoginGrantSink(feats.authn, srv)
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
