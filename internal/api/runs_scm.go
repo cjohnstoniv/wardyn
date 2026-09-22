@@ -311,12 +311,13 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		SecretName string `json:"secret_name"`
 		RequireTLS bool   `json:"require_tls"`
 		// Snapshot is DECLARED here only so the strict decode below does not
-		// refuse the one scope that carries it: the captured-AWS-SSO injection
-		// grant's immutable dispatch-time credential scope
-		// (authorBedrockSSOInjection, runs_dispatch_sso_inject.go). It is read
-		// from the GRANT by resolveAWSSSOInjection, never from the rule — an
-		// injection rule is a host/header/format binding and has no business
-		// carrying identity.
+		// refuse the two scopes that carry it: the immutable dispatch-time
+		// credential scope of the captured-AWS-SSO grant
+		// (authorBedrockSSOInjection) and of the Bedrock bearer grant
+		// (authorBedrockBearerInjection). It is read from the GRANT by
+		// resolveAWSSSOInjection / resolveBedrockBearerInjection, never from the
+		// rule — an injection rule is a host/header/format binding and has no
+		// business carrying identity.
 		Snapshot json.RawMessage `json:"snapshot"`
 		// PinPath/PinQuery narrow WHICH requests to Host may carry the
 		// credential. Unlike Snapshot they ARE the rule's business — they

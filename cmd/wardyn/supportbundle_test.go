@@ -6,6 +6,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // ─── redactSecrets: the test proving redaction (D11) ──────────────────────────
@@ -287,6 +289,77 @@ func TestGatherComposeConfigMissingFileReturnsNote(t *testing.T) {
 	}
 }
 
+// ─── gatherProxyDiagnostics: the corporate-proxy field-report triad ──────────
+
+func TestGatherProxyDiagnostics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(types.SiteConfig{
+			UpstreamProxyURL:     "http://corp-proxy.internal:8080",
+			UpstreamProxyNoProxy: []string{"vpce.amazonaws.com", ".corp.internal"},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := sdk.New(srv.URL, "tok")
+	setupRaw := []byte(`{"ready":true,"trusted_ca_certs":3}`)
+	got, note := gatherProxyDiagnostics(context.Background(), c, setupRaw)
+	if note != "" {
+		t.Fatalf("note = %q, want empty", note)
+	}
+	var diag proxyDiagnostics
+	if err := json.Unmarshal(got, &diag); err != nil {
+		t.Fatalf("unmarshal: %v; raw=%s", err, got)
+	}
+	if diag.UpstreamProxyHost != "corp-proxy.internal:8080" {
+		t.Errorf("UpstreamProxyHost = %q, want %q", diag.UpstreamProxyHost, "corp-proxy.internal:8080")
+	}
+	if !slices.Equal(diag.UpstreamProxyBypass, []string{"vpce.amazonaws.com", ".corp.internal"}) {
+		t.Errorf("UpstreamProxyBypass = %v", diag.UpstreamProxyBypass)
+	}
+	if !diag.TrustedCAPresent {
+		t.Error("TrustedCAPresent = false, want true (setup-status reported 3 trusted_ca_certs)")
+	}
+}
+
+// TestGatherProxyDiagnosticsNeverLeaksUserinfo: even if an upstream proxy URL
+// somehow carried an embedded credential (write-time validation refuses this
+// today — see SiteConfig.UpstreamProxyURL's doc comment — this is
+// defense-in-depth against that check ever loosening), url.URL.Host never
+// includes the userinfo, so the bundle can only ever carry the bare host.
+func TestGatherProxyDiagnosticsNeverLeaksUserinfo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(types.SiteConfig{
+			UpstreamProxyURL: "http://alice:hunter2@corp-proxy.internal:8080",
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := sdk.New(srv.URL, "tok")
+	got, note := gatherProxyDiagnostics(context.Background(), c, []byte(`{}`))
+	if note != "" {
+		t.Fatalf("note = %q, want empty", note)
+	}
+	if strings.Contains(string(got), "alice") || strings.Contains(string(got), "hunter2") {
+		t.Errorf("proxy diagnostics leaked userinfo: %s", got)
+	}
+	if !strings.Contains(string(got), "corp-proxy.internal:8080") {
+		t.Errorf("proxy diagnostics dropped the host entirely: %s", got)
+	}
+}
+
+func TestGatherProxyDiagnosticsUnreachableReturnsNote(t *testing.T) {
+	c := sdk.New("http://127.0.0.1:0", "tok")
+	got, note := gatherProxyDiagnostics(context.Background(), c, []byte(`{}`))
+	if got != nil {
+		t.Errorf("got = %s, want nil", got)
+	}
+	if note == "" {
+		t.Error("want a non-empty note explaining why nothing was gathered")
+	}
+}
+
 // ─── end-to-end: the CLI command wired through a fake control plane ───────────
 
 func TestSupportBundleCmdEndToEnd(t *testing.T) {
@@ -296,7 +369,12 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 		case r.URL.Path == "/healthz":
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "version": "0.6.0"})
 		case r.URL.Path == "/api/v1/setup/status":
-			_ = json.NewEncoder(w).Encode(map[string]any{"ready": true})
+			_ = json.NewEncoder(w).Encode(map[string]any{"ready": true, "trusted_ca_certs": 2})
+		case r.URL.Path == "/api/v1/site-config":
+			_ = json.NewEncoder(w).Encode(types.SiteConfig{
+				UpstreamProxyURL:     "http://corp-proxy.internal:8080",
+				UpstreamProxyNoProxy: []string{"vpce.amazonaws.com"},
+			})
 		case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
 			_ = json.NewEncoder(w).Encode([]types.AuditEvent{
 				{ID: uuid.New(), Action: "run.dispatch", Outcome: "success", Actor: "alice@corp.example",
@@ -357,7 +435,7 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 		files[hdr.Name] = string(b)
 	}
 
-	for _, want := range []string{"cli-version.txt", "healthz.json", "setup-status.json", "audit-tail.json", "compose-config.redacted.yaml"} {
+	for _, want := range []string{"cli-version.txt", "healthz.json", "setup-status.json", "audit-tail.json", "compose-config.redacted.yaml", "proxy-config.json"} {
 		if _, ok := files[want]; !ok {
 			t.Errorf("bundle is missing %q; got entries %v", want, slices.Sorted(maps.Keys(files)))
 		}
@@ -374,6 +452,14 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 	for _, secret := range []string{"demo-admin-token", "first-sensitive-line", "second-sensitive-line"} {
 		if strings.Contains(files["compose-config.redacted.yaml"], secret) {
 			t.Errorf("compose-config.redacted.yaml leaked %q: %s", secret, files["compose-config.redacted.yaml"])
+		}
+	}
+
+	// proxy-config.json: the upstream host, its bypass list, and whether a
+	// trusted CA was loaded — #144's field-report triad.
+	for _, want := range []string{"corp-proxy.internal:8080", "vpce.amazonaws.com", `"trusted_ca_present": true`} {
+		if !strings.Contains(files["proxy-config.json"], want) {
+			t.Errorf("proxy-config.json = %s, want it to contain %q", files["proxy-config.json"], want)
 		}
 	}
 }

@@ -196,6 +196,47 @@ func TestGitBrokerDeniesUngrantedRepo(t *testing.T) {
 	}
 }
 
+// TestGitBrokerReportsH2MismatchNotDialFailed is #382's App-broker case,
+// beside the existing HTTP/2 peer tests (h2peer_test.go): github answering
+// unnegotiated HTTP/2 on a clone must classify as
+// builtin:upstream-protocol-mismatch with a 400, exactly as the LLM and plain
+// lanes already do, not the generic builtin:dial-failed 502 this lane gave
+// before roundTripUpstream's error arm called refuseH2Mismatch.
+func TestGitBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
+	mintUp := newGitBrokerUpstream(t, "gh-inst-token")
+	forgeAddr := startH2MismatchPeer(t)
+	grantID := uuid.New()
+	buf := &bytes.Buffer{}
+	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Sink:            sink,
+		Resolver:        publicResolver{},
+		Dial:            splitDial(upstreamAddr(mintUp.srv), forgeAddr),
+		ControlPlaneURL: "https://wardynd.test:8080",
+		RunToken:        newTokenSource("RUNTOK"),
+		TLSClientConfig: testInsecureTLSConfig,
+		GitGrants:       map[string]uuid.UUID{"octocat/hello-world": grantID},
+	})
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodGet,
+		"/wardyn/gh/octocat/hello-world.git/info/refs?service=git-upload-pack", nil)
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := denyBody(rec); !strings.Contains(got, "peer answered HTTP/2") {
+		t.Errorf("body = %q, want the h2-mismatch sentence", got)
+	}
+	d := findDecision(t, buf, ruleSourceUpstreamProtocolMismatch)
+	if d.Via != viaDirect {
+		t.Errorf("via = %q, want %q", d.Via, viaDirect)
+	}
+}
+
 // TestGitBrokerRejectsBadRequests: traversal / short / unknown-verb / bad-service
 // requests never reach github, whether they 403 (matched-repo, bad rest) or 404
 // (malformed path that doesn't even parse to a key).
@@ -280,6 +321,14 @@ func TestReceivePackCommandParser(t *testing.T) {
 			pkt(someOID+" "+otherOID+" "+prefix+"../../heads/main"+firstCaps) + "0000", "malformed refname"},
 		{"embedded-second-ref",
 			pkt(someOID+" "+otherOID+" "+inNS+" refs/heads/main"+firstCaps) + "0000", "malformed refname"},
+		// The ref-name rule is adoscope.CheckRefName, shared with the REST
+		// refs door: every character git's check-ref-format forbids is refused
+		// here too, inside the namespace, where the prefix test cannot help.
+		{"caret-refname", pkt(someOID+" "+otherOID+" "+inNS+"^{}"+firstCaps) + "0000", "malformed refname"},
+		{"tilde-refname", pkt(someOID+" "+otherOID+" "+inNS+"~1"+firstCaps) + "0000", "malformed refname"},
+		{"colon-refname", pkt(someOID+" "+otherOID+" "+inNS+":refs/heads/main"+firstCaps) + "0000", "malformed refname"},
+		{"backslash-refname", pkt(someOID+" "+otherOID+" "+inNS+`\x`+firstCaps) + "0000", "malformed refname"},
+		{"glob-refname", pkt(someOID+" "+otherOID+" "+inNS+"*"+firstCaps) + "0000", "malformed refname"},
 		// An embedded LF/CR is the shape that smuggles a second command past a
 		// line-oriented reader. Both stay INSIDE the namespace, so only the
 		// control-character check can refuse them — the prefix test cannot.
@@ -287,6 +336,14 @@ func TestReceivePackCommandParser(t *testing.T) {
 			pkt(someOID+" "+otherOID+" "+inNS+"\nrefs/heads/main"+firstCaps) + "0000", "control character"},
 		{"embedded-cr-refname",
 			pkt(someOID+" "+otherOID+" "+inNS+"\rrefs/heads/main"+firstCaps) + "0000", "control character"},
+		// A NUL rides the FIRST command only: on a later line a forge whose
+		// parser is not git's could read the ref after it instead.
+		{"nul-on-second-command",
+			pkt(someOID+" "+otherOID+" "+inNS+firstCaps) + pkt(someOID+" "+otherOID+" "+prefix+"b\x00refs/heads/main\n") + "0000",
+			"a NUL is allowed only on the first command"},
+		{"nul-on-shallow-line",
+			pkt("shallow "+someOID+"\x00refs/heads/main\n") + pkt(someOID+" "+otherOID+" "+inNS+firstCaps) + "0000",
+			"a NUL is allowed only on the first command"},
 		{"push-cert", pkt("push-cert"+firstCaps) + "0000", "unsupported receive-pack command"},
 		{"malformed-length", "zzzz" + "0000", "malformed pkt-line length"},
 		{"delim-pkt", "0001" + "0000", "unexpected pkt-line length"},

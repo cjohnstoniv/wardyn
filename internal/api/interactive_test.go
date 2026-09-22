@@ -176,9 +176,10 @@ func TestCreateRun_Interactive_SkipsExec(t *testing.T) {
 		t.Fatalf("decode run: %v", err)
 	}
 
-	if run.State != types.RunRunning {
-		t.Errorf("interactive run state = %q, want RUNNING (idle, awaiting attach)", run.State)
-	}
+	// The 201 answers before dispatch (runs_create_launch.go); RUNNING and the
+	// run.interactive row are the launch's, written after it.
+	waitForRunState(t, srv, run.ID, types.RunRunning)
+	waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), run.ID, "run.interactive", "success")
 	if fr.createCalls != 1 {
 		t.Errorf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}
@@ -202,6 +203,8 @@ func TestCreateRun_NonInteractive_StillExecs(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	// Dispatch runs after the 201 (runs_create_launch.go).
+	waitFor(t, "the task exec", func() bool { return fr.execCount() >= 1 })
 	if fr.createCalls != 1 {
 		t.Errorf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}

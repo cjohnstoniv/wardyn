@@ -85,13 +85,20 @@ export function onUnauthorized(fn: (reason: string, path: string) => void): void
 export class HttpError extends Error {
   status: number;
   /** The envelope's machine-readable class, "" when the body carries none.
-   *  Today only `model_credential`: the create-time refusal the New Run rail
-   *  answers with the AWS sign-in dialog (runs.ts's isCredentialRefusal). */
+   *  `model_credential` and `git_credential` (#386) are the create-time
+   *  refusals the New Run rail answers with a sign-in/connect dialog
+   *  (runs.ts's isCredentialRefusal / isGitCredentialRefusal). */
   reason: string;
-  constructor(status: number, message: string, reason = "") {
+  /** The git_credential 422's Azure DevOps org address (#386's launch door,
+   *  review finding F1) — "" when the body carries none. The dialog names it
+   *  from HERE, not from a preflight fact: a 422 can be the very first thing
+   *  a caller hears about the row. */
+  org: string;
+  constructor(status: number, message: string, reason = "", org = "") {
     super(message);
     this.status = status;
     this.reason = reason;
+    this.org = org;
     this.name = "HttpError";
   }
 }
@@ -237,8 +244,8 @@ export async function wfetch(
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason);
+    const { message, reason, org } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org);
   }
   return (await res.json()) as T;
 }
@@ -265,21 +272,25 @@ function isRawBodyDisplayable(body: string): boolean {
   return body.length <= RAW_BODY_MAX_CHARS && !/^\s*</.test(body);
 }
 
-export async function errEnvelope(res: Response): Promise<{ message: string; reason: string }> {
+export async function errEnvelope(res: Response): Promise<{ message: string; reason: string; org: string }> {
   try {
     const body = await res.text();
-    if (!body) return { message: res.statusText, reason: "" };
+    if (!body) return { message: res.statusText, reason: "", org: "" };
     try {
-      const j = JSON.parse(body) as { error?: unknown; reason?: unknown };
+      const j = JSON.parse(body) as { error?: unknown; reason?: unknown; org?: unknown };
       if (typeof j.error === "string" && j.error) {
-        return { message: j.error, reason: typeof j.reason === "string" ? j.reason : "" };
+        return {
+          message: j.error,
+          reason: typeof j.reason === "string" ? j.reason : "",
+          org: typeof j.org === "string" ? j.org : "",
+        };
       }
     } catch {
       // not JSON — fall through to the raw-body guard below
     }
-    return { message: isRawBodyDisplayable(body) ? body : res.statusText, reason: "" };
+    return { message: isRawBodyDisplayable(body) ? body : res.statusText, reason: "", org: "" };
   } catch {
-    return { message: res.statusText, reason: "" };
+    return { message: res.statusText, reason: "", org: "" };
   }
 }
 

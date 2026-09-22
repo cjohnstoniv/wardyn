@@ -250,6 +250,7 @@ func (s *Server) routes() chi.Router {
 			// deliberately on r, not operatorOnly (see sshkeys.go's package doc).
 			// Deliberately this one small, localized block rather than a mount of
 			// its own.
+			r.Get("/me/scm-access", s.handleGetSCMAccess) // #386, scmaccess.go: /me/ssh-keys' self-service shape
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
@@ -713,6 +714,14 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
+	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
+	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
+	// self-service block and nowhere else — both doors refuse a caller with no
+	// identity provider subject, the capture is bound to that subject
+	// fail-closed, and the credential is written under that principal's own
+	// namespace, so neither route can reach anyone else's credential whatever
+	// tier the caller holds.
+	s.mountAzureDevOpsSignInRoutes(r)
 	// "View as member" (membermode.go). Registered HERE rather than
 	// beside the ssh-keys block in routes() only because routes() sits exactly
 	// on the funlen ratchet — this is the /me self-service family either way.
