@@ -618,7 +618,7 @@ door, so they are keyed (§7.4, `PROVIDER_MEMBER`) the way `DRIVE_MEMBER`'s refu
 | `LEGACY_OPEN_BODY` | Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name. |
 | `LEGACY_OPEN_OTHER_HOSTS` | A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page. |
 | `SAVED_ELSEWHERE_TITLE` | Someone else saved providers since you loaded this page |
-| `SAVED_ELSEWHERE_BODY` | Reload to see their version before saving yours. |
+| `SAVED_ELSEWHERE_BODY` | Your changes are still here and still unsaved. Copy them first — reloading replaces them with the saved version. |
 | `SAVED_TOAST` | Providers saved. |
 | `SAVED_NARROWED(n)` | {n} onboarded source is now outside every enabled provider — runs can't clone it until an admin widens the addresses or turns its host on. / {n} onboarded sources are now outside every enabled provider — runs can't clone them until an admin widens the addresses or turns their host on. |
 | `SAVE_CTA` | Save providers |

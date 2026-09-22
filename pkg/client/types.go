@@ -33,6 +33,15 @@ type (
 	// AddSSHKey.
 	SSHPublicKey = types.SSHPublicKey
 
+	// Device is one enrolled laptop in the organisation's inventory (no
+	// credential material). Returned by ListDevices.
+	Device = types.Device
+
+	// DeviceEnrolmentToken is a minted single-use enrolment token; Token holds
+	// the plaintext on the mint response only. Returned by
+	// MintDeviceEnrolmentToken.
+	DeviceEnrolmentToken = types.DeviceEnrolmentToken
+
 	// RunPolicy is a declarative policy attached to runs. Returned by the
 	// policy methods (ListPolicies, GetPolicy, CreatePolicy, UpdatePolicy).
 	RunPolicy = types.RunPolicy

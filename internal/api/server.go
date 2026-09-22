@@ -248,6 +248,17 @@ type Config struct {
 	// (`claude setup-token`) lane never consults it and always stays on the
 	// public host — that flow mints the OAuth token itself.
 	LLMGateways map[string]string
+	// LLMGatewayAuth maps the same public model-provider host key as
+	// LLMGateways to an operator-configured injection header/format override
+	// (WARDYN_<VENDOR>_GATEWAY_HEADER / _GATEWAY_FORMAT, validated by
+	// ValidateLLMGateways) — independent of whether that provider also has an
+	// LLMGateways entry. nil/empty (the default) => every provider keeps the
+	// harness catalog's compile-time convention (harness.go's Gateway field),
+	// byte-identical to today. Consulted by (*Server).llmProviderFor, which
+	// applies Header/Format field-by-field onto the InjectionRule it builds —
+	// never onto the mint path directly, so a stored/proposed grant always
+	// reflects the resolved convention at proposal time.
+	LLMGatewayAuth map[string]LLMGatewayAuth
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".
@@ -497,7 +508,8 @@ type Config struct {
 	// minute forever from a single retrying sidecar, which the 1/sec rate limiter
 	// never trips and which still evicted every real security event out of the
 	// console's 1000-row window in minutes. See coalesceAuthFailed (http.go) for
-	// the bounds that keep a burst from collapsing into one row.
+	// the bounds that keep a burst from collapsing into one row. The same
+	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
@@ -796,6 +808,20 @@ type Server struct {
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
 	dirLimiter principalLimiter
+	// enrolLimiter bounds the ONE anonymous device route, POST
+	// /devices/enrol, per TCP peer (devices_auth.go's peerKey), with per-entry
+	// eviction so the map cannot grow without bound. Configured in New.
+	enrolLimiter principalLimiter
+	// The device routes' failure-row bounds (device_audit_bounds.go):
+	// enrolFailures is the anonymous route's one stream, ingestFailures one
+	// stream per device, ingestFailureLimiter that stream's per-device bucket.
+	enrolFailures        failureStreams
+	ingestFailures       failureStreams
+	ingestFailureLimiter principalLimiter
+	// ingestInFlight holds the id of every device with a push in progress —
+	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
+	// the limiters above; an entry lives only as long as its request.
+	ingestInFlight sync.Map
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
@@ -843,7 +869,10 @@ func New(cfg Config) *Server {
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()
 	}
-	s := &Server{cfg: cfg}
+	s := &Server{cfg: cfg,
+		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+	}
 	s.router = s.routes()
 	// drain the durable audit-fallback spool back into the store once it
 	// recovers, so a PG outage no longer leaves spooled events permanently invisible

@@ -275,9 +275,9 @@ cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER
 # race detector over the concurrency proofs CI gates on). Still not a full CI
 # replica: the live-service jobs need a
 # daemon or service — conformance, conformance-k8s, envbuild-integration,
-# helm-install-test, the Playwright ui-e2e, desktop-envelope, buildx-smoke,
-# and trivy — and run separately with those prerequisites. See RELEASING.md
-# and ci.yml for their local setup.
+# helm-install-test, the Playwright ui-e2e, desktop-envelope and trivy — and
+# run separately with those prerequisites; nightly.yml's multi-arch build
+# (buildx-smoke) too. See RELEASING.md and ci.yml for their local setup.
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
@@ -289,9 +289,8 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@echo ""
 	@echo "release-check PASSED. NOT covered here: conformance, conformance-k8s,"
 	@echo "envbuild-integration, helm-install-test, the Playwright ui-e2e, and"
-	@echo "screenshot freshness (ci.yml's screenshots-fresh job owns that — a local"
-	@echo "commit-timestamp test cannot be cleared once the PNGs re-render"
-	@echo "byte-identical) — confirm CI is green on the commit before tagging."
+	@echo "nightly.yml's multi-arch build — confirm CI is green on the commit, and"
+	@echo "the multi-arch build green on it, before tagging (RELEASING.md)."
 
 # 20m, not 10m: this suite is no longer the runner-contract cases alone. 0.7.5's
 # boot-egress measurement boots the REAL claude-code image, walks its first screens
@@ -1042,7 +1041,23 @@ npm-audit-dev: ## Non-blocking: full (dev+prod) advisory scan, to catch a pinned
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
 # (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
 # remains the authority; use this locally to catch most failures before pushing.
-ci: build build-docker build-k8s tidy-check lint test-scripts cover-check test-race staticcheck govulncheck license-headers licenses notices gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub ## Daemon-free merge gate: every CI check that needs no daemon or service
+#
+# Each target runs in its own sub-make so its elapsed time can be printed, and
+# the table is printed on failure too. No two of these share a prerequisite, so
+# nothing runs twice. The cost: `make -j ci` runs them one at a time, and
+# `make -k ci` stops at the first failing target.
+CI_TARGETS := build build-docker build-k8s tidy-check lint test-scripts cover-check test-race staticcheck govulncheck license-headers licenses notices gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub
+ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
+	@t0=$$(date +%s); times=""; \
+	for t in $(CI_TARGETS); do \
+	  s=$$(date +%s); $(MAKE) --no-print-directory $$t; rc=$$?; \
+	  times="$$times$$(printf '%6ss  %s' $$(($$(date +%s) - s)) $$t)|"; \
+	  if [ $$rc -ne 0 ]; then \
+	    printf '\nmake ci: elapsed per target (stopped at %s)\n' "$$t"; printf '%s' "$$times" | tr '|' '\n'; exit $$rc; \
+	  fi; \
+	done; \
+	printf '\nmake ci: elapsed per target\n'; printf '%s' "$$times" | tr '|' '\n'; \
+	printf '%6ss  total\n' $$(($$(date +%s) - t0))
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"

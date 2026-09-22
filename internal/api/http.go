@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -530,6 +529,12 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 // empty one — decodeSession already refuses to hand out a session with an
 // empty role, so this is defense-in-depth, not a real path).
 func (s *Server) isOperator(ctx context.Context) bool {
+	// A device request carries no OIDC human, which the next branch reads as
+	// the admin token. A daemon is never an operator, so refuse it first —
+	// whatever file the handler asking was written in.
+	if _, isDevice := deviceFromContext(ctx); isDevice {
+		return false
+	}
 	if oidcHumanFromContext(ctx) == "" {
 		return true // admin token, local mode, or OIDC not configured: no session role to demote
 	}
@@ -568,6 +573,9 @@ func (s *Server) isOperator(ctx context.Context) bool {
 //     workspace list, policies.go's four read-redaction sites, and helpers.go's
 //     ownsRunOrAdmin — each commented at its own site.
 func (s *Server) isSecurityOperator(ctx context.Context) bool {
+	if _, isDevice := deviceFromContext(ctx); isDevice {
+		return false // the same refusal isOperator makes first
+	}
 	if oidcHumanFromContext(ctx) == "" {
 		return true // same shared-credential arm as isOperator — see above
 	}
@@ -595,43 +603,6 @@ func (s *Server) requireSecurityOperator(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// authFailedRatePerSec and authFailedBurst bound the auth.failed audit emit
-// (see authFailedLimiter.allow) — a steady 1/sec with a small burst so a
-// handful of genuine failures in the same second are not silently dropped,
-// while a scanner's rapid-fire 401s past the burst are.
-const (
-	authFailedRatePerSec = 1.0
-	authFailedBurst      = 5.0
-)
-
-// authFailedLimiter is a process-local token bucket gating auth.failed
-// audit emits. Zero value is ready to use (tokens fill to authFailedBurst on
-// first call).
-type authFailedLimiter struct {
-	mu     sync.Mutex
-	last   time.Time
-	tokens float64
-}
-
-func (l *authFailedLimiter) allow(now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.last.IsZero() {
-		l.tokens = authFailedBurst
-	} else if elapsed := now.Sub(l.last).Seconds(); elapsed > 0 {
-		l.tokens += elapsed * authFailedRatePerSec
-		if l.tokens > authFailedBurst {
-			l.tokens = authFailedBurst
-		}
-	}
-	l.last = now
-	if l.tokens < 1 {
-		return false
-	}
-	l.tokens--
-	return true
 }
 
 // adminAuth gates the public API behind a constant-time bearer compare. An

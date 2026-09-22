@@ -49,7 +49,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { cn } from "../ui/utils";
 import { Mono } from "./code-block";
 
@@ -621,14 +621,25 @@ export function LiveApprovals({
   );
 }
 
+// outline-none + the three focus-visible: classes are CONSOLE-RULES.md §34's
+// standard ring (button.tsx#buttonVariants carries the same three) — these
+// buttons went keyboard-reachable under a Popover (review finding F3) and,
+// without this, showed the browser's default outline instead (review
+// finding 5).
 const SCOPE_ITEM_CLS =
-  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
+  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
 
 // ScopeMenu — the split button's caret content (Approve and Deny each mount
 // their own instance). Renders every option as a plain <button>, not
 // DropdownMenuItem: Always must carry a REAL disabled attribute when gated
 // (see reason-dialog.tsx's identical note) — a div-based menu item can never
 // have one, only aria-disabled, and Playwright will happily "click" that.
+// Held in a Popover, not a DropdownMenu (review finding F3): Radix's
+// DropdownMenuContent runs its own roving-tabindex focus manager over
+// registered DropdownMenuItems and swallows Tab, so a plain <button> inside
+// it is dead to the keyboard — neither Tab nor the arrow keys ever reach it.
+// Popover's content does not manage focus that way, so Tab walks these
+// buttons in plain DOM order and Enter/Space activate them natively.
 function ScopeMenu({
   verb,
   hasWorkspace,
@@ -667,7 +678,7 @@ function ScopeMenu({
   };
 
   return (
-    <DropdownMenu
+    <Popover
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
@@ -677,14 +688,17 @@ function ScopeMenu({
         }
       }}
     >
-      <DropdownMenuTrigger asChild>
+      <PopoverTrigger asChild>
         {/* Deliberately not named "…approve…"/"…deny…" — see the row comment
             above this component's two mount sites. */}
         <Button size="sm" variant="outline" className={cn("h-7 w-6 p-0", triggerClassName)} aria-label="More options">
           <ChevronDown className="size-3.5" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64 space-y-0.5 p-1">
+      </PopoverTrigger>
+      {/* review finding 6: PopoverContent renders role="dialog" with no
+          accessible name by default — label it to match the trigger it
+          opens from. */}
+      <PopoverContent align="end" className="w-64 space-y-0.5 p-1" aria-label="More options">
         {!untilMode ? (
           <>
             {(["once", "run"] as const).map((s) => (
@@ -756,8 +770,8 @@ function ScopeMenu({
             </div>
           </>
         )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </PopoverContent>
+    </Popover>
   );
 }
 

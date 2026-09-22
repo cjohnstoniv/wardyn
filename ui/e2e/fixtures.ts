@@ -58,7 +58,11 @@ export type NavLabel =
   | "Permissions"
   | "Secrets"
   | "Audit"
-  | "Recordings";
+  | "Recordings"
+  // #217 — last, under a divider (app-shell.tsx#SidebarNav): the account
+  // menu keeps its own Settings entry too, so this is a SECOND way in, not a
+  // replacement for it.
+  | "Settings";
 
 // Sidebar entries are react-router <NavLink>s (role="link"), not <button>s.
 // Their accessible name can carry trailing content beyond the label — Runs/
