@@ -432,7 +432,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	relay(w, resp)
+	p.relayUpstream(w, r, host, port, resp, ruleSource)
 }
 
 // coverageInspectable / coverageOpaque describe whether the LLM transport for a

@@ -107,9 +107,7 @@ func (s *Server) handleGit(w http.ResponseWriter, r *http.Request) {
 	ov, overridden := s.overrides[endpoint]
 	s.mu.Unlock()
 	if overridden {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(ov.status)
-		_, _ = w.Write(ov.body)
+		ov.write(w)
 		return
 	}
 	if !granted {

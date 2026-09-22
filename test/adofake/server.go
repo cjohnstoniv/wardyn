@@ -89,7 +89,21 @@ type RecordedRequest struct {
 
 type override struct {
 	status int
+	header http.Header // nil: Content-Type application/json
 	body   []byte
+}
+
+// write answers with the override: its own headers when it carries any (a
+// fault's shape, content type included, or none), else JSON.
+func (ov override) write(w http.ResponseWriter) {
+	if ov.header == nil {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	for k, vs := range ov.header {
+		w.Header()[k] = vs
+	}
+	w.WriteHeader(ov.status)
+	_, _ = w.Write(ov.body)
 }
 
 // tokenGrant is what RegisterToken (or a minted PAT) attaches to a token: the
@@ -310,9 +324,7 @@ func (s *Server) requireScope(endpoint Endpoint, scope string, next http.Handler
 		ov, overridden := s.overrides[endpoint]
 		s.mu.Unlock()
 		if overridden {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(ov.status)
-			_, _ = w.Write(ov.body)
+			ov.write(w)
 			return
 		}
 		if scope != "" && !granted {
