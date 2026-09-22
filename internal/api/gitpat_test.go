@@ -203,7 +203,7 @@ func TestDispatch_BrokeredGitPATDropIsAuditedAndNeverReachesTheSandbox(t *testin
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // no agent exec / completion watcher; this test is about dispatch
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy:       types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC1},
 		GitGrants:    map[string]uuid.UUID{"acme/widgets": uuid.New()},
@@ -319,7 +319,7 @@ func TestDispatchHonoursTheGitPATBrokerFlag(t *testing.T) {
 		srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 		srv.cfg.DisableGitPATBroker = disabled
 		run.Task = "" // composition only: no agent exec, no completion watcher
-		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
+		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
 			RunToken: "run-token", Image: "wardyn/claude-code:latest",
 			GitPATGrants: map[string]string{host: uuid.NewString()},
 		})
