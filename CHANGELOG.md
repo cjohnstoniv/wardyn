@@ -10,6 +10,47 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **An operator can declare SSO the only way into the console** (`WARDYN_SSO_ONLY`, chart
+  `auth.ssoOnly`). The daemon refuses to start if anything contradicts the posture — an admin token,
+  local mode, member mode, or the override that makes every signed-in human an admin — and the chart
+  refuses to render the same combinations. The sign-in screen then offers one SSO button: no
+  admin-token field, and none of the role-derivation caveat that the posture makes untrue (#378, #379).
+
+### Fixed
+
+- **Recordings past the thousandth were unreachable** in the console; the screen now pages (#296).
+- **A decision-log line could interleave with another and corrupt the record.** The proxy mirrors
+  decisions concurrently, and a line longer than the pipe buffer is not an atomic write; writes are
+  now locked (#261).
+- **`/metrics` could answer with a truncated body and a healthy status.** The exposition is composed
+  before anything is written, so a failure mid-read is a failure, not a plausible-looking scrape (#336).
+- **A run reaped before it was ever dispatched died with no reason recorded** anywhere its owner
+  could read (#256).
+- **A clamped policy shared memory with its input**, so mutating one silently edited the other (#322).
+- **A tab refocus fired a duplicate poll during an in-flight read**, leaving the console showing
+  stale status (#314).
+- **The `not_applicable` model-access state rendered as nothing** — a blank cell where a status chip
+  belongs (#292).
+- **An HTTP/2 answer on a clone was reported as a dial failure.** The git and PAT brokers now classify
+  it as a protocol mismatch, like every other lane already did (#382).
+- **An org-scoped provider row with the SSH lane admitted the whole host.** An SSH URL carries no org
+  path, so the addresses an admin set were not the restriction they appeared to be. The combination is
+  now refused where it is chosen (#380).
+- **The PAT lane was labelled "in-sandbox" although the broker keeps the token out of the sandbox**
+  since 0.7; the label now follows the real broker switch (#381).
+- The compose file **documented a writable member mount it did not provide** (#309).
+- The CLI **printed internal tracking identifiers** in user-facing output (#259), and
+  `--devcontainer-repo` **pointed at a command that does not do the job** (#354).
+- The GPL source offer's image list is **derived from what the release actually publishes** rather
+  than a hand-maintained list that drifts (#284).
+
+### Changed
+
+- `docs/adoption/azure-devops-entra.md` documents per-person Azure DevOps access on Entra ID.
+
+
+### Added
+
 - `WARDYN_SSO_ONLY` (flag `-sso-only`, chart `auth.ssoOnly`) lets an operator declare SSO the only
   way into the console. Boot is refused unless OIDC is configured and the admin token, local mode,
   member mode and the no-operator-list override are all unset — each refusal names the one to
