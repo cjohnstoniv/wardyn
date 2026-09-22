@@ -66,9 +66,11 @@ Wardyn address:
 https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 ```
 
-No client secret goes into Wardyn for this. The app registration is the same public one your console
-sign-in already uses, and the exchange is authorization-code-with-PKCE, not a confidential-client
-flow — there is nothing to paste beyond the tenant and client IDs on the row itself.
+**Nothing new is pasted into Wardyn for this.** The exchange is authorization-code with PKCE, and it
+reuses whatever credential your console sign-in already has: on the usual web-platform registration
+that is the client secret already configured for OIDC login (`WARDYN_OIDC_CLIENT_SECRET`), and on a
+public-client registration there is no secret to hold at all. Either way the only new configuration is
+the tenant and client IDs on the row itself, plus the redirect URI above on the app registration.
 
 ## The row your admin adds
 
