@@ -103,11 +103,63 @@ describe("EpisodeRow", () => {
     fireEvent.error(container.querySelector("video")!);
 
     expect(container.querySelector("video")).toBeNull();
-    expect(screen.getByText(/This deployment's media policy blocked this episode/)).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load this episode from GitHub.")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "Open the release page" });
     expect(link).toHaveAttribute("href", "https://github.com/cjohnstoniv/wardyn/releases/tag/v0.6.0");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link.getAttribute("rel")).toContain("noopener");
+  });
+
+  it("the default (unconfigured) source shows the GitHub stream note", async () => {
+    const user = userEvent.setup();
+    render(<EpisodeRow episode={shipped} />);
+    await user.click(screen.getByRole("button", { name: "Watch" }));
+    expect(
+      screen.getByText("Streams from the Wardyn release on GitHub only after you press Watch. Nothing is prefetched."),
+    ).toBeInTheDocument();
+  });
+
+  it("a configured source shows the configured stream note, names no host or URL", async () => {
+    const spy = vi
+      .spyOn(useDemoVideoBaseUrlModule, "useDemoVideoBaseUrl")
+      .mockReturnValue("https://videos.airgapped.example/wardyn-demos");
+    try {
+      const user = userEvent.setup();
+      const { container } = render(<EpisodeRow episode={shipped} />);
+      await user.click(screen.getByRole("button", { name: "Watch" }));
+      expect(
+        screen.getByText(
+          "Streams from the video source your admin configured, only after you press Watch. Nothing is prefetched.",
+        ),
+      ).toBeInTheDocument();
+      expect(container.textContent).not.toContain("videos.airgapped.example");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a configured source's load error names the policy, not GitHub, and shows no release-page link", async () => {
+    const spy = vi
+      .spyOn(useDemoVideoBaseUrlModule, "useDemoVideoBaseUrl")
+      .mockReturnValue("https://videos.airgapped.example/wardyn-demos");
+    try {
+      const user = userEvent.setup();
+      const { container } = render(<EpisodeRow episode={shipped} />);
+      await user.click(screen.getByRole("button", { name: "Watch" }));
+      fireEvent.error(container.querySelector("video")!);
+
+      expect(container.querySelector("video")).toBeNull();
+      expect(
+        screen.getByText(
+          "Couldn't play this episode. This deployment only allows video from the source your admin configured, and this didn't come from it.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Open the release page" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/GitHub/)).not.toBeInTheDocument();
+      expect(container.textContent).not.toContain("videos.airgapped.example");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -144,6 +196,23 @@ describe("EpisodeList — Shape C path grouping (approved mock round 2026-08-31)
     // in the DOM), and no member chips show in single mode.
     expect(screen.getByText("One command to a cluster")).toBeInTheDocument();
     expect(screen.queryByText("For your members")).not.toBeInTheDocument();
+  });
+
+  it("a configured source swaps the catalog summary's trailing clause, names no host or URL", () => {
+    const spy = vi
+      .spyOn(useDemoVideoBaseUrlModule, "useDemoVideoBaseUrl")
+      .mockReturnValue("https://videos.airgapped.example/wardyn-demos");
+    try {
+      const { container } = render(<EpisodeList mode="single" />);
+      const { recorded, minutes } = catalogSummary(EPISODES);
+      expect(
+        screen.getByText(`${recorded} recorded · about ${minutes} minutes · streamed from your admin's video source on click`),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/streamed from GitHub on click/)).not.toBeInTheDocument();
+      expect(container.textContent).not.toContain("videos.airgapped.example");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("multi mode: the deployment group swaps, member-audience rows are chipped, single collapses", () => {
