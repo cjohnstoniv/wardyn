@@ -32,7 +32,7 @@ import { toast } from "sonner";
 import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
 import { ccRank as rank, SectionCard, Seg } from "./new-run-primitives";
-import { RunRail } from "./new-run-rail";
+import { RunRail, useAdoLaunchDoor } from "./new-run-rail";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
@@ -332,6 +332,7 @@ export function NewRunScreen() {
 
   // Launch + preflight state and actions — see use-launch.ts's header for why
   // this lane is a hook rather than a pure function like policy-lane.ts's.
+  const adoDoor = useAdoLaunchDoor(); // #386's launch door — F8: never relaunches
   const {
     launching,
     launchDisabled,
@@ -346,7 +347,7 @@ export function NewRunScreen() {
     preflightError,
     preflightIsCurrent,
     preflight,
-  } = useLaunch({ state, workspaces, useSaved, ccTouched, merged });
+  } = useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLaunchError: adoDoor.notifyLaunchError });
 
   // What happens the moment this launches, in one sentence. Derived HERE and
   // handed to the rail, so the rail cannot describe one run while Launch sends
@@ -367,12 +368,9 @@ export function NewRunScreen() {
   // the merged document on the custom lane, the stored one on the saved lane.
   // Null when there are no rules, so a policy written before the field existed
   // grows no empty rail section.
-  const toolRules = React.useMemo(() => {
-    const spec = useSaved ? selectedPolicy?.spec : merged?.spec;
-    return spec ? toolRulesSummary(spec) : null;
-  }, [useSaved, selectedPolicy, merged]);
-  const hasAdditions =
-    !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
+  const specForRules = useSaved ? selectedPolicy?.spec : merged?.spec;
+  const toolRules = React.useMemo(() => (specForRules ? toolRulesSummary(specForRules) : null), [specForRules]);
+  const hasAdditions = !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
 
   // Editing the spec text DETACHES a picked saved policy: the body on screen is
   // no longer the stored one, and launching by reference would ship a policy
@@ -690,8 +688,13 @@ export function NewRunScreen() {
           cc={cc}
           showModelWarning={isAgent && llmReady === false}
           startup={startupLine}
+          // The server derives a hold in the OPPOSITE case from what this used
+          // to check: autonomyDerive (runs_autonomy.go) sets tool_approvals=
+          // hold when the run is non-interactive, the agent has a hold lane
+          // (claude-code, here) and the request did NOT already ask for hold.
+          // Picking hold yourself derives nothing to announce.
           showHoldNote={
-            !isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals === "hold"
+            !isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals !== "hold"
           }
           toolRules={toolRules}
           launch={{
@@ -713,6 +716,7 @@ export function NewRunScreen() {
               : { error: null, result: null }
           }
           agentRow={isAgent ? harnesses?.find((h) => h.id === state.agent) : undefined}
+          adoDialog={adoDoor.dialog}
         />
       </div>
 

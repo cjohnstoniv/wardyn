@@ -44,7 +44,7 @@ func TestValidateLLMGateways(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out, err := ValidateLLMGateways(c.anthropic, c.openai)
+			out, _, err := ValidateLLMGateways(LLMGatewayRaw{BaseURL: c.anthropic}, LLMGatewayRaw{BaseURL: c.openai})
 			if c.ok && err != nil {
 				t.Fatalf("expected valid, got error: %v", err)
 			}
@@ -71,7 +71,7 @@ func TestValidateLLMGateways(t *testing.T) {
 // keeps a non-default port and a path prefix — the proxy's LLMUpstreams
 // wiring depends on both surviving validation intact.
 func TestValidateLLMGateways_PathPrefixAndPortPreserved(t *testing.T) {
-	out, err := ValidateLLMGateways("https://llm-gateway.corp.internal:8443/v1/", "")
+	out, _, err := ValidateLLMGateways(LLMGatewayRaw{BaseURL: "https://llm-gateway.corp.internal:8443/v1/"}, LLMGatewayRaw{})
 	if err != nil {
 		t.Fatalf("ValidateLLMGateways: %v", err)
 	}
@@ -79,6 +79,152 @@ func TestValidateLLMGateways_PathPrefixAndPortPreserved(t *testing.T) {
 	want := "https://llm-gateway.corp.internal:8443/v1"
 	if got != want {
 		t.Fatalf("got %q, want %q (one trailing slash trimmed, port+prefix preserved)", got, want)
+	}
+}
+
+// TestValidateLLMGateways_GatewayAuth pins the two new operator knobs
+// (WARDYN_ANTHROPIC_GATEWAY_HEADER / _FORMAT, and the OpenAI pair): unset
+// stays a nil map (byte-identical to today, vendor defaults untouched), a
+// valid header/format pair is accepted and carried through keyed by the
+// public host, and either field may be set alone — the other stays empty
+// (meaning "keep the vendor convention"), never defaulted to something else.
+func TestValidateLLMGateways_GatewayAuth(t *testing.T) {
+	gateways, auth, err := ValidateLLMGateways(LLMGatewayRaw{}, LLMGatewayRaw{})
+	if err != nil {
+		t.Fatalf("both unset: %v", err)
+	}
+	if gateways != nil || auth != nil {
+		t.Fatalf("both unset must yield nil maps, got gateways=%v auth=%v", gateways, auth)
+	}
+
+	_, auth, err = ValidateLLMGateways(
+		LLMGatewayRaw{Header: "x-gw-key", Format: "Token %s"},
+		LLMGatewayRaw{Header: "x-oai-key"},
+	)
+	if err != nil {
+		t.Fatalf("valid header/format: %v", err)
+	}
+	if got, want := auth["api.anthropic.com"], (LLMGatewayAuth{Header: "x-gw-key", Format: "Token %s"}); got != want {
+		t.Fatalf("anthropic auth = %+v, want %+v", got, want)
+	}
+	if got, want := auth["api.openai.com"], (LLMGatewayAuth{Header: "x-oai-key"}); got != want {
+		t.Fatalf("openai auth (header only, format left empty) = %+v, want %+v", got, want)
+	}
+}
+
+// TestValidateLLMGateways_GatewayAuthRefusals is the CHECK spec's boot-refusal
+// requirement: a malformed WARDYN_*_GATEWAY_HEADER/_FORMAT value refuses boot,
+// naming the setting, rather than surfacing later as a confusing upstream
+// dial error. Three shapes: a format with no substitution point, one with
+// two, and a header that is not a valid HTTP token.
+func TestValidateLLMGateways_GatewayAuthRefusals(t *testing.T) {
+	cases := []struct {
+		name           string
+		raw            LLMGatewayRaw
+		wantErrContain string
+	}{
+		{
+			name:           "format: no substitution point",
+			raw:            LLMGatewayRaw{Format: "Token"},
+			wantErrContain: "WARDYN_ANTHROPIC_GATEWAY_FORMAT",
+		},
+		{
+			name:           "format: two substitution points",
+			raw:            LLMGatewayRaw{Format: "%s %s"},
+			wantErrContain: "WARDYN_ANTHROPIC_GATEWAY_FORMAT",
+		},
+		{
+			name:           "header: not a valid HTTP token",
+			raw:            LLMGatewayRaw{Header: "x gw key"},
+			wantErrContain: "WARDYN_ANTHROPIC_GATEWAY_HEADER",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gateways, auth, err := ValidateLLMGateways(c.raw, LLMGatewayRaw{})
+			if err == nil {
+				t.Fatalf("expected a boot refusal, got nil (gateways=%v auth=%v)", gateways, auth)
+			}
+			if !strings.Contains(err.Error(), c.wantErrContain) {
+				t.Errorf("refusal %q does not name %s — the operator cannot tell which knob to fix", err, c.wantErrContain)
+			}
+			if gateways != nil || auth != nil {
+				t.Errorf("a refused boot must return nil maps, got gateways=%v auth=%v", gateways, auth)
+			}
+		})
+	}
+}
+
+// TestAnthropicBaseURL pins the subscription/managed lanes' dispatch target
+// (runs_dispatch_llm.go): unset must stay byte-identical to today, and a
+// configured gateway must be dialed verbatim instead.
+func TestAnthropicBaseURL(t *testing.T) {
+	s := &Server{}
+	if got := s.anthropicBaseURL(); got != "https://api.anthropic.com" {
+		t.Fatalf("unset: anthropicBaseURL() = %q, want the vendor default", got)
+	}
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal:8443/v1"}
+	if got, want := s.anthropicBaseURL(), "https://llm-gateway.corp.internal:8443/v1"; got != want {
+		t.Fatalf("configured: anthropicBaseURL() = %q, want %q", got, want)
+	}
+}
+
+// TestAnthropicGatewayHostAndHostPort pins the bare-host and host:port forms
+// authorSubscriptionInjection and the injection-host allowlist consume: unset
+// is empty (no widening), a configured gateway with no explicit port defaults
+// to 443, and an explicit port is preserved.
+func TestAnthropicGatewayHostAndHostPort(t *testing.T) {
+	s := &Server{}
+	if h := s.anthropicGatewayHost(); h != "" {
+		t.Fatalf("unset: anthropicGatewayHost() = %q, want \"\"", h)
+	}
+	if hp := s.anthropicGatewayHostPort(); hp != "" {
+		t.Fatalf("unset: anthropicGatewayHostPort() = %q, want \"\"", hp)
+	}
+
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal"}
+	if h, want := s.anthropicGatewayHost(), "llm-gateway.corp.internal"; h != want {
+		t.Fatalf("anthropicGatewayHost() = %q, want %q", h, want)
+	}
+	if hp, want := s.anthropicGatewayHostPort(), "llm-gateway.corp.internal:443"; hp != want {
+		t.Fatalf("no explicit port: anthropicGatewayHostPort() = %q, want %q (default 443)", hp, want)
+	}
+
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal:8443/v1"}
+	if hp, want := s.anthropicGatewayHostPort(), "llm-gateway.corp.internal:8443"; hp != want {
+		t.Fatalf("explicit port: anthropicGatewayHostPort() = %q, want %q", hp, want)
+	}
+}
+
+// TestSubscriptionInjectionHostAllowed pins the security property: the
+// subscription/managed OAuth sentinel may target the vendor host always, the
+// configured gateway ONLY when one is set (from s.cfg, never from the host
+// argument itself), and nothing else — an unrelated host stays refused
+// regardless of gateway config.
+func TestSubscriptionInjectionHostAllowed(t *testing.T) {
+	s := &Server{}
+	if !s.subscriptionInjectionHostAllowed("api.anthropic.com") {
+		t.Fatal("the vendor host must always be allowed")
+	}
+	if s.subscriptionInjectionHostAllowed("llm-gateway.corp.internal") {
+		t.Fatal("an unconfigured gateway host must be refused")
+	}
+	if s.subscriptionInjectionHostAllowed("evil.example.com") {
+		t.Fatal("an arbitrary host must always be refused")
+	}
+
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal:8443"}
+	if !s.subscriptionInjectionHostAllowed("api.anthropic.com") {
+		t.Fatal("the vendor host must stay allowed once a gateway is configured")
+	}
+	if !s.subscriptionInjectionHostAllowed("llm-gateway.corp.internal") {
+		t.Fatal("the configured gateway host must now be allowed")
+	}
+	if !s.subscriptionInjectionHostAllowed("LLM-Gateway.corp.internal.") {
+		t.Fatal("the comparison must be case-insensitive and trailing-dot-insensitive, like hostEqual everywhere else")
+	}
+	if s.subscriptionInjectionHostAllowed("evil.example.com") {
+		t.Fatal("an arbitrary host must stay refused even with a gateway configured")
 	}
 }
 
@@ -192,5 +338,47 @@ func TestValidateBedrockBaseURL_PlainHTTPOnlyWithTestEndpoints(t *testing.T) {
 		if g, e := ValidateBedrockBaseURL(raw, region, true); e == nil {
 			t.Errorf("ValidateBedrockBaseURL(%q, allow=true) = %q, nil — the acknowledgement must relax rule 1 only", raw, g)
 		}
+	}
+}
+
+// TestLLMProviderFor_GatewayAuthOverride pins the seam ValidateLLMGateways'
+// header/format feeds: (*Server).llmProviderFor applies Config.LLMGatewayAuth
+// field-by-field onto the harness catalog's compile-time convention, keyed by
+// the VENDOR host (not the gateway's, so the lookup survives a host
+// substitution happening in the same call). Unset is byte-identical to
+// today's vendor convention; each field is independently overridable.
+func TestLLMProviderFor_GatewayAuthOverride(t *testing.T) {
+	s := &Server{}
+	p, ok := s.llmProviderFor("claude-code")
+	if !ok {
+		t.Fatal("claude-code must resolve to a provider")
+	}
+	if p.header != "x-api-key" || p.format != "%s" {
+		t.Fatalf("unset: header=%q format=%q, want the vendor default x-api-key/%%s", p.header, p.format)
+	}
+
+	// Header alone overridden: format keeps the vendor default.
+	s.cfg.LLMGatewayAuth = map[string]LLMGatewayAuth{"api.anthropic.com": {Header: "x-gw-key"}}
+	p, _ = s.llmProviderFor("claude-code")
+	if p.header != "x-gw-key" || p.format != "%s" {
+		t.Fatalf("header-only override: header=%q format=%q, want x-gw-key/%%s", p.header, p.format)
+	}
+
+	// Both overridden, alongside a gateway host override: the auth lookup key
+	// stays the ORIGINAL vendor host, not the gateway's.
+	s.cfg.LLMGateways = map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal"}
+	s.cfg.LLMGatewayAuth = map[string]LLMGatewayAuth{"api.anthropic.com": {Header: "x-gw-key", Format: "Token %s"}}
+	p, _ = s.llmProviderFor("claude-code")
+	if p.host != "llm-gateway.corp.internal" {
+		t.Fatalf("host = %q, want the gateway host", p.host)
+	}
+	if p.header != "x-gw-key" || p.format != "Token %s" {
+		t.Fatalf("both overridden: header=%q format=%q, want x-gw-key/Token %%s", p.header, p.format)
+	}
+
+	// OpenAI is unaffected by an Anthropic-only override.
+	pOpenAI, _ := s.llmProviderFor("codex-cli")
+	if pOpenAI.header != "Authorization" || pOpenAI.format != "Bearer %s" {
+		t.Fatalf("openai must keep its own vendor default, got header=%q format=%q", pOpenAI.header, pOpenAI.format)
 	}
 }

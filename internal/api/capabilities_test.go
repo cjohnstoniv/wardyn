@@ -61,6 +61,48 @@ func (noGovernanceStore) GetSiteConfig(context.Context) (types.SiteConfig, error
 	return types.SiteConfig{}, nil
 }
 
+// Ping and LatestAuditEventByAction are the two reads a /metrics SCRAPE makes —
+// the wardyn_store_up gauge and the eBPF ground-truth counters — and they are
+// answered here for GetSiteConfig's second reason exactly: the scrape is a route
+// these doubles are driven through, so a nil embed turns every one of them into
+// a segfault the moment a test reads a counter (#323).
+//
+// A reachable store and a deployment no sensor has ever beaten on: the
+// 0.6-shaped deployment again, and the two answers that make the scrape whole
+// rather than absent. ErrNotFound is what ebpfGroundtruthStatus reads as "no
+// sensor has ever beaten here", which omits the ground-truth family entirely.
+func (noGovernanceStore) Ping(context.Context) error { return nil }
+
+func (noGovernanceStore) LatestAuditEventByAction(context.Context, string) (types.AuditEvent, error) {
+	return types.AuditEvent{}, store.ErrNotFound
+}
+
+// ListCapabilityGrantsFor answers no grants: the same "this deployment has
+// adopted neither" answer as the other governance reads above. capSeamAllowed
+// already treats a nil Store as "nothing to enforce" (its own doc comment); a
+// double that is non-nil but incomplete must answer the SAME way rather than
+// panic on the call capSeamAllowed's non-nil branch (capAllowed -> capScan)
+// then makes (#338).
+func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
+// GetCapabilityEnforcement answers the empty switch map — an absent row means
+// unenforced (its own doc comment in store_capabilities.go, "Never nil"), so
+// an empty non-nil map is the SAME "this deployment has adopted neither"
+// answer as ListCapabilityGrantsFor above, reached via the capGranted-shaped
+// seams ListCapabilityGrantsFor's comment does not cover (#338).
+func (noGovernanceStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
+// ListGroupDenyGrants answers no group-deny rows — capUnresolvableGroupDeny's
+// narrow read for a caller whose group snapshot is stale/unanswerable; an
+// empty deployment has no rows to miss (#338).
+func (noGovernanceStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
 // capStore holds grants and enforcement in memory. Its ListCapabilityGrantsFor
 // MIRRORS the SQL predicate (store_capabilities.go / its pg test) rather than
 // returning everything: subject fan-out is the store's job, and a fake that

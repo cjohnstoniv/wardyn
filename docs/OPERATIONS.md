@@ -872,12 +872,15 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
 | `POST /admin/sandboxes/sweep` — force-reaping sandboxes across every workspace, not just the caller's own | ⛔ admin only |
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
+| `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
+| `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
-| the `/drives` routes — registering a **user drive**, allocating it to people or groups, previewing whose drive resolves (`mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| the `/drives` routes that NAME A HOST PATH — creating, listing, updating, and removing the **user drive** itself (`GET`/`POST /drives`, `PUT`/`DELETE /drives/{id}`, `mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| allocating a drive to people or groups, revoking that allocation, or previewing whose drive resolves — `POST /drives/grants`, `DELETE /drives/grants/{id}`, `POST /drives/preview` (0.8, issue #168) | ⛔ admin or `security_admin`: none of the three names a host path — a security admin's authority over drives is the `DenyUserDrive` door on a governance profile, reached through `/governance` above |
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | signing in to YOUR OWN model provider (`POST /setup/harness-login`) — the container-login sandbox that captures an AWS SSO session | 🟡 any signed-in human, but ONLY under a `per_user` agent row: the agent roster must declare that each person signs in themselves, and the caller must hold the `agent` capability for that row's agent. Otherwise ⛔ admin only. An admin always reaches it, and under a `per_user` row captures their OWN session like anyone else. The start URL is the ADMIN'S — a sign-in can never choose another portal |
@@ -894,6 +897,11 @@ completeness check still blocks any new gated route from landing without either
 a row above or a filed entry here.
 
 ### Who writes the provider policy: console vs CLI/MDM
+
+On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
+can be set to per-user sign-in instead of one shared PAT — see
+[docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
+row's fields, and what a member sees.
 
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
@@ -1011,11 +1019,17 @@ migration `0050`)** are the second and third owned nouns after runs.
   (`secretOwnerFromRequest`: `""` for an operator, their own principal for a
   member). A member's `DELETE` of another principal's row is structurally
   unreachable (`secretstore.Store.For(owner)` never resolves it) and answers the
-  byte-identical 204 a never-set name gets. The four Bedrock/SigV4 names
-  (`aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`/
-  `bedrock-api-key`) stay refused (403) for every non-operator PUT: Bedrock always
-  resolves from the operator namespace, so a member row under one of those names
-  would read as configured in setup while dispatch never uses it.
+  byte-identical 204 a never-set name gets. The three AWS SigV4 names
+  (`aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`) stay
+  refused (403) for every non-operator PUT: SigV4 is always signed out of the
+  operator namespace, so a member row under one of those names would read as
+  configured in setup while dispatch never uses it. `bedrock-api-key` is NOT one
+  of them, so a member may store their own: under a `per_user` agent row the
+  bearer is injected from the run owner's own namespace, under `shared` from the
+  operator's. Dispatch records that choice on the grant it authors, and the
+  injection sink resolves the key from exactly that record
+  (`resolveBedrockBearerInjection`) — a member's own key never stands in for
+  the operator's, nor the operator's for a member's.
 - **`GET /secrets` returns `{names, mine}`.** `mine` is always the queried
   namespace's own rows (reserved names filtered out). `names` keeps its pre-0.7
   meaning for an admin — the operator namespace, or one member's own rows with
@@ -1549,6 +1563,57 @@ an XFS project quota needs `CAP_SYS_ADMIN` the control plane must not hold. A
 `host_path` drive reports `enforcement: external`: the NAS's own quota binds it,
 and Wardyn displays the allocation.
 
+**A real byte cap on Docker: an XFS project quota, run by the operator, on the
+host, never inside the control plane.** `CAP_SYS_ADMIN` is what WARDYN must not
+hold, not a statement that nothing can enforce a `docker_volume` drive's size —
+the recipe below is exactly the case `types.StorageEnforcementFilesystem` was
+named and reserved for (`internal/types/user_drive.go`: "NOTHING in v1 reports
+this — it is the value the documented operator recipe earns"). Wardyn still
+reports `enforcement: none` on the wire; this is an operator ceiling underneath
+it, invisible to the product and unaffected by a `wardynd` restart.
+
+1. **The Docker data root must be XFS, mounted with project quotas.** Find it
+   with `docker info -f '{{.DockerRootDir}}'`, then confirm with
+   `xfs_info <that path>` — the output must list `pquota` or `prjquota`. A
+   filesystem created without it needs a remount (`mount -o remount,prjquota
+   <mountpoint>`, persisted in `/etc/fstab`) — a host operation, unrelated to
+   Wardyn, that does not require restarting the daemon.
+
+2. **Assign a project to the volume's own directory, one per drive per
+   person.** Resolve the real path rather than guessing the data root, and
+   resolve the XFS mount point rather than assuming it is the data root itself
+   (a bind-mounted or LVM-backed data root is not always its own filesystem
+   root):
+
+   ```
+   VOL=wardyn-drive-<drive-slug>-<home>                    # from the reclaim recipe above
+   DIR=$(docker volume inspect -f '{{.Mountpoint}}' "$VOL")
+   MOUNT=$(findmnt -T "$DIR" -no TARGET)                    # the XFS filesystem's own mount point
+   PROJID=$(( 0x$(echo -n "$VOL" | sha256sum | cut -c1-7) )) # any stable project id, unique per volume
+   echo "${PROJID}:${DIR}" >> /etc/projects
+   echo "${VOL}:${PROJID}" >> /etc/projid
+   xfs_quota -x -c "project -s ${VOL}" "$MOUNT"
+   ```
+
+3. **Set the hard limit, and confirm it actually refuses a write:**
+
+   ```
+   xfs_quota -x -c "limit -p bhard=20g ${VOL}" "$MOUNT"
+   xfs_quota -x -c "report -p" "$MOUNT"
+   ```
+
+   A run whose agent then writes past the limit meets the filesystem's own
+   `ENOSPC` — the identical error path a genuinely full disk already takes.
+   Wardyn adds nothing to it and catches nothing from it; that is the whole
+   point of a ceiling that lives below the product rather than in it.
+
+Recreating the volume — a restore, or Wardyn re-minting one after a delete —
+does not carry the quota forward: step 2 keys on the volume's directory, which
+changes, so re-run it (or script it as a step your own restore/create tooling
+runs after Wardyn's). A `host_path` share on an XFS-backed NAS can be capped
+the identical way, against the directory the NAS exports; that quota is the
+NAS's own, which is already what `enforcement: external` reports.
+
 **And a ceiling bounds what you may ALLOCATE, not what the volume will hold.**
 Two numbers can cap a drive, and they are refused and applied in different
 places. `storage.user_drive.max_size_mib` on the **Workspace providers** screen
@@ -1854,6 +1919,10 @@ revokes every unrevoked token that principal holds — a token is their session 
 another form. The `all` arm is deployment-wide for tokens too: EVERY live token
 goes, the calling admin's own included — plan to re-mint after a global revoke.
 
+**No `role` parameter on `POST /me/tokens`.** A token always mints at the
+caller's own current role; there is no deliberately-downgraded mint. Still
+open at 0.8.
+
 **Registered SSH keys are separate.** An API token can register one through
 `wardyn ssh-key ensure`. Neither deleting the token nor revoking sessions
 removes that key, and key deletion does not disconnect an established SSH
@@ -1889,22 +1958,22 @@ recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` i
 a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
 effort and is the signal for "which of these are dead"; revoke those.
 
-**The role is a stamp re-checked at login; the GROUP SNAPSHOT is not checked at
-all.** A token carries the role AND the group snapshot its owner held when they
-minted it, and every request it authenticates republishes them, so downstream it
-is that human as they were at mint time.
+**Both halves are stamps re-checked at login.** A token carries the role AND
+the group snapshot its owner held when they minted it, and every request it
+authenticates republishes them, so downstream it is that human as they were at
+mint time, or at their most recent sign-in since — whichever is later.
 
-The two halves age differently, and only one of them ages. Their next successful
-sign-in **re-stamps the role** on every unrevoked token they hold — the same
-`OnLogin` hook that has re-stamped their SSH keys since 0.6 — so a demotion does
-reach outstanding tokens, at that human's own next login rather than
-immediately. **The group snapshot is never refreshed**, by that hook or anything
-else. And nothing ages either half out on its own: `api_tokens` has
+Their next successful sign-in **re-stamps the role, the group snapshot, and the
+snapshot's own completeness bit** on every unrevoked token they hold — the same
+`OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to
+carry groups too — so a demotion, or a group membership change, reaches
+outstanding tokens at that human's own next login rather than immediately. And
+nothing ages either half out on its own short of that sign-in: `api_tokens` has
 `created_at`, `last_used_at` and `revoked_at` and **no expiry column**, there is
 no TTL on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human
-who is demoted and never signs in again keeps the role their tokens were minted
-with indefinitely. **Explicit revocation is the only thing that ends it on your
-schedule.**
+who is demoted and never signs in again keeps the role and groups their tokens
+were minted with indefinitely. **Explicit revocation is the only thing that
+ends it on your schedule** rather than waiting for that next login.
 
 A demotion made on the People page is now one of those explicit revocations:
 when a role-mapping write or delete takes a tier away from a value, Wardyn
@@ -1950,10 +2019,11 @@ matched nobody, not that there was nothing to revoke — sessions are stateless,
 that half cannot be counted, and only this half can tell you. Both
 `token.create` and `token.revoke` are audited
 ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
-owner. Offboarding a person means revoking their tokens explicitly — the row
-outlives their access to your IdP, and it is published as a residual
-(`threatmodel/THREAT-MODEL.md` §5, "A per-user API token's role and group
-snapshot are frozen at mint").
+owner. Offboarding a person means revoking their tokens explicitly — a demoted
+or departed human who never signs in again is not caught by the login-time
+re-stamp, and the row outlives their access to your IdP either way. It is
+published as a residual (`threatmodel/THREAT-MODEL.md` §5, "A per-user API
+token's role AND group snapshot are bounded-stale, not frozen").
 
 ### Three roles, and who sets the walls
 
@@ -2081,7 +2151,7 @@ admin walking the member path, not an incident.
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
-| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. Five causes, one per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), and — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
@@ -2307,8 +2377,8 @@ Sign in as a second, real person. This is strictly more faithful than the
 toggle — it exercises the server's own role derivation, its own session, and
 its own ownership namespace.
 
-- **kind quickstart** — the bundled Dex already ships two logins:
-  `admin@wardyn.local` and `member@wardyn.local` (`deploy/kind/sso/dex.yaml`,
+- **kind quickstart** — the bundled Dex ships one login per role path:
+  `admin@`, `member@`, `member2@`, `secadmin@`, `operator@` and `stranger@wardyn.local` (`deploy/kind/sso/dex.yaml`,
   role map in `deploy/kind/sso/values.yaml`).
 - **Entra** — the walk provisions `wardyn-admin`, `wardyn-member` and
   `wardyn-outsider` (`deploy/azure-entra-sso/03-people.sh`).
@@ -2880,6 +2950,12 @@ the estate needs both.
 ]
 ```
 
+Suffix entries match names; CIDR entries match only a destination written as
+an IP literal, never a hostname that resolves into the range — the same rule as
+Go's `NO_PROXY` (`bypassUpstream`, `internal/egress/proxy/egress_target.go`).
+So on an estate where AWS resolves into CGNAT, `100.64.0.0/10` bypasses
+nothing for `portal.sso.<region>.amazonaws.com`; list the name or its suffix.
+
 Wildcards are refused at write time: "bypass everything" is spelled by clearing
 `upstream_proxy_url`, not by one character in a list. An entry that is neither a
 CIDR nor a host is a 400 too, because the proxy drops what it cannot compile and
@@ -3446,9 +3522,9 @@ button come back, which an expiry-only grading hid), and the setup checklist's
 precise than the row it comes back with: it is keyed on state alone, so it
 reads "Model access · Signed out" for a session that is actually live and
 renewable — the Action line right beneath it is the one that names the pin
-and tells the truth. What is still missing in 0.7.4:
+and tells the truth. **Still open at 0.8:**
 invalidate-on-write, and an admin "revoke this person's captured session" route
-— both need owner enumeration in the secret store (0.8).
+— both still need owner enumeration in the secret store, which does not exist.
 
 **Changing the model's account later does not invalidate an existing pin.** Since
 0.7.3 the disagreement is a warning — the console's Bedrock row, plus a line in
@@ -3524,7 +3600,7 @@ says which captures were turned away and why.
 **caller's own** stored session: under `per_user` every capture, an admin's
 included, lives in that person's own namespace, so this is the admin revoking
 themselves. There is **no** admin route that deletes a named member's stored
-session, and no member-facing Disconnect — both are 0.8 items.
+session, and no member-facing Disconnect — both are still open at 0.8.
 
 What ends a member's session today, honestly:
 
@@ -3577,7 +3653,8 @@ Consequences worth knowing:
   NOT finish is the rest of the launch: a client that gives up (a closed tab, a proxy timeout) can
   leave the old sign-in already gone and no new one created. Nothing is lost and nothing is stuck —
   start the sign-in again. This is also why a sign-in that hangs is worth waiting out once rather
-  than clicking twice.
+  than clicking twice. **This synchronous kill cascade is still open at 0.8** — moving the teardown
+  to after the response is tracked separately from the rest of this section.
 - **Two sign-ins started at once almost always leave one.** A double-click, or the console and a
   `wdn_` token driving the route for the same person, used to leave BOTH sandboxes alive: each
   launch checks for live sign-ins before its own run row exists, so neither could see the other. The
@@ -3587,7 +3664,7 @@ Consequences worth knowing:
   multi-replica install with clock skew (or after a stall between the two) the run carrying the
   EARLIER timestamp can be written after the other's re-check, and both stay alive. Neither is
   killed, so the upload refusal below does not separate them either. The next sign-in clears it.
-  Closing the last case needs a per-person lock around the write and is a 0.7.6 follow-up.
+  Closing the last case needs a per-person lock around the write. **Still open at 0.8.**
 - **A sandbox superseded mid-upload almost never wins.** The upload door
   re-reads the run's state immediately before it stores, so a capture that was uploading when the
   person's next sign-in replaced its sandbox is ordinarily refused (`harness.credential.refused` /
@@ -3731,8 +3808,8 @@ and no real credential anywhere in the loop.
 `wardyn/agent-aws-sso:local` login image and refuses to start without it), then
 `WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322
 make kind-quickstart`, then `make kind-sso` (see `deploy/kind/sso/README.md`).
-The overlay adds Dex with two static principals —
-`admin@wardyn.local` and `member@wardyn.local`, password `password` — plus
+The overlay adds Dex with one static principal per role path —
+`admin@wardyn.local`, `member@wardyn.local` and four more, password `password` — plus
 `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services
 (`sso-oidc` and the `sso` portal) and a bedrock-runtime stub, all on one
 in-cluster Service. `make kind-sso-down` removes the overlay; the cluster itself
@@ -4037,12 +4114,16 @@ browser bundle or an old CLI, so:
 ### Internal model gateway
 
 Point every run's model calls at an internal endpoint instead of
-`api.anthropic.com`/`api.openai.com`. **Shipped for the api-key lane**:
-`WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL` ([ENV.md](ENV.md)) re-point
-the proxy's own brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at
-the gateway — validated once at boot (`https://` only, RFC1918/CGNAT literal
-allowed, loopback/link-local/metadata/multicast/NAT64 refused, must not equal the
-public host) and forwarded to the proxy sidecar per run. No
+`api.anthropic.com`/`api.openai.com`. `WARDYN_ANTHROPIC_BASE_URL` /
+`WARDYN_OPENAI_BASE_URL` ([ENV.md](ENV.md)) re-point the proxy's own brokered
+`/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway for the
+api-key lane, and — for Anthropic — also the subscription and Wardyn-managed
+lanes' `ANTHROPIC_BASE_URL` (dispatch sets it via `(*Server).anthropicBaseURL`,
+`runs_dispatch_llm.go`, and the subscription-injection sink's host allowlist
+widens to match, `injection.go`) — validated once at boot (`https://` only,
+RFC1918/CGNAT literal allowed, loopback/link-local/metadata/multicast/NAT64
+refused, must not equal the public host) and forwarded to the proxy sidecar per
+run. No
 `SiteConfig.InternalHosts` declaration is needed for the gateway itself **on that
 brokered route**: only the proxy's own `/wardyn/llm/*` handler resolves and dials
 it, per request, with its own refusal for the same disallowed address kinds
@@ -4068,14 +4149,21 @@ dial (the gateway included) is CONNECTed through the corp proxy by the transport
 never dialled directly. A gateway the corp proxy cannot reach — an internal one,
 typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
 gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address.
+other internal address. wardynd also warns at boot when an upstream proxy is
+configured but no `upstream_proxy_no_proxy` entry covers a configured gateway
+host — a snapshot taken at boot only, since `SiteConfig` is admin-editable
+afterwards and either setting can change without a restart.
 
-**Scope: the api-key lane only.** A subscription or Wardyn-managed-token run
-still talks to `api.anthropic.com` directly — the published agent images
-unconditionally `unset ANTHROPIC_BASE_URL` whenever a resident/managed credential
-is detected, and the harness-login (`claude setup-token`) lane is public too.
-Routing those lanes through a gateway needs an image change (teaching `agent-run`
-to honor an explicit operator-set base URL) — a named gap, tracked in ROADMAP.md.
+**A subscription or Wardyn-managed-token run honors a configured Anthropic
+gateway too** — the published `agent-claude-code` image's `agent-run` only
+`unset`s `ANTHROPIC_BASE_URL` when it is still the vendor default, so an
+operator-configured gateway survives the in-image launcher. **This is a trust
+decision**: turning it on sends the operator's live subscription/managed OAuth
+token to the configured gateway proxy-side (TLS-MITM, exactly as it is sent to
+`api.anthropic.com` today) instead of only ever the public host — see
+[CHANGELOG.md](../CHANGELOG.md). The harness-login (`claude setup-token`) lane
+is exempt and always stays on the public host: that flow mints the OAuth token
+itself and must not be redirected.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`
@@ -4636,6 +4724,10 @@ re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
 `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)
+The same shape recurs one release later: `0067` adds `user_drives.object_scheme`,
+and `user_drives` itself was `0054`'s table — created inside the already-shipped
+0.7 line, not this upgrade's own batch — so an install carried forward from a
+released 0.7.x hits the identical ownership requirement on its next upgrade.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does
@@ -5147,10 +5239,13 @@ identity-affecting `PUT /api/v1/drives/{id}` on a drive that already has
 allocations answers **`409`** (`driveRehomeGuard`), naming what changes and how
 many allocations move: *"this drive is allocated to N subjects and this change
 re-homes them: name "old" → "new". … re-send as PUT
-/drives/{id}?confirm=rehome."* Four fields count as identity-affecting —
-`backend`, `home_template`, `host_root`, and a `name` that folds to a
-**different slug** (a purely cosmetic rename that folds to the same slug is not
-refused, and neither is any edit to a drive nothing is allocated from).
+/drives/{id}?confirm=rehome."* Five fields count as identity-affecting —
+`backend`, `home_template`, `host_root`, a `name` that folds to a **different
+slug** (a purely cosmetic rename that folds to the same slug is not refused,
+and neither is any edit to a drive nothing is allocated from — and on an
+`object_scheme: id` drive a rename never counts at all, because the drive's
+name plays no part in that scheme's minted name), and `object_scheme` itself
+(see "Legacy rows keep their old object name, permanently" below).
 
 Confirming is an API action, deliberately:
 
@@ -5201,15 +5296,28 @@ claim whose `wardyn.drive` or `wardyn.home` names a different pair, or whose
 `wardyn.subject` names a different person (that third label is checked only when
 it is PRESENT, so claims stamped before it existed still mount), or a share
 whose claim turns out to carry `wardyn.managed=true` (i.e. it is one person's
-managed drive, not an admin's share). That one is the collision the object name
-cannot rule out: `wardyn-drive-<drive-slug>-<home>` joins two variable-width
-fields with the separator both of them admit, so drive `eng` + home `us-bob` and
-drive
-`eng-us` + home `bob` resolve to the same claim name. Wardyn holds no `delete`
-verb and cannot repair the collision, so it refuses the run rather than mount
-one member's private drive inside another member's agent. The fix is to rename
-one of the two drives (see the rename caveat above) or to give the colliding
-people distinct home names.
+managed drive, not an admin's share).
+
+**Legacy rows keep their old object name, permanently — and only they carry
+this collision.** A drive's `object_scheme` (migration `0067`) decides which
+half of the minted name carries the drive: `slug` — every drive registered
+before `0067` shipped, forever, since neither substrate can rename a storage
+object and Wardyn will not copy bytes between an old object and a new one to
+"fix" a row in place — folds the drive's NAME to a DNS-1123 fragment
+(`types.DriveSlug`) at a VARIABLE offset before `<home>`, and that is the
+collision the object name cannot rule out: `wardyn-drive-<drive-slug>-<home>`
+joins two variable-width fields with the separator both of them admit, so
+drive `eng` + home `us-bob` and drive `eng-us` + home `bob` resolve to the
+same claim name. Wardyn holds no `delete` verb and cannot repair the
+collision, so it refuses the run rather than mount one member's private drive
+inside another member's agent. The fix on a `slug` drive is to rename one of
+the two drives (see the rename caveat above) or to give the colliding people
+distinct home names. Every drive registered from `0067` onward is minted
+`id` instead — `wardyn-drive-<drive-id-hex>-<home>` — and the id is
+always exactly 32 lowercase hex characters, so `<home>` starts at a FIXED
+offset no drive name or home override can move; this whole collision does not
+exist for an `id`-scheme drive, by construction rather than by convention.
+`GET /api/v1/drives/{id}` reports which scheme a drive is on.
 
 Both refusals also cover the loser of a create race. Two first runs can collide
 inside the lookup→create window, and the loser's create comes back
@@ -5512,36 +5620,44 @@ driver, not a guess:
   kubelet `podPidsLimit` (or your distribution's
   `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb
   backstop — coarser but real, and the only lever this substrate has today.
-- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 it reaches an AUTONOMOUS run's `/tmp`
-  and workdir writes — a narrowing, not a close.** All of this describes AUTONOMOUS (task-mode)
+- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 (further narrowed by #164 in 0.8) it
+  reaches an AUTONOMOUS run's `/tmp`, workdir and toolchain-cache writes — a narrowing, not a
+  close.** All of this describes AUTONOMOUS (task-mode)
   runs. An interactive run's agent runs in the pod's main container, whose whole writable layer —
   `$HOME` and the toolchain caches included — the kubelet has counted against `disk_mib` since
   0.7.2; there nothing is outside the cap, so size an interactive run's budget for its caches too.
   A run's `disk_mib` is the agent container's
-  `resources.limits[ephemeral-storage]` and the `sizeLimit` of the two `emptyDir` volumes mounted
-  on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp` and
-  `wardyn-work` at `/home/agent/work`. The ephemeral container `Exec` attaches for the agent
+  `resources.limits[ephemeral-storage]` and the `sizeLimit` of the three `emptyDir` volumes mounted
+  on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp`,
+  `wardyn-work` at `/home/agent/work`, and `wardyn-cache` at `/home/agent/.cache`. The ephemeral
+  container `Exec` attaches for the agent
   process (`internal/runner/k8s/exec.go`) copies the main container's mounts verbatim, so writes
-  to those two paths land in volumes the kubelet meters as the pod's local ephemeral storage.
+  to those paths land in volumes the kubelet meters as the pod's local ephemeral storage.
   Before 0.7.5 they landed on the ephemeral container's own writable layer, which the kubelet
   meters not at all: the limit evicted writes by the pod's idle main container only, and the
   conformance case `EphemeralDiskLimit/OverTheLimitTheRunIsEvicted` was red from 0.7.2 for exactly
-  that reason (0.7.4 disclosed it; it now runs for BOTH fill targets and passes). The two
-  `sizeLimit`s are one budget, not two: `emptyDir` usage counts toward the pod's
-  `ephemeral-storage` total as well, so filling both volumes halfway still evicts. **Upgrade
+  that reason (0.7.4 disclosed it; it now runs for all fill targets and passes). The three
+  `sizeLimit`s are one budget, not three: `emptyDir` usage counts toward the pod's
+  `ephemeral-storage` total as well, so filling every volume partway still evicts. **Upgrade
   note:** an operator's `default_disk_mib` or policy `disk_mib` did not bind an autonomous k8s run
-  before 0.7.5 and does now — size it for the clone plus installs before upgrading, or a run that
-  used to finish will be evicted with its in-flight work lost. **What is still OUTSIDE the cap:**
-  everything the agent writes beyond those two paths — the rest of `$HOME`, including the
-  toolchain caches a build actually fills (`/home/agent/go`, `~/.cache/go-build`, `~/.gotmp`,
-  `~/.npm`, `~/.cache/pip`; `internal/api/runs_dispatch_mounts.go` sets the Go ones) and the
+  before 0.7.5 and does now — size it for the clone, installs and toolchain caches before
+  upgrading, or a run that used to finish will be evicted with its in-flight work lost. **What is
+  still OUTSIDE the cap:**
+  everything the agent writes beyond those three paths — the rest of `$HOME` (`/home/agent/go` —
+  GOPATH itself is unmoved, so the installed tool binaries under its `bin/` stay reachable; only
+  `GOMODCACHE` moved under the cache volume — and `~/.cache/pip`) and the
   dotfiles (`~/.wardyn`, `~/.ssh`, `~/.claude`); `/opt/rust`; and any authored `workspace_repos`
   or ephemeral-source target outside `/home/agent/work`, since an authored target may legally sit
   at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed
   target prefixes). Nothing is mounted at `/home/agent` itself, because a volume there would
   shadow each image's baked `.bashrc`, swallow the reserved drive target `/home/agent/drive`, and
-  hide the read-only `~/.claude` bind the subscription path mounts; pointing the cache env under
-  the workdir on this substrate, or a third cache volume, is the 0.7.6 follow-up. **What the proof
+  hide the read-only `~/.claude` bind the subscription path mounts. **Risk carried by the cache
+  volume specifically:** an `emptyDir` at `/home/agent/.cache` shadows the full image's
+  pre-created, agent-owned `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`) with a
+  fresh directory whose ownership the kubelet decides — `FSGroup` is only applied to a pod with a
+  drive attached (`internal/runner/k8s/drives.go`), so a run with `disk_mib` set and no drive can
+  get a root-owned mount the uid-1000 agent cannot write into; only the conformance "Cache" fill
+  target, run against a real cluster, catches this. **What the proof
   does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
   runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and
   Kata. The live kind SSO walk separately exercises a real `agent-run` boot — the aws-sso sign-in

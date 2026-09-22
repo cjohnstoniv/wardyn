@@ -77,12 +77,12 @@ type governanceResponse struct {
 func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	profiles, err := s.cfg.Store.ListGovernanceProfiles(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list governance profiles: "+err.Error())
+		writeServerError(w, r, "list governance profiles", err)
 		return
 	}
 	assignments, err := s.cfg.Store.ListGovernanceAssignments(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list governance assignments: "+err.Error())
+		writeServerError(w, r, "list governance assignments", err)
 		return
 	}
 	// Belt-and-braces, the same reason redactPolicyForRead applies on the
@@ -222,7 +222,7 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "write governance profile: "+err.Error())
+		writeServerError(w, r, "write governance profile", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -284,7 +284,7 @@ func (s *Server) handleDeleteGovernanceProfile(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete governance profile: "+err.Error())
+		writeServerError(w, r, "delete governance profile", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -389,7 +389,7 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert governance assignment: "+err.Error())
+		writeServerError(w, r, "upsert governance assignment", err)
 		return
 	}
 	status := http.StatusCreated
@@ -420,7 +420,7 @@ func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete governance assignment: "+err.Error())
+		writeServerError(w, r, "delete governance assignment", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -525,7 +525,7 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "resolve governance profile: "+err.Error())
+		writeServerError(w, r, "resolve governance profile", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, governancePreviewResponse{

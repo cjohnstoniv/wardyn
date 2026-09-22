@@ -23,7 +23,7 @@ import { sourceSubLine } from "../workspaces";
 import { Readiness, deploymentMode } from "../../../lib/readiness";
 import { lastCheckedLabel } from "../../../lib/readiness";
 import { toast } from "sonner";
-import type { SetupStepId, StepBadge } from "./steps";
+import { CONFIG_STEPS, DEMO_EGRESS_IDS, DEMO_SECRETS_IDS, STEP_LABEL, stepOrder, type SetupStepId, type StepBadge } from "./steps";
 import { statusTone, statusWord } from "../../../lib/workspace-status";
 import { AccessPanel, type AccessLoadState } from "./access-panel";
 import { UserDrivesCard } from "./user-drives-card";
@@ -65,14 +65,61 @@ export function CheckRow({ check }: { check: SetupCheck }) {
 }
 
 // Review step — the consolidated readiness rollup (its own step, before Launch).
-// Every cross-cutting check grouped by status (blockers → warnings → ready), plus
+// Every cross-cutting check grouped by whether it BLOCKS the install first,
+// then by status within that (grade stays visible as the row's own chip), plus
 // the permanent "About this host" facts, spanning steps 2–7 as a single honest
 // go/no-go view.
 
-// DRAFT (M2 canon pending) — distinct from "Worth a look" (warnings): nothing
-// here is wrong, there's just a fix available for something that was never
-// required.
+// DRAFT (M2 canon pending) — distinct from "Worth a look" (non-blocking fail
+// or warn): nothing here is wrong, there's just a fix available for something
+// that was never required.
 const REVIEW_GROUP_OPTIONAL = "Optional — not blocking";
+
+// #213 — the two optional lists Review names apart, per the approved
+// prototype's reviewStep(): "Optional setup" (CONFIG_STEPS — real
+// configuration that blocks nothing) and "Demos" (the catalog's egress +
+// secrets sections — walk-throughs that change nothing). One shared running
+// number across both, matching the mock's own `var n = 0` shared by both
+// `list()` calls.
+function OptionalWorkLists({ status, onJump }: { status: SetupStatus; onJump: (id: SetupStepId) => void }) {
+  const walkable = new Set(stepOrder(status));
+  const demoIds = [...DEMO_EGRESS_IDS, ...DEMO_SECRETS_IDS].filter((id) => walkable.has(id));
+  let n = 0;
+  const list = (title: string, note: string, items: SetupStepId[]) =>
+    items.length > 0 && (
+      <section className="space-y-2" key={title}>
+        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+        <p className="text-xs text-muted-foreground">{note}</p>
+        <ul className="space-y-1">
+          {items.map((id) => {
+            n += 1;
+            return (
+              <li key={id}>
+                <button
+                  type="button"
+                  onClick={() => onJump(id)}
+                  className="flex items-center gap-2 text-sm text-info hover:underline"
+                >
+                  <span className="w-4 shrink-0 text-xs text-muted-foreground">{n}</span>
+                  {STEP_LABEL[id]}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    );
+  return (
+    <>
+      {list("Optional setup", "Real configuration you may not need yet. None of it blocks a run.", CONFIG_STEPS)}
+      {list(
+        "Demos",
+        `${demoIds.length} short walk-throughs that show a guarantee working. They change nothing.`,
+        demoIds,
+      )}
+    </>
+  );
+}
 
 export function ReviewStep({
   status,
@@ -92,14 +139,19 @@ export function ReviewStep({
   // Actionable checks (exclude permanent platform facts — those are reference).
   const actionable = status.checks.filter((c) => !c.platform);
   const infoNotes = status.checks.filter((c) => c.platform);
-  const blockers = actionable.filter((c) => c.status === "fail");
-  const warnings = actionable.filter((c) => c.status === "warn");
+  // Partition on whether a check BLOCKS the install before its grade — a grade
+  // alone never gates (setup-gate.ts's setupGateActive reads only `blocking`),
+  // so a blocking warn belongs here, not under "Worth a look". Grade still
+  // shows as the row's own chip.
+  const blockers = actionable.filter((c) => c.blocking === true);
+  const nonBlocking = actionable.filter((c) => !c.blocking);
+  const warnings = nonBlocking.filter((c) => c.status === "fail" || c.status === "warn");
   // An `info` check with a fix (e.g. the image builder, off by default, with a
   // one-line env var to turn it on) is optional, not done — lumping it under
   // green "Ready" would claim nothing was left to do when there was. Only an
   // `info` check with no fix (a permanent fact about this host) belongs there.
-  const optionalNotBlocking = actionable.filter((c) => c.status === "info" && c.fix);
-  const ready = actionable.filter((c) => c.status === "ok" || (c.status === "info" && !c.fix));
+  const optionalNotBlocking = nonBlocking.filter((c) => c.status === "info" && c.fix);
+  const ready = nonBlocking.filter((c) => c.status === "ok" || (c.status === "info" && !c.fix));
   const group = (label: string, tone: StepBadge["tone"], checks: SetupCheck[]) =>
     checks.length > 0 && (
       <section className="space-y-2" key={label}>
@@ -144,6 +196,13 @@ export function ReviewStep({
       {group("Worth a look", "neutral", warnings)}
       {group(REVIEW_GROUP_OPTIONAL, "neutral", optionalNotBlocking)}
       {group("Ready", "success", ready)}
+
+      {/* #213 — the optional work, named as optional and listed after the
+          required steps rather than counted alongside them: three real
+          configuration steps that block nothing, then the demos that change
+          nothing. Numbered continuously (1..N) across both lists, matching
+          the prototype's reviewStep(). */}
+      <OptionalWorkLists status={status} onJump={onJump} />
 
       {infoNotes.length > 0 && (
         <section className="space-y-2">

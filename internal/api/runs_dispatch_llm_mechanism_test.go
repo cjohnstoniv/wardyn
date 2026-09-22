@@ -470,13 +470,29 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 // widget's only join key), and it is absent — not empty — when nothing narrowed.
 func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 	warns := []string{"resources capped to operator maximum", `dropped 1 egress domain(s) not in operator allowlist: ["evil.example"]`}
-	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns)
+	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns, types.AutonomyResolution{}, false)
 	got, ok := data["clamp_warnings"].([]string)
 	if !ok || len(got) != len(warns) || got[0] != warns[0] {
 		t.Fatalf("clamp_warnings = %#v, want %#v", data["clamp_warnings"], warns)
 	}
-	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil)["clamp_warnings"]; present {
+	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil, types.AutonomyResolution{}, false)["clamp_warnings"]; present {
 		t.Error("clamp_warnings must be absent when launch narrowed nothing")
+	}
+}
+
+// TestCreateRunAuditData_CredentialConfinement is #150: the closed-vocabulary
+// credential_confinement field is present, with the ONE value it carries
+// today, exactly when the caller says this run's SSO-delivered credential is
+// below the confinement floor — and absent otherwise, never published as a
+// false negative.
+func TestCreateRunAuditData_CredentialConfinement(t *testing.T) {
+	req := createRunRequest{Agent: "claude-code"}
+	data := createRunAuditData(req, nil, types.CC1, "", "jti", nil, types.AutonomyResolution{}, true)
+	if got := data["credential_confinement"]; got != credentialConfinementBelowFloor {
+		t.Errorf("credential_confinement = %v, want %q", got, credentialConfinementBelowFloor)
+	}
+	if _, present := createRunAuditData(req, nil, types.CC3, "", "jti", nil, types.AutonomyResolution{}, false)["credential_confinement"]; present {
+		t.Error("credential_confinement must be absent when the caller reports no below-floor advisory")
 	}
 }
 
@@ -487,10 +503,10 @@ func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 // distinction survives (docs/AUDIT-ACTIONS.md's run.create row).
 func TestCreateRunAuditData_ConfinementSource(t *testing.T) {
 	req := createRunRequest{Agent: "claude-code"}
-	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil)["confinement_source"]; got != "defaulted" {
+	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil, types.AutonomyResolution{}, false)["confinement_source"]; got != "defaulted" {
 		t.Errorf("confinement_source = %v, want \"defaulted\" for an empty reqCC", got)
 	}
-	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil)["confinement_source"]; got != "requested" {
+	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil, types.AutonomyResolution{}, false)["confinement_source"]; got != "requested" {
 		t.Errorf("confinement_source = %v, want \"requested\" when the caller named CC1 explicitly", got)
 	}
 }
@@ -546,6 +562,7 @@ func TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch(t *testing.T) {
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201 — dispatch would have credentialed this run; body=%s", w.Code, w.Body.String())
 		}
+		fr.waitForSandbox(t)
 		if fr.createCalls != 1 {
 			t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 		}
@@ -705,7 +722,7 @@ func TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope(t *testing.T) {
 	sandboxEnv := map[string]string{}
 
 	_, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, sandboxEnv,
-		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false)
+		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false)
 	if ok {
 		t.Fatal("dispatch went ahead on an unreadable roster — the credential namespace was decided from a zero site config")
 	}

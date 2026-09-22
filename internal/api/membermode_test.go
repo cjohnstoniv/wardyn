@@ -147,7 +147,7 @@ func TestMemberMode_RefusesAdminTokenAndLocalMode(t *testing.T) {
 		r.Host = "127.0.0.1"
 		r.RemoteAddr = "127.0.0.1:54321"
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400 — a 500 here is the nil-Authenticator deref: %s", w.Code, w.Body.String())
 		}
@@ -218,7 +218,7 @@ func TestMemberMode_Toggle(t *testing.T) {
 		r.ContentLength = -1
 		r.AddCookie(admin)
 		cw := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(cw, r)
+		panicFails(t, srv.Handler()).ServeHTTP(cw, r)
 		if cw.Code != http.StatusOK {
 			t.Fatalf("chunked POST = %d, want 200: %s", cw.Code, cw.Body.String())
 		}

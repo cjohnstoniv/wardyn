@@ -394,9 +394,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		Path:     "/" + rest,
 		RawQuery: r.URL.RawQuery,
 	}
-	outReq, err := http.NewRequestWithContext(
-		context.WithValue(r.Context(), vettedIPKey{}, target),
-		r.Method, upstreamURL.String(), bodyReader)
+	outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), bodyReader)
 	if err != nil {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
 		p.httpError(w, "build llm request", err, http.StatusBadGateway)
@@ -412,8 +410,12 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	// accuracy fix as handleConnect/handlePlain, E3): a failed upstream dial
 	// must NOT over-report an allow. Emit a dial-failed deny (carrying any scan
 	// summary) instead.
-	resp, err := p.transport.RoundTrip(outReq)
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
+		seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary}
+		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
+			return
+		}
 		if p.sink != nil {
 			p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
 		}
@@ -422,10 +424,10 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		p.httpErrorAWSAware(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
-	p.emitLLMDecision(r, host, port, egress.Allow, ruleSource, scanSummary)
+	p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, resp)
 	defer func() { _ = resp.Body.Close() }()
 
-	relay(w, resp)
+	p.relayUpstream(w, r, host, port, resp, ruleSource)
 }
 
 // coverageInspectable / coverageOpaque describe whether the LLM transport for a

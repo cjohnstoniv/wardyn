@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.8)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.10)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -1542,6 +1542,17 @@ hiding them would repeat the failure mode we are designed to avoid.
     real mitigations are the storage class (block, not network-share), the
     share's own quota, and a namespace `ResourceQuota`.
 
+    **Accepted with a recipe, on Docker.** `CAP_SYS_ADMIN` is what the control
+    plane must not hold, not a statement that a `docker_volume` drive's bytes
+    cannot be bound at all — `docs/OPERATIONS.md` ("User drives on Docker") now
+    carries the XFS project-quota recipe an OPERATOR runs on the host, outside
+    the control plane, the case `types.StorageEnforcementFilesystem` was
+    reserved for. Wardyn still reports `enforcement: none` on the wire (v1 does
+    not detect an operator-applied quota), and the recipe is opt-in per
+    deployment, not a default — the residual is that byte enforcement remains
+    something an operator must choose to set up, never something Wardyn
+    verifies is in place.
+
 37. **Renaming a drive orphans every object already provisioned under it, on
     BOTH substrates, and the console still warns nobody at the write.** A managed claim's name folds the
     drive's slug, so a rename changes the name every FUTURE claim is created
@@ -1578,44 +1589,54 @@ hiding them would repeat the failure mode we are designed to avoid.
     covers all four columns, so the gap that remains is the console's, not the
     API's.
 
-38. **A per-user API token's GROUP SNAPSHOT is frozen at mint, with no expiry
-    — so for a group-derived power the demoted-admin window is UNBOUNDED, where
-    the SSH analogue's (#15) is merely long.** NARROWED, NOT CLOSED, and the
-    half that moved is worth stating exactly. `0045_api_tokens.sql` stamps
+38. **A per-user API token's role AND group snapshot are bounded-stale, not
+    frozen — the residual narrows to a human who never signs in again, the
+    same shape as the SSH analogue (#15).** `0045_api_tokens.sql` stamps
     `role` and `groups` from the minting session
     (`internal/api/apitokens.go`), and every request the token authenticates
     republishes them through `withHumanIdentity`, so downstream the bearer is
-    that human as they were at mint time.
+    that human as they were at mint time, or at their most recent sign-in
+    since, whichever is later.
 
-    Since the token lane gained the login hook the key lane had since `0046`,
-    the ROLE half is now bounded the same way: `oidc.Config.OnLogin` fires
-    `store.RefreshAPITokenRoles` beside `store.RefreshSSHKeyRoles`, so the
-    demoted human's own next sign-in re-stamps `role` on every unrevoked token
-    they hold. What did NOT move: `groups` is never refreshed by that hook or
-    anything else, the table still carries `created_at`, `last_used_at` and
-    `revoked_at` and **no expiry column**, there is no TTL the way
+    The token lane gained the login hook the key lane had since `0046` in two
+    steps: first ROLE only, then #152 widened it to the group half too.
+    `oidc.Config.OnLogin` now fires `store.RefreshAPITokenIdentity` beside
+    `store.RefreshSSHKeyRoles`, and it re-stamps `role`, `groups` AND
+    `groups_truncated` together in one UPDATE — never role alone — so the
+    demoted human's own next sign-in reaches every unrevoked token they hold on
+    BOTH halves at once. `groups_truncated` is bound from the exact same
+    session-completeness signal the new session cookie carries (`sessionGroups`,
+    `internal/auth/oidc/derive.go`), never defaulted or inferred: a `NULL` or a
+    genuinely incomplete snapshot still reads as truncated downstream, never
+    silently flipped to complete by the refresh itself.
+
+    What did NOT move: the table still carries `created_at`, `last_used_at`
+    and `revoked_at` and **no expiry column**, there is no TTL the way
     `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
-    re-stamped never. So a power that derives from the frozen GROUP snapshot —
-    a capability grant or governance profile bound to a group they have left —
-    survives indefinitely, and a demotion in the IdP still never reaches the
-    row on its own. Since 0.7 stamps `security_admin` verbatim, a human
-    demoted out of that tier keeps — through any token minted while they held it
-    — profile authoring and assignment, capability-grant writes, session and
-    token revocation, escalated approval decisions on anyone's run, workspace
-    `approved_egress`/`denied_egress` writes, and audit-chain verify. It gains
-    nothing the tier itself lacks: a token is never a shell, never an attach
-    ticket on a foreign run, and no capability grant widens it to admin
-    (`TestCapabilityGrantsNeverReachTheAdminTier`).
+    re-stamped never. So a power that derives from a stale group snapshot — a
+    capability grant or governance profile bound to a group they have left, or
+    an admin/`security_admin` role they were demoted out of — survives exactly
+    until that human's next login, and for someone who has left the
+    organization and will never sign in again, that is indefinitely. Since 0.7
+    stamps `security_admin` verbatim, a human demoted out of that tier keeps —
+    through any token minted while they held it, until their next sign-in or an
+    explicit revoke — profile authoring and assignment, capability-grant
+    writes, session and token revocation, escalated approval decisions on
+    anyone's run, workspace `approved_egress`/`denied_egress` writes, and
+    audit-chain verify. It gains nothing the tier itself lacks: a token is
+    never a shell, never an attach ticket on a foreign run, and no capability
+    grant widens it to admin (`TestCapabilityGrantsNeverReachTheAdminTier`).
 
-    Since 0.7 the demotion itself also ends it: a People-page role-mapping
-    write or delete that takes a tier away from a value revokes the affected
-    principals' unrevoked tokens in the same call (`internal/api/apitokens.go`,
-    `revokeDemotedRoleSnapshots`), so the window for a demotion performed
-    through that surface closes at the edit rather than at the demoted
-    human's next sign-in. The residual that remains is a stamp that goes
-    stale for a reason no role-mapping edit expresses — a chart-map change or
-    an IdP-side group removal — which still waits for that human's next login
-    or an explicit revoke.
+    Since 0.7 the demotion itself also ends it early: a People-page
+    role-mapping write or delete that takes a tier away from a value revokes
+    the affected principals' unrevoked tokens in the same call
+    (`internal/api/apitokens.go`, `revokeDemotedRoleSnapshots`), so the window
+    for a demotion performed through that surface closes at the edit rather
+    than at the demoted human's next sign-in. The residual that remains is the
+    same shape #15 already has: a human who never signs in again, and any
+    change made outside the People page — a chart-map edit or an IdP-side
+    group removal — which still waits for that human's next login or an
+    explicit revoke.
 
     **The remediation exists, is the only one, and has to be invoked
     deliberately.** `GET /api/v1/tokens` lists every live token with its owner
@@ -1627,10 +1648,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     `session.revoke` row's `tokens_revoked` count is the receipt that the
     identifier matched a person: sessions are stateless and cannot be counted, so
     a zero there against someone you believe holds tokens means you named them
-    wrong. Nothing ages a token out, so offboarding must revoke explicitly
-    (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this means re-deriving
-    the role at auth time, or revoking a principal's live tokens from the
-    role-mapping write path; neither is built.
+    wrong. Nothing ages a token out short of a sign-in, so offboarding — or any
+    change that must take effect before that human's next login — must revoke
+    explicitly (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this fully
+    means a TTL on the stamp itself, the same open half `WARDYN_SSH_ROLE_TTL`
+    narrows for the SSH lane; none is built for tokens.
 
 39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
     a shrink-the-claim workaround loses grants silently.** Wardyn marks a group
@@ -1652,16 +1674,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     `groups_snapshot_stale`. The token carries no signal that anything was filtered,
     so there is nothing Wardyn could check.
 
-    Accepted for 0.7 because the remedy is procedural and the burden is the
-    operator's: re-key group-subject grants and group-tier assignments onto a
-    directly-assigned group or onto the user BEFORE changing the claim
-    configuration, then verify against a real login's `session_groups`
-    (`GET /me/capabilities`) rather than against the IdP's UI —
-    `docs/OPERATIONS.md`, "A third cause of a partial snapshot", carries the
-    procedure. User-subject rows are the only shape a claim-configuration change
-    cannot silently break. Closing this needs a signal the IdP does not send;
-    the nearest approximation is warning when a group-subject row stops matching
-    anyone, which is not built.
+    **STILL OPEN AT 0.8 — a stated ceiling, not a gap awaiting a fix.** The
+    remedy is procedural and the burden is the operator's: re-key group-subject
+    grants and group-tier assignments onto a directly-assigned group or onto the
+    user BEFORE changing the claim configuration, then verify against a real
+    login's `session_groups` (`GET /me/capabilities`) rather than against the
+    IdP's UI — `docs/OPERATIONS.md`, "A third cause of a partial snapshot",
+    carries the procedure. User-subject rows are the only shape a
+    claim-configuration change cannot silently break. Closing this needs a
+    signal the IdP does not send; the nearest approximation is warning when a
+    group-subject row stops matching anyone, which is not built.
 
 40. **Workspace-provider admission is URL-PREFIX matching over a clone URL, not
     a repository ACL.** 0.7.2's provider policy bounds which repositories a run
@@ -2325,24 +2347,26 @@ why this switch is not one to turn on for a single-dev machine.
 ### Coalesced `auth.failed` rows: the peer address is not the bound
 
 Since 0.7.2 the control plane folds IDENTICAL consecutive `auth.failed` audit rows
-— same refusing boundary, same `reason`, same request path, same peer IP — into
-the first row plus one **new** summary row carrying `count`/`first_seen`/
-`last_seen` (`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off). The key
-holds the peer IP WITHOUT the ephemeral port: keying on the port meant a client
-that opens a connection per request — a scanner, or anything without keep-alive —
-folded nothing at all, which made the instrument a no-op on exactly the estates
-this section is about. It exists
+— same refusing boundary, same `reason`, same request path — into the first row
+plus one **new** summary row carrying `count`/`peers`/`first_seen`/`last_seen`
+(`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off). The peer is NOT in the
+key: until 0.8 it was, and a caller that rotated its source address (or its
+ephemeral port, before that) opened a new streak and wrote a new row on every
+request, up to the rate limit. The summary carries the opening peer as
+`SourceIP`, `peers`, the number of distinct peer IPs folded (saturating at
+100, so the set a streak holds is bounded), `peer_ips`, those addresses (capped
+at 100), and `peers_truncated`. It exists
 because a self-inflicted drip evicted everything else: one sidecar retrying a
 renew the control plane would never grant wrote one row a minute, forever, past a
 rate limiter set at 1/sec, and pushed every real security event out of the
 console's 1000-row window mid-investigation.
 
-**`SourceIP` being in that key does NOT separate principals on a Kubernetes
-deployment.** Wardyn deliberately does not install a `RealIP` middleware (an
-`X-Forwarded-For` a client can set is not an identity), so behind an ingress or a
-load balancer `SourceIP` is the proxy's address and every caller shares it. A
-credential-stuffing run against the public lane therefore arrives under ONE
-coalescing key, and the fold is what a defender is reading.
+**`SourceIP` does not separate principals on a Kubernetes deployment either.**
+Wardyn deliberately does not install a `RealIP` middleware (an `X-Forwarded-For` a
+client can set is not an identity), so behind an ingress or a load balancer
+`SourceIP` is the proxy's address and every caller shares it. A
+credential-stuffing run against one path and reason therefore arrives as ONE
+streak on any deployment, and the fold is what a defender is reading.
 
 What bounds that is the window, the count and the rate limiter, not the key: a
 streak closes after `WARDYN_AUDIT_COALESCE_WINDOW` of silence AND at 1000 rows, so
@@ -2401,6 +2425,29 @@ you are trapped behind" principle `setup-gate.ts` already documents), stated her
 residual because it means the gate's absence is not, by itself, evidence the install
 is fine: an operator who wants that assurance still reads the checklist, not just
 whether the funnel opened.
+
+### Hold-lane settings sources: user scope is still agent-writable
+
+Claude Code resolves `permissions.allow` rules before it asks the
+`--permission-prompt-tool`, so on a `tool_approvals=hold` run a matching rule runs
+the tool and `wardyn-toolgate` is never consulted (#358). Since 0.8 the hold lane
+in `deploy/images/claude-code/agent-run` passes `--setting-sources user`, which
+keeps the workspace's `.claude/settings.json` and `.claude/settings.local.json`
+out. Managed settings (`/etc/claude-code/managed-settings.json`) are not a
+selectable source and still load.
+
+**What the flag does NOT cover:** user scope, `~/.claude/settings.json` inside
+the sandbox, is still loaded, and the agent runs as the uid that owns it. An agent
+that writes its own `permissions.allow` rule there is un-gated for every later
+`claude` process that reads it, such as a child `claude` it starts, exactly as a
+repository rule was. The flag narrows
+the route to a file the agent must write itself, rather than one a cloned
+repository can ship. What closes it is #333's root-owned managed settings with
+`allowManagedPermissionRulesOnly: true`, which applies only to runs with a resolved
+autonomy level. The flag is on the hold lane only: the autonomous lane already runs
+every tool (`--dangerously-skip-permissions`), and the interactive lanes have no
+Wardyn gate in the path. The approver there is the human in the pane. codex-cli has
+no hold lane, so there is no gate for a repository config to pre-empt.
 
 ### Known latent vulnerabilities
 

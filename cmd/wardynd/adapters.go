@@ -594,6 +594,13 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 // lifecycleStore/lifecycleStopper — the pool stays here in wardynd and lifecycle
 // keeps its target-agnostic seams. A lock we cannot reach skips the tick: the
 // scan that follows would fail on the same database anyway.
+//
+// It also prunes stale AWS SSO spent-token rows (#149) once the lock is won,
+// rather than starting a THIRD timer beside this one and the two other
+// sweepers: the lock is already single-flight across every control plane, and
+// a prune racing the idle-run scan on the shared pool is harmless (different
+// table, no shared lock). Best-effort — a prune failure never fails the tick
+// or blocks reaping.
 func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
 	return func(ctx context.Context) (func(), bool) {
 		release, ok, err := db.TryAdvisoryLock(ctx, pool, db.ReaperAdvisoryLockKey)
@@ -601,7 +608,26 @@ func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
 			slog.DebugContext(ctx, "wardynd: reap tick lock unavailable", slog.Any("err", err))
 			return nil, false
 		}
+		if ok {
+			pruneAWSSSOSpentTokens(ctx, pool)
+		}
 		return release, ok
+	}
+}
+
+// pruneAWSSSOSpentTokens deletes AWS SSO spent-token rows older than
+// api.AWSSSOSpentTokenRetention. Called from reapTickLock, under the reap
+// advisory lock. Best-effort: a failure is logged and the tick proceeds — the
+// rows are a bounded cache-fill cost, not a correctness requirement, so a
+// prune miss on one tick is retried on the next.
+func pruneAWSSSOSpentTokens(ctx context.Context, pool *pgxpool.Pool) {
+	n, err := store.NewPG(pool).PruneAWSSSOSpentTokens(ctx, time.Now().Add(-api.AWSSSOSpentTokenRetention))
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: pruning aws sso spent tokens failed", slog.Any("err", err))
+		return
+	}
+	if n > 0 {
+		slog.InfoContext(ctx, "wardynd: pruned stale aws sso spent-token rows", slog.Int("deleted", n))
 	}
 }
 
@@ -856,4 +882,18 @@ func runRecordingSweeper(ctx context.Context, s recordingSweepable, rec audit.Re
 			}
 		}
 	}
+}
+
+// attachLoginGrantSink joins the console login to the credential capture, and
+// owns the nil check so run() does not: authn is nil on every deployment
+// without SSO, and there is no login to widen there.
+//
+// The edge is attached rather than configured because the two sides form a
+// cycle — oidc.Config is built before the server, and the server holds the
+// Authenticator — so the only order that works is "construct both, then join".
+func attachLoginGrantSink(authn *oidc.Authenticator, sink oidc.LoginGrantSink) {
+	if authn == nil {
+		return
+	}
+	authn.AttachLoginGrantSink(sink)
 }

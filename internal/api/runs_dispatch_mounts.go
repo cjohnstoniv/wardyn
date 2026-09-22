@@ -258,6 +258,13 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		"GIT_TERMINAL_PROMPT": "0",
 		"GIT_ASKPASS":         "",
 		"SSH_ASKPASS":         "",
+		// npm's cache, redirected under the agent's HOME cache root alongside
+		// the Go toolchain env below so a k8s run's npm installs land inside
+		// disk_mib too (issue #164) instead of on the ephemeral container's
+		// unmetered writable layer. Unconditional (unlike the Go/JVM env
+		// below): npm ships in every agent image, not just workspaces a scan
+		// detected as needing it.
+		"npm_config_cache": "/home/agent/.cache/npm",
 	}
 	// Agent-CLI telemetry, suppressed by default. Claude Code phones home to a
 	// Datadog host on first run; in a Confined run that host is the FIRST pending
@@ -278,11 +285,19 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 	// key is absent (agent-run's make_toolchain_dirs, the attach shell guard).
 	if needs == nil || needs.goTools {
 		// GOTMPDIR: the sandbox mounts /tmp NOEXEC, but `go test` compiles+EXECS
-		// its test binaries in $TMPDIR → "permission denied". Point it (and the
-		// build cache) at the agent's exec-allowed HOME. (Plain env survives a
-		// shell; only PATH is reset by a login shell.)
-		env["GOTMPDIR"] = "/home/agent/.gotmp"
-		env["GOCACHE"] = "/home/agent/.cache/go-build"
+		// its test binaries in $TMPDIR → "permission denied". Point it at the
+		// agent's exec-allowed HOME cache root. NOT a plain-env-only fix: the
+		// full image's login profile (/etc/profile.d/toolchains.sh) sources on
+		// every login shell (exec task mode's `/bin/sh -lc`) and unconditionally
+		// re-exports GOTMPDIR/GOCACHE/GOMODCACHE, which would undo an env-only
+		// relocation the moment a task ran that way — so the profile was moved to
+		// the SAME paths this dispatch env sets (deploy/images/full/Dockerfile),
+		// and the two now agree instead of racing.
+		env["GOTMPDIR"] = "/home/agent/.cache/gotmp"
+		env["GOCACHE"] = "/home/agent/.cache/go-build" // already inside the cache volume
+		// GOMODCACHE, not GOPATH: moving GOPATH itself would relocate
+		// /home/agent/go/bin too, losing the installed tool binaries it carries.
+		env["GOMODCACHE"] = "/home/agent/.cache/go/mod"
 	}
 	if needs == nil || needs.jvmTools {
 		// MAVEN_OPTS: Maven ALONE ignores HTTP(S)_PROXY (npm/pip/cargo/go/git
@@ -298,6 +313,26 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		env["GRADLE_OPTS"] = mavenProxyOpts(proxyURL)
 	}
 	return env
+}
+
+// interactiveBootSeed returns the text an interactive run fires at sandbox
+// boot as WARDYN_INTERACTIVE_SEED, or "" when it fires nothing. ONE definition,
+// because two sides have to agree on it: applyDispatchModeEnv delivers the
+// seed, and resolveRunAutonomy grades it before the run exists — a gate with
+// its own copy of this predicate would refuse one set of runs while dispatch
+// seeded another.
+//
+// The reservedRunTasks exclusion is load-bearing, not defensive:
+// server-launched record/verify/login runs (runs_create_validate.go) are
+// INTERACTIVE runs that carry a non-empty, server-set Task ("workspace
+// record", etc.) — without it they would boot-seed `claude "workspace record"`
+// into what is supposed to be a plain record-mode sandbox, and the login box
+// would boot-seed over its own login flow.
+func interactiveBootSeed(interactive bool, task string) string {
+	if !interactive || reservedRunTasks[task] || strings.TrimSpace(task) == "" {
+		return ""
+	}
+	return task
 }
 
 // applyDispatchModeEnv sets dispatchRun's run-mode discriminator env vars
@@ -349,19 +384,12 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// session the human's attach later joins (interactiveStart above decides
 	// whether it reads as an initial prompt or a startup command; that
 	// interpretation lives entirely image-side, in agent-run's --boot-seed
-	// branch — nothing here needs to know which). The reservedRunTasks
-	// exclusion is load-bearing, not defensive: server-launched record/verify/
-	// login runs (runs_create_validate.go, same package) are INTERACTIVE runs
-	// that carry a non-empty, server-set Task ("workspace record", etc.) —
-	// without this guard they would boot-seed `claude "workspace record"` into
-	// what is supposed to be a plain record-mode sandbox, and the login box
-	// would boot-seed over its own login flow.
-	if p.Interactive && !reservedRunTasks[run.Task] {
-		if seed := strings.TrimSpace(run.Task); seed != "" {
-			sandboxEnv["WARDYN_INTERACTIVE_SEED"] = run.Task
-			if p.SeedAutoTools {
-				sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
-			}
+	// branch — nothing here needs to know which). See interactiveBootSeed for
+	// which tasks never seed.
+	if seed := interactiveBootSeed(p.Interactive, run.Task); seed != "" {
+		sandboxEnv["WARDYN_INTERACTIVE_SEED"] = seed
+		if p.SeedAutoTools {
+			sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
 		}
 	}
 	// Tool-approval posture: "hold" routes an AUTONOMOUS run's own
@@ -407,8 +435,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries host names only and no
 	// grant id, so it cannot be used to mint anything.
 	if p.PATBroker && len(gitPATGrants) > 0 {
-		hosts := slices.Sorted(maps.Keys(gitPATGrants))
-		sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"] = strings.Join(hosts, " ")
+		addGitBrokerHosts(sandboxEnv, slices.Sorted(maps.Keys(gitPATGrants))...)
 		gitPATGrants = nil
 	}
 	if len(gitPATGrants) > 0 {
@@ -428,6 +455,21 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 		}
 	}
 	return droppedSSH, droppedPAT
+}
+
+// addGitBrokerHosts adds entries to WARDYN_GIT_PAT_BROKER_HOSTS, the list
+// agent-run rewrites onto the proxy's /wardyn/git/<host>/ broker path. Two lanes
+// write it — the git_pat broker and the Azure DevOps Entra lane — so it merges,
+// sorted and without duplicates. An entry is a host or `<user>@<host>`.
+func addGitBrokerHosts(sandboxEnv map[string]string, entries ...string) {
+	have := strings.Fields(sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"])
+	for _, e := range entries {
+		if !slices.Contains(have, e) {
+			have = append(have, e)
+		}
+	}
+	slices.Sort(have)
+	sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"] = strings.Join(have, " ")
 }
 
 // applyRepoCloneEnv surfaces the repo(s) to clone (the legacy single run.Repo

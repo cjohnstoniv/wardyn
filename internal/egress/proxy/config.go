@@ -8,10 +8,12 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"net/url"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -84,6 +86,9 @@ type Config struct {
 	// with and Wardyn cannot narrow it — so a per-repo key here would imply a
 	// confinement the credential does not have. Empty => the route always 403s.
 	PATGrants map[string]PATGrant `json:"pat_grants,omitempty"`
+	// ADOGrants is the run's per-person Azure DevOps grant, which drives the
+	// REST gate (ado_gate.go, ado_grants.go). Empty == the gate is off.
+	ADOGrants []ADOGrantConfig `json:"ado_grants,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -269,6 +274,29 @@ func (c *Config) applyDefaultsAndValidate() error {
 			return fmt.Errorf("config: upstream_proxy_no_proxy[%d]: %q is neither a CIDR nor a host/domain suffix", i, e)
 		}
 	}
+	// Warn (never fail boot — the operator may genuinely want the portal
+	// proxied) when a corp upstream is configured and this run carries an AWS
+	// SSO injection host (isAWSSSOPortalHost) with no bypass entry covering
+	// it: every SSO call on that host then CONNECTs through the corporate
+	// upstream, which a corp forward proxy frequently cannot reach (it is a
+	// PrivateLink-style host resolving into CGNAT/private space — see
+	// mitm_upstream_test.go) and which times out looking exactly like a
+	// network fault instead of a routing gap the operator can name. Shares
+	// noProxyRulesCoverHost with the live routing decision (bypassUpstream)
+	// so the two can never disagree about what counts as covered.
+	if c.UpstreamProxyURL != "" {
+		rules := compileNoProxy(c.UpstreamProxyNoProxy)
+		for _, inj := range c.Injection {
+			h := strings.ToLower(strings.TrimSpace(inj.Host))
+			if h == "" || !isAWSSSOPortalHost(h) {
+				continue
+			}
+			if !noProxyRulesCoverHost(rules, h) {
+				slog.Warn("wardyn-proxy: upstream proxy is configured with an AWS SSO injection host not covered by any upstream_proxy_no_proxy entry — every SSO call on this host will CONNECT through the corporate upstream",
+					slog.String("host", inj.Host))
+			}
+		}
+	}
 	// Validate (but do not retain) the trusted CA PEM, same shape as the
 	// upstream proxy URL above: fail fast on garbage. NewServer builds and
 	// RETAINS the real pool (system roots + this bundle) for the live proxy.
@@ -292,6 +320,13 @@ func (c *Config) applyDefaultsAndValidate() error {
 				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, cidr)
 			}
 		}
+	}
+	// An Azure DevOps grant is enforced by the REST gate, which runs only on a
+	// connection the proxy terminates. Without the MITM CA nothing terminates,
+	// and the covered hosts would degrade to a credential-less tunnel no gate
+	// sees — so a config carrying ado_grants without the CA is refused at boot.
+	if len(c.ADOGrants) > 0 && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: ado_grants requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
 	}
 	// Parse-check (but do not retain a compiled form) each configured LLM
 	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these

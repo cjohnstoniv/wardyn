@@ -197,7 +197,9 @@ func rootCmd() *cobra.Command {
 		subscriptionCmd(client),
 		setupCmd(client),
 		siteConfigCmd(client),
+		driveCmd(client),
 		sessionsCmd(client),
+		deviceCmd(client),
 		supportBundleCmd(client),
 	)
 	return root

@@ -210,7 +210,7 @@ func TestAttachWS_CrossOriginRefusalIsAudited(t *testing.T) {
 	r.RemoteAddr = "127.0.0.1:54321"
 	r.Header.Set("Origin", "https://evil.example")
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("code = %d, want 403 (a cross-origin upgrade must not reach Accept)\nbody: %s", w.Code, w.Body.String())
@@ -255,7 +255,7 @@ func TestAttachWS_CrossOriginIsRefusedBeforeTheStoreRead(t *testing.T) {
 	r.Header.Set("Origin", "https://evil.example")
 	r.Header.Set("Authorization", "Bearer "+adminToken)
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("code = %d, want 403 — a cross-origin upgrade must be refused before the run is read\nbody: %s", w.Code, w.Body.String())

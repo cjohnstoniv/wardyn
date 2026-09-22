@@ -31,6 +31,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -120,6 +121,13 @@ type Driver struct {
 	// must never overclaim (see its doc). Surfaced as
 	// ClassSupport.NetworkPolicyAcknowledged instead.
 	netPolAcked bool
+
+	// execFactory is the test seam newExecutor (session.go) defers to when
+	// set: it replaces the real SPDY/WebSocket-fallback executor build (which
+	// dials the apiserver over HTTP and cannot run against a fake clientset)
+	// with a caller-supplied remotecommand.Executor. Nil in production and in
+	// newWithClient's default construction — only tests ever set it.
+	execFactory func(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error)
 }
 
 var _ substrate.Substrate = (*Driver)(nil)
@@ -265,6 +273,12 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// and fails at dispatch, and TestCreateSandbox_MountsAUserDrive pins
 		// the two together.
 		UserDrives: true,
+		// This substrate delivers a root-owned managed file: managedFileVolumes
+		// (managed_files.go) projects each one out of the per-run Secret as a
+		// read-only kubelet tmpfs whose directory is a mount point, so the file
+		// is in place, root-owned and unreplaceable, before any container in the
+		// pod starts. True only while that path exists, for UserDrives' reason.
+		ManagedFiles: true,
 		// A run's disk_mib becomes the agent container's
 		// resources.limits[ephemeral-storage] (naming.go's resourceRequirements),
 		// where the kubelet enforces it by EVICTING the pod — measured

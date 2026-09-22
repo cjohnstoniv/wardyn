@@ -55,6 +55,26 @@ type preflightResponse struct {
 	// per_user member who has not signed in, where there is no response body to
 	// carry it. That is exactly why the status row exists as the default path.
 	ModelCredential *modelCredentialFacts `json:"model_credential,omitempty"`
+	// Autonomy is what resolveRunAutonomy decided for this run — the same
+	// object launch puts on its `run.create` audit row, from the same call, so
+	// Review cannot show a level launch will not honour (0.8 #97).
+	//
+	// ABSENT rather than a zero value when nothing bound the run: no assigned
+	// profile, no rubric on it, or a rubric that leaves this posture's three
+	// fields unset. That is exactly the condition under which the audit row
+	// omits its own field, which is what makes "Review returns what launch
+	// audits" checkable instead of approximately true.
+	Autonomy *types.AutonomyResolution `json:"autonomy,omitempty"`
+	// GitCredential is THIS CALLER's Azure DevOps access state for THIS RUN's
+	// OWN repositories only (review finding F2; gitCredentialFactForRepos,
+	// scmaccess.go) — the per-user row (if any) that admits one of them, the
+	// SAME row-selection gitCredentialRefusal itself uses. Never a refusal:
+	// this handler answers 200 even when the state is not_configured, so the
+	// rail can state it before Launch. Absent for a run whose repositories
+	// touch no per-user Azure DevOps row at all (a GitHub-only run, a
+	// deployment with no such row, or one whose only Azure DevOps row is
+	// shared).
+	GitCredential *SCMAccess `json:"git_credential,omitempty"`
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -150,7 +170,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// comment already states for denyMemberField. In legacy open mode (no
 	// provider rows) it reads the site config and returns having refused,
 	// audited and warned nothing.
-	if s.requestRepoProviderRefusals(w, r, req) {
+	if s.requestRepoProviderRefusals(w, r, req, false) { // false: Review never gates on git_credential (F2)
 		return
 	}
 	// Same free-text field caps + control-character check launch runs over every
@@ -190,7 +210,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// TestPreflightMirrorsLaunchGates now refuses. ephemeralDirs is launch-only
 	// (WARDYN_EPHEMERAL_DIRS at dispatch) — preflight dispatches nothing, so it
 	// is discarded here.
-	if _, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req); !ok {
+	if _, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req, false); !ok { // false: F2, ditto
 		return
 	}
 
@@ -268,6 +288,20 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The SAME autonomy gate launch runs, in the same place in the order
+	// (runs.go) and on the same folded spec + enforced class — called, not
+	// re-implemented, because a Review that previewed a level launch then
+	// refused is the one lie this feature cannot afford. Its 403s are real
+	// refusals with real authz.denied rows, the same way the drive door's are.
+	// The derived tool_approvals write lands on this handler's own request
+	// copy and is discarded with it (preflight dispatches nothing); the 201
+	// warnings belong to the launch channel, and the site-config snapshot to
+	// launch's egress union, so both are dropped here too.
+	autonomy, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	if !ok {
+		return
+	}
+
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really
 	// run at (post-floor/raise), matching launch.
@@ -335,6 +369,14 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)
+
+	// credentialConfinementAdvisory (#150): the SAME shared helper the create
+	// path calls (appendCredentialConfinementAdvisory, runs_create.go), off the
+	// SAME modelCred.Mechanism the gate above just graded — so Review can never
+	// show a rosier picture than the launch it previews. WARN, never refuse:
+	// nothing above this line changed.
+	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Mechanism)
+
 	// A zero residency means nothing was graded (no store, an unreadable roster,
 	// a non-model run) — omitted rather than published as a guess, which leaves
 	// the rail on the /setup/status row it already had.
@@ -343,10 +385,22 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		EnforcedConfinementClass: enforced,
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
-		Warnings:                 clampWarnings,
+		Warnings:                 warnings,
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}
+	// Published on exactly the condition the audit row publishes on — a level
+	// was actually resolved — so the two objects are comparable field for field.
+	if autonomy.Level != "" {
+		resp.Autonomy = &autonomy
+	}
+	// #386: the informational, PER-RUN git_credential fact (review finding
+	// F2) — never blocking (this handler's own contract, doc comment above),
+	// and never the gate: THIS run's own repos only, free-text and
+	// workspace-resolved together, the same two sets requestRepoProviderRefusals
+	// and seedAndAdmitWorkspace each gate at launch.
+	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
+	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
 	writeJSON(w, http.StatusOK, resp)
 }

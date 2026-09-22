@@ -14,12 +14,12 @@
 // (providers-screen.tsx) holds; every edit calls `onChange` with the next
 // array, and the parent's single Save button PUTs the whole document.
 import * as React from "react";
-import type { GitLane, GitProvider, GitProviderKind } from "../../../lib/api/providers";
+import type { GitLane, GitProvider, GitProviderKind, LegacyGitLane } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { PERM } from "../../../lib/permissions-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import { S as GIT_S, HostSummary, Lane as CredentialLane, LaneBody, SecretLane } from "../settings/connection-cards";
-import { slugHost } from "../../../lib/scm-provider";
+import { patLaneMeta, slugHost } from "../../../lib/scm-provider";
 import { Button, buttonVariants } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
 import { Checkbox } from "../../ui/checkbox";
@@ -36,9 +36,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
-import { appLaneAvailable, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable, sshScopedHostLevel } from "./display";
+import { appLaneAvailable, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable } from "./display";
 
-const ALL_LANES: GitLane[] = ["app", "pat", "ssh"];
+const ALL_LANES: LegacyGitLane[] = ["app", "pat", "ssh"];
 const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
 
 // The lanes this row's kind + base URLs can actually carry — never `app` on
@@ -49,8 +49,22 @@ const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
 // into a lane the kind cannot carry: toggling `ssh` off an Azure DevOps row
 // must never write `["app","pat"]`, which the server 400s and the disabled
 // `app` checkbox then leaves no way to un-write.
-function availableLanes(kind: GitProviderKind, baseUrls: string[]): GitLane[] {
+function availableLanes(kind: GitProviderKind, baseUrls: string[]): LegacyGitLane[] {
   return ALL_LANES.filter((l) => !laneUnavailableReason(l, kind, baseUrls));
+}
+
+// The lanes this tab does not render at all — today just "entra", which is
+// configured elsewhere and is not one of ALL_LANES.
+//
+// They are PRESERVED across every toggle here. Rewriting `lanes` from the
+// rendered set alone dropped them, and the drop was not cosmetic: a row whose
+// only lane was "entra" lost it the moment anyone ticked "pat", leaving an
+// entra BLOCK with no entra lane — which the server then refuses as an
+// orphaned block, with a 400 on a Save the admin had no way to connect to the
+// checkbox they clicked.
+function unrenderedLanes(row: GitProvider): GitLane[] {
+  const available = availableLanes(row.kind, row.base_urls);
+  return (row.lanes ?? []).filter((l) => !(available as GitLane[]).includes(l));
 }
 
 // The one derivation of base_urls from textarea bytes — used both to commit a
@@ -59,22 +73,31 @@ function normalizeBaseURLText(text: string): string[] {
   return text.split("\n").map((l) => l.trim()).filter(Boolean);
 }
 
-function permittedLanes(row: GitProvider): Set<GitLane> {
+// The lanes to render as CHECKED. It narrows to the rendered set on purpose —
+// a lane this tab does not draw has no checkbox to check — so it is never the
+// thing that writes `lanes` back; withLaneToggled is.
+function permittedLanes(row: GitProvider): Set<LegacyGitLane> {
   const available = availableLanes(row.kind, row.base_urls);
-  const stored = row.lanes && row.lanes.length > 0 ? row.lanes : available;
-  return new Set(stored.filter((l) => available.includes(l)));
+  const stored: GitLane[] = row.lanes && row.lanes.length > 0 ? row.lanes : available;
+  return new Set(available.filter((l) => stored.includes(l)));
 }
 
-// Wire convention: empty means every lane the kind supports — never a
-// three-item array (GitProvider.Lanes' doc comment) — "every lane" meaning
-// every available one, not literally all three.
-function withLaneToggled(row: GitProvider, lane: GitLane): GitLane[] {
+// Wire convention: empty means every LEGACY lane — never a three-item array
+// (GitProvider.lanes' doc comment) — "every lane" meaning every AVAILABLE one,
+// not literally all three.
+//
+// The empty form can only be written when there is nothing else to preserve:
+// with an "entra" lane on the row, an empty list would mean the three legacy
+// lanes and NOT entra, silently dropping it.
+function withLaneToggled(row: GitProvider, lane: LegacyGitLane): GitLane[] {
   const available = availableLanes(row.kind, row.base_urls);
   const next = permittedLanes(row);
   if (next.has(lane)) next.delete(lane);
   else next.add(lane);
+  const kept = unrenderedLanes(row);
   const filtered = available.filter((l) => next.has(l));
-  return filtered.length === available.length ? [] : filtered;
+  if (kept.length === 0 && filtered.length === available.length) return [];
+  return [...filtered, ...kept];
 }
 
 // The credential-host lanes key off the row's own first base URL's host, the
@@ -104,6 +127,7 @@ function Row({
   present,
   githubApp,
   operator,
+  patBrokerEnabled,
   onUpdate,
   onRemove,
   onAdd,
@@ -114,6 +138,7 @@ function Row({
   present: string[];
   githubApp: boolean;
   operator: boolean;
+  patBrokerEnabled: boolean;
   onUpdate: (next: GitProvider) => void;
   onRemove: () => void;
   onAdd: () => void;
@@ -122,6 +147,10 @@ function Row({
    *  a sibling row (agents-tab.tsx's onStatusRefresh precedent). */
   onStatusRefresh: () => void;
 }) {
+  // The one lane whose meta depends on live server state — see
+  // scm-provider.ts's patLaneMeta. app/ssh keep reading LANE_META directly.
+  const patMeta = patLaneMeta(patBrokerEnabled);
+  const laneMeta = (lane: GitLane) => (lane === "pat" ? patMeta : LANE_META[lane as keyof typeof LANE_META]);
   const [confirmRemove, setConfirmRemove] = React.useState(false);
   // The textarea's raw text, held here rather than derived from
   // row.base_urls.join("\n") every render: splitting on every keystroke fed the
@@ -267,7 +296,7 @@ function Row({
               <div className="space-y-2" role="group" aria-label={PROVIDERS.FIELD_LANES}>
                 {ALL_LANES.map((lane) => {
                   const reason = laneUnavailableReason(lane, kind, row.base_urls);
-                  const meta = LANE_META[lane as keyof typeof LANE_META];
+                  const meta = laneMeta(lane);
                   return (
                     <label key={lane} className="flex items-start gap-2">
                       <Checkbox
@@ -286,13 +315,6 @@ function Row({
                   );
                 })}
               </div>
-              {/* The ceiling, said where the policy is written: an SSH clone URL
-                  carries no org path, so a row scoped to one org admits SSH for
-                  the whole host. The remedy is in the sentence — drop the ssh
-                  lane — which is the control right above it. */}
-              {sshScopedHostLevel(row.base_urls, permitted.has("ssh") && !laneUnavailableReason("ssh", kind, row.base_urls)) && (
-                <p className="text-xs leading-snug text-muted-foreground">{PROVIDERS.SSH_HOST_LEVEL_HINT}</p>
-              )}
             </Field>
           </div>
 
@@ -316,7 +338,11 @@ function Row({
             <CredentialLane
               id={`lane-${kind}-pat`}
               title="Personal access token"
-              hint="The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
+              hint={
+                patBrokerEnabled
+                  ? "The simplest lane — stored once; brokered at the proxy by default, so it never enters the sandbox."
+                  : "The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
+              }
               connected={!!host && present.includes(patName)}
               connectedDetail={`${host} · stored as ${patName}`}
               selected={!!host && credLane === "pat"}
@@ -458,6 +484,11 @@ export function GitTab({
   // what commits that removal, so Add steps down to outline (CONSOLE-RULES §2
   // — one teal per surface).
   loadedEmpty = true,
+  // The loaded snapshot's WorkspaceProviders.git_pat_broker_enabled (#381):
+  // absent on a never-configured install (no lanes UI exists yet either), so
+  // the default here is the true 0.7.10 default (on) rather than a guess —
+  // once a row exists the screen always has the server's real answer.
+  patBrokerEnabled = true,
   onStatusRefresh,
 }: {
   git: GitProvider[];
@@ -466,6 +497,7 @@ export function GitTab({
   githubApp: boolean;
   operator: boolean;
   loadedEmpty?: boolean;
+  patBrokerEnabled?: boolean;
   /** Appendix A V8: every row's SecretLane onChanged threads here — a
    *  setup-status-only refresh (never the screen's whole `load()`, which
    *  would discard an unsaved base-URL draft edit on this or a sibling row). */
@@ -513,6 +545,7 @@ export function GitTab({
               present={present}
               githubApp={githubApp}
               operator={operator}
+              patBrokerEnabled={patBrokerEnabled}
               onUpdate={(next) => updateRow(kind, next)}
               onRemove={() => removeRow(kind)}
               onAdd={() => addRow(kind)}
