@@ -79,13 +79,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   likely causes; a 403 or 404 from Azure DevOps says the person's account lacks access. The same
   messages reach git on the broker (#421).
 - **An Azure DevOps sign-in that expires or is blocked by Conditional Access mid-run no longer fails
-  the run's request.** The request is held and the person is asked to sign in again. A sign-in that
-  is already dead when the run starts fails it with a specific hint, and the next launch opens the
-  sign-in door. Widening the organisation's capability ceiling no longer breaks existing sign-ins.
-- **Large Azure DevOps package publishes and wiki attachments now work.** Wardyn inspects a request
-  body only on the three routes whose classification reads it. Project-relative `$batch` operations
-  are accepted, both the REST gate and the git broker apply one rule for which ref names are valid,
-  and the sidecar refuses an Azure DevOps grant when the run has no interception CA.
+  the run's request outright.** The request is held and the person is asked to sign in again; it
+  resumes once they do, and is refused if they have not within `WARDYN_CREDENTIAL_REAUTH_TIMEOUT`. A
+  sign-in that is already dead when the run starts fails the run with a hint to sign in again. A
+  refused renewal is recorded, so Settings and Getting started show the sign-in as expired with a
+  connect button, and the next launch is refused as "connection ended" and offers the sign-in.
+  Widening a row's capability ceiling no longer breaks renewal of existing sign-ins: renewal asks
+  only for scopes the person already consented to, a newly added capability asks for consent when a
+  run first needs it, and a person whose sign-in does not cover the row's default profile is asked to
+  sign in again (#428).
+- **Large Azure DevOps package publishes and wiki attachments now work.** Wardyn reads a request
+  body only on the routes whose classification depends on it (pull-request updates, ref updates and
+  pushes, and work-item `$batch`); everything else streams through unread. Project-relative `$batch`
+  operations are accepted within the pinned organisation, the REST gate and the git broker apply one
+  rule for which ref names are valid, and the proxy sidecar refuses a configuration that carries
+  Azure DevOps grants without an interception CA (#426).
 - **A drive-share probe could report its answer before it had cleared its own in-flight mark**, so an
   immediate second probe could see a stale mark. The mark is now cleared before the answer is sent
   (#423).
