@@ -20,11 +20,14 @@ import { toast } from "sonner";
 import {
   canDecideApproval,
   decisionArgs,
+  isAdoCapabilityRequest,
+  isAdoConsentRequest,
   isTerminalRunState,
   type AgentRun,
   type ApprovalKind,
   type ApprovalRequest,
   type ApprovalScope,
+  type DecisionOptions,
 } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { anyCapabilityEnforced, capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
@@ -38,12 +41,14 @@ import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives";
 import { RunContextRow } from "../wardyn/run-context-row";
 import { JsonBlock } from "../wardyn/code-block";
+import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
-import { useOperator, useRole, useSecurityOperator } from "../wardyn/operator-context";
+import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
+import { ADO } from "../../lib/ado-entra-copy";
 import {
   APPROVAL,
   APPROVAL_BANNER_LABEL,
@@ -268,6 +273,14 @@ function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAudience)
       // process reads the decision and proceeds. Never claim "once" or "only
       // this command"; both the cmd string and any execution guarantee are
       // requester-supplied.
+      //
+      // STAYS TRUE HERE: an Azure DevOps escalation never reaches this
+      // branch — isAdoCapabilityRequest routes it to AdoCapabilityCard
+      // before deriveBanner is ever called (see PendingCard below), because
+      // for THAT one lane the claim above is false (ADO.
+      // TOOL_CALL_NOTE, rendered once on this screen, says why). Every other
+      // tool_call still lands here, and the sentence below is still honest
+      // for all of them.
       return {
         what: cmd
           ? `The run asks permission to run ${cmd}${env ? ` against ${env}` : ""} (as reported by the requester).`
@@ -413,6 +426,33 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     }
   };
 
+  // decideAdoDirect — the ADO capability card's own decide path. It bypasses
+  // ReasonDialog entirely: the frozen mock (§9 Q2) draws the card's own
+  // Approve/Deny-and-scope control with no reason field and no modal, unlike
+  // every other kind on this screen. `opts` always carries an explicit
+  // decision_scope — see ado-capability-card.tsx's adoDecisionArgs for why a
+  // bodyless decide can't be used here.
+  const decideAdoDirect = async (id: string, approve: boolean, opts: [DecisionOptions]): Promise<void> => {
+    try {
+      if (approve) await api.approve(id, "approved", ...opts);
+      else await api.deny(id, "denied", ...opts);
+      toast.success(approve ? "Request approved" : "Request denied");
+      fetchAll().catch(() => {
+        /* transient refresh failure — the decide itself already succeeded */
+      });
+      onChanged?.();
+    } catch (err) {
+      toast.error(approve ? "Failed to approve request" : "Failed to deny request", {
+        description: getErrorMessage(err),
+      });
+    }
+  };
+
+  // The pending queue's own tool_call items, and only those — the screen-
+  // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
+  // when a tool_call approval is actually in view.
+  const anyToolCall = pendingItems.some((a) => a.kind === "tool_call") || decidedItems.some((a) => a.kind === "tool_call");
+
   return (
     <div className="mx-auto max-w-[880px] px-6 py-6">
       <PageHeader
@@ -429,6 +469,14 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       )}
 
       <TruncatedNote count={longestList} cap={LIST_LIMIT} />
+
+      {/* S10: replaces the sentence this design falsifies (§7.8
+          TOOL_CALL_NOTE) — an Azure DevOps escalation IS enforced, held at
+          the proxy until decided; every OTHER tool_call approval is still
+          the record-only kind deriveBanner's tool_call case describes. */}
+      {anyToolCall && (
+        <p className="mb-4 max-w-[72ch] text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
+      )}
 
       <Tabs value={filter} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">
         <TabsList>
@@ -478,6 +526,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
                 item={a}
                 caps={caps}
                 onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
+                onAdoDecide={decideAdoDirect}
               />
             ))}
           </div>
@@ -523,12 +572,16 @@ function PendingCard({
   item,
   caps,
   onAct,
+  onAdoDecide,
 }: {
   item: ApprovalRequest;
   // The viewer's own capability set, or null when the question doesn't apply
   // (an admin, or an answer still in flight).
   caps: MeCapabilities | null;
   onAct: (action: "approve" | "deny") => void;
+  // S10 — the Azure DevOps capability card's own decide path; see
+  // decideAdoDirect's doc above for why it bypasses onAct/ReasonDialog.
+  onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
 }) {
   const scope = item.requested_scope ?? {};
   const KindIcon = KIND_ICON[item.kind] ?? ShieldCheck;
@@ -577,6 +630,52 @@ function PendingCard({
   const [run, setRun] = React.useState<AgentRun | null | undefined>(undefined);
   const runEnded = !!run && isTerminalRunState(run.state);
   const canDecide = kindDecidable && !hostUngranted && !runEnded;
+
+  // S10 — an Azure DevOps escalation (or the Entra-consent chain it can
+  // raise) gets ITS OWN card, not this generic one: it needs fields
+  // (repository, ref class, the composed command) and a scope control (Once
+  // / This run only, never until/always) that deriveBanner/canDecideApproval
+  // above don't model — see AdoCapabilityCard's own doc comment. `run` is
+  // handed through AS-IS (undefined/null/loaded) — the card itself renders
+  // the loading/error states now (round-2 fix F10), rather than this caller
+  // collapsing "still loading" into "not yours".
+  // usePrincipal(), not door.principal: the consent door's ownership question
+  // here is "is the viewer the row's OWNER subject" (adoConsentScopeBody.Owner
+  // on the wire), a plain identity comparison, not the model-access door's
+  // own audience predicate.
+  const principal = usePrincipal();
+  const [adoBusy, setAdoBusy] = React.useState(false);
+  // N1 (round 2): PendingCard only ever receives PENDING rows today
+  // (pendingItems is fetched via api.listApprovals("PENDING")), but the
+  // state check is explicit here too — defense-in-depth against this
+  // component ever being reused for a broader list, and the single rule
+  // "AdoCapabilityCard only ever renders a PENDING row" stays true
+  // everywhere it mounts, not just by construction at the one caller that
+  // happens to pre-filter today.
+  if ((isAdoCapabilityRequest(item) || isAdoConsentRequest(item)) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        <RunContextRow runId={item.run_id} onRun={setRun} />
+        <AdoCapabilityCard
+          item={item}
+          securityOperator={securityOperator}
+          viewerPrincipal={principal}
+          run={run}
+          busy={adoBusy}
+          onApprove={async (opts) => {
+            setAdoBusy(true);
+            await onAdoDecide(item.id, true, opts);
+            setAdoBusy(false);
+          }}
+          onDeny={async (opts) => {
+            setAdoBusy(true);
+            await onAdoDecide(item.id, false, opts);
+            setAdoBusy(false);
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">

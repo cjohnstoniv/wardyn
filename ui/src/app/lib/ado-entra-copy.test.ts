@@ -12,15 +12,26 @@ import { ADO } from "./ado-entra-copy";
 // The mock round's whole value is that it stays CHECKABLE (the drives/providers
 // precedent, workspace-providers-copy.test.ts's parseFrozenTables()): this
 // suite does not hand-retype a sample of the canon — it PARSES
-// docs/design/ado-entra-prompt.md §7.2-§7.8 back out of the doc and compares
+// docs/design/ado-entra-prompt.md §7.2-§7.8 (AND §10, the capability card's
+// own post-freeze addendum — S10 round 2/3) back out of the doc and compares
 // every key. A swapped hyphen, a dropped ellipsis, a reworded clause, a new
 // doc row or a deleted one all fail here rather than shipping.
+//
+// MUTATION-SAFE BY CONSTRUCTION, NOT BY A SEPARATE HARDCODED LIST (S10 round
+// 3, N3): "covers every doc key" below takes EVERY key the doc parser finds,
+// unconditionally — never filtered by what the module happens to export —
+// and requires the module's own key set to equal it exactly in BOTH
+// directions. An emptied ADO fails that assertion immediately (0 keys where
+// the doc names 237), so the doc's own §7/§10 tables ARE the hardcoded
+// expected-key list this suite is pinned against; there is no second list to
+// keep in sync or let drift.
 //
 // The doc's own freeze note (§0) says §7.2 onward is 217 rows, but warns that
 // is ITS OWN checker's count — this suite's parser is the one that matters.
 // It agreed at 217 when §7 was frozen; CONNECT_POPUP_BLOCKED (review
-// follow-up N1) added one row after the freeze, at the same gate, so the
-// live count is 218.
+// follow-up N1) added one row after the freeze at the same gate (218), and
+// §10's 19 rows (S10 round 2/3, capability-card additions — see that
+// section's own header note) bring the live count to 237.
 //
 // Two normalisations, both documented rules rather than fudges (the drives
 // precedent):
@@ -39,15 +50,16 @@ const DOC = resolve(process.cwd(), "../docs/design/ado-entra-prompt.md");
 
 const unmono = (s: string) => s.replace(/`/g, "");
 
-/** key -> frozen string, for every row of §7.2-§7.8's tables. */
+/** key -> frozen string, for every row of §7.2-§7.8's and §10's tables. */
 function parseFrozenTables(): Map<string, string> {
   const rows = new Map<string, string>();
   let inSection = false;
   for (const line of readFileSync(DOC, "utf8").split("\n")) {
     if (line.startsWith("#")) {
-      // §7.2-§7.8 only — §7.1 is reused canon + the server-composed table
-      // (no Key column, and not this module's to carry).
-      inSection = /^### 7\.[2-8]\b/.test(line);
+      // §7.2-§7.8 — §7.1 is reused canon + the server-composed table (no Key
+      // column, and not this module's to carry) — plus §10's own subsections
+      // (the capability card's post-freeze addendum, S10 round 2/3).
+      inSection = /^### 7\.[2-8]\b/.test(line) || /^### 10\.\d+\b/.test(line);
       continue;
     }
     if (!inSection || !line.startsWith("|")) continue;
@@ -81,8 +93,8 @@ function render(docKey: string): string {
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 
 describe("ado-entra-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 218 frozen keys in the doc", () => {
-    expect(doc.size).toBe(218);
+  it("finds all 237 frozen keys in the doc (218 from §7, 19 from §10)", () => {
+    expect(doc.size).toBe(237);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

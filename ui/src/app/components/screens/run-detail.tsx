@@ -22,13 +22,17 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  canDecideAdoCapability,
   canDecideApproval,
   decisionArgs,
+  isAdoCapabilityRequest,
+  isAdoConsentRequest,
   runHasWorkspace,
   type ApprovalRequest,
   type ApprovalScope,
   type AuditEvent,
   type CredentialGrant,
+  type DecisionOptions,
   type EgressDecision,
   type Recording,
   type RunDetail,
@@ -69,6 +73,7 @@ import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
+import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
@@ -330,6 +335,24 @@ export function RunDetailScreen() {
     }
   };
 
+  // decideAdoDirect — the Approvals tab's own Azure DevOps decide path (S10
+  // round 2, F2). Bypasses ReasonDialog/submitDecision entirely, same reason
+  // screens/approvals.tsx's decideAdoDirect does: the card's own control
+  // carries no reason field, and `opts` ALWAYS carries an explicit
+  // decision_scope — decisionArgs()'s omit-for-"run" shape would collide
+  // with adoDecisionRule's different bodyless default (see ado-capability-
+  // card.tsx's adoDecisionArgs).
+  const decideAdoDirect = async (id: string, approve: boolean, opts: [DecisionOptions]): Promise<void> => {
+    try {
+      if (approve) await approvalsApi.approve(id, "approved", ...opts);
+      else await approvalsApi.deny(id, "denied", ...opts);
+      toast.success(approve ? "Request approved" : "Request denied");
+      load(false);
+    } catch (err) {
+      toast.error(approve ? "Failed to approve" : "Failed to deny", { description: getErrorMessage(err) });
+    }
+  };
+
   // ----- top-level states -----
   const pending = approvals.filter((a) => a.state === "PENDING");
   // F6-F2: run.complete/run.kill/run.autostop rows land here even when the
@@ -394,7 +417,10 @@ export function RunDetailScreen() {
             exitCode={exitCodeFromAudit(endingEvents)}
             pendingApprovalCount={pending.length}
             sandboxHeld={pending.some(isHeld)}
-            awaitingReauth={pending.some((p) => p.kind === "credential_reauth")}
+            // F13 — split, so the AWS-named chip never fires for an Azure
+            // DevOps consent row (isAdoConsentRequest is also credential_reauth).
+            awaitingReauth={pending.some((p) => p.kind === "credential_reauth" && !isAdoConsentRequest(p))}
+            awaitingAdoConsent={pending.some(isAdoConsentRequest)}
             onCopyLink={copyLink}
             linkCopied={copied}
             onKill={kill}
@@ -447,7 +473,9 @@ export function RunDetailScreen() {
           <TabsContent value="approvals" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
             <ApprovalsTab
               approvals={approvals}
+              run={run}
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
+              onAdoDecide={decideAdoDirect}
             />
           </TabsContent>
 
@@ -553,11 +581,22 @@ function Cockpit({
   // owner. The kind is excluded from the predicate rather than the sentence
   // reworded — a run whose ONLY pending row is a re-auth is not blocked on
   // anyone's decision at all, and the strip's own heading says what it needs.
+  //
+  // S10 round 2 (F2): an Azure DevOps escalation this viewer OWNS is ALSO
+  // excluded — canDecideApproval doesn't know the ADO ownership carve-out
+  // (canDecideAdoCapability does), so without this a run's own owner read
+  // this "you're blocked" note over a card that, two lines below, lets them
+  // decide it.
+  const isRunOwner = run.created_by === principal;
   const viewerBlocked =
     pending.length > 0 &&
     !securityOperator &&
     pending.some((p) => p.kind !== "credential_reauth") &&
-    !pending.some((p) => p.kind !== "credential_reauth" && canDecideApproval(false, p.kind));
+    !pending.some(
+      (p) =>
+        p.kind !== "credential_reauth" &&
+        (canDecideApproval(false, p.kind) || (isAdoCapabilityRequest(p) && canDecideAdoCapability(false, isRunOwner))),
+    );
 
   // The terminal widget's contents. Unchanged from the fixed-rail cockpit: the
   // session, and directly beneath it the approval that is HOLDING the session —
@@ -605,7 +644,7 @@ function Cockpit({
               {VIEWER_APPROVAL_BLOCKS_NOTE}
             </p>
           )}
-          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} />
+          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} run={run} />
         </div>
       )}
     </>
@@ -647,15 +686,25 @@ function attachSessions(audit: AuditEvent[]): AuditEvent[] {
 // ---------------------------------------------------------------------------
 function ApprovalsTab({
   approvals,
+  run,
   onDecide,
+  onAdoDecide,
 }: {
   approvals: ApprovalRequest[];
+  // Round 2 (F2) — this page always has the run loaded by the time this tab
+  // can render (see this file's own `status`/Tabs gate), so unlike
+  // screens/approvals.tsx's per-row RunContextRow fetch, there is no
+  // loading/error tri-state to thread here: it's always the real thing.
+  run: RunDetail;
   onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
+  onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
 }) {
   // useSecurityOperator (0.7 §B): the only thing this reads is
   // canDecideApproval, which mirrors authorizeMemberDecision's early return
   // for the security tier (approvals.go:392).
   const securityOperator = useSecurityOperator();
+  const principal = usePrincipal();
+  const [adoBusyId, setAdoBusyId] = React.useState<string | null>(null);
   if (approvals.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card">
@@ -670,6 +719,43 @@ function ApprovalsTab({
   return (
     <div className="flex max-w-3xl flex-col gap-3">
       {approvals.map((a) => {
+        // S10 round 2 (F2) — an Azure DevOps escalation (or its Entra-consent
+        // chain) gets AdoCapabilityCard, not this tab's generic row: it needs
+        // an explicit decision_scope (never the bodyless decide onDecide's
+        // ReasonDialog path produces) and the ownership-aware decidability
+        // rule canDecideApproval doesn't model.
+        //
+        // N1 (round 2) — gated on PENDING: `approvals` here is EVERY state
+        // this run's approvals ever reached (unlike approvals.tsx's
+        // pendingItems / live-approvals.tsx's pending, both already PENDING-
+        // only), so a DECIDED Azure DevOps row reaches this map too. Without
+        // the state check it rendered live Approve/Deny buttons — and, on an
+        // ended run, a false "nothing to allow" — over a row nobody can act
+        // on any more. A decided row falls through to the generic branch
+        // below, whose `scopeBadge` (approvalScopeBadge, extended F11) reads
+        // "Allowed once"/"Allowed for this run" for it.
+        if ((isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) && a.state === "PENDING") {
+          return (
+            <AdoCapabilityCard
+              key={a.id}
+              item={a}
+              securityOperator={securityOperator}
+              viewerPrincipal={principal}
+              run={run}
+              busy={adoBusyId === a.id}
+              onApprove={async (opts) => {
+                setAdoBusyId(a.id);
+                await onAdoDecide(a.id, true, opts);
+                setAdoBusyId(null);
+              }}
+              onDeny={async (opts) => {
+                setAdoBusyId(a.id);
+                await onAdoDecide(a.id, false, opts);
+                setAdoBusyId(null);
+              }}
+            />
+          );
+        }
         const pending = a.state === "PENDING";
         // Owner-scoped page (getRunAuthorized) — canDecideApproval only needs
         // the KIND question: egress_domain is a member act on an owned run,

@@ -8,6 +8,7 @@
 // every-tier note live in cc-meta.ts (CC_META / CONFINEMENT_CONSTANT_NOTE) —
 // import from there, never duplicate them here.
 import type { ApprovalKind as WireApprovalKind, ApprovalRequest, ApprovalScope } from "../../lib/types";
+import { isAdoCapabilityRequest } from "../../lib/types";
 import { shortTime } from "../../lib/format";
 
 // The single residual-risk prefix (D11) — everywhere a tier is explained, never
@@ -312,8 +313,21 @@ export const ALWAYS_NEEDS_WORKSPACE = "Always needs a workspace — this run isn
 // ApprovalStateBadge, which already says Approved/Denied — this is just the
 // "· once" half.
 export function approvalScopeBadge(
-  item: Pick<ApprovalRequest, "kind" | "state" | "decision_scope" | "decision_expires_at">,
+  item: Pick<ApprovalRequest, "kind" | "state" | "decision_scope" | "decision_expires_at" | "grant_id" | "requested_scope">,
 ): string | undefined {
+  // S10 round 2 (F11): a decided ADO escalation reads the canon
+  // OUTCOME_ALLOWED_ONCE/RUN phrase (§7.6), not the lowercase word every
+  // other kind shares — adoDecisionRule never produces until/always, and a
+  // DENIED row needs no extra badge (#414: every ado deny means the same
+  // thing regardless of scope). Hand-copied literals, not an ADO import
+  // (round 3): this file is EAGER (primitives.tsx), and ado-entra-copy.ts is
+  // #415's full ~300-line canon — importing it here blew the entry-chunk
+  // budget. Cross-checked in copy-approval-scope-badge.test.ts, same
+  // discipline lib/reauth-waiting-copy.ts's own hand-copied strings follow.
+  if (isAdoCapabilityRequest(item)) {
+    if (item.state !== "APPROVED" || !item.decision_scope) return undefined;
+    return item.decision_scope === "once" ? "Allowed once" : "Allowed for this run";
+  }
   if (item.kind !== "egress_domain") return undefined;
   if (item.state !== "APPROVED" && item.state !== "DENIED") return undefined;
   const scope = item.decision_scope;

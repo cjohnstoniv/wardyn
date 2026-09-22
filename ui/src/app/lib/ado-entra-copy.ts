@@ -4,15 +4,27 @@
  */
 
 // Azure DevOps per-person copy canon (0.7.10) — the frozen canonical-strings
-// tables from docs/design/ado-entra-prompt.md §7.2-§7.8, transcribed verbatim.
-// The namespace is ADO, exactly as the doc names it (§7 header).
+// tables from docs/design/ado-entra-prompt.md §7.2-§7.8, transcribed verbatim,
+// PLUS §10 — the capability request card's own addendum (plan slice S10,
+// round 2/3): new rows the card needs and §7 never named (a per-capability
+// noun, the ref-class field, a few mount-site strings), and three §7.6 rows
+// corrected post-freeze with the owner's delegated sign-off (REQ_DENYING,
+// REQ_HELD/REQ_HELD_EXPIRED, REQ_CONSENT_BODY — see §7.6's and §10.3's own
+// notes in the doc for why). The namespace is ADO, exactly as the doc names
+// it (§7 header).
 //
 // Pure TS — no React, no fetch, no DOM. Same discipline as workspace-providers-copy.ts
 // and user-drives-copy.ts: the components that consume this add NO copy of their own.
 //
-// ado-entra-copy.test.ts PARSES §7.2-§7.8 back out of the prompt doc and compares
-// every key below against it, so a swapped hyphen, a dropped ellipsis or a new doc
-// row fails a gate instead of shipping.
+// ado-entra-copy.test.ts PARSES §7.2-§7.8 AND §10 back out of the prompt doc
+// and compares every key below against it, so a swapped hyphen, a dropped
+// ellipsis or a new doc row fails a gate instead of shipping.
+//
+// N3 (S10 round 3): this file absorbs ui/src/app/lib/ado-capability-copy.ts,
+// which carried the capability card's own subset of this same canon under a
+// separate ADO_CAPABILITY namespace while this file's branch (#415) hadn't
+// merged yet. That file and its test are deleted in the same change; every
+// consumer now imports ADO from here.
 //
 // Backtick-mono rule (§7 header note): a backticked substring inside a frozen
 // string (a host, a ref, a wire value, a field) is PLAIN TEXT here — the mono span
@@ -189,11 +201,18 @@ export const ADO = {
   REQ_BLAST_POLICY_ADMIN: (repo: string) => `creating, changing and deleting branch policies anywhere in ${repo} — including the ones that would hold back its own pushes.`,
   REQ_WHAT_PR: (pr: string, person: string) => `the run completes pull request ${pr}, as ${person}.`,
   REQ_BLAST_PR: (repo: string) => `opening, updating, commenting on and completing pull requests anywhere in ${repo}. Completing one past its own policies is a separate ask.`,
-  REQ_HELD: (thing: string) => `The ${thing} is held at the proxy for up to four minutes while you answer. Nothing has reached Azure DevOps.`,
+  // Post-freeze correction (S10 round 2/3 — owner-delegated to the lead,
+  // 2026-09-22): no expiry timestamp reaches the client for an ADO hold, so
+  // "for up to four minutes" claimed a precision the card doesn't have.
+  // REQ_HELD_EXPIRED (§10.3) is its honest "already lapsed" twin.
+  REQ_HELD: (thing: string) => `The ${thing} may be waiting at the proxy for a short time; approving lets it through now or the next time the run asks.`,
   REQ_SCOPE_READOUT: (scope: string) => `Scope: ${scope}`,
   REQ_APPROVING_ONCE: (thing: string) => `Approving lets this one ${thing} through. The next one asks again.`,
   REQ_APPROVING_RUN: (thing: string) => `Approving lets every ${thing} from this run through until it ends. Nothing carries to the next run.`,
-  REQ_DENYING: (thing: string) => `Denying refuses this ${thing} and tells the tool why. The run keeps going and may ask again.`,
+  // Post-freeze correction (S10 round 2/3 — owner-delegated to the lead,
+  // 2026-09-22): a deny STICKS for the rest of the run since #414, UNLESS a
+  // later `run`-scoped Approve of the same capability lifts it (adoStanding).
+  REQ_DENYING: (thing: string) => `Denying refuses this ${thing} for the rest of the run, unless this kind of change is later allowed for the whole run.`,
   REQ_SCOPE_ONCE_HINT: (thing: string) => `This one ${thing} goes through. The next one asks again.`,
   REQ_SCOPE_RUN_HINT: (thing: string) => `Every ${thing} from this run goes through until it ends. (default)`,
   REQ_SCOPE_UNTIL_REFUSED: `Refused for Azure DevOps capabilities: a capability can't outlive the run that was granted it.`,
@@ -210,7 +229,13 @@ export const ADO = {
   REQ_UNCLASSIFIED_BODY: `An Azure DevOps write Wardyn doesn't recognise is refused rather than guessed at, because the card couldn't tell you truthfully what you'd be allowing. There is no setting that changes this — if a tool you need keeps hitting it, tell your admin what it was trying to do.`,
   REQ_CONSENT_CHIP: `Needs your Microsoft consent`,
   REQ_CONSENT_SOURCE: (ts: string) => `Azure DevOps · you allowed this at ${ts} · still held`,
-  REQ_CONSENT_BODY: (capability: string) => `You allowed it, but your Azure DevOps connection doesn't cover ${capability} yet. Reconnecting asks Microsoft for that permission — you'll see a consent screen for it, and nothing else changes. The run's request stays held meanwhile.`,
+  // Post-freeze correction (S10 round 2/3 — owner-delegated to the lead,
+  // 2026-09-22): "You allowed it, but…" is false on the dispatch-granted
+  // path (nobody approved anything; the run simply asked and Entra refused
+  // the redemption). Dropped the {capability} parameter too — no capability
+  // name reaches the wire scope on that path either, so this is a plain
+  // string, not a function, as of round 2.
+  REQ_CONSENT_BODY: `Microsoft needs your consent before Azure DevOps lets this run use this access. Reconnecting asks Microsoft for it — you'll see a consent screen, and nothing else changes. The run's request stays held meanwhile.`,
   REQ_CONSENT_CTA: `Allow and continue`,
   REQ_CONSENT_OTHER_BODY: (person: string) => `You allowed it, but only ${person} can give Microsoft the extra permission it needs — the run acts as ${person}, and consent is theirs to give. They've been shown this on their Getting started page.`,
   REQ_NOT_YOURS_CHIP: `Not yours to decide`,
@@ -265,5 +290,32 @@ export const ADO = {
   // ---- §7.8 Sentences this design falsifies — rewritten in the same change ----
   TOOL_CALL_NOTE: `An Azure DevOps capability request is held at the proxy until someone decides it — nothing reaches Azure DevOps first, and a denial is a refusal, not a note. Every other kind of tool-call approval is a record of what a run said it was about to do; nothing stops it.`,
   SECRETS_PER_USER_NOTE: `This row stores no Azure DevOps token: each person's sign-in is their own, and removing them from your directory ends it. Wardyn holds every run to its granted capabilities at the proxy.`,
+
+  // ---- §10.1 `ADO` — the consequence sentences' {thing}, per capability ----
+  CAP_THING_READ: `read`,
+  CAP_THING_CODE_WRITE: `push`,
+  CAP_THING_PR: `action`,
+  CAP_THING_POLICY_ADMIN: `change`,
+  CAP_THING_POLICY_BYPASS: `push`,
+  CAP_THING_REPO_ADMIN: `change`,
+  CAP_THING_BUILD_EXECUTE: `run`,
+  CAP_THING_WORK_WRITE: `edit`,
+  CAP_THING_WIKI_WRITE: `edit`,
+
+  // ---- §10.2 `ADO` — the ref-class field and the consent card's heading ----
+  REQ_FIELD_REF_CLASS: `Ref class`,
+  REQ_REF_CLASS_PROTECTED: `Protected by a branch policy`,
+  REQ_CONSENT_HEADING: `Azure DevOps needs more access`,
+
+  // ---- §10.3 `ADO` — the hold's honest expiry ----
+  REQ_HELD_EXPIRED: (thing: string) => `No longer waiting — approving lets the ${thing} through the next time the run asks.`,
+
+  // ---- §10.5 `ADO` — the remaining mount-site strings ----
+  REQ_RUN_UNAVAILABLE: `Couldn't load this run — try again.`,
+  SCOPE_UNTIL_LABEL: `Until…`,
+  SCOPE_ALWAYS_LABEL: `Always`,
+  STRIP_HEADING_CONSENT: `Azure DevOps sign-in needed — sign in to let this run's Azure DevOps access through`,
+  WAITING_ADO_MINE: `Waiting for your Azure DevOps sign-in`,
+  WAITING_ADO_OWNER: `Waiting for the owner's Azure DevOps sign-in`,
 
 } as const;

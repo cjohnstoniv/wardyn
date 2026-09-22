@@ -16,6 +16,7 @@ import { MemoryRouter } from "react-router-dom";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { waitingReauth } from "../wardyn/model-access-copy";
+import { waitingAdoConsent } from "../../lib/reauth-waiting-copy";
 import type { AgentRun, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
@@ -302,6 +303,45 @@ describe("SummaryHeader — the who + what glyph pair", () => {
     expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
     // The count clause is unchanged by the audience (round-2 UX S8).
     expect(waitingReauth(3, false)).toMatch(/2 more waiting/);
+  });
+
+  // S10 round 2 (F13) — the Azure DevOps twin: same shape, a DIFFERENT
+  // provider, so the cockpit chip must never say "AWS" for this one.
+  it("a held run waiting on an Azure DevOps sign-in names Azure DevOps, never AWS", () => {
+    renderHeader(
+      <OperatorProvider operator principal="me">
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={2}
+          sandboxHeld
+          awaitingAdoConsent
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(waitingAdoConsent(2))).toBeInTheDocument();
+    expect(waitingAdoConsent(2)).toMatch(/1 more waiting/);
+    expect(waitingAdoConsent(1)).toBe("Waiting for your Azure DevOps sign-in");
+    expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
+  });
+
+  it("…and says whose Azure DevOps sign-in it is when the reader is NOT the owner", () => {
+    renderHeader(
+      <OperatorProvider operator principal="admin@corp">
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={1}
+          sandboxHeld
+          awaitingAdoConsent
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(waitingAdoConsent(1, false))).toBeInTheDocument();
+    expect(waitingAdoConsent(1, false)).toBe("Waiting for the owner's Azure DevOps sign-in");
+    expect(screen.queryByText(waitingAdoConsent(1))).not.toBeInTheDocument();
   });
 
   it("a pending approval that is NOT holding the sandbox reads as monitoring, not as a demand", () => {
