@@ -422,8 +422,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries host names only and no
 	// grant id, so it cannot be used to mint anything.
 	if p.PATBroker && len(gitPATGrants) > 0 {
-		hosts := slices.Sorted(maps.Keys(gitPATGrants))
-		sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"] = strings.Join(hosts, " ")
+		addGitBrokerHosts(sandboxEnv, slices.Sorted(maps.Keys(gitPATGrants))...)
 		gitPATGrants = nil
 	}
 	if len(gitPATGrants) > 0 {
@@ -443,6 +442,21 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 		}
 	}
 	return droppedSSH, droppedPAT
+}
+
+// addGitBrokerHosts adds entries to WARDYN_GIT_PAT_BROKER_HOSTS, the list
+// agent-run rewrites onto the proxy's /wardyn/git/<host>/ broker path. Two lanes
+// write it — the git_pat broker and the Azure DevOps Entra lane — so it merges,
+// sorted and without duplicates. An entry is a host or `<user>@<host>`.
+func addGitBrokerHosts(sandboxEnv map[string]string, entries ...string) {
+	have := strings.Fields(sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"])
+	for _, e := range entries {
+		if !slices.Contains(have, e) {
+			have = append(have, e)
+		}
+	}
+	slices.Sort(have)
+	sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"] = strings.Join(have, " ")
 }
 
 // applyRepoCloneEnv surfaces the repo(s) to clone (the legacy single run.Repo

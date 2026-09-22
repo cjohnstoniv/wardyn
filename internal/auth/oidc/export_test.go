@@ -8,6 +8,7 @@ package oidc
 import (
 	"encoding/base64"
 	"net/http"
+	"time"
 )
 
 // EncodeSessionForTest calls the unexported encodeSession method so that
@@ -110,4 +111,13 @@ func NewTolerantJWKSClientForTest(base *http.Client) *http.Client {
 func FilterJWKSForTest(body []byte) (out []byte, droppedCount int) {
 	out, dropped := filterJWKS(body)
 	return out, len(dropped)
+}
+
+// SetLoginGrantTimeoutForTest shortens the per-call login-grant sink deadline
+// so a test can prove a stalled sink does not stall the login without waiting
+// the real three seconds.
+func SetLoginGrantTimeoutForTest(a *Authenticator, d time.Duration) {
+	a.grants.mu.Lock()
+	defer a.grants.mu.Unlock()
+	a.grants.timeout = d
 }

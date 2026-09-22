@@ -424,10 +424,10 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		p.httpErrorAWSAware(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
-	p.emitLLMDecision(r, host, port, egress.Allow, ruleSource, scanSummary)
+	p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, resp)
 	defer func() { _ = resp.Body.Close() }()
 
-	relay(w, resp)
+	p.relayUpstream(w, r, host, port, resp, ruleSource)
 }
 
 // coverageInspectable / coverageOpaque describe whether the LLM transport for a

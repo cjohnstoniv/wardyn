@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -273,6 +274,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// the MITM and plain lanes get (upstream_protocol.go).
 	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
+		seen := &egress.DecisionLog{Request: p.reqOf(r, githubHost, 443)}
+		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, githubHost, "git upstream error") {
+			return
+		}
 		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
 		return
 	}
@@ -779,6 +784,7 @@ func branchNSSwitch(name string, dflt bool, warnOnce *sync.Once) bool {
 func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 	var buf bytes.Buffer
 	hdr := make([]byte, 4)
+	seenCmd := false
 	for {
 		if _, err := io.ReadFull(body, hdr); err != nil {
 			return nil, fmt.Errorf("unreadable pkt-line length: %w", err)
@@ -804,19 +810,30 @@ func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 			return nil, fmt.Errorf("truncated pkt-line: %w", err)
 		}
 		buf.Write(payload)
-		if err := checkPushCommand(string(payload), prefix); err != nil {
+		if err := checkPushCommand(string(payload), prefix, !seenCmd); err != nil {
 			return nil, err
 		}
+		seenCmd = seenCmd || !bytes.HasPrefix(payload, []byte("shallow "))
 	}
 }
 
 // checkPushCommand validates ONE command-section pkt-line payload:
 // "<old-oid> SP <new-oid> SP <refname>", with "\0<capabilities>" on the first and
-// an optional trailing LF, or a "shallow <oid>" line (no ref to check).
-func checkPushCommand(line, prefix string) error {
-	line, _, _ = strings.Cut(line, "\x00") // capabilities ride the FIRST command only
+// an optional trailing LF, or a "shallow <oid>" line (no ref to check). first
+// reports whether this is the first command line.
+//
+// A NUL anywhere but the first command is refused: git's receive-pack reads a
+// capability list only there, and a forge whose parser differs could read
+// "<old> <new> refs/heads/wardyn/<run>/x\0refs/heads/main" on a later line as a
+// different ref than the one checked here.
+func checkPushCommand(line, prefix string, first bool) error {
+	line, _, caps := strings.Cut(line, "\x00") // capabilities ride the FIRST command only
 	line = strings.TrimSuffix(line, "\n")
-	if strings.HasPrefix(line, "shallow ") {
+	shallow := strings.HasPrefix(line, "shallow ")
+	if caps && (!first || shallow) {
+		return fmt.Errorf("refusing receive-pack command %q: a NUL is allowed only on the first command", line)
+	}
+	if shallow {
 		return nil
 	}
 	parts := strings.SplitN(line, " ", 3)
@@ -826,16 +843,10 @@ func checkPushCommand(line, prefix string) error {
 	ref := parts[2]
 	// Defense in depth: receive-pack refuses funny refnames server-side, but a
 	// prefix test must never be the only thing between "wardyn/<id>/x" and a
-	// traversal or an embedded second ref. Control characters are rejected here
-	// rather than left to the forge: git's own check_refname_format would catch
-	// them, but leaning on the server makes this parser's guarantee weaker than
-	// it reads — an embedded LF or CR is exactly the shape that smuggles a
-	// second command past a line-oriented reader.
-	if strings.Contains(ref, "..") || strings.ContainsAny(ref, " \t\\^~:?*[") {
-		return fmt.Errorf("refusing malformed refname %q", ref)
-	}
-	if i := strings.IndexFunc(ref, func(r rune) bool { return r < 0x20 || r == 0x7f }); i >= 0 {
-		return fmt.Errorf("refusing refname %q: control character at byte %d", ref, i)
+	// traversal or an embedded second ref. The rule is adoscope.CheckRefName,
+	// the ONE ref-name check the Azure DevOps REST refs door applies too.
+	if err := adoscope.CheckRefName(ref); err != nil {
+		return err
 	}
 	if !strings.HasPrefix(ref, prefix) || len(ref) <= len(prefix) {
 		return fmt.Errorf("push to %q is outside this run's branch namespace", ref)

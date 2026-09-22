@@ -87,6 +87,8 @@ type Proxy struct {
 	// yet), so coverage is reported honestly without flooding the audit log.
 	blindMu    sync.Mutex
 	blindHosts map[string]struct{}
+	// bedrockFaulted: data-plane hosts whose last model call AWS refused (bedrock_fault.go).
+	bedrockFaulted sync.Map
 
 	// privIP is B6's per-run builtin:private-ip memo — the one egress verdict
 	// that cannot change mid-run, so an identical retry is answered without a
@@ -103,6 +105,9 @@ type Proxy struct {
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
 	patGrants map[string]PATGrant
+	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
+	// (ado_gate.go). Nil == no host gated.
+	adoGrants ADOGrantSource
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -246,6 +251,8 @@ type Options struct {
 	// See Config.PATGrants and pat_broker.go for why it is per-host rather than
 	// per-repo.
 	PATGrants map[string]PATGrant
+	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
+	ADOGrants ADOGrantSource
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -416,6 +423,7 @@ func newProxy(opts Options) *Proxy {
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,
+		adoGrants:            opts.ADOGrants,
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:             opts.RunToken,
@@ -548,7 +556,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleLocalRoute(w, r)
 		return
 	}
-	p.handlePlain(w, r)
+	p.servePlain(w, r)
 }
 
 // splitHostPort returns the host (lowercased, no port) and port, defaulting

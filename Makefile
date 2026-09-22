@@ -723,6 +723,26 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.$$k=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses env.$$k on Kubernetes — local mode bypasses public-API authentication entirely, and a shared subscription credential serves one person's Claude subscription to every user's run"; exit 1; }; \
 		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set extraEnv[0].name=$$k --set extraEnv[0].value=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses $$k via extraEnv — a refusal that only reads .Values.env leaves the documented secret-bearing door wide open"; exit 1; }; \
 	done
+	@# #378: auth.ssoOnly mirrors validateSSOOnlyPosture's boot refusal at render
+	@# time — but a render-time refusal proves the VALUES are consistent, not
+	@# that the DAEMON ever learns the posture. Three separate, independently
+	@# failing checks on the one complete recipe (issuer + operator allowlist,
+	@# no admin token): it must actually render (not just avoid the ADMIN_TOKEN
+	@# string because the render died outright), it must carry WARDYN_SSO_ONLY
+	@# (deployment.yaml's emission is what makes /healthz's sso_only real), and
+	@# it must NOT carry WARDYN_ADMIN_TOKEN — the default render a few lines
+	@# above already proves the token DOES render when ssoOnly is unset.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com 2>&1); \
+	echo "$$out" | grep -q "kind: Deployment" || { echo "the sso-only recipe (issuer + operator allowlist, no admin token) no longer renders at all: $$out"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_SSO_ONLY" || { echo "auth.ssoOnly=true rendered no WARDYN_SSO_ONLY — the daemon this manifest boots would never learn the posture, so /healthz would report sso_only=false and the boot refusal would never fire"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" && { echo "auth.ssoOnly=true rendered a WARDYN_ADMIN_TOKEN — sso-only asserts SSO is the only way in, and a rendered admin bearer is a second one"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "no OIDC issuer is configured" || { echo "chart no longer refuses auth.ssoOnly=true with no OIDC issuer — sso-only with no SSO at all would leave the console with no usable sign-in"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com 2>&1 | grep -q "auth.ssoOnly is set together with an admin token" || { echo "chart no longer refuses auth.ssoOnly=true alongside an admin token"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com --set env.WARDYN_MEMBER_MODE=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_MEMBER_MODE" || { echo "chart no longer refuses auth.ssoOnly=true alongside WARDYN_MEMBER_MODE — member mode relies on the admin token as a process credential, which sso-only forbids outright"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST" || { echo "chart no longer refuses auth.ssoOnly=true alongside WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST — that override is exactly the ambiguity sso-only exists to close off"; exit 1; }
+	@# A WARDYN_SSO_ONLY=true set straight in env (not auth.ssoOnly) declares the same posture to the
+	@# daemon, so it must hit the same refusals — otherwise it renders clean and crash-loops at boot.
+	@helm template wardyn ./deploy/helm/wardyn --set env.WARDYN_SSO_ONLY=true --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com 2>&1 | grep -q "WARDYN_SSO_ONLY=true in env/extraEnv is set together with an admin token" || { echo "chart no longer refuses env.WARDYN_SSO_ONLY=true alongside an admin token — the daemon reads that variable as the sso-only posture and would refuse to boot"; exit 1; }
 	@# ── R5 W4-deploy: refusals and invariants added in the 0.7 hardening wave ──
 	@# F018/F193: ssh + the UI-sandbox gateway are OPERATOR/HUMAN ports, and
 	@# k8s.runsNamespace defaults to EMPTY — runs land in THIS namespace, so the
