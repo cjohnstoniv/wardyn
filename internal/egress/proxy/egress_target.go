@@ -274,12 +274,51 @@ func (p *Proxy) bypassUpstream(host string) bool {
 	if len(p.noProxy) == 0 {
 		return false
 	}
+	return noProxyRulesCoverHost(p.noProxy, host)
+}
+
+// noProxyRulesCoverHost is bypassUpstream's matching rule, factored out so it
+// has exactly ONE spelling: Config.applyDefaultsAndValidate's boot-time
+// "AWS SSO injection host not covered by the bypass list" warning consults
+// the same compiled rules through this function, rather than keeping a
+// second copy that could silently drift from what bypassUpstream actually
+// does at dial time.
+func noProxyRulesCoverHost(rules []noProxyRule, host string) bool {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if h == "" {
 		return false
 	}
 	ip := net.ParseIP(h)
-	for _, r := range p.noProxy {
+	for _, r := range rules {
+		if r.cidr != nil {
+			if ip != nil && r.cidr.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		if h == r.suffix || strings.HasSuffix(h, "."+r.suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// NoProxyCovers reports whether entries — an UNCOMPILED
+// SiteConfig.UpstreamProxyNoProxy list, exactly as an admin wrote it — would
+// bypass a dial to host, the same routing question bypassUpstream answers for
+// a live Proxy's already-compiled list. Exposed as a pure function, not a
+// *Proxy method, so a caller with no running Proxy (cmd/wardynd's boot-time
+// advisory for a gateway host with no covering bypass entry) can ask it. It
+// compiles entries via compileNoProxy — the same compiler bypassUpstream's
+// caller (NewServer) feeds p.noProxy from — so a typo'd entry that would be
+// silently dropped there is silently absent here too, never a false cover.
+func NoProxyCovers(entries []string, host string) bool {
+	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if h == "" {
+		return false
+	}
+	ip := net.ParseIP(h)
+	for _, r := range compileNoProxy(entries) {
 		if r.cidr != nil {
 			if ip != nil && r.cidr.Contains(ip) {
 				return true

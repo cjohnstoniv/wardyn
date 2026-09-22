@@ -71,6 +71,16 @@ var envDocAllow = map[string]bool{
 	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps
 	// its ENV.md row honest.
 	"WARDYN_E2E_LIVE_BASE_URL": true,
+	// The live-local harness (internal/testlive, ui/playwright.live-local.config.ts;
+	// docs/LIVE-TESTS.md): opt-in suites against a real tenant, never CI or
+	// operator config. Documented in ENV.md's "Live-local harness" table.
+	"WARDYN_LIVE_ENTRA": true, "WARDYN_LIVE_ADO": true, "WARDYN_LIVE_BEDROCK": true,
+	"WARDYN_LIVE_AWS_SSO": true, "WARDYN_LIVE_BASE_URL": true, "WARDYN_LIVE_IDENTITIES_FILE": true,
+	"WARDYN_LIVE_ADO_ORG": true, "WARDYN_LIVE_ADO_PROJECT": true, "WARDYN_LIVE_ADO_REPO": true,
+	"WARDYN_LIVE_AWS_SSO_START_URL": true, "WARDYN_LIVE_AWS_SSO_REGION": true,
+	"WARDYN_LIVE_AWS_SSO_TOKEN_FILE": true, "WARDYN_LIVE_BEDROCK_ACCOUNT_ID": true,
+	"WARDYN_LIVE_BEDROCK_ROLE_NAME": true, "WARDYN_LIVE_BEDROCK_REGION": true,
+	"WARDYN_LIVE_BEDROCK_MODEL": true, "WARDYN_LIVE_BEDROCK_MAX_CALLS": true,
 }
 
 // envDocShellOnly lists vars read ONLY by deploy/compose/docker-compose.yaml and
@@ -147,6 +157,11 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_KIND_SSO_NODE":      true,
 	"WARDYN_KIND_SSO_TOKEN_TTL": true, "WARDYN_KIND_SSO_ROLE_CRED_TTL": true, "WARDYN_KIND_SSO_PROXY_INJECT": true,
 	"WARDYN_KIND_SSO_SKIP_REAUTH_HOLD": true,
+	// scripts/compose-sso-roles.sh's inputs (the compose SSO role walk), read
+	// only by that script and ui/e2e/live/sso-roles.spec.ts.
+	"WARDYN_TEST_SSO_ROLES": true, "WARDYN_ROLES_WARDYND_IMAGE": true,
+	"WARDYN_ROLES_PROXY_IMAGE": true, "WARDYN_ROLES_EVIDENCE": true,
+	"WARDYN_KIND_SSO_PROFILE": true, "WARDYN_QUICKSTART_IMAGE_TAG": true,
 	// The walk's own EXPORTS to ui/e2e/live/sso-member.spec.ts and
 	// ui/e2e/live/sso-member-recovery.spec.ts (process.env, never Go) — outputs
 	// of the walk, not operator inputs.
@@ -158,6 +173,13 @@ var envDocShellOnly = map[string]bool{
 	// renamed cluster reds that case instead of making its 90 s hold vacuous.
 	"WARDYN_LIVE_KUBE_CONTEXT": true, "WARDYN_LIVE_KUBE_NAMESPACE": true,
 	"WARDYN_LIVE_KUBE_NODE": true,
+	// #285: the walk's two poll-ceiling overrides. Real operator inputs (unlike
+	// the exports just above), but read only by ui/e2e/live/helpers.ts
+	// (process.env) and set only by scripts/kind-sso-walk.sh — never by Go.
+	"WARDYN_LIVE_SANDBOX_UP_MS": true, "WARDYN_LIVE_LOGIN_DONE_MS": true,
+	// The chart render ui/e2e/live/sso-roles.spec.ts runs on, set per leg by
+	// the walk — another walk output, read only via process.env.
+	"WARDYN_LIVE_ROLES_RENDER": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
@@ -395,6 +417,7 @@ var envDocE2EShellFiles = []string{
 	"test/e2e/e2e.sh",
 	"scripts/kind-sso-walk.sh",
 	"deploy/kind/sso/overlay.sh",
+	"scripts/lib/kind-sso-walk-ado.sh",
 }
 
 // readE2EShellVars returns every WARDYN_* token found in envDocE2EShellFiles.
