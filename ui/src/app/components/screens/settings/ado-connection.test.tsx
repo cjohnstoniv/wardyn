@@ -10,8 +10,9 @@ import type { SetupStatus } from "../../../lib/types";
 import { ADO } from "../../../lib/ado-entra-copy";
 
 const adoConnectMock = vi.fn();
+let adoBlockedUrl: string | null = null;
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
-  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock }),
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, blockedUrl: adoBlockedUrl }),
 }));
 
 import { AdoConnectionCard } from "./ado-connection";
@@ -21,7 +22,10 @@ function status(scm_access?: SetupStatus["scm_access"]): SetupStatus {
 }
 
 describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)", () => {
-  beforeEach(() => adoConnectMock.mockReset());
+  beforeEach(() => {
+    adoConnectMock.mockReset();
+    adoBlockedUrl = null;
+  });
 
   it("renders nothing with no Azure DevOps row configured", () => {
     render(<AdoConnectionCard status={status(undefined)} onChanged={vi.fn()} />);
@@ -42,6 +46,17 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
     expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
   });
 
+  // Review finding F3: a SHARED row's `live` (no source) must render
+  // ACCESS_SHARED_NOTE, never a per-person claim like "Your Wardyn sign-in"
+  // or "Renewed while you keep using it".
+  it("live on a shared row (no source): ACCESS_SHARED_NOTE, never the per-person panel", () => {
+    render(<AdoConnectionCard status={status({ state: "live", org: "https://dev.azure.com/contoso" })} onChanged={vi.fn()} />);
+    expect(screen.getByText(ADO.ACCESS_SHARED_LIVE)).toBeInTheDocument();
+    expect(screen.getByText(ADO.ACCESS_SHARED_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(ADO.PANEL_HOW_ORG))).not.toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(ADO.PANEL_ENDS_RENEWED))).not.toBeInTheDocument();
+  });
+
   it("not_configured: the cause and the connect button, which reloads status on a real connection", async () => {
     adoConnectMock.mockResolvedValueOnce(true);
     const onChanged = vi.fn();
@@ -56,5 +71,16 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
     render(<AdoConnectionCard status={status({ state: "shared_expired" })} onChanged={vi.fn()} />);
     expect(screen.getByText(ADO.ACCESS_SHARED_EXPIRED_ACTION)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
+  });
+});
+
+// Review finding F9 — a blocked popup.
+describe("AdoConnectionCard — a blocked popup (F9)", () => {
+  it("shows a plain fallback link to the sign-in URL, alongside the button", () => {
+    adoBlockedUrl = "/api/v1/scm/azure-devops/signin";
+    render(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />);
+    const link = screen.getByRole("link", { name: ADO.CONNECT_ADO });
+    expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
+    expect(link).toHaveAttribute("target", "_blank");
   });
 });

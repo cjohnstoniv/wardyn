@@ -15,6 +15,7 @@ import * as React from "react";
 import { scmAccess } from "../api/scm-access";
 
 const POLL_MS = 1500;
+const SIGNIN_URL = "/api/v1/scm/azure-devops/signin";
 
 /**
  * connect() opens the connect popup and resolves once it closes: true if the
@@ -23,34 +24,66 @@ const POLL_MS = 1500;
  * /me/scm-access rather than trusting anything the popup's own page says —
  * that page is Microsoft's consent screen and then the daemon's own redirect
  * target, neither of which is this window's to instrument.
+ *
+ * blockedUrl is set when the browser refused to open the popup at all
+ * (review finding F9): the caller renders a plain link to it instead.
  */
-export function useAdoConnect(): { connecting: boolean; connect: () => Promise<boolean> } {
+export function useAdoConnect(): { connecting: boolean; connect: () => Promise<boolean>; blockedUrl: string | null } {
   const [connecting, setConnecting] = React.useState(false);
+  const [blockedUrl, setBlockedUrl] = React.useState<string | null>(null);
+  const timerRef = React.useRef<number | null>(null);
+  const mountedRef = React.useRef(true);
+
+  // Stop polling on unmount (review finding F9) — an interval left running
+  // past the screen it was raised on both leaks and can still call
+  // scmAccess.getMine() for a caller who navigated away.
+  React.useEffect(
+    () => () => {
+      mountedRef.current = false;
+      if (timerRef.current !== null) window.clearInterval(timerRef.current);
+    },
+    [],
+  );
 
   const connect = React.useCallback((): Promise<boolean> => {
+    setBlockedUrl(null);
     setConnecting(true);
     return new Promise<boolean>((resolve) => {
-      const popup = window.open("/api/v1/scm/azure-devops/signin", "wardyn-ado-connect", "width=520,height=680");
+      // about:blank FIRST, same-origin, then sever the opener reference and
+      // navigate — not window.open(SIGNIN_URL, ...) directly (review finding
+      // F9). Microsoft's sign-in page sets a Cross-Origin-Opener-Policy that
+      // can sever an opener link formed AT a cross-origin navigation; forming
+      // it here, one document that is still same-origin with this window,
+      // and only THEN navigating the popup, is what keeps `popup.closed`
+      // readable from this side through that hop.
+      const popup = window.open("about:blank", "wardyn-ado-connect", "width=520,height=680");
       if (!popup) {
-        // Popup blocked — nothing to poll and nothing this hook can repair.
         setConnecting(false);
+        setBlockedUrl(SIGNIN_URL);
         resolve(false);
         return;
       }
+      popup.opener = null;
+      popup.location.href = SIGNIN_URL;
+
       const finish = (ok: boolean) => {
-        window.clearInterval(timer);
-        setConnecting(false);
+        if (timerRef.current !== null) {
+          window.clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+        if (mountedRef.current) setConnecting(false);
         resolve(ok);
       };
-      const timer = window.setInterval(() => {
+      timerRef.current = window.setInterval(() => {
         if (popup.closed) {
           finish(false);
           return;
         }
         scmAccess
           .getMine()
-          .then((a) => {
-            if (a.state === "live") {
+          .then((rows) => {
+            if (!mountedRef.current) return;
+            if (rows.some((r) => r.state === "live")) {
               popup.close();
               finish(true);
             }
@@ -62,5 +95,5 @@ export function useAdoConnect(): { connecting: boolean; connect: () => Promise<b
     });
   }, []);
 
-  return { connecting, connect };
+  return { connecting, connect, blockedUrl };
 }

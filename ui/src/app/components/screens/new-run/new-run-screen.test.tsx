@@ -64,10 +64,10 @@ vi.mock("./new-run-rail", async (importOriginal) => {
   };
 });
 // The connect popup + poll (#386) — mocked so the launch-door tests below
-// drive the screen's own dialog-and-relaunch wiring without a real window.
+// drive the screen's own dialog wiring without a real window.
 const adoConnectMock = vi.fn();
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
-  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock }),
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, blockedUrl: null }),
 }));
 const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
@@ -871,10 +871,10 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
 });
 
 // #386's launch door: a 422 carrying reason git_credential opens the Connect
-// Azure DevOps dialog, and a completed connection launches again with the
-// form exactly as it stood — model_credential's own precedent, for a second
-// credential and a popup-driven connect instead of an in-page sign-in pane.
-describe("NewRunScreen — the git_credential refusal opens the Connect Azure DevOps dialog and relaunches", () => {
+// Azure DevOps dialog. Review finding F8: connecting does NOT relaunch —
+// RELAUNCH_TOAST_BODY's own words are "launch when you're ready", so the
+// form stays exactly as it stood and the person presses Launch themselves.
+describe("NewRunScreen — the git_credential refusal opens the Connect Azure DevOps dialog", () => {
   async function titled() {
     renderScreen();
     await user.type(await screen.findByLabelText("Title"), "Refund flow");
@@ -891,18 +891,32 @@ describe("NewRunScreen — the git_credential refusal opens the Connect Azure De
     expect(screen.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeInTheDocument();
   });
 
-  it("confirming connects and launches again exactly once — the form as it stood", async () => {
+  // Review finding F1: the org comes from the 422 body itself, so the dialog
+  // names it even with NO preflight verdict ever having run (this screen
+  // fires preflight on a debounce; a fast Launch click can beat it there).
+  it("F1: names the org from the 422 body, with no preflight verdict having run", async () => {
+    createRunMock.mockRejectedValueOnce(
+      new HttpError(422, "git_credential: you are not connected to Azure DevOps — connect and start the run again", "git_credential", "https://dev.azure.com/contoso"),
+    );
+    const launch = await titled();
+    await user.click(launch);
+    await screen.findByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE });
+    expect(screen.getByText(ADO.LAUNCH_DIALOG_BODY("https://dev.azure.com/contoso"))).toBeInTheDocument();
+  });
+
+  it("F8: confirming connects and closes the dialog, but never relaunches — the person presses Launch themselves", async () => {
     createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
     adoConnectMock.mockResolvedValueOnce(true);
-    createRunMock.mockResolvedValueOnce({ id: "run_ado" });
     const launch = await titled();
     await user.click(launch);
     await screen.findByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE });
     await user.click(screen.getByRole("button", { name: ADO.CONNECT_CTA }));
     expect(adoConnectMock).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/runs/run_ado"));
-    expect(createRunMock).toHaveBeenCalledTimes(2);
-    expect(screen.queryByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull());
+    // No second createRun call, no navigation — the form stays as it stood.
+    expect(createRunMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled();
   });
 
   it("a popup that closes without connecting closes the dialog and launches nothing", async () => {

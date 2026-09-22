@@ -172,7 +172,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// Fold the named workspace onto the resolved spec, then re-run every check
 	// that seeding can invalidate. Writes its own error and stops on false.
-	ephemeralDirs, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req)
+	ephemeralDirs, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req, true) // true: launch, #386's gate applies
 	if !ok {
 		return
 	}
@@ -475,7 +475,15 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // gap a member-owned workspace used to walk through. The onboarding gate runs
 // LAST because it is the single chokepoint on the RESOLVED spec, which is what
 // makes it un-bypassable by a hand-authored stored policy.
-func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) ([]string, bool) {
+//
+// gate is #386's launch door (review finding F5): LAUNCH (runs.go's own
+// caller) passes true, so gitCredentialRefusal runs here TOO — over
+// spec.WorkspaceRepos, the resolved set a workspace_id, a SECOND workspace,
+// a non-first repo, a stored policy or a hand-authored inline policy all
+// fold into, which requestRepoProviderRefusals' two free-text fields alone
+// never see. Review (preflight.go) passes false: see that gate's own doc
+// comment.
+func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest, gate bool) ([]string, bool) {
 	// FIRST, before a single source is folded: authorize the SELECTION against
 	// the CALLER. Everything below this line reasons about host paths that are
 	// about to become binds, and until now nothing on the path asked whose
@@ -530,6 +538,9 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		return nil, false
 	}
 	if s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
+		return nil, false
+	}
+	if gate && s.gitCredentialRefusal(w, r, repos...) {
 		return nil, false
 	}
 	return ephemeralDirs, true

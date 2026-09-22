@@ -466,7 +466,7 @@ export function NewRunScreen() {
       setLaunching(false);
     }
   };
-  const adoDoor = useAdoLaunchDoor(() => void launch()); // #386's launch door
+  const adoDoor = useAdoLaunchDoor(); // #386's launch door — F8: never relaunches
 
   // A dry-run of launch's own resolution: same body, same 4xx surface, but
   // mints/dispatches nothing. Renders the member-clamp warnings, the risk

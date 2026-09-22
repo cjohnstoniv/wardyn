@@ -56,14 +56,15 @@ type preflightResponse struct {
 	// per_user member who has not signed in, where there is no response body to
 	// carry it. That is exactly why the status row exists as the default path.
 	ModelCredential *modelCredentialFacts `json:"model_credential,omitempty"`
-	// GitCredential is THIS CALLER's Azure DevOps access state (#386,
-	// scmaccess.go) — deployment-wide, not narrowed to whether this specific
-	// run's repository is on that row: the rail states it as informational
-	// context before Launch, the same way the setup checklist's other rows
-	// are deployment facts rather than per-run ones. The actual per-run GATE
-	// is gitCredentialRefusal, reached through requestRepoProviderRefusals
-	// above, which answers its own 422 before this field is ever computed.
-	// Absent when no Azure DevOps row is configured at all.
+	// GitCredential is THIS CALLER's Azure DevOps access state for THIS RUN's
+	// OWN repositories only (review finding F2; gitCredentialFactForRepos,
+	// scmaccess.go) — the per-user row (if any) that admits one of them, the
+	// SAME row-selection gitCredentialRefusal itself uses. Never a refusal:
+	// this handler answers 200 even when the state is not_configured, so the
+	// rail can state it before Launch. Absent for a run whose repositories
+	// touch no per-user Azure DevOps row at all (a GitHub-only run, a
+	// deployment with no such row, or one whose only Azure DevOps row is
+	// shared).
 	GitCredential *SCMAccess `json:"git_credential,omitempty"`
 }
 
@@ -160,7 +161,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// comment already states for denyMemberField. In legacy open mode (no
 	// provider rows) it reads the site config and returns having refused,
 	// audited and warned nothing.
-	if s.requestRepoProviderRefusals(w, r, req) {
+	if s.requestRepoProviderRefusals(w, r, req, false) { // false: Review never gates on git_credential (F2)
 		return
 	}
 	// Same free-text field caps + control-character check launch runs over every
@@ -200,7 +201,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// TestPreflightMirrorsLaunchGates now refuses. ephemeralDirs is launch-only
 	// (WARDYN_EPHEMERAL_DIRS at dispatch) — preflight dispatches nothing, so it
 	// is discarded here.
-	if _, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req); !ok {
+	if _, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req, false); !ok { // false: F2, ditto
 		return
 	}
 
@@ -358,12 +359,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}
-	// #386: the informational git_credential fact — best-effort, never
-	// blocking (this handler's own contract, doc comment above); the actual
-	// gate already ran, above, inside this handler's own
-	// requestRepoProviderRefusals call.
-	if gc, ok := s.computeSCMAccess(ctx, oidcHumanFromContext(ctx)); ok {
-		resp.GitCredential = &gc
-	}
+	// #386: the informational, PER-RUN git_credential fact (review finding
+	// F2) — never blocking (this handler's own contract, doc comment above),
+	// and never the gate: THIS run's own repos only, free-text and
+	// workspace-resolved together, the same two sets requestRepoProviderRefusals
+	// and seedAndAdmitWorkspace each gate at launch.
+	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
+	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -259,7 +259,7 @@ export function MemberGettingStarted() {
   // #386: the Azure DevOps chip + its fallback connect control — the same
   // popup-driven flow the New Run rail's launch door uses.
   const scmChip = status?.scm_access ? scmAccessChip(status.scm_access.state, status.scm_access.source) : null;
-  const { connecting: adoConnecting, connect: adoConnect } = useAdoConnect();
+  const { connecting: adoConnecting, connect: adoConnect, blockedUrl: adoBlockedUrl } = useAdoConnect();
   const handleAdoConnect = async () => {
     if (await adoConnect()) setRetryTick((n) => n + 1);
   };
@@ -442,6 +442,15 @@ export function MemberGettingStarted() {
                   >
                     {ADO.CONNECT_ADO}
                   </Button>
+                  {/* review finding F9: the browser refused the popup outright. */}
+                  {adoBlockedUrl && (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Your browser blocked the popup.{" "}
+                      <a href={adoBlockedUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-info hover:underline">
+                        {ADO.CONNECT_ADO}
+                      </a>
+                    </p>
+                  )}
                 </>
               )}
               {status?.scm_access?.state === "shared_expired" && (

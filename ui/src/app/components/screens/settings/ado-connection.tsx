@@ -23,7 +23,7 @@ import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import type { SetupStatus } from "../../../lib/types";
 
 export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus; onChanged: () => void }) {
-  const { connecting, connect } = useAdoConnect();
+  const { connecting, connect, blockedUrl } = useAdoConnect();
   const access = status?.scm_access;
   const handleConnect = async () => {
     if (await connect()) onChanged();
@@ -36,7 +36,11 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
       <h3 className="text-sm font-medium text-foreground">{PROVIDERS.KIND_AZURE_DEVOPS}</h3>
       <div className="mt-3 space-y-2 text-body">
         {chip && <p className={chip.tone === "success" ? "text-success" : "text-warning"}>{chip.label}</p>}
-        {access.state === "live" && (
+        {/* review finding F3: `live` branches on `source` — a SHARED row's
+            `live` (no source) makes no per-person claim (§7.5's
+            ACCESS_SHARED_NOTE) and must never render "Your Wardyn sign-in" /
+            "Renewed while you keep using it", which are per-person facts. */}
+        {access.state === "live" && access.source && (
           <>
             {access.org && (
               <p className="text-muted-foreground">
@@ -52,12 +56,21 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
             <p className="text-muted-foreground">{ADO.PANEL_ENDS_HINT}</p>
           </>
         )}
+        {access.state === "live" && !access.source && <p className="text-muted-foreground">{ADO.ACCESS_SHARED_NOTE}</p>}
         {access.state === "not_configured" && (
           <>
             <p className="text-warning">{scmAccessCause(access.cause)}</p>
             <Button size="sm" variant="outline" disabled={connecting} onClick={() => void handleConnect()}>
               {ADO.CONNECT_ADO}
             </Button>
+            {blockedUrl && (
+              <p className="text-xs text-muted-foreground">
+                Your browser blocked the popup.{" "}
+                <a href={blockedUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-info hover:underline">
+                  {ADO.CONNECT_ADO}
+                </a>
+              </p>
+            )}
           </>
         )}
         {access.state === "shared_expired" && <p className="text-warning">{ADO.ACCESS_SHARED_EXPIRED_ACTION}</p>}

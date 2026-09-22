@@ -103,6 +103,8 @@ function railTree(props: {
   gitCredential?: SCMAccess;
   adoDialogOpen?: boolean;
   adoConnecting?: boolean;
+  adoOrg?: string;
+  adoBlockedUrl?: string | null;
   onAdoConfirm?: () => void;
   onAdoCancel?: () => void;
   /** Mounted as a sibling INSIDE the same ModelAccessProvider — a test-only
@@ -151,6 +153,8 @@ function railTree(props: {
       adoDialog={{
         open: props.adoDialogOpen ?? false,
         connecting: props.adoConnecting ?? false,
+        org: props.adoOrg ?? "",
+        blockedUrl: props.adoBlockedUrl ?? null,
         onConfirm: props.onAdoConfirm ?? (() => {}),
         onCancel: props.onAdoCancel ?? (() => {}),
       }}
@@ -758,6 +762,14 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
     expect(screen.queryByRole("dialog", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeNull();
   });
 
+  // Review finding F4: on a deployment with no per-user Azure DevOps row (or
+  // no Azure DevOps row at all), preflight never sends git_credential — a
+  // shell run there must render no "Credentials" section, not an empty one.
+  it("F4: a shell run with no git_credential fact renders no Credentials heading at all", () => {
+    renderRail({});
+    expect(screen.queryByText("Credentials")).toBeNull();
+  });
+
   it("states PREFLIGHT_MISSING for a not_configured connection, before Launch is pressed", () => {
     renderRail({ gitCredential: { state: "not_configured" } });
     expect(screen.getByText(ADO.PREFLIGHT_MISSING)).toBeInTheDocument();
@@ -769,15 +781,21 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
     expect(screen.queryByText(ADO.PREFLIGHT_MISSING)).toBeNull();
   });
 
-  it("the dialog names the row's org and offers Continue to Microsoft / Cancel", () => {
-    renderRail({
-      gitCredential: { state: "not_configured", org: "https://dev.azure.com/contoso" },
-      adoDialogOpen: true,
-    });
+  it("the dialog names the row's org (from the 422 body — F1) and offers Continue to Microsoft / Cancel", () => {
+    // No preflight verdict at all — F1: the org comes from the 422 itself,
+    // never from a git_credential fact that may not exist yet.
+    renderRail({ adoDialogOpen: true, adoOrg: "https://dev.azure.com/contoso" });
     expect(screen.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toBeInTheDocument();
     expect(screen.getByText(ADO.LAUNCH_DIALOG_BODY("https://dev.azure.com/contoso"))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: ADO.CONNECT_CTA })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("a blocked popup shows a plain fallback link to the sign-in URL (F9)", () => {
+    renderRail({ adoDialogOpen: true, adoBlockedUrl: "/api/v1/scm/azure-devops/signin" });
+    const link = screen.getByRole("link", { name: ADO.CONNECT_CTA });
+    expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
+    expect(link).toHaveAttribute("target", "_blank");
   });
 
   it("Continue to Microsoft calls onAdoConfirm; Cancel calls onAdoCancel", async () => {

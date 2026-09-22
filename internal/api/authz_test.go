@@ -395,7 +395,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/me/ssh-keys": {class: classMember},
 	// This caller's own Azure DevOps access state (scmaccess.go, #386): the
 	// same self-service shape as /me/ssh-keys above — scoped entirely to the
-	// caller's own OIDC subject (computeSCMAccess), so a member reading only
+	// caller's own OIDC subject (computeSCMAccessRows), so a member reading only
 	// their own answer discloses nothing about anyone else.
 	"GET /api/v1/me/scm-access": {class: classMember},
 	// The per-user Azure DevOps sign-in (ado_entra.go): classMember, and for

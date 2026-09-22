@@ -19,7 +19,7 @@ vi.mock("../../../lib/api/setup", () => ({
 // below drive the click without a real window.
 const adoConnectMock = vi.fn();
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
-  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock }),
+  useAdoConnect: () => ({ connecting: false, connect: adoConnectMock, blockedUrl: null }),
 }));
 
 const listSecretsMineMock = vi.fn();

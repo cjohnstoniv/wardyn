@@ -103,11 +103,18 @@ interface RunRailProps {
    * rendered "AWS credentials sign inside the sandbox" over a Claude sign-in.
    */
   agentRow?: SetupHarnessTool;
-  /** The Connect Azure DevOps launch-door dialog (§2.4, #386): owned by the screen
-   *  (which runs the popup + relaunch), rendered here. */
+  /** The Connect Azure DevOps launch-door dialog (§2.4, #386): owned by the
+   *  screen (use-ado-launch-door.ts), rendered here. `org` comes from the
+   *  422 body itself (review finding F1), never from a preflight fact — a
+   *  422 can be the very first thing this caller hears about the row.
+   *  `blockedUrl` is set when the browser refused the popup (review finding
+   *  F9): a plain link to it renders instead. F8: confirming never
+   *  relaunches — the person presses Launch themselves. */
   adoDialog: {
     open: boolean;
     connecting: boolean;
+    org: string;
+    blockedUrl: string | null;
     onConfirm: () => void;
     onCancel: () => void;
   };
@@ -609,14 +616,31 @@ export function RunRail({
       )}
 
       {/* #386's launch door (§2.4): opened automatically on a git_credential
-          422, and closable without launching — the screen owns the popup +
-          relaunch (use-ado-connect.ts), this dialog only asks. */}
+          422, and closable without launching — the screen owns the popup
+          (use-ado-connect.ts), this dialog only asks. `org` is the 422
+          body's own (review finding F1): this dialog can be the very first
+          thing a caller sees about the row, before any preflight verdict. */}
       <Dialog open={adoDialog.open} onOpenChange={(open) => !open && adoDialog.onCancel()}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{ADO.LAUNCH_DIALOG_TITLE}</DialogTitle>
-            <DialogDescription>{ADO.LAUNCH_DIALOG_BODY(gitCredential?.org ?? "")}</DialogDescription>
+            <DialogDescription>{ADO.LAUNCH_DIALOG_BODY(adoDialog.org)}</DialogDescription>
           </DialogHeader>
+          {/* review finding F9: the browser refused the popup outright — a
+              plain link is the fallback, opened by the browser itself. */}
+          {adoDialog.blockedUrl && (
+            <p className="text-xs text-muted-foreground">
+              Your browser blocked the popup.{" "}
+              <a
+                href={adoDialog.blockedUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-info hover:underline"
+              >
+                {ADO.CONNECT_CTA}
+              </a>
+            </p>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={adoDialog.onCancel}>
               {PEOPLE.CANCEL}

@@ -14,41 +14,69 @@
 // from the catch block that just received the 422, rather than reactively off
 // a persisted boolean — so there is no "re-arm before the next Launch" guard
 // to own here or in the caller.
+//
+// REVIEW FINDING F8: connecting does NOT relaunch. RELAUNCH_TOAST_BODY's own
+// words are "launch when you're ready" — the person presses Launch
+// themselves, with the form exactly as it stood; this hook never calls it
+// for them.
 import * as React from "react";
 import { toast } from "sonner";
 import { ADO } from "../../../lib/ado-entra-copy";
+import { HttpError } from "../../../lib/api/core";
 import { isGitCredentialRefusal } from "../../../lib/api/runs";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 
-export function useAdoLaunchDoor(relaunch: () => void): {
+export function useAdoLaunchDoor(): {
   /** Call from Launch's catch block with the caught error. */
   notifyLaunchError: (e: unknown) => void;
-  dialog: { open: boolean; connecting: boolean; onConfirm: () => void; onCancel: () => void };
+  dialog: {
+    open: boolean;
+    connecting: boolean;
+    /** The Azure DevOps org the 422 body named (review finding F1) — read
+     *  from the error itself, never from a preflight fact: a 422 can be the
+     *  very first thing this caller hears about the row. */
+    org: string;
+    blockedUrl: string | null;
+    onConfirm: () => void;
+    onCancel: () => void;
+  };
 } {
   const [open, setOpen] = React.useState(false);
-  const { connecting, connect } = useAdoConnect();
-  // The latest `relaunch`, read at confirm time — `launch` is redefined every
-  // render of the caller.
-  const relaunchRef = React.useRef(relaunch);
-  relaunchRef.current = relaunch;
+  const [org, setOrg] = React.useState("");
+  const { connecting, connect, blockedUrl } = useAdoConnect();
+  // Never toast into an unmounted screen (review finding F9) — a person who
+  // navigated away while the popup was open must not see a stray "Connected"
+  // toast land on whatever page they are on now.
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
-  // Connect confirmed: run the popup + poll, and — only on a real connection
-  // — close the dialog, toast the relaunch (§7.7's RELAUNCH_TOAST), and press
-  // Launch again with the form exactly as it stood. A closed-without-
-  // connecting popup just closes the dialog; nothing relaunches.
+  // Connect confirmed: run the popup + poll, close the dialog either way, and
+  // — only on a real connection — toast the fact (§7.7's RELAUNCH_TOAST).
+  // Nothing relaunches (F8, above).
   const onConfirm = async () => {
     const connected = await connect();
+    if (!mountedRef.current) return;
     setOpen(false);
     if (connected) {
       toast.success(ADO.RELAUNCH_TOAST_TITLE, { description: ADO.RELAUNCH_TOAST_BODY });
-      relaunchRef.current();
     }
   };
 
   return {
     notifyLaunchError: (e) => {
-      if (isGitCredentialRefusal(e)) setOpen(true);
+      if (!isGitCredentialRefusal(e)) return;
+      setOrg(e instanceof HttpError ? e.org : "");
+      setOpen(true);
     },
-    dialog: { open, connecting, onConfirm: () => void onConfirm(), onCancel: () => setOpen(false) },
+    dialog: {
+      open,
+      connecting,
+      org,
+      blockedUrl,
+      onConfirm: () => void onConfirm(),
+      onCancel: () => setOpen(false),
+    },
   };
 }

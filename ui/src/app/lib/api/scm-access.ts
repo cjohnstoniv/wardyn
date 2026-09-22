@@ -10,10 +10,13 @@ import type { SCMAccess } from "../types";
 import { asJson, wfetch } from "./core";
 
 export const scmAccess = {
-  // GET /api/v1/me/scm-access. A deployment with no Azure DevOps row answers
-  // {} (state ""), never a 404 — the absent-row doctrine.
-  async getMine(): Promise<SCMAccess> {
+  // GET /api/v1/me/scm-access. One entry per per-user Azure DevOps row
+  // (review finding F6) — [] when there is none (no row at all, or the
+  // deployment's only row is shared), never a 404. Today's server ever
+  // returns 0 or 1 entries (scmaccess.go's file doc), but every caller
+  // reads it as a list.
+  async getMine(): Promise<SCMAccess[]> {
     const res = await wfetch("/me/scm-access", { method: "GET" });
-    return asJson<SCMAccess>(res);
+    return asJson<SCMAccess[]>(res);
   },
 };

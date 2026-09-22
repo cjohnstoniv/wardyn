@@ -365,18 +365,21 @@ func (s *Server) sshHostLevelWarnings(ctx context.Context, runID uuid.UUID, repo
 //
 // One function for the pair because decodeAndValidateCreateRun sits at the
 // gocyclo ratchet, and because they are one question asked of one request.
-func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Request, req createRunRequest) bool {
+//
+// gate is #386's launch door: LAUNCH (decodeAndValidateCreateRun) passes
+// true, so a repo just admitted onto a per-user Azure DevOps row with no
+// usable captured sign-in for this caller 422s here (gitCredentialRefusal,
+// scmaccess.go). Review (preflight.go) passes false — review finding F2:
+// preflight reads the SAME fact through gitCredentialFactForRepos instead,
+// informationally, and never refuses on it.
+func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Request, req createRunRequest, gate bool) bool {
 	if s.admitRepoSources(w, r, req.Repo, req.DevcontainerRepo) {
 		return true
 	}
 	if req.Repo != "" && s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo) {
 		return true
 	}
-	// #386's launch door: a repo just admitted onto a per-user Azure DevOps row
-	// with no usable captured sign-in for this caller 422s here, the one place
-	// both launch (via decodeAndValidateCreateRun) and Review (preflight.go)
-	// call this function — see gitCredentialRefusal (scmaccess.go).
-	return s.gitCredentialRefusal(w, r, req.Repo, req.DevcontainerRepo)
+	return gate && s.gitCredentialRefusal(w, r, req.Repo, req.DevcontainerRepo)
 }
 
 // recordLaunchRefusals are the ORG-POLICY refusals a record session must clear
