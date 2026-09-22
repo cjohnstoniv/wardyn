@@ -10,6 +10,7 @@ import {
   hostError,
   laneOfName,
   LANE_META,
+  patLaneMeta,
   deriveProviders,
 } from "./scm-provider";
 
@@ -100,7 +101,7 @@ describe("LANE_META — honesty canon", () => {
       "The run works through a short-lived, scoped credential — your stored key stays in Wardyn.",
     );
     expect(LANE_META.pat.tooltip).toBe(
-      "A git access token is handed to git inside the sandbox — the process running there can read it.",
+      "A stored git access token is attached to the request by the proxy on the outbound leg — it never enters the sandbox.",
     );
     expect(LANE_META.ssh.tooltip).toBe(
       "A private SSH key is written to disk in the sandbox — the process running there can read it.",
@@ -115,20 +116,50 @@ describe("LANE_META — honesty canon", () => {
 
   it("pins the chip labels verbatim (U+00B7 middle dot, not a hyphen)", () => {
     expect(LANE_META.app.label).toBe("App · brokered");
-    expect(LANE_META.pat.label).toBe("PAT · in-sandbox");
+    expect(LANE_META.pat.label).toBe("PAT · brokered");
     expect(LANE_META.ssh.label).toBe("SSH · resident");
   });
 
   it("pins each lane's chip tone", () => {
     expect(LANE_META.app.tone).toBe("success");
-    expect(LANE_META.pat.tone).toBe("info");
+    // pat is patLaneMeta's ON shape (#381 default): brokered like the App
+    // lane, so it earns the same reassuring tone — "info" is the OFF
+    // (in-sandbox) tone, pinned in the patLaneMeta describe block below.
+    expect(LANE_META.pat.tone).toBe("success");
     expect(LANE_META.ssh.tone).toBe("warning");
   });
 
   it("pins each lane's residency — the fact a stored credential can actually produce", () => {
     expect(LANE_META.app.residency).toBe("brokered_mint");
-    expect(LANE_META.pat.residency).toBe("resident_env");
+    expect(LANE_META.pat.residency).toBe("proxy_injected");
     expect(LANE_META.ssh.residency).toBe("resident_mount");
+  });
+
+  // #381: the PAT lane's label/tooltip/residency are chosen from the
+  // operator's own WARDYN_GIT_PAT_BROKER switch — LANE_META.pat above is
+  // patLaneMeta's ON shape (the 0.7.10 default); this pins BOTH positions,
+  // including that the OFF position keeps the pre-0.7 wording verbatim (the
+  // issue's own "the old wording is still correct when the broker is off").
+  describe("patLaneMeta — both switch positions", () => {
+    it("on (default): brokered label, tone and residency", () => {
+      const meta = patLaneMeta(true);
+      expect(meta.label).toBe("PAT · brokered");
+      expect(meta.tooltip).toBe(CAPABILITY.gitPatLine);
+      expect(meta.tone).toBe("success");
+      expect(meta.residency).toBe("proxy_injected");
+      expect(meta).toEqual(LANE_META.pat);
+    });
+
+    it("off: the pre-0.7 in-sandbox label, tone and residency", () => {
+      const meta = patLaneMeta(false);
+      expect(meta.label).toBe("PAT · in-sandbox");
+      expect(meta.tooltip).toBe(CAPABILITY.gitPatLineResident);
+      expect(meta.tooltip).toBe(
+        "A git access token is handed to git inside the sandbox — the process running there can read it.",
+      );
+      expect(meta.tone).toBe("info");
+      expect(meta.residency).toBe("resident_env");
+    });
   });
 });
 

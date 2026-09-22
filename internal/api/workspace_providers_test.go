@@ -549,6 +549,65 @@ func TestWorkspaceProvidersGet(t *testing.T) {
 	}
 }
 
+// TestWorkspaceProvidersGetProjectsGitPatBrokerEnabled is #381's wire contract:
+// a configured install's GET states the real WARDYN_GIT_PAT_BROKER switch (on
+// by default) as git_pat_broker_enabled, true or false, so the console can
+// label the PAT lane correctly — and a PUT can never smuggle a stale value
+// back into storage.
+func TestWorkspaceProvidersGetProjectsGitPatBrokerEnabled(t *testing.T) {
+	row := githubRow("gh", false, "https://github.com/acme")
+	for _, tc := range []struct {
+		name                string
+		disableGitPATBroker bool
+		want                *bool
+	}{
+		{"broker on (0.7.10 default)", false, boolPtr(true)},
+		{"broker off (operator escape hatch)", true, boolPtr(false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{
+				cfg: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}},
+			}}
+			cfg := baseTestConfig(h, fake)
+			cfg.DisableGitPATBroker = tc.disableGitPATBroker
+			srv := New(cfg)
+			w := do(t, srv, http.MethodGet, "/api/v1/workspace-providers", adminToken, "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			var got types.WorkspaceProviders
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode: %v (body=%s)", err, w.Body.String())
+			}
+			if got.GitPatBrokerEnabled == nil || *got.GitPatBrokerEnabled != *tc.want {
+				t.Fatalf("git_pat_broker_enabled = %v, want %v", got.GitPatBrokerEnabled, *tc.want)
+			}
+		})
+	}
+}
+
+// TestWorkspaceProvidersPutClearsGitPatBrokerEnabled: a client that echoes the
+// GET response's git_pat_broker_enabled field back on a PUT (the ordinary
+// GET-modify-PUT pattern this screen already uses) must never persist it —
+// GitPatBrokerEnabled is server-projected, not stored config.
+func TestWorkspaceProvidersPutClearsGitPatBrokerEnabled(t *testing.T) {
+	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	srv, _ := newProvidersHarness(t, fake)
+	w := do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken,
+		`{"git":[{"id":"gh","kind":"github","base_urls":["https://github.com/acme"]}],"git_pat_broker_enabled":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen == nil || fake.putSeen.WorkspaceProviders == nil {
+		t.Fatal("the provider block was not written")
+	}
+	if fake.putSeen.WorkspaceProviders.GitPatBrokerEnabled != nil {
+		t.Fatalf("stored WorkspaceProviders.GitPatBrokerEnabled = %v, want nil (never stored)",
+			*fake.putSeen.WorkspaceProviders.GitPatBrokerEnabled)
+	}
+}
+
 // TestWorkspaceProvidersPut is the write: it persists, it audits, it hands back
 // the new ETag, and {} clears.
 func TestWorkspaceProvidersPut(t *testing.T) {

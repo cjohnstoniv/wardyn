@@ -19,7 +19,7 @@ import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { PERM } from "../../../lib/permissions-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import { S as GIT_S, HostSummary, Lane as CredentialLane, LaneBody, SecretLane } from "../settings/connection-cards";
-import { slugHost } from "../../../lib/scm-provider";
+import { patLaneMeta, slugHost } from "../../../lib/scm-provider";
 import { Button, buttonVariants } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
 import { Checkbox } from "../../ui/checkbox";
@@ -103,6 +103,7 @@ function Row({
   present,
   githubApp,
   operator,
+  patBrokerEnabled,
   onUpdate,
   onRemove,
   onAdd,
@@ -113,6 +114,7 @@ function Row({
   present: string[];
   githubApp: boolean;
   operator: boolean;
+  patBrokerEnabled: boolean;
   onUpdate: (next: GitProvider) => void;
   onRemove: () => void;
   onAdd: () => void;
@@ -121,6 +123,10 @@ function Row({
    *  this or a sibling row (agents-tab.tsx's onStatusRefresh precedent). */
   onStatusRefresh: () => void;
 }) {
+  // The one lane whose meta depends on live server state — see
+  // scm-provider.ts's patLaneMeta. app/ssh keep reading LANE_META directly.
+  const patMeta = patLaneMeta(patBrokerEnabled);
+  const laneMeta = (lane: GitLane) => (lane === "pat" ? patMeta : LANE_META[lane]);
   const [confirmRemove, setConfirmRemove] = React.useState(false);
   // The textarea's RAW text, held here rather than derived from
   // row.base_urls.join("\n") every render: splitting on every keystroke fed the
@@ -266,7 +272,7 @@ function Row({
               <div className="space-y-2" role="group" aria-label={PROVIDERS.FIELD_LANES}>
                 {ALL_LANES.map((lane) => {
                   const reason = laneUnavailableReason(lane, kind, row.base_urls);
-                  const meta = LANE_META[lane as keyof typeof LANE_META];
+                  const meta = laneMeta(lane);
                   return (
                     <label key={lane} className="flex items-start gap-2">
                       <Checkbox
@@ -314,7 +320,11 @@ function Row({
             <CredentialLane
               id={`lane-${kind}-pat`}
               title="Personal access token"
-              hint="The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
+              hint={
+                patBrokerEnabled
+                  ? "The simplest lane — stored once; brokered at the proxy by default, so it never enters the sandbox."
+                  : "The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
+              }
               connected={!!host && present.includes(patName)}
               connectedDetail={`${host} · stored as ${patName}`}
               selected={!!host && credLane === "pat"}
@@ -457,6 +467,11 @@ export function GitTab({
   // what commits that removal, so Add steps down to outline (CONSOLE-RULES §2
   // — one teal per surface).
   loadedEmpty = true,
+  // The loaded snapshot's WorkspaceProviders.git_pat_broker_enabled (#381):
+  // absent on a never-configured install (no lanes UI exists yet either), so
+  // the default here is the true 0.7.10 default (on) rather than a guess —
+  // once a row exists the screen always has the server's real answer.
+  patBrokerEnabled = true,
   onStatusRefresh,
 }: {
   git: GitProvider[];
@@ -465,6 +480,7 @@ export function GitTab({
   githubApp: boolean;
   operator: boolean;
   loadedEmpty?: boolean;
+  patBrokerEnabled?: boolean;
   /** F4-F2 (Appendix A V8): every row's SecretLane onChanged threads here —
    *  a setup-status-only refresh (never the screen's whole `load()`, which
    *  would discard an unsaved base-URL draft edit on THIS or a sibling row). */
@@ -512,6 +528,7 @@ export function GitTab({
               present={present}
               githubApp={githubApp}
               operator={operator}
+              patBrokerEnabled={patBrokerEnabled}
               onUpdate={(next) => updateRow(kind, next)}
               onRemove={() => removeRow(kind)}
               onAdd={() => addRow(kind)}

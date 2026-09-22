@@ -764,6 +764,16 @@ func (s *Server) handleGetWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 	}
 	block := storedWorkspaceProviders(sc)
 	w.Header().Set("ETag", computeETag(block))
+	// GitPatBrokerEnabled (#381) is projected AFTER the ETag, exactly like
+	// SiteConfig's EffectiveScmHosts: a live env switch, not stored config, so
+	// it must never perturb the optimistic-concurrency comparison below. Gated
+	// on providersConfigured so a never-configured install keeps getting the
+	// byte-identical "{}" a pre-#381 build did (TestWorkspaceProvidersGet) —
+	// there is no lanes UI to annotate until a git row exists.
+	if providersConfigured(sc) {
+		on := !s.cfg.DisableGitPATBroker
+		block.GitPatBrokerEnabled = &on
+	}
 	writeJSON(w, http.StatusOK, block)
 }
 
@@ -785,6 +795,13 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	block := normalizeWorkspaceProviders(&body)
+	// GitPatBrokerEnabled is projected on read and never stored — a value that
+	// rode in on a GET-spread PUT body would otherwise persist into the JSONB
+	// (harmlessly inert, since every GET recomputes it fresh, but the same
+	// hygiene EffectiveScmHosts gets below).
+	if block != nil {
+		block.GitPatBrokerEnabled = nil
+	}
 	if err := validateWorkspaceProviders(block); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid workspace providers: "+err.Error())
 		return

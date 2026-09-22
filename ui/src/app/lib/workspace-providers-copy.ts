@@ -97,7 +97,11 @@ export const PROVIDERS = {
   BASE_URLS_REQUIRED: "Name at least one address. A row with none admits nothing and is refused at save.",
   FIELD_LANES: "Permitted lanes",
   LANES_HINT: "Which credential a run may use for this provider. Turning one off does not delete its stored secret.",
-  LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent.",
+  // #381: Azure DevOps DOES publish a token-lifecycle API (it's the PAT lane's
+  // path there) — the stale claim was that no comparable API exists at all.
+  // What's actually true today: Wardyn hasn't built a repo-scoped App-style
+  // broker against it, so say that without promising a lane that isn't built.
+  LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped tokens for github.com only — Wardyn doesn't broker Azure DevOps's own token API this way (yet). Use the PAT lane there.",
   LANE_SSH_UNAVAILABLE:
     "Not available: SSH over port 443 is offered for github.com and dev.azure.com only — a self-hosted host clones over HTTPS.",
   // The SSH scoping CEILING, said on the surface that writes the policy: an SSH

@@ -348,7 +348,7 @@ describe("GitTab", () => {
         />,
       );
       const row = screen.getByTestId("provider-row-github");
-      await userEvent.click(within(row).getByRole("checkbox", { name: /PAT · in-sandbox/ }));
+      await userEvent.click(within(row).getByRole("checkbox", { name: /PAT · brokered/ }));
       // pat was the only available lane; toggling it off leaves nothing
       // available permitted, and the empty-wire-convention never fires here
       // because it means "every AVAILABLE lane", not "every lane" — with pat

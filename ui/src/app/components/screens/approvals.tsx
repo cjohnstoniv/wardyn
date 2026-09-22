@@ -212,12 +212,18 @@ function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAudience)
       const host = str(scope, "host");
       if (ck === "git_pat") {
         return {
-          what: `A git access token${host ? ` for ${host}` : ""} is handed to git inside the sandbox${ttl}.`,
-          // The git_pat nuance: unlike a brokered credential, this value is
-          // readable by the agent's process (CAPABILITY.gitPatLine), and the
-          // PAT itself is a long-lived operator secret Wardyn cannot expire or
-          // down-scope — never claim otherwise here.
-          blast: `${CAPABILITY.gitPatLine} Wardyn can't expire or down-scope a PAT — it stays live until you revoke it on ${host ?? "the git host"}.`,
+          // #381: since 0.7 WARDYN_GIT_PAT_BROKER defaults on, so the stored
+          // token is attached by the proxy rather than handed to git inside
+          // the sandbox (CAPABILITY.gitPatLine) — matches gitPatLine's own
+          // wording rather than a second copy of it, the same duplication
+          // ssh_key's "what"/"blast" already accept below.
+          what: `A stored git access token${host ? ` for ${host}` : ""} is attached to the request by the proxy on the outbound leg${ttl}.`,
+          // The git_pat nuance: unlike a minted/scoped credential, the PAT
+          // itself is a long-lived operator secret Wardyn cannot expire or
+          // down-scope from its side — never claim otherwise here, and say
+          // "stored" so this reads as the stored-PAT lane's limit, not every
+          // credential kind's.
+          blast: `${CAPABILITY.gitPatLine} Wardyn can't expire or down-scope a stored PAT — it stays live until you revoke it on ${host ?? "the git host"}.`,
         };
       }
       if (ck === "ssh_key") {

@@ -100,9 +100,23 @@ export interface LaneMeta {
 // hardcodes under different names (LANE_BROKERED/LANE_INSANDBOX/
 // LANE_RESIDENT). Importing it means the two surfaces can't drift apart; a
 // hand-retyped copy here could.
+// patLaneMeta (#381) is the PAT lane's meta chosen from the operator's real
+// WARDYN_GIT_PAT_BROKER switch (Config.DisableGitPATBroker), rather than a
+// single frozen guess: on (the 0.7 default) the token is rewritten to a
+// broker path and never enters the sandbox, so it reads like the App lane
+// (brokered residency); off, it reverts to the pre-0.7 in-sandbox posture.
+// LANE_META.pat below is this function's ON shape — the default a caller with
+// no switch value in scope (secrets.tsx's chip, the Integrations rollup)
+// should show, since that's what a fresh 0.7.10 install actually does.
+export function patLaneMeta(brokered: boolean): LaneMeta {
+  return brokered
+    ? { label: "PAT · brokered", tooltip: CAPABILITY.gitPatLine, tone: "success", residency: "proxy_injected" }
+    : { label: "PAT · in-sandbox", tooltip: CAPABILITY.gitPatLineResident, tone: "info", residency: "resident_env" };
+}
+
 export const LANE_META: Record<Lane, LaneMeta> = {
   app: { label: "App · brokered", tooltip: CAPABILITY.brokerLine, tone: "success", residency: "brokered_mint" },
-  pat: { label: "PAT · in-sandbox", tooltip: CAPABILITY.gitPatLine, tone: "info", residency: "resident_env" },
+  pat: patLaneMeta(true),
   ssh: { label: "SSH · resident", tooltip: CAPABILITY.sshKeyLine, tone: "warning", residency: "resident_mount" },
 };
 

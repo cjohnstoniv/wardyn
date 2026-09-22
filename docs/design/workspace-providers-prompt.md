@@ -610,7 +610,7 @@ door, so they are keyed (§7.4, `PROVIDER_MEMBER`) the way `DRIVE_MEMBER`'s refu
 | `BASE_URLS_REQUIRED` | Name at least one address. A row with none admits nothing and is refused at save. |
 | `FIELD_LANES` | Permitted lanes |
 | `LANES_HINT` | Which credential a run may use for this provider. Turning one off does not delete its stored secret. |
-| `LANE_APP_UNAVAILABLE` | Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent. |
+| `LANE_APP_UNAVAILABLE` | Not available: the App broker mints repository-scoped tokens for github.com only — Wardyn doesn't broker Azure DevOps's own token API this way (yet). Use the PAT lane there. |
 | `LANE_SSH_UNAVAILABLE` | Not available: SSH over port 443 is offered for `github.com` and `dev.azure.com` only — a self-hosted host clones over HTTPS. |
 | `SSH_HOST_LEVEL_HINT` | SSH clones are admitted for the whole host: an SSH URL carries no org path to bound. Drop SSH here to keep this row's addresses binding. |
 | `LANES_NEED_ADDRESS` | Add an allowed address first — a credential is stored under its host. |

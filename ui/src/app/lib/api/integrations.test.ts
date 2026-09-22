@@ -206,10 +206,14 @@ describe("deriveIntegrations — SCM hosts", () => {
     expect(data.scm[0].residency).not.toBe("notbuilt");
   });
 
-  it("a github-pat secret yields a resident_env row, not the live-check row", () => {
+  it("a github-pat secret yields a proxy_injected row (#381 default), not the live-check row", () => {
     const data = deriveIntegrations(baseStatus(), { scm_hosts: ["github.com"] }, ["git-pat-github-com"]);
     const [row] = data.scm;
-    expect(row.residency).toBe("resident_env");
+    // patLaneMeta's ON shape (scm-provider.ts): since 0.7 WARDYN_GIT_PAT_BROKER
+    // defaults on, so a stored PAT is attached by the proxy, not resident in
+    // the sandbox — this rollup has no switch value in scope, so it shows the
+    // real default rather than the pre-0.7 residency.
+    expect(row.residency).toBe("proxy_injected");
     expect(row.isGithubApp).toBeFalsy();
     expect(row.canReCheck).toBeFalsy();
   });
