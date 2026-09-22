@@ -416,10 +416,19 @@ func repoLocatorsOf(repos []types.WorkspaceRepo) []string {
 }
 
 // laneAllowed reports whether a provider row permits one credential lane. An
-// EMPTY Lanes list means every lane the kind supports — the field NARROWS, it
-// never widens, so an absent value is today's behaviour.
+// EMPTY Lanes list means every LEGACY lane — the field NARROWS, it never
+// widens, so an absent value is today's behaviour.
+//
+// "Legacy" and not "every lane in the closed set" is the load-bearing word.
+// This expansion is the one site where an unwritten field becomes permission,
+// so a lane added to the closed set would otherwise be granted retroactively
+// to every stored row on every install, with no admin having written it. A new
+// lane must be NAMED on the row (GitLane.Legacy).
 func laneAllowed(row types.GitProvider, lane types.GitLane) bool {
-	return len(row.Lanes) == 0 || slices.Contains(row.Lanes, lane)
+	if len(row.Lanes) == 0 {
+		return lane.Legacy()
+	}
+	return slices.Contains(row.Lanes, lane)
 }
 
 // admittingRows is the row that ADMITTED this repository — as a one-element
