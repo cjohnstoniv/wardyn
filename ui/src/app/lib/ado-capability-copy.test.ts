@@ -9,24 +9,30 @@ import { describe, expect, it } from "vitest";
 import { ADO_CAPABILITY } from "./ado-capability-copy";
 
 // This is the SAME parseFrozenTables() method ado-entra-copy.test.ts (PR
-// #415) uses: parse docs/design/ado-entra-prompt.md's frozen §7 tables back
-// out of the doc and compare every key this module carries, so a swapped
-// hyphen or a reworded clause fails here instead of shipping. Unlike that
-// suite, this one does NOT assert full §7.4/§7.6/§7.8 coverage — this module
-// is a deliberate SUBSET (see its own doc comment for which keys and why),
-// so the only claim this test makes is: every key ADO_CAPABILITY exports
-// exists in the doc under §7.4, §7.6 or §7.8, and matches it byte-exact.
+// #415) uses: parse docs/design/ado-entra-prompt.md's frozen §7 tables (and
+// this round's own §10 addendum — see ado-capability-copy.ts's top comment)
+// back out of the doc and compare every key this module carries, so a
+// swapped hyphen or a reworded clause fails here instead of shipping.
+//
+// ROUND-2 FIX (independent review F5): the first version of this test
+// derived its "expected keys" BY FILTERING THE MODULE ITSELF (every doc key
+// whose name existed in ADO_CAPABILITY) — which means an EMPTY module
+// produced an EMPTY expected-key set and the coverage assertion passed
+// vacuously. EXPECTED below is a hand-written, hardcoded list, entirely
+// independent of what the module happens to export, so emptying the module
+// (or silently dropping a key) fails "the module exports exactly these keys"
+// rather than passing by shrinking both sides of the comparison together.
 const DOC = resolve(process.cwd(), "../docs/design/ado-entra-prompt.md");
 
 const unmono = (s: string) => s.replace(/`/g, "");
 
-/** key -> frozen string, for every row of §7.4, §7.6 and §7.8's tables. */
+/** key -> frozen string, for every row of §7.4, §7.6, §7.8 and §10's tables. */
 function parseFrozenTables(): Map<string, string> {
   const rows = new Map<string, string>();
   let inSection = false;
   for (const line of readFileSync(DOC, "utf8").split("\n")) {
     if (line.startsWith("#")) {
-      inSection = /^### 7\.(4|6|8)\b/.test(line);
+      inSection = /^### 7\.(4|6|8)\b/.test(line) || /^### 10\.\d+\b/.test(line);
       continue;
     }
     if (!inSection || !line.startsWith("|")) continue;
@@ -46,45 +52,96 @@ function splitKey(docKey: string): [string, string[]] {
   return m ? [m[1], m[2].split(",").map((a) => a.trim())] : [docKey, []];
 }
 
-// Every doc key whose bare name (no parens) matches one of this module's own
-// exported names — i.e. the subset this module actually carries.
-const CARRIED_DOC_KEYS = [...doc.keys()].filter((k) => splitKey(k)[0] in ADO_CAPABILITY);
-
-function render(docKey: string): string {
-  const [name, args] = splitKey(docKey);
+function render(name: string, args: string[]): string {
   const value = (ADO_CAPABILITY as Record<string, unknown>)[name];
-  if (value === undefined) throw new Error(`${docKey}: no such key in ADO_CAPABILITY`);
-  return typeof value === "function" ? (value as (...a: string[]) => string)(...args.map((a) => `{${a}}`)) : String(value);
+  if (value === undefined) throw new Error(`${name}: no such key in ADO_CAPABILITY`);
+  return typeof value === "function" ? (value as (...a: string[]) => string)(...args) : String(value);
 }
 
-describe("ado-capability-copy — a subset of §7.4/§7.6/§7.8, parsed out of the prompt doc", () => {
-  it("every module key is a real §7.4/§7.6/§7.8 row (no invented canon)", () => {
-    const moduleNames = Object.keys(ADO_CAPABILITY).sort();
-    const carriedNames = [...new Set(CARRIED_DOC_KEYS.map((k) => splitKey(k)[0]))].sort();
-    expect(moduleNames).toEqual(carriedNames);
+// The hardcoded expected surface — every key ADO_CAPABILITY is SUPPOSED to
+// carry, as (module key name, its doc key with placeholder arg names). This
+// list is the test's ground truth, not the module's.
+const EXPECTED: Array<[string, string]> = [
+  ["CAP_READ", "CAP_READ"],
+  ["CAP_CODE_WRITE", "CAP_CODE_WRITE"],
+  ["CAP_PR", "CAP_PR"],
+  ["CAP_POLICY_ADMIN", "CAP_POLICY_ADMIN"],
+  ["CAP_POLICY_BYPASS", "CAP_POLICY_BYPASS"],
+  ["CAP_BUILD_EXECUTE", "CAP_BUILD_EXECUTE"],
+  ["CAP_REPO_ADMIN", "CAP_REPO_ADMIN"],
+  ["CAP_WORK_WRITE", "CAP_WORK_WRITE"],
+  ["CAP_WIKI_WRITE", "CAP_WIKI_WRITE"],
+  ["REQ_WAITING", "REQ_WAITING"],
+  ["REQ_WAITING_OTHER", "REQ_WAITING_OTHER(person)"],
+  ["REQ_SOURCE", "REQ_SOURCE(ts)"],
+  ["REQ_FIELD_REPOSITORY", "REQ_FIELD_REPOSITORY"],
+  ["REQ_FIELD_COMMAND", "REQ_FIELD_COMMAND"],
+  ["REQ_FIELD_REQUEST", "REQ_FIELD_REQUEST"],
+  ["REQ_FIELD_ACTS_AS", "REQ_FIELD_ACTS_AS"],
+  ["REQ_ACTS_AS_HINT", "REQ_ACTS_AS_HINT(person)"],
+  ["REQ_HELD", "REQ_HELD(thing)"],
+  ["REQ_SCOPE_READOUT", "REQ_SCOPE_READOUT(scope)"],
+  ["REQ_APPROVING_ONCE", "REQ_APPROVING_ONCE(thing)"],
+  ["REQ_APPROVING_RUN", "REQ_APPROVING_RUN(thing)"],
+  ["REQ_DENYING", "REQ_DENYING(thing)"],
+  ["REQ_SCOPE_ONCE_HINT", "REQ_SCOPE_ONCE_HINT(thing)"],
+  ["REQ_SCOPE_RUN_HINT", "REQ_SCOPE_RUN_HINT(thing)"],
+  ["REQ_SCOPE_UNTIL_REFUSED", "REQ_SCOPE_UNTIL_REFUSED"],
+  ["REQ_SCOPE_ALWAYS_REFUSED", "REQ_SCOPE_ALWAYS_REFUSED"],
+  ["REQ_CONSENT_CHIP", "REQ_CONSENT_CHIP"],
+  ["REQ_CONSENT_BODY", "REQ_CONSENT_BODY(capability)"],
+  ["REQ_CONSENT_CTA", "REQ_CONSENT_CTA"],
+  ["REQ_CONSENT_OTHER_BODY", "REQ_CONSENT_OTHER_BODY(person)"],
+  ["REQ_NOT_YOURS_CHIP", "REQ_NOT_YOURS_CHIP"],
+  ["REQ_NOT_YOURS_BODY", "REQ_NOT_YOURS_BODY(person)"],
+  ["LIST_ENDED_CHIP", "LIST_ENDED_CHIP"],
+  ["LIST_ENDED_BODY", "LIST_ENDED_BODY"],
+  ["OUTCOME_ALLOWED_ONCE", "OUTCOME_ALLOWED_ONCE"],
+  ["OUTCOME_ALLOWED_RUN", "OUTCOME_ALLOWED_RUN"],
+  ["TOOL_CALL_NOTE", "TOOL_CALL_NOTE"],
+  ["CAP_THING_READ", "CAP_THING_READ"],
+  ["CAP_THING_CODE_WRITE", "CAP_THING_CODE_WRITE"],
+  ["CAP_THING_PR", "CAP_THING_PR"],
+  ["CAP_THING_POLICY_ADMIN", "CAP_THING_POLICY_ADMIN"],
+  ["CAP_THING_POLICY_BYPASS", "CAP_THING_POLICY_BYPASS"],
+  ["CAP_THING_REPO_ADMIN", "CAP_THING_REPO_ADMIN"],
+  ["CAP_THING_BUILD_EXECUTE", "CAP_THING_BUILD_EXECUTE"],
+  ["CAP_THING_WORK_WRITE", "CAP_THING_WORK_WRITE"],
+  ["CAP_THING_WIKI_WRITE", "CAP_THING_WIKI_WRITE"],
+  ["REQ_FIELD_REF_CLASS", "REQ_FIELD_REF_CLASS"],
+  ["REQ_REF_CLASS_PROTECTED", "REQ_REF_CLASS_PROTECTED"],
+  ["REQ_CONSENT_HEADING", "REQ_CONSENT_HEADING"],
+  ["REQ_HELD_EXPIRED", "REQ_HELD_EXPIRED(thing)"],
+];
+
+describe("ado-capability-copy — the hardcoded expected surface", () => {
+  it("is not empty (a mutation guard: an emptied module must fail this suite)", () => {
+    expect(EXPECTED.length).toBeGreaterThan(0);
+    expect(EXPECTED.length).toBe(50);
   });
 
-  it.each(CARRIED_DOC_KEYS)("%s is byte-exact against the doc", (key) => {
-    expect(render(key)).toBe(doc.get(key));
+  it("the module exports EXACTLY the expected keys — no fewer, no more", () => {
+    expect(Object.keys(ADO_CAPABILITY).sort()).toEqual(EXPECTED.map(([k]) => k).sort());
   });
 
-  it("carries no copy the doc's freeze does not (defends against a hand-edit drifting from §7)", () => {
-    // Every string value (and every function's rendering with placeholder
-    // args) must appear verbatim somewhere in the doc's §7.4/§7.6/§7.8 cells.
-    const docValues = new Set(doc.values());
+  it("every expected key exists, is non-empty, and is found in the doc under §7.4/§7.6/§7.8/§10", () => {
+    for (const [moduleKey, docKey] of EXPECTED) {
+      const value = (ADO_CAPABILITY as Record<string, unknown>)[moduleKey];
+      expect(value, `${moduleKey} is missing from the module`).toBeDefined();
+      if (typeof value === "string") expect(value.length, `${moduleKey} is empty`).toBeGreaterThan(0);
+      expect(doc.has(docKey), `${docKey} not found in the doc's §7.4/§7.6/§7.8/§10 tables`).toBe(true);
+    }
+  });
+
+  it.each(EXPECTED)("%s is byte-exact against the doc", (_moduleKey, docKey) => {
+    const [name, placeholders] = splitKey(docKey);
+    expect(render(name, placeholders.map((p) => `{${p}}`))).toBe(doc.get(docKey));
+  });
+
+  it("carries no key the doc's §7.4/§7.6/§7.8/§10 tables don't have a row for", () => {
+    const docNames = new Set([...doc.keys()].map((k) => splitKey(k)[0]));
     for (const key of Object.keys(ADO_CAPABILITY)) {
-      const value = (ADO_CAPABILITY as Record<string, unknown>)[key];
-      const rendered =
-        typeof value === "function"
-          ? (value as (...a: string[]) => string)("{a}", "{b}", "{c}")
-          : String(value);
-      // Functions are checked exactly by the byte-exact test above (which
-      // renders with the DOC's own placeholder names) — this second pass
-      // only re-confirms the plain string keys, which that test can't fully
-      // distinguish from a coincidentally-matching substring.
-      if (typeof value !== "function") {
-        expect(docValues.has(rendered)).toBe(true);
-      }
+      expect(docNames.has(key), `${key} has no matching doc row`).toBe(true);
     }
   });
 });

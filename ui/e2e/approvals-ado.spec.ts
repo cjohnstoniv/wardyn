@@ -71,8 +71,11 @@ test.describe("Approvals — the Azure DevOps capability card", () => {
 
     const card = page.getByTestId("ado-capability-card");
     await expect(card).toBeVisible();
-    await expect(card.getByText("Push")).toBeVisible();
-    await expect(card.getByText("acme/payments-api")).toBeVisible();
+    // exact: true — "Push" and "acme/payments-api" both also appear as
+    // SUBSTRINGS of the composed Command field's own text (F4 fix: a loose
+    // getByText hit strict-mode multi-match against that field).
+    await expect(card.getByRole("heading", { name: "Push", exact: true })).toBeVisible();
+    await expect(card.getByText("acme/payments-api", { exact: true })).toBeVisible();
 
     // Stage "Once" from the caret before deciding — the scope readout tracks
     // it, unstaged, before either button is pressed.

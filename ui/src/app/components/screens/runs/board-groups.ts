@@ -15,7 +15,7 @@ import type { AgentRun, ApprovalRequest } from "../../../lib/types";
 // THE PREDICATE, not the strip: importing it from live-approvals.tsx hoisted
 // that whole module (and everything it imports) into the eager entry chunk —
 // see isHeld's own doc in lib/types/approvals.ts.
-import { isHeld } from "../../../lib/types";
+import { isAdoConsentRequest, isHeld } from "../../../lib/types";
 import {
   attentionFor,
   attentionRank,
@@ -35,6 +35,13 @@ interface RunApprovalSignals extends AttentionSignals {
    *  the cockpit header then say "Waiting for your AWS sign-in" instead of
    *  "sandbox held", because this hold is the person's own to clear. */
   reauth?: boolean;
+  /** At least one pending row is an Azure DevOps Entra-consent request (S10
+   *  round 2, F13) — a DIFFERENT provider than `reauth` above, so the board
+   *  and cockpit header say "Azure DevOps sign-in", never "AWS sign-in",
+   *  for this one. Checked structurally (isAdoConsentRequest), never folded
+   *  into `reauth`: the two must never collapse into one string that names
+   *  the wrong provider. */
+  adoConsent?: boolean;
 }
 
 export type RunSignals = ReadonlyMap<string, RunApprovalSignals>;
@@ -69,8 +76,12 @@ export function approvalSignals(pending: readonly ApprovalRequest[]): RunSignals
     // A mid-run AWS sign-in request is the ONE hold a person can act on
     // directly, and the board and the cockpit header say so instead of the
     // generic "sandbox held" — which would send them looking for an Approve
-    // button that does not exist for this kind.
-    if (a.kind === "credential_reauth") cur.reauth = true;
+    // button that does not exist for this kind. An Azure DevOps consent
+    // request is the SAME shape (kind credential_reauth) but a DIFFERENT
+    // provider — checked first and separately so it never falls into the
+    // AWS-named `reauth` bucket (F13).
+    if (isAdoConsentRequest(a)) cur.adoConsent = true;
+    else if (a.kind === "credential_reauth") cur.reauth = true;
     by.set(a.run_id, cur);
   }
   return by;

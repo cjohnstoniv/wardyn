@@ -645,7 +645,7 @@ already done (§5 #10).
 | `REQ_SCOPE_READOUT(scope)` | Scope: {scope} |
 | `REQ_APPROVING_ONCE(thing)` | Approving lets this one {thing} through. The next one asks again. |
 | `REQ_APPROVING_RUN(thing)` | Approving lets every {thing} from this run through until it ends. Nothing carries to the next run. |
-| `REQ_DENYING(thing)` | Denying refuses this {thing} and tells the tool why. The run keeps going and may ask again. |
+| `REQ_DENYING(thing)` | Denying refuses this {thing} for the rest of the run. The run keeps going, but this same request is refused every time it asks again. |
 | `REQ_SCOPE_ONCE_HINT(thing)` | This one {thing} goes through. The next one asks again. |
 | `REQ_SCOPE_RUN_HINT(thing)` | Every {thing} from this run goes through until it ends. (default) |
 | `REQ_SCOPE_UNTIL_REFUSED` | Refused for Azure DevOps capabilities: a capability can't outlive the run that was granted it. |
@@ -685,6 +685,14 @@ already done (§5 #10).
 | `COL_ASKED` | Asked for |
 | `COL_WHERE` | Where |
 | `COL_OUTCOME` | Outcome |
+
+**Post-freeze correction (S10 round 2, lead-approved):** `REQ_DENYING` was frozen before #414 taught
+`answerADOCapability` that a deny STICKS for the rest of the run — the same canonical request is
+refused by naming the denied approval, regardless of the scope it was denied at (`adoCapDeniedForRunRefusal`).
+"The run keeps going and may ask again" was true when a deny only ever bound the one held request; it
+is not true now. The row above carries the corrected text. Because a deny's SCOPE choice no longer
+changes what happens, the `Scope: {scope}` readout (`REQ_SCOPE_READOUT`) is not shown next to Deny —
+only next to Approve, where once/run still means something.
 
 ### 7.7 `ADO` — the launch door and the after view
 
@@ -868,3 +876,66 @@ not only in a lane's commit message. It is not a copy decision and this document
 Not drawn, deliberately: a second forge, a second identity provider, multi-party approval, a
 per-capability application registration, device code, a "tell my admin" action on the above-ceiling
 card, and any change to how `pat` / `ssh` rows reach Azure DevOps today.
+
+## 10. Addendum — capability-card additions (S10 round 2, lead-approved, added post-freeze)
+
+An independent review of the first capability-card implementation found real strings the mock draws
+in context but §7.2–§7.8's tables never gave their own row — chiefly the per-capability NOUN each
+consequence sentence's `{thing}` plugs in (§7.6 draws "push"/"change"/"action" inline, State 5, never
+as a keyed row) — and a few small fields (Ref class, a consent-card heading) the card needs and the
+mock's own drawing doesn't isolate as text either. These rows are ADDED, not amended: §7.2–§7.8 stay
+exactly as frozen 2026-09-22 above. Every row below is pinned by the same parser
+(ado-capability-copy.test.ts) that checks §7.4/§7.6/§7.8.
+
+### 10.1 `ADO` — the consequence sentences' `{thing}`, per capability
+
+The mock (§7.6 State 5, `docs/design/ado-entra-mock/index.html` ~492-606) draws four capabilities and
+picks a different noun for each: `code_write` and `policy_bypass` both read "push" (they're both a
+push, one past a policy and one not), `policy_admin` reads "change", `pr` reads "action". The other
+five grantable capabilities (`read`, `repo_admin`, `build_execute`, `work_write`, `wiki_write`) are not
+drawn in the mock; their nouns below are the lead's own extension, in the same register.
+
+| Key | String |
+|---|---|
+| `CAP_THING_READ` | read |
+| `CAP_THING_CODE_WRITE` | push |
+| `CAP_THING_PR` | action |
+| `CAP_THING_POLICY_ADMIN` | change |
+| `CAP_THING_POLICY_BYPASS` | push |
+| `CAP_THING_REPO_ADMIN` | change |
+| `CAP_THING_BUILD_EXECUTE` | run |
+| `CAP_THING_WORK_WRITE` | edit |
+| `CAP_THING_WIKI_WRITE` | edit |
+
+### 10.2 `ADO` — the ref-class field and the consent card's heading
+
+`REQ_FIELD_REF_CLASS`/`REQ_REF_CLASS_PROTECTED` name the fact the canonical scope actually carries
+(`ref_class: "protected"`) without inventing a ref name the wire scope does not have (`adoCapabilityScope`
+carries no ref). `REQ_CONSENT_HEADING` titles the Entra-consent card (`credential_reauth` /
+`entra_consent`) when it stands alone rather than paired with the escalation it blocked — see
+ado-capability-card.tsx's own doc comment for why it is not paired.
+
+| Key | String |
+|---|---|
+| `REQ_FIELD_REF_CLASS` | Ref class |
+| `REQ_REF_CLASS_PROTECTED` | Protected by a branch policy |
+| `REQ_CONSENT_HEADING` | Azure DevOps needs more access |
+
+### 10.3 `ADO` — the hold's honest expiry
+
+`REQ_HELD` (§7.6) says the request is held "for up to four minutes" — true only while it actually
+still is. Past that window the row is no longer parked at the proxy (the hold ran out server-side, same
+`HOLD_TIMEOUT_MS`-shaped ceiling every other hold in this console carries); saying so keeps the card
+honest instead of quietly wrong once four minutes pass.
+
+| Key | String |
+|---|---|
+| `REQ_HELD_EXPIRED(thing)` | The {thing} was not held — approving lets it through the next time the run asks. |
+
+### 10.4 `ADO` — the decided badge
+
+Reused, not re-frozen: `OUTCOME_ALLOWED_ONCE`/`OUTCOME_ALLOWED_RUN` are already §7.6 rows (the decided
+LIST's own outcome column). Round 2 extends `approvalScopeBadge` (`wardyn/copy.ts`) to read them for a
+decided Azure DevOps escalation too, so the /approvals and run-detail decided rows say "Allowed once" /
+"Allowed for this run" rather than the lowercase `once`/`this run` egress badge shares with every other
+kind. No new row: this section exists only to record the pointer.

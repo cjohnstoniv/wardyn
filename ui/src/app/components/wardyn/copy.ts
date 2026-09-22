@@ -8,7 +8,9 @@
 // every-tier note live in cc-meta.ts (CC_META / CONFINEMENT_CONSTANT_NOTE) —
 // import from there, never duplicate them here.
 import type { ApprovalKind as WireApprovalKind, ApprovalRequest, ApprovalScope } from "../../lib/types";
+import { isAdoCapabilityRequest } from "../../lib/types";
 import { shortTime } from "../../lib/format";
+import { ADO_CAPABILITY } from "../../lib/ado-capability-copy";
 
 // The single residual-risk prefix (D11) — everywhere a tier is explained, never
 // dropped or softened. The residual text itself is CC_META[*].doesntProtect.
@@ -300,8 +302,19 @@ export const ALWAYS_NEEDS_WORKSPACE = "Always needs a workspace — this run isn
 // ApprovalStateBadge, which already says Approved/Denied — this is just the
 // "· once" half.
 export function approvalScopeBadge(
-  item: Pick<ApprovalRequest, "kind" | "state" | "decision_scope" | "decision_expires_at">,
+  item: Pick<ApprovalRequest, "kind" | "state" | "decision_scope" | "decision_expires_at" | "grant_id" | "requested_scope">,
 ): string | undefined {
+  // S10 round 2 (F11): an Azure DevOps escalation's decided badge reads the
+  // canon OUTCOME_ALLOWED_ONCE/RUN phrase (§7.6, reused via ado-capability-
+  // copy.ts §10.4) rather than the lowercase once/this-run word every other
+  // kind shares — adoDecisionRule never produces until/always, so only the
+  // two ALLOWED outcomes exist to badge; a DENIED row carries no extra badge
+  // (the state chip already says Denied, and #414 made every ado deny mean
+  // the same "for the rest of the run" thing regardless of scope).
+  if (isAdoCapabilityRequest(item)) {
+    if (item.state !== "APPROVED" || !item.decision_scope) return undefined;
+    return item.decision_scope === "once" ? ADO_CAPABILITY.OUTCOME_ALLOWED_ONCE : ADO_CAPABILITY.OUTCOME_ALLOWED_RUN;
+  }
   if (item.kind !== "egress_domain") return undefined;
   if (item.state !== "APPROVED" && item.state !== "DENIED") return undefined;
   const scope = item.decision_scope;

@@ -178,9 +178,14 @@ export interface AdoConsentScope {
 // adoEscalationScope, internal/api/injection_ado_capability.go): a tool_call
 // with grant_id set is a control-plane-raised ADO escalation, an older
 // console's generic tool_call card is not.
-export function isAdoCapabilityRequest(
-  a: ApprovalRequest,
-): a is ApprovalRequest & { requested_scope: AdoCapabilityScope } {
+//
+// Takes a Pick, not the full ApprovalRequest: copy.ts's approvalScopeBadge
+// (F11, round 2) calls this with its own narrower Pick, and a full-shape
+// parameter would refuse that caller structurally even though every field
+// this function actually reads is present.
+export function isAdoCapabilityRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
+  a: T,
+): a is T & { requested_scope: AdoCapabilityScope } {
   return a.kind === "tool_call" && !!a.grant_id && a.requested_scope?.lane === "azure_devops";
 }
 

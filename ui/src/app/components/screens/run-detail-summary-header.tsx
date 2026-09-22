@@ -19,7 +19,7 @@ import { Button } from "../ui/button";
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RunStateGlyph } from "../wardyn/run-state-glyph";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
-import { waitingReauth } from "../../lib/reauth-waiting-copy";
+import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
@@ -59,6 +59,7 @@ export function SummaryHeader({
   pendingApprovalCount = 0,
   sandboxHeld = false,
   awaitingReauth = false,
+  awaitingAdoConsent = false,
   onCopyLink,
   linkCopied = false,
   onKill,
@@ -83,6 +84,11 @@ export function SummaryHeader({
   // one hold they can clear themselves. The count rides the sentence (round-2
   // UX S8), so a co-pending egress approval is not hidden behind the sign-in.
   awaitingReauth?: boolean;
+  // The Azure DevOps twin of awaitingReauth (S10 round 2, F13) — the SAME
+  // shape (a mid-run sign-in hold this run's owner can clear themselves) for
+  // a DIFFERENT provider. Kept as its own prop, never folded into
+  // awaitingReauth: the chip below must never say "AWS" for this one.
+  awaitingAdoConsent?: boolean;
   // Copy this run's permalink. The old screen had a Copy-link button in a
   // breadcrumb row that the command bar replaced; the affordance survives the
   // row it lived in.
@@ -365,13 +371,17 @@ export function SummaryHeader({
           <Chip tone="warning" className="h-7 max-w-[130px] gap-1">
             <ShieldAlert className="size-3 shrink-0" />
             <span className="block min-w-0 truncate">
-              {awaitingReauth
-                ? /* `owned` — the chip says whose sign-in is awaited, and only
-                     the run's owner can give it (W6-U SHOULD-1). */
-                  waitingReauth(pendingApprovalCount, owned)
-                : sandboxHeld
-                  ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
-                  : RUN_COCKPIT.waiting(pendingApprovalCount)}
+              {awaitingAdoConsent
+                ? // Azure DevOps, never AWS (F13) — checked ahead of
+                  // awaitingReauth, same ownership rule.
+                  waitingAdoConsent(pendingApprovalCount, owned)
+                : awaitingReauth
+                  ? /* `owned` — the chip says whose sign-in is awaited, and only
+                       the run's owner can give it (W6-U SHOULD-1). */
+                    waitingReauth(pendingApprovalCount, owned)
+                  : sandboxHeld
+                    ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
+                    : RUN_COCKPIT.waiting(pendingApprovalCount)}
             </span>
           </Chip>
         )}

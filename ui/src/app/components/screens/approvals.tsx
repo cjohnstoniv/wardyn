@@ -627,7 +627,10 @@ function PendingCard({
   // raise) gets ITS OWN card, not this generic one: it needs fields
   // (repository, ref class, the composed command) and a scope control (Once
   // / This run only, never until/always) that deriveBanner/canDecideApproval
-  // above don't model — see AdoCapabilityCard's own doc comment.
+  // above don't model — see AdoCapabilityCard's own doc comment. `run` is
+  // handed through AS-IS (undefined/null/loaded) — the card itself renders
+  // the loading/error states now (round-2 fix F10), rather than this caller
+  // collapsing "still loading" into "not yours".
   // usePrincipal(), not door.principal: the consent door's ownership question
   // here is "is the viewer the row's OWNER subject" (adoConsentScopeBody.Owner
   // on the wire), a plain identity comparison, not the model-access door's
@@ -640,10 +643,9 @@ function PendingCard({
         <RunContextRow runId={item.run_id} onRun={setRun} />
         <AdoCapabilityCard
           item={item}
-          operator={securityOperator}
+          securityOperator={securityOperator}
           viewerPrincipal={principal}
-          runOwner={run?.created_by}
-          runEnded={runEnded}
+          run={run}
           busy={adoBusy}
           onApprove={async (opts) => {
             setAdoBusy(true);

@@ -8,7 +8,10 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
-import { AdoCapabilityCard } from "./ado-capability-card";
+import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
+
+const OWNER: AdoCardRun = { created_by: "dana@acme.example", state: "RUNNING" };
+const ENDED_RUN: AdoCardRun = { created_by: "dana@acme.example", state: "COMPLETED" };
 
 function escalation(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
   return {
@@ -28,7 +31,7 @@ function escalation(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
       cmd: "Push commits and move branches that no policy protects (code_write) in acme/payments-api",
     },
     state: "PENDING",
-    requested_at: "2026-09-22T14:02:11.000Z",
+    requested_at: new Date().toISOString(),
     ...overrides,
   };
 }
@@ -46,7 +49,7 @@ function consent(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
       scopes: ["vso.code_write"],
     },
     state: "PENDING",
-    requested_at: "2026-09-22T14:09:52.000Z",
+    requested_at: new Date().toISOString(),
     ...overrides,
   };
 }
@@ -56,15 +59,9 @@ function renderCard(ui: React.ReactElement) {
 }
 
 describe("AdoCapabilityCard — the escalation states", () => {
-  it("shows the capability heading in plain words, the repository and the composed command", async () => {
+  it("shows the capability heading in plain words, the repository, the composed command and Acts as", async () => {
     renderCard(
-      <AdoCapabilityCard
-        item={escalation()}
-        operator
-        busy={false}
-        onApprove={vi.fn()}
-        onDeny={vi.fn()}
-      />,
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
     const card = await screen.findByTestId("ado-capability-card");
     expect(within(card).getByText("Push")).toBeInTheDocument();
@@ -74,6 +71,9 @@ describe("AdoCapabilityCard — the escalation states", () => {
     ).toBeInTheDocument();
     // Not protected — no Ref class row.
     expect(within(card).queryByText("Ref class")).not.toBeInTheDocument();
+    // F8 — Acts as, from run.created_by.
+    expect(within(card).getByText("Acts as")).toBeInTheDocument();
+    expect(within(card).getByText("dana@acme.example")).toBeInTheDocument();
   });
 
   it("shows a Ref class row, and the bypass heading, for a protected-ref escalation", async () => {
@@ -92,7 +92,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
             cmd: "Land changes past a branch policy (policy_bypass) in acme/payments-api, on a protected branch",
           },
         })}
-        operator
+        securityOperator
+        run={OWNER}
         busy={false}
         onApprove={vi.fn()}
         onDeny={vi.fn()}
@@ -110,7 +111,8 @@ describe("AdoCapabilityCard — the escalation states", () => {
         item={escalation({
           requested_scope: { ...escalation().requested_scope, capability: "project_admin" } as never,
         })}
-        operator
+        securityOperator
+        run={OWNER}
         busy={false}
         onApprove={vi.fn()}
         onDeny={vi.fn()}
@@ -123,7 +125,7 @@ describe("AdoCapabilityCard — the escalation states", () => {
   it("defaults to 'This run', and Approve sends decision_scope run explicitly (never omitted)", async () => {
     const onApprove = vi.fn();
     renderCard(
-      <AdoCapabilityCard item={escalation()} operator busy={false} onApprove={onApprove} onDeny={vi.fn()} />,
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={onApprove} onDeny={vi.fn()} />,
     );
     const card = await screen.findByTestId("ado-capability-card");
     expect(within(card).getByText("Scope: This run")).toBeInTheDocument();
@@ -131,11 +133,37 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(onApprove).toHaveBeenCalledWith([{ scope: "run" }]);
   });
 
+  // F1 — the consequence sentences use the mock's per-capability noun
+  // ("push" for code_write/policy_bypass), never the generic "request".
+  it("F1: the consequence sentences use the capability's own noun, not the generic 'request'", async () => {
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByText(/Approving lets every push from this run through/)).toBeInTheDocument();
+    expect(within(card).queryByText(/every request from this run/)).not.toBeInTheDocument();
+  });
+
+  it("F1: a pull-request escalation's consequence sentence says 'action'", async () => {
+    renderCard(
+      <AdoCapabilityCard
+        item={escalation({ requested_scope: { ...escalation().requested_scope, capability: "pr" } as never })}
+        securityOperator
+        run={OWNER}
+        busy={false}
+        onApprove={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByText(/Approving lets every action from this run through/)).toBeInTheDocument();
+  });
+
   it("picking Once from the caret stages it, and Approve/Deny both then send scope once", async () => {
     const onApprove = vi.fn();
     const onDeny = vi.fn();
     renderCard(
-      <AdoCapabilityCard item={escalation()} operator busy={false} onApprove={onApprove} onDeny={onDeny} />,
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={onApprove} onDeny={onDeny} />,
     );
     const card = await screen.findByTestId("ado-capability-card");
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -149,8 +177,21 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(onDeny).toHaveBeenCalledWith([{ scope: "once" }]);
   });
 
+  it("F1: the caret's Once/This run hints also use the capability's own noun", async () => {
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(within(card).getByRole("button", { name: /more options/i }));
+    expect(await screen.findByText(/This one push goes through/)).toBeInTheDocument();
+    expect(screen.getByText(/Every push from this run goes through/)).toBeInTheDocument();
+  });
+
   it("Until… and Always are disabled with their refusal reason (ADO has no clock and no workspace to write to)", async () => {
-    renderCard(<AdoCapabilityCard item={escalation()} operator busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
     const card = await screen.findByTestId("ado-capability-card");
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(within(card).getByRole("button", { name: /more options/i }));
@@ -158,13 +199,97 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(screen.getByText(/nothing here is saved to the workspace/)).toBeInTheDocument();
   });
 
-  it("renders no buttons and 'Not yours to decide' for a non-owner, non-operator viewer", async () => {
+  // F7 — a deny now sticks for the rest of the run (#414); the scope readout
+  // sits by Approve only.
+  it("F7: Denying says it refuses this request for the rest of the run, and no scope readout sits by Deny", async () => {
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByText(/Denying refuses this push for the rest of the run/)).toBeInTheDocument();
+    expect(within(card).queryByText(/may ask again/)).not.toBeInTheDocument();
+    const denyBtn = within(card).getByRole("button", { name: "Deny" });
+    // The readout sits once, immediately after the caret/Deny group — assert
+    // there is exactly one "Scope:" node and it precedes Deny in DOM order
+    // is out of scope for a jsdom test; the stronger, still-precise
+    // assertion is that removing it from beside Deny leaves exactly one.
+    expect(within(card).getAllByText(/^Scope: /)).toHaveLength(1);
+    expect(denyBtn).toBeInTheDocument();
+  });
+
+  // F7 — the hold's honest expiry.
+  it("F7: says the request is held while requested_at is recent", async () => {
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByText(/is held at the proxy for up to four minutes/)).toBeInTheDocument();
+  });
+
+  it("F7: says the request was not held once requested_at is more than four minutes old", async () => {
+    renderCard(
+      <AdoCapabilityCard
+        item={escalation({ requested_at: new Date(Date.now() - 5 * 60_000).toISOString() })}
+        securityOperator
+        run={OWNER}
+        busy={false}
+        onApprove={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByText(/was not held — approving lets it through the next time the run asks/)).toBeInTheDocument();
+  });
+
+  // F6 — Q3: policy_bypass/policy_admin get a plain Approve + destructive Deny.
+  it("F6: an ordinary capability (code_write) keeps a teal Approve and a plain Deny", async () => {
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByRole("button", { name: "Approve" }).className).toMatch(/\bbg-info\b/);
+    expect(within(card).getByRole("button", { name: "Deny" }).className).not.toMatch(/\bbg-destructive\b/);
+  });
+
+  it("F6: policy_bypass gets a plain Approve and a destructive Deny", async () => {
+    renderCard(
+      <AdoCapabilityCard
+        item={escalation({ requested_scope: { ...escalation().requested_scope, capability: "policy_bypass" } as never })}
+        securityOperator
+        run={OWNER}
+        busy={false}
+        onApprove={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByRole("button", { name: "Approve" }).className).not.toMatch(/\bbg-info\b/);
+    expect(within(card).getByRole("button", { name: "Deny" }).className).toMatch(/\bbg-destructive\b/);
+  });
+
+  it("F6: policy_admin gets a plain Approve and a destructive Deny", async () => {
+    renderCard(
+      <AdoCapabilityCard
+        item={escalation({ requested_scope: { ...escalation().requested_scope, capability: "policy_admin" } as never })}
+        securityOperator
+        run={OWNER}
+        busy={false}
+        onApprove={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByRole("button", { name: "Approve" }).className).not.toMatch(/\bbg-info\b/);
+    expect(within(card).getByRole("button", { name: "Deny" }).className).toMatch(/\bbg-destructive\b/);
+  });
+
+  it("renders no buttons and neutral 'Not yours to decide' for a non-owner, non-security viewer", async () => {
     const onApprove = vi.fn();
     renderCard(
       <AdoCapabilityCard
         item={escalation()}
-        operator={false}
-        runOwner="dana@acme.example"
+        securityOperator={false}
+        run={OWNER}
         viewerPrincipal="priya@acme.example"
         busy={false}
         onApprove={onApprove}
@@ -172,17 +297,19 @@ describe("AdoCapabilityCard — the escalation states", () => {
       />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText("Not yours to decide")).toBeInTheDocument();
+    const chip = within(card).getByText("Not yours to decide");
+    expect(chip).toBeInTheDocument();
+    expect(chip.className).toMatch(/bg-muted|text-muted-foreground/);
     expect(within(card).getByText(/Only dana@acme.example, who started this run, or an admin can answer this\./)).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
 
-  it("is decidable when the viewer IS the run's owner, with no operator tier at all", async () => {
+  it("is decidable when the viewer IS the run's owner, with no security tier at all", async () => {
     renderCard(
       <AdoCapabilityCard
         item={escalation()}
-        operator={false}
-        runOwner="dana@acme.example"
+        securityOperator={false}
+        run={OWNER}
         viewerPrincipal="dana@acme.example"
         busy={false}
         onApprove={vi.fn()}
@@ -193,22 +320,52 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(within(card).getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 
-  it("shows the run-ended sentence and no controls once the run has ended", async () => {
+  it("shows the LIST_ENDED sentence and no controls once the run has ended", async () => {
     renderCard(
-      <AdoCapabilityCard item={escalation()} operator runEnded busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+      <AdoCapabilityCard item={escalation()} securityOperator run={ENDED_RUN} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText(/The run ended before anyone decided this/)).toBeInTheDocument();
+    expect(within(card).getByText("This run has ended")).toBeInTheDocument();
+    expect(within(card).getByText(/nothing to allow — the request went away with the run/)).toBeInTheDocument();
     expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  // F10 — loading and error states, non-security viewer only (a security
+  // operator's decidability never depends on the run fetch).
+  it("F10: a non-security viewer sees a neutral loading state, never 'Not yours', while run is undefined", async () => {
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator={false} run={undefined} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).queryByText("Not yours to decide")).not.toBeInTheDocument();
+    expect(within(card).getByLabelText("loading")).toBeInTheDocument();
+  });
+
+  it("F10: a non-security viewer sees a generic error, never 'Not yours', when run is null", async () => {
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator={false} run={null} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).queryByText("Not yours to decide")).not.toBeInTheDocument();
+    expect(within(card).getByText(/Couldn't load this run/)).toBeInTheDocument();
+  });
+
+  it("F10: a security operator sees the real card immediately, even with run undefined", async () => {
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator run={undefined} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 });
 
 describe("AdoCapabilityCard — the Entra-consent state", () => {
-  it("the owner sees the consent chip and the 'Allow and continue' door, to Settings", async () => {
+  it("the owner sees the consent chip, Acts as, and the 'Allow and continue' door, to Settings", async () => {
     renderCard(
       <AdoCapabilityCard
         item={consent()}
-        operator={false}
+        securityOperator={false}
+        run={null}
         viewerPrincipal="dana@acme.example"
         busy={false}
         onApprove={vi.fn()}
@@ -217,6 +374,9 @@ describe("AdoCapabilityCard — the Entra-consent state", () => {
     );
     const card = await screen.findByTestId("ado-consent-card");
     expect(within(card).getByText("Needs your Microsoft consent")).toBeInTheDocument();
+    // F8 — Acts as, from the consent row's own owner field.
+    expect(within(card).getByText("Acts as")).toBeInTheDocument();
+    expect(within(card).getByText("dana@acme.example")).toBeInTheDocument();
     const cta = within(card).getByRole("link", { name: "Allow and continue" });
     expect(cta).toHaveAttribute("href", "/settings");
   });
@@ -225,7 +385,8 @@ describe("AdoCapabilityCard — the Entra-consent state", () => {
     renderCard(
       <AdoCapabilityCard
         item={consent({ requested_scope: { ...consent().requested_scope, owner: "dana@acme.example" } as never })}
-        operator={false}
+        securityOperator={false}
+        run={null}
         viewerPrincipal="priya@acme.example"
         busy={false}
         onApprove={vi.fn()}
@@ -234,7 +395,7 @@ describe("AdoCapabilityCard — the Entra-consent state", () => {
     );
     const card = await screen.findByTestId("ado-consent-card");
     expect(within(card).getByText("Waiting for dana@acme.example")).toBeInTheDocument();
-    expect(within(card).getByText(/Only dana@acme.example can give Microsoft/)).toBeInTheDocument();
+    expect(within(card).getByText(/only dana@acme.example can give Microsoft/)).toBeInTheDocument();
     expect(within(card).queryByRole("link")).not.toBeInTheDocument();
   });
 });

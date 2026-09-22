@@ -21,6 +21,7 @@ import * as React from "react";
 import { ShieldAlert, Clock, Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
+  canDecideAdoCapability,
   canDecideApproval,
   decisionArgs,
   isAdoCapabilityRequest,
@@ -30,7 +31,7 @@ import {
   type ApprovalScope,
   type DecisionOptions,
 } from "../../lib/types";
-import { AdoCapabilityCard } from "./ado-capability-card";
+import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
@@ -56,7 +57,7 @@ import { Mono } from "./code-block";
 // re-exported so this module stays the place a reader of the strip looks.
 export { isHeld };
 import { Chip, SectionLabel } from "./primitives";
-import { useSecurityOperator } from "./operator-context";
+import { useSecurityOperator, usePrincipal } from "./operator-context";
 import { attentionRank } from "./run-state-glyph";
 import {
   ALWAYS_NEEDS_WORKSPACE,
@@ -131,6 +132,13 @@ function clip(s: string): string {
 // off the screen is the strip defeating the surface it exists to serve.
 const STRIP_ROWS = 2;
 
+// S10 round 2 (F3) — the strip's own heading when every pending row is an
+// Azure DevOps consent request (never REAUTH_HEADING, which names AWS
+// outright). PLAIN, NOT CANON: §7.6/§10 give the card's own chip
+// (REQ_CONSENT_CHIP) but no strip-heading sentence, so this mirrors
+// REAUTH_HEADING's own rhythm rather than inventing a new register.
+const ADO_CONSENT_STRIP_HEADING = "Azure DevOps sign-in needed — sign in to let this run's Azure DevOps access through";
+
 // The strip's own precedence, read from the ONE rank table the board's glyph
 // reads (run-state-glyph.tsx): a held request — the sandbox is parked on this
 // decision right now — is "permission" and outranks a passive pending, which is
@@ -151,16 +159,33 @@ export function LiveApprovals({
   // forgets to pass it shows the option disabled rather than offering a click
   // the server 400s. Every production mount passes it explicitly.
   hasWorkspace = false,
+  // S10 round 2 (F2/F3) — the run this strip is mounted on, so an Azure
+  // DevOps escalation card can tell its own owner from anyone else. All FOUR
+  // real production mounts (run-detail.tsx; demo-runner.tsx; workspace-
+  // detail/record-pane.tsx TWICE) pass it explicitly — run-detail.tsx passes
+  // its real, already-loaded RunDetail; the other three pass `null` on
+  // purpose (see each call site's own comment: none has a real AgentRun in
+  // hand, or an ADO row is not expected there at all). Defaults to null, not
+  // undefined: this
+  // component's own test suite mounts it dozens of times with no ADO row in
+  // play, and `null` reads as "no run known" (AdoCapabilityCard treats it
+  // exactly like a run it couldn't read: a security operator still decides;
+  // anyone else sees the honest "couldn't load this run" state) rather than
+  // `undefined`'s "still loading" — a default that would only ever LOOK
+  // finished once, and every test mount is exactly that "never resolves"
+  // shape if it defaulted to undefined instead.
+  run = null,
 }: {
   runId: string;
   reasonApprove?: string;
   reasonDeny?: string;
   idleHint?: string;
   hasWorkspace?: boolean;
+  run?: AdoCardRun | null;
 }) {
   // Decides here go straight to the API with no ReasonDialog stop, so this is
-  // the one gate for all three mount sites (run detail, demo screen, the
-  // record-mode verify panel) — see approvals.tsx's PendingCard for the
+  // the one gate for all FOUR mount sites (run detail, demo screen, and
+  // record-pane.tsx's two) — see approvals.tsx's PendingCard for the
   // queue-screen equivalent.
   //
   // useSecurityOperator, not useOperator (0.7 §B): authorizeMemberDecision
@@ -168,6 +193,9 @@ export function LiveApprovals({
   // decision_scope=always is its lockstep pair (approvals.go:604), so the
   // security tier decides any kind, on any run, at any scope.
   const securityOperator = useSecurityOperator();
+  // The signed-in viewer's own subject — see the `run` prop's doc above for
+  // why the ADO card needs both.
+  const principal = usePrincipal();
   const [pending, setPending] = React.useState<ApprovalRequest[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
   // A misclick on Deny (any scope) can't silently poison a host the operator
@@ -362,14 +390,26 @@ export function LiveApprovals({
   // THE THREE SENTENCES THAT ARE FALSE FOR A RE-AUTH ROW (UX round B2).
   // "approve to let it through" names a decision nobody makes for this kind;
   // when every pending row is one, the heading names the need instead.
-  const allReauth = pending.length > 0 && pending.every((a) => a.kind === "credential_reauth");
-  const heading = allReauth
+  //
+  // S10 round 2 (F3): credential_reauth is not ONE kind of need — an Azure
+  // DevOps consent row (isAdoConsentRequest) is a DIFFERENT provider from a
+  // mid-run AWS sign-in, and REAUTH_HEADING says "AWS" outright. Both are
+  // split out of the generic reauth bucket so neither claims the other's
+  // provider; a MIXED set (both present, or reauth alongside something else)
+  // falls through to the generic "waiting on you" heading rather than assert
+  // either provider by name.
+  const allAwsReauth =
+    pending.length > 0 && pending.every((a) => a.kind === "credential_reauth" && !isAdoConsentRequest(a));
+  const allAdoConsent = pending.length > 0 && pending.every((a) => isAdoConsentRequest(a));
+  const heading = allAwsReauth
     ? REAUTH_HEADING
-    : anyHeld
-      ? "Sandbox is waiting — approve to let it through"
-      : pending.every((a) => a.kind === "egress_domain")
-        ? "Approval needed — off-policy egress"
-        : "Approval needed — the agent is waiting on you";
+    : allAdoConsent
+      ? ADO_CONSENT_STRIP_HEADING
+      : anyHeld
+        ? "Sandbox is waiting — approve to let it through"
+        : pending.every((a) => a.kind === "egress_domain")
+          ? "Approval needed — off-policy egress"
+          : "Approval needed — the agent is waiting on you";
 
   return (
     <div
@@ -390,8 +430,15 @@ export function LiveApprovals({
             // The re-auth kind is EXCLUDED: "requires the admin role" is false
             // of a row the admin cannot decide either (canDecideApproval is
             // false for it on every tier), and the person it is addressed to is
-            // the one who can fix it.
-            (a) => a.kind !== "credential_reauth" && !canDecideApproval(securityOperator, a.kind),
+            // the one who can fix it. An ADO escalation this VIEWER owns is
+            // ALSO excluded (round-2 F2) — canDecideApproval doesn't know the
+            // ADO ownership carve-out, so without this a run's own owner read
+            // "requires the admin role" on a row their own card lets them
+            // decide, on the very same strip.
+            (a) =>
+              a.kind !== "credential_reauth" &&
+              !canDecideApproval(securityOperator, a.kind) &&
+              !(isAdoCapabilityRequest(a) && canDecideAdoCapability(securityOperator, run?.created_by === principal)),
           ) && (
           <span className="ml-auto text-meta font-normal normal-case text-muted-foreground">
             {SECURITY_ONLY_REASON}
@@ -402,20 +449,20 @@ export function LiveApprovals({
         // S10 — an Azure DevOps escalation (or its Entra-consent chain) gets
         // the FULL card, not the strip's usual one-liner: it needs fields
         // (repository, ref class, the composed command) and its own Once/
-        // This-run scope control the strip's plain row can't show. `operator`
-        // is unconditionally true here: this component only ever mounts on
-        // a run's own cockpit, and GET /runs/{id} (handleGetRun ->
-        // getRunAuthorized -> ownsRunOrAdmin) already refused anyone who
-        // isn't the run's owner or a security operator before this page
-        // could load at all — so "not yours to decide" cannot be reached
-        // from here, only from the standalone /approvals list
-        // (screens/approvals.tsx), which has no such gate on VIEWING a row.
+        // This-run scope control the strip's plain row can't show. `run` and
+        // `principal` are this component's own props/hook (see the `run`
+        // prop's doc) — round 1 hardcoded `operator` to true here on the
+        // (wrong, see F2/F12) assumption every mount site gates on
+        // ownsRunOrAdmin the way run-detail.tsx's GET /runs/{id} does; two of
+        // this component's four real mounts (record-pane.tsx) do not.
         if (isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) {
           return (
             <AdoCapabilityCard
               key={a.id}
               item={a}
-              operator
+              securityOperator={securityOperator}
+              viewerPrincipal={principal}
+              run={run}
               busy={busy === a.id}
               onApprove={(opts: [DecisionOptions]) => decideAdo(a, true, opts)}
               onDeny={(opts: [DecisionOptions]) => decideAdo(a, false, opts)}

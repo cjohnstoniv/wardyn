@@ -110,6 +110,9 @@ describe("ApprovalsScreen — the Azure DevOps capability card", () => {
     const card = await screen.findByTestId("ado-capability-card");
     expect(card).toHaveTextContent("Push");
     expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    // F8 — Acts as, from the run fetch's own created_by.
+    expect(card).toHaveTextContent("Acts as");
+    expect(card).toHaveTextContent("dana@acme.example");
   });
 
   it("a security admin can decide it, regardless of ownership", async () => {

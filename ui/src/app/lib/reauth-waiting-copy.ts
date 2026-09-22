@@ -40,3 +40,14 @@ export const waitingReauth = (n: number, mine = true): string => {
   const head = mine ? "Waiting for your AWS sign-in" : "Waiting for the owner's AWS sign-in";
   return n > 1 ? `${head} · ${n - 1} more waiting` : head;
 };
+
+// waitingAdoConsent — the SAME string shape as waitingReauth, for the
+// Azure DevOps Entra-consent hold (S10 round 2, F13). Its own function, not
+// a `provider` argument on waitingReauth: the two must never share a call
+// site that could silently pass the wrong provider's mine/count pair. PLAIN,
+// NOT CANON — see live-approvals.tsx's ADO_CONSENT_STRIP_HEADING, which
+// carries the same "no §7 row for a strip-level sentence" note.
+export const waitingAdoConsent = (n: number, mine = true): string => {
+  const head = mine ? "Waiting for your Azure DevOps sign-in" : "Waiting for the owner's Azure DevOps sign-in";
+  return n > 1 ? `${head} · ${n - 1} more waiting` : head;
+};

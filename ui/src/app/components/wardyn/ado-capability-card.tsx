@@ -7,9 +7,12 @@
 // DevOps capability escalation (a tool_call raised by
 // internal/api/injection_ado_capability.go's answerADOCapability) and of the
 // Entra-consent-missing chain it can raise (a credential_reauth, raiseADOConsent).
-// Shared by live-approvals.tsx (the run cockpit's live strip) and
-// screens/approvals.tsx (the standalone queue) — docs/design/ado-entra-
-// prompt.md §8 names this split; §7.6 is this card's frozen copy source.
+// Shared by live-approvals.tsx (the run cockpit's live strip, mounted at FOUR
+// sites — see that file's own comment), screens/approvals.tsx (the standalone
+// queue) and run-detail.tsx's Approvals tab — docs/design/ado-entra-prompt.md
+// §8 names the first two; the Approvals tab is round-2's own addition, so the
+// same explicit-scope rule applies there too. §7.6 is this card's frozen copy
+// source, plus §10 (ado-capability-copy.ts's own doc comment).
 //
 // WHAT THIS CARD DOES NOT DRAW, AND WHY: the frozen mock (State 6) also draws
 // an above-ceiling card, an always-refused card, a governance-refused card and
@@ -29,13 +32,23 @@
 // mock), so it can NEVER use lib/types/approvals.ts's decisionArgs() helper
 // (which omits the field for "run", relying on the OTHER default) — see
 // adoDecisionArgs below, which always sends an explicit decision_scope.
+//
+// WHO MAY DECIDE (round-2 fix): canDecideAdoCapability(securityOperator,
+// isRunOwner) — the run's OWNER or a security operator, mirroring
+// authorizeMemberDecision/ownsRunOrAdmin exactly. securityOperator already
+// INCLUDES a plain admin: isSecurityOperator (internal/api/http.go) is true
+// for oidc.RoleAdmin as well as oidc.RoleSecurityAdmin ("a super admin is a
+// security admin too — the tiers overlap on this surface"). There is no
+// third "admin but not security operator" tier this card needs to reason
+// about; every caller of this component passes useSecurityOperator()'s
+// answer, never useOperator()'s.
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, CheckCircle2, ChevronDown, Loader2, X } from "lucide-react";
-import type { ApprovalRequest, DecisionOptions } from "../../lib/types";
+import type { AgentRun, ApprovalRequest, DecisionOptions } from "../../lib/types";
 import { canDecideAdoCapability, isAdoConsentRequest, type AdoCapabilityScope, type AdoConsentScope } from "../../lib/types/approvals";
+import { isTerminalRunState } from "../../lib/types";
 import { ADO_CAPABILITY } from "../../lib/ado-capability-copy";
-import { APPROVAL } from "./copy";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Chip } from "./primitives";
@@ -60,9 +73,36 @@ const CAP_LABEL: Record<string, string> = {
   wiki_write: ADO_CAPABILITY.CAP_WIKI_WRITE,
 };
 
+// §10.1's per-capability noun for the consequence sentences' {thing} — the
+// mock (State 5) picks a different word per capability ("push"/"change"/
+// "action"), never the generic "request" round 1 used. A capability outside
+// this map falls back to "request", same reasoning as CAP_LABEL's fallback.
+const CAP_THING: Record<string, string> = {
+  read: ADO_CAPABILITY.CAP_THING_READ,
+  code_write: ADO_CAPABILITY.CAP_THING_CODE_WRITE,
+  pr: ADO_CAPABILITY.CAP_THING_PR,
+  policy_admin: ADO_CAPABILITY.CAP_THING_POLICY_ADMIN,
+  policy_bypass: ADO_CAPABILITY.CAP_THING_POLICY_BYPASS,
+  repo_admin: ADO_CAPABILITY.CAP_THING_REPO_ADMIN,
+  build_execute: ADO_CAPABILITY.CAP_THING_BUILD_EXECUTE,
+  work_write: ADO_CAPABILITY.CAP_THING_WORK_WRITE,
+  wiki_write: ADO_CAPABILITY.CAP_THING_WIKI_WRITE,
+};
+
+// Q3 (mock §9): teal Approve / plain Deny on an ordinary card; on the two
+// capabilities that move something PAST a policy or CHANGE the policy
+// itself, nothing is teal and Deny is destructive. "Same rule, one fewer
+// button" — the ruling was given against the three-button drawing and
+// re-read onto the shipped Approve+caret+Deny control (Q2).
+const DESTRUCTIVE_CAPABILITIES = new Set(["policy_bypass", "policy_admin"]);
+
 function capabilityHeading(capability: string): React.ReactNode {
   const label = CAP_LABEL[capability];
   return label ?? <Mono>{capability}</Mono>;
+}
+
+function capabilityThing(capability: string): string {
+  return CAP_THING[capability] ?? ADO_CAPABILITY.REQ_FIELD_REQUEST.toLowerCase();
 }
 
 // adoDecisionArgs ALWAYS sends an explicit decision_scope — see this file's
@@ -74,30 +114,54 @@ function adoDecisionArgs(scope: "once" | "run"): [DecisionOptions] {
 
 const SCOPE_LABEL: Record<"once" | "run", string> = { once: "Once", run: "This run" };
 
+// A request is still HELD (the proxy is parked on it) for up to four
+// minutes from when it was raised — the same ceiling REQ_HELD's own text
+// names. No expiry timestamp reaches the client (unlike egress's
+// HOLD_TIMEOUT_MS), so this is derived from requested_at, exactly the way
+// isHeld (lib/types/approvals.ts) derives egress's own HOLD_TIMEOUT_MS check.
+const HOLD_WINDOW_MS = 240_000;
+
+function stillHeld(requestedAt: string): boolean {
+  const at = Date.parse(requestedAt);
+  return Number.isNaN(at) ? true : Date.now() - at < HOLD_WINDOW_MS; // unparseable — fail toward showing the hold
+}
+
+// relativeAbsolute — REQ_SOURCE's {ts} placeholder wants a short clock
+// reading (the mock draws "14:02:11"), not a relative phrase;
+// relativeTime (lib/format) is built for the latter. A locale time string is
+// the honest middle ground available from an ISO timestamp alone.
+function relativeAbsolute(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// The run this card needs to know about — created_by (who it acts as / owns
+// the decision) and state (has it ended). Every real caller passes a real
+// AgentRun/RunDetail; this Pick is what the two shapes have in common.
+export type AdoCardRun = Pick<AgentRun, "created_by" | "state">;
+
 export function AdoCapabilityCard({
   item,
-  operator,
+  securityOperator,
   viewerPrincipal,
-  runOwner,
-  runEnded = false,
+  run,
   busy,
   onApprove,
   onDeny,
 }: {
   item: ApprovalRequest;
-  // useSecurityOperator(), NOT useOperator() — ownsRunOrAdmin
-  // (internal/api/helpers.go) bypasses ownership for isSecurityOperator
-  // only, the same tier authorizeMemberDecision already special-cases before
-  // it ever calls ownsRunOrAdmin. A plain (non-security) admin gets no
-  // special bypass here — only the run's own owner or a security operator.
-  operator: boolean;
+  securityOperator: boolean;
   // The signed-in viewer's own subject — decides who the consent door is for
-  // (adoConsentScopeBody.Owner) and, alongside runOwner, who "yours" means.
+  // (adoConsentScopeBody.Owner) and, alongside run.created_by, who "yours"
+  // means for an escalation.
   viewerPrincipal?: string;
-  // run.created_by — undefined while the run fetch is still in flight, which
-  // this card treats exactly like "not yet known" (no decision either way).
-  runOwner?: string;
-  runEnded?: boolean;
+  // undefined = still loading (render a neutral skeleton, never "Not yours"
+  // — round-2 fix F10); null = the fetch failed or the run is unreadable by
+  // this caller (render a generic error, never "Not yours"); an object =
+  // loaded. A securityOperator viewer never needs this at all (their
+  // decidability doesn't depend on ownership), so loading/null never gates
+  // THEM — only a non-security viewer waits on it.
+  run: AdoCardRun | null | undefined;
   busy: boolean;
   onApprove: (opts: [DecisionOptions]) => void;
   onDeny: (opts: [DecisionOptions]) => void;
@@ -105,29 +169,59 @@ export function AdoCapabilityCard({
   const [scope, setScope] = React.useState<"once" | "run">("run");
   const [menuOpen, setMenuOpen] = React.useState(false);
 
-  if (runEnded) {
-    return (
-      <div className="rounded-xl border border-border bg-card p-4" data-testid="ado-capability-card">
-        <p className="text-sm text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
-      </div>
-    );
-  }
-
+  // The consent card FIRST, before any run-loading/error/ended gate below:
+  // its decidability is "is the viewer the row's own owner" (a plain string
+  // compare against the wire scope's own `owner` field), never run
+  // ownership — it needs no `run` at all, so it must never be blocked behind
+  // a run fetch the escalation card below actually depends on.
   if (isAdoConsentRequest(item)) {
     return <AdoConsentCard item={item} viewerPrincipal={viewerPrincipal} />;
   }
 
+  if (!securityOperator && run === undefined) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4" data-testid="ado-capability-card">
+        <span className="block h-5 w-48 animate-pulse rounded bg-muted" aria-label="loading" />
+      </div>
+    );
+  }
+  if (!securityOperator && run === null) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4" data-testid="ado-capability-card">
+        <p className="text-sm text-muted-foreground">Couldn't load this run — try again.</p>
+      </div>
+    );
+  }
+
+  const runEnded = !!run && isTerminalRunState(run.state);
+  if (runEnded) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4" data-testid="ado-capability-card">
+        <div className="flex items-center gap-2">
+          <Chip tone="neutral">{ADO_CAPABILITY.LIST_ENDED_CHIP}</Chip>
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">{ADO_CAPABILITY.LIST_ENDED_BODY}</p>
+      </div>
+    );
+  }
+
   const scopeData = item.requested_scope as unknown as AdoCapabilityScope;
   const heading = capabilityHeading(scopeData.capability);
+  const thing = capabilityThing(scopeData.capability);
+  const destructive = DESTRUCTIVE_CAPABILITIES.has(scopeData.capability);
+  const runOwner = run?.created_by;
   const isOwner = !!runOwner && runOwner === viewerPrincipal;
-  const decidable = canDecideAdoCapability(operator, isOwner);
+  const decidable = canDecideAdoCapability(securityOperator, isOwner);
   const where = scopeData.repo ? `${scopeData.org}/${scopeData.repo}` : scopeData.org;
   const source = ADO_CAPABILITY.REQ_SOURCE(relativeAbsolute(item.requested_at));
+  const held = stillHeld(item.requested_at);
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4" data-testid="ado-capability-card">
       <div className="flex flex-wrap items-center gap-2">
-        <Chip tone="warning">{decidable ? ADO_CAPABILITY.REQ_WAITING : ADO_CAPABILITY.REQ_NOT_YOURS_CHIP}</Chip>
+        <Chip tone={decidable ? "warning" : "neutral"}>
+          {decidable ? ADO_CAPABILITY.REQ_WAITING : ADO_CAPABILITY.REQ_NOT_YOURS_CHIP}
+        </Chip>
         <div className="min-w-0">
           <h4 className="text-sm font-semibold text-foreground">{heading}</h4>
           <span className="text-meta text-muted-foreground">{source}</span>
@@ -138,18 +232,27 @@ export function AdoCapabilityCard({
         <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_REPOSITORY}</dt>
         <dd className="font-mono text-xs text-foreground">{where || "—"}</dd>
         {scopeData.ref_class === "protected" && (
+          // No ref NAME reaches the client (the canonical scope carries only
+          // ref_class) — see this file's own top comment. The capability
+          // heading above already says "past a branch policy" for this
+          // case; this row states the fact §2.3 asks for without inventing
+          // a ref.
           <>
-            {/* No ref NAME reaches the client (the canonical scope carries
-                only ref_class) — see this file's own top comment. The
-                capability heading above already says "past a branch policy"
-                for this case; this row states the fact the task asks for
-                without inventing a ref. */}
-            <dt className="text-muted-foreground">Ref class</dt>
-            <dd className="text-xs text-foreground">Protected by a branch policy</dd>
+            <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_REF_CLASS}</dt>
+            <dd className="text-xs text-foreground">{ADO_CAPABILITY.REQ_REF_CLASS_PROTECTED}</dd>
           </>
         )}
         <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_COMMAND}</dt>
         <dd className="font-mono text-xs text-foreground">{scopeData.cmd}</dd>
+        {runOwner && (
+          <>
+            <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_ACTS_AS}</dt>
+            <dd className="text-xs text-foreground">
+              {runOwner}
+              <span className="mt-0.5 block text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_ACTS_AS_HINT(runOwner)}</span>
+            </dd>
+          </>
+        )}
       </dl>
 
       {decidable ? (
@@ -157,37 +260,39 @@ export function AdoCapabilityCard({
           <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              variant="info"
+              variant={destructive ? "outline" : "info"}
               className="rounded-r-none"
               disabled={busy}
               onClick={() => onApprove(adoDecisionArgs(scope))}
             >
               {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Approve
             </Button>
-            <AdoScopeMenu scope={scope} onPick={(s) => setScope(s)} open={menuOpen} onOpenChange={setMenuOpen} />
+            <AdoScopeMenu scope={scope} thing={thing} onPick={(s) => setScope(s)} open={menuOpen} onOpenChange={setMenuOpen} />
+            {/* The scope readout sits directly after Approve's own group,
+                BEFORE Deny (F7/round-2): a deny sticks for the rest of the
+                run regardless of which scope was staged (#414), so a reader
+                must never see "Scope: Once" positioned as if it governed
+                Deny too. */}
+            <span className="text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_SCOPE_READOUT(SCOPE_LABEL[scope])}</span>
             <Button
               size="sm"
-              variant="outline"
+              variant={destructive ? "destructive" : "outline"}
               className="ml-1"
               disabled={busy}
               onClick={() => onDeny(adoDecisionArgs(scope))}
             >
               {busy ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />} Deny
             </Button>
-            <span className="text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_SCOPE_READOUT(SCOPE_LABEL[scope])}</span>
           </div>
           <p className="mt-2.5 text-meta text-muted-foreground">
             <b className="font-semibold text-foreground">Approving</b>{" "}
-            {scope === "once"
-              ? ADO_CAPABILITY.REQ_APPROVING_ONCE(ADO_CAPABILITY.REQ_FIELD_REQUEST.toLowerCase())
-              : ADO_CAPABILITY.REQ_APPROVING_RUN(ADO_CAPABILITY.REQ_FIELD_REQUEST.toLowerCase())}
+            {scope === "once" ? ADO_CAPABILITY.REQ_APPROVING_ONCE(thing) : ADO_CAPABILITY.REQ_APPROVING_RUN(thing)}
           </p>
           <p className="mt-0.5 text-meta text-muted-foreground">
-            <b className="font-semibold text-foreground">Denying</b>{" "}
-            {ADO_CAPABILITY.REQ_DENYING(ADO_CAPABILITY.REQ_FIELD_REQUEST.toLowerCase())}
+            <b className="font-semibold text-foreground">Denying</b> {ADO_CAPABILITY.REQ_DENYING(thing)}
           </p>
           <p className="mt-2.5 text-meta text-muted-foreground">
-            {ADO_CAPABILITY.REQ_HELD(ADO_CAPABILITY.REQ_FIELD_REQUEST.toLowerCase())}
+            {held ? ADO_CAPABILITY.REQ_HELD(thing) : ADO_CAPABILITY.REQ_HELD_EXPIRED(thing)}
           </p>
         </div>
       ) : (
@@ -197,15 +302,6 @@ export function AdoCapabilityCard({
       )}
     </div>
   );
-}
-
-// relativeAbsolute — REQ_SOURCE's {ts} placeholder wants a short clock
-// reading (the mock draws "14:02:11"), not a relative phrase;
-// relativeTime (lib/format) is built for the latter. A locale time string is
-// the honest middle ground available from an ISO timestamp alone.
-function relativeAbsolute(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 const SCOPE_ITEM_CLS =
@@ -219,11 +315,16 @@ const SCOPE_ITEM_CLS =
 // right is what they read with Once selected instead of This run".
 function AdoScopeMenu({
   scope,
+  thing,
   onPick,
   open,
   onOpenChange,
 }: {
   scope: "once" | "run";
+  // F1 (round 2) — the hints under Once/This run use the SAME per-capability
+  // noun the consequence sentences do ("push", not "request"); the mock
+  // (State 5, Q2's "drawn open" variant) shows it there too.
+  thing: string;
   onPick: (s: "once" | "run") => void;
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -251,9 +352,7 @@ function AdoScopeMenu({
               {SCOPE_LABEL[s]}
             </span>
             <span className="text-meta text-muted-foreground">
-              {s === "once"
-                ? ADO_CAPABILITY.REQ_SCOPE_ONCE_HINT(ADO_CAPABILITY.REQ_FIELD_REQUEST.toLowerCase())
-                : ADO_CAPABILITY.REQ_SCOPE_RUN_HINT(ADO_CAPABILITY.REQ_FIELD_REQUEST.toLowerCase())}
+              {s === "once" ? ADO_CAPABILITY.REQ_SCOPE_ONCE_HINT(thing) : ADO_CAPABILITY.REQ_SCOPE_RUN_HINT(thing)}
             </span>
           </button>
         ))}
@@ -280,7 +379,10 @@ function AdoScopeMenu({
 // side would require guessing which escalation a consent row answers for,
 // which is exactly the kind of unverifiable claim AGENTS.md and §5's
 // never-claim rule refuse. This card is therefore its own, honest, simpler
-// state — flagged in the S10 handoff.
+// state, titled by REQ_CONSENT_HEADING (§10.2) rather than a guessed
+// capability name — flagged in the S10 handoff. REQ_CONSENT_BODY's own
+// {capability} placeholder gets "Azure DevOps access" — the honest generic
+// the card can name, in place of the specific one it cannot.
 //
 // "Allow and continue" (REQ_CONSENT_CTA) links to Settings rather than
 // starting a redemption: the actual Azure DevOps sign-in surface
@@ -300,14 +402,19 @@ function AdoConsentCard({
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone="warning">{isOwner ? ADO_CAPABILITY.REQ_CONSENT_CHIP : ADO_CAPABILITY.REQ_WAITING_OTHER(owner)}</Chip>
         <div className="min-w-0">
-          <h4 className="text-sm font-semibold text-foreground">Azure DevOps needs more access</h4>
+          <h4 className="text-sm font-semibold text-foreground">{ADO_CAPABILITY.REQ_CONSENT_HEADING}</h4>
           <span className="text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_SOURCE(relativeAbsolute(item.requested_at))}</span>
         </div>
       </div>
+      <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+        <dt className="text-muted-foreground">{ADO_CAPABILITY.REQ_FIELD_ACTS_AS}</dt>
+        <dd className="text-xs text-foreground">
+          {owner}
+          <span className="mt-0.5 block text-meta text-muted-foreground">{ADO_CAPABILITY.REQ_ACTS_AS_HINT(owner)}</span>
+        </dd>
+      </dl>
       <p className="mt-3 border-t border-border/60 pt-3 text-sm text-muted-foreground">
-        {isOwner
-          ? "You'll need to allow Wardyn a bit more Azure DevOps access before this request can go through. Reconnecting asks Microsoft for it — you'll see a consent screen, and nothing else changes. The run's request stays held meanwhile."
-          : `Only ${owner} can give Microsoft the extra permission this run needs — the run acts as them, and consent is theirs to give.`}
+        {isOwner ? ADO_CAPABILITY.REQ_CONSENT_BODY("Azure DevOps access") : ADO_CAPABILITY.REQ_CONSENT_OTHER_BODY(owner)}
       </p>
       {isOwner && (
         <div className="mt-3">

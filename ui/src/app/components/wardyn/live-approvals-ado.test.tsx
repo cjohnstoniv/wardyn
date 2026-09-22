@@ -16,6 +16,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
 import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
+import type { AdoCardRun } from "./ado-capability-card";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -30,6 +31,8 @@ vi.mock("../../lib/api/approvals", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 import { LiveApprovals } from "./live-approvals";
+
+const OWNER: AdoCardRun = { created_by: "dana@acme.example", state: "RUNNING" };
 
 function escalationRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
   return {
@@ -54,12 +57,31 @@ function escalationRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
   } as ApprovalRequest;
 }
 
-function mount() {
+function consentRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    id: "consent-1",
+    run_id: "r1",
+    kind: "credential_reauth",
+    requested_scope: {
+      lane: "azure_devops",
+      mechanism: "entra_consent",
+      owner: "dana@acme.example",
+      provider_id: "row_1",
+      scopes: ["vso.code_write"],
+    },
+    state: "PENDING",
+    requested_at: new Date().toISOString(),
+    ...over,
+  } as ApprovalRequest;
+}
+
+function mount(opts: { operator?: boolean; securityOperator?: boolean; principal?: string; run?: AdoCardRun | null } = {}) {
+  const { operator = false, securityOperator = false, principal = "dana@acme.example", run = OWNER } = opts;
   return render(
-    <OperatorProvider operator={false} securityOperator={false} principal="dana@acme.example">
+    <OperatorProvider operator={operator} securityOperator={securityOperator} principal={principal}>
       <MemoryRouter>
         <ModelAccessProvider status={null} onRefresh={() => {}}>
-          <LiveApprovals runId="r1" />
+          <LiveApprovals runId="r1" run={run} />
         </ModelAccessProvider>
       </MemoryRouter>
     </OperatorProvider>,
@@ -67,20 +89,36 @@ function mount() {
 }
 
 describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit", () => {
-  it("renders the full card, decidable, for a plain member with no operator tier", async () => {
+  it("renders the full card, decidable, for the run's own owner (no operator tier at all)", async () => {
     listApprovalsMock.mockResolvedValue([escalationRow()]);
-    mount();
+    mount({ principal: "dana@acme.example" });
     const card = await screen.findByTestId("ado-capability-card");
     expect(card).toHaveTextContent("Push");
-    // Decidable here regardless of the viewer's own operator tier: reaching
-    // this cockpit page at all already proved run ownership or admin (GET
-    // /runs/{id} -> ownsRunOrAdmin) — see the card's mount-site comment.
+    expect(within(card).getByRole("button", { name: "Approve" })).toBeInTheDocument();
+  });
+
+  // F2 (round-2 fix) — round 1 hardcoded `operator` true here, on the wrong
+  // assumption that every LiveApprovals mount gates on run ownership the way
+  // run-detail.tsx's GET /runs/{id} does. It does not: a viewer who is
+  // neither the run's owner nor a security operator sees "Not yours".
+  it("F2: a viewer who is neither the run's owner nor a security operator sees 'Not yours to decide'", async () => {
+    listApprovalsMock.mockResolvedValue([escalationRow()]);
+    mount({ principal: "someone-else@acme.example", securityOperator: false });
+    const card = await screen.findByTestId("ado-capability-card");
+    expect(within(card).getByText("Not yours to decide")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+  });
+
+  it("a security operator decides it regardless of ownership", async () => {
+    listApprovalsMock.mockResolvedValue([escalationRow()]);
+    mount({ principal: "someone-else@acme.example", securityOperator: true });
+    const card = await screen.findByTestId("ado-capability-card");
     expect(within(card).getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 
   it("Approve sends an explicit decision_scope 'run' — never a bodyless decide", async () => {
     listApprovalsMock.mockResolvedValue([escalationRow()]);
-    mount();
+    mount({ principal: "dana@acme.example" });
     const card = await screen.findByTestId("ado-capability-card");
     await userEvent.click(within(card).getByRole("button", { name: "Approve" }));
     expect(approveMock).toHaveBeenCalledWith("esc-1", expect.any(String), { scope: "run" });
@@ -90,8 +128,28 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
     listApprovalsMock.mockResolvedValue([
       { id: "t1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "bash", cmd: "rm -rf build/" }, state: "PENDING", requested_at: new Date().toISOString() } as ApprovalRequest,
     ]);
-    mount();
+    mount({ principal: "dana@acme.example" });
     await screen.findByTestId("live-approval-row");
     expect(screen.queryByTestId("ado-capability-card")).not.toBeInTheDocument();
+  });
+
+  // F3 (round-2 fix) — the consent state's heading must not claim AWS, and
+  // the owner gets the door.
+  describe("the Entra-consent row", () => {
+    it("F3: the strip heading names Azure DevOps, never AWS, when every pending row is a consent request", async () => {
+      listApprovalsMock.mockResolvedValue([consentRow()]);
+      mount({ principal: "dana@acme.example" });
+      await screen.findByTestId("ado-consent-card");
+      expect(screen.getByText(/Azure DevOps sign-in needed/)).toBeInTheDocument();
+      expect(screen.queryByText(/AWS sign-in needed/)).not.toBeInTheDocument();
+    });
+
+    it("F3: the owner gets the consent chip and the door", async () => {
+      listApprovalsMock.mockResolvedValue([consentRow()]);
+      mount({ principal: "dana@acme.example" });
+      const card = await screen.findByTestId("ado-consent-card");
+      expect(within(card).getByText("Needs your Microsoft consent")).toBeInTheDocument();
+      expect(within(card).getByRole("link", { name: "Allow and continue" })).toBeInTheDocument();
+    });
   });
 });
