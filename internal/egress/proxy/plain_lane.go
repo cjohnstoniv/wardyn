@@ -197,17 +197,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// host is never re-resolved. Invoked only post-allow+vet.
 	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
-		if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, log, host, "upstream error") {
-			return
-		}
-		// The allow decision is emitted only AFTER a successful round-trip (same
-		// accuracy fix as handleConnect, E3): a failed upstream dial must NOT
-		// over-report an allow. Emit a dial-failed deny (carrying any scan
-		// summary) instead.
-		if log != nil {
-			p.sink.emit(p.denyDialFailed("builtin:dial-failed", log.Request, host, err, log.Scan))
-		}
-		p.httpError(w, "upstream error", err, http.StatusBadGateway)
+		p.failUpstream(w, err, log, host, "upstream error")
 		return
 	}
 	if log != nil {
