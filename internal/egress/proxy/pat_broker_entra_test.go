@@ -484,3 +484,28 @@ func TestADOGitBroker_HeldLargePushProbeDoesNotSpend(t *testing.T) {
 	}
 	h.finish(t)
 }
+
+// A NUL ON A LATER COMMAND LINE is refused before anything reaches Azure
+// DevOps, in receive-pack terms: "<old> <new> refs/heads/wardyn/<run>/x\0
+// refs/heads/main" on line 2 must not pass as the run's own ref.
+func TestADOGitBroker_NULOnALaterCommandIsRefused(t *testing.T) {
+	h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
+	run := BranchNSPrefix(h.runID)
+	section := pkt(someOID+" "+otherOID+" "+run+"a"+firstCaps) +
+		pkt(someOID+" "+otherOID+" "+run+"b\x00refs/heads/main\n") + "0000"
+	req := mustLocalReq(t, http.MethodPost, "/wardyn/git/dev.azure.com/acme/proj/_git/app/git-receive-pack",
+		strings.NewReader(section+"PACK"))
+	rec := httptest.NewRecorder()
+	h.p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/x-git-receive-pack-result" {
+		t.Fatalf("status %d type %q, want a receive-pack result", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "a NUL is allowed only on the first command") || !strings.Contains(body, "unpack refused by Wardyn") {
+		t.Errorf("refusal body %q does not carry the reason and the unpack status", body)
+	}
+	if n := len(h.fake.Requests()); n != 0 {
+		t.Errorf("Azure DevOps saw %d requests, want 0", n)
+	}
+	h.finish(t)
+}

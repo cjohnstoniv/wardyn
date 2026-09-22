@@ -76,7 +76,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	if verb == "git-receive-pack" {
 		head, pp, msg := readADOGitPush(r)
 		if msg != "" {
-			p.refuseADOGit(w, r, host, nil, nil, msg)
+			p.refuseADOGit(w, r, host, nil, pp, msg)
 			return
 		}
 		push, body = pp, io.MultiReader(bytes.NewReader(head), r.Body)
@@ -84,7 +84,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		// large pack (remote-curl's probe_rpc): it writes nothing, so it is a
 		// read and never raises, or spends, an approval meant for the push.
 		switch {
-		case slices.ContainsFunc(push.refs, p.adoGitRefProtected):
+		case slices.ContainsFunc(push.refs, p.adoRunRefProtected):
 			need = adoscope.CapPolicyBypass
 		case len(push.refs) > 0:
 			need = adoscope.CapCodeWrite
@@ -231,44 +231,34 @@ func pktLine(s string) string { return fmt.Sprintf("%04x", len(s)+4) + s }
 // readADOGitPush reads a receive-pack command section through the same
 // parser the branch-namespace confinement uses (an empty prefix admits every
 // well-formed ref) and returns its bytes for the forward, the refs it moves and
-// the capabilities git asked for. msg is the refusal when it cannot be read.
+// the capabilities git asked for. msg is the refusal when it cannot be read;
+// push then still carries the first command's capabilities, when there were
+// any, so the refusal can be spelled in receive-pack terms.
 func readADOGitPush(r *http.Request) (head []byte, push *adoGitPush, msg string) {
 	if encs := r.Header.Values("Content-Encoding"); len(encs) > 1 ||
 		(len(encs) == 1 && encs[0] != "" && !strings.EqualFold(encs[0], "identity")) {
 		return nil, nil, "Wardyn refused this git push: an encoded push body cannot be checked."
 	}
-	head, err := readReceivePackCommands(r.Body, "")
-	if err != nil {
-		return nil, nil, "Wardyn refused this git push: " + err.Error()
-	}
+	var seen bytes.Buffer // what the parser consumed, bounded by its own cap
+	head, err := readReceivePackCommands(io.TeeReader(r.Body, &seen), "")
 	push = &adoGitPush{}
-	for b := head; len(b) >= 4; {
-		n, _ := strconv.ParseUint(string(b[:4]), 16, 32)
-		if n == 0 {
+	for b := seen.Bytes(); len(b) >= 4; {
+		n, perr := strconv.ParseUint(string(b[:4]), 16, 32)
+		if perr != nil || n < 5 || int(n) > len(b) {
 			break
 		}
-		cmd, caps, _ := strings.Cut(string(b[4:n]), "\x00")
+		cmd, caps, hasCaps := strings.Cut(string(b[4:n]), "\x00")
 		b = b[n:]
-		if caps != "" {
+		if hasCaps && push.caps == nil {
 			push.caps = strings.Fields(caps)
 		}
 		cmd = strings.TrimSuffix(cmd, "\n")
-		if strings.HasPrefix(cmd, "shallow ") {
-			continue
+		if parts := strings.SplitN(cmd, " ", 3); err == nil && !strings.HasPrefix(cmd, "shallow ") && len(parts) == 3 {
+			push.refs = append(push.refs, parts[2])
 		}
-		push.refs = append(push.refs, strings.SplitN(cmd, " ", 3)[2])
+	}
+	if err != nil {
+		return nil, push, "Wardyn refused this git push: " + err.Error()
 	}
 	return head, push, ""
-}
-
-// adoGitRefProtected is the REST gate's protected-ref predicate (every ref is
-// protected until a grant carries a branch-policy list) with one exception:
-// a ref inside this run's own branch namespace, refs/heads/wardyn/<run-id>/…,
-// which agent-run checks the work tree out onto and nothing else writes.
-func (p *Proxy) adoGitRefProtected(ref string) bool {
-	prefix := BranchNSPrefix(p.runID)
-	if strings.HasPrefix(ref, prefix) && len(ref) > len(prefix) {
-		return false
-	}
-	return adoRefProtected(ref)
 }
