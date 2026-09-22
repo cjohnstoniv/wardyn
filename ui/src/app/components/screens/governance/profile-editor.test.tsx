@@ -36,9 +36,10 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 
 import type { GovernanceProfile } from "../../../lib/api/governance";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, RUBRIC } from "../../../lib/governance-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { ProfileEditor } from "./profile-editor";
 
 const GREENFIELD: GovernanceProfile = {
@@ -142,5 +143,55 @@ describe("ProfileEditor — the three integer LimitNumberRows", () => {
 
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
     expect(screen.queryByText(PROVIDERS.DOCKER_UNCAPPED_WARN)).not.toBeInTheDocument();
+  });
+});
+
+// #93/#96 — the rubric round-trips through the editor: a saved row shows its
+// level, and editing a DIFFERENT row on save carries both, so the write is a
+// merge onto the loaded rubric rather than a fresh object with everything but
+// the one field just touched dropped.
+describe("ProfileEditor — the autonomy rubric round-trips", () => {
+  beforeEach(() => {
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    gradePolicyMock.mockReset();
+    gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
+  });
+
+  it("shows a saved row's level and writes an edited row's on save, alongside it", async () => {
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+    renderEditor({ ...GREENFIELD, limits: { autonomy_rubric: { secrets_powerful: "L1" } } });
+
+    expect(screen.getByText(RUBRIC.HEADING)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.secrets_powerful[0]} caps autonomy at` })).toHaveTextContent(
+      AUTONOMY_META.L1.label,
+    );
+    // An untouched row reads "No cap" — the wire's absent field, not L0.
+    expect(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.confinement_cc1[0]} caps autonomy at` })).toHaveTextContent(RUBRIC.NOCAP);
+
+    await userEvent.click(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.confinement_cc1[0]} caps autonomy at` }));
+    await userEvent.click(await screen.findByRole("option", { name: AUTONOMY_META.L2.label }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+
+    expect(updateProfileMock).toHaveBeenCalledWith(
+      GREENFIELD.id,
+      expect.objectContaining({
+        limits: expect.objectContaining({
+          autonomy_rubric: expect.objectContaining({ secrets_powerful: "L1", confinement_cc1: "L2" }),
+        }),
+      }),
+    );
+  });
+
+  it("a profile with no rubric at all leaves every row at No cap and saves no autonomy_rubric untouched", async () => {
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+    renderEditor({ ...GREENFIELD, limits: {} });
+
+    expect(screen.getByRole("combobox", { name: `${RUBRIC.ROWS.egress_open[0]} caps autonomy at` })).toHaveTextContent(RUBRIC.NOCAP);
+    expect(screen.getByText(RUBRIC.EMPTY_NOTE)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    const call = updateProfileMock.mock.calls[0][1];
+    expect(call.limits.autonomy_rubric).toBeUndefined();
   });
 });

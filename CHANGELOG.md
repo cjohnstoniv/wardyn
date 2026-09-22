@@ -256,6 +256,46 @@ and does not yet follow semantic versioning (interfaces are not stable).
   existing audit-chain advisory lock, recomputing each row's hash in SQL over the stored jsonb, refuses
   the whole batch on any mismatch, and accepts a genesis row as a recorded chain reset. Storage and the
   store seam only — no routes, CLI or forwarder yet.
+
+- **A run's autonomy level is now resolved once and enforced at launch and on Review.** With an
+  `autonomy_rubric` on the assigned governance profile, a run's posture — egress reach (`open` with
+  allow-all or any allowlisted host beyond the safe baseline, `reviewed` when first-use approval
+  escalates to a human, else `sealed`), secret power (`powerful` with a write-capable grant, an
+  `api_key` to a non-baseline host, or a `git_pat`/`ssh_key`/`env_secret`; `baseline` with any
+  grant; else `none`) and the ENFORCED confinement class — folds to the minimum level the rubric
+  permits. `L0` refuses an unattended run and seeded auto tools; `L1` additionally refuses
+  `task_mode=exec` and derives `tool_approvals=hold` on an unattended run, refusing it outright for
+  an agent with no tool-approval lane; `L2` refuses `task_mode=exec`; `L3` refuses nothing. An
+  interactive run's STARTUP COMMAND — a task with `interactive_start` unset or `shell`, which the
+  image runs as `bash -lc` at sandbox boot before anyone attaches — ranks with `task_mode=exec`
+  and is refused below `L3` (target `runs.interactive_start`); `interactive_start=agent`, which
+  hands the task to the agent as its first prompt under its own approval prompt, is unaffected.
+  Refusals reuse the existing member 403 and its `governance_profile` `authz.denied` row — the
+  closed reason enum is unchanged. The level is frozen on `agent_runs.autonomy_level`; the level,
+  the posture and `bound_by` — EVERY rubric field that tied at that level, not the first in a
+  fixed order, since raising one row of a tie does not move the level — ride the `run.create`
+  audit row and `POST /runs/preflight`'s new `autonomy` field, so Review and launch answer with
+  the same object from the same call (`resolveRunAutonomy`, `internal/api/runs_autonomy.go`; the arithmetic is pure, in
+  `internal/composer/autonomy.go`). A member with no assigned profile — and a profile with no
+  rubric, or one that caps nothing at this posture — is unchanged: no refusal, no derived field and
+  no `autonomy` key on either surface.
+  The posture is graded on the run's real egress envelope, not on the spec as each handler
+  happens to hold it: every lane `unionRunEgress` adds after the resolution is unioned in before
+  grading — the workspace registries and clone hosts; the site-config enterprise SCM hosts,
+  whenever the run declares a repo through `repo`, `workspace_repos` OR any `github_token`,
+  `git_pat` or `ssh_key` grant; a `git_pat`'s Azure DevOps bundle; and an `ssh_key`'s
+  SSH-over-443 endpoint — from the spec alone, so Review and launch compute it identically. The
+  grant lanes are graded BEFORE the launch-side provider-lane veto and codex-cli's missing SSH
+  lane, so the graded allowlist is a superset of the one `unionRunEgress` builds: a run that
+  reaches beyond the safe baseline through any of those lanes is always graded `open`, and a run
+  whose lane is later vetoed may be graded `open` on reach it will not get. The site config
+  those hosts come from is read ONCE per request and handed to both the resolution and the
+  union, so the level and the dispatched hosts cannot come from two reads; a read that fails
+  refuses the run with a 500, as provider admission and the grant-lane veto already do on theirs.
+  **Not in the posture:** the egress dispatch adds later still — the model-provider hosts it
+  resolves from global configuration, and the artifact-redirect substitution. A Bedrock run
+  whose region comes from global configuration therefore grades its egress without the Bedrock
+  hosts, where the same run with an integration row grades them.
 - **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
   profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
   secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`
@@ -275,6 +315,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   as it is sent to `api.anthropic.com` today. The harness-login (`claude setup-token`) lane is
   unaffected and always stays on the public host, since that flow mints the OAuth token itself.
   Unset is byte-identical to today.
+- **The autonomy rubric is now visible in the console: the profile editor, the profiles list, the New
+  Run rail and the run header.** The profile editor grows a Rubric section (`profile-rubric.tsx`) —
+  three posture groups, nine rows, one `No cap`/`L0`-`L3` select each — that round-trips through
+  `GovernanceLimits.autonomy_rubric`. The profiles list names the strictest cap on the chip itself
+  (`Autonomy: <level> at the strictest`), not merely that a rubric exists, since the detail is
+  unreadable in a tooltip on a phone or by keyboard. The New Run rail reads `preflight.result.autonomy`
+  and states the resolved level plus one sentence naming every rubric row that bound it — `bound_by`
+  is a list, and a tie at the resolved level names every tied cause, never just the first, so
+  loosening one of them without the others is never a false promise. The run header carries the same
+  level beside `ConfinementChip` from the frozen `agent_runs.autonomy_level`. Levels read Attended /
+  Gated / Unattended / Unrestricted on screen; the internal `L0`-`L3` codes stay in `title` only, the
+  same way `ConfinementChip` keeps `CC1`-`CC3` out of the visible label. New copy lives in
+  `governance-copy.ts` (`RUBRIC`, `LIMITS_CHIP`, `AUTONOMY_RAIL`, `AUTONOMY_BOUND`) and a new
+  `wardyn/autonomy-meta.ts` mirroring `cc-meta.ts`; the TypeScript mirror of `AutonomyResolution` /
+  `AutonomyPosture` is new too (`lib/api/governance.ts`), there being no prior console consumer of
+  either.
 
 ### Fixed
 

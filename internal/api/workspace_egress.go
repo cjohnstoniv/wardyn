@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -129,16 +128,13 @@ func filterOffEgress(domains []string, off map[string]bool) []string {
 // provider row's base URL, or in the legacy ScmHosts list — and every
 // cloning run inherits them. Non-secret, additive: it only ever widens the
 // allowlist with hosts the operator explicitly declared, never anything
-// content-derived. No SiteConfig row / no Store configured / no ScmHosts set
-// are all the common "unconfigured" case and add nothing.
-func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPolicySpec) []string {
-	if s.cfg.Store == nil {
-		return nil
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil {
-		return nil
-	}
+// content-derived. No SiteConfig row / no ScmHosts set are the common
+// "unconfigured" case and add nothing.
+//
+// It takes the site config rather than reading it: the autonomy gate grades
+// these hosts and launch's unionRunEgress dispatches them, and both must see
+// the SAME read (scmLaneSiteConfig) or they can disagree about the run.
+func unionSiteConfigScmHosts(spec *types.RunPolicySpec, sc types.SiteConfig) []string {
 	// effectiveScmHosts, not the raw ScmHosts list: once a provider row claims a
 	// host, that row decides whether it is reachable — a disabled github row plus
 	// a legacy scm_hosts: ["github.com"] must NOT keep unioning github.com into
