@@ -160,6 +160,7 @@ var envDocShellOnly = map[string]bool{
 	// only by that script and ui/e2e/live/sso-roles.spec.ts.
 	"WARDYN_TEST_SSO_ROLES": true, "WARDYN_ROLES_WARDYND_IMAGE": true,
 	"WARDYN_ROLES_PROXY_IMAGE": true, "WARDYN_ROLES_EVIDENCE": true,
+	"WARDYN_KIND_SSO_PROFILE": true, "WARDYN_QUICKSTART_IMAGE_TAG": true,
 	// The walk's own EXPORTS to ui/e2e/live/sso-member.spec.ts and
 	// ui/e2e/live/sso-member-recovery.spec.ts (process.env, never Go) — outputs
 	// of the walk, not operator inputs.
@@ -415,6 +416,7 @@ var envDocE2EShellFiles = []string{
 	"test/e2e/e2e.sh",
 	"scripts/kind-sso-walk.sh",
 	"deploy/kind/sso/overlay.sh",
+	"scripts/lib/kind-sso-walk-ado.sh",
 }
 
 // readE2EShellVars returns every WARDYN_* token found in envDocE2EShellFiles.

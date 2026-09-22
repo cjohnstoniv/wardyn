@@ -155,6 +155,15 @@ type Server struct {
 
 // New starts a fake Azure DevOps server.
 func New() *Server {
+	s, h := NewHandler()
+	s.httpSrv = httptest.NewServer(h)
+	return s
+}
+
+// NewHandler returns an UNSTARTED fake plus its handler, for a caller that owns
+// its own listener (test/adofake/cmd serves it behind a TLS front). Mirrors
+// entrafake.NewHandler; an unstarted Server's URL is "".
+func NewHandler() (*Server, http.Handler) {
 	s := &Server{
 		tokens:       map[string]*tokenGrant{},
 		overrides:    map[Endpoint]override{},
@@ -167,19 +176,23 @@ func New() *Server {
 		pats:         map[string]*pat{},
 		workItemRev:  map[int]int{},
 	}
-	s.httpSrv = httptest.NewServer(s.handler())
-	return s
+	return s, s.handler()
 }
 
 // URL is the fake's base URL (an org's own address in the real service — the
 // caller supplies the {org}/{project} path segments).
 func (s *Server) URL() string {
+	if s.httpSrv == nil {
+		return ""
+	}
 	return s.httpSrv.URL
 }
 
 // Close shuts down the underlying httptest server.
 func (s *Server) Close() {
-	s.httpSrv.Close()
+	if s.httpSrv != nil {
+		s.httpSrv.Close()
+	}
 }
 
 // RegisterToken makes token (a bearer access token OR a personal access

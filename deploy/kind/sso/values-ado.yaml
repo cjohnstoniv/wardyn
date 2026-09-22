@@ -1,0 +1,44 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Azure DevOps profile's overlay (WARDYN_KIND_SSO_PROFILE=ado): the console
+# signs in against the fake Entra tenant in adofake.yaml instead of Dex.
+#
+# It has to be a separate profile, not a second issuer: the per-person Azure
+# DevOps sign-in binds its credential to the CONSOLE's own app registration and
+# tenant (cmd/wardynd/ado_entra_source.go derives the tenant from this issuer,
+# and only from a login.microsoftonline.com one), so Dex cannot be the console
+# IdP in the same install.
+#
+# The issuer is the REAL name. wardynd reaches it through the fake's forward
+# proxy (WARDYN_DAEMON_PROXY_URL) and trusts the fake's leaf through the
+# walk CA overlay.sh passes as trustedCA — the corporate-proxy posture Wardyn
+# already supports, so nothing here is a test-only code path.
+auth:
+  adminToken:
+    value: ""
+env:
+  WARDYN_OIDC_ISSUER: "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0"
+  WARDYN_OIDC_CLIENT_ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  WARDYN_OIDC_REDIRECT_URL: "http://localhost:8580/auth/callback"
+  # Entra omits email_verified, so no domain gate: the role map below is what
+  # decides who is who.
+  WARDYN_OIDC_EMAIL_DOMAINS: ""
+  WARDYN_OIDC_OPERATOR_EMAILS: "admin@wardyn.test"
+  WARDYN_OIDC_ROLE_MAP: "admin@wardyn.test=admin,member@wardyn.test=member"
+  WARDYN_DAEMON_PROXY_URL: "http://wardyn-test-adofake.wardyn.svc.cluster.local:3128"
+  WARDYN_DAEMON_NO_PROXY: ".svc,.cluster.local,localhost,127.0.0.1"
+extraEnv:
+  - name: WARDYN_OIDC_CLIENT_SECRET
+    value: "wardyn-ado-walk-secret"   # demo literal — must match adofake.yaml
+networkPolicy:
+  egress:
+    extra:
+      # wardynd's OWN egress to the fake's forward proxy: OIDC discovery, the
+      # login's code exchange and every Azure DevOps redemption go through it.
+      - to:
+          - podSelector:
+              matchLabels: {app: wardyn-test-adofake}
+        ports:
+          - port: 3128
+            protocol: TCP

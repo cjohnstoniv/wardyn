@@ -4,6 +4,9 @@
 # Demo-grade Dex for the kind quickstart cluster — mirrors deploy/compose/dex.yaml
 # (same image digest, same client id/secret, same "password" bcrypt literal; the
 # hash stays literal because Dex env-expansion corrupts $2a$/$10$ segments).
+# overlay.sh renders the issuer's 5557 and the callback's 8280 onto
+# WARDYN_KIND_SSO_DEX_PORT / WARDYN_QUICKSTART_HTTP_PORT (the defaults leave this
+# file unchanged), so the literals below are the defaults, not the only values.
 # Split-horizon: issuer is the BROWSER-facing URL (kubectl port-forward 5557);
 # wardynd reaches Dex at the in-cluster Service via WARDYN_OIDC_INTERNAL_ISSUER.
 apiVersion: v1

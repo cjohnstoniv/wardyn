@@ -74,6 +74,16 @@ if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
   exit 0
 fi
 
+# WARDYN_KIND_SSO_PROFILE=ado is a DIFFERENT walk on a different install: the
+# console signs in against a fake Entra tenant instead of Dex, and the member's
+# login captures an Azure DevOps credential their run then redeems. It shares
+# nothing below this line, so it lives in its own file.
+case "${WARDYN_KIND_SSO_PROFILE:-default}" in
+  default) ;;
+  ado) exec "$(dirname "${BASH_SOURCE[0]}")/lib/kind-sso-walk-ado.sh" ;;
+  *) echo "ERROR: WARDYN_KIND_SSO_PROFILE must be default or ado (got ${WARDYN_KIND_SSO_PROFILE})" >&2; exit 1 ;;
+esac
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
@@ -103,8 +113,9 @@ KIND_NODE="${WARDYN_KIND_SSO_NODE:-${CLUSTER}-control-plane}"
 # (wardynd/proxy/claude-code) and deploy/kind/sso/overlay.sh (aws-sso, the
 # fake), or step 1b rebuilds tags nothing on the node is running and the
 # provenance record names images the node never saw.
-WARDYND_IMAGE="wardyn/wardynd:quickstart"
-PROXY_IMAGE="wardyn/wardyn-proxy:quickstart"
+# The tag is per cluster (deploy/kind/quickstart.sh's WARDYN_QUICKSTART_IMAGE_TAG).
+WARDYND_IMAGE="wardyn/wardynd:${WARDYN_QUICKSTART_IMAGE_TAG:-quickstart}"
+PROXY_IMAGE="wardyn/wardyn-proxy:${WARDYN_QUICKSTART_IMAGE_TAG:-quickstart}"
 AGENT_IMAGE="wardyn/agent-claude-code:local"
 AWS_SSO_IMAGE="wardyn/agent-aws-sso:local"
 FAKE_IMAGE="wardyn/awsssofake:local"

@@ -82,8 +82,12 @@ HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8080}"
 NODE_SSH_PORT=30022
 SSH_PORT="${WARDYN_QUICKSTART_SSH_PORT:-2222}"
 # Locally built, `kind load`ed images. No registry is involved anywhere here.
-WARDYND_IMAGE="wardyn/wardynd:quickstart"
-PROXY_IMAGE="wardyn/wardyn-proxy:quickstart"
+# The TAG is per cluster: a second cluster built from another tree must not
+# retag the images a first one's overlay reloads, so a walk cluster names its
+# own (the Azure DevOps profile uses kind-ado).
+IMAGE_TAG="${WARDYN_QUICKSTART_IMAGE_TAG:-quickstart}"
+WARDYND_IMAGE="wardyn/wardynd:${IMAGE_TAG}"
+PROXY_IMAGE="wardyn/wardyn-proxy:${IMAGE_TAG}"
 # The repo-convention tag `make agent-images-core` produces. Reused (not a
 # :quickstart tag of its own) so an operator behind a corporate proxy can
 # build it once through make's NPM_REGISTRY/HTTPS_PROXY pass-through and this
