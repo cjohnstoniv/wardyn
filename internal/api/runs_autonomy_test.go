@@ -947,9 +947,11 @@ func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
 // the miss would be invisible.
 func TestAutonomyPostureGradesTheADOEntraCredentialAtCreate(t *testing.T) {
 	site := adoSite(adoEntraTestRow())
-	if _, ok := resolveADOEntraRun(site, []string{adoTestRepo}, adoTestOwner); !ok {
+	adoRun, ok := resolveADOEntraRun(site, []string{adoTestRepo}, adoTestOwner)
+	if !ok {
 		t.Fatalf("fixture: %q does not resolve to the per-person Azure DevOps lane", adoTestRepo)
 	}
+	grade := adoEntraGradedAs(adoRun, ok)
 	ws := types.Workspace{ID: uuid.New(), Name: "ado",
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: adoTestRepo}}}
 	spec := types.RunPolicySpec{
@@ -961,13 +963,13 @@ func TestAutonomyPostureGradesTheADOEntraCredentialAtCreate(t *testing.T) {
 		SecretsBaseline: types.AutonomyL2, SecretsPowerful: types.AutonomyL1,
 	}
 
-	graded := composer.AutonomyPostureOf(autonomyPostureSpec(spec, []types.Workspace{ws}, "", site, adoTestOwner), types.CC2)
+	graded := composer.AutonomyPostureOf(autonomyPostureSpec(spec, []types.Workspace{ws}, "", site, grade), types.CC2)
 	level, boundBy := composer.FoldAutonomy(rubric, graded)
 
 	// The same spec as dispatch leaves it: the grants the lane really writes.
 	dispatched := spec
 	dispatched.EligibleGrants = adoEntraPostureGrants("contoso")
-	after := composer.AutonomyPostureOf(autonomyPostureSpec(dispatched, []types.Workspace{ws}, "", site, adoTestOwner), types.CC2)
+	after := composer.AutonomyPostureOf(autonomyPostureSpec(dispatched, []types.Workspace{ws}, "", site, grade), types.CC2)
 	afterLevel, afterBound := composer.FoldAutonomy(rubric, after)
 
 	if graded.Secrets != types.AutonomySecretsPowerful {
@@ -1061,10 +1063,27 @@ func TestAutonomyPostureIncludesTheADOEntraLaneAtBothDoors(t *testing.T) {
 			}
 
 			srv2, st2, audit2 := fixture()
-			if c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), body); c.Code != http.StatusCreated {
+			c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), body)
+			if c.Code != http.StatusCreated {
 				t.Fatalf("create = %d, want 201: %s", c.Code, c.Body.String())
 			}
 			launched, _ := autonomyCreateAudit(t, st2, audit2)["autonomy"].(map[string]any)
+
+			// The 201 warning has to NAME the credential when it is what graded
+			// powerful. The member's request declared no secret at all on this
+			// lane, so "narrow the run's secrets" is unactionable without the
+			// noun, and the admin has nothing to look up either.
+			if tc.wantSecrets == types.AutonomySecretsPowerful {
+				var created struct {
+					Warnings []string `json:"warnings"`
+				}
+				if err := json.Unmarshal(c.Body.Bytes(), &created); err != nil {
+					t.Fatalf("decode create: %v", err)
+				}
+				if !slices.ContainsFunc(created.Warnings, func(s string) bool { return strings.Contains(s, "contoso") }) {
+					t.Errorf("no 201 warning names the Azure DevOps organisation that graded this run powerful: %q", created.Warnings)
+				}
+			}
 
 			review, _ := json.Marshal(resp.Autonomy)
 			audited, _ := json.Marshal(launched)

@@ -88,7 +88,7 @@ func TestADOEntraLane_EndToEnd(t *testing.T) {
 	policy := types.RunPolicySpec{}
 	runID := uuid.New()
 	lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: runID}, adoTestRun(t), true,
-		dispatchLLMPlan{mitmCACertPEM: string(caCert), mitmCAKeyPEM: string(caKey)}, &policy, map[string]string{}, nil)
+		adoEntraUngraded(), dispatchLLMPlan{mitmCACertPEM: string(caCert), mitmCAKeyPEM: string(caKey)}, &policy, map[string]string{}, nil)
 	if !ok || len(lane.gate) != 1 {
 		t.Fatalf("dispatch: ok=%v gate=%+v", ok, lane.gate)
 	}
