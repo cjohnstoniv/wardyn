@@ -2,7 +2,7 @@
 # Test gaps — untested exported surface (inventory)
 
 _Generated 2026-09-22 by `scripts/test-gaps.sh` from `test/reports/go/union/coverage-func.txt`
-(union coverage total **79.6%**), cross-checked against the Postgres lane (`test/reports/go/pg/coverage-func.txt`)._
+(union coverage total **79.7%**), cross-checked against the Postgres lane (`test/reports/go/pg/coverage-func.txt`)._
 
 This is an **inventory, not a promise**. An exported func listed here is not
 automatically a bug: a thin pass-through, a driver only a live daemon exercises,
@@ -27,7 +27,7 @@ Refresh: `make cover-check` (+ `make test-report-pg` for the PG cross-check), th
 | **Kubernetes-gated** (needs a real cluster) | 6 |
 | **Untested** (no test in the tree reaches it) | 96 |
 | Total 0.0% exported | 264 |
-| _(of 835 exported funcs in the union)_ | |
+| _(of 836 exported funcs in the union)_ | |
 
 ## Untested — no test in the tree reaches these
 
