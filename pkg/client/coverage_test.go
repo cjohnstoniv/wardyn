@@ -42,6 +42,8 @@ var (
 	_ client.DecisionOpts
 	_ []client.SSHPublicKey
 	_ client.RunFiles
+	_ []client.Device
+	_ client.DeviceEnrolmentToken
 	_ client.DrivesDocument
 	_ client.UserDrive
 	_ []client.UserDriveListItem
@@ -73,6 +75,7 @@ func routeFamilies() map[string][]string {
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},
 		"ssh-keys":    {"ListSSHKeys", "AddSSHKey"},
+		"devices":     {"MintDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
 	}
 }
 

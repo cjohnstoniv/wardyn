@@ -394,7 +394,7 @@ func TestUIGateway_ConsoleOriginHasNoRelayRoutes(t *testing.T) {
 		uiRunPrefix + h.run.ID.String() + "/ide",
 	} {
 		rec := httptest.NewRecorder()
-		h.srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		panicFails(t, h.srv.Handler()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("console router answered %s with %d, want 404", path, rec.Code)
 		}

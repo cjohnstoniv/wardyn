@@ -27,9 +27,9 @@ import type {
   SetupHarnessTool,
 } from "../../../lib/types";
 import { Button } from "../../ui/button";
-import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
+import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
-import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
+import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
@@ -459,6 +459,40 @@ export function RunRail({
           </div>
           <p className="text-xs text-muted-foreground">{CC_META[cc].doesntProtect}</p>
         </RailSection>
+
+        {/* What resolveRunAutonomy (#97) would cap this run at — known only
+            once a preflight verdict is on screen, exactly like the risk/
+            confinement block at the bottom of this rail. `preflight.result.
+            autonomy` is ABSENT (never a zero value) when nothing bound the
+            run, which is indistinguishable from "no rubric on the assigned
+            profile" and "no profile at all" — governanceProfile (already
+            threaded above) is what tells those two apart. */}
+        {preflight.result && (
+          <RailSection title={AUTONOMY_RAIL.HEADING}>
+            <div className="mb-1">
+              <AutonomyChip level={preflight.result.autonomy?.level} />
+            </div>
+            {preflight.result.autonomy ? (
+              <>
+                {/* Ruling 1 (#96 review): bound_by is a LIST — a tie at the
+                    resolved level names EVERY cause, not just the first. */}
+                <p className="text-xs text-muted-foreground">
+                  {autonomyBoundSentence(preflight.result.autonomy.bound_by ?? [])}
+                </p>
+                {showHoldNote && preflight.result.autonomy.level === "L1" && (
+                  <p className="mt-1 text-xs font-medium text-foreground">{AUTONOMY_RAIL.DERIVED_HOLD_NOTE}</p>
+                )}
+                {governanceProfile && (
+                  <p className="mt-1 text-xs text-muted-foreground">{AUTONOMY_RAIL.PROFILE_LINE(governanceProfile)}</p>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {governanceProfile ? AUTONOMY_RAIL.NO_CAP : AUTONOMY_RAIL.NO_PROFILE}
+              </p>
+            )}
+          </RailSection>
+        )}
 
         {showCredentials && (
         <RailSection title="Credentials">

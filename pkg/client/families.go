@@ -277,6 +277,39 @@ func (c *Client) RevokeSessions(ctx context.Context, sub string, all bool) error
 		map[string]any{"sub": sub, "all": all}, nil)
 }
 
+// DeviceEnrolmentTokenRequest is the POST /api/v1/admin/devices/enrolment-tokens
+// body. internal/api aliases it (mintEnrolmentTokenRequest), so the strict
+// server decode and this struct are one type.
+type DeviceEnrolmentTokenRequest struct {
+	// Name is the laptop's inventory name; the device it enrols carries it.
+	Name string `json:"name"`
+}
+
+// MintDeviceEnrolmentToken mints a single-use token one laptop's first boot
+// exchanges for its device credential (admin only). The returned Token is the
+// only copy — the server keeps a hash — and it expires unused after 72 hours.
+// POST /api/v1/admin/devices/enrolment-tokens.
+func (c *Client) MintDeviceEnrolmentToken(ctx context.Context, name string) (DeviceEnrolmentToken, error) {
+	var out DeviceEnrolmentToken
+	err := c.do(ctx, http.MethodPost, "/api/v1/admin/devices/enrolment-tokens", DeviceEnrolmentTokenRequest{Name: name}, &out)
+	return out, err
+}
+
+// ListDevices returns every enrolled device, revoked ones included, newest
+// first (admin or security_admin). GET /api/v1/admin/devices.
+func (c *Client) ListDevices(ctx context.Context) ([]Device, error) {
+	var out []Device
+	err := c.do(ctx, http.MethodGet, "/api/v1/admin/devices", nil, &out)
+	return out, err
+}
+
+// RevokeDevice cuts one device off: its next audit push or heartbeat answers
+// 401 (admin or security_admin). 404 for an unknown or already-revoked id.
+// DELETE /api/v1/admin/devices/{id}.
+func (c *Client) RevokeDevice(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/admin/devices/"+id.String(), nil, nil)
+}
+
 // ListSSHKeys returns the caller's own registered SSH gateway keys — the
 // gateway's entire trust root (docs/SSH.md §1). There is no admin view of
 // another principal's keys. GET /api/v1/me/ssh-keys.

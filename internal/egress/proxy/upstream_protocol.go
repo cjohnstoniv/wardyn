@@ -446,6 +446,20 @@ func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, err error, ruleSource st
 	return true
 }
 
+// failUpstream answers a failed roundTripUpstream with exactly one deny row:
+// the HTTP/2 mismatch refusal (a 400), or builtin:dial-failed and a 502. A lane
+// emits its allow row only after the round trip succeeds (E3), so a failed dial
+// never over-reports an allow. seen may be nil, for a lane that records nothing.
+func (p *Proxy) failUpstream(w http.ResponseWriter, err error, seen *egress.DecisionLog, host, msg string) {
+	if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, msg) {
+		return
+	}
+	if seen != nil && p.sink != nil {
+		p.sink.emit(p.denyDialFailed("builtin:dial-failed", seen.Request, host, err, seen.Scan))
+	}
+	p.httpError(w, msg, err, http.StatusBadGateway)
+}
+
 // writeUpstreamProtocolMismatch answers the refusal to the sandbox with cause
 // — never the raw wrapped net/http error, which is the HTTP/2 frame bytes
 // themselves (mostly control characters), not a readable diagnosis, the one
