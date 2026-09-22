@@ -71,6 +71,16 @@ var envDocAllow = map[string]bool{
 	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps
 	// its ENV.md row honest.
 	"WARDYN_E2E_LIVE_BASE_URL": true,
+	// The live-local harness (internal/testlive, ui/playwright.live-local.config.ts;
+	// docs/LIVE-TESTS.md): opt-in suites against a real tenant, never CI or
+	// operator config. Documented in ENV.md's "Live-local harness" table.
+	"WARDYN_LIVE_ENTRA": true, "WARDYN_LIVE_ADO": true, "WARDYN_LIVE_BEDROCK": true,
+	"WARDYN_LIVE_AWS_SSO": true, "WARDYN_LIVE_BASE_URL": true, "WARDYN_LIVE_IDENTITIES_FILE": true,
+	"WARDYN_LIVE_ADO_ORG": true, "WARDYN_LIVE_ADO_PROJECT": true, "WARDYN_LIVE_ADO_REPO": true,
+	"WARDYN_LIVE_AWS_SSO_START_URL": true, "WARDYN_LIVE_AWS_SSO_REGION": true,
+	"WARDYN_LIVE_AWS_SSO_TOKEN_FILE": true, "WARDYN_LIVE_BEDROCK_ACCOUNT_ID": true,
+	"WARDYN_LIVE_BEDROCK_ROLE_NAME": true, "WARDYN_LIVE_BEDROCK_REGION": true,
+	"WARDYN_LIVE_BEDROCK_MODEL": true, "WARDYN_LIVE_BEDROCK_MAX_CALLS": true,
 }
 
 // envDocShellOnly lists vars read ONLY by deploy/compose/docker-compose.yaml and
