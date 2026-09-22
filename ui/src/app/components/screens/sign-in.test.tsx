@@ -109,6 +109,44 @@ describe("SignIn — SSO entry point", () => {
   });
 });
 
+// #378/#379: the sign-in screen reads /healthz's new token_login/sso_only bits
+// and renders only what can work, in every combination the posture can report.
+describe("SignIn — renders only what the posture says can work (#378/#379)", () => {
+  it("SSO-only: one 'Sign in with SSO' button, no admin-token field, no role-source caveat", async () => {
+    healthMock.mockResolvedValue({ sso: true, sso_only: true, token_login: false });
+    renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.queryByLabelText(/admin token/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/comes from your SSO role assignment/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("token + SSO both configured (today's combined deployment): unchanged", async () => {
+    healthMock.mockResolvedValue({ sso: true, sso_only: false, token_login: true });
+    renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.getByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/comes from your SSO role assignment/i),
+    ).toBeInTheDocument();
+  });
+
+  it("both bits false keeps the admin-token form (nothing says sign-in is unavailable)", async () => {
+    healthMock.mockResolvedValue({ sso: false, sso_only: false, token_login: false });
+    renderSignIn();
+    expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
+  });
+
+  it("local-mode cell: an older/local daemon reporting no posture bits keeps today's form", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    renderSignIn();
+    expect(await screen.findByLabelText(/admin token/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in with sso/i })).toBeDisabled();
+  });
+});
+
 // W31-S1-2 regression: wardynd never prints an admin token on startup — it
 // only ever READS WARDYN_ADMIN_TOKEN from the environment (cmd/wardynd's
 // boot_flags.go/main.go). The sign-in copy claiming otherwise was the gate's
