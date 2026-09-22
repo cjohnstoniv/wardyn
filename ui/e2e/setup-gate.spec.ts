@@ -65,6 +65,15 @@ async function skipHero(page: Page): Promise<void> {
 }
 
 async function openPermissionsFromPeople(page: Page): Promise<void> {
+  // The rail itself is the real signal that the funnel's lazy chunk has
+  // mounted — waited on explicitly rather than assumed, since the caller's
+  // waitForURL(/\/setup/) resolves on the client-side route change alone and
+  // can land well before the chunk (and the SSO-mode /access read the People
+  // step's multi-user branch kicks off) are done. Without this the People
+  // click below is the first thing to notice the rail isn't there yet, which
+  // reads as "the button never appeared" rather than "the funnel is still
+  // loading".
+  await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible();
   // The rail's steps are buttons; "Open Permissions" is a Link (role=link).
   await page.getByRole("button", { name: /^People/ }).click();
   await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible();
