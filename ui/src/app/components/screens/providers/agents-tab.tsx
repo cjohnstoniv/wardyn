@@ -31,6 +31,9 @@ import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { readableDiff } from "../../../lib/readable-diff";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
+import { useRegisterUnsaved } from "../../../lib/unsaved-registry";
+import { useWriteDropped } from "../../../lib/reauth";
+import { REAUTH_DIALOG } from "../../../lib/reauth-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import {
   AGENTS,
@@ -569,6 +572,8 @@ export function AgentsTab({
   const [etag, setEtag] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [saving, setSaving] = React.useState(false);
+  // #483: a save of this screen's was refused when the session ended.
+  const [writeDropped, clearWriteDropped] = useWriteDropped();
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [savedElsewhere, setSavedElsewhere] = React.useState(false);
 
@@ -595,6 +600,8 @@ export function AgentsTab({
   // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.
   const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
   useUnsavedGuard(changedLines.length > 0);
+  // #483: the same lines, for "Copy my changes" on the signed-out bar/dialog.
+  useRegisterUnsaved("agent-providers", changedLines.length > 0, () => changedLines.join("\n"));
   const roster = harnesses ?? [];
   const catalogIds = new Set(roster.map((h) => h.id));
   // Any row not in this build's catalog (a custom WARDYN_AGENT_IMAGES id) is
@@ -618,6 +625,7 @@ export function AgentsTab({
   const save = async () => {
     setSaving(true);
     setSaveError(null);
+    clearWriteDropped();
     try {
       // What the admin sees is what is written, in catalog order. A switch that
       // is ON contributes its row (the stored one, or the defaults for one just
@@ -647,6 +655,9 @@ export function AgentsTab({
       // sitting on the OTHER two tabs (A-01).
       onStatusRefresh();
     } catch (e) {
+      // #483: a 401 is the sign-in dialog's to answer; once the person is
+      // back, writeDropped says this save never went through.
+      if (e instanceof HttpError && e.status === 401) return;
       if (e instanceof HttpError && e.status === 412) {
         setSavedElsewhere(true);
       } else if (e instanceof HttpError && e.status === 400) {
@@ -742,6 +753,11 @@ export function AgentsTab({
           {!operator && <OperatorOnlyHint />}
           {operator && changedLines.length > 0 && (
             <span className="mr-auto text-meta text-muted-foreground">{PROVIDERS_DRAFT.UNSAVED_MARKER}</span>
+          )}
+          {writeDropped && (
+            <span role="status" className="text-meta text-warning">
+              {REAUTH_DIALOG.WRITE_DROPPED}
+            </span>
           )}
           <Button disabled={!operator || saving || invalidAgentRow} onClick={save}>
             {PROVIDERS.SAVE_CTA}

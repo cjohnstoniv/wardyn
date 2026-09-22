@@ -10,10 +10,12 @@
 // drives it directly with a stub RoleProvider rather than the whole App, since
 // App's own auth/health polling has nothing to do with this decision.
 import { describe, it, expect, vi, afterEach, type Mock } from "vitest";
-import { act, render, screen, cleanup, waitFor } from "@testing-library/react";
+import { act, render, screen, cleanup, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import App, { FirstRunLanding, roleCanReach } from "./App";
+import App, { FirstRunLanding } from "./App";
+import { roleCanReach } from "./components/wardyn/reauth-layer";
+import { SESSION_ENDED_REASON } from "./lib/api/core";
 import { RoleProvider, type Role } from "./components/wardyn/operator-context";
 import { baseStatus } from "./lib/test-fixtures";
 import type { SetupStatus } from "./lib/types";
@@ -140,125 +142,36 @@ function renderApp(initialPath = "/") {
   );
 }
 
-describe("App — a 401 only carries a reason when the console WAS authed (H1)", () => {
+describe("App — the sign-in screen's notice (H1, #483)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    sessionStorage.clear();
     cleanup();
   });
 
-  // The regression this pins: onUnauthorized must fire only when the console
-  // WAS authed — firing unconditionally would render "Your session ended…"
-  // to a visitor who never had one, off the cold mount probe's OWN 401 (no
-  // session ever established this tab).
-  it("a cold-mount 401 (never signed in) renders SignIn with no alert", async () => {
+  // A visitor who never had a session sees the gate with nothing to explain.
+  it("a cold-mount 401 with no stored token (a first visit) shows no notice", async () => {
     vi.stubGlobal("fetch", mockFetch({ probeUnauthed: true }).fetch);
     renderApp();
     await screen.findByText("Admin token", { exact: true });
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).toBeNull();
   });
 
-  it("a mid-session 401 (was authed) renders the reason", async () => {
-    const { fetch, resolve401 } = mockFetch({ on401: "limit=1000" });
-    vi.stubGlobal("fetch", fetch);
+  // #483: a stored token refused on load is a session this browser held — the
+  // notice is an amber warning (role=status), never the error box.
+  it("a cold-mount 401 for a stored token shows the signed-out warning, not an error", async () => {
+    sessionStorage.setItem("wardyn_admin_token", "expired-token");
+    vi.stubGlobal("fetch", mockFetch({ probeUnauthed: true }).fetch);
     renderApp();
-    // Authed and rendered FIRST — the badge poll's own 401 is a promise this
-    // test hasn't resolved yet, so there is nothing to race: it cannot land
-    // before this does, on any hardware.
-    await screen.findByText("runs screen stub");
-    resolve401();
     await screen.findByText("Admin token", { exact: true });
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/session ended/i);
+    expect(await screen.findByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 
-// L4: onSignIn resolves identity BEFORE flipping `auth`, so the routed tree
-// never mounts at the pre-401 URL for one commit before the bounce — proven
-// by ORDER, not by DOM absence: while onSignIn's own `health.whoami()` call
-// (the SECOND /me request, deferred here) is still pending, nothing that
-// only fires once `auth === "authed"` (the badge poll's `limit=1000` reads)
-// may have gone out yet.
-describe("App — identity resolves before auth flips on re-auth (L4)", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    window.history.pushState({}, "", "/");
-    cleanup();
-  });
-
-  it("no post-auth fetch fires while the re-auth whoami() is still pending", async () => {
-    // window.location.pathname is what safeReturnPath actually reads at
-    // capture (core.ts) — MemoryRouter's own history never touches it, so
-    // without this the captured path folds to the bare "/" the app happens
-    // to boot at, safeReturnPath rewrites THAT to "/runs", and onSignIn's
-    // `path === "/runs"` short-circuit skips whoami() entirely (a real path
-    // is required to exercise the branch this pin is about).
-    window.history.pushState({}, "", "/drives");
-
-    const midSession401 = deferred<Response>();
-    const reAuthWhoami = deferred<Response>();
-    let meCalls = 0;
-    let badgeCalls = 0;
-    let reAuthClicked = false;
-    let badgeCallsAfterClick = 0;
-    const fetchMock = vi.fn((url: RequestInfo | URL) => {
-      const u = String(url);
-      if (u.includes("/api/v1/me")) {
-        meCalls++;
-        // Call 1: AppShell's own mount-time /me (admin). Call 2+: the
-        // onSignIn whoami() this test controls.
-        return meCalls === 1 ? Promise.resolve(jsonResponse(200, ME_ADMIN)) : reAuthWhoami.promise;
-      }
-      if (u.includes("limit=1000")) {
-        badgeCalls++;
-        if (reAuthClicked) badgeCallsAfterClick++;
-        // Call 1: the mid-session 401 this test drives on purpose. Every
-        // later call (the SECOND badge poll, once re-authed) just succeeds.
-        return badgeCalls === 1 ? midSession401.promise : Promise.resolve(jsonResponse(200, []));
-      }
-      if (u.includes("/runs?limit=1") && !u.includes("limit=1000")) return Promise.resolve(jsonResponse(200, []));
-      if (u.includes("/healthz")) return Promise.resolve(jsonResponse(200, { status: "ok", sso: false }));
-      if (u.includes("/readyz")) return Promise.resolve(jsonResponse(200, { status: "ok" }));
-      if (u.includes("/setup/status")) return Promise.resolve(jsonResponse(200, SETUP_STATUS_READY));
-      if (u.includes("/approvals")) return Promise.resolve(jsonResponse(200, []));
-      if (u.includes("/runs")) return Promise.resolve(jsonResponse(200, []));
-      return Promise.resolve(jsonResponse(200, {}));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    renderApp();
-    await screen.findByText("runs screen stub");
-
-    midSession401.resolve(jsonResponse(401, { error: "unauthorized" }));
-    await screen.findByText("Admin token", { exact: true });
-    await screen.findByRole("alert");
-
-    reAuthClicked = true;
-    const user = userEvent.setup();
-    await user.type(screen.getByLabelText("Admin token"), "any-token");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
-
-    // onSignIn is suspended on `await health.whoami()` right now (its
-    // promise is still pending) — `setAuth("authed")` cannot have run yet,
-    // so the badge poll it gates must not have fired either.
-    expect(badgeCallsAfterClick).toBe(0);
-    expect(screen.getByLabelText("Admin token")).toBeInTheDocument(); // still on the gate
-
-    // Resolved as a MEMBER (fails roleCanReach("/drives", "member")) so the
-    // fallback lands on the stubbed Runs screen rather than a real,
-    // unmocked DrivesScreen — this test is about ORDER, not destination
-    // (M2/M3 already cover the destination).
-    reAuthWhoami.resolve(jsonResponse(200, { ...ME_ADMIN, role: "member", operator: false, security_operator: false }));
-    await screen.findByText("runs screen stub");
-    expect(badgeCallsAfterClick).toBeGreaterThan(0); // …and now it has.
-  });
-});
-
-// H2/M2's actual path-restore behavior is proven end to end in
-// e2e/auth.spec.ts (Playwright drives the REAL browser location — a
-// MemoryRouter-based vitest mount can't: `safeReturnPath` reads
-// `window.location.pathname`, which MemoryRouter's in-memory history never
-// touches, so a vitest mount here would only prove the mock's own scripted
-// path, not the capture/restore wiring). The pure `safeReturnPath`/
-// `roleCanReach` functions are unit-pinned directly instead.
+// The reauth dialog itself (#483) is pinned in App.reauth.test.tsx; the path a
+// different person reloads to is decided by roleCanReach, pinned directly here.
 
 describe("roleCanReach — pure (M2)", () => {
   it("a member cannot reach an operator-only route", () => {
@@ -280,8 +193,8 @@ describe("roleCanReach — pure (M2)", () => {
   // merely the member NAV set — /secrets (self-service WRITE/DELETE since
   // migration 0050) and /settings + /ssh-keys (rendered in the account menu
   // for every role) have no sidebar entry but ARE reachable, or a member's
-  // own mid-session 401 on any of the three would bounce to /runs instead of
-  // restoring.
+  // own mid-session 401 on any of the three would read as "no longer yours"
+  // and send them to /runs instead of carrying on.
   it("M3: a member reaches the three self-service routes with no sidebar entry", () => {
     expect(roleCanReach("/secrets", "member")).toBe(true);
     expect(roleCanReach("/settings", "member")).toBe(true);
@@ -397,40 +310,29 @@ describe("App — the setup-status poll behind the model-access door", () => {
 
   it("drops the previous person's snapshot on sign-out, and ignores a read that lands after it", async () => {
     // The mount read is held open, so nothing has been stored yet when the
-    // session is cut; it then answers for a person who is no longer signed in.
+    // person signs out; it then answers for someone who is no longer here.
     const landingRead = deferred<Response>();
-    const reAuthWhoami = deferred<Response>();
-    const midSession401 = deferred<Response>();
     const secondRead = deferred<Response>();
     let statusCalls = 0;
-    let meCalls = 0;
-    let badgeCalls = 0;
-    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+    const base = mockFetch({}).fetch;
+    const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
       const u = String(url);
       if (u.includes("/setup/status")) {
         statusCalls += 1;
         return statusCalls === 1 ? landingRead.promise : secondRead.promise;
       }
-      if (u.includes("/api/v1/me")) {
-        meCalls += 1;
-        return meCalls === 1 ? Promise.resolve(jsonResponse(200, ME_ADMIN)) : reAuthWhoami.promise;
-      }
-      if (u.includes("limit=1000")) {
-        badgeCalls += 1;
-        return badgeCalls === 1 ? midSession401.promise : Promise.resolve(jsonResponse(200, []));
-      }
-      if (u.includes("/runs?limit=1") && !u.includes("limit=1000")) return Promise.resolve(jsonResponse(200, []));
-      if (u.includes("/healthz")) return Promise.resolve(jsonResponse(200, { status: "ok", sso: false }));
-      if (u.includes("/readyz")) return Promise.resolve(jsonResponse(200, { status: "ok" }));
-      if (u.includes("/approvals")) return Promise.resolve(jsonResponse(200, []));
-      if (u.includes("/runs")) return Promise.resolve(jsonResponse(200, []));
-      return Promise.resolve(jsonResponse(200, {}));
+      return base(url, init);
     });
     vi.stubGlobal("fetch", fetchMock);
     renderApp();
 
-    // Signed in, landing still waiting on its status read.
-    midSession401.resolve(jsonResponse(401, { error: "unauthorized" }));
+    // Signed in, landing still waiting on its status read — sign out.
+    const user = userEvent.setup();
+    const header = await screen.findByRole("banner");
+    await waitFor(() => expect(within(header).getByText("cj")).toBeInTheDocument());
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
     await screen.findByText("Admin token", { exact: true });
 
     // The stale completion: the first person's snapshot arrives after they are
@@ -439,13 +341,11 @@ describe("App — the setup-status poll behind the model-access door", () => {
       landingRead.resolve(jsonResponse(200, SETUP_STATUS_READY));
     });
 
-    const user = userEvent.setup();
     await user.type(screen.getByLabelText("Admin token"), "any-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
-    reAuthWhoami.resolve(jsonResponse(200, ME_ADMIN));
 
     // The next person's landing decision waits for THEIR OWN read: with the
-    // stale body stored, FirstRunLanding would have routed off it already.
+    // stale body stored, the landing would have routed off it already.
     await waitFor(() => expect(statusCalls).toBe(2));
     expect(screen.queryByText("runs screen stub")).toBeNull();
 

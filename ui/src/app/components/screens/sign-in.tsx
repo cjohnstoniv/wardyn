@@ -6,6 +6,7 @@
 import * as React from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   Building2,
   KeyRound,
@@ -48,6 +49,11 @@ export const UNREACHABLE_ERROR =
 // what belongs in the field and where the person saw it instead.
 export const TOKEN_HINT =
   "The token this Wardyn daemon was started with. Your install printed it when it finished.";
+
+// Shared with the in-place sign-in dialog (#483, wardyn/reauth-layer.tsx).
+export const TOKEN_LABEL = "Admin token";
+export const TOKEN_REJECTED = "That admin token was rejected. Check the value and try again.";
+export const SSO_SIGN_IN = "Sign in with SSO";
 
 // The OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
 // redirects a user-actionable login denial to "/?auth_error=<code>" instead
@@ -105,11 +111,9 @@ function authErrorMessage(code: string): string {
 
 export function SignIn({
   onSignIn,
-  // X3-F7: why the gate reopened — App.tsx's onUnauthorized handler, for a
-  // mid-session expiry (a revoked token, a dead SSO session). Undefined on
-  // the ordinary mount-probe gate (never signed in this tab at all), which is
-  // why this is the INITIAL error state, not a separate alert slot: the same
-  // box submitToken's own failures render below.
+  // #483: a session this browser held was refused on load — an amber
+  // warning (it is news, not a failure of anything typed here), never the
+  // error box below. Undefined on a first visit and after a sign-out.
   reason,
 }: {
   onSignIn: () => void;
@@ -121,7 +125,7 @@ export function SignIn({
   // closes). Opt in to persist it to localStorage across restarts.
   const [remember, setRemember] = React.useState(false);
   const [loading, setLoading] = React.useState<"token" | null>(null);
-  const [error, setError] = React.useState<string | null>(reason ?? null);
+  const [error, setError] = React.useState<string | null>(null);
   // Whether this control plane has OIDC configured (so GET /auth/login exists).
   // Defaults false: without the flow mounted the link would 404, and an older
   // server simply omits the field.
@@ -204,9 +208,7 @@ export function SignIn({
     } catch (e) {
       if (e instanceof HttpError && e.status === 401) {
         setToken(null); // a real rejection — don't keep carrying a bad token
-        setError(
-          "That admin token was rejected. Check the value and try again.",
-        );
+        setError(TOKEN_REJECTED);
       } else {
         setError(UNREACHABLE_ERROR);
       }
@@ -281,6 +283,16 @@ export function SignIn({
             </p>
           </div>
 
+          {reason && (
+            <div
+              role="status"
+              className="mb-4 flex items-start gap-2 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning"
+            >
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>{reason}</span>
+            </div>
+          )}
+
           {/* #378/#379: the admin-token form renders only when the daemon says a
               token can actually work (showTokenForm) — never on an SSO-only
               deployment, where a live token is a second front door the posture
@@ -296,7 +308,7 @@ export function SignIn({
               className="space-y-2"
             >
               <Label htmlFor="token" className="text-foreground">
-                Admin token
+                {TOKEN_LABEL}
               </Label>
               <div className="relative">
                 <KeyRound className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -376,7 +388,7 @@ export function SignIn({
               <Button asChild variant="outline" className="w-full">
                 <a href="/auth/login">
                   <Building2 className="size-4" />
-                  Sign in with SSO
+                  {SSO_SIGN_IN}
                 </a>
               </Button>
               {!ssoOnly && (
@@ -394,7 +406,7 @@ export function SignIn({
                 title="SSO sign-in needs OIDC configured on this control plane (WARDYN_OIDC_*)"
               >
                 <Building2 className="size-4" />
-                Sign in with SSO
+                {SSO_SIGN_IN}
               </Button>
               <p className="mt-2 text-center text-xs text-muted-foreground">
                 SSO sign-in isn&apos;t configured on this control plane — use an

@@ -10,6 +10,8 @@ import {
   EMAIL_DOMAIN_REFUSAL,
   UNREACHABLE_ERROR,
 } from "../src/app/components/screens/sign-in";
+import { SESSION_ENDED_REASON } from "../src/app/lib/api/core";
+import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_DRAFT } from "../src/app/lib/reauth-copy";
 
 // Auth / sign-in lane.
 //
@@ -106,9 +108,10 @@ test.describe("auth / sign-in gate", () => {
 
     // H1: the cold mount probe (no session ever established this tab) is
     // ALSO a 401 — onUnauthorized used to fire unconditionally, so this
-    // ordinary first-visit gate rendered "Your session ended…" to a human
-    // who never had one. No alert at all on this path.
+    // ordinary first-visit gate told a human who never had a session that it
+    // ended. No alert and no notice at all on this path.
     await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText(SESSION_ENDED_REASON)).toHaveCount(0);
   });
 
   test("the token field is password-typed and the submit button is disabled while empty", async ({ page }) => {
@@ -198,6 +201,10 @@ test.describe("auth / sign-in gate", () => {
 
     await expect(signInToken(page)).toBeVisible();
     await expect(runsNav(page)).toHaveCount(0);
+    // #483: a session this browser held, refused on load — said as an amber
+    // warning (role=status), never in the error box.
+    await expect(page.getByRole("status").filter({ hasText: SESSION_ENDED_REASON })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
   test("sign-out returns to the sign-in gate and clears the token (/auth/logout HIGH fix)", async ({ page }) => {
@@ -222,6 +229,8 @@ test.describe("auth / sign-in gate", () => {
 
     // The local admin token MUST be cleared so the next probe can't re-auth.
     expect(await readToken(page)).toBeNull();
+    // #483: a deliberate sign-out is not a session that ended — no notice.
+    await expect(page.getByText(SESSION_ENDED_REASON)).toHaveCount(0);
   });
 
   test("after sign-out a reload stays on the gate (token really gone)", async ({ page }) => {
@@ -396,104 +405,61 @@ test.describe("outage vs. rejection (R4/F027)", () => {
 
 // R4/F116 — MID-SESSION EXPIRY, the one auth path no spec in either tier drove.
 //
-// wfetch routes every 401 to the module-level onUnauthorized handler, and
-// App.tsx wires that to setAuth("unauthed") — the sign-in gate. It is the
-// console's ONLY route back to a door the human can open once an SSO session
-// dies or an admin token is revoked mid-work; without it the operator keeps a
-// console that answers 401 to everything and never says why. Deleting the
-// handler call left the whole vitest suite green, and every spec above boots
-// EITHER already authenticated OR already rejected: none revokes a session that
-// the console has already accepted.
-//
-// DEFERRED (Docker down for the R4 fix wave — never run, never skipped):
-//   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
-//   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
-//   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/auth.spec.ts
-test.describe("a session revoked mid-run (R4/F116)", () => {
-  test("a 401 arriving on an ALREADY-authenticated console returns to the sign-in gate", async ({
+// wfetch routes every 401 to the module-level onUnauthorized handler. Since
+// #483 a 401 on a console that WAS signed in keeps the page and opens the
+// "Sign in to continue" dialog over it — the console's only way back to a
+// door the human can open once an SSO session dies or an admin token is
+// revoked mid-work; without it the operator keeps a console that answers 401
+// to everything and never says why. Every other spec here boots EITHER already
+// authenticated OR already rejected: none revokes a session the console has
+// already accepted. The draft-keeping half is reauth-in-place.spec.ts.
+function revokeEverything(page: Page) {
+  return page.route("**/api/v1/**", (route) =>
+    route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }),
+  );
+}
+function reauthDialog(page: Page) {
+  return page.getByRole("dialog", { name: REAUTH_DIALOG.TITLE });
+}
+async function signInInDialog(page: Page) {
+  await reauthDialog(page).locator("#reauth-token").fill(GOOD_TOKEN);
+  await reauthDialog(page).getByRole("button", { name: REAUTH_BAR.CTA, exact: true }).click();
+}
+
+test.describe("a session revoked mid-run (R4/F116, #483)", () => {
+  test("a 401 arriving on an ALREADY-authenticated console opens the sign-in dialog over the page", async ({
     page,
   }) => {
-    // In, the ordinary way: a stored token the daemon accepts.
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    // Now the session dies underneath the console: every API call 401s from
-    // here on, exactly as it would after an SSO session expiry or a revoked
-    // token. /healthz is left alone — the daemon is up, it is this CALLER who
-    // is no longer welcome, and that is the distinction the gate must draw.
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({
-        status: 401,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "unauthorized" }),
-      }),
-    );
-
-    // The console's own polls (the attention badge, every 5 s) reach the 401
-    // on their own. This used to click the Runs nav to force one sooner — but
-    // the gate can replace the shell BETWEEN Playwright resolving that link
-    // and dispatching the click (a 401 from a poll, or from a boot request
-    // still in flight when the route landed), and the click then waits 30 s
-    // on a detached element. A race the test loses on a cold CI runner (6/6
-    // on 2026-09-11) and sometimes locally, on 0.7.0 itself. So the door is
-    // asserted directly, with room for one full poll period.
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
-    // …and the gate is a real door, not a dead end: the submit control is there
-    // to be used.
-    await expect(useTokenButton(page)).toBeVisible();
-  });
-
-  // X3-F7: the gate used to swap in a bare SignIn with no explanation and no
-  // way back — this pins both halves of the fix. reason renders in SignIn's
-  // own alert slot (the same box submitToken's own failures use), and
-  // re-authenticating returns to the SCREEN the 401 interrupted, not always
-  // to Runs.
-  test("a 401 while on another screen shows why, and re-auth returns to that screen (X3-F7)", async ({ page }) => {
-    await bootWithStoredToken(page, GOOD_TOKEN);
-    await expect(runsNav(page)).toBeVisible();
-
-    await page.getByRole("link", { name: /^Workspaces/ }).click();
-    await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
-
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({
-        status: 401,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "unauthorized" }),
-      }),
-    );
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole("alert")).toContainText(/session ended/i);
-
-    // The session works again — re-authenticate.
-    await page.unroute("**/api/v1/**");
-    await signInToken(page).fill(GOOD_TOKEN);
-    await useTokenButton(page).click();
-
-    // Back on Workspaces, not dumped on Runs.
-    await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
+    // The session dies underneath the console. /healthz is left alone — the
+    // daemon is up, it is this CALLER who is no longer welcome. The board's
+    // own poll reaches the 401 on its own, so the door is asserted directly,
+    // with room for one full poll period.
+    await revokeEverything(page);
+    await expect(reauthDialog(page)).toBeVisible({ timeout: 15_000 });
+    // The page stayed: no full sign-in screen replaced it…
+    await expect(signInToken(page)).toHaveCount(0);
+    // …and the dialog is a real door, not a dead end.
+    await expect(reauthDialog(page).getByRole("button", { name: REAUTH_BAR.CTA, exact: true })).toBeVisible();
   });
 });
 
-// M2: the plan's own X3-F7 row says "restore the path after re-auth
-// (fallback /runs on 403)" — the captured path belongs to whoever was
-// signed in BEFORE, not necessarily whoever signs back in on this tab.
-test.describe("the restored path is checked against the re-authenticated role (M2)", () => {
-  test("a member re-authenticating over an admin's captured operator-only path lands on Runs, not a dead end", async ({ page }) => {
+// M2: the page belongs to whoever was signed in BEFORE — the same person
+// with a narrower role is told so and taken to Runs (owner decision Q457-9).
+test.describe("the page is checked against the re-authenticated role (M2, #483)", () => {
+  test("a member signing back in over an admin-only page is told so and taken to Runs", async ({ page }) => {
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
-
     await page.goto("/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }),
-    );
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+    await revokeEverything(page);
+    await expect(reauthDialog(page)).toBeVisible({ timeout: 15_000 });
 
-    // Re-authenticate as a MEMBER (the harness's bearer token is always
-    // admin server-side — splice GET /me the same way mockMemberRole does
-    // for every other member-render spec).
+    // Back as a MEMBER (the harness's bearer token is always admin
+    // server-side — splice GET /me the same way mockMemberRole does).
     await page.unroute("**/api/v1/**");
     await page.route("**/api/v1/me", async (route) => {
       const response = await route.fetch();
@@ -503,31 +469,27 @@ test.describe("the restored path is checked against the re-authenticated role (M
       json.security_operator = false;
       await route.fulfill({ response, json });
     });
-    await signInToken(page).fill(GOOD_TOKEN);
-    await useTokenButton(page).click();
+    await signInInDialog(page);
 
-    // /drives has no member surface at all — landed on Runs instead of a
-    // bare 403 or a route this identity can't even reach.
-    await expect(runsNav(page)).toBeVisible();
+    await expect(reauthDialog(page).getByText(REAUTH_DIALOG.ROLE_CHANGED_BODY)).toBeVisible();
+    await reauthDialog(page).getByRole("button", { name: REAUTH_DRAFT.GO_TO_RUNS }).click();
     await expect(page).toHaveURL(/\/runs$/);
+    await expect(reauthDialog(page)).toHaveCount(0);
   });
 
-  test("neg: the SAME role re-authenticating restores to the captured operator-only path", async ({ page }) => {
+  test("neg: the SAME role signing back in stays on the page", async ({ page }) => {
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
-
     await page.goto("/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }),
-    );
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
-
+    await revokeEverything(page);
+    await expect(reauthDialog(page)).toBeVisible({ timeout: 15_000 });
     await page.unroute("**/api/v1/**");
-    await signInToken(page).fill(GOOD_TOKEN);
-    await useTokenButton(page).click();
+    await signInInDialog(page);
 
+    await expect(reauthDialog(page)).toHaveCount(0);
+    await expect(page).toHaveURL(/\/drives$/);
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
   });
 });

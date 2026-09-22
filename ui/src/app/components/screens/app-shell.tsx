@@ -43,7 +43,8 @@ import {
   RoleProvider,
   type Role,
 } from "../wardyn/operator-context";
-import { health as api, type MeUserDrive } from "../../lib/api/health";
+import { health as api, type Me, type MeUserDrive } from "../../lib/api/health";
+import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
@@ -132,8 +133,9 @@ export interface ShellMeta {
   networkPolicy: string;
 }
 
-/** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
-function useMeta(): [ShellMeta, () => void] {
+/** The shell's identity, the retry that re-fires /me (B1's banner action), and
+ *  adopt() for a /me the reauth dialog already read (#483). */
+function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
   // Bumped by retry(), which is the effect's only other dependency: /me is
   // fetched once per load today, so after a failure identityResolved would stay
   // false forever and the banner below would have nothing to offer.
@@ -206,7 +208,22 @@ function useMeta(): [ShellMeta, () => void] {
       alive = false;
     };
   }, [attempt]);
-  return [meta, React.useCallback(() => setAttempt((n) => n + 1), [])];
+  // The same person signed back in over the page: take what can have moved
+  // from the /me the dialog read, rather than re-asking — a failed re-ask
+  // would settle as an unknown identity and blank the page it just kept.
+  const adopt = React.useCallback(
+    (me: Me) =>
+      setMeta((m) => ({
+        ...m,
+        method: me.method || "",
+        operator: me.operator,
+        securityOperator: me.security_operator ?? true,
+        role: me.role,
+        sessionExpiresAt: validExpiry(me.session_expires_at),
+      })),
+    [],
+  );
+  return [meta, React.useCallback(() => setAttempt((n) => n + 1), []), adopt];
 }
 
 // SESSION_WARN_MS — how far ahead of the session's real expiry to start
@@ -372,6 +389,12 @@ const ConfinementPostureBanner = React.lazy(() =>
   import("../wardyn/confinement-posture").then((m) => ({ default: m.ConfinementPostureBanner })),
 );
 
+// #483 — the "Sign in to continue" dialog and the signed-out bar. Lazy for the
+// same entry-budget reason; the shell warms the chunk on mount, because by the
+// time a session ends the daemon may not be answering.
+const loadReauthLayer = () => import("../wardyn/reauth-layer");
+const ReauthLayer = React.lazy(() => loadReauthLayer().then((m) => ({ default: m.ReauthLayer })));
+
 const navLinkClass = (isActive: boolean) =>
   cn(
     "relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
@@ -521,7 +544,12 @@ export function AppShell({
   unreachable?: boolean;
   lastOkAt?: Date | null;
 }) {
-  const [meta, retryIdentity] = useMeta();
+  const [meta, retryIdentity, adoptIdentity] = useMeta();
+  const reauth = useReauth();
+  React.useEffect(() => {
+    // A warm-up only: if it fails, React.lazy asks again when the layer mounts.
+    loadReauthLayer().catch(() => {});
+  }, []);
   // B1 — SETTLED and still unknown: /me answered nothing, so every tier the
   // shell holds is the fail-open seed. Distinct from "not settled yet", which is
   // an ordinary first paint and says nothing to anybody.
@@ -571,6 +599,13 @@ export function AppShell({
             >
               Skip to main content
             </a>
+            {/* #483: first, above everything — while it shows, nothing below
+                it can save. */}
+            {reauth.phase !== "none" && (
+              <React.Suspense fallback={null}>
+                <ReauthLayer onResumed={adoptIdentity} />
+              </React.Suspense>
+            )}
             {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
           painted over the shell anyway, but leaving the header mounted would
           keep a dozen focusable controls ahead of the terminal in tab order

@@ -34,6 +34,9 @@ import type { SetupStatus } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { readableDiff } from "../../../lib/readable-diff";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
+import { useRegisterUnsaved } from "../../../lib/unsaved-registry";
+import { useWriteDropped } from "../../../lib/reauth";
+import { REAUTH_DIALOG } from "../../../lib/reauth-copy";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
@@ -66,6 +69,8 @@ export function ProvidersScreen() {
   const [etag, setEtag] = React.useState<string | null>(null);
   const [tab, setTab] = React.useState<Tab>("git");
   const [saving, setSaving] = React.useState(false);
+  // #483: a save of this screen's was refused when the session ended.
+  const [writeDropped, clearWriteDropped] = useWriteDropped();
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [savedElsewhere, setSavedElsewhere] = React.useState(false);
   // Stays on the page as an amber note until the NEXT save (Q8, drawn as (b))
@@ -116,6 +121,7 @@ export function ProvidersScreen() {
   const save = async () => {
     setSaving(true);
     setSaveError(null);
+    clearWriteDropped();
     try {
       const result = await api.putWorkspaceProviders(draft, etag);
       setDraft(result.providers);
@@ -135,6 +141,9 @@ export function ProvidersScreen() {
         toast.success(PROVIDERS.SAVED_TOAST);
       }
     } catch (e) {
+      // #483: a 401 is the sign-in dialog's to answer; once the person is
+      // back, writeDropped says this save never went through.
+      if (e instanceof HttpError && e.status === 401) return;
       if (e instanceof HttpError && e.status === 412) {
         setSavedElsewhere(true);
       } else if (e instanceof HttpError && e.status === 400) {
@@ -163,6 +172,8 @@ export function ProvidersScreen() {
   // banner would call clean.
   const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
   useUnsavedGuard(changedLines.length > 0);
+  // #483: the same lines, for "Copy my changes" on the signed-out bar/dialog.
+  useRegisterUnsaved("providers", changedLines.length > 0, () => changedLines.join("\n"));
 
   const secretsPresent = setupStatus?.secrets.present ?? [];
   const githubApp = setupStatus?.secrets.github_app ?? false;
@@ -286,6 +297,11 @@ export function ProvidersScreen() {
               {!operator && <OperatorOnlyHint />}
               {operator && changedLines.length > 0 && (
                 <span className="mr-auto text-meta text-muted-foreground">{PROVIDERS_DRAFT.UNSAVED_MARKER}</span>
+              )}
+              {writeDropped && (
+                <span role="status" className="text-meta text-warning">
+                  {REAUTH_DIALOG.WRITE_DROPPED}
+                </span>
               )}
               <Button disabled={!operator || saving || invalidGitRow} onClick={save}>
                 {PROVIDERS.SAVE_CTA}
