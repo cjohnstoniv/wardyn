@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -44,8 +45,11 @@ func TestZeroAI_ExecGovernedCommandDispatches(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	if run.State == types.RunFailed {
-		t.Errorf("run state = %q, want a dispatched state, not FAILED — a governed command needs no AI credential", run.State)
+	// Dispatch runs after the 201 (runs_create_launch.go): wait for the exec,
+	// then read the state the launch left.
+	waitFor(t, "the governed command exec", func() bool { return fr.execCount() >= 1 })
+	if got, _ := srv.cfg.Store.GetRun(context.Background(), run.ID); got.State == types.RunFailed {
+		t.Errorf("run state = %q, want a dispatched state, not FAILED — a governed command needs no AI credential", got.State)
 	}
 	if fr.createCalls != 1 {
 		t.Errorf("CreateSandbox calls = %d, want 1 (exec must dispatch with zero AI configured)", fr.createCalls)
@@ -71,9 +75,9 @@ func TestZeroAI_InteractiveRunWorks(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	if run.State != types.RunRunning {
-		t.Errorf("interactive run state = %q, want RUNNING (idle, awaiting attach)", run.State)
-	}
+	// RUNNING and the run.interactive row are written by the launch, after the 201.
+	waitForRunState(t, srv, run.ID, types.RunRunning)
+	waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), run.ID, "run.interactive", "success")
 	if fr.createCalls != 1 {
 		t.Errorf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}

@@ -209,6 +209,47 @@ func TestPATGrants_EmptyMeansNoHostBrokered(t *testing.T) {
 	}
 }
 
+// TestPATBrokerReportsH2MismatchNotDialFailed is #382's PAT-broker case,
+// TestGitBrokerReportsH2MismatchNotDialFailed's sibling: a forge answering
+// unnegotiated HTTP/2 on a clone must classify as
+// builtin:upstream-protocol-mismatch with a 400, not the generic
+// builtin:dial-failed 502 this lane gave before roundTripUpstream's error arm
+// called refuseH2Mismatch.
+func TestPATBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
+	mintUp := newPATBrokerUpstream(t, "T", "oauth2")
+	forgeAddr := startH2MismatchPeer(t)
+	grantID := uuid.New()
+	buf := &bytes.Buffer{}
+	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Sink:            sink,
+		Resolver:        publicResolver{},
+		Dial:            splitDial(upstreamAddr(mintUp.srv), forgeAddr),
+		ControlPlaneURL: "https://wardynd.test:8080",
+		RunToken:        newTokenSource("RUNTOK"),
+		TLSClientConfig: testInsecureTLSConfig,
+		PATGrants:       map[string]PATGrant{"gitlab.com": {GrantID: grantID}},
+	})
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodGet,
+		"/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil)
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := denyBody(rec); !strings.Contains(got, "peer answered HTTP/2") {
+		t.Errorf("body = %q, want the h2-mismatch sentence", got)
+	}
+	d := findDecision(t, buf, ruleSourceUpstreamProtocolMismatch)
+	if d.Via != viaDirect {
+		t.Errorf("via = %q, want %q", d.Via, viaDirect)
+	}
+}
+
 // F085: the smart-HTTP verb check reads the DECODED path, so a '#' (%23) or '?'
 // (%3F) inside the sandbox-supplied rest used to satisfy the "/info/refs" suffix
 // and then re-split the concatenated upstream URL — the brokered PAT delivered

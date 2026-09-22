@@ -314,6 +314,9 @@ type ProxyConfig struct {
 	// forge's PAT is minted proxy-side and never enters the sandbox. Empty => no
 	// host brokered. See proxy.Config.PATGrants.
 	PATGrants map[string]proxy.PATGrant
+	// ADOGrants is the run's per-person Azure DevOps grant for the proxy's REST
+	// gate. See proxy.Config.ADOGrants.
+	ADOGrants []proxy.ADOGrantConfig
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar chains
 	// egress through (http://[user:pass@]host[:port] — https-to-proxy is rejected
 	// by the sidecar's own config validation, parseUpstreamProxy). Threaded

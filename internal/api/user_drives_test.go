@@ -289,7 +289,7 @@ func driveCall(t *testing.T, h http.HandlerFunc, method, path, body string, para
 // driveAuditActions lists the audit actions recorded so far, in order.
 func driveAuditActions(rec *recRecorder) []string {
 	var out []string
-	for _, ev := range rec.events {
+	for _, ev := range rec.snapshot() {
 		out = append(out, ev.Action)
 	}
 	return out

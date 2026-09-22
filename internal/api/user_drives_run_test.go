@@ -1428,10 +1428,8 @@ func TestUnusableGroupSnapshotRefusesTheLaunchWhileMeStaysQuiet(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	ev := findAudit(audit.events, run.ID, "run.drive.mount", "success")
-	if ev == nil {
-		t.Fatalf("no run.drive.mount for the complete-snapshot launch; events=%s", auditDump(audit.events, run.ID))
-	}
+	// The mount row is written by dispatch, which runs after the 201.
+	ev := waitForRecAudit(t, audit, run.ID, "run.drive.mount", "success")
 	home, err := types.DriveHomeName(*d, "sub-f13", "")
 	if err != nil {
 		t.Fatalf("DriveHomeName: %v", err)
