@@ -144,6 +144,9 @@ type Server struct {
 	// run makes calls for more than one model, so it cannot answer "did the
 	// configured ARN reach the data plane".
 	bedrockModels []string
+	// bedrockThrottled counts the 429s a `throttle:N` fault has served, so the
+	// (N+1)th call through succeeds (bedrock.go).
+	bedrockThrottled int
 
 	// roleCredsSeen is the account_id/role_name of the LAST GetRoleCredentials
 	// call. It is the only place a test can see WHICH identity real botocore

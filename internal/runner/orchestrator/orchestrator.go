@@ -148,7 +148,7 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 // the union of enforceable classes (strongest last) and the merged per-class
 // substrate labels. A class is advertised only when SOME substrate enforces it.
 //
-// UserDrives IS THE ONE CONJUNCTION, and the asymmetry is which side of routing
+// UserDrives AND ManagedFiles ARE THE CONJUNCTIONS, and the asymmetry is which side of routing
 // the flag is read on. Every union above describes a control that has to hold
 // for the run ROUTED TO THAT SUBSTRATE, and CreateSandbox picks a substrate
 // that enforces the demanded class. A drive request is refused BEFORE routing,
@@ -156,6 +156,10 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 // mount to a run the orchestrator then hands to one that cannot bind it — the
 // "previewed green, failed at dispatch" shape this flag exists to close. With
 // no substrates wired there is nothing to bind, so it is false there too.
+// ManagedFiles is read on the same side of routing and answers the same way:
+// the control plane decides whether a run gets its root-owned ceiling BEFORE a
+// substrate is picked, so one substrate that cannot deliver it makes the
+// deployment unable to promise it.
 //
 // EphemeralDiskEnforcement follows the same rule in string form: the WEAKEST word
 // any substrate reports wins, because the word is what an admin is told a disk
@@ -167,6 +171,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		Resolved: map[types.ConfinementClass]string{},
 	}
 	drives := len(o.substrates) > 0
+	managed := len(o.substrates) > 0
 	var enforcement types.StorageEnforcement
 	seen := map[types.ConfinementClass]bool{}
 	var classes []types.ConfinementClass
@@ -192,11 +197,13 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		caps.NetworkPolicyAcknowledged = caps.NetworkPolicyAcknowledged || cs.NetworkPolicyAcknowledged
 		caps.SessionRecording = caps.SessionRecording || cs.SessionRecording
 		drives = drives && cs.UserDrives
+		managed = managed && cs.ManagedFiles
 		if i == 0 || ephemeralRank(cs.EphemeralDiskEnforcement) < ephemeralRank(enforcement) {
 			enforcement = cs.EphemeralDiskEnforcement
 		}
 	}
 	caps.UserDrives = drives
+	caps.ManagedFiles = managed
 	caps.EphemeralDiskEnforcement = enforcement
 	// Strongest last regardless of substrate order.
 	sort.Slice(classes, func(i, j int) bool { return classes[i].Rank() < classes[j].Rank() })

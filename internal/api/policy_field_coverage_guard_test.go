@@ -4,6 +4,8 @@
 package api
 
 import (
+	"go/ast"
+	"go/parser"
 	"go/scanner"
 	"go/token"
 	"os"
@@ -88,7 +90,14 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 	// field mentioned only in a comment, which would let a row read "bounded"
 	// for a field the source only talks about. See stripGoComments below.
 	policySrc := stripGoComments(t, readRepoFile(t, "internal", "api", "policy.go"))
-	clampSrc := stripGoComments(t, readRepoFile(t, "internal", "composer", "clamp.go"))
+	// cloneProposal is the clamp's OWNERSHIP copy (it reallocates the caller's
+	// slices and pointees so the clamped spec aliases nothing). It names EVERY
+	// reference-semantics field by construction and bounds none of them, so
+	// counting it would force clamped=true on every slice and pointer field and
+	// cost this census the distinction it exists to draw — the workspace_repos
+	// pass-through row below would become indistinguishable from its dropped
+	// workspace_mounts sibling.
+	clampSrc := stripGoComments(t, withoutFunc(t, readRepoFile(t, "internal", "composer", "clamp.go"), "cloneProposal"))
 
 	seen := map[string]bool{}
 	for _, f := range reflect.VisibleFields(reflect.TypeOf(types.RunPolicySpec{})) {
@@ -116,6 +125,29 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 			t.Errorf("coverage row %q names no RunPolicySpec field — the field was renamed or removed", name)
 		}
 	}
+}
+
+// withoutFunc returns src with one top-level func's declaration cut out, so a
+// census of "which fields does this file bound" can exclude a helper that
+// names a field without bounding it. A missing name is FATAL rather than a
+// silent no-op: a renamed helper must red this guard, not quietly restore the
+// reference it was excluded for.
+func withoutFunc(t *testing.T, src, name string) string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != name {
+			continue
+		}
+		return src[:fset.Position(fd.Pos()).Offset] + src[fset.Position(fd.End()).Offset:]
+	}
+	t.Fatalf("func %q is not in the source — this guard's exclusion has gone stale", name)
+	return ""
 }
 
 func saysOrNot(has bool) string {

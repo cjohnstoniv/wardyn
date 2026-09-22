@@ -92,7 +92,7 @@ func TestDecideWriteBacksSurviveAClientDisconnect(t *testing.T) {
 		strings.NewReader(decideBody(t, types.ScopeAlways, nil))).WithContext(ctx)
 	req.AddCookie(admin)
 	w := httptest.NewRecorder()
-	f.srv.Handler().ServeHTTP(w, req)
+	panicFails(t, f.srv.Handler()).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("approve always: status = %d, want 200; body=%s", w.Code, w.Body.String())

@@ -212,7 +212,7 @@ type sourceRequest = client.SourceRequest
 func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	list, err := s.cfg.Store.ListSources(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list sources: "+err.Error())
+		writeServerError(w, r, "list sources", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sources": list})
@@ -263,7 +263,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := s.cfg.Store.UpsertSource(r.Context(), src)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert source: "+err.Error())
+		writeServerError(w, r, "upsert source", err)
 		return
 	}
 	status := http.StatusCreated
@@ -287,7 +287,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 			}
 			updated, uerr := s.cfg.Store.UpdateSourceConfig(r.Context(), created.ID, name, reqs)
 			if uerr != nil {
-				writeError(w, http.StatusInternalServerError, "apply name/requirements to existing source: "+uerr.Error())
+				writeServerError(w, r, "apply name/requirements to existing source", uerr)
 				return
 			}
 			created = updated
@@ -322,7 +322,7 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get source: "+err.Error())
+		writeServerError(w, r, "get source", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, src)
@@ -358,7 +358,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 	force := r.URL.Query().Get("force") == "1"
 	names, err := s.cfg.Store.WorkspacesAttaching(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "check source use: "+err.Error())
+		writeServerError(w, r, "check source use", err)
 		return
 	}
 	if err := s.cfg.Store.DeleteSource(r.Context(), id, force); err != nil {
@@ -380,7 +380,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "no such source")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "delete source: "+err.Error())
+		writeServerError(w, r, "delete source", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

@@ -4,10 +4,11 @@
 package conformance
 
 // ephemeral_disk.go is contract item 7 — ephemeral-disk enforcement — lifted out
-// of conformance.go whole when 0.7.5 gave the case its second fill target. It is
-// the one case with a timer, a budget the Makefile has to fit, and a scripted
-// in-sandbox probe, so it reads better alone than as the tail of the suite file
-// (which was also at its size cap).
+// of conformance.go whole when 0.7.5 gave the case its second fill target; 0.8's
+// #164 gave it a third (the toolchain cache root). It is the one case with a
+// timer, a budget the Makefile has to fit, and a scripted in-sandbox probe, so
+// it reads better alone than as the tail of the suite file (which was also at
+// its size cap).
 
 import (
 	"context"
@@ -20,27 +21,35 @@ import (
 )
 
 // ephemeralFillTarget is one path the eviction case fills, and one sub-run of
-// it. TWO of them, because a substrate's disk budget is claimed over BOTH paths
-// its agent is told it may write: /tmp, which carries the per-run CA files, and
-// the workdir, which is where a clone at its default destination lands. A gate
-// that only ever filled /tmp would go green on a substrate whose workdir writes
-// are unbounded — which is exactly the shape 0.7.4 disclosed.
+// it. THREE of them, because a substrate's disk budget is claimed over every
+// path its agent is told it may write: /tmp, which carries the per-run CA
+// files; the workdir, which is where a clone at its default destination
+// lands; and the toolchain cache root, which is where dispatch's own env
+// (GOCACHE/GOTMPDIR/GOMODCACHE/npm_config_cache) points a build's Go and npm
+// cache writes. A gate that only ever filled /tmp would go green on a
+// substrate whose workdir writes are unbounded — which is exactly the shape
+// 0.7.4 disclosed — and one that stopped at the workdir would go green on a
+// substrate whose cache writes are unbounded, #164's residual.
 //
 // It is not a claim about "everywhere the agent writes", and this case does not
-// make one: a run can be authored to write outside both paths, and a toolchain
-// cache usually is. What the k8s substrate does and does not reach is stated in
-// its own ephemeralScratchVolumes, next to the mounts.
+// make one: a run can be authored to write outside all three paths. What the
+// k8s substrate does and does not reach is stated in its own
+// ephemeralScratchVolumes, next to the mounts.
 //
-// substrateOwned is the difference between the two, and it changes what an
+// substrateOwned is the difference among them, and it changes what an
 // unwritable target MEANS:
 //
 //   - /tmp exists in the IMAGE. An image whose /tmp cannot be opened is an
 //     environment contract — the fill never ran, so the case says nothing about
 //     enforcement either way and skips (exit 91 below).
-//   - the workdir is mounted by the SUBSTRATE under test. If it cannot be
-//     opened, the substrate did not provide the writable scratch it claims to
-//     bound — that is a verdict, and skipping it would hide exactly the defect
-//     this target was added to catch.
+//   - the workdir and the cache root are mounted by the SUBSTRATE under test.
+//     If either cannot be opened, the substrate did not provide the writable
+//     scratch it claims to bound — that is a verdict, and skipping it would
+//     hide exactly the defect that target was added to catch. The cache root
+//     specifically catches an emptyDir whose ownership the substrate left
+//     root-only (FSGroup is only applied when a drive attaches), shadowing the
+//     image's own pre-created agent-owned directory at the same path — a
+//     failure a fake-clientset unit test cannot see at all.
 type ephemeralFillTarget struct {
 	name           string
 	path           string
@@ -48,12 +57,15 @@ type ephemeralFillTarget struct {
 }
 
 // ephemeralFillTargets is the set walked by the eviction sub-case. The workdir
-// path is the sandbox contract's own (`/home/agent/work`, WORKDIR in every agent
-// image) — spelled literally, because the point is to assert about the path the
-// images and the substrate agreed on rather than about a constant they share.
+// and cache paths are the sandbox contract's own (`/home/agent/work`, WORKDIR
+// in every agent image; `/home/agent/.cache`, the toolchain-fidelity env's
+// root, deploy/images/full/Dockerfile) — spelled literally, because the point
+// is to assert about the path the images and the substrate agreed on rather
+// than about a constant they share.
 var ephemeralFillTargets = []ephemeralFillTarget{
 	{name: "Tmp", path: "/tmp/wardyn-ephemeral-fill"},
 	{name: "Workdir", path: "/home/agent/work/wardyn-ephemeral-fill", substrateOwned: true},
+	{name: "Cache", path: "/home/agent/.cache/wardyn-ephemeral-fill", substrateOwned: true},
 }
 
 // ephemeralFillScriptFor writes far past the ephemeral-disk case's 64Mi limit at
@@ -147,8 +159,8 @@ func ephemeralCaseBudget(opts Options) time.Duration {
 //   - Over the limit, the run DIES and says why: the pod is evicted and Status
 //     reports RunFailed with "Evicted" in the message (the reason, which carries
 //     the whole verdict, joined to the kubelet's detail). Once per fill target —
-//     the agent's /tmp and its workdir are both inside the budget or the claim is
-//     only half true.
+//     the agent's /tmp, its workdir and its toolchain cache root are all inside
+//     the budget or the claim is only partly true.
 //   - An OVERSIZED limit still schedules, and its accepted request is the small
 //     fixed floor. Kubernetes copies a limit into the request when no request is
 //     set for that key, so a driver that sent the limit alone would produce pods

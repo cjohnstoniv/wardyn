@@ -464,6 +464,15 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 			"runner %q cannot enforce confinement_class %s (available: %s)",
 			s.cfg.Runner.Name(), cc, classesOrNone(caps.ConfinementClasses))
 	}
+	// Serialized per person, across replicas, for the whole span below: the
+	// supersede pass, the insert, and the SECOND pass after it are independent
+	// statements, and two launches interleaving through them leave two live
+	// sandboxes each holding a captured AWS SSO session. lockLoginSupersede
+	// carries the interleaving and why the lock fails open; released on every
+	// path, including the refusals and the error returns between here and the
+	// second pass.
+	releaseLoginLock := s.lockLoginSupersede(ctx, actor)
+	defer releaseLoginLock()
 	// One live sign-in sandbox per person, and it happens HERE — before
 	// newStepRun, where the concurrency quota is counted — so a member capped at
 	// one run is never refused by their own abandoned sign-in. See
@@ -775,7 +784,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
 	raw, _ := json.Marshal(blob)
 	if err := s.cfg.Secrets.Put(r.Context(), hl.secretName, raw); err != nil { // operator-wide route (operatorOnly), not per-principal
-		writeError(w, http.StatusInternalServerError, "store managed credential: "+err.Error())
+		writeServerError(w, r, "store managed credential", err)
 		return
 	}
 	// Register the token PROCESS-GLOBALLY so it is masked out of every run's PTY
@@ -842,7 +851,7 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if err := st.Delete(r.Context(), hl.secretName); err != nil {
-		writeError(w, http.StatusInternalServerError, "delete managed credential: "+err.Error())
+		writeServerError(w, r, "delete managed credential", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

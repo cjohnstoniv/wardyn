@@ -198,6 +198,41 @@ func TestLaunchRecordRun_RequiredSecretRowRidesAlong(t *testing.T) {
 	}
 }
 
+// TestLaunchRecordRun_RequiredSecretIsAudited: the requirement grant a record
+// session mints writes the same audit row POST /runs writes for it, bound to
+// the session's run.
+func TestLaunchRecordRun_RequiredSecretIsAudited(t *testing.T) {
+	h := newHarness(t)
+	ws := types.Workspace{
+		ID:      uuid.New(),
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/work/acme"}},
+		Status:  types.WorkspaceScanned,
+		Requirements: map[string]types.WorkspaceRequirement{
+			"secret:acme-deploy-key": {Level: "required", Provenance: "operator_set"},
+		},
+	}
+	fake := &fkGrantStore{runs: map[uuid.UUID]types.AgentRun{}, importStateFake: importStateFake{ws: ws}}
+	audit := &memAudit{}
+	cfg := baseTestConfig(h, fake)
+	cfg.Audit = audit
+	cfg.Runner = &fakeRunner{}
+	cfg.Broker = h.broker
+	cfg.Secrets = &memSecrets{m: map[string][]byte{"acme-deploy-key": []byte("v")}}
+	srv := New(cfg)
+
+	run, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", ws, "build", "build", false)
+	if err != nil {
+		t.Fatalf("launchRecordRun: %v", err)
+	}
+	rows := audit.find("run.workspace.requirement.secret")
+	if len(rows) != 1 {
+		t.Fatalf("record launch wrote %d run.workspace.requirement.secret rows; want 1", len(rows))
+	}
+	if rows[0].Target != "acme-deploy-key" || rows[0].RunID == nil || *rows[0].RunID != run.ID {
+		t.Errorf("audit row target=%q run=%v; want acme-deploy-key bound to run %s", rows[0].Target, rows[0].RunID, run.ID)
+	}
+}
+
 // TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey pins the fix for a grant that
 // could never mint. The scan/record clone grant used to carry `"repos": []`
 // while the broker allowlist it is reached through was keyed from the CLONE

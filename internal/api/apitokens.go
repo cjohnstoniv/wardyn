@@ -457,18 +457,18 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 }
 
 // staleRoleSnapshotCount reports how many UNREVOKED wdn_ tokens still carry a
-// frozen role snapshot that a role-mapping edit naming `value` cannot reach.
+// role snapshot that a role-mapping edit naming `value` cannot reach.
 //
 // Why this exists. An api_token's role is stamped at mint (handleCreateAPIToken)
 // and read verbatim on every request (apiTokenAuth) — that stamp can
 // be security_admin. The stamp is BOUNDED-STALE, NOT FROZEN, and the ceiling is
-// the owner's own next login: store.RefreshAPITokenRoles re-stamps role on
-// every unrevoked token that principal holds, fired from the same OnLogin hook
-// that has refreshed SSH keys (the SSH lane's bound is a TTL instead
-// — sshgateway.go's sshRoleFresh against WARDYN_SSH_ROLE_TTL). What the login
-// hook does NOT refresh is the GROUP snapshot, and what it cannot bound at all
-// is a human who is demoted and never signs in again. Both are why this count,
-// and the revoke beside it, exist.
+// the owner's own next login: store.RefreshAPITokenIdentity re-stamps role AND
+// the group snapshot together on every unrevoked token that principal holds,
+// fired from the same OnLogin hook that has refreshed SSH keys (the SSH lane's
+// bound is a TTL instead — sshgateway.go's sshRoleFresh against
+// WARDYN_SSH_ROLE_TTL). What the login hook cannot bound at all is a human who
+// is demoted and never signs in again. That is why this count, and the revoke
+// beside it, exist.
 //
 // What it is not: it is not a TTL. It is the INFORMATIONAL half — how many
 // mint-time snapshots name this value at all, elevated or not — and it revokes
@@ -644,19 +644,19 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 // of the role-mapping WARN, kept as named constants because they are a CLAIM
 // about system behaviour that must stay accurate.
 //
-// A token's role is not frozen at mint forever: the token lane has the same
-// login hook the key lane has since migration 0046 (store.RefreshAPITokenRoles),
-// and the demotion path itself
-// revokes what it demotes. An operator acting on a stale remedy line
-// either does unnecessary work or assumes a bound that is not there, so the two
-// strings say exactly the three things that are true at once: what this edit
-// already did, what the owner's next login will do, and when the human still has
-// to reach for the lever.
+// A token's role is bounded-stale, not frozen: the token lane has the same
+// login hook the key lane has since migration 0046 (store.RefreshAPITokenIdentity,
+// which re-stamps role and the group snapshot together), and the demotion
+// path itself revokes what it demotes. An operator acting on a stale remedy
+// line either does unnecessary work or assumes a bound that is not there, so
+// the two strings say exactly the three things that are true at once: what
+// this edit already did, what the owner's next login will do, and when the
+// human still has to reach for the lever.
 const (
 	roleSnapshotWarnNote = "counted BEFORE this edit acted; the snapshots this edit demotes were revoked with it (see the revoke line), and the rest keep a role this edit did not change"
 
 	roleSnapshotWarnRemedy = "nothing further is needed for the principals this edit demoted — they were revoked. For the rest, the owner's next sign-in re-stamps the " +
-		"role on every unrevoked token they hold (store.RefreshAPITokenRoles, the same OnLogin hook that has refreshed SSH keys since 0.6); POST " +
+		"role on every unrevoked token they hold (store.RefreshAPITokenIdentity, the same OnLogin hook that has refreshed SSH keys since 0.6); POST " +
 		"/api/v1/sessions/revoke {\"sub\":\"<principal>\"} or DELETE /api/v1/tokens/{id} is the lever when a change has to take effect immediately or " +
 		"the owner will not sign in again"
 )

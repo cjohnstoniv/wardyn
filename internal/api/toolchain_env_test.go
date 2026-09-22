@@ -28,20 +28,34 @@ func TestBuildBaseSandboxEnv_ToolchainEnvIsRequirementsDriven(t *testing.T) {
 
 	// nil needs — no workspace context (ad-hoc/BYO/scan/login): full set.
 	keys(buildBaseSandboxEnv(run, "http://p:3128", nil),
-		map[string]bool{"GOTMPDIR": true, "GOCACHE": true, "MAVEN_OPTS": true, "GRADLE_OPTS": true})
+		map[string]bool{"GOTMPDIR": true, "GOCACHE": true, "GOMODCACHE": true, "MAVEN_OPTS": true, "GRADLE_OPTS": true})
 
 	// Go detected, no JVM: Go group only.
 	keys(buildBaseSandboxEnv(run, "http://p:3128", &toolchainNeeds{goTools: true}),
-		map[string]bool{"GOTMPDIR": true, "GOCACHE": true, "MAVEN_OPTS": false, "GRADLE_OPTS": false})
+		map[string]bool{"GOTMPDIR": true, "GOCACHE": true, "GOMODCACHE": true, "MAVEN_OPTS": false, "GRADLE_OPTS": false})
 
 	// Maven/Gradle detected, no Go: JVM group only.
 	keys(buildBaseSandboxEnv(run, "http://p:3128", &toolchainNeeds{jvmTools: true}),
-		map[string]bool{"GOTMPDIR": false, "GOCACHE": false, "MAVEN_OPTS": true, "GRADLE_OPTS": true})
+		map[string]bool{"GOTMPDIR": false, "GOCACHE": false, "GOMODCACHE": false, "MAVEN_OPTS": true, "GRADLE_OPTS": true})
 
 	// Scanned and NEITHER detected: a workspace run's env states what its
 	// requirements ground — nothing more.
 	keys(buildBaseSandboxEnv(run, "http://p:3128", &toolchainNeeds{}),
-		map[string]bool{"GOTMPDIR": false, "GOCACHE": false, "MAVEN_OPTS": false, "GRADLE_OPTS": false})
+		map[string]bool{"GOTMPDIR": false, "GOCACHE": false, "GOMODCACHE": false, "MAVEN_OPTS": false, "GRADLE_OPTS": false})
+}
+
+// npm_config_cache is UNCONDITIONAL, unlike the Go/JVM groups above: npm ships
+// in every agent image regardless of what a workspace scan detected, so a run
+// with no workspace context and a run with a Go-only or JVM-only profile must
+// all carry it the same way GIT_TERMINAL_PROMPT does.
+func TestBuildBaseSandboxEnv_NpmCacheIsUnconditional(t *testing.T) {
+	run := types.AgentRun{CreatedBy: "op", Agent: "claude-code"}
+	for _, needs := range []*toolchainNeeds{nil, {}, {goTools: true}, {jvmTools: true}} {
+		env := buildBaseSandboxEnv(run, "http://p:3128", needs)
+		if got, want := env["npm_config_cache"], "/home/agent/.cache/npm"; got != want {
+			t.Errorf("needs=%+v: npm_config_cache = %q, want %q", needs, got, want)
+		}
+	}
 }
 
 // The pre-exec clone (agent-run-lib.sh's clone_one) runs on a TTY exec, so a

@@ -9,43 +9,88 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 )
 
-// llmGatewayPublicHosts pairs each supported vendor's WARDYN_*_BASE_URL knob
-// with the public host it re-points, in validation order.
+// llmGatewayPublicHosts pairs each supported vendor's WARDYN_*_BASE_URL /
+// _GATEWAY_HEADER / _GATEWAY_FORMAT knobs with the public host they re-point,
+// in validation order.
 var llmGatewayPublicHosts = []struct {
-	env, envVar, publicHost string
+	env, envVar, headerEnvVar, formatEnvVar, publicHost string
 }{
-	{"anthropic", "WARDYN_ANTHROPIC_BASE_URL", "api.anthropic.com"},
-	{"openai", "WARDYN_OPENAI_BASE_URL", "api.openai.com"},
+	{"anthropic", "WARDYN_ANTHROPIC_BASE_URL", "WARDYN_ANTHROPIC_GATEWAY_HEADER", "WARDYN_ANTHROPIC_GATEWAY_FORMAT", "api.anthropic.com"},
+	{"openai", "WARDYN_OPENAI_BASE_URL", "WARDYN_OPENAI_GATEWAY_HEADER", "WARDYN_OPENAI_GATEWAY_FORMAT", "api.openai.com"},
 }
 
-// ValidateLLMGateways validates the two operator-set internal-model-gateway
-// knobs (boot posture, control-plane-authored — the sandbox cannot set these)
-// and returns api.Config.LLMGateways: public vendor host -> the gateway's
-// normalized base URL. Both empty => nil map, byte-identical to today. Fail
-// closed on any rule violation (the WARDYN_SUBSCRIPTION_INJECT/agentImagesJSON
-// precedent) — an operator-typed posture that doesn't parse must refuse boot,
-// not silently fall back to the public host.
-func ValidateLLMGateways(anthropicRaw, openaiRaw string) (map[string]string, error) {
-	raws := map[string]string{"api.anthropic.com": anthropicRaw, "api.openai.com": openaiRaw}
-	out := make(map[string]string, 2)
+// LLMGatewayAuth is a provider's operator-set injection header name and value
+// format override for api.Config.LLMGatewayAuth (WARDYN_<VENDOR>_GATEWAY_HEADER
+// / _GATEWAY_FORMAT, validated by ValidateLLMGateways). Header and Format are
+// independent: either may be set alone, and an empty field means
+// llmProviderFor keeps the harness catalog's compile-time vendor convention
+// for that piece — byte-identical to today unless the operator explicitly set
+// one.
+type LLMGatewayAuth struct {
+	Header string
+	Format string
+}
+
+// LLMGatewayRaw is the raw operator-typed value of one provider's three
+// gateway knobs, exactly as read off the boot flags, before validation.
+type LLMGatewayRaw struct {
+	BaseURL string
+	Header  string
+	Format  string
+}
+
+// ValidateLLMGateways validates the operator-set internal-model-gateway knobs
+// for both providers (boot posture, control-plane-authored — the sandbox
+// cannot set these) and returns api.Config.LLMGateways (public vendor host ->
+// the gateway's normalized base URL) and api.Config.LLMGatewayAuth (public
+// vendor host -> header/format override, present only for a provider that set
+// at least one of the two). Everything unset => (nil, nil, nil),
+// byte-identical to today. Fail closed on any rule violation (the
+// WARDYN_SUBSCRIPTION_INJECT/agentImagesJSON precedent) — an operator-typed
+// posture that doesn't parse must refuse boot, not silently fall back to the
+// public host or the vendor convention: a malformed value surfacing later at
+// dial time as a confusing upstream error is exactly what this guards
+// against.
+func ValidateLLMGateways(anthropic, openai LLMGatewayRaw) (map[string]string, map[string]LLMGatewayAuth, error) {
+	raws := map[string]LLMGatewayRaw{"api.anthropic.com": anthropic, "api.openai.com": openai}
+	gateways := make(map[string]string, 2)
+	auth := make(map[string]LLMGatewayAuth, 2)
 	for _, e := range llmGatewayPublicHosts {
-		raw := strings.TrimSpace(raws[e.publicHost])
-		if raw == "" {
+		r := raws[e.publicHost]
+		base := strings.TrimSpace(r.BaseURL)
+		if base != "" {
+			norm, err := validateOneLLMGateway(e.publicHost, base, false)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s: %w", e.envVar, err)
+			}
+			gateways[e.publicHost] = norm
+		}
+		header := strings.TrimSpace(r.Header)
+		format := strings.TrimSpace(r.Format)
+		if header == "" && format == "" {
 			continue
 		}
-		norm, err := validateOneLLMGateway(e.publicHost, raw, false)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", e.envVar, err)
+		if header != "" && !egress.ValidHeaderName(header) {
+			return nil, nil, fmt.Errorf("%s: %q is not a valid HTTP header token", e.headerEnvVar, header)
 		}
-		out[e.publicHost] = norm
+		if format != "" {
+			if err := validInjectionFormat(format); err != nil {
+				return nil, nil, fmt.Errorf("%s: %w", e.formatEnvVar, err)
+			}
+		}
+		auth[e.publicHost] = LLMGatewayAuth{Header: header, Format: format}
 	}
-	if len(out) == 0 {
-		return nil, nil
+	if len(gateways) == 0 {
+		gateways = nil
 	}
-	return out, nil
+	if len(auth) == 0 {
+		auth = nil
+	}
+	return gateways, auth, nil
 }
 
 // ValidateBedrockBaseURL validates WARDYN_BEDROCK_BASE_URL — the Bedrock
@@ -179,4 +224,59 @@ func gatewayHost(base string) string {
 		return ""
 	}
 	return u.Hostname()
+}
+
+// anthropicGatewayBase returns the operator-configured Anthropic gateway's
+// validated base URL (s.cfg.LLMGateways["api.anthropic.com"]) and ok=true, or
+// ("", false) when none is configured. The single place every subscription/
+// managed-lane gateway consumer — dispatch's ANTHROPIC_BASE_URL, the
+// injection-host allowlist, the egress precondition, and the per-run MITM host
+// — resolves the gateway from, so they can never drift on which config key or
+// normalization they read.
+func (s *Server) anthropicGatewayBase() (string, bool) {
+	base, ok := s.cfg.LLMGateways[subscriptionInjectionHost]
+	return base, ok
+}
+
+// anthropicGatewayHost is anthropicGatewayBase's bare host (no scheme, port or
+// path), or "" when no gateway is configured.
+func (s *Server) anthropicGatewayHost() string {
+	base, ok := s.anthropicGatewayBase()
+	if !ok {
+		return ""
+	}
+	return gatewayHost(base)
+}
+
+// anthropicGatewayHostPort is anthropicGatewayHost with its port attached
+// (default 443, matching the proxy's own LLMUpstreams parsing) — the
+// "host:port" form a per-run MITM host entry needs, mirroring how
+// authorBedrockBearerInjection joins its own runtime host and port. "" when no
+// gateway is configured.
+func (s *Server) anthropicGatewayHostPort() string {
+	base, ok := s.anthropicGatewayBase()
+	if !ok {
+		return ""
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	port := "443"
+	if p := u.Port(); p != "" {
+		port = p
+	}
+	return net.JoinHostPort(u.Hostname(), port)
+}
+
+// anthropicBaseURL is the base URL subscription and Wardyn-managed runs dial:
+// the operator-configured gateway when one is set, else the vendor default —
+// unset is byte-identical to today ("https://" + subscriptionInjectionHost).
+// The harness-login (`claude setup-token`) lane never calls this: that flow
+// mints the OAuth token itself and must stay on the public host.
+func (s *Server) anthropicBaseURL() string {
+	if base, ok := s.anthropicGatewayBase(); ok {
+		return base
+	}
+	return "https://" + subscriptionInjectionHost
 }

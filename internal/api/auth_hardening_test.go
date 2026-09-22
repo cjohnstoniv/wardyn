@@ -89,7 +89,7 @@ func TestLocalModeRejectsNonLoopbackHost(t *testing.T) {
 	req.Host = "attacker.com"
 	req.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
+	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("non-loopback Host: code = %d, want 403", w.Code)
 	}
@@ -101,7 +101,7 @@ func TestLocalModeRejectsNonLoopbackHost(t *testing.T) {
 		req.Host = host
 		req.RemoteAddr = "127.0.0.1:54321"
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, req)
+		panicFails(t, srv.Handler()).ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Errorf("loopback Host %q: code = %d, want 200 (should pass the gate)", host, w.Code)
 		}
@@ -130,7 +130,7 @@ func TestLocalModeRejectsNonLoopbackRemoteAddr(t *testing.T) {
 		req.Host = "127.0.0.1" // forged — passes the Host gate
 		req.RemoteAddr = peer
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, req)
+		panicFails(t, srv.Handler()).ServeHTTP(w, req)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("non-loopback peer %q with forged loopback Host: code = %d, want 403", peer, w.Code)
 		}
@@ -141,7 +141,7 @@ func TestLocalModeRejectsNonLoopbackRemoteAddr(t *testing.T) {
 	req.Host = "127.0.0.1"
 	req.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
+	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("loopback peer + loopback Host: code = %d, want 200 (legit local path)", w.Code)
 	}
@@ -168,7 +168,7 @@ func TestLocalTrustForwarderAllowsGatewayPeer(t *testing.T) {
 	req.Host = "127.0.0.1"
 	req.RemoteAddr = "172.18.0.1:44444" // docker bridge gateway, non-loopback
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
+	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("trusted-forwarder gateway peer: code = %d, want 200", w.Code)
 	}
@@ -178,7 +178,7 @@ func TestLocalTrustForwarderAllowsGatewayPeer(t *testing.T) {
 	req.Host = "attacker.com"
 	req.RemoteAddr = "172.18.0.1:44444"
 	w = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
+	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("trusted-forwarder + rebinding Host: code = %d, want 403 (Host gate must still fire)", w.Code)
 	}

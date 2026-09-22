@@ -16,17 +16,19 @@ import (
 )
 
 // TestAPITokenStampResidualIsPublished pins the api_tokens role/group stamp —
-// its bound, and the fact that it HAS no bound — to the schema and the store
-// code, and to the two documents that publish it.
+// its bound, and the fact that the bound is login, not a TTL — to the schema
+// and the store code, and to the two documents that publish it.
 //
 // A token carries the role and group snapshot of the session that minted it and
 // replays them on every request. The SSH-key analogue of that stamp is published
 // as residual #15 and is bounded-stale: every login re-stamps the key and a TTL
-// expires the override. The token stamp had neither the bound nor the residual.
-// It still has no bound — and since 0.7 stamps `security_admin` verbatim, the
-// unbounded window now carries governance authority, so the only thing standing
-// between a demoted security admin and the profile/grant/approval surface is an
-// operator remembering to revoke.
+// expires the override. The token stamp originally had neither the bound nor the
+// residual; 0.7 gave the ROLE half the login bound, and #152 widened it to the
+// GROUP half too. The remaining gap is the same shape #15 has: no TTL, so a human
+// who never signs in again keeps the stamp indefinitely — and since 0.7 stamps
+// `security_admin` verbatim, that now carries governance authority, so the only
+// thing standing between a demoted security admin who never signs in again and
+// the profile/grant/approval surface is an operator remembering to revoke.
 //
 // WHAT THIS GUARD READS (its scope IS part of its correctness): the migration
 // that creates api_tokens, internal/store/store_apitokens.go, this package's
@@ -52,26 +54,30 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 		}
 	}
 
-	// (2) Store premise: nothing re-stamps the row. Only last_used_at and
-	// revoked_at are ever written after mint.
+	// (2) Store premise: nothing UNEXPECTED re-stamps the row. Only
+	// last_used_at, revoked_at, role, groups and groups_truncated are ever
+	// written after mint.
 	updated := apiTokenUpdatedColumns(t)
 	// `role` JOINED this list when the token lane gained the login hook the key
-	// lane had since 0046 (store.RefreshAPITokenRoles, fired from OnLogin beside
-	// RefreshSSHKeyRoles). That NARROWED the residual rather than closing it, and
-	// the guard narrowed with it: `groups` must stay off this list, because the
-	// group snapshot is the half nothing refreshes and is what residual #38 is
-	// now about. A future UPDATE of `groups` means the residual is closed and
-	// needs re-reading, not that this test needs another entry.
-	allowed := []string{"last_used_at", "revoked_at", "role"}
+	// lane had since 0046. `groups` and `groups_truncated` joined it with #152
+	// (store.RefreshAPITokenIdentity, fired from OnLogin beside
+	// RefreshSSHKeyRoles): the residual narrowed from "the group snapshot is
+	// never refreshed" to "bounded-stale until the owner's next sign-in", the
+	// same shape residual #15 already has. Removing either from this list means
+	// the group half stopped being refreshed again and the docs would overstate
+	// what is bounded.
+	allowed := []string{"last_used_at", "revoked_at", "role", "groups", "groups_truncated"}
 	for _, c := range updated {
 		if !slices.Contains(allowed, c) {
-			t.Errorf("internal/store/store_apitokens.go now UPDATEs api_tokens.%s — if that re-stamps the GROUP snapshot, "+
-				"the remaining unbounded-staleness claim in OPERATIONS.md and residual #38 is no longer true", c)
+			t.Errorf("internal/store/store_apitokens.go now UPDATEs api_tokens.%s — an unexpected column is re-stamped; "+
+				"re-read OPERATIONS.md and residual #38 against what actually happens", c)
 		}
 	}
-	if !slices.Contains(updated, "role") {
-		t.Error("internal/store/store_apitokens.go no longer UPDATEs api_tokens.role — the login re-stamp that bounds " +
-			"the ROLE half is gone, so OPERATIONS.md and residual #38 overstate what is bounded")
+	for _, want := range []string{"role", "groups", "groups_truncated"} {
+		if !slices.Contains(updated, want) {
+			t.Errorf("internal/store/store_apitokens.go no longer UPDATEs api_tokens.%s — the login re-stamp that bounds "+
+				"that half is gone, so OPERATIONS.md and residual #38 overstate what is bounded", want)
+		}
 	}
 
 	// (3) The contrast the docs draw is real: SSH keys DO get re-stamped on
@@ -101,8 +107,8 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// that tells an operator the revoke actually named somebody.
 	ops := readDoc(t, "docs/OPERATIONS.md")
 	for _, want := range []string{
-		"re-checked at login; the GROUP SNAPSHOT is not checked at all",
-		"**The group snapshot is never refreshed**",
+		"Both halves are stamps re-checked at login",
+		"re-stamps the role, the group snapshot, and the",
 		"**no expiry column**",
 		"A human demoted out of `security_admin`",
 		"`DELETE /api/v1/tokens/{id}`",
@@ -118,8 +124,8 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// (5) And it is published where the SSH analogue is, as a numbered residual.
 	tm := readDoc(t, "threatmodel/THREAT-MODEL.md")
 	for _, want := range []string{
-		"A per-user API token's GROUP SNAPSHOT is frozen at mint",
-		"the demoted-admin window is UNBOUNDED",
+		"A per-user API token's role AND group snapshot are bounded-stale, not",
+		"the residual narrows to a human who never signs in again",
 		"The remediation exists, is the only one, and has to be invoked deliberately",
 	} {
 		if !strings.Contains(tm, strings.Join(strings.Fields(want), " ")) {
@@ -187,17 +193,23 @@ func alteredAPITokenColumns(t *testing.T, dir string, entries []os.DirEntry) []s
 }
 
 // apiTokenUpdatedColumns returns every api_tokens column the store writes after
-// mint.
+// mint. Captures the WHOLE SET clause (up to WHERE), not just its first
+// column — an UPDATE that sets several columns in one statement (role, groups
+// and groups_truncated together, since #152) must not read as touching only
+// the first one named.
 func apiTokenUpdatedColumns(t *testing.T) []string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), "internal", "store", "store_apitokens.go"))
 	if err != nil {
 		t.Fatalf("read store_apitokens.go: %v", err)
 	}
-	set := regexp.MustCompile(`(?is)UPDATE api_tokens\s+SET\s+([a-z_]+)`)
+	set := regexp.MustCompile(`(?is)UPDATE api_tokens\s+SET\s+(.*?)\s+WHERE`)
+	col := regexp.MustCompile(`([a-z_]+)\s*=`)
 	var out []string
 	for _, m := range set.FindAllStringSubmatch(string(b), -1) {
-		out = append(out, m[1])
+		for _, c := range col.FindAllStringSubmatch(m[1], -1) {
+			out = append(out, c[1])
+		}
 	}
 	if len(out) == 0 {
 		t.Fatal("no UPDATE api_tokens found in the store — revisit this guard rather than the docs")
@@ -209,7 +221,7 @@ func apiTokenUpdatedColumns(t *testing.T) []string {
 // login re-stamp is actually WIRED, not merely mentioned:
 //
 //	OnLogin: func(...) { ... refreshLoginStamps(...) ... }
-//	func refreshLoginStamps(ctx, st, ...) { st.RefreshSSHKeyRoles(...); st.RefreshAPITokenRoles(...) }
+//	func refreshLoginStamps(ctx, st, ...) { st.RefreshSSHKeyRoles(...); st.RefreshAPITokenIdentity(...) }
 //
 // Both halves matter and neither implies the other. A gutted OnLogin leaves a
 // perfectly good refreshLoginStamps nothing calls; a gutted refreshLoginStamps
@@ -288,7 +300,7 @@ func assertLoginStampWiring(t *testing.T) {
 		}
 		return true
 	})
-	for _, hook := range []string{"RefreshSSHKeyRoles", "RefreshAPITokenRoles"} {
+	for _, hook := range []string{"RefreshSSHKeyRoles", "RefreshAPITokenIdentity"} {
 		if !called[hook] {
 			t.Errorf("refreshLoginStamps no longer calls %s.%s — one of the two stamps this residual COMPARES is no "+
 				"longer re-checked at login, so docs/OPERATIONS.md and residual #38 need re-reading. Both lanes are "+

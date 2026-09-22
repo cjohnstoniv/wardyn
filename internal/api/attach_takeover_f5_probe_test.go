@@ -247,7 +247,7 @@ func wsPing(t *testing.T, c *websocket.Conn) {
 // the tmux session is attachPump's per-frame canWrite() gate.
 func TestF5_WebPump_FrameOnTheWireBeforeEvictionIsDropped(t *testing.T) {
 	srv, gr, _, run := f5Server(t)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
 	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")

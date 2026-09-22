@@ -53,10 +53,14 @@
 #   subscription : ~/.claude holds resident OAuth creds (the wizard mounts the
 #                  host ~/.claude and ~/.claude.json into /home/agent).  Detected
 #                  by /home/agent/.claude/.credentials.json (or credentials.json).
-#                  ANTHROPIC_BASE_URL is UNSET so claude talks straight to
-#                  api.anthropic.com — the request CONNECT-tunnels out through
-#                  HTTPS_PROXY (wardyn-proxy) under the run's egress allowlist, and
-#                  the resident OAuth token is used as-is.  No API key is set.
+#                  ANTHROPIC_BASE_URL is UNSET only when dispatch left it at the
+#                  vendor default, so claude talks straight to api.anthropic.com —
+#                  the request CONNECT-tunnels out through HTTPS_PROXY (wardyn-proxy)
+#                  under the run's egress allowlist, and the resident OAuth token is
+#                  used as-is.  When dispatch instead pointed it at an operator-
+#                  configured internal gateway (WARDYN_ANTHROPIC_BASE_URL), it is
+#                  LEFT AS-IS so the CONNECT targets the gateway instead — sending
+#                  the operator's OAuth token there.  No API key is set either way.
 #   bedrock      : CLAUDE_CODE_USE_BEDROCK is set.  ANTHROPIC_BASE_URL is UNSET so
 #                  claude uses the Bedrock endpoint via HTTPS_PROXY + resident AWS
 #                  creds.  No Anthropic API key is set.
@@ -116,9 +120,15 @@ apply_anthropic_mode() {
     ANTHROPIC_MODE="$(detect_anthropic_mode)"
     case "$ANTHROPIC_MODE" in
         subscription)
-            # Resident OAuth creds: talk to api.anthropic.com directly through
-            # HTTPS_PROXY (wardyn-proxy CONNECT tunnel).  No API key.
-            unset ANTHROPIC_BASE_URL
+            # Resident OAuth creds: talk directly through HTTPS_PROXY (wardyn-proxy
+            # CONNECT tunnel).  No API key.  dispatch sets ANTHROPIC_BASE_URL to
+            # either the vendor default or an operator-configured internal gateway
+            # (runs_dispatch_llm.go); only unset it when it's still the vendor
+            # default, so a configured gateway survives instead of being clobbered
+            # back to api.anthropic.com.
+            if [[ "${ANTHROPIC_BASE_URL:-}" == "https://api.anthropic.com" ]]; then
+                unset ANTHROPIC_BASE_URL
+            fi
             ;;
         bedrock)
             # Bedrock endpoint via HTTPS_PROXY + resident AWS creds.  No API key.
@@ -663,13 +673,23 @@ echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 #     live in the C0 spike, claude 2.1.234).
 #   CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0   a human decision can take hours; the
 #     stdio idle timer must not turn patience into a deny.
+#   --setting-sources user   load NO project or local settings (#358). Claude
+#     Code resolves permissions.allow rules BEFORE it consults the prompt tool,
+#     so a rule in the workspace's .claude/settings.json (a checkout the agent
+#     itself can write) ran matching tools without the gate ever being asked.
+#     Managed settings (/etc/claude-code) still load: that source is not
+#     selectable here. Residual: ~/.claude/settings.json is user scope and the
+#     agent can write it too; #333's allowManagedPermissionRulesOnly closes that.
+#     Only this lane: the autonomous lane below already runs every tool, and the
+#     interactive lanes have no Wardyn gate to bypass (the human in the pane is
+#     the approver, behind Claude Code's own workspace-trust prompt).
 if [[ "${WARDYN_TOOL_APPROVALS:-}" == "hold" ]]; then
     mkdir -p "$HOME/.wardyn"  # only --idle creates it; this is the exec path
     printf '{"mcpServers":{"gate":{"command":"wardyn-toolgate"}}}\n' > "$HOME/.wardyn/toolgate-mcp.json"
     echo "agent-run: tool-approval hold — gated tool use parks on Wardyn approvals" >&2
     export CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0
     exec claude -p "$task" --output-format text \
-        --permission-mode manual \
+        --permission-mode manual --setting-sources user \
         --mcp-config "$HOME/.wardyn/toolgate-mcp.json" --strict-mcp-config \
         --permission-prompt-tool mcp__gate__approve
 fi

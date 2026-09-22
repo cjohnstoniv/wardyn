@@ -138,7 +138,7 @@ func TestRejectedSessionAnswersItself(t *testing.T) {
 		r.AddCookie(expiredSSOSession(t, "sub-expired", "e@corp.example", oidc.RoleAdmin))
 		r.Header.Set("Authorization", "Bearer "+adminToken)
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
@@ -166,7 +166,7 @@ func TestRejectedSessionAnswersItself(t *testing.T) {
 		r.AddCookie(expiredSSOSession(t, "sub-stale", "s@corp.example", oidc.RoleAdmin))
 		r.Header.Set("Authorization", "Bearer wdn_bogus")
 		w := httptest.NewRecorder()
-		outSrv.Handler().ServeHTTP(w, r)
+		panicFails(t, outSrv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401 (today's answer) — if this changed deliberately, "+
 				"the bearer-presence narrowing in rejectedSessionAnswer was re-decided; body=%s",

@@ -639,14 +639,16 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// requirement credential is never skipped just because this session
 	// happens to be subscription-mounted.
 	before := len(policy.EligibleGrants)
-	_ = s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
+	reqEvents := s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
+	// Audited the way POST /runs audits them, before any grant is minted.
+	s.recordCreateFolds(ctx, runID, types.Integration{}, "", reqEvents)
 	minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[before:])
 	if ierr != nil {
 		return types.AgentRun{}, false, abort(fmt.Errorf("create requirement grant: %w", ierr))
 	}
 	injections = append(injections, minted...)
 	// llmGrantsBefore fences the fallback mint below to ONLY what IT adds: the
-	// fold above already minted (and audited) the requirement grants — reusing
+	// fold above already minted and audited the requirement grants — reusing
 	// the full policy.EligibleGrants slice there would remint and re-inject
 	// every one of them a second time.
 	llmGrantsBefore := len(policy.EligibleGrants)
@@ -665,7 +667,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// No workspace/operator integration bound: fall back to the operator
 		// ceiling's convention subscription mount, else a brokered api-key grant
 		// (today's behavior for an unbound workspace).
-		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true); m {
+		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHost()); m {
 			subMounted = true
 		} else {
 			s.ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)
