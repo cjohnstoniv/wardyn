@@ -258,22 +258,9 @@ export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
 // the DAEMON names the rows that mean it (a dead runner, an unenforceable
 // confinement floor, SSO with no role mapping) — a grade alone never holds it,
 // and a row about the caller's own credential never can.
-export function RequireSetup({ status }: { status: SetupStatus | null }) {
+function RequireSetup({ status }: { status: SetupStatus | null }) {
   const role = useRole();
   const roleResolved = useRoleResolved();
-  // #806: warms the SAME funnel chunk FirstRunLanding and SetupRoute already
-  // warm, for the THIRD path into it — a hard-gate redirect. Without this,
-  // the dynamic import only started once <Navigate to="/setup"/> below had
-  // already fired and SetupRoute had mounted, serializing the chunk fetch
-  // AFTER the status/role round trip instead of overlapping it — the gap a
-  // loaded CI runner (cold chunk, cold connections) turned into the
-  // "Setup steps" nav occasionally not being there yet when a test's default
-  // expect timeout ran out (setup-gate.spec.ts's People → Open Permissions
-  // case). Starting the fetch here, before either early return, closes the
-  // same race FirstRunLanding's own copy of this effect closes for "/".
-  React.useEffect(() => {
-    void import("./components/screens/onboarding/onboarding-screen");
-  }, []);
   // B1, same reasoning as FirstRunLanding above: setupGateActive() reads the
   // role, so a /me that never answered would bounce an unknown human into the
   // ADMIN funnel on the fail-open default. Decline to gate instead — the route

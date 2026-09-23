@@ -163,21 +163,16 @@ test.describe("Runs board (default view)", () => {
 
     // #806: the filter itself is synchronous client-side state (runs.tsx's
     // `filtered` is re-derived from `runs` + `query` on every render), so a
-    // slow RENDER was never the failure mode here — reproduced locally as an
-    // outright "run-card count: Received 9" (all nine, unfiltered), meaning
-    // the fill's own `input` event never reached React at all. runs.tsx's
-    // search box is a plain controlled input with no debounce, and React
-    // tracks a native input's last-seen value on the DOM node itself to
-    // decide whether an `input` event is novel; a re-render that touches
-    // this exact node in the same tick Playwright's fill() sets that value
-    // (the board's own toolbar unmounts and remounts across `load()`, e.g.
-    // on the F1-F10 "every navigation to /runs" reload above) can leave that
-    // tracker out of sync, and the event is silently dropped rather than
-    // reaching `onChange` — a real, external non-determinism no timeout
-    // waits out, since a longer wait still only ever re-checks the SAME
-    // dropped fill. Retrying the fill itself (not just the assertion after
-    // it) is what actually converges: each attempt either lands or it
-    // doesn't, and `toHaveValue` inside the loop is what tells them apart.
+    // slow render was never the failure — the recorded failure was "run-card
+    // count: Received 9", the fill never reaching React at all. The likely
+    // mechanism: openRuns' navTo("Runs") changes location.key, which re-runs
+    // load() (runs.tsx), and load() flips status to "loading", which unmounts
+    // the toolbar input. "e2e fixture 0" can already be visible from the
+    // FIRST load, so the fill can land on the input that reload is about to
+    // detach, and its input event never reaches React's root listener. A
+    // longer wait only re-checks the same lost fill. Retrying the fill itself
+    // converges: each attempt either lands or it doesn't, and `toHaveValue`
+    // inside the loop tells them apart.
     await expect(async () => {
       await search.fill("e2e fixture 4");
       await expect(search).toHaveValue("e2e fixture 4");

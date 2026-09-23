@@ -10,14 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- **A hard-gate redirect into the Getting Started funnel no longer serializes its chunk fetch
-  after the redirect (#806).** `FirstRunLanding` (a fresh "/") and `SetupRoute` (a cold `/setup`
-  load) already warmed the funnel's lazy chunk on mount so the fetch overlaps the status/role
-  round trip; the gate's own redirect path (`RequireSetup`, reached whenever a blocking setup
-  check bounces the console into `/setup`) did not, so the chunk fetch only started once the
-  redirect had already fired — the race behind `setup-gate.spec.ts`'s occasional "Setup steps"
-  nav-not-there-yet flake under a loaded CI runner. `RequireSetup` now warms the same chunk on
-  mount, closing the same gap for its own path.
+- **The Getting Started funnel paints from the setup status the console already holds (#806).**
+  A gated install redirected into `/setup` used to show "Checking Wardyn's setup…" with no step
+  rail until the funnel's own second `/setup/status` read answered. The funnel now starts from the
+  status that sent it there and refreshes behind it, so a slow second read no longer hides the rail
+  (the shape of `setup-gate.spec.ts`'s CI flake). `runs.spec.ts`'s search tests retry the fill
+  itself, since a reload of the board can detach the input a fill lands on.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
