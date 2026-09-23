@@ -24,6 +24,47 @@ func TestEnvOr(t *testing.T) {
 	}
 }
 
+func TestEnvAlias(t *testing.T) {
+	t.Run("old set, new unset: copies old into new and warns", func(t *testing.T) {
+		t.Setenv("CLIUTIL_NEW", "")
+		t.Setenv("CLIUTIL_OLD", "value")
+		var gotNew, gotOld, gotVal string
+		EnvAlias("CLIUTIL_NEW", "CLIUTIL_OLD", func(newEnv, oldEnv, value string) {
+			gotNew, gotOld, gotVal = newEnv, oldEnv, value
+		})
+		if got := os.Getenv("CLIUTIL_NEW"); got != "value" {
+			t.Errorf("CLIUTIL_NEW = %q, want the old var's value copied over", got)
+		}
+		if gotNew != "CLIUTIL_NEW" || gotOld != "CLIUTIL_OLD" || gotVal != "value" {
+			t.Errorf("warn callback got (%q, %q, %q), want (CLIUTIL_NEW, CLIUTIL_OLD, value)", gotNew, gotOld, gotVal)
+		}
+	})
+	t.Run("both set: new wins, no warn", func(t *testing.T) {
+		t.Setenv("CLIUTIL_NEW", "new-value")
+		t.Setenv("CLIUTIL_OLD", "old-value")
+		warned := false
+		EnvAlias("CLIUTIL_NEW", "CLIUTIL_OLD", func(string, string, string) { warned = true })
+		if got := os.Getenv("CLIUTIL_NEW"); got != "new-value" {
+			t.Errorf("CLIUTIL_NEW = %q, want unchanged — an explicit new value must never be overwritten by the old one", got)
+		}
+		if warned {
+			t.Error("warn callback fired although the new name was already set")
+		}
+	})
+	t.Run("neither set: no-op, no warn", func(t *testing.T) {
+		t.Setenv("CLIUTIL_NEW", "")
+		t.Setenv("CLIUTIL_OLD", "")
+		warned := false
+		EnvAlias("CLIUTIL_NEW", "CLIUTIL_OLD", func(string, string, string) { warned = true })
+		if got := os.Getenv("CLIUTIL_NEW"); got != "" {
+			t.Errorf("CLIUTIL_NEW = %q, want still empty", got)
+		}
+		if warned {
+			t.Error("warn callback fired although neither var was set")
+		}
+	})
+}
+
 // resetFlags gives each case a private FlagSet (the helpers register on the
 // global flag.CommandLine) and captures flag's error stream so envFatal's
 // message is assertable instead of spraying the test log.

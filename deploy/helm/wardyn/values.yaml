@@ -159,7 +159,8 @@ auth:
   # (plus WARDYN_OIDC_OPERATOR_EMAILS or WARDYN_OIDC_ROLE_MAP) and refuses to
   # render — same as wardynd itself refuses to boot (validateSSOOnlyPosture,
   # cmd/wardynd/boot_posture.go) — alongside adminToken above, or
-  # env.WARDYN_LOCAL_MODE / WARDYN_MEMBER_MODE / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
+  # env.WARDYN_LOCAL_MODE / WARDYN_USER_DESKTOP (deprecated alias WARDYN_MEMBER_MODE,
+  # removed in 0.9) / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
   ssoOnly: false
 
 secrets:

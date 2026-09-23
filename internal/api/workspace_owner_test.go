@@ -419,7 +419,7 @@ func TestWorkspaceOwnership_MemberLocalDirGate(t *testing.T) {
 }
 
 // TestWorkspaceOwnership_MemberWritableAllowlist pins O3's two halves at the
-// route: writable inside WARDYN_MEMBER_WRITABLE_ROOTS is accepted, and the
+// route: writable inside WARDYN_USER_WRITABLE_ROOTS is accepted, and the
 // deny carve-out wins over it.
 func TestWorkspaceOwnership_MemberWritableAllowlist(t *testing.T) {
 	root, project := memberProjectRoot(t)

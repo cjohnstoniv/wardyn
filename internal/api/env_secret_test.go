@@ -196,7 +196,7 @@ func (s *envSecretCeilingStore) GetCapabilityEnforcement(context.Context) (map[s
 // selecting a stored row (or taking the deployment default) kept the grant
 // verbatim and resolveEnvSecretGrants wrote the operator's raw secret value into
 // their sandbox env. THREAT-MODEL.md §5.1a, docs/ENV.md's
-// WARDYN_ALLOW_MEMBER_ENV_SECRET row and docs/POLICIES.md's env_secret row all
+// WARDYN_ALLOW_USER_ENV_SECRET row and docs/POLICIES.md's env_secret row all
 // state the control without qualification.
 //
 // Four arms over the two axes that gate it — assignment (the bug) and the route

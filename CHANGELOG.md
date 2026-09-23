@@ -38,6 +38,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
+  `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
+  `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →
+  `WARDYN_USER_WRITABLE_ROOTS`; `WARDYN_MEMBER_WRITABLE_DENY` → `WARDYN_USER_WRITABLE_DENY`;
+  `WARDYN_ALLOW_MEMBER_ENV_SECRET` → `WARDYN_ALLOW_USER_ENV_SECRET`. Every deprecated name still
+  works and WARNs once at boot (`cliutil.EnvAlias`, `cmd/wardynd/boot_flags.go`'s
+  `resolveDeprecatedEnvAliases`) through 0.8.x; removed in 0.9 (user-types-design.md rev 4 §4's D5
+  ruling). Helm's sso-only conflict guard, the compose env-forwarding block and
+  `deploy/desktop/wardyn.env.m-prime.example` are updated to match; docs/ENV.md's six rows name
+  their deprecated alias.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and

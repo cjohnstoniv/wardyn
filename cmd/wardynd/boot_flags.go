@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 )
 
@@ -298,10 +299,43 @@ type bootFlags struct {
 	uiSessionTTL *time.Duration
 }
 
+// deprecatedEnvAliases is UT-5's six WARDYN_MEMBER_* → WARDYN_USER_* renames
+// (user-types-design.md rev 4 §6, §4's D5 ruling): {new, old} pairs, resolved
+// before any flag is parsed so every FlagBool/FlagEnv/os.Getenv(new) read below
+// sees the operator's value whichever name they used. No M-surface-2 generic
+// alias mechanism exists yet (issue UT-5 allows "or self-contained"), so this
+// is wardynd's own list rather than a shared registry; a later M-surface-2 PR
+// can fold it into a bigger one using the same cliutil.EnvAlias primitive.
+// Accepted through 0.8.x, removed in 0.9 — same shape as the boot WARN for a
+// chart WARDYN_OIDC_ROLE_MAP entry still saying `=member` (UT-2a).
+var deprecatedEnvAliases = [][2]string{
+	{"WARDYN_USER_DESKTOP", "WARDYN_MEMBER_MODE"},
+	{"WARDYN_USER_WORKSPACE_ROOTS", "WARDYN_MEMBER_WORKSPACE_ROOTS"},
+	{"WARDYN_USER_WORKSPACE_ROOTS_MAP", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP"},
+	{"WARDYN_USER_WRITABLE_ROOTS", "WARDYN_MEMBER_WRITABLE_ROOTS"},
+	{"WARDYN_USER_WRITABLE_DENY", "WARDYN_MEMBER_WRITABLE_DENY"},
+	{"WARDYN_ALLOW_USER_ENV_SECRET", "WARDYN_ALLOW_MEMBER_ENV_SECRET"},
+}
+
+// resolveDeprecatedEnvAliases applies deprecatedEnvAliases and WARNs once per
+// aliased entry actually in use, naming 0.9 as the removal release — the
+// aliasing itself (cliutil.EnvAlias) never logs, so every caller controls its
+// own wording.
+func resolveDeprecatedEnvAliases() {
+	for _, pair := range deprecatedEnvAliases {
+		newEnv, oldEnv := pair[0], pair[1]
+		cliutil.EnvAlias(newEnv, oldEnv, func(newEnv, oldEnv, _ string) {
+			slog.Warn(fmt.Sprintf("wardynd: %s is no longer a variable name; use %s instead. Accepted through 0.8.x, removed in 0.9.", oldEnv, newEnv),
+				slog.String("old_env", oldEnv), slog.String("new_env", newEnv))
+		})
+	}
+}
+
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
 // and parses the command line. Moved verbatim out of run(); the usage strings
 // carry the operator-facing documentation for each knob.
 func parseBootFlags() *bootFlags {
+	resolveDeprecatedEnvAliases()
 	f := &bootFlags{
 		dsn:            flagEnv("dsn", "WARDYN_PG_DSN", "", "Postgres DSN (required)"),
 		migrateDSN:     flagEnv("migrate-dsn", "WARDYN_PG_MIGRATE_DSN", "", "OPTIONAL Postgres DSN for an owner/migrator role that runs migrations; when set, WARDYN_PG_DSN is used ONLY for the least-privilege runtime app pool (enables audit_events DDL protection). Empty = single-DSN mode (no DDL protection, unchanged behavior)."),
@@ -321,16 +355,16 @@ func parseBootFlags() *bootFlags {
 		localTrustFwd:           flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer (the no-auth bypass otherwise requires a loopback TCP peer). COMPOSE/TEAM ONLY: safe solely when the port is published loopback-only (127.0.0.1:PORT) so the peer is always the docker gateway. NEVER set on a directly-bound host-mode wardynd — it re-opens LAN no-auth access."),
 		allowLocalModeWithOIDC:  flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "override: allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, i.e. — silently disable the configured SSO/RBAC deployment and attribute every request to the fixed local operator (normally refused — unset -local-mode or -oidc-issuer instead)"),
 		allowSharedSubscription: flagBool("allow-shared-subscription", "WARDYN_ALLOW_SHARED_SUBSCRIPTION", false, "override: allow ONE operator's Anthropic subscription credential to be injected into runs on a deployment that is not -local-mode (e.g. the compose demo stack, which uses a shared admin token). Does NOT waive the refusals on the k8s runner or a configured OIDC issuer — those are multi-user by definition, and sharing a subscription there breaches the harness vendor's per-user authentication terms. DEMO/SINGLE-USER BOXES ONLY."),
-		memberMode:              flagBool("member-mode", "WARDYN_MEMBER_MODE", false, "MEMBER-MODE DESKTOP: assert that the human using this daemon is a MEMBER and the operator authority is elsewhere (an org IdP / MDM). Refuses to start unless -local-mode is off AND OIDC is configured — the two preconditions under which isOperator is false for the developer's every request. Adds no middleware; it makes the assumption checkable instead of assumed."),
-		memberRoots:             flagEnv("member-workspace-roots", "WARDYN_MEMBER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a MEMBER's own local_dir workspace source may live under. A member source is allowed only if its CANONICALIZED real path is inside one of these (symlink-resolved, credential dotfiles denied regardless). Empty (the default) = members may not mount host directories at all; repos and operator-owned workspaces are unaffected. Point it at a dedicated projects dir, NEVER $HOME."),
-		memberRootsMap:          flagEnv("member-workspace-roots-map", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email. A principal with an entry uses ONLY that entry — per-member REPLACES the shared list (it exists to narrow, so a union would make adding a row widen). An empty list for a principal means that member mounts nothing.`),
-		memberWritableRoots:     flagEnv("member-writable-roots", "WARDYN_MEMBER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a MEMBER may mark their own mount WRITABLE. Empty (the default) = no writable member mounts at all; a member's mounts are read-only. Operators keep their unrestricted per-source writable opt-in."),
-		memberWritableDeny:      flagEnv("member-writable-deny", "WARDYN_MEMBER_WRITABLE_DENY", "", "comma-separated absolute host directories carved OUT of -member-writable-roots. Deny WINS over allow, so a subtree inside a writable root can be pinned read-only for members."),
+		memberMode:              flagBool("member-mode", "WARDYN_USER_DESKTOP", false, "MEMBER-MODE DESKTOP: assert that the human using this daemon is a MEMBER and the operator authority is elsewhere (an org IdP / MDM). Refuses to start unless -local-mode is off AND OIDC is configured — the two preconditions under which isOperator is false for the developer's every request. Adds no middleware; it makes the assumption checkable instead of assumed."),
+		memberRoots:             flagEnv("member-workspace-roots", "WARDYN_USER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a MEMBER's own local_dir workspace source may live under. A member source is allowed only if its CANONICALIZED real path is inside one of these (symlink-resolved, credential dotfiles denied regardless). Empty (the default) = members may not mount host directories at all; repos and operator-owned workspaces are unaffected. Point it at a dedicated projects dir, NEVER $HOME."),
+		memberRootsMap:          flagEnv("member-workspace-roots-map", "WARDYN_USER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email. A principal with an entry uses ONLY that entry — per-member REPLACES the shared list (it exists to narrow, so a union would make adding a row widen). An empty list for a principal means that member mounts nothing.`),
+		memberWritableRoots:     flagEnv("member-writable-roots", "WARDYN_USER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a MEMBER may mark their own mount WRITABLE. Empty (the default) = no writable member mounts at all; a member's mounts are read-only. Operators keep their unrestricted per-source writable opt-in."),
+		memberWritableDeny:      flagEnv("member-writable-deny", "WARDYN_USER_WRITABLE_DENY", "", "comma-separated absolute host directories carved OUT of -member-writable-roots. Deny WINS over allow, so a subtree inside a writable root can be pinned read-only for members."),
 		orgURL:                  flagEnv("org-url", "WARDYN_ORG_URL", "", "the org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Unset (the default) = no hybrid posture at all. Set, it is REFUSED at boot unless -member-mode is also on (see validateHybridPosture, boot_posture.go)."),
 		orgEnrolToken:           flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url. Setting it with no -org-url is REFUSED at boot — a token with nowhere to send it is a misconfiguration, not a no-op."),
 		orgDeviceName:           flagEnv("org-device-name", "WARDYN_ORG_DEVICE_NAME", "", "human-readable name this device registers under at -org-url (e.g. a hostname or asset tag). Empty is fine while -org-url is unset; it carries no posture of its own."),
 		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a USER DRIVE of backend host_path may be registered inside — typically the mount point of an NFS/SMB share the operator mounted host-side. A drive's host_root is allowed only if its CANONICALIZED real path is inside one of these (symlink-resolved, the bind-mount deny-list applied, must exist on this host), and only that person's SUBDIRECTORY is ever bound into a run. Empty (the default) = no host_path drive may be registered at all; Wardyn-managed volume drives are unaffected. Point it at the share's mount point, NEVER $HOME or /."),
-		ssoOnly:                 flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the ONLY way into the console: refuses to start unless OIDC is configured and WARDYN_ADMIN_TOKEN, WARDYN_LOCAL_MODE, WARDYN_MEMBER_MODE and WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST are all unset (validateSSOOnlyPosture). Publishes sso_only on /healthz so the sign-in screen drops the admin-token form and the role-derivation caveat."),
+		ssoOnly:                 flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the ONLY way into the console: refuses to start unless OIDC is configured and WARDYN_ADMIN_TOKEN, WARDYN_LOCAL_MODE, WARDYN_USER_DESKTOP and WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST are all unset (validateSSOOnlyPosture). Publishes sso_only on /healthz so the sign-in screen drops the admin-token form and the role-derivation caveat."),
 		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),
 		runnerTargetOverride:    flagEnv("runner-target", "WARDYN_RUNNER_TARGET", "", `substrate name STORED objects validate against when -runner is "none" ("docker" or "k8s"); TEST HARNESSES ONLY — it changes what may be REGISTERED (a user drive names the backend one target can mount), never what is dispatched, and is IGNORED whenever a runner is configured. Empty (the default) resolves the target "none", which refuses every drive backend`),

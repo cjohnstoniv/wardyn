@@ -538,7 +538,7 @@ type DriveMount struct {
 // bad PUT can blank) is the wrong home for a security ceiling. The API write
 // boundary composes the two — shape here, ceiling there — and an UNSET env
 // means no host_path drive may be authored at all, the same fail-closed posture
-// WARDYN_MEMBER_WORKSPACE_ROOTS takes.
+// WARDYN_USER_WORKSPACE_ROOTS takes.
 type UserDriveHostRootCheck func(hostRoot string) error
 
 // ─── derivation ───────────────────────────────────────────────────────────────

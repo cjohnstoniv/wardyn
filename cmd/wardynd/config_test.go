@@ -687,7 +687,7 @@ func TestValidateUISandboxConfig(t *testing.T) {
 	}
 }
 
-// TestValidateMemberModePosture pins WARDYN_MEMBER_MODE's two preconditions
+// TestValidateMemberModePosture pins WARDYN_USER_DESKTOP's two preconditions
 // (W-MEMB M1). Member mode asserts a topology — the human at the keyboard is a
 // MEMBER, the operator authority is elsewhere — and the whole value of the flag
 // is that boot REFUSES when the assertion is false. Local mode makes the
@@ -779,7 +779,7 @@ func TestValidateSSOOnlyPosture(t *testing.T) {
 		},
 		{
 			name: "on with member mode set", ssoOnly: true, oidcConfigured: true, memberMode: true,
-			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_MEMBER_MODE"},
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_USER_DESKTOP"},
 		},
 		{
 			name: "on with the no-operator-list override set", ssoOnly: true, oidcConfigured: true, allowNoOperatorList: true,

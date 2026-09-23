@@ -5,7 +5,7 @@
 # The role walk on the two COMPOSE-shaped SSO deployments, hermetic and local:
 #
 #   mprime       the desktop member-mode envelope (deploy/desktop/
-#                wardyn.env.m-prime.example: WARDYN_MEMBER_MODE, default role
+#                wardyn.env.m-prime.example: WARDYN_USER_DESKTOP, default role
 #                member, the MDM-held admin token)
 #   compose-sso  the plain `docker compose --profile sso` stack
 #                (deploy/compose/.env.example's role map)
@@ -129,9 +129,9 @@ for shape in "${SHAPES[@]}"; do
 WARDYN_MANAGED_DIR=${SCRATCH}/managed
 WARDYN_AGENT_IMAGES=
 WARDYN_WORKSPACES_ROOT=${SCRATCH}/src
-WARDYN_MEMBER_WORKSPACE_ROOTS=${SCRATCH}/src
-WARDYN_MEMBER_WRITABLE_ROOTS=${SCRATCH}/src
-WARDYN_MEMBER_WRITABLE_DENY=${SCRATCH}/src/.git
+WARDYN_USER_WORKSPACE_ROOTS=${SCRATCH}/src
+WARDYN_USER_WRITABLE_ROOTS=${SCRATCH}/src
+WARDYN_USER_WRITABLE_DENY=${SCRATCH}/src/.git
 WARDYN_LOCAL_OPERATOR=local:roles-harness
 WARDYN_SSH_ADVERTISE=127.0.0.1:${SSH_PORT}
 EOF

@@ -42,6 +42,31 @@ func EnvOr(key, def string) string {
 	return def
 }
 
+// EnvAlias lets a deprecated env var name go on working for one deprecation
+// window while a new name takes over (UT-5, user-types-design.md rev 4 §6: six
+// WARDYN_MEMBER_* names replaced by WARDYN_USER_* through 0.8.x, removed in
+// 0.9). When newEnv is unset and oldEnv is set, it copies oldEnv's value into
+// newEnv — so every downstream FlagEnv/FlagBool/EnvBool/os.Getenv(newEnv) read
+// needs no change of its own — and calls warn once with both names, so the
+// caller can log a boot WARN naming the removal release. No-op when newEnv is
+// already set (newEnv always wins, so an operator who sets both is never
+// surprised) or when neither is set. Callers aliasing several pairs at boot
+// must call this before ANY flag is parsed or any of the pair is otherwise
+// read, so the substitution is in place for every reader.
+func EnvAlias(newEnv, oldEnv string, warn func(newEnv, oldEnv, value string)) {
+	if os.Getenv(newEnv) != "" {
+		return
+	}
+	v, ok := os.LookupEnv(oldEnv)
+	if !ok || v == "" {
+		return
+	}
+	if warn != nil {
+		warn(newEnv, oldEnv, v)
+	}
+	os.Setenv(newEnv, v) //nolint:errcheck // this process's own env; Setenv cannot fail here
+}
+
 // FlagEnv defines a string flag whose default is overridden by an env var.
 // Unset — or set to the empty string, which is what `docker run -e VAR` and a
 // compose `VAR=` passthrough produce for a var the operator never set — means
