@@ -264,7 +264,7 @@ type bootFlags struct {
 	printGroundtruthToken *bool
 	genAgeKey             *bool
 	// rotateAgeKey is the one knob in this struct with NO WARDYN_* env pair, on
-	// purpose: it is a destructive maintenance mode that re-encrypts every
+	// purpose: it is a destructive maintenance mode that rewraps every
 	// stored secret, so it must be an explicit act on a command line. Its
 	// early-exit siblings above are print-and-quit and harmless if an env var
 	// turns them on; a stray WARDYN_ROTATE_AGE_KEY left in a compose .env would
@@ -464,7 +464,7 @@ func parseBootFlags() *bootFlags {
 		// flag.String, NOT flagEnv: no env pair by design — see the struct field.
 		// The backquoted word is deliberate: flag.PrintDefaults renders the first
 		// one in a usage string as the argument placeholder ("-rotate-age-key path").
-		rotateAgeKey: flag.String("rotate-age-key", "", "MAINTENANCE MODE, daemon must be STOPPED: mint a new age identity, re-encrypt every stored secret from WARDYN_AGE_KEY to it in ONE transaction, "+
+		rotateAgeKey: flag.String("rotate-age-key", "", "MAINTENANCE MODE, daemon must be STOPPED: mint a new age identity, rewrap every stored secret's data key from WARDYN_AGE_KEY's key to it in ONE transaction, "+
 			"replace the key file at `path` (previous kept as <path>.bak), then exit. Serves nothing. "+
 			"That file must already hold the CURRENT identity as a bare AGE-SECRET-KEY-... line (# comments allowed) — it is NOT an env file. See docs/OPERATIONS.md"),
 

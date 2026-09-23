@@ -95,8 +95,8 @@ func run() error {
 		return genAndPrintAgeKey(os.Stdout)
 	}
 
-	// -rotate-age-key: MAINTENANCE MODE, another early exit — it re-encrypts the
-	// secret store and returns, never serving. Ahead of validateConfig on
+	// -rotate-age-key: MAINTENANCE MODE, another early exit — it rewraps the
+	// secret store's data keys and returns, never serving. Ahead of validateConfig on
 	// purpose: those rules (TLS posture, bind routability, plaintext listen) all
 	// govern SERVING, and a rotation run under the deployment's own environment
 	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
@@ -200,8 +200,11 @@ func run() error {
 		return err
 	}
 
-	// Secret store (pluggable seam; default "pg" = age-encrypted Postgres column).
-	secrets, err := buildSecretStore(pool, *f.ageKey, *f.secretStoreSel)
+	// Secret store (pluggable seam; default "pg" = envelope-encrypted Postgres
+	// rows). Returned only after its v0 rows are converted, so the boot-key
+	// reads below never see one. rootCtx, not bootCtx: the conversion is one
+	// all-or-nothing transaction over the whole table.
+	secrets, err := buildSecretStore(rootCtx, pool, *f.ageKey, *f.secretStoreSel)
 	if err != nil {
 		return err
 	}
@@ -692,10 +695,11 @@ func genAndPrintAgeKey(w io.Writer) error {
 	return err
 }
 
-// buildSecretStore constructs the age-encrypted Postgres secret store. The age
-// identity comes from -age-key; if empty one is generated and logged (operators
-// MUST persist it across restarts to keep prior ciphertext readable).
-func buildSecretStore(pool *pgxpool.Pool, ageKey, storeName string) (secretstore.Store, error) {
+// buildSecretStore constructs the secret store and readies its rows
+// (convertSecretStore). The age identity comes from -age-key; if empty one is
+// generated and logged (operators MUST persist it across restarts to keep prior
+// ciphertext readable).
+func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string) (secretstore.Store, error) {
 	var id *age.X25519Identity
 	var err error
 	if ageKey == "" {
@@ -723,6 +727,9 @@ func buildSecretStore(pool *pgxpool.Pool, ageKey, storeName string) (secretstore
 	s, err := secretstore.New(storeName, secretstore.Deps{Pool: pool, AgeIdentity: id})
 	if err != nil {
 		return nil, fmt.Errorf("secret store: %w", err)
+	}
+	if err := convertSecretStore(ctx, s, id, ageKey == ""); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

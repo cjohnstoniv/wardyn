@@ -266,6 +266,7 @@ fail-closed gate".
 | Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. Unset roots = no member host mounts at all. Mechanism: §4.4. Residuals #25, #26 | B1, ID |
 | Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` → `kernel.*` via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast before the run ends — but every upload emits its own `recording.upload` row, so the overwrite is visible even though the replaced bytes are not recoverable. Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`); host eBPF is blind inside CC3/Kata (`kernel.sensor.blind`). | AU |
 | Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: §4.5 | AU |
+| Stored credential moved or forged by a DATABASE writer | **[v0.8 shipped]** Every `secrets` row is envelope v1 (`0069_secret_envelope_v1.sql`, `internal/secretstore/pg`): a fresh 32-byte data key per save seals the value with AES-256-GCM, bound as associated data to the row's own `(owned_by, name)`, and the data key is wrapped by a key-encryption key bound to the same pair and its `kek_id` (`internal/secretstore/kek`). A ciphertext moved to another person, another name, or into the operator's slot fails that check; the `local` KEK is derived from `WARDYN_AGE_KEY` with HKDF-SHA256 and is symmetric, so the public age recipient no longer lets anyone write a row that opens. Every refusal names the row, never the value, and is never read as "not found" — so `loadOrCreateSecret` fails boot rather than minting a fresh signing key over a tampered one. Pre-envelope rows are converted once at boot and never read again; one that appears later is refused as "an older wardynd is still writing" | Swapping a credential between people or names (F1); forging a credential from the public recipient (F2). NOT a restored old row — residual 48 |
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | Docker: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Kubernetes: default-deny east-west NetworkPolicy **[shipped]** (empty-ingress + own-proxy-only egress per sandbox pod, `internal/runner/k8s/sandbox.go`). | B1, L0 (L1), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) 🟡 **[planned]**. | AU |
@@ -1876,6 +1877,25 @@ hiding them would repeat the failure mode we are designed to avoid.
     (`requested`/`defaulted`): it is the one place that distinguishes "the caller
     asked for CC1" from "CC1 is what today's runner had to offer," which an
     `enforced` value of CC1 alone cannot say on its own.
+
+48. **A database writer can put a stored credential BACK, and the local key sits
+    beside the data (0.8, envelope v1).** Envelope v1 binds each row to its own
+    `(owned_by, name)` and makes forgery need the key-encryption key (§4), but
+    three things stay open. (a) **A restored row still opens:** a superseded or
+    deleted row copied back — from WAL, a replica or a backup — into the SAME
+    `(owned_by, name)` passes its binding and unwraps while that key-encryption
+    key lives, so a Replace, a delete and every future erase are reversible by a
+    database writer until the key is rotated past the old wrap
+    (`wardynd -rotate-age-key`). A database writer is already super-admin
+    equivalent (`role_mappings`, asset 8), so this is disclosed, not engineered
+    around. (b) **The `local` KEK is the only one in 0.8's first lane:** whoever
+    holds both the database (or a backup) and `WARDYN_AGE_KEY` reads every value,
+    offline and unlogged; a deleted credential still decrypts from any earlier
+    backup while both exist — the erasure horizon is the deployment's backup
+    retention. A key service (Vault/OpenBao Transit, Azure Key Vault) that keeps
+    the KEK away from the database is the next lane, not this one. (c)
+    **Metadata stays in the clear:** who holds which named credential, and since
+    when, is readable to anyone who can read the table.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
