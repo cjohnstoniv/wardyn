@@ -186,21 +186,33 @@ sequenceDiagram
   participant Person
   participant Wardyn as wardynd
   participant Entra as Entra ID
+  participant Sandbox
   participant Proxy as wardyn-proxy
   participant ADO as Azure DevOps
 
   Person->>Wardyn: sign in
   Wardyn->>Entra: browser redirect
-  Entra-->>Wardyn: capture per-user token
-  Note over Wardyn: run dispatches as that person
-  Wardyn->>Proxy: request, token attached
-  Proxy->>Proxy: classify against granted ceiling
-  alt within ceiling
-    Proxy->>ADO: forward, scoped token
+  Entra-->>Wardyn: per-user token, captured
+  Note over Wardyn,Sandbox: run dispatches as that person
+  Sandbox->>Proxy: Azure DevOps request (no token)
+  Proxy->>Wardyn: resolve capability C for this grant
+  alt C already held by the run
+    Wardyn-->>Proxy: 200, per-user token
+    Proxy->>ADO: forward, token attached
     ADO-->>Proxy: response
-    Proxy-->>Wardyn: response
-  else outside ceiling
-    Proxy-->>Wardyn: hold for approval
+    Proxy-->>Sandbox: response
+  else C inside the ceiling, not held
+    Wardyn-->>Proxy: 423 capability_pending
+    Note over Proxy: request held
+    Person->>Wardyn: allow once / allow for this run
+    Proxy->>Wardyn: resolve again with the approval
+    Wardyn-->>Proxy: 200, per-user token
+    Proxy->>ADO: forward, token attached
+    ADO-->>Proxy: response
+    Proxy-->>Sandbox: response
+  else C above the ceiling
+    Wardyn-->>Proxy: 403 capability_above_ceiling
+    Proxy-->>Sandbox: refused
   end
 ```
 

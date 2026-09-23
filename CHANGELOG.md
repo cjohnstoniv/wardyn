@@ -933,7 +933,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
-- `docs/AZURE-DEVOPS.md` documents per-person Azure DevOps access on Entra ID.
+- `docs/adoption/azure-devops-entra.md` documents per-person Azure DevOps access on Entra ID.
 - **`/healthz` now always reports `token_login` and `sso_only`**, so the sign-in screen can decide
   what to offer before anyone signs in. Anyone who can reach `/healthz` can read them: `sso_only` is
   new, and `token_login` reflects whether member mode is on, which `/healthz` did not previously
