@@ -130,7 +130,7 @@ func TestDenyPathSegments(t *testing.T) {
 		}
 	}
 	for _, pattern := range []string{"", "/", "//infra", "./infra/**", "infra//**", "infra/./x",
-		"infra/../x", "..", ".", "infra//", " infra/**", "infra/** ", "deploy/\xff\xfe"} {
+		"infra/../x", "..", ".", "infra//", " infra/**", "infra/** ", "/ infra/**", "deploy/\xff\xfe"} {
 		if got, err := DenyPathSegments(pattern); err == nil {
 			t.Errorf("DenyPathSegments(%q) = %q, want a refusal", pattern, got)
 		}

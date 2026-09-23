@@ -335,10 +335,10 @@ func DenyPathSegments(pattern string) ([]string, error) {
 	if !utf8.ValidString(pattern) {
 		return nil, fmt.Errorf("%q is not valid UTF-8", pattern)
 	}
-	if strings.TrimSpace(pattern) != pattern {
+	p := strings.TrimPrefix(pattern, "/")
+	if strings.TrimSpace(p) != p {
 		return nil, fmt.Errorf("%q has leading or trailing whitespace (almost certainly a typo)", pattern)
 	}
-	p := strings.TrimPrefix(pattern, "/")
 	if strings.HasSuffix(p, "/") {
 		p += "**"
 	}
