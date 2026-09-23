@@ -141,6 +141,15 @@ type SetupStatus struct {
 	// member redaction has nothing to strip. Absent with no provider block,
 	// which is today.
 	ModelProviders []SetupModelProvider `json:"model_providers,omitempty"`
+	// ProviderAccess is THIS PRINCIPAL's connection state for every provider in
+	// ModelProviders (MP-12) — one row per provider, generalising the single
+	// AWS-SSO-only answer ModelAccess gives. Getting started and the setup
+	// checklist read this instead of grading one hardcoded lane, so a person
+	// granted several providers sees all of them. Member-safe by construction,
+	// same as ModelProviders: a state name, an already-composed action
+	// sentence, and a deadline instant — no secret names, no account pin, no
+	// start URL. Absent with no provider block.
+	ProviderAccess []SetupProviderAccess `json:"provider_access,omitempty"`
 }
 
 // SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
@@ -609,6 +618,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// the wizard opens rather than hiding a half-configured bootstrap.
 	// Credentials are warnings, not readiness gates.
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
+	modelProviders, providerAccess := s.setupModelProviderState(ctx, siteCfg, runIdentitySubject(ctx, principalFromRequest(r)))
 
 	resp := SetupStatus{
 		Ready:  ready,
@@ -635,7 +645,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Integrations: integrations,
 		// The roster and the model providers it defaults to, side by side (one
 		// line: this function sits at its funlen ratchet).
-		Harnesses: setupHarnessTools(siteCfg, s.cfg.AgentImages), ModelProviders: s.setupModelProviders(ctx, siteCfg),
+		Harnesses: setupHarnessTools(siteCfg, s.cfg.AgentImages), ModelProviders: modelProviders, ProviderAccess: providerAccess,
 		LLMReady:    llmReady,
 		ModelAccess: modelAccess,
 		SCMAccess:   s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value

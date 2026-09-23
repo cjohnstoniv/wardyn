@@ -74,6 +74,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   fails the run's next model call rather than holding it, until provider sign-in lands (#533).
   The "not yet available" refusal is lifted for both Bedrock kinds.
 
+- **`GET /setup/status` reports every granted model provider's connection state (#533).**
+  `provider_access: [{provider, state, action, deadline}]` generalises the single hardcoded
+  AWS-SSO answer `model_access` gave (`model_access` itself is unchanged, and stays until MP-4) to
+  every provider a person is granted: one row per provider in `model_providers`, graded against
+  that caller's own credential and never another's. States are `live`, `expiring`,
+  `expired_signin`, `not_configured` and `not_applicable` — no key probe: a typed key or token
+  grades on presence alone. A per-person Claude subscription grades `expiring` past the same age
+  heuristic the compose-mode managed token already uses (no machine-readable expiry on a
+  setup-token); a Bedrock SSO provider reuses the five-state AWS-SSO vocabulary over a
+  provider-scoped read, and a live, renewable session for an account or role the provider's own pin
+  no longer allows grades `expired_signin`, naming both pairs, rather than reading `live` for an
+  identity dispatch would refuse. The shared admin bearer token under OIDC reads `not_applicable`
+  for every provider kind, having no credential of its own to grade. Member-safe by construction,
+  the same discipline `model_providers` follows: a state name, an already-composed sentence and a
+  deadline instant, never a secret name, account pin or start URL.
+
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0069_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to
   at create time, so every `scanRun`-bound reader — `GetRun`, `ListRuns`, the run detail and list
