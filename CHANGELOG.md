@@ -85,6 +85,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The user view looks through a chosen user type (#615).** `POST /me/view` with
+  `{"view": "user", "user_type": "<id>"}` puts an admin in the user view as that type: its grants,
+  governance profile, drives and run limits bind exactly as for a person of that type, and the tier
+  stays clamped to `user`. With no type given, the view uses the admin's previous choice (migration
+  `0072_user_view_type` adds `principal_prefs`, so the choice follows them across devices), then
+  their own type, then the built-in one; an unknown type is refused `400`. If the viewed type is
+  deleted, the next request is refused `403` `user_view_type_deleted` (a launch `409` `admin_view`)
+  rather than answered as the admin, and the view turns off; `GET /me` answers the real tier with
+  `user_view_dropped`. A run records the type it was launched as (`agent_runs.user_type`, and
+  `user_type` / `user_view` on `run.create`); the switch is audited as `auth.user_view`.
 - **A user type is a subject (#610).** Migration `0071_user_type_subject` lets a capability
   grant, a governance assignment and a drive grant name `subject_type: "user_type"` with a type's
   id. A grant on a type is one more subject beside user and group: an allow lets that type's

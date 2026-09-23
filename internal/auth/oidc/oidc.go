@@ -339,7 +339,7 @@ type Session struct {
 	MemberMode bool `json:"mm,omitempty"`
 	// MemberModeNoCredential (0.7.5, field report finding 3) is the SECOND
 	// posture of the same mode: "view as a NEW member — one who has not signed
-	// in yet". Meaningful only with MemberMode; SetMemberMode writes it as
+	// in yet". Meaningful only with MemberMode; SetUserView writes it as
 	// `on && noCredential`, so turning the mode off clears it by construction
 	// and it can never be set on its own.
 	//
@@ -361,6 +361,15 @@ type Session struct {
 	// shows the admin their own credential — the 0.7.4 behaviour, never a
 	// widening. docs/OPERATIONS.md publishes it as a ceiling.
 	MemberModeNoCredential bool `json:"mmnc,omitempty"`
+	// UserViewType is the user type the user view looks through, chosen at
+	// the switch (SetUserView validates it first). Meaningful only with
+	// MemberMode; contextWithPrincipal publishes it in place of UserType.
+	// It chooses which type's rows bind, never the tier: the view clamps the
+	// tier to user whatever the type.
+	UserViewType string `json:"uvt,omitempty"`
+	// UserViewDropped names the type whose deletion turned the view off
+	// (DropUserView), so GET /me can say why until the next switch clears it.
+	UserViewDropped string `json:"uvd,omitempty"`
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.

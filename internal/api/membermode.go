@@ -71,7 +71,7 @@ type memberModeRequest struct {
 // so an operator-gated exit would be a door that locks from the inside. A real
 // member toggling ON is a no-op 200 for the same reason — they are already what
 // they asked to be, and a 4xx would only teach them the control exists for
-// someone else. It is a no-op in FACT as well as in status code: SetMemberMode
+// someone else. It is a no-op in FACT as well as in status code: SetUserView
 // writes no cookie for that caller, because everything downstream reads
 // the FLAG rather than the stamped tier — a member carrying mm:1 would be shown
 // a banner naming an admin role they do not hold and refused their own
@@ -117,7 +117,17 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	// silently downgrades to the plain mode — the honest answer, and no new
 	// string.
 	preview := req.Enabled && req.NoCredential && s.memberPreviewApplies(ctx, r)
-	realRole, err := s.cfg.OIDC.SetMemberMode(w, r, req.Enabled, preview)
+	// This route picks no type: the view looks through the same default POST
+	// /me/view falls back to.
+	typeID := ""
+	if req.Enabled {
+		var err error
+		if typeID, _, err = s.userViewType(ctx, sub, ""); err != nil {
+			writeServerError(w, r, "resolve user view type", err)
+			return
+		}
+	}
+	realRole, err := s.cfg.OIDC.SetUserView(w, r, req.Enabled, typeID, preview)
 	if err != nil {
 		// decodeSession's own errors: the cookie went missing or stopped
 		// verifying between the middleware and here. Not a 500 — there is
@@ -134,7 +144,7 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	}
 	// Actor is the admin's OWN sub, from the untouched actorFromRequest: the
 	// whole value of the mode over a shared second login is that the trail
-	// still names the person. real_role is the STAMPED role SetMemberMode read
+	// still names the person. real_role is the STAMPED role SetUserView read
 	// off the cookie — never oidcRoleFromContext, which is already clamped to
 	// member while the mode is on and would record the wrong tier on the
 	// turning-OFF row (and would flatten a security_admin into an admin).
@@ -145,7 +155,7 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	// rather than a field every row answers — the same rule authzDeniedDatum's
 	// member_mode marker below follows.
 	// noCred is what the SESSION now carries, never what the body asked for.
-	// Besides the roster gate above it drops the REAL-MEMBER case: SetMemberMode
+	// Besides the roster gate above it drops the REAL-MEMBER case: SetUserView
 	// writes that caller no cookie at all, so echoing their request would report
 	// — and audit — a posture nobody is in, and would make this row's own
 	// AUDIT-ACTIONS sentence ("only on a row that turned the mode ON with it")
@@ -190,6 +200,7 @@ func authzDeniedDatum(ctx context.Context, reason, method string) map[string]any
 	d := map[string]any{"reason": reason, "method": method}
 	if oidc.MemberModeFromContext(ctx) {
 		d["member_mode"] = true
+		d["user_type"] = oidc.UserTypeFromContext(ctx)
 	}
 	return d
 }

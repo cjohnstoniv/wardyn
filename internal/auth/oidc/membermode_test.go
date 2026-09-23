@@ -5,7 +5,7 @@ package oidc_test
 
 // The four invariants that keep "view as member" from becoming a privilege
 // primitive (P2, v0.7.4). Driven through the REAL cookie round trip — encode,
-// SetMemberMode, Middleware — rather than against the struct, because the whole
+// SetUserView, Middleware — rather than against the struct, because the whole
 // design rests on what survives a re-encode: the clamp is applied at
 // contextWithPrincipal and the stamped Role is never rewritten, so a test that
 // only read the Session back would prove none of it.
@@ -44,7 +44,7 @@ func memberModeSession() writoidc.Session {
 	}
 }
 
-// setMemberMode drives (*Authenticator).SetMemberMode over a request carrying
+// setMemberMode drives (*Authenticator).SetUserView over a request carrying
 // `in` and returns the cookie it wrote. noCredential is variadic so every case
 // written before the 0.7.5 posture existed still reads as "the plain mode".
 func setMemberMode(t *testing.T, a *writoidc.Authenticator, in *http.Cookie, on bool, noCredential ...bool) *http.Cookie {
@@ -52,16 +52,16 @@ func setMemberMode(t *testing.T, a *writoidc.Authenticator, in *http.Cookie, on 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
 	w := httptest.NewRecorder()
-	stamped, err := a.SetMemberMode(w, r, on, len(noCredential) > 0 && noCredential[0])
+	stamped, err := a.SetUserView(w, r, on, "", len(noCredential) > 0 && noCredential[0])
 	if err != nil {
-		t.Fatalf("SetMemberMode(%v): %v", on, err)
+		t.Fatalf("SetUserView(%v): %v", on, err)
 	}
 	if stamped != writoidc.RoleAdmin {
-		t.Errorf("SetMemberMode returned stamped role %q, want %q — the audit row records what is PAUSED", stamped, writoidc.RoleAdmin)
+		t.Errorf("SetUserView returned stamped role %q, want %q — the audit row records what is PAUSED", stamped, writoidc.RoleAdmin)
 	}
 	got := w.Result().Cookies()
 	if len(got) != 1 {
-		t.Fatalf("SetMemberMode wrote %d cookies, want exactly 1", len(got))
+		t.Fatalf("SetUserView wrote %d cookies, want exactly 1", len(got))
 	}
 	return got[0]
 }
@@ -267,15 +267,15 @@ func TestMemberMode_RealMemberTurningItOnWritesNoCookie(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
 	w := httptest.NewRecorder()
-	stamped, err := a.SetMemberMode(w, r, true, false)
+	stamped, err := a.SetUserView(w, r, true, "", false)
 	if err != nil {
-		t.Fatalf("SetMemberMode: %v", err)
+		t.Fatalf("SetUserView: %v", err)
 	}
 	if stamped != writoidc.RoleUser {
 		t.Errorf("stamped role = %q, want %q — the return value is the role the caller HOLDS", stamped, writoidc.RoleUser)
 	}
 	if got := w.Result().Cookies(); len(got) != 0 {
-		t.Fatalf("SetMemberMode wrote %d cookies for a member turning the mode ON, want 0: %+v", len(got), got)
+		t.Fatalf("SetUserView wrote %d cookies for a member turning the mode ON, want 0: %+v", len(got), got)
 	}
 	// The session it was handed is untouched, so the mint doors stay open.
 	if _, _, mm, authed := principalOf(t, a, in); !authed || mm {
@@ -288,8 +288,8 @@ func TestMemberMode_RealMemberTurningItOnWritesNoCookie(t *testing.T) {
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
-	if _, err := a.SetMemberMode(w, r, false, false); err != nil {
-		t.Fatalf("SetMemberMode(false): %v", err)
+	if _, err := a.SetUserView(w, r, false, "", false); err != nil {
+		t.Fatalf("SetUserView(false): %v", err)
 	}
 	if got := w.Result().Cookies(); len(got) != 1 {
 		t.Fatalf("turning it OFF wrote %d cookies, want 1", len(got))
@@ -321,7 +321,7 @@ func previewOf(t *testing.T, a *writoidc.Authenticator, c *http.Cookie) (memberM
 //
 // THE RE-ISSUE ARM. The one thing that could resurrect a cleared bit is a path
 // that decodes a whole Session and re-signs it. There are exactly two
-// encodeSession callers in this package — SetMemberMode (driven below in both
+// encodeSession callers in this package — SetUserView (driven below in both
 // directions) and the OIDC callback, which builds a FRESH Session literal from
 // the id_token and therefore cannot carry a stale preview bit across a re-login.
 // There is no sliding-window/renewal re-issue at all: Expiry and IssuedAt are

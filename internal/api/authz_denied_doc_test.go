@@ -38,6 +38,7 @@ var authzDeniedReasons = []string{
 	"second_human_required",
 	"security_admin_surface",
 	"user_type_unknown",
+	"user_view_type_deleted",
 }
 
 // How a reason is written at an emit site. The first two are read only INSIDE a

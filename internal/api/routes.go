@@ -736,6 +736,8 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// inside. The no-per-human-role lane (admin token, local mode, no IdP) is
 	// refused inside the handler — a 400, not a tier.
 	r.Post("/me/member-mode", s.handleSetMemberMode)
+	// The user view with a chosen type (user_view.go), on r for the same reason.
+	r.Post("/me/view", s.handleSetUserView)
 }
 
 // mountPermissionRoutes registers the capability-grant family: which of the

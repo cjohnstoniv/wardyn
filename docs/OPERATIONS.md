@@ -2185,6 +2185,7 @@ admin walking the member path, not an incident.
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
+| `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `member_mode: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
 whose whole allowlist is ungranted gets a run with no member-authored egress, not
@@ -2281,6 +2282,21 @@ exiting restores whichever tier you were actually signed in as. It is offered
 over SSO only: the admin token, local mode and a deployment with no identity
 provider are one shared credential with no per-person role to pause, so there is
 nothing to pause and the route answers those callers `400`.
+
+**Viewing as a user type (0.8).** `POST /me/view` with `{"view": "user",
+"user_type": "<id>"}` enters the user view looking through that type: its
+grants, governance profile, drives and run limits bind you exactly as they bind
+a person of that type, beside your own user and group rows, while the tier stays
+clamped to `user` so no admin route opens whatever the type. With no
+`user_type`, the view uses your previous choice (remembered per person, so it
+follows you across devices), then your own mapped type, then the built-in one.
+`{"view": "admin"}` exits. `POST /me/member-mode` still works and uses the same
+default type. A run launched in the view records the type (`user_type` on the
+run and on its `run.create` row, with `user_view: true`). If the type is deleted
+while you are viewing as it, your next request is refused (`403`
+`user_view_type_deleted`, or `409` `admin_view` on a launch) and the view turns
+off; `GET /me` instead answers as your real tier with `user_view_dropped`
+naming the type.
 
 **The no-credential preview — "view as a new member (not signed in)".** The
 same menu offers a second entry, **View as a new member (not signed in)**. It is

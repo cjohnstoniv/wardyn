@@ -502,6 +502,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// enabled:false and the handler answers 200, which is what classMember's
 	// assertNotBlocked probe needs.
 	"POST /api/v1/me/member-mode":              {class: classMember},
+	"POST /api/v1/me/view":                     {class: classMember, body: `{"view":"admin"}`},
 	"POST /api/v1/policies/grade":              {class: classMember},
 	"POST /api/v1/runs":                        {class: classMember},
 	"POST /api/v1/runs/preflight":              {class: classMember},

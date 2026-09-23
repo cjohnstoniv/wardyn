@@ -258,7 +258,7 @@ func TestMemberPreview_SharedRosterDowngradesToThePlainMode(t *testing.T) {
 	}
 }
 
-// TestMemberPreview_RealMemberIsNeverGrantedThePosture is F4. SetMemberMode
+// TestMemberPreview_RealMemberIsNeverGrantedThePosture is F4. SetUserView
 // writes a real member no cookie at all, so echoing their request would report
 // and AUDIT a posture nobody is in — and would make this row's own
 // docs/AUDIT-ACTIONS.md sentence false.

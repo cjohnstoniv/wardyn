@@ -417,6 +417,11 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusForbidden, err.Error())
 				return
 			}
+			// A user view whose type was deleted is refused here, before any
+			// handler reads the tier; GET /me alone drops back (user_view.go).
+			if r = s.userViewGate(w, r); r == nil {
+				return
+			}
 			// Publish the verified human on an api-owned context key so
 			// actorFromRequest attributes the action to the real SSO human
 			// (and IGNORES any X-Wardyn-Principal header — a real identity won).

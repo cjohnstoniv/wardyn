@@ -300,6 +300,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// freezing them on the row would mirror a computation into a column
 		// nothing reads back.
 		AutonomyLevel: autonomy.Level,
+		UserType:      runCreatorUserType(ctx),
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
@@ -378,7 +379,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Mechanism)
 
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor))))
+		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor)))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
 	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject)...)

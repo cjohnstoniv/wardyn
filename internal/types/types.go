@@ -244,6 +244,11 @@ type AgentRun struct {
 	// every run is empty until #97 lands. Migration 0065 adds the column NOT
 	// NULL DEFAULT ''.
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
+	// UserType freezes the user type the run's creator resolved as at create
+	// time: the chosen type for a run launched in the user view, the stamped
+	// one otherwise. Empty for a run with no human creator (admin token, local
+	// mode) or created before migration 0072.
+	UserType string `json:"user_type,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
