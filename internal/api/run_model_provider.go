@@ -145,14 +145,15 @@ func providerRefusal(id string, kind types.ModelProviderKind, state string) runP
 // writeProviderRefusal is enforceRunModelProvider's 422: `provider` and
 // `kind` (#532) name the provider the refusal is about, so the console can
 // open THAT provider's door instead of guessing from the roster. id is ""
-// only when the refusal names no provider at all — mpRunChoose, an ambiguous
-// CHOICE rather than a dead credential, whose remedy is "choose another", not
-// a sign-in — and `reason` (the legacy declared-mechanism gate's
-// llmRefusalAuditReason, "model_credential": one class, one console reader)
-// rides only WITH a named provider, for the same reason.
-func writeProviderRefusal(w http.ResponseWriter, id string, kind types.ModelProviderKind, msg string) {
+// only when the refusal names no provider at all (mpRunChoose). `reason`
+// (llmRefusalAuditReason, "model_credential") rides only on a credential
+// refusal, the one class a sign-in or a stored key repairs: the console
+// already answers that reason with a sign-in and a relaunch, which would
+// repair nothing for a provider that is off, not available to the agent or
+// of a kind with no dispatch arm (multi-provider §5.8: no door).
+func writeProviderRefusal(w http.ResponseWriter, id string, kind types.ModelProviderKind, msg string, credential bool) {
 	body := errorBody{Error: msg, Provider: id, Kind: string(kind)}
-	if id != "" {
+	if credential {
 		body.Reason = llmRefusalAuditReason
 	}
 	writeJSON(w, http.StatusUnprocessableEntity, body)
@@ -205,7 +206,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			// both doors refuse an unreadable provider block (#532) rather than
 			// have one 500 with driver text while the other names the cause.
 			slog.ErrorContext(ctx, "api: get site config for model-provider choice", slog.Any("err", err))
-			writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: mpRunUnreadable})
+			writeError(w, http.StatusServiceUnavailable, mpRunUnreadable)
 			return runProviderChoice{}, false
 		}
 	}
@@ -237,10 +238,10 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		s.denyMemberField(w, r, "runs.model_provider", "capability_model_provider", choice.refusal)
 		return runProviderChoice{}, false
 	case choice.refusal != "":
-		writeProviderRefusal(w, choice.providerID, choice.kind, choice.refusal)
+		writeProviderRefusal(w, choice.providerID, choice.kind, choice.refusal, false)
 		return runProviderChoice{}, false
 	case choice.chosen && !providerKindDispatched[choice.provider.Kind]:
-		writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunNotYet, choice.provider.ID))
+		writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunNotYet, choice.provider.ID), false)
 		return runProviderChoice{}, false
 	case choice.chosen:
 		// Liveness, the check dispatch repeats: the caller's OWN credential for
@@ -248,14 +249,13 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		// dispatch reads for this run).
 		msg, err := s.providerCredentialRefusal(ctx, runIdentitySubject(ctx, principalFromRequest(r)), choice.provider)
 		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, errorBody{
-				Error:    fmt.Sprintf(mpRunCredUnreadable, choice.provider.ID),
-				Provider: choice.provider.ID, Kind: string(choice.provider.Kind),
-			})
+			// The sentence alone: a transient store failure is no door
+			// (multi-provider §5.8), and `provider` is what keys one.
+			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf(mpRunCredUnreadable, choice.provider.ID))
 			return runProviderChoice{}, false
 		}
 		if msg != "" {
-			writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, msg)
+			writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, msg, providerCredentialMissing(msg))
 			return runProviderChoice{}, false
 		}
 	}
