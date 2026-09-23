@@ -740,9 +740,12 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
 // allows a non-standard exit only if it is advised on entry, so the chord and
 // its announcement are one feature: either alone still fails the criterion.
 //
-// The chord is Ctrl+] and not the filed proposal's Ctrl+Shift+Esc — Windows
-// intercepts that at OS level (Task Manager) before the browser sees it, so
-// on the platform most likely to need it the exit would silently not exist.
+// The advertised chord is Ctrl+Shift+Backspace (#133) — the earlier Ctrl+]
+// never fired on DE/FR/ES layouts, where AltGr (needed to type `]`) arrives
+// at the browser as ctrlKey && altKey. Ctrl+] still works, silently,
+// as a US-only fallback, but must not fire when altKey is held — that is
+// AltGr typing a bracket, not the chord. The per-layout matrix lives in
+// attach-terminal-keys.test.ts; these tests pin the wiring into the widget.
 describe("AttachTerminal — the keyboard trap has an advertised exit", () => {
   // ticket: F144
   beforeEach(() => {
@@ -755,9 +758,9 @@ describe("AttachTerminal — the keyboard trap has an advertised exit", () => {
   const chord = () =>
     ({
       type: "keydown",
-      key: "]",
+      key: "Backspace",
       ctrlKey: true,
-      shiftKey: false,
+      shiftKey: true,
       altKey: false,
       metaKey: false,
     }) as unknown as KeyboardEvent;
@@ -772,7 +775,7 @@ describe("AttachTerminal — the keyboard trap has an advertised exit", () => {
     ).not.toBeNull();
   });
 
-  it("Ctrl+] moves focus OUT of the terminal and is not forwarded to the PTY", () => {
+  it("Ctrl+Shift+Backspace moves focus OUT of the terminal and is not forwarded to the PTY", () => {
     render(<AttachTerminal runId="run_1" />);
     act(() => FakeWebSocket.instances[0].open());
     expect(keyHandler).not.toBeNull();
@@ -788,18 +791,25 @@ describe("AttachTerminal — the keyboard trap has an advertised exit", () => {
     expect((document.activeElement as HTMLElement).tabIndex).toBe(-1);
   });
 
+  it("Ctrl+] (US, no AltGr) still escapes silently", () => {
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+    const bracket = { ...chord(), key: "]", shiftKey: false } as unknown as KeyboardEvent;
+    expect(keyHandler!(bracket)).toBe(false);
+  });
+
+  it("Ctrl+] with altKey held (DE AltGr+9 typing a bracket) reaches the PTY, not the escape", () => {
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+    const altGr = { ...chord(), key: "]", shiftKey: false, altKey: true } as unknown as KeyboardEvent;
+    expect(keyHandler!(altGr)).toBe(true);
+  });
+
   it("leaves an ordinary ] alone — the terminal still gets its bracket", () => {
     render(<AttachTerminal runId="run_1" />);
     act(() => FakeWebSocket.instances[0].open());
-    const plain = { ...chord(), ctrlKey: false } as unknown as KeyboardEvent;
+    const plain = { ...chord(), key: "]", shiftKey: false, ctrlKey: false } as unknown as KeyboardEvent;
     expect(keyHandler!(plain)).toBe(true);
-  });
-
-  it("leaves Ctrl+Shift+] alone — one chord, no near-miss that also escapes", () => {
-    render(<AttachTerminal runId="run_1" />);
-    act(() => FakeWebSocket.instances[0].open());
-    const near = { ...chord(), shiftKey: true } as unknown as KeyboardEvent;
-    expect(keyHandler!(near)).toBe(true);
   });
 });
 

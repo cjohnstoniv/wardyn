@@ -695,6 +695,10 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await page.getByLabel("Title").fill("e2e plain refusal");
     await page.getByRole("button", { name: "Launch run" }).click();
     await expect(page.getByText(refusal)).toBeVisible();
+    // #459: the refusal is an announced alert region, sr-only prefix + the
+    // server's own sentence, unchanged. No dialog opens here to aria-hide it.
+    await expect(page.getByRole("alert")).toContainText("Launch failed");
+    await expect(page.getByRole("alert")).toContainText(refusal);
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
   });

@@ -7,6 +7,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { SIGNIN } from "../src/app/lib/sign-in-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "../src/app/lib/people-access-copy";
 
 // Auth / sign-in lane.
 //
@@ -330,6 +331,61 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
     await expect(alert).toBeVisible();
     await expect(alert).toHaveText(SIGNIN.EMAIL_DOMAIN);
     await expect(alert).not.toContainText("WARDYN_OIDC_EMAIL_DOMAINS");
+  });
+});
+
+// #484 — the admin-written request-access help, published on the anonymous
+// /healthz and shown under the four refusals a person cannot clear alone.
+// /healthz is mocked at the network boundary, like the SSO-only specs above.
+test.describe("admin-written help under a sign-in refusal (#484)", () => {
+  const HELP_TEXT = `Ask in #it-helpdesk — it's "Wardyn access" you want. <b>not bold</b>`;
+  const HELP_URL = "https://it.corp.example/request";
+
+  async function mockHelp(page: Page): Promise<void> {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          sso: true,
+          token_login: true,
+          sign_in_help_text: HELP_TEXT,
+          sign_in_help_url: HELP_URL,
+        }),
+      }),
+    );
+  }
+
+  test("the no_role refusal shows Wardyn's sentence first, then the admin's text and Request access", async ({ page }) => {
+    await mockHelp(page);
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=no_role");
+
+    const alert = page.getByRole("alert");
+    await expect(alert).toHaveText(SIGNIN.NO_ROLE);
+    const help = page.getByTestId("sign-in-help");
+    // Literal text: the markup in it is characters, never an element.
+    await expect(help.getByText(HELP_TEXT, { exact: true })).toBeVisible();
+    await expect(help.locator("b")).toHaveCount(0);
+    const link = help.getByRole("link", { name: SIGNIN_HELP_LINK_LABEL });
+    await expect(link).toHaveAttribute("href", HELP_URL);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    // Wardyn's own sentence stays first.
+    const [alertBox, helpBox] = await Promise.all([alert.boundingBox(), help.boundingBox()]);
+    expect(alertBox && helpBox && helpBox.y > alertBox.y).toBe(true);
+  });
+
+  test("a timeout refusal gets nothing extra", async ({ page }) => {
+    await mockHelp(page);
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=oidc_transient");
+
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in with SSO" })).toBeVisible();
+    await expect(page.getByTestId("sign-in-help")).toHaveCount(0);
+    await expect(page.getByText(HELP_TEXT)).toHaveCount(0);
   });
 });
 

@@ -46,6 +46,8 @@ vi.mock("../../../lib/api/health", () => ({
     // (its own independent fetch) both GET the site config — default to the
     // unconfigured zero value.
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    // #484's People-step help card reads the same document with its ETag.
+    getSiteConfigSnapshot: () => getSiteConfigMock().then((siteConfig: unknown) => ({ siteConfig, etag: null })),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
     // Corporate network's connectivity gate (corp-network-step.tsx) — the
     // walkthroughs below aren't testing the gate itself, so they clear it with

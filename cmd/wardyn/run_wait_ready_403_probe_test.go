@@ -181,10 +181,15 @@ func TestWaitReady_TransientFilesStatusesAreRetried(t *testing.T) {
 			srv, counts := countingReadyServer(t, runID, tc.status, tc.body)
 			c := &sdk.Client{BaseURL: srv.URL}
 
-			// The deadline has to outlast TWO polls on a loaded runner, not one:
-			// this case asserts the status was retried, and `make release-check`
-			// runs several suites at once, where a single poll can outlast a
-			// 30 ms budget and leave one poll behind.
+			// A TIMING BUDGET, deliberately, and the one thing to know before
+			// changing it: the case asserts the status was RETRIED, so the
+			// deadline has to outlast two polls of waitPollInterval (1 ms here)
+			// plus two loopback round trips. 30 ms did not survive
+			// `make release-check`, which runs several suites at once; 500 ms is
+			// ~250x the work being timed. A fully deterministic version would
+			// have to drive waitForRunReady's own clock, which means a seam in
+			// production code for a test-only concern — not worth it while the
+			// margin is this wide, but that is the fix if this ever flakes again.
 			_, err := waitForRunReady(context.Background(), c, runID, 500*time.Millisecond, false)
 			var ee *exitError
 			if !errors.As(err, &ee) || ee.code != 124 {

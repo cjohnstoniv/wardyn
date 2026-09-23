@@ -270,8 +270,18 @@ describe("roleCanReach — pure", () => {
   });
 
   it("an admin can reach an operator-only route; a security admin cannot", () => {
-    expect(roleCanReach("/drives", "admin")).toBe(true);
-    expect(roleCanReach("/drives", "security_admin")).toBe(false);
+    expect(roleCanReach("/admin/providers", "admin")).toBe(true);
+    expect(roleCanReach("/admin/providers", "security_admin")).toBe(false);
+  });
+
+  it("a security admin's return path to Drives is honoured (its grants are theirs)", () => {
+    expect(roleCanReach("/admin/drives", "security_admin")).toBe(true);
+  });
+
+  it("a user reaches their own account page but nothing in the Admin view", () => {
+    expect(roleCanReach("/account", "member")).toBe(true);
+    expect(roleCanReach("/admin/audit", "member")).toBe(false);
+    expect(roleCanReach("/admin/runs", "member")).toBe(false);
   });
 
   it("a member reaches their own three-screen surface, including sub-routes", () => {
