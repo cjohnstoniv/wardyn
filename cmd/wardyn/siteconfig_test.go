@@ -276,7 +276,7 @@ func TestSiteConfigApply_NoOmittedFieldsNoteIsSilent(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 	if strings.Contains(stderr, "left as the server already has it") {
-		t.Errorf("stderr = %q, want no F285 note when the file omits nothing", stderr)
+		t.Errorf("stderr = %q, want no omitted-fields note when the file omits nothing", stderr)
 	}
 }
 
@@ -296,6 +296,6 @@ func TestSiteConfigApply_NoOmittedFieldsNoteOnRejectedApply(t *testing.T) {
 		t.Fatalf("apply against a 500 server: want an error, got none")
 	}
 	if strings.Contains(stderr, "left as the server already has it") {
-		t.Errorf("stderr = %q, want no F285 note when PutSiteConfig failed", stderr)
+		t.Errorf("stderr = %q, want no omitted-fields note when PutSiteConfig failed", stderr)
 	}
 }

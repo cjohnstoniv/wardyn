@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// TestPGConcurrencyProofsRunUnderRace is the pin for the finding.
-//
 // internal/broker/concurrency_pg_test.go's exactly-once proofs
 // (TestPG_ConcurrentMint_ExactlyOnceWins,
 // TestPG_ConcurrentMint_AutoApprovalGrant_Independent,

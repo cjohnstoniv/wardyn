@@ -58,8 +58,8 @@ func (r3IntegStore) ListRunsPage(context.Context, store.Page) ([]types.AgentRun,
 	return nil, nil
 }
 
-// TestIntegrationProjectionWithholdsCredentialRefs is the finding (GET /integrations)
-// and the finding (GET /setup/status) — one projection, both routes.
+// TestIntegrationProjectionWithholdsCredentialRefs covers GET /integrations
+// and GET /setup/status — one projection, both routes.
 //
 // routes.go called GET /integrations "the same RBAC posture as site-config's
 // GET", and that claim went false when site-config's GET moved to operatorOnly
@@ -136,7 +136,7 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 		})
 	}
 
-	// the finding RESIDUE. The projection KEEPS Capabilities on purpose — a member's
+	// A RESIDUE. The projection KEEPS Capabilities on purpose — a member's
 	// launch card needs the live matrix — but a capability REASON is DERIVED
 	// from the four fields the projection drops: gatedCap's needs_setup reason
 	// interpolates the credential ref verbatim (`secret %q not stored`,

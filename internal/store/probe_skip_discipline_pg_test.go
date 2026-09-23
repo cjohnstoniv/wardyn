@@ -72,7 +72,7 @@ func storeSkipOrFatal(t *testing.T, pool *pgxpool.Pool, format string, args ...a
 
 // TestPG_ProbeF11_StoreLaneCannotSilentlySelfSkip pins the derivation itself, the
 // way internal/db's sibling does. On the lane CI actually runs — superuser, URL-
-// form DSN — every the finding probe in this package MUST be in fail-not-skip mode; if
+// form DSN — every audit-chain probe in this package MUST be in fail-not-skip mode; if
 // that stops being true, the tamper and splice probes can go back to reporting
 // `ok` while proving nothing.
 //

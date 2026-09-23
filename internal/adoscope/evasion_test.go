@@ -319,7 +319,7 @@ func TestEvasionBatchCrossOrg(t *testing.T) {
 	})
 }
 
-// the finding — the token surface is wider than one area name. Every one of these is a
+// The token surface is wider than one area name. Every one of these is a
 // documented door onto an access token or a session.
 func TestEvasionWiderTokenSurface(t *testing.T) {
 	runCases(t, []caseT{
@@ -330,7 +330,7 @@ func TestEvasionWiderTokenSurface(t *testing.T) {
 	})
 }
 
-// the finding — a header map whose keys were never canonicalised. http.Header.Values
+// A header map whose keys were never canonicalised. http.Header.Values
 // canonicalises the key it is GIVEN but not the keys already in the map, so a
 // caller that built the map by hand (or a proxy that preserved the wire
 // spelling) hid the override header from this package entirely.

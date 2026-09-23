@@ -12,8 +12,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestDriveGrantHomeOverrideIsBackendChecked .
-//
 // types.ValidateUserDriveGrant holds only the grant ROW, so it cannot see which
 // substrate the drive it points at lands on, and it applies the DOCKER segment
 // rule as the looser of the two. A k8s backend enforces DNS-1123 — no `_`, no

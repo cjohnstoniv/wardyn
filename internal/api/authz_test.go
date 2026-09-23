@@ -1086,7 +1086,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		}
 		// Every owner-scoped route is probed, not a subset: the count is what
 		// catches a route that silently leaves classOwner.
-		// 17 since the finding moved GET /workspaces/{id}/env-as-code here from
+		// 17 since GET /workspaces/{id}/env-as-code moved here from
 		// classMember (its emitted files are the operator's authored
 		// environment, and its write twin was already operatorOnly).
 		if probed != 17 {

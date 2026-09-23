@@ -56,7 +56,7 @@ func r3bCaptureStdout(t *testing.T, fn func()) string {
 	return out
 }
 
-// TestR3BListCmdsWarnOnTruncation is the finding's CLI half: a list command against a
+// TestR3BListCmdsWarnOnTruncation is the CLI half of the truncation contract: a list command against a
 // page the server flagged truncated printed the rows, exited 0, wrote nothing to
 // stderr and left no marker in --json — indistinguishable from a complete list.
 // `wardyn audit` has warned on exactly this signal since W16-S1-2; the four list

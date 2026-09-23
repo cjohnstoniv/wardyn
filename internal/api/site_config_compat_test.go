@@ -22,8 +22,6 @@ var siteConfigKeysV066 = []string{
 	"egress_redirects", "scm_hosts", "integrations",
 }
 
-// TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName .
-//
 // PUT /site-config is a whole-document replace, so a v0.6.6 `site-config get |
 // edit | apply` round trip re-marshals a struct that has no field for anything
 // 0.7 added — and the newer keys are simply absent from the body. The handler

@@ -804,8 +804,6 @@ func TestCapabilities_SessionRecordingFollowsRecordConfig(t *testing.T) {
 	}
 }
 
-// TestApplyDiskQuota_NonXFSOverlay2FailsClosedNamingXFS .
-//
 // overlay2 over ext4 is the DEFAULT on Docker Desktop / WSL2 and on stock
 // Ubuntu/Debian, and a policy carrying disk_mib > 0 there has always failed the
 // run: the size opt went on the create and the daemon refused it. That refusal

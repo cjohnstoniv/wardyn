@@ -16,8 +16,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestCapabilityWorkspaceValueIsCanonicalized .
-//
 // The SUBJECT half of a capability grant is canonicalized at the write boundary
 // (group subjects through oidc.CanonicalGroupSubject, user subjects lowercased)
 // and the egress_host VALUE gets the proxy's own shape check. The workspace
@@ -113,7 +111,7 @@ func TestCapabilityWorkspaceValueIsCanonicalized(t *testing.T) {
 		}
 	})
 
-	// SECRET AND INTEGRATION are the sibling kinds the finding's title names, and this
+	// SECRET AND INTEGRATION are the sibling kinds of the same defect, and this
 	// subtest used to pin the defect: it asserted "Acme-Prod-DB" was stored
 	// verbatim for capSecret, on a rationale that was inverted. secretNameRE
 	// forbids uppercase in every stored secret name and integrationRefRE does
@@ -173,7 +171,7 @@ func (s *inertGrantStore) GetCapabilityEnforcement(context.Context) (map[string]
 	return map[string]bool{capWorkspace: true}, nil
 }
 
-// TestListPermissionsMarksRowsThatCanNeverMatch is the finding's second residual: the
+// TestListPermissionsMarksRowsThatCanNeverMatch pins a second residual: the
 // value rule is a WRITE-boundary rule, and capability_grants shipped in v0.6.0.
 //
 // Every non-canonical row written before it survives the upgrade unchanged and

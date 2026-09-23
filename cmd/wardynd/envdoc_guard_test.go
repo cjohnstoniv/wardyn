@@ -398,7 +398,7 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 }
 
 // envDocE2EShellFiles are the Playwright-e2e-backend shell scripts whose
-// WARDYN_E2E_* reads must also stay documented — the finding. readVars above walks
+// WARDYN_E2E_* reads must also stay documented. readVars above walks
 // only non-test .go under envDocRoots, so a var read EXCLUSIVELY by one of
 // these scripts (WARDYN_E2E_PG_HOSTPORT chief among them: the one var an
 // operator must set to run the UI e2e gate on a shared box) was invisible to
@@ -409,7 +409,7 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 // Deliberately a curated FILE list, not a recursive scripts/+test/ walk: the
 // rest of scripts/ (the demo-recording and ci-run harnesses chief among them)
 // reads dozens of its own WARDYN_* vars that are real, but out of scope for
-// the finding and not audited here — documenting those is separate work with its
+// this guard and not audited here — documenting those is separate work with its
 // own review, not a side effect of closing this gap.
 var envDocE2EShellFiles = []string{
 	"scripts/e2e-backend.sh",

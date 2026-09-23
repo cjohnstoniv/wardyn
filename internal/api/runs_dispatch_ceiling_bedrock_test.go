@@ -55,8 +55,6 @@ func ceilingBedrockFixture(t *testing.T, cfg Config) (*Server, *recRecorder, typ
 	return srv, audit, run, llm, sandboxEnv, policy
 }
 
-// TestCeilingReassert_WithholdsTheResidentBedrockLane .
-//
 // The re-assertion dropped the Bedrock BEARER injection — a bearer rides an
 // injection rule and injection rules are filtered by host — but the bearer is
 // the one Bedrock mode that is never resident. A profile denying the Bedrock

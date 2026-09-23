@@ -139,7 +139,7 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/permissions/grants", "the `/permissions` routes below"},
 	{"DELETE /api/v1/permissions/grants/{id}", "the `/permissions` routes below"},
 
-	// the finding's ten previously-undocumented gated routes (below), rowed in this
+	// The ten previously-undocumented gated routes (below), rowed in this
 	// docs pass. Moved OUT of docTierUndocumented, which is now empty.
 	{"POST /api/v1/sources", "the `/sources` writes"},
 	{"POST /api/v1/sources/{id}/scan", "the `/sources` writes"},

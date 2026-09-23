@@ -22,14 +22,14 @@ import (
 // with no coverage row — the exact "silently allowed" outcome the arm's own doc
 // comment says it prevents.
 //
-// The NEGATIVE control moved to the METHOD axis when the finding made the default arm
+// The NEGATIVE control moved to the METHOD axis when the default arm was made
 // fail-closed: a POST the classifiers have no extractor for is now scanOpaque
 // (the sandbox picks the suffix and the vendor adds endpoints, so an enumerated
 // allowlist cannot be the fail-closed boundary), while a bodiless GET is what
 // still classifies quiet. The parity claim above is unchanged — a named
 // prompt-bearing arm must answer the same for both spellings — but a row
 // asserting "POST <unlisted> == scanNone" would now be pinning the very gap
-// the finding closed, so it is stated as scanOpaque here.
+// that was closed, so it is stated as scanOpaque here.
 func TestClassifyLLMBothSpellingsOfEveryPromptBearingArm(t *testing.T) {
 	names := map[int]string{scanNone: "scanNone", scanMessages: "scanMessages", scanOpaque: "scanOpaque"}
 	cases := []struct {

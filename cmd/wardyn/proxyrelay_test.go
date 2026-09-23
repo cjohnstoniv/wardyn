@@ -129,7 +129,7 @@ func TestRelayConn_UnreachableUpstreamClosesTheClient(t *testing.T) {
 }
 
 // The default is a SECURITY decision that TestProxyRelay_ListenDefaults pins,
-// and the finding's point is that it was nowhere in the operator's view: the caveat
+// and it was nowhere in the operator's view: the caveat
 // ("this exposes the corp proxy to anything that can reach the listen address")
 // lived only in a source comment, so `--help` described 0.0.0.0 as merely
 // "address to listen on" and the running relay printed only which ports it was

@@ -6,7 +6,7 @@ package db
 // PINS for the two review findings against 0057_audit_chain_security_definer.sql
 // (fixed by 0058_audit_chain_schema_qualified.sql):
 //
-//	the finding — the pinned `search_path = pg_catalog, public` made the SECURITY
+//	First  — the pinned `search_path = pg_catalog, public` made the SECURITY
 //	       DEFINER body resolve `audit_events` and `audit_row_hash` in public
 //	       rather than in the schema the migrations actually ran against. On a
 //	       deployment with nothing in public that is `relation "audit_events"
@@ -15,7 +15,7 @@ package db
 //	       Wardyn schema it is quieter and worse — the head read crosses into
 //	       the wrong table and the chain never links.
 //
-//	the finding — that same path omitted `pg_temp`, and PostgreSQL searches the
+//	Second — that same path omitted `pg_temp`, and PostgreSQL searches the
 //	       session temp schema FIRST for relation names when it is not listed.
 //	       A caller could therefore `CREATE TEMP TABLE audit_events(...)`,
 //	       seed it, and have the definer-privileged head read come back with a

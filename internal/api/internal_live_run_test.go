@@ -75,8 +75,6 @@ func internalDoors(runID, grantID uuid.UUID) []struct {
 	}
 }
 
-// TestInternalAuth_TerminalRunIsRefusedAtEveryDoor .
-//
 // internalAuth verified signature, expiry, audience and the revocation list —
 // but revokeRunCascade is best-effort (Identity.RevokeRun's error is audited and
 // swallowed, Broker.RevokeRun is audit-only), so a run that went terminal while

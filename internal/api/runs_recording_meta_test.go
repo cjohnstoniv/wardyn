@@ -36,7 +36,7 @@ func (c *countingRecordingStore) StatAndTail(ctx context.Context, key string, n 
 	return c.Store.StatAndTail(ctx, key, n)
 }
 
-// TestProjectRecordingMeta_ListAndGet pins R4-F077: GET /runs?include=recording_meta
+// TestProjectRecordingMeta_ListAndGet pins the recording_meta projection: GET /runs?include=recording_meta
 // and GET /runs/{id}?include=recording_meta must answer
 // has_recording/recording_bytes/recording_duration_sec from
 // RecordingStore.StatAndTail alone — no OpenCast, no download of the whole
@@ -137,8 +137,8 @@ func TestProjectRecordingMeta_ListAndGet(t *testing.T) {
 }
 
 // TestProjectRecordingMeta_NilStoreIsNoop: a deployment with no recording
-// store configured (a stock Helm install, persistence.enabled=false — see
-// the finding) must not fail the run list; every run just reports has_recording=false.
+// store configured (a stock Helm install, persistence.enabled=false)
+// must not fail the run list; every run just reports has_recording=false.
 func TestProjectRecordingMeta_NilStoreIsNoop(t *testing.T) {
 	ast := newAuthzStore()
 	h := newHarness(t)

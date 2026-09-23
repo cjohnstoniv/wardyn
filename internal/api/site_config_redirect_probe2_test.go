@@ -307,7 +307,7 @@ func TestRedirectProbeScript_Probe2ReadsTheConnectFact(t *testing.T) {
 	}
 }
 
-// TestRedirectStateTableDocumentsTheUntestedVerdict (the finding, adversarial fix-up)
+// TestRedirectStateTableDocumentsTheUntestedVerdict (adversarial fix-up)
 // pins docs/OPERATIONS.md's test-redirect state table to the verdict this round
 // introduced.
 //

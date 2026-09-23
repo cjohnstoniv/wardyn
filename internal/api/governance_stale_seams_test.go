@@ -20,9 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded is the finding's cross-cutting half.
-//
-// the finding is that a member-reachable groups_snapshot_stale 403 left no
+// The defect was that a member-reachable groups_snapshot_stale 403 left no
 // authz.denied row, against docs/OPERATIONS.md's "Every denial that isn't a
 // 404" section's categorical claim that every member denial which is not a
 // plain foreign-resource 404 is audited. The
@@ -36,7 +34,7 @@ import (
 // THAT ARGUMENT IS ONLY TRUE WHILE THE DECIDING SITES ARE THE ONLY SOURCE. A
 // seam that raised errGroupsSnapshotStale itself — a new resolver, a copy of the
 // unusable-groups arm, a shortcut that skips effectiveCeiling — would refuse a
-// member with the documented sentence and record nothing, which is the finding again at
+// member with the documented sentence and record nothing, which is the same defect again at
 // a site nobody thought to look at. Nothing executed that claim; the seams are
 // spread across policies.go, secrets.go, inline_policy.go,
 // runs_create_validate.go, workspace_run.go, profile.go and user_drives.go, and
@@ -62,7 +60,7 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 			t.Errorf("%s raises errGroupsSnapshotStale, which is a member-reachable 403, but it is not one of "+
 				"the deciding sites that record it. Either resolve through effectiveCeiling / resolveUserDrive "+
 				"so an existing site decides, or emit authz.denied here — a refusal with no row is the whole "+
-				"of F227, and docs/OPERATIONS.md's \"Every denial that isn't a 404\" section says every member "+
+				"of the defect, and docs/OPERATIONS.md's \"Every denial that isn't a 404\" section says every member "+
 				"denial that is not a foreign-resource 404 is audited", name)
 		}
 	}
@@ -74,7 +72,7 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 		if !records[name] {
 			t.Errorf("%s decides the groups_snapshot_stale refusal and no longer calls recordAudit: the "+
 				"denial stream is the operator's only view of who cannot use the product, and this is the "+
-				"site F227 put the row at", name)
+				"site the audit row was put at", name)
 		}
 	}
 }
@@ -157,8 +155,6 @@ func callsNamed(fn *ast.FuncDecl, name string) bool {
 	return found
 }
 
-// TestDrivePreviewWritesNoDenial is the finding's residue.
-//
 // The emit landed at the deciding sites, and BOTH of them are reached by the
 // admin drive preview: drivePreviewDoorIsOpen resolves the previewed principal's
 // ceiling, previewResolveUserDrive resolves their drive. So an admin asking
@@ -170,7 +166,7 @@ func callsNamed(fn *ast.FuncDecl, name string) bool {
 // handlePreviewUserDrive's own doc has always said this endpoint is "STILL NOT
 // AUDITED … nothing is minted and nothing changes", so the tree stated the rule
 // and then broke it. A denial stream with the wrong person in it is worse than
-// the silence the finding set out to fix: the silence was at least honest about who had
+// the silence the audit row set out to fix: the silence was at least honest about who had
 // been refused.
 func TestDrivePreviewWritesNoDenial(t *testing.T) {
 	st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: true}

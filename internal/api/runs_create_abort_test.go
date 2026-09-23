@@ -84,8 +84,6 @@ func abortHarness(t *testing.T, wrap func(store.Store) store.Store) (*Server, *f
 	return srv, brk, audit, pool
 }
 
-// TestCreateRun_GrantFailureAfterCreateRunFinalizesTheRun .
-//
 // handleCreateRun's post-CreateRun early returns answered 500 and walked away:
 // the run row stayed PENDING, the identity minted one line earlier was never
 // revoked and no run.create row was ever written — a ghost run holding a live

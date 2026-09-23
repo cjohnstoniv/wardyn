@@ -68,7 +68,7 @@ func r3bJWKS(t *testing.T, extra ...string) (jwksURL, token string) {
 	return srv.URL, token
 }
 
-// TestR3BJWKSSurvivesAnUnrepresentableKey is the finding's pin, and its scope is
+// TestR3BJWKSSurvivesAnUnrepresentableKey is a narrow pin, and its scope is
 // EXACTLY the dependency floor — not the broader property the commit that added
 // it claimed.
 //

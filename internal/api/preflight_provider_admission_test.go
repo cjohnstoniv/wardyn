@@ -36,8 +36,6 @@ func firePreflightAndCreate(t *testing.T, sc types.SiteConfig, repo, body string
 	return fire("/api/v1/runs/preflight"), fire("/api/v1/runs")
 }
 
-// TestPreflightAnswersTheSameProviderRefusalAsCreate .
-//
 // handlePreflightRun reproduced resolveRunPolicy's 4xx set, the workspace seed
 // and the confinement floor — but NOT requestRepoProviderRefusals, the gate
 // over the two FREE-TEXT repository fields. So Review showed a clean checklist

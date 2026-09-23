@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// P0.3 (R3-F001 / R3-F108 / R3-F145) — an egress_domain approval is HOST-WIDE,
+// P0.3 — an egress_domain approval is HOST-WIDE,
 // on every port, and 0.7.2's decision is to keep it that way and make the
 // surfaces SAY so rather than leave it resting on a caller's convention one call
 // site away. The convention is real (evaluate's splitHostPort removes the port

@@ -18,7 +18,7 @@ import (
 
 // TestAllowedExactHostAcceptsAnAuthoredPort pins the consumer half of
 // the port-qualification contradiction. The dispatch producer writes a
-// token-bearing redirect as "m.corp:443" (the finding: never bare, so a literal-IP `to`
+// token-bearing redirect as "m.corp:443" (never bare, so a literal-IP `to`
 // cannot open :22 as well) while the paired injection rule host is BARE — the
 // shape buildInjector's exact-allowlist binding has always required. Both halves
 // were individually right; together they made buildInjector, and therefore

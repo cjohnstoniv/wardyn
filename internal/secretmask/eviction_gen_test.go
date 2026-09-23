@@ -10,7 +10,7 @@ import (
 )
 
 // TestEvict_GenerationBumpsOnlyOnARealDelete pins the verifier's correction.
-// The finding's own fix — make RunIDs return the cache-only ids too —
+// The original fix — make RunIDs return the cache-only ids too —
 // is only safe alongside this one: Evict bumped gen UNCONDITIONALLY, and gen is
 // the cache key for EVERY run, so a sweep that newly evicts N cache-only ids
 // would invalidate every live run's cached Masker N times and re-derive it

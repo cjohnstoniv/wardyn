@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// TestSpoolRestartReplaysOnlyTheInFlightBatch .
-//
 // Drain retires work by advancing a byte cursor and only REWRITES the file when
 // the reclaim pays for itself (at least half), so between compactions the cursor
 // is the only record of what already reached the store. It lived in memory, so a

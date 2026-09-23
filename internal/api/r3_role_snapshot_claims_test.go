@@ -20,8 +20,6 @@ import (
 // review rather than silently inverted a second time.
 var refreshAPITokenIdentityExists func(store.Store, context.Context, string, string, []string, bool) error = store.Store.RefreshAPITokenIdentity
 
-// TestRoleSnapshotClaimsMatchTheRefreshThatShipped .
-//
 // The role-mapping WARN told operators "a token's role is frozen at mint and no
 // sign-in refreshes it" — in the same release that gave the token lane the login
 // hook the key lane had since 0046 (store.RefreshAPITokenRoles; CHANGELOG 0.7
@@ -30,7 +28,7 @@ var refreshAPITokenIdentityExists func(store.Store, context.Context, string, str
 // operator acting on a stale remedy line either does unnecessary work or
 // assumes a bound that is not there.
 //
-// The demotion path has since gained a second, sharper answer (the finding: the edit
+// The demotion path has since gained a second, sharper answer (the edit
 // revokes what it demotes), so the line now has THREE true things to keep
 // straight at once. This pins all three rather than banning one sentence.
 func TestRoleSnapshotClaimsMatchTheRefreshThatShipped(t *testing.T) {

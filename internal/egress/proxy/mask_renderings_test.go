@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// the finding — the proxy-side mask registers per RENDERING, not per credential.
+// The proxy-side mask registers per RENDERING, not per credential.
 //
 // procRegistry is what stands between a proxy-held credential and every
 // sandbox-facing error body (Proxy.httpError -> maskDecisionBytes) and every

@@ -178,7 +178,7 @@ func TestNewSessionRecorder_MasksSecretSplitAcrossWrites(t *testing.T) {
 	cast := string(body)
 
 	// THE headline assertion of this test, and the one that could not fire
-	// before the finding: the secret is split across two writes, so it lands in two
+	// against the raw framed bytes: the secret is split across two writes, so it lands in two
 	// different "o" events and never appears contiguously in the framed bytes.
 	// It has to be looked for in the reassembled output.
 	assertCastHasNoSecret(t, cast, secret, "boundary-split secret")

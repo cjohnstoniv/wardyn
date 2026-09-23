@@ -110,7 +110,7 @@ func r3MemberPreflightBody(t *testing.T, n int) string {
 	return string(body)
 }
 
-// TestOwnedSecretReadsAreFlatInCallerInput is the finding's growth law for the half
+// TestOwnedSecretReadsAreFlatInCallerInput is the growth law for the half
 // capBatch did not close.
 //
 // capBatch made the egress loop's store reads flat in len(allowed_domains) and
@@ -164,7 +164,7 @@ func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 	}
 }
 
-// TestMemberPipelineOwnedSecretReadsPerSite is the finding's pin: the THREE sibling
+// TestMemberPipelineOwnedSecretReadsPerSite pins the THREE sibling
 // per-grant ownsSecret loops capBatch left standing, asserted one at a time.
 //
 // The end-to-end pin above proves the request installs a memo; this proves each

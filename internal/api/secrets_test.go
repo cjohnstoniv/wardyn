@@ -632,7 +632,7 @@ func (d secretOwnerDirectory) ListWorkspaces(context.Context) ([]types.Workspace
 // signed in yet is the affordance, and refusing a subject merely because nobody
 // has seen it would break it. What made that indistinguishable from a typo is
 // that both answer 204 with an outcome=success row — and the typo's namespace is
-// one the owner's runs will never read, which is the silent no-op the finding is about
+// one the owner's runs will never read, which is a silent no-op
 // for the admitted population.
 //
 // So: the STATUS is unchanged (refusing is what the affordance rules out) and

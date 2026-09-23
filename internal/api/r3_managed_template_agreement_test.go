@@ -10,8 +10,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestManagedTemplateWriteAndResolveAgree is the finding's structural half, and it is
-// the check the finding says would have caught the change that caused it: the
+// TestManagedTemplateWriteAndResolveAgree is the structural half, and it is
+// the check that would have caught the change that caused the defect: the
 // managed non-hash rule was WIDENED at the write boundary and the resolver's
 // defence-in-depth copy was left matching email_local alone, so a managed drive
 // templated on `sub` was refused on write and still mounted — publishing the

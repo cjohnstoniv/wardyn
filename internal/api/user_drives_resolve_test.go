@@ -664,7 +664,7 @@ func TestResolveUserDrive(t *testing.T) {
 		if !strings.Contains(err.Error(), "drive: this deployment cannot mount your drive (") {
 			t.Errorf("err = %v, want the frozen REFUSED_BACKEND shape", err)
 		}
-		// the finding's residue. The parenthesised half — the ONLY half a member reads
+		// A residue. The parenthesised half — the ONLY half a member reads
 		// for a reason — said "its directory name comes from your email address".
 		// For a `sub` row that is simply false: the email claim had no part in
 		// it, and a member told to look at their email address cannot act on the
@@ -902,7 +902,7 @@ func previewDriveHTTP(t *testing.T, srv *Server, users, groups []string) *httpte
 func TestPreviewUserDrive(t *testing.T) {
 	t.Run("a match is answered with the object name", func(t *testing.T) {
 		// A STATIC PVC ON `sub` (R1, lane core's handoff). The pair this
-		// previously used — k8s_pvc_static + `email_local` — is the shape the finding
+		// previously used — k8s_pvc_static + `email_local` — is the shape Wardyn now
 		// refuses: Wardyn MINTS the claim name for a static PVC, so an
 		// email-local home folds two addresses that share a local part onto one
 		// claim. Retargeted rather than deleted, because every assertion below
@@ -961,7 +961,7 @@ func TestPreviewUserDrive(t *testing.T) {
 
 	// AN EMAIL-LOCAL PREVIEW, restored here by R1's fixture change rather
 	// than lost with it. The subtest above previewed `email_local` until that
-	// pairing became the shape the finding refuses, and retargeting it to `sub` left
+	// pairing became a refused shape, and retargeting it to `sub` left
 	// the endpoint with no email-local coverage at all — so the template most
 	// share deployments actually use would have had its preview answered by
 	// nothing.
@@ -1731,7 +1731,7 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 // logs WARN "a run was refused its drive" — for a run that never existed. An
 // operator watching either signal saw members being turned away from their
 // drives every time an admin opened the drives screen; /me was converted to the
-// decision (driveBindFailureHere) by the finding and pinned by
+// decision (driveBindFailureHere) earlier and pinned by
 // r3_me_unbindable_drive_test.go, and the preview was the last caller left.
 //
 // The BODY must not move: an admin checking why a member cannot mount a drive

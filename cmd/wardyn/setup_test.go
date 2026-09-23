@@ -19,7 +19,7 @@ import (
 // `setup wall`/`setup vault` declared no Args validator, so cobra
 // defaulted to ArbitraryArgs — a stray positional (a typo'd flag value that
 // missed its `--`, e.g. `setup wall -y run`) was silently accepted and
-// ignored rather than refused, the same the finding shape the grouping commands
+// ignored rather than refused, the same stray-positional shape the grouping commands
 // already hold (commands.go's subcommandGroup) but leaf commands need their
 // own Args, not subcommandGroup (which also disables Runnable).
 func TestSetupTierCmd_DeclaresNoArgs(t *testing.T) {

@@ -297,7 +297,7 @@ func TestDocsOpsSessionCookieDocsMatchTheCodec(t *testing.T) {
 	}
 }
 
-// TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo is the finding, rewritten in 0.7.2 when
+// TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo was rewritten in 0.7.2 when
 // the two substrates stopped behaving the same way. The row originally said the
 // cap "warns/fails closed when a cap is demanded but unsupported"; neither
 // substrate failed closed on that branch, both ran UNCAPPED. Now only Docker
@@ -351,7 +351,7 @@ func TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo(t *testing.T) {
 		t.Errorf("docs/POLICIES.md's disk_mib row never says the k8s substrate enforces the cap by EVICTION — the kubelet kills the pod, it does not refuse the write, and a run that dies mid-work is what an operator is actually planning for: %s", row)
 	}
 
-	// the finding's doc half. The THIRD outcome is the one the mainstream host gets:
+	// The doc half. The THIRD outcome is the one the mainstream host gets:
 	// overlay2's size storage-opt is an xfs project quota, so on overlay2 over
 	// ext4 (Docker Desktop/WSL2, stock Ubuntu/Debian) the daemon refuses the
 	// create and the run never starts. Anchored on the warning applyDiskQuota

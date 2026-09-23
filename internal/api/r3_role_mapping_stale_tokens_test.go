@@ -71,8 +71,6 @@ func (s *roleMapTokenStore) liveRoles() map[string]string {
 	return out
 }
 
-// TestRoleMappingWriteReportsStaleTokenSnapshots .
-//
 // An api_token's role is stamped at MINT and read verbatim on every request;
 // since 0.7 that stamp can be security_admin. The sibling credential got a bound
 // in migration 0046 — an SSH key's admin override goes stale after
@@ -207,7 +205,7 @@ func jsonHasKey(t *testing.T, body, key string) bool {
 	return ok
 }
 
-// TestRoleMappingDemotionRevokesTheStampedTokens is the finding's owner adjudication:
+// TestRoleMappingDemotionRevokesTheStampedTokens pins the owner's adjudication:
 // "the role-mapping write and delete paths call revokeAPITokensFor for a
 // principal whose derived role drops, so demotion is effective immediately".
 //

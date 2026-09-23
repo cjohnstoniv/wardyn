@@ -22,8 +22,6 @@ func denialRows(events []types.AuditEvent) []types.AuditEvent {
 	return out
 }
 
-// TestInHandlerMemberDenialsAreAudited .
-//
 // docs/AUDIT-ACTIONS.md states the contract as "every member denial that isn't a
 // plain foreign-resource 404", and the MIDDLEWARE honours it — the same member
 // refused by an admin-only route leaves authz.denied/admin_surface. Two gates

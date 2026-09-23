@@ -21,7 +21,7 @@ import (
 // TestDispatch_TokenBearingRedirect_ProxySidecarBoots closes the one
 // seam that let a producer/consumer contradiction ship: dispatch writes a
 // token-bearing redirect's allowlist entry PORT-QUALIFIED ("artifactory.corp:443",
-// the finding) while the paired injection rule host is BARE ("artifactory.corp" — what
+// never bare) while the paired injection rule host is BARE ("artifactory.corp" — what
 // buildInjector's exact-allowlist binding requires), and NO test ever fed one
 // producer's output to the consumer. AllowedExactHost consulted only the
 // port-less map, so buildInjector errored, NewServer errored, and

@@ -120,7 +120,7 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 	const memberSub = "sub-ws-owner"
 	routes := workspaceReadRoutes()
 	// EXACT SET, not a count: getWorkspaceReadable serves these three at member
-	// class, and GET .../env-as-code — its fourth consumer until the finding — moved to
+	// class, and GET .../env-as-code — formerly its fourth consumer — moved to
 	// owner-or-super because its emitted files render the operator's authored
 	// environment whole. It is covered below on its own terms, so a route
 	// leaving OR joining classMember still fails here rather than quietly
@@ -222,8 +222,6 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 	})
 }
 
-// TestSecurityAdminForeignWorkspaceFieldByField .
-//
 // The finding is an ASYMMETRY on one stated axis: routes.go refuses to widen
 // GET /sources to this tier because a local_dir source carries "the /srv NFS
 // path ... credential material and the host, two of the three axes this tier is
@@ -318,7 +316,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 	}
 }
 
-// TestSecurityTierNoteStatesOneRule is the finding's other half: routes.go states the
+// TestSecurityTierNoteStatesOneRule is the other half: routes.go states the
 // axis this tier never reaches, and a reader comparing "/sources is 403" with
 // "/workspaces/{id} is 200" needs the note to say WHY both are true at once.
 // Otherwise the next reader resolves the asymmetry the other way and widens the

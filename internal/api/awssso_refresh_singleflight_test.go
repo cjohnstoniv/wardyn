@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal .
-//
 // Dispatch is synchronous with POST /runs and needsRefresh fires a whole skew
 // window (10 min) ahead of expiry, so the common case is several people
 // launching runs against a token that still works. Against an unresponsive

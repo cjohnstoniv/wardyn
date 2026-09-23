@@ -14,8 +14,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestAuthorBedrockBearerInjection_MITMEntryIsPortScoped is the pin for the finding.
-//
 // A MITM-eligibility entry is ANY-PORT when it carries no ":port" suffix:
 // proxy.parseMITMHostPort returns port 0 for a bare host, and handleConnect
 // then matches with `cport == 0 || cport == port`. planArtifactRedirect has

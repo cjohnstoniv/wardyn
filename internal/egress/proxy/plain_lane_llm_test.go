@@ -113,7 +113,7 @@ func TestPlainLaneInjectionStripsSandboxCredential(t *testing.T) {
 		anthropicMessagesBody("hello"))
 	req.Header.Set("Authorization", "Bearer SANDBOX-OWN-KEY")
 	req.Header.Set("X-Auth-Token", "SANDBOX-OWN-TOKEN")
-	// the finding fix-up: the strip list has to cover every header a vendor Wardyn
+	// The strip list has to cover every header a vendor Wardyn
 	// brokers for reads as a credential, not four of them.
 	for h, v := range sandboxCredentialHeaders {
 		req.Header.Set(h, v)
@@ -140,7 +140,7 @@ func TestPlainLaneInjectionStripsSandboxCredential(t *testing.T) {
 	}
 }
 
-// TestPlainLaneHTTPSAbsoluteFormPort pins the finding's port half: an https
+// TestPlainLaneHTTPSAbsoluteFormPort pins the port half: an https
 // absolute-form request with no explicit port means 443 — the port the proxy
 // vets, dials and RECORDS. It used to be evaluated and audited as 80 while the
 // transport ran a TLS handshake against it.

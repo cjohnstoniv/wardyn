@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestDriveGrantGroupSubjectSharesTheSnapshotRule is the finding's third boundary.
+// TestDriveGrantGroupSubjectSharesTheSnapshotRule pins the third boundary.
 //
 // group_subject_boundary_test.go pins the rule across the two 0.7 capability
 // tables (validateCapabilityGrant, validateGovernanceAssignment). The drive

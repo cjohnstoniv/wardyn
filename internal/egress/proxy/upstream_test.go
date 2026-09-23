@@ -191,7 +191,7 @@ func TestUpstreamPrivateIPException(t *testing.T) {
 // proxy set, an AGENT-chosen egress target that is a literal private/loopback/
 // metadata IP is STILL denied by the step-0 guard (no SSRF-via-corp-proxy).
 //
-// the finding — why the policy and the rule_source assertion are load-bearing: this
+// Why the policy and the rule_source assertion are load-bearing: this
 // test used to run under AllowedDomains=["tls.test"], i.e. DEFAULT-DENY, and
 // assert only `dec != egress.Deny`... in fact only that the decision was Deny.
 // Every host it named was refused by `policy:default-deny` whether or not the
@@ -244,7 +244,7 @@ func TestUpstreamDoesNotWeakenLiteralIPGuard(t *testing.T) {
 }
 
 // TestUpstreamNeverHandsANonCanonicalLiteralToTheCorpProxy is the END of the
-// the finding gap: the table above proves the DECISION, this proves the WIRE.
+// literal-IP gap: the table above proves the DECISION, this proves the WIRE.
 //
 // The upstream lane is the one place the exposure is real — evaluate hands the
 // destination to the operator's proxy BY NAME, unresolved, so whatever the corp

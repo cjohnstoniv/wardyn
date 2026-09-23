@@ -1,10 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// PINS for the following (RevokeRun emitted ZERO credential.revoke rows for every
+// PINS for two defects (RevokeRun emitted ZERO credential.revoke rows for every
 // credential the run auto-minted, and for a leased git_pat's 2nd..Nth mint,
 // while THREAT-MODEL.md publishes kill-cascade step 4 as "every minted
-// credential for the run") and the finding (one hardcoded GitHub-installation-token
+// credential for the run") and (one hardcoded GitHub-installation-token
 // note on every revoke row, false in both halves for git_pat/ssh_key).
 //
 // The existing TestRevokeRun_EmitsRevokeAudit seeds an APPROVED approval, i.e.
@@ -79,7 +79,7 @@ func TestRevokeRun_AutoMintedGrant_EmitsRevokeAudit(t *testing.T) {
 	}
 }
 
-// TestRevokeRun_LeasedGitPAT_EmitsOneRevokePerMint is the second half of the finding:
+// TestRevokeRun_LeasedGitPAT_EmitsOneRevokePerMint is the second half:
 // under the B2 per-run lease the minted_jti burn is SKIPPED on re-mints, so
 // every jti after the first was invisible to a cascade reading that column.
 func TestRevokeRun_LeasedGitPAT_EmitsOneRevokePerMint(t *testing.T) {
@@ -168,7 +168,7 @@ func TestRevokeRun_NotePerGrantKind(t *testing.T) {
 		if !strings.Contains(note, "github installation tokens expire") {
 			t.Fatalf("github_token revoke note = %q, want the TTL-expiry story preserved", note)
 		}
-		// the finding/B4/B5: GitHub's DELETE /installation/token endpoint is real (it
+		// B4/B5: GitHub's DELETE /installation/token endpoint is real (it
 		// revokes the token you authenticate with), so the note must not say
 		// the API is missing; and wardyn DOES hold in-memory copies of the
 		// value (the run's mask corpus, broker.go maskReg.Add; the proxy's

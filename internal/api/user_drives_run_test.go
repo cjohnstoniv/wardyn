@@ -372,7 +372,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 				"(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)",
 		},
 		{
-			// THE ADMIN'S VALUE, BLAMED ON THE MEMBER — the finding's surviving half,
+			// THE ADMIN'S VALUE, BLAMED ON THE MEMBER — the surviving half,
 			// pinned here because nothing exercised an INVALID override at all
 			// (every other test stores a legal one).
 			//
@@ -1712,7 +1712,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 	// dashboard that silently stops counting an arm.
 	//
 	// ANCHORED IN THE CONSTANT DECLARATIONS, not in driveRefusalReasons (R1
-	// the finding). This loop used to walk driveRefusalReasons and look for each entry
+	// fix). This loop used to walk driveRefusalReasons and look for each entry
 	// in /metrics — while metrics.go builds that output by walking the SAME
 	// slice. Deleting an entry deleted it from both sides at once, so the guard
 	// passed, the whole package passed, and the series for a still-reachable

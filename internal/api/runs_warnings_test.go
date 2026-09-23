@@ -150,7 +150,7 @@ func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 
 	// The caller here holds no verified human (the admin-token / local-mode
 	// shape), so isSecurityOperator is true and every colliding run is visible
-	// to them — this test is about the READ, and the finding's ownership filter is
+	// to them — this test is about the READ, and the ownership filter is
 	// pinned separately in r3_workspace_collision_test.go.
 	warnings := srv.warnWorkspaceCollision(collisionRequest(), mine, path)
 

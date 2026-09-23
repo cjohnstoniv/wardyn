@@ -14,8 +14,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestCreateRun_TextFieldsAreCappedAndControlCharFree .
-//
 // title/description were rune-capped but never control-char-checked, and repo,
 // devcontainer_repo, task and agent had no cap at all — only the 1 MiB body.
 // A NUL in a title reached Postgres, which rejects it, so the caller got a 500

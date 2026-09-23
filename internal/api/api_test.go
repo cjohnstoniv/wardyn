@@ -197,7 +197,7 @@ func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason 
 	return n, nil
 }
 
-// CountForRun counts this run's rows in any state (R3-F071's cap reads it).
+// CountForRun counts this run's rows in any state (the per-run approval cap reads it).
 // cancelledCalls returns a snapshot of what CancelForRun recorded, under the
 // lock — the watcher test polls this from the test goroutine.
 func (f *fakeApprovals) cancelledCalls() []cancelCall {
@@ -867,7 +867,7 @@ func TestInternalMintScopeMismatchFailsClosed(t *testing.T) {
 	}
 	var resp map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["code"] != "scope_mismatch" { // literal, not the constant — see the finding
+	if resp["code"] != "scope_mismatch" { // literal, not the constant: a renamed constant must not hide a wire change
 		t.Errorf("code = %v, want %q (W19-W19a-2)", resp["code"], "scope_mismatch")
 	}
 }
@@ -890,7 +890,7 @@ func TestInternalMintAlreadyMintedCarriesDiscriminatingCode(t *testing.T) {
 	}
 	var resp map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["code"] != "already_minted" { // literal, not the constant — see the finding
+	if resp["code"] != "already_minted" { // literal, not the constant: a renamed constant must not hide a wire change
 		t.Errorf("code = %v, want %q — the git helper cannot otherwise tell this apart from a pending/denied 409", resp["code"], "already_minted")
 	}
 	if _, hasApprovalID := resp["approval_id"]; hasApprovalID {

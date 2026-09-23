@@ -76,7 +76,7 @@ func TestPG_CreateAPITokenWritesCreatedAtOnTheDatabaseClock(t *testing.T) {
 			"than the request's age", fast.CreatedAt, before)
 	}
 
-	// (2) the finding, NOT RE-OPENED. A request admitted 30s ago — a caller holding the
+	// (2) The admission-time fix, NOT RE-OPENED. A request admitted 30s ago — a caller holding the
 	// body open — must keep its ADMISSION time, not pick up the insert time, or
 	// a mint held across a revoke lands after the cutoff.
 	const held = 30 * time.Second
@@ -85,7 +85,7 @@ func TestPG_CreateAPITokenWritesCreatedAtOnTheDatabaseClock(t *testing.T) {
 	age := dbNow().Sub(slow.CreatedAt)
 	if age < held-5*time.Second {
 		t.Errorf("a request admitted %s ago produced a created_at only %s old. It has picked up the INSERT time "+
-			"instead of the admission time, which: a caller who holds the mint body open across "+
+			"instead of the admission time: a caller who holds the mint body open across "+
 			"POST /sessions/revoke gets a token stamped after the cutoff", held, age)
 	}
 	if age > held+time.Minute {

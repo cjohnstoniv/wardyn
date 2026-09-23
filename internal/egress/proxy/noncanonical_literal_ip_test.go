@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// upstreamAllowAllProxy builds the exact shape the finding is about: a corp upstream
+// upstreamAllowAllProxy builds the exact shape at risk: a corp upstream
 // configured (so egressTarget hands the destination to the corp proxy BY NAME,
 // unresolved and unpinned) with allow_all_egress, so nothing but the
 // unconditional literal-IP guard stands between the sandbox and the target.
@@ -65,7 +65,7 @@ func TestNonCanonicalLiteralIPIsDeniedLikeItsCanonicalSpelling(t *testing.T) {
 		{"2852039166", "169.254.169.254", "bare 32-bit cloud metadata"},
 		{"0xa000001", "10.0.0.1", "hexadecimal RFC1918"},
 		{"167772161", "10.0.0.1", "bare 32-bit RFC1918"},
-		// the finding second axis: net.ParseIP is nil for a zoned IPv6 literal, so the
+		// The second axis: net.ParseIP is nil for a zoned IPv6 literal, so the
 		// zone id alone used to decide allow-vs-deny for the SAME address.
 		{"fe80::1%eth0", "fe80::1", "zone-suffixed IPv6 link-local"},
 		{"fe80::1%25eth0", "fe80::1", "percent-encoded zone (RFC 6874 authority form)"},

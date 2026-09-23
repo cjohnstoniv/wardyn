@@ -23,7 +23,7 @@ import (
 //     levels, since one scope carries one permissions map) therefore emptied a
 //     proposal that named ONE of them — while the comparator accepted it, because that
 //     entry dominates. Narrowing to nothing is not a widening, but it IS the two rules
-//     giving one input two answers, which is what the finding is about.
+//     giving one input two answers, which is the defect.
 //   - The same pairing written twice with different bounds. Round 1's search returned
 //     the FIRST match and stopped, so the identical ceiling SET clamped to (approval
 //     true, ttl 300) in one slice order and (approval false, ttl 3600) in the other.

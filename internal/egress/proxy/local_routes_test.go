@@ -708,7 +708,7 @@ func TestBrokeredRouteTableCoversEveryDispatchedRoute(t *testing.T) {
 			t.Errorf("%s is dispatched to a brokered handler but has no row in "+
 				"TestBrokeredRouteControlPlaneDownDeniesAndFails502: every brokered "+
 				"sandbox->control-plane route must be pinned to the 502 + per-route deny shape "+
-				"(F144 — routeSSOToken, the sandbox's write channel to the operator SSO blob, "+
+				"(routeSSOToken, the sandbox's write channel to the operator SSO blob, "+
 				"was the one that went missing)", name)
 		}
 	}

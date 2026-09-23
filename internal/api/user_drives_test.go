@@ -61,7 +61,7 @@ type driveCRUDStore struct {
 	// second healthy, so the 500 can only have come from the gate under test.
 	listErrOnce bool
 	// upsertErr replaces the write's answer, so a caller can be shown the
-	// SPECIFIC conflict sentinels UpsertUserDrive returns (R1 / the finding).
+	// SPECIFIC conflict sentinels UpsertUserDrive returns (R1).
 	// Without it only UNIQUE(name) was reachable from an api-side test, which is
 	// exactly why the other two 409s shipped the name-taken sentence.
 	upsertErr error

@@ -52,8 +52,6 @@ func (a *runScopedApprovals) ListApprovalsPageByRun(_ context.Context, runID uui
 	return out, nil
 }
 
-// TestListApprovals_RunScopedReadIsBounded is the pin for the finding.
-//
 // handleListApprovals installed the DB-paged reader only when run_id was
 // ABSENT. With ?run_id= set, pageFn was nil, so servePage took the allFn branch
 // -> Approvals.List -> store.ListApprovals -> ListApprovalsPage(ctx, state,

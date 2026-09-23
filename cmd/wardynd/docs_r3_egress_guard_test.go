@@ -181,7 +181,7 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 		// intro fifteen lines above and the Bedrock recipe below both deny.
 		"**reaches the endpoint** through the corp proxy",
 		"is the one field that admits a private address",
-		// Retired with the finding's guard-runs-here semantics: the section intro promised a
+		// Retired with the guard-runs-here semantics: the section intro promised a
 		// timeout for the case the matrix immediately below says is refused.
 		"every one of them times out",
 	)
@@ -254,7 +254,7 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 	)
 }
 
-// TestBranchNSScopeRationaleMatchesThePATLane (the finding, re-derived in 0.7.2) pins
+// TestBranchNSScopeRationaleMatchesThePATLane (re-derived in 0.7.2) pins
 // the two comments that scope push confinement per lane, plus docs/ENV.md's
 // rows, to what the git_pat lane actually is.
 //
@@ -355,7 +355,7 @@ func TestGatewayPredicateHasOneBody(t *testing.T) {
 	}
 }
 
-// TestPATPushIsNotDocumentedAsAnImpossibility (the finding, re-derived in 0.7.2) pins
+// TestPATPushIsNotDocumentedAsAnImpossibility (re-derived in 0.7.2) pins
 // the THREAT-MODEL's half of the branch-namespace scope claim to the same
 // premise its code sibling is pinned to above.
 //

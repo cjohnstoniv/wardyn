@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// the finding — Proxy.httpError writes its error text to the SANDBOX, and the mask it
+// Proxy.httpError writes its error text to the SANDBOX, and the mask it
 // applies (maskDecisionBytes) only replaces values registered in procRegistry,
 // i.e. CREDENTIALS. A Go transport error always embeds the ENDPOINT that failed,
 // so every sandbox-reachable caller of httpError was handing the untrusted

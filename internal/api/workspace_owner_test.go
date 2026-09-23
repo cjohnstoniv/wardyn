@@ -189,14 +189,14 @@ func TestWorkspaceOwnership_OwnerReachesOwn(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
 
-	// R1-the finding: the MUTATIONS are in here too, and each gets its OWN fixture from
+	// The MUTATIONS are in here too, and each gets its OWN fixture from
 	// inside the loop. That is the whole reason they were missing — this control
 	// used to walk one shared workspace, so a PUT would rename it and a DELETE
 	// remove it under the cases that follow, and the four {id} mutations sat with
 	// their foreign-404 direction pinned and their owner-ADMIT direction pinned
 	// nowhere (ownerAdmitNotInTheControl's admitted debt). A handler that refused
 	// the owning member on PUT /workspaces/{id} left all 221 test files in this
-	// package green — exactly the finding's own counterfactual for env-as-code.
+	// package green — exactly the counterfactual env-as-code had.
 	//
 	// A fresh fixture per case is what makes the destructive ones safe to include,
 	// which is why the shared one this test used to open is gone.

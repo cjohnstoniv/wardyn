@@ -10,12 +10,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// TestMemberCannotReadOperatorTopologyRoutes is the counterfactual the finding asks for
-// and no lane had: a MEMBER session must not reach the three documents that
+// TestMemberCannotReadOperatorTopologyRoutes is the counterfactual
+// no lane had: a MEMBER session must not reach the three documents that
 // carry an upstream-proxy password ref, a local_dir HOST PATH and an internal
 // registry image.
 //
-// The R1 answer to the finding was reclassification rather than projection
+// The R1 answer was reclassification rather than projection
 // (mountLibraryRoutes' own note: nothing member-facing consumes either route),
 // and that answer is only as durable as a test that fails when a route moves
 // back. Nothing asserted it: authz_test.go's matrix classifies routes but a

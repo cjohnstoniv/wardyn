@@ -16,8 +16,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// the finding residue. The first fix added recordCeilingLimits, which reads the two
-// named limits — and it CANNOT FIRE on the route the finding names, so that
+// The first fix added recordCeilingLimits, which reads the two
+// named limits — and it CANNOT FIRE on the record route, so that
 // route's behaviour was byte-for-byte unchanged:
 //
 //	POST /workspaces/{id}/record is mounted operatorOnly (routes.go);

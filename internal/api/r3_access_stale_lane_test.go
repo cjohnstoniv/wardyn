@@ -13,8 +13,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// TestAccessStaleSnapshotNamesTheCallerRemedy .
-//
 // The stale-snapshot guard fires on any caller whose stamped claim snapshot
 // cannot reproduce the admin role they hold, and apiTokenAuth installs exactly
 // such a snapshot: api_tokens.groups is stamped at MINT and on every OnLogin

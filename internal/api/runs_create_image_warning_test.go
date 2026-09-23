@@ -29,8 +29,6 @@ func (b fakeDevcontainerBuilder) BuildFromDevcontainerFiles(context.Context, map
 	return b.tag, nil
 }
 
-// TestCreateRun_DevcontainerWithoutBuilderWarnsOnThe201 .
-//
 // resolveCreateRunImage fails a workspace base_image CLOSED when no
 // ImageBuilder is wired (PARITY-4) but lets devcontainer_repo fall through to
 // the convention image. The fall-through is correct — a hard refusal would

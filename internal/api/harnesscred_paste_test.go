@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// TestHarnessPaste_RefusedForAHelperCapturedProvider .
-//
 // `aws` is a captureViaHelper row with no tokenPrefix, so the paste door's only
 // guard let {"token":…} straight through to Secrets.Put on the RESERVED SSO
 // secret: the structured blob wardyn-aws-sso captured was overwritten, Bedrock

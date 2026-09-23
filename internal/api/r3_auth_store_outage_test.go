@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestSessionRevocationOutageIsCounted is the finding, and it is the SSO half of
+// TestSessionRevocationOutageIsCounted is the SSO half of
 // TestAPITokenStoreErrorIsCounted's argument.
 //
 // Both lanes abandon an authentication because a store read failed. Only the

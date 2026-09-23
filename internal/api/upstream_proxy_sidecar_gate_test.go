@@ -35,7 +35,7 @@ func upstreamProxySidecarAccepts(t *testing.T, raw string) error {
 	return lerr
 }
 
-// TestUpstreamProxyGateMatchesSidecar is the pin for the finding: every
+// TestUpstreamProxyGateMatchesSidecar pins the gate agreement: every
 // upstream_proxy_url the CONTROL PLANE accepts must be one the SIDECAR accepts.
 //
 // Two validators sat over one operator-authored value. The dispatch-side gate
@@ -113,7 +113,7 @@ func resolveUpstreamProxyLane(t *testing.T, raw string, viaSecret bool) (string,
 
 // TestValidateSiteConfigRejectsSidecarKillingProxyURL pins the same property at
 // the WRITE boundary: PUT /api/v1/site-config must not persist a value that
-// makes the sidecar exit(1). Before the finding this returned nil.
+// makes the sidecar exit(1). It used to return nil.
 func TestValidateSiteConfigRejectsSidecarKillingProxyURL(t *testing.T) {
 	for _, raw := range []string{"http://proxy.corp:0", "http://proxy.corp:99999"} {
 		err := validateSiteConfig(types.SiteConfig{UpstreamProxyURL: raw})

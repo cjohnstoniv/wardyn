@@ -52,8 +52,6 @@ func r3bAuditDetail(t *testing.T, ev types.AuditEvent) string {
 	return data.Detail
 }
 
-// TestR3BLearnVerifyEgressAuditsEveryGiveUp is the finding's pin.
-//
 // approvals_writeback.go's file header states the contract these functions
 // share and the rest of the package does not: FAIL SILENT BUT AUDITED. The
 // decision already stands by the time the write-back runs, so no give-up may

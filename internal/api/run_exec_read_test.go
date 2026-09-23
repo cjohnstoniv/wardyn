@@ -81,8 +81,6 @@ func overCapNumstat() string {
 	return b.String()
 }
 
-// TestRunFiles_ByteCapTruncatesWithoutStallingOnWait .
-//
 // The 512 KiB io.LimitReader left sess.Stdout undrained, so the in-sandbox git
 // blocked on write, the demux goroutine blocked with it, and Wait could only
 // time out: a 5 s stall, a 500, and a run.files FAILURE row on every poll tick
@@ -130,7 +128,7 @@ func (nilSessionRunner) ExecStream(context.Context, string, runner.ExecSpec) (*r
 	return nil, nil
 }
 
-// TestRunExec_NilSessionIsA500OnBothWidgets .
+// TestRunExec_NilSessionIsA500OnBothWidgets pins a nil exec session to a 500 on both widgets.
 func TestRunExec_NilSessionIsA500OnBothWidgets(t *testing.T) {
 	run := types.AgentRun{
 		ID:         uuid.New(),

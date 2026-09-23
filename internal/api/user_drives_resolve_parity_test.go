@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-// TestDriveDoorsAnswerOverTheSameSentinels is the finding's anti-recurrence guard.
+// TestDriveDoorsAnswerOverTheSameSentinels is an anti-recurrence guard.
 //
-// the finding was the state collapse itself: three server states the launch path
+// The defect was the state collapse itself: three server states the launch path
 // refuses with 403, 422 and 500 all reached GET /me as the one
 // `{"user_drive":null}` a genuinely unallocated member gets, so the console
 // rendered no drive affordance and the member never met the sentence naming
@@ -25,7 +25,7 @@ import (
 // SWITCH, in the same order and over the same sentinels … so a new arm in one is
 // a missing arm in the other rather than a silent divergence" — and nothing
 // executes that claim. Add a sentinel to writeDriveError alone and every state
-// it names collapses back into driveUnavailableUnknown at /me: the finding's exact
+// it names collapses back into driveUnavailableUnknown at /me: the original
 // defect, one sentinel at a time, with the whole package green.
 //
 // So the invariant is asserted the way the file states it: mechanically, over
@@ -75,13 +75,13 @@ func TestDriveDoorsAnswerOverTheSameSentinels(t *testing.T) {
 		}
 		t.Errorf("arm %d: writeDriveError matches %s, driveUnavailableReason matches %s — "+
 			"the two answer ONE question at two doors (the launch refusal and what /me says before "+
-			"the member tries), and a sentinel named at only one of them is F139 again: the state "+
+			"the member tries), and a sentinel named at only one of them is the state collapse again: the state "+
 			"collapses back into %q on the wire and the console renders nothing where the server "+
 			"composed a remedy. Add the arm to both, or record the reason in driveSentinelDivergence.",
 			i, door[i], me[i], driveUnavailableUnknown)
 	}
 
-	// A sentinel the DOOR grew and /me did not is exactly the finding's direction,
+	// A sentinel the DOOR grew and /me did not is exactly the original defect's direction,
 	// so it is reported as its own failure rather than only as a length
 	// mismatch — the message has to name the arm an author has to go add.
 	for _, name := range door {

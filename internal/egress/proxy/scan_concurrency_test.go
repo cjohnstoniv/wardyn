@@ -120,8 +120,8 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 // internal/egress/proxy/server.go); only the inner MITM server carries one. So a
 // single slow-loris POST holding the process-wide slot would park every other
 // inspected request of the run in the semaphore send FOREVER — each retaining a
-// goroutine and a socket in a 256 MiB sidecar, the same retention class the finding is
-// about, now reachable through the inspection path and triggerable by the
+// goroutine and a socket in a 256 MiB sidecar — a retention class
+// now reachable through the inspection path and triggerable by the
 // untrusted sandbox.
 //
 // Bounded, the wait must fail CLOSED (a Deny + an error response), like the

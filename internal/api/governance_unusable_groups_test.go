@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// TestCeilingResolvesOnTheAnswerableIdentityOnly .
-//
 // resolveEffectiveCeiling's stale arm carries the rule as a comment: "The
 // unusable half must not be MATCHED against. Passing a truncated list would
 // still let a surviving group's row win, which is not wrong on its own — but it

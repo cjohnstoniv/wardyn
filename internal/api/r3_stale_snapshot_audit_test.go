@@ -30,8 +30,6 @@ func (s staleAuditStore) HasGroupTierAssignments(context.Context) (bool, error) 
 	return s.hasGroupTier, nil
 }
 
-// TestStaleSnapshotRefusalIsAudited .
-//
 // docs/OPERATIONS.md's "Every denial that isn't a 404" makes authz.denied the
 // record of every member denial that is not a plain foreign-resource 404. The
 // groups_snapshot_stale 403 is member-reachable from six seams and produced

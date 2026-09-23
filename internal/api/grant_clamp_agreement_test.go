@@ -12,8 +12,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestClampAndComparatorAgreeOnEveryCeilingShape is the finding's cross-package pin,
-// widened after round 2 reopened the finding.
+// TestClampAndComparatorAgreeOnEveryCeilingShape pins clamp/comparator agreement across packages,
+// widened after round 2 reopened it.
 //
 // TestClampAndComparatorAreOneRule (governance_grantbound_test.go) pins ONE
 // input — pairing A asking for pairing B's TTL headroom. Round 1 closed that
@@ -21,7 +21,7 @@ import (
 // rules: the comparator asks "does SOME single ceiling grant dominate this
 // proposal on every axis", the clamp MET every candidate. Meeting can only
 // narrow, so neither residual was a widening — but a rule that gives one input
-// two answers is the defect the finding names, whichever direction it errs in.
+// two answers is the defect, whichever direction it errs in.
 //
 // The agreement is stated as two directions, and both are asserted for every
 // shape below:
@@ -95,7 +95,7 @@ func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {
 			pairingInCeiling: true,
 		},
 		{
-			// the finding's ORIGINAL fixture, kept so round 1's fix cannot regress: the
+			// The ORIGINAL fixture, kept so round 1's fix cannot regress: the
 			// comparator refuses pairing A at pairing B's TTL, so only D2 applies —
 			// the clamp must bound it to pairing A's own 60s.
 			name: "api_key: pairing A asking for pairing B's TTL headroom",
@@ -107,7 +107,7 @@ func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {
 			pairingInCeiling: true,
 		},
 		{
-			// the finding's other original consequence: a proposal naming the STRICT
+			// The other original consequence: a proposal naming the STRICT
 			// forge's pairing must not pick up the permissive forge's approval
 			// posture. requires_approval=false auto-mints the injection at proxy
 			// boot with no human in the loop.

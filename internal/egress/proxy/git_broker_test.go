@@ -37,7 +37,7 @@ type gitBrokerUpstream struct {
 	gitBody   []byte // body the forge received (proves byte-for-byte forwarding)
 	gitHits   int
 	// gitHeaders is the FULL header set the forge saw. gitAuth alone could not
-	// see the finding: the lane stripped Authorization and forwarded every other
+	// see the leak: the lane stripped Authorization and forwarded every other
 	// sandbox-set credential header (Private-Token, X-Api-Key, …) beside the
 	// brokered Basic auth.
 	gitHeaders http.Header

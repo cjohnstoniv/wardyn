@@ -1,8 +1,6 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// the finding PROBE — destination: internal/db/auditddl_f11_probe_pg_test.go
-//
 // db.AuditDDLProtected is 0% covered (docs/TEST-GAPS.md) because every live
 // lane connects as the container superuser and the split-role mode is never
 // exercised. This probe manufactures the split: it creates a throwaway LOGIN

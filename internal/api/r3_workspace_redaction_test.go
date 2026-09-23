@@ -57,7 +57,7 @@ const (
 	r3TopologySecret   = "acme-prod-db-password"
 	r3TopologyEgress   = "artifacts.corp.internal"
 	// The SCANNED PROFILE republishes the same three axes under its own keys —
-	// the residue the finding's first fix left: redactWorkspaceForRead projected
+	// the residue the first fix left: redactWorkspaceForRead projected
 	// Sources/BaseImage/Requirements and never touched Workspace.Profile, which
 	// travels in the SAME response.
 	r3TopologyLeakPath  = "/srv/nfs-prod/payments/config/prod.env"
@@ -100,7 +100,7 @@ func newTopologyWorkspaceServer(t *testing.T, ownedBy string) (*Server, *r3Topol
 	return h.srv, st
 }
 
-// TestWorkspaceReadRedaction is the finding (the member arm) and the finding (the security
+// TestWorkspaceReadRedaction covers both the member arm and the security
 // arm).
 //
 // R1 narrowed GET /site-config, /sources, /sources/{id} and /base-images to
@@ -146,7 +146,7 @@ func TestWorkspaceReadRedaction(t *testing.T) {
 		t.Run(a.name, func(t *testing.T) {
 			// The member arm reads an OPERATOR-owned row (OwnedBy ""), which is
 			// the shape a member can legitimately reach; the security arm reads
-			// a MEMBER-owned row, which is the shape the finding names.
+			// a MEMBER-owned row.
 			ownedBy := ""
 			if strings.Contains(a.name, "security admin") {
 				ownedBy = owner

@@ -742,7 +742,6 @@ func TestAgentImageCheck(t *testing.T) {
 	}
 }
 
-// TestRedactSetupStatusForMember_DropsHostCredentialPosture .
 // The redaction dropped the deployer's checklist (checks/providers/secret
 // names/runner detail) but left three fields that describe the OPERATOR'S HOST
 // rather than anything a member can act on:

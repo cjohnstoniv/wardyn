@@ -524,7 +524,7 @@ func TestPrivateIPMemo_BoundedAndFlushesTheStreakItEvicts(t *testing.T) {
 
 // TestResolveFailedDenialIsRetryableAndReEmits is the first negative: a name
 // that did not resolve is a DNS fault that may clear on the next attempt, so it
-// gets neither the retry-never header nor the memo. It also byte-asserts the finding's
+// gets neither the retry-never header nor the memo. It also byte-asserts the resolve-failed
 // decision string, which must not be reworded.
 func TestResolveFailedDenialIsRetryableAndReEmits(t *testing.T) {
 	const host = "unresolvable.example"
