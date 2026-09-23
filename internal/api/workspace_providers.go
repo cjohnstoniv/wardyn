@@ -250,6 +250,9 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders, refuseSSHPathScope 
 			return err
 		}
 	}
+	if err := validateOneEntraRow(p.Git); err != nil {
+		return err
+	}
 	return validateStorageProviders(p.Storage)
 }
 
