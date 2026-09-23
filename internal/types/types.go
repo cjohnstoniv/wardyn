@@ -244,6 +244,21 @@ type AgentRun struct {
 	// every run is empty until #97 lands. Migration 0065 adds the column NOT
 	// NULL DEFAULT ''.
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
+	// EndsAt is when this run's lease ends (long-holds §2.1); nil is no end.
+	// Captured at create from the owner's profile run limits (RunLimits) and
+	// never re-resolved: the owner's authority at launch, not a later caller's.
+	EndsAt *time.Time `json:"ends_at"`
+	// WaitBudgetSec is how long a request this run raises stays open for a
+	// decision. Captured at create, already folded under the deployment's
+	// approval expiry; 0 (every run created before migration 0072) means the
+	// deployment's approval expiry alone.
+	WaitBudgetSec int `json:"wait_budget_sec,omitempty"`
+	// RunLimits are the owner's profile run limits as they stood at create, and
+	// GovernanceProfileID the profile they came from (nil for an unassigned or
+	// super-admin owner). Every later change to the end or the wait clamps
+	// against these captured bounds, never against the profile's current ones.
+	RunLimits           RunLimits  `json:"run_limits"`
+	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -623,6 +638,13 @@ type ApprovalRequest struct {
 	// EXPIRED state / approval.expire sweeper, which ages out stale PENDING
 	// requests — this bounds a GRANT that was actually made.
 	DecisionExpiresAt *time.Time `json:"decision_expires_at,omitempty"`
+	// ExpiresAt is when a PENDING request stops waiting:
+	// min(requested_at + the run's WaitBudgetSec, the run's EndsAt). Computed
+	// on read from the run row, never stored or accepted from a caller, so a
+	// change to the run's end or wait reaches its open requests at once. Nil
+	// when the run has neither (a run created before migration 0072); the
+	// deployment's approval expiry still applies to every row.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // ApprovalDecision is what a human — or the sweeper, for a stale-PENDING
@@ -754,6 +776,10 @@ type AuditEvent struct {
 // upgrading to 0046" — a pre-migration row, or a key registered before an
 // OIDC-configured deployment's first login for that principal — and sshAuth
 // treats nil as infinitely stale, never as fresh.
+//
+// Capped marks a key registered while an admin's session was in the user view
+// (migration 0070): Role stays member through every login re-stamp, and
+// sshAuth never grants it the admin override.
 type SSHPublicKey struct {
 	Fingerprint   string     `json:"fingerprint"`
 	Principal     string     `json:"principal"`
@@ -761,6 +787,7 @@ type SSHPublicKey struct {
 	PublicKey     string     `json:"public_key"` // authorized_keys line; never a secret
 	Role          string     `json:"role"`
 	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
+	Capped        bool       `json:"capped"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
 

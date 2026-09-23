@@ -235,7 +235,8 @@ func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, b
 // an organisation — so the legacy arm requires the host to be exactly one label
 // in front of visualstudio.com rather than trimming a suffix.
 func adoOrganisationOf(cloneURL string) (string, bool) {
-	t, ok := parseCloneTarget(cloneURL)
+	// nil: an organisation is only ever read off an Azure DevOps SERVICE host.
+	t, ok := parseCloneTarget(cloneURL, nil)
 	if !ok {
 		return "", false
 	}

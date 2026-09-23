@@ -35,6 +35,7 @@ import {
   type AutonomyRubric,
   type AutonomyRubricRowKey,
 } from "./api/governance";
+import { GOVERNANCE_NAV_TITLE } from "./nav-copy";
 
 // §7.1 — reused canon, referenced never re-frozen
 //
@@ -96,8 +97,9 @@ export const GOVERNANCE = {
   // ---- §7.2 the profiles block ----
   // TITLE is ONE string for two places — the NAV_ITEMS label and the screen
   // heading — the way every other nav entry already works. There is no second
-  // "Governance profiles" label.
-  TITLE: "Governance",
+  // "Governance profiles" label. Lives in nav-copy.ts (see its own comment)
+  // so app-shell's eager sidebar isn't the reason this whole table ships early.
+  TITLE: GOVERNANCE_NAV_TITLE,
   LEAD: "Named ceilings, assigned to people and groups. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
   PROFILES_TITLE: "Profiles",
   PROFILES_LEAD:
@@ -276,6 +278,8 @@ export const GOVERNANCE = {
 //     when a redeploy removes a pairing from WARDYN_DEFAULT_POLICY that a
 //     stored profile still names: the grant is dropped rather than the run
 //     failed, and the member is told.
+//     WARN_PUSH_RULES_DROPPED is its push_rules mirror (droppedPushRulesWarning,
+//     same file), fired at the same resolve seam (#272).
 // DENIED_CODEX_HOLD sits BESIDE, never replaces, runs_create_validate.go's
 // existing explicit-hold refusal (§7.1) — one refuses a hold the caller asked
 // for, the other a hold their profile derived. WARN_STORED_CLAMPED is the
@@ -303,6 +307,8 @@ export const MEMBER = {
     `workspace host "${host}" is denied by your governance profile "${name}" — the run launches, but that host is refused at the proxy`,
   WARN_GRANT_DROPPED: (name: string, kind: string, reason: string) =>
     `governance profile "${name}": dropped ${kind} grant no longer within the deployment's eligible grants (${reason})`,
+  WARN_PUSH_RULES_DROPPED: (name: string) =>
+    `governance profile "${name}": push_rules dropped — this profile's ceiling sets none, so the deployment default's content rules do not apply to members of it`,
   DENIED_STALE_GROUPS:
     "groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved",
 

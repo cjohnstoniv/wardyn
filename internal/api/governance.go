@@ -186,7 +186,7 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 			return "limits.autonomy_rubric." + err.Error()
 		}
 	}
-	return ""
+	return runLimitsRefusal(l.RunLimits)
 }
 
 // writeGovernanceProfile is the shared body of POST and PUT: bound the eligible
@@ -900,7 +900,29 @@ func (s *Server) ceilingFromProfile(p *types.GovernanceProfile, err error, deplo
 	spec := p.Ceiling.Clone()
 	kept, warns := reintersectGovernanceGrants(spec.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants, p.Name)
 	spec.EligibleGrants = kept
+	warns = append(warns, droppedPushRulesWarning(spec, s.cfg.DefaultPolicy, p.Name)...)
 	return governanceCeiling{Spec: spec, Limits: p.Limits, Profile: p, Warnings: warns}, nil
+}
+
+// droppedPushRulesWarning is ceilingFromProfile's push_rules mirror of
+// reintersectGovernanceGrants's grant-kind drop: when the deployment default
+// carries push_rules and this profile's own ceiling does not, the deployment's
+// content rules silently stop applying to this profile's members.
+//
+// clampPushRules itself cannot say this — it clamps an already-resolved
+// ceiling and never sees what the deployment default would have said — and a
+// bare ceiling with no push_rules is otherwise indistinguishable from "the
+// operator deliberately left this narrower". This is the one seam where
+// resolving a profile assignment sees BOTH specs at once, so it is the one
+// place the drop can be said out loud (see #272).
+func droppedPushRulesWarning(profile, deployment types.RunPolicySpec, profileName string) []string {
+	if deployment.PushRules.IsSet() && !profile.PushRules.IsSet() {
+		return []string{fmt.Sprintf(
+			"governance profile %q: push_rules dropped — this profile's ceiling sets none, "+
+				"so the deployment default's content rules do not apply to members of it",
+			profileName)}
+	}
+	return nil
 }
 
 // reintersectGovernanceGrants re-applies the monotone-⊆ bound at RESOLVE time,
