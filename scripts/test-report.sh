@@ -56,7 +56,9 @@ fi
 # NAMED, not "no skips anywhere": a suite legitimately skips what its lane cannot
 # provide (no Docker, no cluster). The floor covers the tests whose whole purpose
 # is to be falsifiable, matched by NAME so a rename cannot quietly empty the set -
-# an empty match is itself a failure.
+# an empty match is itself a failure. The floor is a space-separated list of
+# regexes and EACH must match a test that ran, so one member of the set cannot
+# vanish behind the others.
 # The DEFAULT floor applies to the pg suite, and only when the lane actually
 # declared a database: a run with WARDYN_TEST_PG unset has no substrate, and
 # skipping what the environment genuinely cannot provide is the one sanctioned
@@ -64,7 +66,9 @@ fi
 # asserted the lane can satisfy it.
 REQUIRE_PASS="${WARDYN_TEST_REPORT_REQUIRE_PASS:-}"
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "pg" ] && [ -n "${WARDYN_TEST_PG:-}" ]; then
-  REQUIRE_PASS='^TestPG_ProbeF11_'
+  # TestFederation_: the one-audit-stream proof (#104), falsifiable only with a
+  # database it can create and a role that can edit and purge the laptop's table.
+  REQUIRE_PASS='^TestPG_ProbeF11_ ^TestFederation_'
 fi
 # X2-F16: the unit suite has its own falsifiable floor. The regex is
 # deliberately broader than "the seven curl skips": it matches all 17
@@ -88,14 +92,20 @@ if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
   # grep/sed so this needs no jq on the runner.
   names() {
     grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",\"Test\":\"[^\"/]*\"" "$OUT/test-output.json" \
-      | sed 's/.*"Test":"//; s/"$//' | grep -E "$REQUIRE_PASS" | sort -u
+      | sed 's/.*"Test":"//; s/"$//' | grep -E "$2" | sort -u
   }
-  PASSED="$(names pass)"
-  SKIPPED="$(names skip)"
-  FAILED="$(names fail)"
-  if [ -z "$PASSED$SKIPPED$FAILED" ]; then
-    echo ">> SKIP FLOOR: no test matching /$REQUIRE_PASS/ ran in suite '$SUITE'." >&2
-    echo ">> Those probes are the falsifiable proof of the append-only invariant; a set that matches nothing" >&2
+  read -r -a FLOOR <<< "$REQUIRE_PASS"
+  ANY="$(IFS='|'; echo "${FLOOR[*]}")"
+  PASSED="$(names pass "$ANY")"
+  SKIPPED="$(names skip "$ANY")"
+  FAILED="$(names fail "$ANY")"
+  MISSING=""
+  for re in "${FLOOR[@]}"; do
+    if [ -z "$(names pass "$re")$(names skip "$re")$(names fail "$re")" ]; then MISSING="$MISSING /$re/"; fi
+  done
+  if [ -n "$MISSING" ]; then
+    echo ">> SKIP FLOOR: no test matching$MISSING ran in suite '$SUITE'." >&2
+    echo ">> Those probes are the falsifiable proofs this suite exists to run; a regex that matches nothing" >&2
     echo ">> is a rename that silently removed the floor, not a suite with nothing to check." >&2
     GO_EXIT=1
   elif [ -n "$SKIPPED" ]; then
