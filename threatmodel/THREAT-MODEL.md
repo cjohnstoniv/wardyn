@@ -1684,7 +1684,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     and that agreement is now enforced rather than assumed: the traversable
     spellings are refused at the one parse every door resolves through — any
     percent-escape, any backslash, any empty, `.` or `..` segment, in all three URL
-    forms, and the same rule is a `400` at both write doors. Before that,
+    forms, and the same rule is a `400` at both write doors. The one escape
+    admitted is an Azure DevOps project or repository name in its single stored
+    spelling (`Payments%20Platform`); an escape that decodes to a separator, a dot
+    segment or a control character is still refused (0.7.11, #485). Before that,
     `/acme/../evil` and `/acme%2Fevil` both read as inside
     `https://github.com/acme` (the server compares decoded, git squashes
     client-side) and the `pat` lane then minted the acme organisation's credential
