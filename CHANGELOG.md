@@ -57,17 +57,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **Migration-numbering collision gates (#667).** `make lint` now runs
   `scripts/check-migration-numbers.sh`: a new migration file must use a numeric
-  prefix greater than every prefix already on `origin/main`, catching a branch
-  that forked before a sibling's migration merged and never rebased its
-  number. `nightly.yml` gets a `migration-merge-check` job that merges every
-  open, mergeable PR targeting `main` together (an octopus merge) in a
-  throwaway worktree, runs `go vet` (all tag sets), `go test ./internal/db -run
-  Migrat`, and the internal/api AST guards over the result, and — the collision
-  neither PR-time gate can see, since two PRs open at once each look clean in
-  isolation — falls back to a one-PR-at-a-time bisection naming the first PR
-  whose addition broke it when the combined merge fails. It also flags any open
-  PR stacked on a branch that is no longer open (merged or closed) and so
-  should have been retargeted to `main`.
+  prefix greater than every prefix already on the branch it targets
+  (`origin/main`, or the PR's base in CI), catching a branch that forked before
+  a sibling's migration merged and never rebased its number. `nightly.yml` gets
+  a `migration-merge-check` job for the collision no PR-time gate can see, two
+  PRs open at once that each look clean in isolation: it flags two open PRs
+  targeting `main` that add the same migration prefix, then merges every open,
+  non-draft PR targeting `main` together in a throwaway worktree, runs `go vet`
+  (all tag sets), `go test ./internal/db -run Migrat`, and the internal/api AST
+  guards over the result, and names every PR that breaks them. It also flags
+  any open PR stacked on a branch that is no longer open (merged or closed) and
+  so should have been retargeted to `main`.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

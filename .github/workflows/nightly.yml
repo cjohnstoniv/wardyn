@@ -539,19 +539,20 @@ jobs:
   # T-07: the collision scripts/check-migration-numbers.sh (make lint) cannot
   # see — two PRs open at once, each picking the next free migration number
   # off origin/main as it stood when THAT PR's own gate ran, both green in
-  # isolation. This merges every open, mergeable, main-targeted PR together
-  # (git's real octopus strategy, one `git merge` of every head at once) in a
-  # throwaway worktree and runs go vet (all tag sets), `go test ./internal/db
-  # -run Migrat`, and the internal/api AST guards over the result; on
-  # failure it falls back to merging the same PRs one at a time, in number
-  # order, to name the first PR whose addition broke it. Also flags any open
-  # PR stacked on a branch that is no longer open (merged/closed) and so
-  # should have been retargeted to main.
+  # isolation. It flags two open main-targeted PRs adding the same migration
+  # prefix (no merge needed), then merges every open, non-draft, main-targeted
+  # PR together, one at a time, in a throwaway worktree and runs go vet (all
+  # tag sets), `go test ./internal/db -run Migrat`, and the internal/api AST
+  # guards over the result. A binary search over the merge sequence names each
+  # PR that breaks them; PRs that conflict with an earlier one are set aside
+  # and listed. Also flags any open PR stacked on a branch that is no longer
+  # open (merged/closed) and so should have been retargeted to main. psql
+  # (preinstalled on ubuntu-latest) resets the database between check runs.
   #
   # Informational: it never merges or pushes anything for real, only reports.
-  # No measured baseline yet (new job) — 180 min budgets for the worst case,
-  # every open PR conflicting and a full one-at-a-time bisection; re-measure
-  # and tighten once nightly runs exist (docs/CI.md).
+  # No measured baseline yet (new job) — 180 min budgets for about 30 check
+  # runs (a live dry run against 92 open PRs: 4 bad PRs, a binary search
+  # each); re-measure and tighten once nightly runs exist (docs/CI.md).
   migration-merge-check:
     runs-on: ubuntu-latest
     timeout-minutes: 180

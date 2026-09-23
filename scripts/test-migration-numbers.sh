@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # test-migration-numbers.sh — check-migration-numbers.sh actually reads
-# origin/main, not just the working tree.
+# the branch it targets on origin, not just the working tree.
 #
 # The gate's whole point is comparing THIS branch's new migration numbers
 # against a remote it did not pick them from, so the fixture builds a real
@@ -47,8 +47,12 @@ git -C "$WORK" config user.name "test"
 mkdir -p "$WORK/scripts"
 cp "$ROOT/scripts/check-migration-numbers.sh" "$WORK/scripts/"
 
-run_gate() { (cd "$WORK" && ./scripts/check-migration-numbers.sh >/dev/null 2>&1); }
-gate_says() { (cd "$WORK" && ./scripts/check-migration-numbers.sh 2>&1 >/dev/null); }
+# The gate reads GITHUB_BASE_REF / GITHUB_REF_NAME, which CI sets for THIS
+# repo's build (a push build of feature/** would make every case skip), so the
+# fixture runs start without them and a case that needs one passes it in.
+gate() { (cd "$WORK" && env -u GITHUB_BASE_REF -u GITHUB_REF_NAME "$@" ./scripts/check-migration-numbers.sh); }
+run_gate() { gate "$@" >/dev/null 2>&1; }
+gate_says() { gate "$@" 2>&1 >/dev/null; }
 
 # 1. a new migration numbered past origin/main's max => pass.
 echo "-- ok" > "$WORK/internal/db/migrations/0004_new.sql"
@@ -82,7 +86,46 @@ rm "$WORK/internal/db/migrations/0002_behind.sql"
 run_gate || fail "an unmodified pre-existing migration set must PASS"
 echo "ok  unmodified tree passes"
 
-# 5. no 'origin' remote at all => skip (exit 0), never a hard failure — this
+# 5. the scenario the gate exists for: a sibling's 0004 lands on origin/main
+#    AFTER this branch forked, and this branch (fetched, never merged) adds
+#    its own 0004. The branch's own tree still stops at 0003, so a gate that
+#    compared against HEAD instead of origin/main would pass it.
+echo "-- sibling" > "$SEED/internal/db/migrations/0004_sibling.sql"
+git -C "$SEED" add -A
+git -C "$SEED" commit --quiet -m sibling
+git -C "$SEED" push --quiet origin main
+git -C "$WORK" fetch --quiet origin
+echo "-- mine" > "$WORK/internal/db/migrations/0004_mine.sql"
+if run_gate; then fail "0004 must FAIL once a sibling's 0004 is on origin/main"; fi
+out="$(gate_says || true)"
+printf '%s' "$out" | grep -q "0004_mine" || fail "the failure message must name 0004_mine: $out"
+echo "ok  a sibling's migration landing on origin/main after the fork fails the branch's same number"
+
+# 6. a PR build targeting another branch compares against THAT branch, which
+#    the gate fetches itself (this clone has never fetched it): release/0.8
+#    stops at 0003, so the same 0004 that collides on main passes there.
+git -C "$SEED" push --quiet origin HEAD~1:refs/heads/release/0.8
+run_gate GITHUB_BASE_REF=release/0.8 || fail "0004 must PASS against a release/0.8 that stops at 0003"
+echo "ok  GITHUB_BASE_REF picks the branch compared against"
+
+# 7. a push build of a branch other than main has no base to compare against
+#    and skips.
+out="$(gate GITHUB_REF_NAME=release/0.8 2>&1)" || fail "a push build of release/0.8 must SKIP (exit 0): $out"
+printf '%s' "$out" | grep -q "skipping" || fail "a push build of release/0.8 must say it skipped: $out"
+echo "ok  push build of a non-main branch skips"
+
+# 8. a checkout with no default fetch refspec (and so no refs/remotes/origin/*
+#    after a plain fetch) still compares against the real origin/main.
+git -C "$WORK" config --unset-all remote.origin.fetch
+git -C "$WORK" update-ref -d refs/remotes/origin/main
+git -C "$WORK" update-ref -d refs/remotes/origin/release/0.8 2>/dev/null || true
+out="$(gate_says || true)"
+printf '%s' "$out" | grep -q "0004_mine" \
+  || fail "0004 must still FAIL, naming 0004_mine, when origin/main is fetched without a default refspec: $out"
+echo "ok  no default fetch refspec still fetches origin/main"
+rm "$WORK/internal/db/migrations/0004_mine.sql"
+
+# 9. no 'origin' remote at all => skip (exit 0), never a hard failure — this
 #    gate degrades gracefully rather than blocking `make lint` offline.
 NOORIGIN="$TMP/noorigin"
 git init --quiet -b main "$NOORIGIN"
