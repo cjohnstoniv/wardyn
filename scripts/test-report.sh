@@ -40,15 +40,26 @@ GO_EXIT=$?
 # G11: a red `build`/`test-pg` job used to say only `make: *** [Makefile:195:
 # test-report] Error 1` — the failing test names and any compiler output were
 # visible only in the uploaded JSON artifact (gh run download -n
-# go-test-reports). Surface both directly in the job log on a red run.
+# go-test-reports). Surface both directly in the job log on a red run, plus
+# any package that failed with no failing test to name (a -timeout panic, a
+# panic in init, os.Exit or a failure in TestMain): its package name and the
+# panic, or else its last few output lines.
 if [ "$GO_EXIT" -ne 0 ] && [ -s "$OUT/test-output.json" ] && command -v python3 >/dev/null 2>&1; then
   python3 - "$OUT/test-output.json" >&2 <<'PYEOF'
 import json
 import sys
+from collections import deque
 
 fails = set()
 build_output = {}  # ImportPath -> [Output, ...], buffered until we see build-fail
 build_fails = {}   # ImportPath -> [Output, ...]
+pkg_fails = set()  # Package: failed with no Test and not a build failure
+tail = {}          # Package -> its last few output lines
+panics = {}        # Package -> its first `panic:` line and the lines after it
+
+
+def emit(out):
+    sys.stdout.write(">>     " + out if out.endswith("\n") else ">>     " + out + "\n")
 
 with open(sys.argv[1]) as f:
     for line in f:
@@ -65,8 +76,20 @@ with open(sys.argv[1]) as f:
         elif action == "build-fail":
             ip = ev.get("ImportPath", "")
             build_fails[ip] = build_output.get(ip, [])
+        elif action == "output" and ev.get("Package"):
+            pkg, out = ev["Package"], ev.get("Output", "")
+            tail.setdefault(pkg, deque(maxlen=8)).append(out)
+            # A -timeout panic is attributed to the running test but emits no
+            # fail event for it, and its last lines are goroutine frames: the
+            # `panic:` line and the ones after it are what name the cause.
+            if pkg not in panics and out.startswith("panic: "):
+                panics[pkg] = [out]
+            elif pkg in panics and len(panics[pkg]) < 8:
+                panics[pkg].append(out)
         elif action == "fail" and ev.get("Test"):
             fails.add((ev.get("Package", ""), ev["Test"]))
+        elif action == "fail" and not ev.get("FailedBuild"):
+            pkg_fails.add(ev.get("Package", ""))
 
 if fails:
     print(">> failing tests:")
@@ -78,7 +101,15 @@ if build_fails:
     for ip, lines in sorted(build_fails.items()):
         print(f">>   {ip}")
         for out in lines:
-            sys.stdout.write(">>     " + out if out.endswith("\n") else ">>     " + out + "\n")
+            emit(out)
+
+unnamed = sorted(pkg_fails - {pkg for pkg, _ in fails})
+if unnamed:
+    print(">> failed outside any named test:")
+    for pkg in unnamed:
+        print(f">>   {pkg}")
+        for out in panics.get(pkg) or tail.get(pkg, []):
+            emit(out)
 PYEOF
 fi
 
