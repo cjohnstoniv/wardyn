@@ -956,8 +956,10 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
   try {
     // The rollout replaced the pod; wait for the new one to actually serve
     // before driving a browser at it.
+    // The old pod drops its connections mid-rollout (ECONNRESET); a thrown
+    // request is "not serving yet", not a failure.
     await expect
-      .poll(async () => (await request.get("/healthz")).status(), { timeout: 120_000 })
+      .poll(async () => (await request.get("/healthz").catch(() => null))?.status() ?? 0, { timeout: 120_000 })
       .toBe(200);
 
     await dexSignIn(page, MEMBER_EMAIL);
