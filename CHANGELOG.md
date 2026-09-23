@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A secret-store or site-config outage no longer tells a person to reconnect Azure DevOps
+  (#447).** When the per-user Azure DevOps sign-in state could not be read, launching a run used to
+  refuse with "you are not connected to Azure DevOps", and `GET /me/scm-access` answered 200 with
+  a `not_configured` row or an empty array. Every launch door (run create, Build, Scan, record) now
+  answers 503 `roster_unreadable`, and `/me/scm-access` answers 500. Setup status and preflight
+  leave the Azure DevOps fact out rather than guess. Both sign-in doors (the console login and the
+  dedicated sign-in) now store the same scopes: those granted within the row's ceiling.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

@@ -591,6 +591,21 @@ func adoEntraSplitScope(raw string) []string {
 	})
 }
 
+// adoCaptureScopes is what a capture stores from a token response's granted
+// scope string: the row's ceiling intersected with what was granted, in the
+// ceiling's order. Both capture doors (the console login and the dedicated
+// sign-in) record the same fact through this one helper.
+func adoCaptureScopes(granted string, ceiling []string) []string {
+	have := adoEntraSplitScope(granted)
+	var out []string
+	for _, sc := range ceiling {
+		if slices.Contains(have, sc) {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
 // auditADOCapture emits the one audit action the sign-in owns. outcome is
 // "success" or "failure"; data names the row, the tenant, the scopes granted
 // and — on a refusal — the class. It never carries a token.

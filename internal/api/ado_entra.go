@@ -602,11 +602,11 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	granted := adoEntraSplitScope(resp.Scope)
+	granted := adoCaptureScopes(resp.Scope, cfg.Scopes)
 	if resp.RefreshToken == "" || len(granted) == 0 {
 		// No refresh token means nothing to store and nothing to renew; no
-		// granted scope means the authority told us nothing about what this
-		// credential may do. Either way there is no usable capture.
+		// granted scope inside the row's ceiling means this credential may do
+		// nothing a run could use. Either way there is no usable capture.
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": "unusable_grant", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})

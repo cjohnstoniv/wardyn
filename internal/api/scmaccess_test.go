@@ -67,9 +67,10 @@ func TestScmAccessSourceFor(t *testing.T) {
 type scmTestStore struct {
 	store.Store
 	site types.SiteConfig
+	err  error // a failed site-config read, when set
 }
 
-func (s *scmTestStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, nil }
+func (s *scmTestStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, s.err }
 
 const scmTestRowID = "ado-row-1"
 
@@ -121,12 +122,22 @@ func adoTestEntraSource(context.Context) (ADOEntraConfig, bool, error) {
 	}, true, nil
 }
 
+// scmAccessRows is computeSCMAccessRowsFor for a case whose reads succeed.
+func scmAccessRows(t *testing.T, s *Server, ctx context.Context, sc types.SiteConfig, subject string) []SCMAccess {
+	t.Helper()
+	rows, err := s.computeSCMAccessRowsFor(ctx, sc, subject)
+	if err != nil {
+		t.Fatalf("computeSCMAccessRowsFor: %v", err)
+	}
+	return rows
+}
+
 // ── computeSCMAccessRowsFor / scmAccessValue — row-shaped grading ─────────
 
 func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("no Azure DevOps row: empty", func(t *testing.T) {
 		s := newSCMTestServer(t, types.SiteConfig{}, false)
-		rows := s.computeSCMAccessRowsFor(context.Background(), types.SiteConfig{}, "alice")
+		rows := scmAccessRows(t, s, context.Background(), types.SiteConfig{}, "alice")
 		if len(rows) != 0 {
 			t.Fatalf("got %+v, want none", rows)
 		}
@@ -135,7 +146,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("a disabled row is the same as no row", func(t *testing.T) {
 		sc := adoTestSiteConfig(true)
 		s := newSCMTestServer(t, sc, true)
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "alice")
+		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
 		if len(rows) != 0 {
 			t.Fatalf("got %+v, want none", rows)
 		}
@@ -144,7 +155,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("a SHARED row (no entra) is never graded (F4) — not shared_expired, not live, nothing", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, false)
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "alice")
+		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
 		if len(rows) != 0 {
 			t.Fatalf("got %+v, want none — a plain PAT row must report nothing, not shared_expired", rows)
 		}
@@ -154,7 +165,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, false)
 		s.cfg.Secrets.(*memSecrets).m["git-pat-dev-azure-com"] = []byte("x")
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "alice")
+		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
 		if len(rows) != 0 {
 			t.Fatalf("got %+v, want none — secret presence must never be graded into a state (F4)", rows)
 		}
@@ -163,7 +174,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("per-user row, never signed in: one row, not_configured, row-is-newer cause", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, true)
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "alice")
+		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
 		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured || rows[0].Cause != scmAccessCauseRowIsNewer || rows[0].Kind != string(types.GitProviderAzureDevOps) {
 			t.Fatalf("got %+v, want one row state=not_configured cause=row_is_newer kind=azure_devops", rows)
 		}
@@ -179,7 +190,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("store blob: %v", err)
 		}
-		rows := s.computeSCMAccessRowsFor(ctx, sc, "alice")
+		rows := scmAccessRows(t, s, ctx, sc, "alice")
 		if len(rows) != 1 || rows[0].State != modelAccessLive || rows[0].Source != scmAccessSourceOrg {
 			t.Fatalf("got %+v, want one row state=live source=org", rows)
 		}
@@ -195,7 +206,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("store blob: %v", err)
 		}
-		rows := s.computeSCMAccessRowsFor(ctx, sc, "alice")
+		rows := scmAccessRows(t, s, ctx, sc, "alice")
 		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured {
 			t.Fatalf("alice read bob's connection: got %+v", rows)
 		}
@@ -204,7 +215,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("per-user row, a mechanism caller (no OIDC subject): not_applicable", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, true)
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "")
+		rows := scmAccessRows(t, s, context.Background(), sc, "")
 		if len(rows) != 1 || rows[0].State != modelAccessNotApplicable {
 			t.Fatalf("got %+v, want one row state=not_applicable", rows)
 		}
