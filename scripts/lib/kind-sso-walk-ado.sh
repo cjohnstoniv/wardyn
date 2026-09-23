@@ -278,5 +278,23 @@ jq -e --arg m "${MEMBER_SUB}" '.callers[$m].endpoints["projects.get"] >= 1 and .
 jq -e --arg a "${ADMIN_SUB}" '.callers | has($a) | not' "${EVIDENCE_DIR}/seen.json" >/dev/null \
   || die "the admin's subject reached the fake Azure DevOps (see ${EVIDENCE_DIR}/seen.json)"
 
+# ── 8. the browser leg (#751) ────────────────────────────────────────────────
+# Everything above is curl: no browser has ever driven the console's own
+# Azure DevOps connect UI against this cluster. ui/e2e/live/ado-connect.spec.ts
+# signs a real Chromium in through the same fake Entra picker, then asserts
+# the #628 client contract on the real /settings connect popup — that it
+# never leaves the person sitting on about:blank, and that a blocked popup
+# falls back to a plain link, not a stranded dialog. ${FAKE_LOCAL} is still
+# up (the port-forward opened in step 2 lives until this script's trap), so
+# it is the browser's route to "login.microsoftonline.com" too.
+step "running the browser leg (ui/e2e/live/ado-connect.spec.ts)"
+export WARDYN_TEST_K8S=1
+export WARDYN_E2E_LIVE_BASE_URL="${BASE_URL}"
+export WARDYN_LIVE_ADO_MEMBER_EMAIL="${MEMBER_USER}"
+export WARDYN_LIVE_ADO_PROXY_URL="${FAKE_LOCAL}"
+./scripts/run-ui-e2e.sh ado-connect 2>&1 | tee "${EVIDENCE_DIR}/browser-leg.log"
+browser_rc="${PIPESTATUS[0]}"
+[[ "${browser_rc}" == "0" ]] || die "the ado-connect browser leg failed (see ${EVIDENCE_DIR}/browser-leg.log)"
+
 echo
 echo "kind-sso-walk (ado): PASS — evidence in ${EVIDENCE_DIR}"
