@@ -44,9 +44,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   call waited. Dispatch now mirrors that ceiling onto a hold-mode run's sandbox env;
   `wardyn-toolgate` defaults its deadline to it, and `agent-run` sets `MCP_TOOL_TIMEOUT` to the
   ceiling plus 15 minutes whenever that exceeds Claude Code's own ~27.8h default, so the gate's
-  deny, not a Claude Code timeout, ends a call held to the ceiling. `wardyn-toolgate` also polls
-  once more after its deadline, catching a decision that landed while its last poll interval
-  slept past it.
+  deny, not a Claude Code timeout, ends a call held to the ceiling. Above a ~596h ceiling that
+  export would exceed Claude Code's own ~24.85 day clamp on the value (2^31-1 ms); past that
+  point `agent-run` caps `MCP_TOOL_TIMEOUT` at the clamp and passes `wardyn-toolgate` a
+  `-deadline` 15 minutes under it, so the gate's deny still wins the race no matter how high the
+  ceiling is raised. `wardyn-toolgate` also polls once more after its deadline, catching a
+  decision that landed while its last poll interval slept past it.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and

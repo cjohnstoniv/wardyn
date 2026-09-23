@@ -142,8 +142,9 @@ function isStale(requestedAt: string, ceilingMs: number): boolean {
 //
 //  - tool_call — wardyn-toolgate blocks the agent's tool call on the PENDING
 //    row itself and polls until it is decided (cmd/wardyn-toolgate/main.go's
-//    -deadline is a 24h ceiling for a control plane that stopped answering,
-//    not a hold timeout), and the scope it raises is {tool,cmd,env} with no
+//    -deadline mirrors the operator's own approval ceiling and normally denies
+//    the call BEFORE the row's own server-side expiry sweeps it EXPIRED), and
+//    the scope it raises is {tool,cmd,env} with no
 //    mode at all (internal/egress/proxy/local_routes.go). PENDING alone IS the
 //    hold here, so nothing client-side bounds it the way HOLD_TIMEOUT_MS
 //    bounds the egress case — the row's own server-side expiry ends it. It

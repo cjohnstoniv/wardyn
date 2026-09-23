@@ -60,10 +60,13 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	// every agent's environment as the standard proxy variable.
 	base := fs.String("base", os.Getenv("HTTP_PROXY"), "brokered API base URL (default: $HTTP_PROXY — the egress proxy)")
 	poll := fs.Duration("poll", 2*time.Second, "approval poll interval")
-	// A ceiling, not a timeout in the UX sense: claude blocks on this call for
-	// as long as we keep polling, and the approval itself expires server-side
-	// (FSM EXPIRED -> deny) long before this. This only bounds a gate whose
-	// control plane stopped answering entirely.
+	// -deadline IS the approval ceiling now (mirrored from
+	// WARDYN_APPROVAL_EXPIRY_AFTER, the same value the approval-expiry sweeper
+	// uses), not a distinct "control plane stopped answering" bound: claude
+	// blocks on this call for as long as we keep polling, and this gate's own
+	// deadline-reached deny normally lands the tool call BEFORE the sweeper's
+	// EXPIRED does — the sweeper only ticks every sweep interval (10m
+	// default), so its FSM transition can trail this deny by up to that long.
 	//
 	// Defaults from WARDYN_APPROVAL_EXPIRY_AFTER (dispatch sets it to the
 	// operator's actual approval-expiry-after when tool_approvals=hold) rather
