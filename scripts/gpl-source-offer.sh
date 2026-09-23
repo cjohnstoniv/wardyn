@@ -89,7 +89,13 @@ for b in ${BOOTSTRAP_IMAGES:-}; do
 done
 
 # Commit the bootstrap note below can point at, so "scanned before
-# publication" names something concrete instead of just asserting it.
+# publication" names something concrete instead of just asserting it. This is
+# HEAD at the time this SCRIPT runs, not necessarily the commit the local
+# image was actually built from — the two drift the moment a commit lands
+# between `make agent-image-<name>` and this script (see the header's
+# bootstrap recipe: build, then scan, then run this). It is the best proxy
+# available; the dirty-tree check below closes the one case that would make
+# it actively wrong rather than merely stale.
 SCAN_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 # ── manual supplements: components syft cannot see ──────────────────────────
@@ -148,6 +154,21 @@ if [ "${#missing[@]}" -gt 0 ]; then
   echo "FATAL: no SBOM for:" >&2
   printf '  %s\n' "${missing[@]}" >&2
   echo "Scan the published digest (previous tag), or for a first-time publish the local build — see this script's header." >&2
+  exit 1
+fi
+
+# A bootstrap entry's note names SCAN_SHA as the commit the local image was
+# built from (see above). On a dirty tree that claim is actively false — the
+# image was built from a working copy no commit describes — so refuse rather
+# than write a note that names the wrong source. Only bootstrap entries use
+# SCAN_SHA at all, so a dirty tree elsewhere (an unrelated in-progress edit)
+# does not block a run that only re-scans already-published images.
+bootstrap_imgs=()
+for img in "${!IS_BOOTSTRAP[@]}"; do
+  [ "${IS_BOOTSTRAP[$img]}" = 1 ] && bootstrap_imgs+=("$img")
+done
+if [ "${#bootstrap_imgs[@]}" -gt 0 ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "FATAL: working tree is dirty and this run needs SCAN_SHA for bootstrap image(s) ${bootstrap_imgs[*]} — commit or stash first. A dirty-tree build's SCAN_SHA note would name a commit the local image wasn't actually built from." >&2
   exit 1
 fi
 
