@@ -140,11 +140,12 @@ func TestDeriveRoleArm1UntouchedBySecurityAdmin(t *testing.T) {
 
 // TestDeriveRoleUnknownMapValueIsInert: a value that is not a valid role
 // contributes nothing to the fold AND produces no Match — the exhaustive-case
-// behavior of the pre-0.7 switch, now expressed as a ValidRole guard. Without
+// behavior of the pre-0.7 switch, now expressed as a SplitMappingTarget guard
+// (a lowercase slug would be a user type id, so the garbage here is not one). Without
 // it, a garbage row would rank 0 yet still appear in the provenance list as if
 // it had been consulted.
 func TestDeriveRoleUnknownMapValueIsInert(t *testing.T) {
-	roleMap := map[string]string{"eng-team": oidc.RoleUser, "weird": "superadmin"}
+	roleMap := map[string]string{"eng-team": oidc.RoleUser, "weird": "Super_Admin"}
 	role, matches, ok := oidc.DeriveRoleForTest([]string{"weird"}, []string{"eng-team"}, "", roleMap, nil, "")
 	if !ok || role != oidc.RoleUser {
 		t.Fatalf("role = %q ok=%v, want %q true", role, ok, oidc.RoleUser)
@@ -231,7 +232,7 @@ func TestParseRoleMapAcceptsSecurityAdmin(t *testing.T) {
 	if m["wardyn.security"] != oidc.RoleSecurityAdmin {
 		t.Fatalf("parsed map = %v, want wardyn.security => %q", m, oidc.RoleSecurityAdmin)
 	}
-	_, err = oidc.ParseRoleMap("x=superadmin")
+	_, err = oidc.ParseRoleMap("x=Super_Admin")
 	if err == nil {
 		t.Fatal("ParseRoleMap accepted an invalid role")
 	}

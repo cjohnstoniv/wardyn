@@ -682,6 +682,10 @@ const (
 	// above it — and a row naming the wrong one sends an incident review to the
 	// credential-stuffing runbook for what is a cross-origin page.
 	csrfActor = "wardyn/csrf"
+	// oidcCallbackActor is the SSO sign-in callback, refusing a login the
+	// IdP approved because of what the role map makes of it (a user type
+	// that is ambiguous or does not exist).
+	oidcCallbackActor = "wardyn/oidcCallback"
 )
 
 // auditAuthFailedAs is the ONE rate-bound emit every authentication refusal

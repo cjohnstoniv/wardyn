@@ -82,6 +82,15 @@ func RoleFromContext(ctx context.Context) string {
 	return r
 }
 
+// UserTypeFromContext returns the user type id stamped on the session
+// Middleware verified at sign-in, or "" when there is no SSO session. It is
+// published verbatim, beside the tier: "view as member" clamps the tier and
+// leaves the type alone.
+func UserTypeFromContext(ctx context.Context) string {
+	t, _ := ctx.Value(userTypeCtxKey{}).(string)
+	return t
+}
+
 // ExpiryFromContext returns when the session Middleware verified will expire,
 // or the zero time when there is no SSO session. W31-S1-7: there is no
 // refresh — the session dies outright at this instant — so the console
@@ -188,6 +197,7 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 		role = RoleUser
 	}
 	ctx = context.WithValue(ctx, roleCtxKey{}, role)
+	ctx = context.WithValue(ctx, userTypeCtxKey{}, sess.UserType)
 	ctx = context.WithValue(ctx, memberModeCtxKey{}, sess.MemberMode)
 	// The preview posture, ANDed with the mode rather than copied: a cookie
 	// hand-built with "mmnc" and no "mm" is inert, so the bit is never a
@@ -212,6 +222,10 @@ type nameCtxKey struct{}
 // roleCtxKey is the context key for the session's derived role.
 // Unexported: use RoleFromContext.
 type roleCtxKey struct{}
+
+// userTypeCtxKey is the context key for the session's user type.
+// Unexported: use UserTypeFromContext.
+type userTypeCtxKey struct{}
 
 // groupsCtxKey is the context key for the session's login-time group snapshot.
 // Unexported: use GroupsFromContext.

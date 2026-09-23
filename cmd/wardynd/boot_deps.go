@@ -8,7 +8,9 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -376,6 +378,10 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// Wired unconditionally the same way Revocations is — pool is
 			// already required whenever OIDC boots at all.
 			RoleMappings: roleMappingsFor(pool),
+			// UserTypes (0.8): the user types a role-map value may name, read
+			// once per login beside RoleMappings and failing the login closed
+			// the same way. store.PG already has the one method it needs.
+			UserTypes: store.NewPG(pool),
 			// OnLogin (migration 0046, widened by #152): every successful login
 			// re-stamps role+role_checked_at on every ssh_public_keys row this
 			// principal owns — the bounded-stale re-check sshAuth's admin-override
@@ -418,6 +424,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 				"boot continues past this ONLY with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set (set the operator list instead to make everyone else a member)")
 		}
 		warnRoleMapPosture(roleMap, f, defaultRole)
+		warnUnknownUserTypes(bootCtx, store.NewPG(pool), roleMap, defaultRole)
 	}
 
 	// The second boot refusal (validateConfig, main.go, is the first): SSO
@@ -641,8 +648,9 @@ func componentsInfo(f *bootFlags, runnerTarget string, recStore recording.Store)
 }
 
 // validDefaultRole reports whether role is admissible as
-// WARDYN_OIDC_DEFAULT_ROLE. STRICTER than oidc.ValidRole on exactly one value:
-// oidc.RoleSecurityAdmin is refused, and boot FAILS CLOSED on it.
+// WARDYN_OIDC_DEFAULT_ROLE: admin, user, or a user type id (0.8), which is the
+// user tier on that type. STRICTER than oidc.ValidMappingTarget on exactly one
+// value: oidc.RoleSecurityAdmin is refused, and boot FAILS CLOSED on it.
 //
 // The default role is what a signed-in human falls through to when NOTHING in
 // the merged role map matched them — i.e. the tier granted by accident, to
@@ -657,7 +665,7 @@ func componentsInfo(f *bootFlags, runnerTarget string, recStore recording.Store)
 // misconfiguration produces no error at any point, just a quietly over-powered
 // org, discovered at audit time.
 func validDefaultRole(role string) bool {
-	return oidc.ValidRole(role) && role != oidc.RoleSecurityAdmin
+	return oidc.ValidMappingTarget(role) && role != oidc.RoleSecurityAdmin
 }
 
 // parseDefaultRole validates WARDYN_OIDC_DEFAULT_ROLE, accepting the pre-0.8
@@ -669,10 +677,44 @@ func parseDefaultRole(raw string) (string, error) {
 		role = oidc.RoleUser
 	}
 	if role != "" && !validDefaultRole(role) {
-		return "", fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
+		return "", fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q, %q or a user type id (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
 			role, oidc.RoleAdmin, oidc.RoleUser, oidc.RoleSecurityAdmin)
 	}
 	return role, nil
+}
+
+// warnUnknownUserTypes WARNs once per WARDYN_OIDC_ROLE_MAP value, and for
+// WARDYN_OIDC_DEFAULT_ROLE, that names a user type the store does not hold. A
+// WARN, not a refusal: the type may be created in the console after boot. Until
+// it exists, a sign-in that reaches the value is refused (user_type_unknown),
+// never given a wider default.
+func warnUnknownUserTypes(ctx context.Context, src oidc.UserTypeSource, roleMap map[string]string, defaultRole string) {
+	named := map[string][]string{}
+	for k, v := range roleMap {
+		if _, ut, ok := oidc.SplitMappingTarget(v); ok && ut != types.UserTypeStandard && ut != "" {
+			named[ut] = append(named[ut], "WARDYN_OIDC_ROLE_MAP entry "+strconv.Quote(k+"="+v))
+		}
+	}
+	if _, ut, ok := oidc.SplitMappingTarget(defaultRole); ok && ut != types.UserTypeStandard && ut != "" {
+		named[ut] = append(named[ut], "WARDYN_OIDC_DEFAULT_ROLE")
+	}
+	if len(named) == 0 {
+		return
+	}
+	list, err := src.ListUserTypes(ctx)
+	if err != nil {
+		slog.Warn("wardynd: could not read user types to check the role map; sign-ins that reach a missing one are refused", "error", err)
+		return
+	}
+	for _, t := range list {
+		delete(named, t.ID)
+	}
+	for _, id := range slices.Sorted(maps.Keys(named)) {
+		refs := named[id]
+		slices.Sort(refs)
+		slog.Warn("wardynd: the user type "+strconv.Quote(id)+" doesn't exist yet; sign-ins it decides are refused until it is created or the value is remapped",
+			"named_by", refs)
+	}
 }
 
 // chartMapHasNoAdminPath reports whether the chart role map grants

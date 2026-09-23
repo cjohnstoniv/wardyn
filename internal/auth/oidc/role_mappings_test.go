@@ -37,7 +37,7 @@ func (f *fakeRoleMappingSource) ListRoleMappings(context.Context) ([]writoidc.Ro
 // newRoleMappingAuth is newRoleAuth (see oidc_test.go) plus a
 // Config.RoleMappings source — a local variant rather than widening
 // newRoleAuth's signature, which every other role-derivation test also calls.
-func (e *idpEnv) newRoleMappingAuth(t *testing.T, roleMap map[string]string, defaultRole string, legacyAdminEmails []string, mappings writoidc.RoleMappingSource) *writoidc.Authenticator {
+func (e *idpEnv) newRoleMappingAuth(t *testing.T, roleMap map[string]string, defaultRole string, legacyAdminEmails []string, mappings writoidc.RoleMappingSource, opts ...func(*writoidc.Config)) *writoidc.Authenticator {
 	t.Helper()
 	rt := &rewriteTokenRT{
 		base:          http.DefaultTransport,
@@ -55,11 +55,26 @@ func (e *idpEnv) newRoleMappingAuth(t *testing.T, roleMap map[string]string, def
 		LegacyAdminEmails: legacyAdminEmails,
 		RoleMappings:      mappings,
 	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	auth, err := writoidc.New(ctx, cfg, testHMACKey)
 	if err != nil {
 		t.Fatalf("writoidc.New: %v", err)
 	}
 	return auth
+}
+
+// previewTuple and againstTuple flatten the two previews' Derivation into the
+// (role, matched, ok) shape these tier-only cases were written against.
+func previewTuple(auth *writoidc.Authenticator, roles, groups []string, email string) (string, []writoidc.Match, bool, error) {
+	d, err := auth.PreviewRole(context.Background(), roles, groups, email)
+	return d.Role, d.Matches, d.OK(), err
+}
+
+func againstTuple(auth *writoidc.Authenticator, rows []writoidc.RoleMapping, roles, groups []string, email string) (string, bool) {
+	d := auth.PreviewRoleAgainst(rows, nil, roles, groups, email)
+	return d.Role, d.OK()
 }
 
 // ─── mergeRoleMaps: pure-function table tests ─────────────────────────────────
@@ -347,7 +362,7 @@ func TestPreviewRoleParityWithCallback(t *testing.T) {
 	store := &fakeRoleMappingSource{rows: []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}}
 	auth := env.newRoleMappingAuth(t, nil, "", nil, store)
 
-	previewRole, _, previewOK, err := auth.PreviewRole(context.Background(), nil, []string{"eng-team"}, "carol@corp.example")
+	previewRole, _, previewOK, err := previewTuple(auth, nil, []string{"eng-team"}, "carol@corp.example")
 	if err != nil {
 		t.Fatalf("PreviewRole: %v", err)
 	}
@@ -366,7 +381,7 @@ func TestPreviewRoleErrorPropagation(t *testing.T) {
 	wantErr := errors.New("pg: connection refused")
 	auth := env.newRoleMappingAuth(t, nil, "", nil, &fakeRoleMappingSource{err: wantErr})
 
-	role, matched, ok, err := auth.PreviewRole(context.Background(), nil, nil, "x@corp.example")
+	role, matched, ok, err := previewTuple(auth, nil, nil, "x@corp.example")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
 	}
@@ -391,7 +406,7 @@ func TestPreviewRoleProvenance(t *testing.T) {
 		// MatchSourceOperatorAllowlist, the SAME source arm 2 uses below, as
 		// the ONLY Match, one entry exactly.
 		auth := env.newRoleMappingAuth(t, nil, "", []string{"ops@corp.example"}, nil)
-		role, matched, ok, err := auth.PreviewRole(context.Background(), nil, nil, "ops@corp.example")
+		role, matched, ok, err := previewTuple(auth, nil, nil, "ops@corp.example")
 		if err != nil || !ok || role != writoidc.RoleAdmin {
 			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleAdmin)
 		}
@@ -402,7 +417,7 @@ func TestPreviewRoleProvenance(t *testing.T) {
 
 	t.Run("operator email", func(t *testing.T) {
 		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", []string{"ops@corp.example"}, nil)
-		role, matched, ok, err := auth.PreviewRole(context.Background(), nil, []string{"eng-team"}, "ops@corp.example")
+		role, matched, ok, err := previewTuple(auth, nil, []string{"eng-team"}, "ops@corp.example")
 		if err != nil || !ok || role != writoidc.RoleAdmin {
 			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleAdmin)
 		}
@@ -413,7 +428,7 @@ func TestPreviewRoleProvenance(t *testing.T) {
 
 	t.Run("map row", func(t *testing.T) {
 		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", nil, nil)
-		role, matched, ok, err := auth.PreviewRole(context.Background(), nil, []string{"eng-team"}, "eng@corp.example")
+		role, matched, ok, err := previewTuple(auth, nil, []string{"eng-team"}, "eng@corp.example")
 		if err != nil || !ok || role != writoidc.RoleUser {
 			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleUser)
 		}
@@ -424,7 +439,7 @@ func TestPreviewRoleProvenance(t *testing.T) {
 
 	t.Run("default role fallthrough", func(t *testing.T) {
 		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, writoidc.RoleUser, nil, nil)
-		role, matched, ok, err := auth.PreviewRole(context.Background(), nil, nil, "nobody@corp.example")
+		role, matched, ok, err := previewTuple(auth, nil, nil, "nobody@corp.example")
 		if err != nil || !ok || role != writoidc.RoleUser {
 			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleUser)
 		}
@@ -517,12 +532,12 @@ func TestPreviewRoleAgainstParityWithPreviewRole(t *testing.T) {
 	store := &fakeRoleMappingSource{rows: rows}
 	auth := env.newRoleMappingAuth(t, nil, "", nil, store)
 
-	wantRole, _, wantOK, err := auth.PreviewRole(context.Background(), nil, []string{"eng-team"}, "carol@corp.example")
+	wantRole, _, wantOK, err := previewTuple(auth, nil, []string{"eng-team"}, "carol@corp.example")
 	if err != nil {
 		t.Fatalf("PreviewRole: %v", err)
 	}
 
-	gotRole, gotOK := auth.PreviewRoleAgainst(rows, nil, []string{"eng-team"}, "carol@corp.example")
+	gotRole, gotOK := againstTuple(auth, rows, nil, []string{"eng-team"}, "carol@corp.example")
 	if gotRole != wantRole || gotOK != wantOK {
 		t.Errorf("PreviewRoleAgainst = (%q, %v), want parity with PreviewRole (%q, %v)", gotRole, gotOK, wantRole, wantOK)
 	}
@@ -537,7 +552,7 @@ func TestPreviewRoleAgainstNoStoreRead(t *testing.T) {
 	poisoned := &fakeRoleMappingSource{err: errors.New("must never be called")}
 	auth := env.newRoleMappingAuth(t, nil, "", nil, poisoned)
 
-	role, ok := auth.PreviewRoleAgainst(
+	role, ok := againstTuple(auth,
 		[]writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleAdmin}},
 		nil, []string{"eng-team"}, "",
 	)
@@ -561,7 +576,7 @@ func TestPreviewRoleAgainstLockoutScenario(t *testing.T) {
 		{Value: "admins", Role: writoidc.RoleAdmin},
 		{Value: "other-team", Role: writoidc.RoleUser},
 	}
-	role, ok := auth.PreviewRoleAgainst(before, nil, []string{"admins"}, "admin@corp.example")
+	role, ok := againstTuple(auth, before, nil, []string{"admins"}, "admin@corp.example")
 	if !ok || role != writoidc.RoleAdmin {
 		t.Fatalf("before delete: role = %q, ok = %v, want (%q, true)", role, ok, writoidc.RoleAdmin)
 	}
@@ -571,7 +586,7 @@ func TestPreviewRoleAgainstLockoutScenario(t *testing.T) {
 	// survives, so the merged map stays non-empty (arm 2) — this caller's
 	// "admins" group now matches nothing in it, and no DefaultRole is set.
 	after := []writoidc.RoleMapping{{Value: "other-team", Role: writoidc.RoleUser}}
-	role, ok = auth.PreviewRoleAgainst(after, nil, []string{"admins"}, "admin@corp.example")
+	role, ok = againstTuple(auth, after, nil, []string{"admins"}, "admin@corp.example")
 	if ok {
 		t.Fatalf("after delete: role = %q, ok = %v, want ok=false (this admin would no longer derive any role — the lockout the guard exists to catch)", role, ok)
 	}
