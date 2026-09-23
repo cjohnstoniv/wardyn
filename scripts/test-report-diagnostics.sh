@@ -9,7 +9,7 @@
 # error entirely).
 #
 # Runs the real script against a throwaway Go module with one failing test,
-# one package that fails to COMPILE, and two that fail with no test to name
+# one test that panics, one package that fails to COMPILE, and two that fail with no test to name
 # (os.Exit in TestMain, a panic in init), and asserts the failing test's name,
 # the compiler's own error text and each package's cause all land on stderr.
 #
@@ -28,7 +28,16 @@ module reportfixture
 go 1.23
 EOF
 
-mkdir -p "$TMP/failpkg" "$TMP/buildbrokenpkg" "$TMP/mainexitpkg" "$TMP/initpanicpkg"
+mkdir -p "$TMP/failpkg" "$TMP/testpanicpkg" "$TMP/buildbrokenpkg" "$TMP/mainexitpkg" "$TMP/initpanicpkg"
+cat > "$TMP/testpanicpkg/p_test.go" <<'EOF'
+package testpanicpkg
+
+import "testing"
+
+func TestPanics(t *testing.T) {
+	panic("fixture test exploded")
+}
+EOF
 cat > "$TMP/failpkg/f_test.go" <<'EOF'
 package failpkg
 
@@ -94,6 +103,16 @@ for want in "mainexitpkg" "setup: cannot reach the fixture database" "initpanicp
 $OUT"
 done
 echo "ok  names a package that failed outside any test"
+
+# An ordinary panic inside a test is that test's failure: it is named under
+# the failing tests and must not also be listed as failing outside any test.
+echo "$OUT" | grep -q "testpanicpkg TestPanics" \
+  || fail "stderr must name the test that panicked (testpanicpkg TestPanics) — got:
+$OUT"
+echo "$OUT" | sed -n '/failed outside any named test:/,$p' | grep -q "testpanicpkg" \
+  && fail "a test's own panic must not list its package as failing outside any named test — got:
+$OUT"
+echo "ok  a panic inside a named test is not reported as outside any test"
 
 # A package can have BOTH a named failing test and a -timeout panic (the
 # panic kills the package after the named failure is already recorded). The
