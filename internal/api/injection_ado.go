@@ -138,12 +138,7 @@ func (s *Server) adoRequestScopes(ctx context.Context, cfg ADOEntraConfig, owner
 	if err != nil || !found {
 		return cfg.Scopes
 	}
-	var out []string
-	for _, sc := range cfg.Scopes {
-		if slices.Contains(blob.Scopes, sc) {
-			out = append(out, sc)
-		}
-	}
+	out := intersect(cfg.Scopes, blob.Scopes)
 	if len(out) == 0 {
 		return cfg.Scopes
 	}
@@ -248,7 +243,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	}
 	scopes := s.adoRequestScopes(ctx, cfg, snapshot.OwnerSubject)
 	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, false)
-	if err == nil && capAsk.capability != "" && !adoScopesWithin(need, access.Scopes) {
+	if err == nil && capAsk.capability != "" && !subsetOf(need, access.Scopes) {
 		access, err = s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, true)
 	}
 	if err != nil {
@@ -397,7 +392,7 @@ func (sn adoEntraScopeSnapshot) driftFrom(sc types.SiteConfig) string {
 		return "token_mode"
 	case !rowServesOrganisation(row, sn.Organisation):
 		return "organisation"
-	case !adoCapabilitiesWithin(sn.Capabilities, row.Entra.CapabilityCeiling):
+	case !subsetOf(sn.Capabilities, row.Entra.CapabilityCeiling):
 		return "capability_ceiling"
 	}
 	return ""

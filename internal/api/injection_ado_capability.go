@@ -431,10 +431,8 @@ func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.Approval
 	if err != nil || !found || !blob.CapturedAt.After(ap.RequestedAt) || blob.signInEnded() {
 		return ap
 	}
-	for _, need := range sc.Scopes {
-		if !slices.Contains(blob.Scopes, need) {
-			return ap
-		}
+	if !subsetOf(sc.Scopes, blob.Scopes) {
+		return ap
 	}
 	ev := s.auditEvent(&ap.RunID, types.ActorHuman, sc.Owner, "credential.reauth.resolved", ap.ID.String(), "success",
 		mustJSON(map[string]any{
@@ -457,16 +455,6 @@ func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.Approval
 // without it honours no `once` approval at all.
 type approvalOnceSpender interface {
 	SpendApprovalOnce(ctx context.Context, id uuid.UUID, jti string) (bool, error)
-}
-
-// adoScopesWithin reports whether every scope in need is in have.
-func adoScopesWithin(need, have []string) bool {
-	for _, n := range need {
-		if !slices.Contains(have, n) {
-			return false
-		}
-	}
-	return true
 }
 
 // adoEscalationWithinCeiling reports whether the escalation's capability is
@@ -564,7 +552,7 @@ func (s *Server) settleADOCapability(w http.ResponseWriter, r *http.Request, cla
 	// The authority's GRANTED set is the person's whole consent for the
 	// resource (measured), so a capability whose scope is missing from it is
 	// one they have not consented to — whoever approved it here.
-	if !adoScopesWithin(need, access.Scopes) {
+	if !subsetOf(need, access.Scopes) {
 		s.adoConsentRefused(cfg, snapshot.OwnerSubject, need)
 		return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
 	}

@@ -246,7 +246,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, row types.GitProvider, cfg
 // map covers nothing honestly, so false.
 func adoBlobCoversBaseline(blob adoEntraBlob, row types.GitProvider) bool {
 	need, err := adoscope.ScopesFor(row.Entra.Profile())
-	return err == nil && adoScopesWithin(need, blob.Scopes)
+	return err == nil && subsetOf(need, blob.Scopes)
 }
 
 // adoOrgDisplay is the row's own address, for the {org} the connect/launch
