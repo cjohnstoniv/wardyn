@@ -179,6 +179,31 @@ The person (or an admin) sees it in the Wardyn UI and answers **allow once** —
 again. Either way, an answer can never reach past the row's capability ceiling: that ceiling is the
 one thing nobody, including an admin approving in the moment, can grant past.
 
+## Request flow
+
+```mermaid
+sequenceDiagram
+  participant Person
+  participant Wardyn as wardynd
+  participant Entra as Entra ID
+  participant Proxy as wardyn-proxy
+  participant ADO as Azure DevOps
+
+  Person->>Wardyn: sign in
+  Wardyn->>Entra: browser redirect
+  Entra-->>Wardyn: capture per-user token
+  Note over Wardyn: run dispatches as that person
+  Wardyn->>Proxy: request, token attached
+  Proxy->>Proxy: classify against granted ceiling
+  alt within ceiling
+    Proxy->>ADO: forward, scoped token
+    ADO-->>Proxy: response
+    Proxy-->>Wardyn: response
+  else outside ceiling
+    Proxy-->>Wardyn: hold for approval
+  end
+```
+
 ## Two layers of enforcement
 
 Two independent things stand between a sandbox and an unwanted write, and it takes both:

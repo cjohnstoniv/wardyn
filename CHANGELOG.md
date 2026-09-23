@@ -38,6 +38,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- The Azure DevOps per-user setup guide moved from `docs/adoption/azure-devops-entra.md` (a
+  point-in-time field report location) to `docs/AZURE-DEVOPS.md`, indexed in `docs/README.md`
+  alongside a new `docs/LIVE-TESTS.md` row, and gained a request-flow sequence diagram (#465).
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
@@ -930,7 +933,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
-- `docs/adoption/azure-devops-entra.md` documents per-person Azure DevOps access on Entra ID.
+- `docs/AZURE-DEVOPS.md` documents per-person Azure DevOps access on Entra ID.
 - **`/healthz` now always reports `token_login` and `sso_only`**, so the sign-in screen can decide
   what to offer before anyone signs in. Anyone who can reach `/healthz` can read them: `sso_only` is
   new, and `token_login` reflects whether member mode is on, which `/healthz` did not previously
