@@ -73,10 +73,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `RUNNING` (and holds its concurrent-run slot) with `lost_at`/`lost_reason: "ended"` on the wire
   until `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` = tear down at the end) runs out or someone
   kills it; then it is torn down as `STOPPED`. A substrate that cannot keep a stopped sandbox
-  (Kubernetes), or an end that fails, tears the run down at its end instead. `run.ending_soon` is
-  audited 24 hours (for runs over two days), 1 hour and 10 minutes before the end; `run.ended` and
-  `run.ended.expired` record the end and the grace running out. Migration `0070_agent_runs_lease`
-  adds `lost_at`, `lost_reason`, `ending_soon_for` and `ending_soon_sec`.
+  (Kubernetes), or an end that fails, tears the run down at its end instead, including when the
+  daemon restarts part-way through the end. Attaching to an ended run, or minting an attach ticket
+  for one, answers 409. `run.ending_soon` is audited 24 hours (for runs over two days), 1 hour and
+  10 minutes before the end; `run.ended` and `run.ended.expired` record the end and the grace running
+  out. Migration `0070_agent_runs_lease` adds `lost_at`, `lost_reason`, `ending_soon_for` and
+  `ending_soon_sec`.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

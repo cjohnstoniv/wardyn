@@ -842,6 +842,10 @@ type Server struct {
 	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
 	// the limiters above; an entry lives only as long as its request.
 	ingestInFlight sync.Map
+	// leaseEnded holds the id of every kept run whose broker credentials this
+	// process has revoked (run_lease.go), so the lease sweep's re-assert
+	// revokes once per process, not every pass. Pruned by the sweep.
+	leaseEnded sync.Map
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two

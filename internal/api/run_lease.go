@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -44,9 +45,18 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	listed := make(map[uuid.UUID]bool, len(runs))
 	for _, run := range runs {
+		listed[run.ID] = true
 		s.leaseRun(ctx, leaser, run)
 	}
+	// A run the sweep no longer lists (torn down, killed) needs no entry.
+	s.leaseEnded.Range(func(id, _ any) bool {
+		if !listed[id.(uuid.UUID)] {
+			s.leaseEnded.Delete(id)
+		}
+		return true
+	})
 	return nil
 }
 
@@ -67,12 +77,25 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 			})
 			return
 		}
-		// Re-assert the stop every pass: a crash between the claim and the stop
-		// in endRun would otherwise leave a kept run with its agent and proxy
-		// up. Both steps are no-ops on a sandbox already ended. A failure is
-		// retried next pass rather than escalated: it is the daemon failing,
-		// and a teardown would fail on the same daemon.
-		if err := s.endSandbox(ctx, run); err != nil {
+		// Re-assert the end every pass: a crash between the claim and the end
+		// in endRun would otherwise leave a kept run with its agent, proxy and
+		// broker credentials up. The broker revoke writes a row per credential,
+		// so it runs once per process; a crash shows up as a restart.
+		if _, done := s.leaseEnded.LoadOrStore(run.ID, struct{}{}); !done {
+			s.revokeRunBroker(ctx, run.ID)
+		}
+		err := s.endSandbox(ctx, run)
+		if errors.Is(err, runner.ErrEndUnsupported) {
+			// The substrate cannot keep a sandbox, for good: tear the run down
+			// as the first pass would have.
+			s.stopEndedRun(ctx, run, "run.ended", map[string]any{
+				"kept": false, "end_error": err.Error(), "ended_at": run.LostAt,
+			})
+			return
+		}
+		// Any other failure is the daemon failing, and a teardown would fail
+		// on the same daemon, so it is retried next pass.
+		if err != nil {
 			slog.WarnContext(ctx, "wardynd: re-asserting an ended run's stop failed",
 				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
@@ -104,6 +127,7 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	if _, canKeep := s.cfg.Runner.(runner.SandboxEnder); canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != "" {
 		s.cancelRunApprovals(ctx, run.ID)
 		s.revokeRunBroker(ctx, run.ID)
+		s.leaseEnded.Store(run.ID, struct{}{})
 		err := s.endSandbox(ctx, run)
 		if err == nil {
 			data["kept"] = true

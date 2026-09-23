@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -216,6 +217,9 @@ func TestRunLease_EndStopsAndKeepsTheRun(t *testing.T) {
 		t.Errorf("second pass: EndSandbox = %d, StopSandbox = %d, state %s; want the stop re-asserted and the run still kept",
 			f.rn.endCount(), f.rn.stopCount(), f.st.State())
 	}
+	if f.brk.count(f.run.ID) != 1 {
+		t.Errorf("second pass: broker revocations = %d, want still 1", f.brk.count(f.run.ID))
+	}
 }
 
 // TestRunLease_EndFailsClosed: when the sandbox cannot be ended and kept, the
@@ -263,6 +267,50 @@ func TestRunLease_TornDownAtTheEndWhenItCannotBeKept(t *testing.T) {
 		}
 		if calls := f.fa.cancelledCalls(); len(calls) != 1 || calls[0].Reason != "run_ended" {
 			t.Errorf("approval cancels = %+v, want one with reason run_ended", calls)
+		}
+	})
+}
+
+// TestRunLease_ACrashAfterTheClaimStillEndsTheRun: a crash between the claim
+// and the end leaves a run marked kept with its sandbox and broker credentials
+// up. The next pass revokes the credentials (once) and re-asserts the end; a
+// substrate that cannot keep a sandbox says so for good, so the run is torn
+// down rather than kept for the whole grace with nothing ever stopping it.
+func TestRunLease_ACrashAfterTheClaimStillEndsTheRun(t *testing.T) {
+	claim := func(t *testing.T, f *leaseFixture) {
+		t.Helper()
+		if applied, err := f.st.MarkRunEnded(context.Background(), f.run.ID, f.now); err != nil || !applied {
+			t.Fatalf("MarkRunEnded = %v, %v; want the claim to land", applied, err)
+		}
+	}
+	t.Run("a substrate that cannot keep a sandbox", func(t *testing.T) {
+		f := newLeaseFixture(t, -time.Minute)
+		claim(t, f)
+		f.rn.endErr = runner.ErrEndUnsupported
+		f.sweep(t)
+		if f.st.State() != types.RunStopped || f.rn.stopCount() != 1 {
+			t.Fatalf("state %s, StopSandbox %d; want STOPPED, 1", f.st.State(), f.rn.stopCount())
+		}
+		if f.brk.count(f.run.ID) == 0 || f.idp.count() == 0 {
+			t.Errorf("broker revocations %d, identity revocations %d; want both revoked",
+				f.brk.count(f.run.ID), f.idp.count())
+		}
+		ended := f.audit.eventsFor(f.run.ID, "run.ended")
+		if len(ended) != 1 || leaseAuditData(t, ended[0])["kept"] != false || leaseAuditData(t, ended[0])["end_error"] == nil {
+			t.Errorf("run.ended events = %+v, want one with kept:false and end_error", ended)
+		}
+	})
+	t.Run("a substrate that can keep one", func(t *testing.T) {
+		f := newLeaseFixture(t, -time.Minute)
+		claim(t, f)
+		f.sweep(t)
+		f.sweep(t)
+		if f.st.State() != types.RunRunning || f.rn.endCount() != 2 || f.rn.stopCount() != 0 {
+			t.Fatalf("state %s, EndSandbox %d, StopSandbox %d; want RUNNING, 2, 0",
+				f.st.State(), f.rn.endCount(), f.rn.stopCount())
+		}
+		if f.brk.count(f.run.ID) != 1 {
+			t.Errorf("broker revocations = %d, want 1: revoked once, not on every pass", f.brk.count(f.run.ID))
 		}
 	})
 }
