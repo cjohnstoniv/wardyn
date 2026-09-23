@@ -763,6 +763,99 @@ it takes the chip's lowercase, so the third tier's in-sentence form is `security
 `ui/src/app/components/screens/setup/access-panel.tsx`, beside the `roleLabel` chip form it is
 derived from — so this string stays the only frozen spelling.
 
+### 7.10–7.13 — the autonomy rubric (backfilled, #768)
+
+Unlike §7.1–§7.9, these four tables were not drawn before implementation. `RUBRIC`,
+`LIMITS_CHIP.AUTONOMY`, `AUTONOMY_RAIL` and `AUTONOMY_BOUND` (`governance-copy.ts`) shipped in
+#339 against #96's mock (`autonomy-launch`, approved 2026-09-20, two rulings recorded on #96),
+but the approved prototype never landed in this repo and the mock itself lived in a scratchpad,
+so nothing under `docs/design/` could be diffed against the module. Per the owner's 2026-09-23
+ruling on #768, the strings as shipped in #339 (which already carry both #96 rulings) are
+canon — transcribed verbatim from the module below, the reverse direction from §7.1–§7.9's
+mock-first tables. `governance-copy.test.ts` parses §7.10–§7.13 the same way it parses
+§7.2–§7.9 and fails on a single byte of drift.
+
+### 7.10 `RUBRIC` — the profile editor's rubric section (`profile-rubric.tsx`)
+
+| Key | String |
+|---|---|
+| `RUBRIC.HEADING` | Autonomy rubric |
+| `RUBRIC.INTRO` | Cap how much a run may do on its own, by the posture it launches with. A run gets the lowest level any matching row sets. Rows left at No cap restrict nothing. |
+| `RUBRIC.EMPTY_NOTE` | No row sets a cap, so this profile leaves autonomy exactly as it is today. |
+| `RUBRIC.NOCAP` | No cap |
+| `RUBRIC.GROUP_EGRESS` | Network reach |
+| `RUBRIC.GROUP_SECRETS` | Secrets |
+| `RUBRIC.GROUP_BARRIER` | Barrier |
+| `RUBRIC.GROUP_BARRIER_HINT` | The enforced barrier — “confinement class” in the API and the docs. |
+| `RUBRIC.ROWS.egress_open.LABEL` | Open |
+| `RUBRIC.ROWS.egress_open.WHY` | The run can reach hosts beyond the baseline, or everything. |
+| `RUBRIC.ROWS.egress_reviewed.LABEL` | Reviewed |
+| `RUBRIC.ROWS.egress_reviewed.WHY` | New hosts are approved on first use. |
+| `RUBRIC.ROWS.egress_sealed.LABEL` | Sealed |
+| `RUBRIC.ROWS.egress_sealed.WHY` | Baseline hosts only. |
+| `RUBRIC.ROWS.secrets_powerful.LABEL` | Powerful |
+| `RUBRIC.ROWS.secrets_powerful.WHY` | The run carries a credential that can write. |
+| `RUBRIC.ROWS.secrets_baseline.LABEL` | Baseline |
+| `RUBRIC.ROWS.secrets_baseline.WHY` | The run carries credentials, none of them write-capable. |
+| `RUBRIC.ROWS.secrets_none.LABEL` | None |
+| `RUBRIC.ROWS.secrets_none.WHY` | The run carries no credential. |
+| `RUBRIC.ROWS.confinement_cc1.LABEL` | Fence (CC1) |
+| `RUBRIC.ROWS.confinement_cc1.WHY` | Shared kernel. |
+| `RUBRIC.ROWS.confinement_cc2.LABEL` | Wall (CC2) |
+| `RUBRIC.ROWS.confinement_cc2.WHY` | gVisor userspace kernel. |
+| `RUBRIC.ROWS.confinement_cc3.LABEL` | Vault (CC3) |
+| `RUBRIC.ROWS.confinement_cc3.WHY` | Kata microVM. |
+| `RUBRIC.SET_NOTE(n, level)` | {n} of 9 rows set a cap. The lowest is {level}. |
+
+`ROWS` is keyed by the nine `AutonomyRubricRowKey` values, iterated in `AUTONOMY_RUBRIC_ROW_KEYS`
+order (egress, then secrets, then confinement) rather than object insertion order, matching the
+Go side's own row order. `SET_NOTE`'s `{n}` is a plain count, not a pluralised alternation — it
+is always "rows" regardless of `n`.
+
+### 7.11 `LIMITS_CHIP` — the profiles-list chip's autonomy cell (`governance-screen.tsx`)
+
+| Key | String |
+|---|---|
+| `LIMITS_CHIP.AUTONOMY(label)` | Autonomy: {label} at the strictest |
+
+Ruling 2 (#96 review): the chip names the **strictest cap** a set rubric row resolves to, not
+merely that a rubric exists — `{label}` is that level's `AUTONOMY_META` label (e.g. "Attended"),
+looked up by the caller. Detail behind a tooltip is unreadable on a phone and unreachable by
+keyboard, so the fact that matters is on the chip face itself.
+
+### 7.12 `AUTONOMY_RAIL` — the New Run rail's Autonomy section and the run header
+
+| Key | String |
+|---|---|
+| `AUTONOMY_RAIL.HEADING` | Autonomy |
+| `AUTONOMY_RAIL.NO_CAP` | Your organization's profile sets no autonomy rubric, so nothing caps this run. |
+| `AUTONOMY_RAIL.NO_PROFILE` | No governance profile applies to you, so nothing caps this run. |
+| `AUTONOMY_RAIL.DERIVED_HOLD_NOTE` | Every tool call in this run will wait for your confirmation. |
+| `AUTONOMY_RAIL.PROFILE_LINE(p)` | From the {p} governance profile. |
+
+### 7.13 `AUTONOMY_BOUND` — the one-cause "bound by" sentence, one per rubric row
+
+| Key | String |
+|---|---|
+| `AUTONOMY_BOUND.egress_open` | Bound by this run's network reach: it can reach hosts beyond the baseline. |
+| `AUTONOMY_BOUND.egress_reviewed` | Bound by this run's network reach: new hosts are approved on first use. |
+| `AUTONOMY_BOUND.egress_sealed` | Bound by this run's network reach: baseline hosts only. |
+| `AUTONOMY_BOUND.secrets_powerful` | Bound by this run's secrets: it carries a credential that can write. |
+| `AUTONOMY_BOUND.secrets_baseline` | Bound by this run's secrets: it carries credentials, none of them write-capable. |
+| `AUTONOMY_BOUND.secrets_none` | Bound by this run's secrets: it carries none. |
+| `AUTONOMY_BOUND.confinement_cc1` | Bound by this run's barrier: Fence, confinement class CC1. |
+| `AUTONOMY_BOUND.confinement_cc2` | Bound by this run's barrier: Wall, confinement class CC2. |
+| `AUTONOMY_BOUND.confinement_cc3` | Bound by this run's barrier: Vault, confinement class CC3. |
+
+Ruling 1 (#96 review): when more than one rubric row ties at the resolved level, the rail names
+**every** tied cause, not just the first — `autonomyBoundSentence` (`governance-copy.ts`)
+composes the tied rows' own dimension and detail fragments (the same fragments each row's
+`AUTONOMY_BOUND` sentence above is built from) rather than concatenating whole sentences; a
+single cause renders the frozen sentence above unchanged. The composition itself — joining
+dimensions with "and", details with ";" so a detail's own comma (confinement's "Fence,
+confinement class CC1") never reads as a fourth tied cause — is behaviour, not copy, and is not
+re-frozen here.
+
 ## 8. Where to apply (once implemented, out of scope this round)
 
 - **`/governance`** — the whole screen: profiles block, assignments block, resolved preview

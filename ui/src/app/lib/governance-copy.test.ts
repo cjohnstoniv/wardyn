@@ -23,19 +23,21 @@ import { AUTONOMY_RUBRIC_ROW_KEYS, type AutonomyRubricRowKey } from "./api/gover
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// governance-prompt.md §7.2-§7.9 back out of the doc and compares all 87 keys.
+// governance-prompt.md §7.2-§7.13 back out of the doc and compares every key.
 // A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc row or a
-// deleted one all fail here rather than shipping.
+// deleted one all fail here rather than shipping. §7.10-§7.13 (the autonomy
+// rubric, #768) were backfilled from this module rather than drawn before it
+// — see the RUBRIC block's own comment below — but are parsed the same way.
 //
 // Two normalisations, both of them documented rules rather than fudges:
 //   - BACKTICKS ARE STRIPPED from the doc cell. §7's header note makes mono a
 //     DISPLAY concern applied by the consuming component (people-access-
 //     copy.ts's own backtick-mono rule); the frozen string itself is plain
-//     text. Nothing in §7.2-§7.9 contains a backtick as content.
+//     text. Nothing in §7.2-§7.13 contains a backtick as content.
 //   - A PARAMETERIZED key is called with its own placeholder text, so
 //     EDITOR_TITLE_EDIT("{name}") must reproduce the doc's `Edit "{name}"`
-//     character for character. The two inline-pluralised keys can't be
-//     checked that way and get their own test below.
+//     character for character. The pluralised keys and SET_NOTE's plain
+//     numeric count can't be checked that way and get their own test below.
 
 // process.cwd() is the vitest root — ui/ — for every entry point that runs
 // this suite (`pnpm vitest run`, `pnpm test`, make ci). import.meta.url is not
@@ -44,16 +46,18 @@ const DOC = resolve(process.cwd(), "../docs/design/governance-prompt.md");
 
 const unmono = (s: string) => s.replace(/`/g, "");
 
-/** key -> frozen string, for every row of §7.2-§7.9's tables. */
+/** key -> frozen string, for every row of §7.2-§7.13's tables. */
 function parseFrozenTables(): Map<string, string> {
   const rows = new Map<string, string>();
   let inSection = false;
   for (const line of readFileSync(DOC, "utf8").split("\n")) {
     if (line.startsWith("#")) {
-      // §7.2 onward only: §7.1 is the reused-canon table (strings that live in
+      // §7.2-§7.13 only: §7.1 is the reused-canon table (strings that live in
       // permissions-copy.ts / people-access-copy.ts / the server), not keys
-      // this module freezes.
-      inSection = /^### 7\.[2-9]\b/.test(line);
+      // this module freezes. The §7.10-§7.13 INTRO heading (no table of its
+      // own) matches too, harmlessly — the prose lines under it don't start
+      // with "|" and are skipped below.
+      inSection = /^### 7\.(?:[2-9]|1[0-3])\b/.test(line);
       continue;
     }
     if (!inSection || !line.startsWith("|")) continue;
@@ -183,15 +187,49 @@ const rendered: Record<string, string> = {
   MIN_CHARS_HINT: DIRECTORY.MIN_CHARS_HINT,
   NO_MATCHES: DIRECTORY.NO_MATCHES,
   LOOKUP_FAILED: DIRECTORY.LOOKUP_FAILED,
+
+  // ---- §7.10 ----
+  "RUBRIC.HEADING": RUBRIC.HEADING,
+  "RUBRIC.INTRO": RUBRIC.INTRO,
+  "RUBRIC.EMPTY_NOTE": RUBRIC.EMPTY_NOTE,
+  "RUBRIC.NOCAP": RUBRIC.NOCAP,
+  "RUBRIC.GROUP_EGRESS": RUBRIC.GROUP_EGRESS,
+  "RUBRIC.GROUP_SECRETS": RUBRIC.GROUP_SECRETS,
+  "RUBRIC.GROUP_BARRIER": RUBRIC.GROUP_BARRIER,
+  "RUBRIC.GROUP_BARRIER_HINT": RUBRIC.GROUP_BARRIER_HINT,
+  ...Object.fromEntries(
+    AUTONOMY_RUBRIC_ROW_KEYS.flatMap((k) => [
+      [`RUBRIC.ROWS.${k}.LABEL`, RUBRIC.ROWS[k][0]],
+      [`RUBRIC.ROWS.${k}.WHY`, RUBRIC.ROWS[k][1]],
+    ]),
+  ),
+
+  // ---- §7.11 ----
+  "LIMITS_CHIP.AUTONOMY(label)": LIMITS_CHIP.AUTONOMY("{label}"),
+
+  // ---- §7.12 ----
+  "AUTONOMY_RAIL.HEADING": AUTONOMY_RAIL.HEADING,
+  "AUTONOMY_RAIL.NO_CAP": AUTONOMY_RAIL.NO_CAP,
+  "AUTONOMY_RAIL.NO_PROFILE": AUTONOMY_RAIL.NO_PROFILE,
+  "AUTONOMY_RAIL.DERIVED_HOLD_NOTE": AUTONOMY_RAIL.DERIVED_HOLD_NOTE,
+  "AUTONOMY_RAIL.PROFILE_LINE(p)": AUTONOMY_RAIL.PROFILE_LINE("{p}"),
+
+  // ---- §7.13 ----
+  ...Object.fromEntries(AUTONOMY_RUBRIC_ROW_KEYS.map((k) => [`AUTONOMY_BOUND.${k}`, AUTONOMY_BOUND[k]])),
 };
 
-describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
-  it("finds all 96 frozen keys in the doc", () => {
-    expect(doc.size).toBe(96);
+// SET_NOTE(n, level) is a plain numeric interpolation, not an "A / B"
+// alternation like PLURALISED below — checked in its own test alongside them
+// rather than forced into `rendered`'s placeholder-call shape.
+const NUMERIC_TEMPLATE = ["RUBRIC.SET_NOTE(n, level)"];
+
+describe("governance-copy — §7.2-§7.13 parsed out of the prompt doc", () => {
+  it("finds all 138 frozen keys in the doc", () => {
+    expect(doc.size).toBe(138);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
-    const covered = [...Object.keys(rendered), ...PLURALISED].sort();
+    const covered = [...Object.keys(rendered), ...PLURALISED, ...NUMERIC_TEMPLATE].sort();
     expect(covered).toEqual([...doc.keys()].sort());
   });
 
@@ -234,7 +272,7 @@ describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
 // The one set of strings in this module that §7's TABLES do not freeze. §7.3's
 // prose names all three verbatim as PREVIEW_RESULT's {matched} vocabulary, so
 // they are canon — they are just canon the doc spelled in a sentence. Pinned
-// here, and named as an addition, so the coverage test above staying at 85
+// here, and named as an addition, so the coverage test above staying at 138
 // isn't read as "nothing else lives in this module".
 describe("governance-copy — the §7.3 {matched} vocabulary (ADDITION)", () => {
   it("renders the three phrases §7.3's prose names", () => {
@@ -288,10 +326,10 @@ describe("governance-copy — the reuse rules §7 spells out", () => {
   });
 });
 
-// #93/#96 — the autonomy rubric. These strings live outside GOVERNANCE/MEMBER
-// (never parsed from governance-prompt.md — the mock they were transcribed
-// from is a scratchpad, not docs/), so they get their own direct pins rather
-// than a doc-table comparison.
+// #93/#96/#768 — the autonomy rubric. Byte-exact wording is pinned above, by
+// the doc-parsed §7.10-§7.13 tables; what's left here is SHAPE (row identity
+// and order) and the one key the doc-table comparison can't reach, because it
+// isn't a single renderable string.
 describe("RUBRIC — the profile editor's rubric section", () => {
   it("has one [label, why] row for every one of the nine AutonomyRubric fields, in the fixed order", () => {
     expect(Object.keys(RUBRIC.ROWS).sort()).toEqual([...AUTONOMY_RUBRIC_ROW_KEYS].sort());
@@ -302,9 +340,14 @@ describe("RUBRIC — the profile editor's rubric section", () => {
     }
   });
 
-  it("SET_NOTE and EMPTY_NOTE match the mock round's frozen wording", () => {
-    expect(RUBRIC.SET_NOTE(3, "Gated")).toBe("3 of 9 rows set a cap. The lowest is Gated.");
-    expect(RUBRIC.EMPTY_NOTE).toBe("No row sets a cap, so this profile leaves autonomy exactly as it is today.");
+  // SET_NOTE(n, level) is a plain numeric interpolation (§7.10's own note: "rows"
+  // never pluralises), so it can't be called with a placeholder the way the doc's
+  // other parameterized keys are — checked against both of the doc cell's own
+  // literal pieces instead.
+  it("SET_NOTE renders the doc cell's template around n and level", () => {
+    const cell = doc.get("RUBRIC.SET_NOTE(n, level)")!;
+    const [before, after] = cell.split("{n}")[1].split("{level}");
+    expect(RUBRIC.SET_NOTE(3, "Gated")).toBe(`${cell.split("{n}")[0]}3${before}Gated${after}`);
   });
 });
 
@@ -328,7 +371,7 @@ describe("foldAutonomyRubric", () => {
 
 describe("LIMITS_CHIP.AUTONOMY — ruling 2 (#96 review)", () => {
   it("names the strictest cap on the chip face itself, not merely that a rubric exists", () => {
-    expect(LIMITS_CHIP.AUTONOMY("Attended")).toBe("Autonomy: Attended at the strictest");
+    expect(LIMITS_CHIP.AUTONOMY("Attended")).toBe(doc.get("LIMITS_CHIP.AUTONOMY(label)")!.replace("{label}", "Attended"));
   });
 });
 
@@ -338,8 +381,6 @@ describe("AUTONOMY_BOUND / autonomyBoundSentence — ruling 1 (#96 review)", () 
       expect(AUTONOMY_BOUND[k]).toMatch(/^Bound by this run's /);
       expect(AUTONOMY_BOUND[k].endsWith(".")).toBe(true);
     }
-    expect(AUTONOMY_BOUND.secrets_powerful).toBe("Bound by this run's secrets: it carries a credential that can write.");
-    expect(AUTONOMY_BOUND.confinement_cc1).toBe("Bound by this run's barrier: Fence, confinement class CC1.");
   });
 
   it("a single cause renders the SAME sentence AUTONOMY_BOUND carries, unchanged", () => {
