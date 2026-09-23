@@ -2530,6 +2530,54 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   answer the same refusal. An unevaluated rule never reads as a pass; the cost
   is that a client which ignores the `no-thin` the broker advertises cannot
   push at all while rules are set.
+
+### A push held for review is decided by an admin, on what the broker could read
+
+`push_rules.require_review_paths` turns a matching push into a held request
+and a `push_content` approval (`internal/egress/proxy/push_hold.go`,
+`Proxy.holdPush`) instead of a refusal. It inherits every reading the deny
+rules have — the same matcher, the same forge comparison, the same
+fail-toward-matched handling of what cannot be compared — so a directory the
+push does not carry and the forge cannot clear is held, not waved through. The
+residuals particular to holding:
+
+- **The admin decides on paths, not content.** The card names the repository,
+  the ref, the credential, up to ten matched paths, the count and the commit
+  ids; it does not show a diff. An admin who approves without reading the
+  commits on the forge approves whatever they carry at those paths.
+- **Deny beats review, and oversize or unreadable never holds.** A path both
+  lists match is refused (`inspectPush` evaluates the review list only when no
+  deny path matched), and a push the inspector could not read is refused
+  before either list is consulted: holding it would ask a person to approve a
+  push nobody inspected.
+- **An approval covers commits, and sticks for the run.** The dedup key is the
+  sorted commit ids plus a digest of every matched path
+  (`types.PushContentScope`), so a repacked retry of the same commits is
+  forwarded on an approval already given and a denial refuses the same commits
+  again without asking. Identical commits are identical content, so this admits
+  nothing the admin did not see; the sidecar's memory of it (`pushHolds`) is
+  per process and bounded, so a restarted sidecar asks again.
+- **Members cannot decide one, not even on their own run.**
+  `authorizeMemberDecision` keeps members to `egress_domain` (and their own
+  Azure DevOps escalations); a member approving their own run's workflow-file
+  edit is the exfiltration the rule exists to stop. A security operator decides
+  any kind, as today.
+- **Unattended runs refuse instead of holding.** A non-interactive run
+  (`proxy.Config.Unattended`, stamped at dispatch from the run's own flag) has
+  nobody to ask, so a review match is refused with no approval raised, and the
+  control plane refuses such a raise too (`admitPushContentRaise`). The flag is
+  control-plane-authored; the sandbox cannot set it.
+- **A hold costs the sidecar a connection and its buffer.** The buffer stays
+  charged to the process-wide retained-bytes budget for the whole hold (at most
+  600 seconds), and at most `maxPushHoldsActive` pushes are held at once; past
+  that a push is refused, never forwarded. The hold is taken after the
+  inspection slot is given back, so a held push does not stall LLM scanning.
+- **The Azure DevOps Entra lane applies no content rules.** Pushes through the
+  per-person Azure DevOps lane (`Proxy.serveADOGit`) are governed by the
+  capability gate only; neither `deny_paths` nor `require_review_paths` reads
+  them yet. A git_pat grant for Azure DevOps goes through the token lane and is
+  covered.
+
 ### Hold-lane settings sources: user scope is still agent-writable
 
 Claude Code resolves `permissions.allow` rules before it asks the

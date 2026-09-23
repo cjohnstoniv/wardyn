@@ -16,6 +16,11 @@ package proxy
 //     internal/gitpack's own ceilings (brokered:git:push-uninspectable);
 //   - a path the push introduces matches a deny rule (brokered:git:push-rules).
 //
+// A push none of those refuses, but which introduces a path a
+// require_review_paths rule matches, is HELD for an admin's decision
+// (push_hold.go) — matched exactly as a deny rule is, forge comparison
+// included, and only once no deny rule matched: deny beats review.
+//
 // Otherwise the buffered bytes go onward unchanged.
 //
 // ENTERED INDEPENDENTLY OF BRANCH-NAMESPACE CONFINEMENT. Both brokered lanes
@@ -88,6 +93,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -131,7 +137,7 @@ const (
 // same uninspectable outcome a pack over one of gitpack's ceilings gets: in
 // both cases the rules could not be evaluated, and an unevaluated rule must
 // never read as a pass.
-var errGlobBudget = errors.New("the deny_paths list is too large to evaluate against this push")
+var errGlobBudget = errors.New("the push_rules pattern list is too large to evaluate against this push")
 
 // pushRuleSet is a run's push_rules compiled once, at policy-compile time, for
 // per-request matching: the patterns are pre-split on "/" so a push carrying
@@ -140,7 +146,12 @@ var errGlobBudget = errors.New("the deny_paths list is too large to evaluate aga
 type pushRuleSet struct {
 	// deny holds each deny_paths entry split into segments.
 	deny [][]string
-	// unreadable is the first deny_paths entry types.DenyPathSegments refused.
+	// review holds each require_review_paths entry, split the same way.
+	review [][]string
+	// hold is how long a push a review rule matches waits for its decision.
+	hold time.Duration
+	// unreadable is the first deny_paths or require_review_paths entry
+	// types.DenyPathSegments refused.
 	// Write-time validation refuses the same entries, so this is reached only
 	// by a policy that bypassed it — and then every push is refused, because
 	// compiling the entry to a pattern that matches nothing is the silent
@@ -158,32 +169,48 @@ func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 	if !s.IsSet() {
 		return nil
 	}
-	rs := &pushRuleSet{inspectMax: int64(defaultInspectPackMiB) << 20}
+	rs := &pushRuleSet{inspectMax: int64(defaultInspectPackMiB) << 20, hold: defaultPushHold}
 	if s.MaxInspectPackMiB > 0 {
 		rs.inspectMax = int64(s.MaxInspectPackMiB) << 20
 	}
-	for _, pat := range s.DenyPaths {
+	if s.HoldSeconds > 0 {
+		// The sidecar's last door, as configureHold is for first_use_hold_seconds:
+		// a policy stored before its bound existed reaches here unvalidated.
+		rs.hold = min(time.Duration(s.HoldSeconds)*time.Second, maxHoldTimeout)
+	}
+	rs.deny = rs.compile(s.DenyPaths)
+	rs.review = rs.compile(s.RequireReviewPaths)
+	return rs
+}
+
+// compile splits each entry, recording the first one it cannot read.
+func (rs *pushRuleSet) compile(pats []string) [][]string {
+	var out [][]string
+	for _, pat := range pats {
 		segs, err := types.DenyPathSegments(pat)
 		if err != nil {
 			rs.unreadable = cmp.Or(rs.unreadable, pat)
 			continue
 		}
-		rs.deny = append(rs.deny, segs)
+		out = append(out, segs)
 	}
-	return rs
+	return out
 }
 
-// match reports the entries a deny rule claims. Those the pack carries are
-// refused outright: a capped SAMPLE for the log and the exact total. Those it
-// does not carry come back whole in unknown, for the forge to clear or not
-// (push_forge.go). It stops at the first pattern that claims an entry — the
-// answer is per path, not per rule.
+// match reports the entries one of pats claims. Those the pack carries come
+// back in hits, named as shownPath names them. Those it does not carry come
+// back whole in unknown, for the forge to clear or not (push_forge.go). It
+// stops at the first pattern that claims an entry — the answer is per path,
+// not per rule.
 //
 // An opaque entry (gitpack.Change.Opaque: a directory the pack does not carry,
 // a symlink, a submodule) is claimed when a pattern could match anything
 // beneath it, not only the entry itself: what is beneath it is unknown, and a
-// deny rule has to treat unknown as matched.
-func (rs *pushRuleSet) match(changes []gitpack.Change) (sample []string, total int, unknown []gitpack.Change, err error) {
+// rule has to treat unknown as matched.
+//
+// hits is every claimed path, not a sample: the held-push dedup key covers
+// them all. It holds references to the Change paths, not copies.
+func match(pats [][]string, changes []gitpack.Change) (hits []string, unknown []gitpack.Change, err error) {
 	budget := maxGlobOps
 	for _, c := range changes {
 		var segs []string // the root is zero segments, not one empty one
@@ -191,17 +218,17 @@ func (rs *pushRuleSet) match(changes []gitpack.Change) (sample []string, total i
 			segs = strings.Split(c.Path, "/")
 		}
 		opaque := c.Opaque()
-		for _, pat := range rs.deny {
+		for _, pat := range pats {
 			ok, err := matchSegments(pat, segs, &budget)
 			if err == nil && !ok && opaque {
 				ok, err = matchesBeneath(pat, segs, &budget)
 			}
 			if err != nil {
-				return nil, 0, nil, err
+				return nil, nil, err
 			}
 			if ok {
 				if c.Carried() {
-					sample, total = claim(sample, total, c)
+					hits = append(hits, shownPath(c))
 				} else {
 					unknown = append(unknown, c)
 				}
@@ -209,15 +236,12 @@ func (rs *pushRuleSet) match(changes []gitpack.Change) (sample []string, total i
 			}
 		}
 	}
-	return sample, total, unknown, nil
+	return hits, unknown, nil
 }
 
-// claim adds c to a refusal's capped sample and exact count.
-func claim(sample []string, total int, c gitpack.Change) ([]string, int) {
-	if len(sample) < maxDeniedPathsLogged {
-		sample = append(sample, shownPath(c))
-	}
-	return sample, total + 1
+// sampleOf is the capped slice of paths the structured log carries.
+func sampleOf(paths []string) []string {
+	return paths[:min(len(paths), maxDeniedPathsLogged)]
 }
 
 // shownPath is how a claimed entry is named to the person: an uncarried
@@ -353,8 +377,9 @@ func nonIdentityEncoding(h http.Header) (string, bool) {
 
 // applyPushRules is the push CONTENT-rules step, shared by both brokered git
 // lanes exactly as confinePush is: it buffers the request to the run's
-// inspection ceiling, reads what the push would change, and refuses a push
-// that is too large, unreadable, or carries a denied path.
+// inspection ceiling, reads what the push would change, refuses a push that is
+// too large, unreadable, or carries a denied path, and holds one that carries
+// a path needing review until an admin decides (push_hold.go).
 //
 // body is what the previous step left to forward — r.Body, or confinePush's
 // command section followed by the still-streaming pack — and the reader
@@ -368,28 +393,48 @@ func nonIdentityEncoding(h http.Header) (string, bool) {
 // today.
 //
 // forge reads what the pack does not carry from the lane's own forge; nil
-// when the lane cannot, which keeps the strict reading (push_forge.go).
+// when the lane cannot, which keeps the strict reading (push_forge.go). target
+// is what a held push's approval names as its repository and identity.
 //
 // The returned release MUST be deferred by the caller, as scanBufferedBody's
 // is: the buffer stays charged to scanRetained until the forwarded request is
 // done with it. It is always non-nil and safe to call more than once.
 func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.Reader,
-	subject slog.Attr, deny func(ruleSource string), forge *forgeRepo) (io.Reader, func(), bool) {
+	subject slog.Attr, deny func(ruleSource string), forge *forgeRepo, target pushTarget) (io.Reader, func(), bool) {
 	noRelease := func() {}
 	rules := p.policy.contentRules()
 	if rules == nil {
 		return body, noRelease, true
 	}
+	buf, review, release, ok := p.inspectPush(w, r, rules, body, subject, deny, forge)
+	if !ok {
+		return nil, noRelease, false
+	}
+	// Held OUTSIDE the inspection slot, which inspectPush has given back: a
+	// hold lasts minutes, and the slot is the whole sidecar's. The buffer stays
+	// charged to scanRetained while it waits.
+	if len(review.paths) > 0 && !p.holdPush(w, r, rules, review, target, subject, deny) {
+		release()
+		return nil, noRelease, false
+	}
+	return bytes.NewReader(buf), release, true
+}
+
+// inspectPush is applyPushRules' work inside the inspection slot: the buffer,
+// the verdict, and — when no deny rule matched — what the review rules match.
+func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushRuleSet, body io.Reader,
+	subject slog.Attr, deny func(ruleSource string), forge *forgeRepo) ([]byte, pushReview, func(), bool) {
+	noRelease := func() {}
 	if rules.unreadable != "" {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
-			fmt.Sprintf("wardyn: cannot enforce push content rules: push_rules.deny_paths entry %q is not a"+
+			fmt.Sprintf("wardyn: cannot enforce push content rules: push_rules entry %q is not a"+
 				" pattern the broker can read\nask an operator to correct it", rules.unreadable))
-		return nil, noRelease, false
+		return nil, pushReview{}, noRelease, false
 	}
 	if enc, bad := nonIdentityEncoding(r.Header); bad {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on a "+enc+"-encoded push body")
-		return nil, noRelease, false
+		return nil, pushReview{}, noRelease, false
 	}
 	// The same slot and byte budget the LLM inspection path takes
 	// (scanBufferedBody), for the same reason: the sidecar runs under a hard
@@ -411,7 +456,7 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 		defer func() { <-scanSlots }()
 	case <-ctx.Done():
 		busy()
-		return nil, noRelease, false
+		return nil, pushReview{}, noRelease, false
 	}
 	// One byte past the ceiling is how "over it" is known without reading what
 	// is past it.
@@ -419,14 +464,14 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules: the push body could not be read")
-		return nil, noRelease, false
+		return nil, pushReview{}, noRelease, false
 	}
 	if int64(len(buf)) > rules.inspectMax {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBig, http.StatusRequestEntityTooLarge,
 			fmt.Sprintf("wardyn: this push is larger than the %d MiB its content rules can inspect"+
 				"\npush fewer commits, or ask an operator to raise push_rules.max_inspect_pack_mib",
 				rules.inspectMax>>20))
-		return nil, noRelease, false
+		return nil, pushReview{}, noRelease, false
 	}
 	res, err := gitpack.Inspect(buf)
 	if err != nil {
@@ -434,72 +479,83 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
 				"\npush from a complete clone (git fetch --unshallow) so the pack carries"+
 				" every object it deltifies against")
-		return nil, noRelease, false
+		return nil, pushReview{}, noRelease, false
 	}
-	sample, total, why, err := p.deniedPaths(r, rules, res, forge, subject)
+	denied, why, err := p.matchedPaths(r, rules.deny, res, forge, subject)
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
 				"\nask an operator to shorten push_rules.deny_paths")
-		return nil, noRelease, false
+		return nil, pushReview{}, noRelease, false
 	}
-	if total > 0 {
+	if len(denied) > 0 {
 		deny(ruleSourceGitRules)
 		slog.WarnContext(r.Context(), "wardyn-proxy: git push denied by content rules",
 			slog.String("run_id", p.runID.String()),
 			subject,
-			slog.Int("denied_paths", total),
-			slog.Any("paths", sample),
+			slog.Int("denied_paths", len(denied)),
+			slog.Any("paths", sampleOf(denied)),
 			slog.String("reason", why))
-		http.Error(w, deniedPathsBody(sample, total, why), http.StatusForbidden)
-		return nil, noRelease, false
+		http.Error(w, deniedPathsBody(denied, why), http.StatusForbidden)
+		return nil, pushReview{}, noRelease, false
 	}
-	// The buffer outlives the slot: it is forwarded from here. Charged while the
-	// slot is still held, so scanRetained keeps its single acquirer.
+	review := pushReview{cmds: res.Commands}
+	if review.paths, review.why, err = p.matchedPaths(r, rules.review, res, forge, subject); err != nil {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
+				"\nask an operator to shorten push_rules.require_review_paths")
+		return nil, pushReview{}, noRelease, false
+	}
+	// The buffer outlives the slot: it is forwarded (or held) from here.
+	// Charged while the slot is still held, so scanRetained keeps its single
+	// acquirer.
 	if !scanRetained.acquire(ctx, len(buf)) {
 		busy()
-		return nil, noRelease, false
+		return nil, pushReview{}, noRelease, false
 	}
 	var once sync.Once
 	n := len(buf)
-	return bytes.NewReader(buf), func() { once.Do(func() { scanRetained.release(n) }) }, true
+	return buf, review, func() { once.Do(func() { scanRetained.release(n) }) }, true
 }
 
-// deniedPaths is the verdict on one inspected push: what the rules refuse, and
-// why when the forge was asked. A push the pack alone passes is never asked
-// about. Otherwise, inside forgeReadWait, the history the pack re-sends is
-// taken out first (forgeRepo.settle); an entry the rest of the pack carries is
-// then refused outright, and only when none is does the forge get to clear
-// the entries the pack does not carry.
-func (p *Proxy) deniedPaths(r *http.Request, rules *pushRuleSet, res gitpack.Result, forge *forgeRepo,
-	subject slog.Attr) (sample []string, total int, why string, err error) {
-	sample, total, unknown, err := rules.match(res.Changes)
-	if err != nil || total == 0 && len(unknown) == 0 {
-		return sample, total, "", err
+// matchedPaths is the verdict of one pattern list on one inspected push: every
+// path it claims, and why when the forge was asked. A push the pack alone
+// passes is never asked about. Otherwise, inside forgeReadWait, the history
+// the pack re-sends is taken out first (forgeRepo.settle); an entry the rest
+// of the pack carries is then claimed outright, and only when none is does the
+// forge get to clear the entries the pack does not carry.
+func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Result, forge *forgeRepo,
+	subject slog.Attr) (paths []string, why string, err error) {
+	if len(pats) == 0 {
+		return nil, "", nil
+	}
+	paths, unknown, err := match(pats, res.Changes)
+	if err != nil || len(paths) == 0 && len(unknown) == 0 {
+		return paths, "", err
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), forgeReadWait)
 	defer cancel()
 	left := unknown
 	if res, why = forge.settle(ctx, res); why == "" {
-		if sample, total, unknown, err = rules.match(res.Changes); err != nil {
-			return nil, 0, "", err
+		if paths, unknown, err = match(pats, res.Changes); err != nil {
+			return nil, "", err
 		}
 		left = nil
-		if total == 0 && len(unknown) > 0 {
+		if len(paths) == 0 && len(unknown) > 0 {
 			left, why = forge.unchanged(ctx, unknown, res)
 		}
 	}
 	for _, c := range left {
-		sample, total = claim(sample, total, c)
+		paths = append(paths, shownPath(c))
 	}
 	if forge != nil && forge.reads > 0 {
 		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
 			slog.String("run_id", p.runID.String()),
 			subject,
-			slog.Int("still_refused", total),
+			slog.Int("still_matched", len(paths)),
 			slog.Int("forge_reads", forge.reads))
 	}
-	return sample, total, why, nil
+	return paths, why, nil
 }
 
 // refusePush records, logs and answers one content-rule refusal that names no
@@ -518,22 +574,30 @@ func (p *Proxy) refusePush(w http.ResponseWriter, r *http.Request, subject slog.
 
 // deniedPathsBody is the refusal git shows the person: the paths that matched,
 // capped, why the forge did not clear them when it was asked, and what to do.
-func deniedPathsBody(sample []string, total int, why string) string {
+func deniedPathsBody(paths []string, why string) string {
+	return pathsBody("wardyn: this push is refused by the run's push content rules", paths, "denied", why,
+		"remove these paths from the push, or ask an operator to widen push_rules.deny_paths")
+}
+
+// pathsBody is the shape every path-naming push refusal shares: a headline, at
+// most maxDeniedPathsInBody of paths and the count of the rest, why the forge
+// did not clear them when asked, and a remedy.
+func pathsBody(headline string, paths []string, noun, why, remedy string) string {
 	var b strings.Builder
-	b.WriteString("wardyn: this push is refused by the run's push content rules\n")
-	shown := min(len(sample), maxDeniedPathsInBody)
-	for _, pth := range sample[:shown] {
+	b.WriteString(headline + "\n")
+	shown := min(len(paths), maxDeniedPathsInBody)
+	for _, pth := range paths[:shown] {
 		b.WriteString("  " + pth + "\n")
 	}
-	if total > shown {
-		fmt.Fprintf(&b, "  ... and %d more denied path(s)\n", total-shown)
+	if len(paths) > shown {
+		fmt.Fprintf(&b, "  ... and %d more %s path(s)\n", len(paths)-shown, noun)
 	}
-	if slices.ContainsFunc(sample, func(s string) bool { return strings.HasSuffix(s, "/") }) {
+	if slices.ContainsFunc(sampleOf(paths), func(s string) bool { return strings.HasSuffix(s, "/") }) {
 		b.WriteString("a path ending in / is a directory this push does not carry (/ alone is the whole tree)\n")
 	}
 	if why != "" {
 		b.WriteString(why + "\n")
 	}
-	b.WriteString("remove these paths from the push, or ask an operator to widen push_rules.deny_paths")
+	b.WriteString(remedy)
 	return b.String()
 }

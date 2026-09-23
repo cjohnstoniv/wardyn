@@ -168,6 +168,12 @@ type Config struct {
 	// route's own generic detail, plus the below-policy clause either way
 	// (proxyLLMRequest).
 	LLMUnavailableDetail string `json:"llm_unavailable_detail,omitempty"`
+	// Unattended marks a run nobody is driving (a non-interactive task run).
+	// A push that touches a push_rules.require_review_paths entry is then
+	// refused outright rather than held for a decision nobody is waiting to
+	// make (push_hold.go). Control-plane-authored at dispatch; false (the
+	// default) holds.
+	Unattended bool `json:"unattended,omitempty"`
 }
 
 const (

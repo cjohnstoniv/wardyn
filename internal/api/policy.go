@@ -326,9 +326,12 @@ func validateUIAppPath(p string) error {
 // bounded, and keeps a hand-authored policy from asking the broker's pack
 // inspector to read an unbounded pack. Clamp only ever LOWERS this
 // scalar (never a union), so it cannot suffer the same post-clamp overshoot.
+// maxPushRulesHoldSeconds is the proxy's own hold ceiling (maxHoldTimeout in
+// internal/egress/proxy): a longer value would be clamped there anyway.
 const (
 	maxPushRulesPathBytes      = 256
 	maxPushRulesInspectPackMiB = 64
+	maxPushRulesHoldSeconds    = 600
 )
 
 // validatePushRules enforces push_rules' structural invariants at write time.
@@ -342,22 +345,37 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 	if pr == nil {
 		return nil
 	}
-	for i, p := range pr.DenyPaths {
-		if p == "" {
-			return fmt.Errorf("push_rules.deny_paths[%d]: empty entry", i)
-		}
-		if len(p) > maxPushRulesPathBytes {
-			return fmt.Errorf("push_rules.deny_paths[%d]: exceeds %d bytes", i, maxPushRulesPathBytes)
-		}
-		if !controlCharFree(p) {
-			return fmt.Errorf("push_rules.deny_paths[%d]: control character not allowed", i)
-		}
-		if _, err := types.DenyPathSegments(p); err != nil {
-			return fmt.Errorf("push_rules.deny_paths[%d]: %w", i, err)
-		}
+	if err := validatePushRulePaths("deny_paths", pr.DenyPaths); err != nil {
+		return err
+	}
+	if err := validatePushRulePaths("require_review_paths", pr.RequireReviewPaths); err != nil {
+		return err
 	}
 	if pr.MaxInspectPackMiB < 0 || pr.MaxInspectPackMiB > maxPushRulesInspectPackMiB {
 		return fmt.Errorf("push_rules.max_inspect_pack_mib must be between 0 and %d, got %d", maxPushRulesInspectPackMiB, pr.MaxInspectPackMiB)
+	}
+	if pr.HoldSeconds < 0 || pr.HoldSeconds > maxPushRulesHoldSeconds {
+		return fmt.Errorf("push_rules.hold_seconds must be between 0 and %d, got %d", maxPushRulesHoldSeconds, pr.HoldSeconds)
+	}
+	return nil
+}
+
+// validatePushRulePaths is one pattern list's checks; require_review_paths
+// shares deny_paths' language and limits, count cap included (none).
+func validatePushRulePaths(field string, list []string) error {
+	for i, p := range list {
+		if p == "" {
+			return fmt.Errorf("push_rules.%s[%d]: empty entry", field, i)
+		}
+		if len(p) > maxPushRulesPathBytes {
+			return fmt.Errorf("push_rules.%s[%d]: exceeds %d bytes", field, i, maxPushRulesPathBytes)
+		}
+		if !controlCharFree(p) {
+			return fmt.Errorf("push_rules.%s[%d]: control character not allowed", field, i)
+		}
+		if _, err := types.DenyPathSegments(p); err != nil {
+			return fmt.Errorf("push_rules.%s[%d]: %w", field, i, err)
+		}
 	}
 	return nil
 }

@@ -64,6 +64,19 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 			"push_rules.max_inspect_pack_mib must be between"},
 		{"max_inspect_pack_mib above the cap", spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB + 1}),
 			"push_rules.max_inspect_pack_mib must be between"},
+		// require_review_paths shares deny_paths' language and limits.
+		{"empty require_review_paths entry", spec(&types.PushRulesSpec{RequireReviewPaths: []string{""}}),
+			"push_rules.require_review_paths[0]: empty entry"},
+		{"require_review_paths entry too long", spec(&types.PushRulesSpec{RequireReviewPaths: []string{strings.Repeat("a", maxPushRulesPathBytes+1)}}),
+			"push_rules.require_review_paths[0]: exceeds"},
+		{"require_review_paths entry carries a control character", spec(&types.PushRulesSpec{RequireReviewPaths: []string{"ci/\x01"}}),
+			"push_rules.require_review_paths[0]: control character"},
+		{"require_review_paths entry with a .. segment", spec(&types.PushRulesSpec{RequireReviewPaths: []string{"ok/**", "a/../b"}}),
+			"push_rules.require_review_paths[1]: \"a/../b\" has an empty"},
+		{"hold_seconds negative", spec(&types.PushRulesSpec{HoldSeconds: -1}),
+			"push_rules.hold_seconds must be between 0 and 600"},
+		{"hold_seconds above the proxy's hold ceiling", spec(&types.PushRulesSpec{HoldSeconds: maxPushRulesHoldSeconds + 1}),
+			"push_rules.hold_seconds must be between 0 and 600"},
 	}
 	for _, tc := range refused {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,6 +97,8 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 		spec(&types.PushRulesSpec{DenyPaths: []string{".github/workflows/**", "infra/**"}, MaxInspectPackMiB: 8}),
 		spec(&types.PushRulesSpec{DenyPaths: []string{"infra/", "/infra/**"}}), // trailing and leading separators read, not refused
 		spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB}),
+		spec(&types.PushRulesSpec{RequireReviewPaths: []string{".github/workflows/**"}, HoldSeconds: maxPushRulesHoldSeconds}),
+		spec(&types.PushRulesSpec{DenyPaths: []string{"secrets/**"}, RequireReviewPaths: []string{"infra/"}}),
 	} {
 		if err := validatePolicySpec(ok); err != nil {
 			t.Errorf("rejected a policy inside the bounds %+v: %v", ok, err)
