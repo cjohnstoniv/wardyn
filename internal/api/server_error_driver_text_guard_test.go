@@ -79,7 +79,7 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// break TestRunResources_ExecStreamUnsupported_Returns501, which pins the
 	// sentinel staying in the 501 body so the console/operator can tell this
 	// case apart from the no-runner-configured guard beside it.
-	"run_resources.go:201": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
+	"run_resources.go:205": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
 	// Every other site #173 found was FIXED, not allowlisted — a new entry
 	// here needs the same kind of justification (a named fixed sentinel or a
 	// design record, plus a pinning test) as these two, not just a passing

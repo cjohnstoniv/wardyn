@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -131,6 +132,8 @@ type Proxy struct {
 	// the proxy's pinned, IP-vetted transport so the control-plane host is
 	// resolved+vetted once and dialed explicitly (no transport re-resolution).
 	localClient *http.Client
+	// streamMoved is set when a tunnel or MITM stream moves a byte (activity.go).
+	streamMoved atomic.Bool
 
 	// dial connects to a vetted "ip:port" target. Both the plain-HTTP
 	// transport and the CONNECT path use this single seam; tests override it.
@@ -888,7 +891,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = clientConn.Close()
 		return
 	}
-	tunnel(clientConn, upstream)
+	tunnel(p.countActivity(clientConn), upstream)
 }
 
 // tunnel pipes bytes in both directions until EITHER side finishes, then closes

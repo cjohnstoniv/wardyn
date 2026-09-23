@@ -524,6 +524,12 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 				if err := s.sweepRunLeases(ctx); err != nil {
 					slog.WarnContext(ctx, "wardynd: run lease sweep", slog.Any("err", err))
 				}
+				// And the pause, after the lease so a run ending this tick is
+				// not frozen first; its backstop resumes a run whose request
+				// closed without a writer calling approvalClosed.
+				if err := s.sweepRunPauses(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: run pause sweep", slog.Any("err", err))
+				}
 			}()
 		}
 	}

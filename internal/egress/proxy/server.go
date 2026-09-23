@@ -283,6 +283,9 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 			defer close(out.renewStopped)
 			runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
 		}()
+		// Stream activity for the pause's presence clock (activity.go). Ends
+		// with the renewer's context.
+		go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
 	}
 	return out, nil
 }

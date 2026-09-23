@@ -180,6 +180,14 @@ export interface AgentRun {
   // stay for the ended-run grace. The run stays RUNNING meanwhile.
   lost_at?: string;
   lost_reason?: "ended";
+  // Set while the run's agent is frozen because nobody is there (migration
+  // 0071, #572): "waiting" = parked on an open request, "idle" = unused past
+  // its profile's pause_idle_after_sec. The run stays RUNNING; typing, an
+  // exec, the request closing or POST /runs/{id}/resume thaws it. active_at is
+  // the presence clock (absent = nothing stamped since create).
+  paused_at?: string;
+  paused_reason?: "waiting" | "idle";
+  active_at?: string;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that

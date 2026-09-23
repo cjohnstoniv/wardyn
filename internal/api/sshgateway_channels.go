@@ -200,7 +200,7 @@ func drainExecStderr(channel ssh.Channel, sess *runner.ExecSession) {
 // same fold) and the total bytes copied Stdout->channel: what ssh.sftp's and
 // ssh.forward's "bytes" audit field means — the direction that matters for a
 // download/forward is what came OUT of the sandbox.
-func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesOut int64) {
+func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesOut int64) {
 	defer channel.Close()
 	drainExecStderr(channel, sess)
 
@@ -224,7 +224,9 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, chan
 
 	if sess.Stdin != nil {
 		go func() {
-			_, _ = io.Copy(sess.Stdin, channel)
+			// Bytes a person sends are presence (run_pause.go).
+			in := presenceReader{r: channel, mark: func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") }}
+			_, _ = io.Copy(sess.Stdin, in)
 			_ = sess.Stdin.Close() // half-close only: Stdout/Stderr may still be flowing
 		}()
 	}
@@ -413,7 +415,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// doc for why the OUTER handleSSHSessionChannel's own deferred Close
 	// cannot be trusted to run promptly here (same deadlock class, same fix).
 	defer channel.Close()
-	run, msg := s.sshFreshRun(ctx, runID)
+	run, msg := s.sshFreshRun(ctx, runID, principal)
 	if msg != "" {
 		sendChannelError(channel, msg)
 		return
@@ -468,6 +470,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		actorType: types.ActorHuman,
 		since:     s.cfg.Now().UTC(),
 		source:    attachSourceSSH,
+		onInput:   func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") },
 		cols:      cols,
 		rows:      rows,
 		// Promotion: this channel just became the writer without reconnecting.
@@ -672,7 +675,7 @@ func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess run
 // exactly why sftp's and direct-tcpip's binary streams are safe to run
 // through the SAME bridge as this one, below).
 func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, command string, env []string) {
-	run, msg := s.sshFreshRun(ctx, runID)
+	run, msg := s.sshFreshRun(ctx, runID, principal)
 	if msg != "" {
 		sendChannelError(channel, msg)
 		return
@@ -687,7 +690,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, sshExecStreamErrorMessage(err))
 		return
 	}
-	exit, _ := s.sshBridgeExecSession(ctx, runID, channel, sess, true)
+	exit, _ := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
 	// Every trailing write in this file that follows
 	// sshBridgeExecSession (here, bridgeSSHSFTP, handleSSHDirectTCPIP) must
 	// run on s.cfg.BaseCtx, never ctx — handleSSHConn's connCtx, cancelled the
@@ -714,7 +717,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 // primitive here uses, and any other ExecStream launch failure names the
 // missing path directly.
 func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel) {
-	run, msg := s.sshFreshRun(ctx, runID)
+	run, msg := s.sshFreshRun(ctx, runID, principal)
 	if msg != "" {
 		sendChannelError(channel, msg)
 		return
@@ -730,7 +733,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, reason)
 		return
 	}
-	_, bytesOut := s.sshBridgeExecSession(ctx, runID, channel, sess, true)
+	_, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
 	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
 	// comment above (same shape, same connection-teardown race, same fix).
 	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp",
@@ -760,7 +763,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		return
 	}
 
-	run, msg := s.sshFreshRun(ctx, runID)
+	run, msg := s.sshFreshRun(ctx, runID, principal)
 	if msg != "" {
 		_ = newCh.Reject(ssh.ConnectionFailed, msg)
 		return
@@ -787,7 +790,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	defer channel.Close()
 	go ssh.DiscardRequests(reqs)
 
-	_, bytesOut := s.sshBridgeExecSession(ctx, runID, channel, sess, false)
+	_, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, false)
 	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
 	// comment (same shape, same connection-teardown race, same fix). THIS is
 	// the exact call the live e2e's -L forward step caught losing its

@@ -72,6 +72,10 @@ type attachHolder struct {
 	actorType types.ActorType
 	since     time.Time
 	source    string // attachSourceWeb | attachSourceSSH
+	// onInput, when set, is told before a writer's keystrokes reach the PTY:
+	// a person typing is presence, and a paused run is thawed first
+	// (run_pause.go). An observer's input is dropped, so it never counts.
+	onInput func()
 
 	// displace ends this holder's session with a reason the DISPLACED CLIENT can
 	// read, and is deliberately a closure rather than the bare context.CancelFunc
@@ -178,6 +182,9 @@ const attachWriteChunk = 4 * 1024
 // ponytail: chunk loop, no queue and no writer goroutine — the upgrade path is
 // that exec teardown, if one chunk is ever one too many.
 func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
+	if h.onInput != nil && len(p) > 0 && h.canWrite() {
+		h.onInput()
+	}
 	for len(p) > 0 {
 		if !h.canWrite() {
 			return nil // evicted, or an observer: drop the rest, server-side

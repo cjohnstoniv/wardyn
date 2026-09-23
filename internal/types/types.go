@@ -120,6 +120,18 @@ type LostReason string
 // and kept for the ended-run grace.
 const LostEnded LostReason = "ended"
 
+// PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
+type PauseReason string
+
+const (
+	// PauseWaiting is a run parked on an open request that nobody has
+	// answered, with no one at it.
+	PauseWaiting PauseReason = "waiting"
+	// PauseIdle is a run nobody has used for its profile's
+	// pause_idle_after_sec, whose CPU is quiet.
+	PauseIdle PauseReason = "idle"
+)
+
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
 type ActorType string
@@ -273,6 +285,19 @@ type AgentRun struct {
 	// live run. Migration 0070.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
+	// PausedAt / PausedReason mark a run whose agent container is frozen in
+	// place because nobody is there (long-holds §3). It keeps its RunState,
+	// memory, files and proxy; a person typing, an exec, the request it waits
+	// on closing, or POST /runs/{id}/resume thaws it. A paused run is not
+	// contained: kill still is. Nil / "" is a run that is not paused.
+	// Migration 0071.
+	PausedAt     *time.Time  `json:"paused_at,omitempty"`
+	PausedReason PauseReason `json:"paused_reason,omitempty"`
+	// ActiveAt is the presence clock: the last input a person typed into the
+	// run, the agent's last egress decision, or the last bytes the proxy moved
+	// for it. Keepalives never move it. Nil (a run from before migration 0071,
+	// or one nothing has happened in yet) reads as CreatedAt.
+	ActiveAt *time.Time `json:"active_at,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the

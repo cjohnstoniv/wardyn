@@ -350,6 +350,8 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	if s.shouldTouch(runID, "") { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
+	// The same human is presence for the pause, and thaws a paused run.
+	_ = s.markPresent(r.Context(), runID, types.ActorHuman, sess.Principal, "presence")
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
 	s.uiReverseProxy().ServeHTTP(w, r.WithContext(ctx))
@@ -589,6 +591,10 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		return nil, uiFail(ctx, de.status, de.msg)
 	}
 	s.markUIReasserted(sess, s.cfg.Now())
+	// A paused run is thawed before the execs below (run_pause.go).
+	if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {
+		return nil, uiFail(ctx, http.StatusBadGateway, "run is paused and could not be resumed; try again")
+	}
 
 	release, ok := s.acquireUIConn(sess.Run)
 	if !ok {

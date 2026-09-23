@@ -524,7 +524,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/kill":             {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
-	"POST /api/v1/runs/{id}/profile":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// Thawing a paused run keeps its sandbox busy: a write, so not the
+	// security tier's inspect-or-stop.
+	"POST /api/v1/runs/{id}/resume":  {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/profile": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// The run cockpit's live evidence reads. classOwner, same gate as GET
 	// /runs/{id} above: each names a run in its path and each exposes something
 	// about a LIVE sandbox — the workspace's diff, its resource usage, and who
@@ -564,6 +567,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/internal/approvals":           {class: classInternal},
 	"POST /api/v1/internal/credentials/mint":    {class: classInternal},
 	"POST /api/v1/internal/decisions":           {class: classInternal},
+	"POST /api/v1/internal/activity":            {class: classInternal},
 	"POST /api/v1/internal/groundtruth":         {class: classInternal},
 	"POST /api/v1/internal/token/renew":         {class: classInternal},
 	"PUT /api/v1/internal/recordings/{runID}":   {class: classInternal},
@@ -1092,9 +1096,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// 17 since F287 moved GET /workspaces/{id}/env-as-code here from
 		// classMember (its emitted files are the operator's authored
 		// environment, and its write twin was already operatorOnly); 18 since
-		// #569 added PATCH /runs/{id}.
-		if probed != 18 {
-			t.Errorf("probed %d classOwner routes, want 18 — a route that left classOwner takes its tier "+
+		// #569 added PATCH /runs/{id}; 19 since #572 added POST /runs/{id}/resume.
+		if probed != 19 {
+			t.Errorf("probed %d classOwner routes, want 19 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

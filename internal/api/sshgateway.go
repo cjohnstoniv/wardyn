@@ -496,7 +496,7 @@ func (s *Server) sshReleaseSession(runID uuid.UUID) {
 // immediately and surface it however fits their channel's lifecycle stage
 // (sendChannelError on an already-accepted channel, NewChannel.Reject
 // otherwise).
-func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID) (types.AgentRun, string) {
+func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID, principal string) (types.AgentRun, string) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, "no runner configured; ssh unavailable"
 	}
@@ -506,6 +506,11 @@ func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID) (types.AgentR
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		return types.AgentRun{}, "run is not RUNNING; ssh unavailable (state=" + string(run.State) + ")"
+	}
+	// Every ssh channel execs into the sandbox, which the daemon refuses while
+	// it is paused: a person connecting is presence, so thaw it (run_pause.go).
+	if err := s.thawForExec(ctx, run, types.ActorHuman, principal, "presence"); err != nil {
+		return types.AgentRun{}, "run is paused and could not be resumed; try again"
 	}
 	return run, ""
 }
