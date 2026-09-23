@@ -82,4 +82,4 @@ jobs:
         run: echo "actions/upload-artifact@v7 mentioned in passing"
 EOF
 run_gate || fail "a run: line merely mentioning upload-artifact must PASS"
-echo "ok  unrelated uses: step is not flagged"
+echo "ok  a run: line mentioning upload-artifact is not flagged"
