@@ -107,6 +107,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `false` until that pause path is verified. Kubernetes does not implement `Freezer`; a router in
   front of one answers `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is
   #572.
+- **The run page shows disk used, with a warning at 80% where a cap is enforced (#578).**
+  `GET /api/v1/runs/{id}/resources` gains `disk_used_bytes` (space currently occupied inside the
+  sandbox, via the same cgroup v2/procfs exec read as its other metrics — not
+  `disk_written_bytes`' running write total, which can run far past what is actually on disk) and
+  `disk_cap_bytes`, present ONLY when the deployment's driver actually enforces a disk cap for this
+  run. The Sandbox widget's Disk row now shows a used/cap bar and colors amber at 80% or more —
+  never a bar or a warning against a cap nothing binds. A run's resolved ephemeral disk cap is now
+  captured on the run row (`disk_mib`, migration `0071_agent_runs_disk_mib`) at dispatch, the same
+  way its resolved image is.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

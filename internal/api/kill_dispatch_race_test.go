@@ -275,6 +275,7 @@ func (s *raceDispatchStore) SetSandboxRef(_ context.Context, _ uuid.UUID, ref st
 }
 
 func (s *raceDispatchStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error { return nil }
+func (s *raceDispatchStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error         { return nil }
 func (s *raceDispatchStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }

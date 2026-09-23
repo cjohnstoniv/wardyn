@@ -11,11 +11,16 @@
 // 0%-width bar (see RunResources's doc comment; a 0 here would tell an
 // operator a governed workload is using no memory, which is a lie).
 //
-// Disk and process count have no denominator in this wire shape (no
-// disk_limit/process_limit field exists) — unlike the design board's mockup,
-// which draws a bar for all four metrics with an invented percentage, this
-// renders those two value-only. Fabricating a ratio for them would be the
-// exact D11 lie the memory-bar rule forbids, just for a different metric.
+// Process count has no denominator in this wire shape (no process_limit field
+// exists) — unlike the design board's mockup, which draws a bar for all four
+// metrics with an invented percentage, this renders it value-only.
+// Fabricating a ratio for it would be the exact D11 lie the memory-bar rule
+// forbids, just for a different metric.
+//
+// Disk (RL-13, long-holds design rev 4 §8) gets a bar ONLY when disk_cap_bytes
+// is present — which the backend sends ONLY when the deployment's driver
+// actually enforces a disk cap (types.StorageEnforcement != none). Same rule,
+// same reason: an unenforced number is not a denominator.
 import * as React from "react";
 import { Box } from "lucide-react";
 import { runs as runsApi } from "../../../../lib/api/runs";
@@ -27,6 +32,10 @@ import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { WidgetCard } from "../../../wardyn/primitives";
 
 const POLL_MS = 4000;
+
+// RL-13's own number (long-holds design rev 4 §8: "a warning at 80% where the
+// cap is enforced").
+const DISK_WARN_PERCENT = 80;
 
 
 type SandboxState =
@@ -91,14 +100,12 @@ function renderBody(state: SandboxState, live: boolean): React.ReactNode {
 function Metrics({ data }: { data: RunResources }) {
   const cpu = cpuMetric(data.cpu_percent);
   const memory = memoryMetric(data.memory_used_bytes, data.memory_limit_bytes);
+  const disk = diskMetric(data.disk_used_bytes, data.disk_cap_bytes);
   return (
     <div className="grid grid-cols-2 gap-x-3 gap-y-2">
       <Metric label="CPU" value={cpu.value} barPercent={cpu.barPercent} />
       <Metric label="Memory" value={memory.value} barPercent={memory.barPercent} />
-      <Metric
-        label="Disk"
-        value={data.disk_written_bytes !== undefined ? fmtBytes(data.disk_written_bytes) : RUN_COCKPIT.metricUnavailable}
-      />
+      <Metric label="Disk" value={disk.value} barPercent={disk.barPercent} warn={disk.warn} />
       <Metric
         label="Processes"
         value={data.process_count !== undefined ? String(data.process_count) : RUN_COCKPIT.metricUnavailable}
@@ -122,21 +129,49 @@ function memoryMetric(used?: number, limit?: number): { value: string; barPercen
   return { value: `${fmtBytes(used)} / ${fmtBytes(limit)}`, barPercent: pct };
 }
 
-function Metric({ label, value, barPercent }: { label: string; value: string; barPercent?: number }) {
+// diskMetric is memoryMetric's shape plus RL-13's warn flag. `cap` absent
+// means the backend found no driver-enforced cap for this run (either
+// EphemeralDiskEnforcement is `none`, or this run resolved no disk_mib at
+// all) — same "no bar" fallback memoryMetric already uses for its own
+// degenerate limit, not a new rule.
+function diskMetric(used?: number, cap?: number): { value: string; barPercent?: number; warn?: boolean } {
+  if (used === undefined) return { value: RUN_COCKPIT.metricUnavailable };
+  if (cap === undefined || cap <= 0) return { value: fmtBytes(used) };
+  const pct = Math.max(0, Math.min(100, (used / cap) * 100));
+  return { value: `${fmtBytes(used)} / ${fmtBytes(cap)}`, barPercent: pct, warn: pct >= DISK_WARN_PERCENT };
+}
+
+function Metric({
+  label,
+  value,
+  barPercent,
+  warn,
+}: {
+  label: string;
+  value: string;
+  barPercent?: number;
+  warn?: boolean;
+}) {
   return (
     <div>
       <div className="flex items-baseline justify-between">
         <span className="text-meta text-muted-foreground">{label}</span>
-        <span className="font-mono text-meta text-foreground">{value}</span>
+        <span className={`font-mono text-meta ${warn ? "text-warning" : "text-foreground"}`}>{value}</span>
       </div>
       {/* A bar needs a denominator — omitted (not a 0%-width bar) whenever
           barPercent is undefined, which covers both an unavailable metric and
-          a value with no ratio to show (Disk, Processes). */}
+          a value with no ratio to show (Disk with no enforced cap, Processes). */}
       {barPercent !== undefined && (
         <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
-          <span className="block h-full rounded-full bg-primary" style={{ width: `${barPercent}%` }} />
+          <span
+            className={`block h-full rounded-full ${warn ? "bg-warning" : "bg-primary"}`}
+            style={{ width: `${barPercent}%` }}
+          />
         </div>
       )}
+      {/* RL-13's 80% warning (long-holds design rev 4 §8) — text alongside the
+          color change above, not color alone. */}
+      {warn && <p className="mt-1 text-meta text-warning">{RUN_COCKPIT.diskNearCap}</p>}
     </div>
   );
 }

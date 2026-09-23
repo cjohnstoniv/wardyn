@@ -64,6 +64,7 @@ func (s *dispatchTestStore) State() types.RunState {
 }
 
 func (s *dispatchTestStore) SetSandboxRef(context.Context, uuid.UUID, string) error { return nil }
+func (s *dispatchTestStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error    { return nil }
 func (s *dispatchTestStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error {
 	return nil
 }

@@ -58,6 +58,8 @@ func (s *orphanSweepStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref st
 	return nil
 }
 
+func (s *orphanSweepStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error { return nil }
+
 // orphanSweepRunner records every StopSandbox call and can be told to fail on
 // a given ref.
 type orphanSweepRunner struct {

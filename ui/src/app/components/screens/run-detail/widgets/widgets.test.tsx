@@ -35,7 +35,7 @@ describe("SandboxWidget", () => {
     // so a stray "0" in the DOM can only have come from the memory metric.
     getResourcesMock.mockResolvedValue({
       cpu_percent: 38,
-      disk_written_bytes: 2_000_000_000,
+      disk_used_bytes: 2_000_000_000,
       process_count: 14,
     });
     render(<SandboxWidget runId="r1" live={true} />);
@@ -49,6 +49,37 @@ describe("SandboxWidget", () => {
     getResourcesMock.mockRejectedValue(new HttpError(501, "no exec primitive"));
     render(<SandboxWidget runId="r1" live={true} />);
     expect(await screen.findByText(RUN_COCKPIT.execUnsupported)).toBeInTheDocument();
+  });
+
+  // RL-13 (long-holds design rev 4 §8): "a warning at 80% where the cap is
+  // enforced" — the disk_cap_bytes backend sends ONLY when a driver actually
+  // enforces one.
+  it("warns at >=80% of disk_cap_bytes, when the backend sent one", async () => {
+    getResourcesMock.mockResolvedValue({
+      disk_used_bytes: 900,
+      disk_cap_bytes: 1000, // 90%
+    });
+    render(<SandboxWidget runId="r1" live={true} />);
+    expect(await screen.findByText(RUN_COCKPIT.diskNearCap)).toBeInTheDocument();
+  });
+
+  it("does not warn below 80%, even with a cap present", async () => {
+    getResourcesMock.mockResolvedValue({
+      disk_used_bytes: 500,
+      disk_cap_bytes: 1000, // 50%
+    });
+    render(<SandboxWidget runId="r1" live={true} />);
+    await screen.findByText("Disk");
+    expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
+  });
+
+  it("never warns with no disk_cap_bytes, however high disk_used_bytes is — an unenforced cap is not a denominator", async () => {
+    getResourcesMock.mockResolvedValue({
+      disk_used_bytes: 999_000_000_000,
+    });
+    render(<SandboxWidget runId="r1" live={true} />);
+    await screen.findByText("Disk");
+    expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
   });
 });
 

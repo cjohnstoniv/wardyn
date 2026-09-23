@@ -292,6 +292,15 @@ type AgentRun struct {
 	HasRecording         bool    `json:"has_recording"`
 	RecordingBytes       int64   `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64 `json:"recording_duration_sec,omitempty"`
+	// DiskMiB is this run's EFFECTIVE ephemeral disk cap (long-holds design rev
+	// 4, RL-13), MiB. Written by a scoped update (SetRunDiskMiB) right after
+	// applyEphemeralDisk resolves it at dispatch — the fill/clamp needs the site
+	// config and the ceiling, both dispatch-time inputs, so unlike
+	// AutoStopAfterSec this cannot be captured at create. 0 = no cap resolved
+	// (every legacy row, and any run whose disk stayed unbounded — see
+	// applyEphemeralDisk's doc); the run page's disk-used reading treats an
+	// absent/zero cap as "no denominator", never as a zero-byte quota.
+	DiskMiB int `json:"disk_mib,omitempty"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.

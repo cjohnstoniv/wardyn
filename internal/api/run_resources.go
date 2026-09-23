@@ -1,8 +1,8 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Sandbox resource usage — CPU, memory, disk written, process count — for the
-// Sandbox widget on the run-detail cockpit.
+// Sandbox resource usage — CPU, memory, disk written, disk used, process
+// count — for the Sandbox widget on the run-detail cockpit.
 //
 // WHY NOT a Runner.Resources interface method: that buys a moby ContainerStats
 // path, a k8s metrics-API path (which needs metrics-server installed — often it
@@ -99,6 +99,24 @@ mt=$(awk '$1=="MemTotal:"{print $2}' /proc/meminfo 2>/dev/null)
 wb=$(awk '{for(i=1;i<=NF;i++) if($i ~ /^wbytes=/){split($i,a,"="); s+=a[2]; n++}} END{if(n)print s}' /sys/fs/cgroup/io.stat 2>/dev/null)
 [ -n "$wb" ] && echo "disk_wbytes=$wb"
 
+# disk_used_kb (RL-13, long-holds design rev 4 §8) is a DIFFERENT question from
+# disk_wbytes above: wbytes is cumulative bytes ever WRITTEN (an edit/overwrite
+# cycle inflates it far past what is actually occupying disk), where "disk
+# used" on the run page means space CURRENTLY occupied. cgroup v2 has no space-
+# accounting controller (io.stat only meters bandwidth), so this reads it the
+# only way available inside the sandbox: du -x from / — real file sizes, on
+# ONE device. -x is load-bearing, not a nice-to-have: it keeps the walk off
+# /proc, /sys, tmpfs and any bind-mounted workspace/drive (each its own
+# device), so this counts the sandbox's OWN image + writable-layer footprint —
+# exactly what disk_mib's ephemeral cap bounds — never a host-mounted
+# workspace's size. Slower than every other read above (a real tree walk, not
+# one small file), which is why it is guarded the same as any other line here
+# rather than given its own budget: a pathologically large writable layer
+# blows the whole handler's runResourcesExecTimeout, same failure shape a stuck
+# shell would already produce, and the field simply comes back absent.
+du_kb=$(du -skx / 2>/dev/null | awk '{print $1}')
+[ -n "$du_kb" ] && echo "disk_used_kb=$du_kb"
+
 pc=$(ls -d /proc/[0-9]* 2>/dev/null | wc -l)
 # Guarded like every other read, and >0 rather than -n: wc -l on a glob that
 # matched nothing prints "0", and a sandbox reporting zero processes is not a
@@ -123,7 +141,19 @@ type runResourcesResponse struct {
 	MemoryUsedBytes  *int64   `json:"memory_used_bytes,omitempty"`
 	MemoryLimitBytes *int64   `json:"memory_limit_bytes,omitempty"`
 	DiskWrittenBytes *int64   `json:"disk_written_bytes,omitempty"`
-	ProcessCount     *int     `json:"process_count,omitempty"`
+	// DiskUsedBytes is space currently occupied (du -x from /, RL-13) — see the
+	// script's own comment on why this is not DiskWrittenBytes.
+	DiskUsedBytes *int64 `json:"disk_used_bytes,omitempty"`
+	// DiskCapBytes is the run's resolved ephemeral disk cap (AgentRun.DiskMiB),
+	// present ONLY when the driver's EphemeralDiskEnforcement is something other
+	// than `none` — an unenforced cap is not a denominator, it is a number
+	// nothing binds, and rendering a bar against it would be the exact lie
+	// StorageEnforcement's own doc forbids ("never claim a cap [nothing]
+	// enforces"). The 80% warning (long-holds design rev 4 §8) is this field's
+	// only consumer: absent it, the UI shows DiskUsedBytes with no bar, same as
+	// before RL-13.
+	DiskCapBytes *int64 `json:"disk_cap_bytes,omitempty"`
+	ProcessCount *int   `json:"process_count,omitempty"`
 }
 
 // runResourcesUnsupportedMsg is the honest 501 reason, shared by BOTH the
@@ -205,7 +235,35 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, parseRunResourcesKV(kv))
+	resp := parseRunResourcesKV(kv)
+	if b, ok := diskCapBytes(ctx, s.cfg.Runner, run.DiskMiB); ok {
+		resp.DiskCapBytes = &b
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// diskCapBytes is RL-13's "80% warning where the cap is enforced" gate: run's
+// resolved disk_mib is a genuine denominator ONLY when the driver actually
+// binds SOMETHING to it (EphemeralDiskEnforcement != none/absent) — an
+// unenforced number is not a cap, it is a request nothing holds, and showing a
+// bar against it would be exactly the lie types.StorageEnforcement's own doc
+// forbids. A Capabilities() error (or no cap resolved at all, run.DiskMiB==0,
+// every legacy/unbounded run) answers false rather than guessing — the UI
+// falls back to DiskUsedBytes alone, same as before this field existed.
+func diskCapBytes(ctx context.Context, rn runner.Runner, diskMiB int) (int64, bool) {
+	if diskMiB <= 0 || rn == nil {
+		return 0, false
+	}
+	caps, err := rn.Capabilities(ctx)
+	if err != nil {
+		return 0, false
+	}
+	switch caps.EphemeralDiskEnforcement {
+	case types.StorageEnforcementFilesystem, types.StorageEnforcementEviction:
+		return int64(diskMiB) << 20, true
+	default:
+		return 0, false
+	}
 }
 
 // execRunResourcesScript launches runResourcesScript in run's sandbox and
@@ -342,6 +400,11 @@ func parseRunResourcesKV(kv map[string]string) runResourcesResponse {
 
 	if v, ok := kvInt64(kv, "disk_wbytes"); ok {
 		resp.DiskWrittenBytes = &v
+	}
+
+	if kb, ok := kvInt64(kv, "disk_used_kb"); ok {
+		v := kb * 1024
+		resp.DiskUsedBytes = &v
 	}
 
 	if v, ok := kvInt64(kv, "proc_count"); ok {

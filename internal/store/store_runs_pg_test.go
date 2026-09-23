@@ -172,6 +172,17 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	if reread, _ := store.NewPG(pool).GetRun(ctx, r.ID); reread.AgentExecID != "agent-exec-02" {
 		t.Errorf("after SetRunAgentExecID, agent_exec_id = %q, want agent-exec-02", reread.AgentExecID)
 	}
+	if got.DiskMiB != 0 {
+		t.Errorf("disk_mib = %d, want 0 (unset at create — RL-13's SetRunDiskMiB is a scoped update)", got.DiskMiB)
+	}
+	// SetRunDiskMiB scoped-writes the column post-create (applyEphemeralDisk
+	// resolves the effective size at dispatch, after the row exists).
+	if err := store.NewPG(pool).SetRunDiskMiB(ctx, r.ID, 4096); err != nil {
+		t.Fatalf("set run disk mib: %v", err)
+	}
+	if reread, _ := store.NewPG(pool).GetRun(ctx, r.ID); reread.DiskMiB != 4096 {
+		t.Errorf("after SetRunDiskMiB, disk_mib = %d, want 4096", reread.DiskMiB)
+	}
 	if got.RunnerTarget != r.RunnerTarget {
 		t.Errorf("runner_target = %q, want %q", got.RunnerTarget, r.RunnerTarget)
 	}

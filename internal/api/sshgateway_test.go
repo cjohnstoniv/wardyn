@@ -131,11 +131,16 @@ type sshFakeRunner struct {
 	execFn   func(spec runner.ExecSpec) (*runner.ExecSession, error)
 	lastArgv []string
 	lastEnv  []string
+	// diskEnforcement lets a (sub)test model a substrate that actually binds
+	// disk_mib (run_resources_test.go's RL-13 cases). The zero value ("")
+	// reads as StorageEnforcementNone, unchanged from every test written before
+	// this field existed.
+	diskEnforcement types.StorageEnforcement
 }
 
 func (f *sshFakeRunner) Name() string { return "ssh-fake" }
 func (f *sshFakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
-	return runner.Capabilities{Driver: "ssh-fake"}, nil
+	return runner.Capabilities{Driver: "ssh-fake", EphemeralDiskEnforcement: f.diskEnforcement}, nil
 }
 func (f *sshFakeRunner) CreateSandbox(context.Context, runner.SandboxSpec) (runner.Sandbox, error) {
 	return runner.Sandbox{}, errors.New("not used by this test")

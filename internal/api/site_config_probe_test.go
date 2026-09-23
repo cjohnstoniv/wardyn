@@ -493,6 +493,7 @@ func (s *probeStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref string) 
 	s.runs[id] = r
 	return nil
 }
+func (s *probeStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error { return nil }
 func (s *probeStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

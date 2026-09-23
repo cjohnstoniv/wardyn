@@ -131,6 +131,14 @@ export interface AgentRun {
   // explicitly never (interactive). No console reader today — kept for mirror
   // parity, same reason as source_id above.
   auto_stop_after_sec?: number;
+  // The run's EFFECTIVE ephemeral disk cap in MiB (internal/types/types.go's
+  // AgentRun.DiskMiB, RL-13), written by a scoped update at dispatch — see
+  // that field's own doc for why this can't be captured at create like
+  // auto_stop_after_sec above it. 0/absent = no cap resolved. No console
+  // reader today (the /runs/{id}/resources endpoint computes the Sandbox
+  // widget's disk_cap_bytes from it server-side); kept for mirror parity,
+  // same reason as source_id above.
+  disk_mib?: number;
   // The docker exec id of the run's agent process (internal/types/types.go's
   // AgentRun.AgentExecID) — empty for exec-less substrates and before Exec
   // runs. Server/crash-recovery bookkeeping only; no console reader today, kept
@@ -249,6 +257,13 @@ export interface RunResources {
    *  back to MemTotal, and stays absent if that was unreadable too. */
   memory_limit_bytes?: number;
   disk_written_bytes?: number;
+  /** Space currently occupied (du -x from /), not disk_written_bytes' running
+   *  write total — see the backend's own comment on why those differ. */
+  disk_used_bytes?: number;
+  /** The run's ephemeral disk cap, present ONLY when the deployment's driver
+   *  actually binds something to it — an unenforced number is not a
+   *  denominator. Absent means: render disk_used_bytes with no bar. */
+  disk_cap_bytes?: number;
   process_count?: number;
 }
 
