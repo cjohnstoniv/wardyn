@@ -174,7 +174,7 @@ export function Segmented<T extends string>({
               would silently break every exact-string `getByRole(...,
               {name: o.label})` lookup the moment the tab it names is dirty. */}
           {o.dirty && (
-            <span aria-hidden="true">
+            <span aria-hidden="true" data-testid={`tab-dirty-chip-${o.value}`}>
               <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
             </span>
           )}

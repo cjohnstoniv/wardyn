@@ -33,7 +33,7 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import type { SetupStatus } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { readableDiff } from "../../../lib/readable-diff";
-import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
+import { useRequestLeave, useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { UNSAVED } from "../../../lib/unsaved-copy";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
@@ -172,6 +172,20 @@ export function ProvidersScreen() {
   const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
   useUnsavedGuard("providers-screen", changedLines.length > 0, () => JSON.stringify(draft, null, 2));
 
+  // #460 review — leaving the Agents tab while ITS draft is dirty unmounts
+  // AgentsTab (agents-tab.tsx's own draft lives nowhere else), silently
+  // dropping the edit with no warning. Git<->Storage never has this problem
+  // (their shared draft lives in THIS screen's own state, so it survives a
+  // tab switch either way) — only a switch AWAY from a dirty Agents tab asks.
+  const requestLeave = useRequestLeave();
+  const handleTabChange = (next: Tab) => {
+    if (tab === "agents" && agentsDirty && next !== "agents") {
+      requestLeave(() => setTab(next));
+      return;
+    }
+    setTab(next);
+  };
+
   const secretsPresent = setupStatus?.secrets.present ?? [];
   const githubApp = setupStatus?.secrets.github_app ?? false;
   const enforcement = setupStatus?.runner.ephemeral_disk_enforcement;
@@ -181,11 +195,16 @@ export function ProvidersScreen() {
       <PageHeader
         title={PROVIDERS.TITLE}
         description={PROVIDERS.LEAD}
-        // #460 — beside the screen's own title, the same fact the Segmented
-        // tab labels and the bottom-of-tab marker below are all armed on.
-        actions={
+        // #460 review — BESIDE the title text (titleBadge), never the
+        // far-right actions slot: the same fact the Segmented tab labels and
+        // the bottom-of-tab marker below are all armed on. Its own testid so
+        // a mutation dropping this specific chip fails a test even though the
+        // beside-Save marker (a different element) still renders.
+        titleBadge={
           status === "ready" && (changedLines.length > 0 || agentsDirty) ? (
-            <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
+            <span data-testid="page-header-dirty-chip">
+              <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
+            </span>
           ) : undefined
         }
       />
@@ -215,7 +234,7 @@ export function ProvidersScreen() {
         <section className="mt-6 space-y-4 rounded-xl border border-border bg-card p-5">
           <Segmented
             value={tab}
-            onChange={setTab}
+            onChange={handleTabChange}
             options={[
               // #460 — Git and Storage share this screen's one draft/Save,
               // so both chip on the SAME dirty fact: an edit made on the

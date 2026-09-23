@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act } from "react";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, NavLink, Route, Routes, useNavigate } from "react-router-dom";
+import { BrowserRouter, MemoryRouter, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import { UnsavedGuardProvider, useGuardedNavClick, useUnsavedGuard } from "./use-unsaved-guard";
 import { UNSAVED } from "./unsaved-copy";
+import { registerUnsaved } from "./unsaved-registry";
 
 // Mirrors the real call site (app-shell.tsx#SidebarNav): a guarded click sits
 // on an actual <NavLink>, since a clean click lets the LINK's own navigation
@@ -95,5 +97,122 @@ describe("useUnsavedGuard — beforeunload", () => {
     expect(remove).toHaveBeenCalledWith("beforeunload", expect.any(Function));
 
     unmount();
+  });
+});
+
+// #460 review — BrowserRouter has no blocker for Back/Forward, so
+// UnsavedGuardProvider listens to native `popstate` directly. By the time it
+// fires the browser has ALREADY moved (window.history.state reads as the NEW
+// entry) — the fix restores it immediately (mocked here: `history.go` is
+// spied so the test controls exactly what "restore"/"redo" asserts, without
+// depending on jsdom's own async back()/go() timing), then asks; Discard
+// replays the original move.
+function PushButton() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate("/next")}>
+      go forward
+    </button>
+  );
+}
+
+async function setUpAtNextEntry(user: ReturnType<typeof userEvent.setup>) {
+  render(
+    <BrowserRouter>
+      <UnsavedGuardProvider>
+        <PushButton />
+      </UnsavedGuardProvider>
+    </BrowserRouter>,
+  );
+  // A REAL react-router push — exercises the pushState patch that keeps
+  // UnsavedGuardProvider's own index tracking current between pops, the same
+  // path a real <Link>/navigate() click takes.
+  await user.click(screen.getByRole("button", { name: "go forward" }));
+}
+
+// Simulates what the BROWSER itself does on a real Back/Forward: it moves
+// history.state to the target entry, THEN fires popstate — with no call to
+// pushState/replaceState in between (that's a JS-visible API the browser's
+// own navigation never goes through). Using window.history.replaceState()
+// here instead would run through use-unsaved-guard.tsx's OWN patch — a test
+// artifact that updates historyIndexRef before the guard ever sees the
+// "old" value, masking the delta it's supposed to compute. The native
+// History.prototype method sidesteps that patch, the same way the browser's
+// C++ implementation does.
+function simulateBrowserPop(idx: number): void {
+  History.prototype.replaceState.call(window.history, { idx }, "", window.location.pathname);
+  act(() => {
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+}
+
+describe("UnsavedGuardProvider — browser Back/Forward (popstate)", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/start");
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("a dirty registry intercepts Back: restores the entry immediately and opens the confirm", async () => {
+    const user = userEvent.setup();
+    await setUpAtNextEntry(user);
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const unregister = registerUnsaved("dirty-back-test", () => "unsaved text");
+
+    // Simulate the browser having already popped back one entry.
+    const poppedTo = (window.history.state as { idx: number }).idx - 1;
+    simulateBrowserPop(poppedTo);
+
+    expect(goSpy).toHaveBeenCalledWith(1); // restore = -delta = -(-1)
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
+
+    unregister();
+  });
+
+  it("Keep editing stays — no further history.go call", async () => {
+    const user = userEvent.setup();
+    await setUpAtNextEntry(user);
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const unregister = registerUnsaved("dirty-back-stay", () => "unsaved text");
+
+    const poppedTo = (window.history.state as { idx: number }).idx - 1;
+    simulateBrowserPop(poppedTo);
+    await screen.findByRole("alertdialog");
+
+    await user.click(screen.getByRole("button", { name: UNSAVED.STAY }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(goSpy).toHaveBeenCalledTimes(1); // only the restore — no redo
+
+    unregister();
+  });
+
+  it("Discard changes replays the ORIGINAL move", async () => {
+    const user = userEvent.setup();
+    await setUpAtNextEntry(user);
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const unregister = registerUnsaved("dirty-back-discard", () => "unsaved text");
+
+    const poppedTo = (window.history.state as { idx: number }).idx - 1;
+    simulateBrowserPop(poppedTo);
+    await screen.findByRole("alertdialog");
+
+    await user.click(screen.getByRole("button", { name: UNSAVED.DISCARD }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(goSpy).toHaveBeenNthCalledWith(1, 1); // restore
+    expect(goSpy).toHaveBeenNthCalledWith(2, -1); // redo the original Back
+
+    unregister();
+  });
+
+  it("a clean registry lets Back through untouched — no restore, no dialog", async () => {
+    const user = userEvent.setup();
+    await setUpAtNextEntry(user);
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {});
+
+    const poppedTo = (window.history.state as { idx: number }).idx - 1;
+    simulateBrowserPop(poppedTo);
+
+    expect(goSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 });

@@ -14,6 +14,8 @@ import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-provi
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus } from "../../../lib/test-fixtures";
+import { UnsavedGuardProvider } from "../../../lib/use-unsaved-guard";
+import { UNSAVED } from "../../../lib/unsaved-copy";
 import { ProvidersScreen } from "./providers-screen";
 
 const getWorkspaceProvidersMock = vi.fn();
@@ -59,11 +61,18 @@ vi.mock("react-router-dom", async () => {
   return { ...actual, useNavigate: () => vi.fn() };
 });
 
+// #460 review — wrapped in UnsavedGuardProvider even for tests that never
+// dirty anything: it's a no-op while clean (the noopGuard-shaped default),
+// so every existing assertion below is unaffected, and it's what the tab-
+// switch-guard tests need to see the real confirm dialog rather than the
+// context's own no-provider fallback (which would proceed silently).
 function renderScreen(operator = true) {
   return render(
-    <OperatorProvider operator={operator}>
-      <ProvidersScreen />
-    </OperatorProvider>,
+    <UnsavedGuardProvider>
+      <OperatorProvider operator={operator}>
+        <ProvidersScreen />
+      </OperatorProvider>
+    </UnsavedGuardProvider>,
   );
 }
 
@@ -241,12 +250,77 @@ describe("ProvidersScreen", () => {
     renderScreen();
     const row = await screen.findByTestId("provider-row-github");
     expect(screen.queryAllByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toHaveLength(0);
+    expect(screen.queryByTestId("page-header-dirty-chip")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tab-dirty-chip-git")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tab-dirty-chip-storage")).not.toBeInTheDocument();
 
     await userEvent.type(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS), "{Enter}https://git.corp.example/team");
     expect(screen.getAllByText(PROVIDERS_DRAFT.UNSAVED_MARKER).length).toBeGreaterThan(0);
+    // #460 review — the PageHeader chip and BOTH Segmented tab chips (Git and
+    // Storage share this one draft), each pinned by their own testid: a
+    // mutation removing just one of these three would pass the marker-only
+    // assertion above but fail here.
+    expect(screen.getByTestId("page-header-dirty-chip")).toHaveTextContent(UNSAVED.DIRTY_CHIP);
+    expect(screen.getByTestId("tab-dirty-chip-git")).toHaveTextContent(UNSAVED.DIRTY_CHIP);
+    expect(screen.getByTestId("tab-dirty-chip-storage")).toHaveTextContent(UNSAVED.DIRTY_CHIP);
 
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await waitFor(() => expect(screen.queryAllByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toHaveLength(0));
+    expect(screen.queryByTestId("page-header-dirty-chip")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tab-dirty-chip-git")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tab-dirty-chip-storage")).not.toBeInTheDocument();
+  });
+
+  // #460 review — the Agents tab chips independently of Git/Storage (its own
+  // separate draft/onDirtyChange wiring), pinned the same way.
+  it("chips the Agents Segmented option, and the PageHeader, off its OWN dirty draft", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: {}, etag: '"i0"' });
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true }] }),
+    );
+    renderScreen();
+    await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
+    expect(screen.queryByTestId("tab-dirty-chip-agents")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    const row = await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(within(row).getByRole("switch"));
+
+    expect(screen.getByTestId("tab-dirty-chip-agents")).toHaveTextContent(UNSAVED.DIRTY_CHIP);
+    expect(screen.getByTestId("page-header-dirty-chip")).toHaveTextContent(UNSAVED.DIRTY_CHIP);
+    // Git/Storage's own chips stay dark — this is a DIFFERENT draft.
+    expect(screen.queryByTestId("tab-dirty-chip-git")).not.toBeInTheDocument();
+  });
+
+  // #460 review — leaving a dirty Agents tab used to silently unmount it
+  // (agents-tab.tsx's draft lives nowhere else), dropping the edit with no
+  // warning. It must now ask, the same dialog every other exit uses.
+  it("switching away from a dirty Agents tab opens the leave-without-saving confirm; Keep editing stays on Agents, Discard switches", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: {}, etag: '"i1"' });
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true }] }),
+    );
+    renderScreen();
+    await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    const row = await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(within(row).getByRole("switch"));
+    expect(await screen.findByTestId("tab-dirty-chip-agents")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.GIT_TITLE }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
+    // Still on Agents — the switch never happened.
+    expect(screen.getByTestId("agent-row-claude-code")).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: UNSAVED.STAY }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByTestId("agent-row-claude-code")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.GIT_TITLE }));
+    await userEvent.click(await screen.findByRole("button", { name: UNSAVED.DISCARD }));
+    expect(screen.queryByTestId("agent-row-claude-code")).not.toBeInTheDocument();
+    expect(screen.getByText(PROVIDERS.LEGACY_OPEN_TITLE)).toBeInTheDocument();
   });
 
   // F4-F3: the banner must not SWAP the whole tab body — that would discard

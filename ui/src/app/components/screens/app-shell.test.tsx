@@ -14,6 +14,9 @@ import { TopBar } from "./top-bar";
 import { useUserDrive, type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { baseMeDrive } from "../../lib/test-fixtures";
+import { registerUnsaved } from "../../lib/unsaved-registry";
+import { UnsavedGuardProvider } from "../../lib/use-unsaved-guard";
+import { UNSAVED } from "../../lib/unsaved-copy";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -554,43 +557,95 @@ describe("SidebarNav (member role — B3)", () => {
 // Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
 // describe block above only drives the sidebar) is meaningless on a member's
 // own Getting Started, which has no /setup?step= deep link at all.
+// #460 review — wrapped in UnsavedGuardProvider: a no-op while nothing's
+// dirty (every existing assertion below is unaffected), and what the
+// account-menu guard test just past this function needs to see the real
+// confirm dialog instead of the context's no-provider fallback.
 function renderTopBar(role: Role) {
   return render(
     <MemoryRouter>
-      <ThemeProvider>
-        <TopBar
-          onSignOut={() => {}}
-          meta={{
-            trustDomain: "example.test",
-            identityProvider: "spiffe",
-            principal: "u@example.test",
-            email: "",
-            name: "",
-            method: "sso",
-            resolved: true,
-            identityResolved: true,
-            operator: role === "admin",
-            securityOperator: role !== "member",
-            role,
-            sessionExpiresAt: null,
-            memberLocalDirRoot: null,
-            userDrive: null,
-            userDriveDeniedByProfile: "",
-            userDriveUnavailable: "",
-            memberMode: false,
-            memberModeNoCredential: false,
-            memberPreviewAvailable: false,
-            runner: "",
-            networkPolicy: "",
-          }}
-          pendingApprovals={0}
-          attentionCount={0}
-          onNewRun={() => {}}
-        />
-      </ThemeProvider>
+      <UnsavedGuardProvider>
+        <ThemeProvider>
+          <TopBar
+            onSignOut={() => {}}
+            meta={{
+              trustDomain: "example.test",
+              identityProvider: "spiffe",
+              principal: "u@example.test",
+              email: "",
+              name: "",
+              method: "sso",
+              resolved: true,
+              identityResolved: true,
+              operator: role === "admin",
+              securityOperator: role !== "member",
+              role,
+              sessionExpiresAt: null,
+              memberLocalDirRoot: null,
+              userDrive: null,
+              userDriveDeniedByProfile: "",
+              userDriveUnavailable: "",
+              memberMode: false,
+              memberModeNoCredential: false,
+              memberPreviewAvailable: false,
+              runner: "",
+              networkPolicy: "",
+            }}
+            pendingApprovals={0}
+            attentionCount={0}
+            onNewRun={() => {}}
+          />
+        </ThemeProvider>
+      </UnsavedGuardProvider>
     </MemoryRouter>,
   );
 }
+
+// #460 review — every plain <Link> in the account menu (top-bar.tsx) must go
+// through the same guardedClick the sidebar already uses; Settings is the
+// entry the review named explicitly.
+describe("TopBar — account-menu links are guarded (#460 review)", () => {
+  it("Settings, dirty: opens the confirm, and Keep editing stays", async () => {
+    const user = userEvent.setup();
+    const unregister = registerUnsaved("dirty-test-editor-stay", () => "unsaved text");
+    try {
+      renderTopBar("admin");
+      await user.click(screen.getAllByRole("button").at(-1)!);
+      const menu = screen.getByRole("menu");
+      await user.click(within(menu).getByRole("menuitem", { name: /Settings/ }));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole("button", { name: UNSAVED.STAY }));
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("Settings, dirty: Discard proceeds", async () => {
+    const user = userEvent.setup();
+    const unregister = registerUnsaved("dirty-test-editor-discard", () => "unsaved text");
+    try {
+      renderTopBar("admin");
+      await user.click(screen.getAllByRole("button").at(-1)!);
+      await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /Settings/ }));
+      await user.click(await screen.findByRole("button", { name: UNSAVED.DISCARD }));
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("a clean session's Settings click opens no dialog", async () => {
+    const user = userEvent.setup();
+    renderTopBar("admin");
+    await user.click(screen.getAllByRole("button").at(-1)!);
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /Settings/ }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+});
 
 // 0.7.3 F6: the Fence/NetworkPolicy chips are gone outright — no degraded
 // chip, no replacement. Both were deployment-wide facts fixed at boot that

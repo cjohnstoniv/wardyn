@@ -17,11 +17,14 @@ import * as React from "react";
 const registry = new Map<string, () => string>();
 
 /** Registers `getText` under `id`; a second call with the same `id`
- *  overwrites the first — one editor, one entry. Returns the unregister. */
+ *  overwrites the first — one editor, one entry. Returns the unregister,
+ *  which is IDENTITY-CHECKED: it only deletes the entry if `id` still maps
+ *  to THIS `getText` — a stale unregister from an overwritten registration
+ *  (e.g. React re-invoking an effect) must never delete a newer one. */
 export function registerUnsaved(id: string, getText: () => string): () => void {
   registry.set(id, getText);
   return () => {
-    registry.delete(id);
+    if (registry.get(id) === getText) registry.delete(id);
   };
 }
 
@@ -41,7 +44,13 @@ export function unsavedSnapshot(): string | null {
  *  changing does. */
 export function useRegisterUnsaved(id: string, dirty: boolean, getText: () => string): void {
   const getTextRef = React.useRef(getText);
-  getTextRef.current = getText;
+  // Updated in an EFFECT, not during render: a ref write during render is a
+  // side effect React doesn't know about (breaks under concurrent rendering,
+  // and is the one difference from doing this inline that would otherwise
+  // make this file and its #488 counterpart diverge).
+  React.useEffect(() => {
+    getTextRef.current = getText;
+  });
   React.useEffect(() => {
     if (!dirty) return undefined;
     return registerUnsaved(id, () => getTextRef.current());
