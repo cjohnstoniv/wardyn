@@ -221,6 +221,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 	cfg := proxy.Config{
 		RunID:                runID,
 		ControlPlaneURL:      pc.ControlPlaneURL,
+		ControlPlaneCAPEM:    pc.ControlPlaneCAPEM,
 		RunToken:             pc.RunToken,
 		Policy:               pc.Policy,
 		Injection:            inj,

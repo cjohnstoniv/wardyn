@@ -858,6 +858,7 @@ var reservedBrokerSecretNames = map[string]bool{
 	"github-app-id":         true,
 	"github-app-key":        true,
 	"wardyn-ssh-host-key":   true,
+	"wardyn-internal-ca":    true,
 	"bedrock-api-key":       true,
 }
 

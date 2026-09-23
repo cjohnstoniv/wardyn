@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -30,8 +31,14 @@ import (
 type Config struct {
 	// RunID is the governed run this sidecar serves.
 	RunID uuid.UUID `json:"run_id"`
-	// ControlPlaneURL is the base URL of wardynd (e.g. "http://wardynd:8080").
+	// ControlPlaneURL is the base URL of wardynd's internal TLS listener (e.g.
+	// "https://wardynd:8443"). http:// is refused unless the host is loopback
+	// (hoptls.CheckURL).
 	ControlPlaneURL string `json:"control_plane_url"`
+	// ControlPlaneCAPEM is wardynd's internal CA (internal/hoptls), the ONLY
+	// root this sidecar trusts for control-plane calls. Required with an
+	// https ControlPlaneURL.
+	ControlPlaneCAPEM string `json:"control_plane_ca_pem,omitempty"`
 	// RunToken authenticates internal calls (Authorization: Bearer <token>).
 	RunToken string `json:"run_token"`
 	// Policy is the compiled egress allowlist / method rules / first-use flag.
@@ -136,9 +143,9 @@ type Config struct {
 	UpstreamProxyNoProxy []string `json:"upstream_proxy_no_proxy,omitempty"`
 	// TrustedCAPEM is the OPERATOR's corporate CA bundle (WARDYN_TRUSTED_CA_FILE,
 	// wardynd's Config.TrustedCAPEM), forwarded verbatim per run so THIS
-	// sidecar's own outbound TLS (the forward/egress transport AND the
-	// control-plane transport, see NewServer) additionally trusts a corporate
-	// TLS-inspecting middlebox on the path to the real upstream. Control-plane
+	// sidecar's forward/egress transport additionally trusts a corporate
+	// TLS-inspecting middlebox on the path to the real upstream. Never the
+	// control-plane transport, which trusts ControlPlaneCAPEM alone. Control-plane
 	// authored, same trust boundary as MITMCACertPEM/MITMCAKeyPEM above — the
 	// sandbox cannot set it. Empty (the default) => system roots only,
 	// byte-identical to today.
@@ -257,6 +264,15 @@ func (c *Config) applyDefaultsAndValidate() error {
 	}
 	if c.RunToken == "" {
 		return fmt.Errorf("config: run_token is required")
+	}
+	if err := hoptls.CheckURL(c.ControlPlaneURL); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.ControlPlaneURL)), "https://") && c.ControlPlaneCAPEM == "" {
+		return fmt.Errorf("config: an https control_plane_url needs control_plane_ca_pem — control-plane calls trust wardynd's internal CA only, never the system roots")
+	}
+	if _, err := hoptls.ClientConfig(c.ControlPlaneCAPEM); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	// Validate (but do not retain) the upstream proxy URL: fail fast on a bad
 	// scheme/host/port. The live proxy re-parses it in NewServer.

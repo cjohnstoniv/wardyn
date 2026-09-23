@@ -18,11 +18,13 @@ re-open only what wardynd needs:
     agent pod or proxy sidecar has no business on either. They cannot ride
     the HTTP rule above, because NetworkPolicy ingress rules are ADDITIVE —
     withholding a port from run pods means NO rule may grant it to them.
-  - a SEPARATE ingress rule, HTTP ONLY, when k8s.enabled and
+  - the internal TLS listener (k8s.enabled) on the first rule, for
+    same-namespace run proxies
+  - a SEPARATE ingress rule, internal + http only, when k8s.enabled and
     k8s.runsNamespace differs from this release's namespace: that namespace's
-    proxy sidecars call back to wardynd for credential mints, approval
-    checks, and recording uploads — never SSH, which is an operator/human
-    surface, not something a run's sidecar has any business reaching
+    proxy sidecars call back to wardynd for credential resolves and mints,
+    approval checks, and recording uploads — never SSH, which is an
+    operator/human surface
 */}}
 {{- /*
 `default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
@@ -74,6 +76,12 @@ spec:
       ports:
         - protocol: TCP
           port: http
+        {{- if .Values.k8s.enabled }}
+        # The proxy-facing TLS listener: same-namespace run proxies resolve
+        # credentials here (WARDYN_CONTROL_PLANE_URL).
+        - protocol: TCP
+          port: internal
+        {{- end }}
     {{- if or $ssh.enabled $ui.enabled }}
     # SSH and the UI-sandbox gateway, on their OWN rule with their OWN peers.
     #
@@ -137,12 +145,17 @@ spec:
     # with no render-time or even boot-time signal). A SEPARATE rule (not
     # folded into the one above): this peer gets http only, never ssh and
     # never the UI-sandbox gateway — a run's proxy sidecar has no business on
-    # either operator/human port.
+    # either operator/human port. Proxies dispatched since 0.7.12 use only the
+    # internal TLS listener; http stays so a run already in flight at the
+    # upgrade finishes on the path it was dispatched with.
+    # ponytail: drop http here once no pre-0.7.12 proxy can still be running.
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace }}
       ports:
+        - protocol: TCP
+          port: internal
         - protocol: TCP
           port: http
     {{- end }}

@@ -321,7 +321,10 @@ services:
       # default lands on flagEnv's own compiled default ("on") like every
       # other empty passthrough above.
       WARDYN_AWS_SSO_PROXY_INJECT: "${WARDYN_AWS_SSO_PROXY_INJECT:-}"
-      WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
+      # Every run's proxy reaches wardynd on its internal TLS listener
+      # (WARDYN_INTERNAL_LISTEN, :8443 — never published to the host), pinned
+      # to wardynd's own internal CA. http:// here is refused at boot.
+      WARDYN_CONTROL_PLANE_URL: "https://wardynd:8443"
       # Devcontainer image builds — ON by default on the compose stack: the
       # wizard's DEFAULT card is "Recommended — built for this workspace", and a
       # default the deployment can't honor reads as "command not found" inside

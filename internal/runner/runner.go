@@ -249,6 +249,10 @@ type ProxyConfig struct {
 	RunToken string
 	// ControlPlaneURL is where sidecars stream decisions/recordings.
 	ControlPlaneURL string
+	// ControlPlaneCAPEM is wardynd's internal CA (internal/hoptls): the only
+	// root the sidecar trusts for ControlPlaneURL. Public; empty with a
+	// loopback http URL only.
+	ControlPlaneCAPEM string
 	// Policy is the run's egress policy, handed verbatim to the wardyn-proxy
 	// sidecar (default-deny domain allowlist, method rules, first-use flag).
 	// Drivers MUST deliver it to the sidecar at launch: a proxy without a
@@ -303,8 +307,8 @@ type ProxyConfig struct {
 	// resolveUpstreamProxyURL and its audit event run.upstream_proxy.resolve.
 	UpstreamProxyURL string
 	// TrustedCAPEM is the operator's corporate CA bundle (WARDYN_TRUSTED_CA_FILE,
-	// api.Config.TrustedCAPEM), forwarded verbatim so the sidecar's own outbound
-	// TLS additionally trusts it. Threaded to the proxy via proxy.Config's
+	// api.Config.TrustedCAPEM), forwarded verbatim so the sidecar's egress TLS
+	// additionally trusts it (never its control-plane calls). Threaded to the proxy via proxy.Config's
 	// identically-named field (WARDYN_PROXY_CONFIG_JSON, BuildProxyConfig below).
 	// Control-plane-authored, same trust boundary as MITMCACertPEM/MITMCAKeyPEM
 	// above; empty => system roots only, byte-identical to today.

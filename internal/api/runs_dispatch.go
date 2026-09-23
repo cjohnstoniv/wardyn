@@ -434,8 +434,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// shell isn't empty. A non-interactive run's task exec does this itself.
 		Interactive: p.Interactive,
 		ProxyConfig: runner.ProxyConfig{
-			RunToken:        p.RunToken,
-			ControlPlaneURL: s.cfg.ControlPlaneURL,
+			RunToken:          p.RunToken,
+			ControlPlaneURL:   s.cfg.ControlPlaneURL,
+			ControlPlaneCAPEM: s.cfg.ControlPlaneCAPEM,
 			// The proxy sidecar enforces THIS run's egress policy; a proxy
 			// without a policy fails closed (no egress at all).
 			Policy:    policy,

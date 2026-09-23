@@ -277,6 +277,7 @@ func TestUpstreamProtocolMismatch_MITM_AWSLane(t *testing.T) {
 		Resolver:        publicResolver{},
 		Upstream:        up,
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 	})
 
 	rec := httptest.NewRecorder()
@@ -328,6 +329,7 @@ func TestUpstreamProtocolMismatch_PlainForward(t *testing.T) {
 		Resolver:        publicResolver{},
 		Upstream:        up,
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 	})
 
 	rec := httptest.NewRecorder()
@@ -495,6 +497,7 @@ func newH2TestProxy(t *testing.T, peer *h2Peer, host string) (*Proxy, *bytes.Buf
 		Resolver:        publicResolver{},
 		Upstream:        mustUpstream(t, peer.addr()),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 	}), buf
 }
 
@@ -807,6 +810,7 @@ func TestH2Fallback_PATBrokerLane(t *testing.T) {
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		PATGrants:       map[string]PATGrant{"dev.azure.com": {GrantID: uuid.New()}},
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			to := forgeAddr
@@ -846,6 +850,7 @@ func TestH2Fallback_NoProxyBypass(t *testing.T) {
 		Upstream:        mustUpstream(t, f.addr()),
 		UpstreamNoProxy: []string{".corp.internal"},
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 	})
 
 	rec := httptest.NewRecorder()

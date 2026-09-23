@@ -73,6 +73,14 @@ service:
   # pod but is INERT — wardynd still binds whatever service.port says. Change
   # the listen port here, not through env.WARDYN_LISTEN (B12b-F10).
   port: 8080
+  # internalPort is wardynd's proxy-facing TLS listener (-internal-listen,
+  # WARDYN_INTERNAL_LISTEN): every run's proxy resolves credentials and calls
+  # /api/v1/internal/* here, over TLS pinned to wardynd's OWN internal CA. The
+  # CA is minted into wardynd's secret store on first boot (beside its signing
+  # key, age-encrypted in Postgres) — no Secret, no cert-manager, nothing to
+  # rotate by hand. WARDYN_CONTROL_PLANE_URL is rendered as https on this port.
+  # Never expose it through an Ingress.
+  internalPort: 8443
 
 # Optional Ingress fronting the console's HTTP port only (never `ui` or
 # `ssh` — see the "Console Ingress" / "UI sandbox gateway" / "Split SSH
