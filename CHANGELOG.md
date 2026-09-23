@@ -76,6 +76,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The Wall tier (CC2) is exercised on a real gVisor runtime (#702).** A new nightly job,
+  `gvisor-cc2-live`, installs a pinned, sha512-checked `runsc` on the runner and runs the docker
+  conformance suite and the live task e2e with `WARDYN_TEST_REQUIRE_CLASS=CC2`, which fails the lane
+  if the runtime did not register rather than letting it pass on runc. On Kubernetes,
+  `TestCreateSandbox_PinsTheRuntimeClassPerTier` pins that a CC2/CC3 agent pod carries its pinned
+  RuntimeClass, and that an unpinned, missing, weaker or since-changed RuntimeClass is refused
+  before any pod, Secret or NetworkPolicy is created.
 - **Migration-numbering collision gates (#667).** `make lint` now runs
   `scripts/check-migration-numbers.sh`: a new migration file must use a numeric
   prefix greater than every prefix already on the branch it targets

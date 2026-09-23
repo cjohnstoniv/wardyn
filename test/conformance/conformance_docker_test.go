@@ -29,8 +29,10 @@ import (
 	dockerclient "github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/conformance"
 )
 
@@ -54,6 +56,7 @@ func TestConformanceDocker(t *testing.T) {
 	// Exercise the assembled production path: the orchestrator over the OCI
 	// substrate is what the control plane actually runs.
 	r := orchestrator.New(sub)
+	requireStrongestClass(t, r)
 
 	// The docker driver requires the control-plane-facing network to exist so
 	// the proxy sidecar can join it at sandbox creation. Create best-effort;
@@ -76,6 +79,27 @@ func TestConformanceDocker(t *testing.T) {
 		// as the uid every agent image uses instead.
 		AgentUserImage: agentUserImage(t, "busybox:latest"),
 	})
+}
+
+// requireStrongestClass fails the leg when WARDYN_TEST_REQUIRE_CLASS is set and
+// is not the strongest class the daemon advertises. Every conformance case runs
+// at the strongest class, so this is what makes the nightly gVisor leg run
+// ManagedFiles, L0StructuralEgress and ExecStream under runsc — and go red, not
+// quietly back to runc, on a runner where runsc did not register.
+func requireStrongestClass(t *testing.T, r runner.Runner) {
+	t.Helper()
+	want := types.ConfinementClass(os.Getenv("WARDYN_TEST_REQUIRE_CLASS"))
+	if want == "" {
+		return
+	}
+	caps, err := r.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if n := len(caps.ConfinementClasses); n == 0 || caps.ConfinementClasses[n-1] != want {
+		t.Fatalf("WARDYN_TEST_REQUIRE_CLASS=%s but the strongest class this daemon advertises is not it (classes %v): is its runtime installed and registered with dockerd?",
+			want, caps.ConfinementClasses)
+	}
 }
 
 // agentUserImage commits base with USER 1000:1000 — the image contract's
