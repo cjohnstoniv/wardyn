@@ -778,7 +778,13 @@ walk_rc="${PIPESTATUS[0]}"
 # file here is the expected shape of "the last case restarted the fake", never a
 # finding on its own.
 step "reading the fake's /_seen"
-if ! curl -sf "${SEEN_URL}" | tee "${EVIDENCE_DIR}/seen.json" | grep -q .; then
+# CAPTURE, THEN MATCH — same law as the "TEST HATCH ACTIVE" read above: never
+# `curl | grep -q` under `pipefail`. Write the evidence file from the capture
+# rather than through `tee`, so a grep -q that matches on the first byte can
+# no longer SIGPIPE curl mid-write.
+_seen_body="$(curl -sf "${SEEN_URL}")"
+printf '%s' "${_seen_body}" >"${EVIDENCE_DIR}/seen.json"
+if ! grep -q . <<<"${_seen_body}"; then
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}" \
     "${SEEN_RETRY_PORT:-8398}:${FAKE_PORT}" >/dev/null 2>&1 &
   seen_retry_pf=$!

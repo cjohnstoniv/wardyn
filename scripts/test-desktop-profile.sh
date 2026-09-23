@@ -295,10 +295,15 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   sed "s#__WARDYN_DESKTOP_SH__#${DESK_DIR}/wardyn-desktop.sh#" "${UNIT}" > "${_t}/wardyn.service"
   cp "${TIMER}" "${_t}/wardyn.timer"
   # Filter this HOST's unrelated unit warnings; only our two files' verdict counts.
-  if ! systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' | grep -q .; then
+  # CAPTURE, THEN MATCH — never `grep | grep -q` under `pipefail`: `grep -q`
+  # exits on its first match while systemd-analyze/the upstream grep are still
+  # writing, the upstream takes SIGPIPE, and pipefail reports the pipeline
+  # failed even on a clean (matching) verdict.
+  _verify_warnings="$(systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' || true)"
+  if ! grep -q . <<<"${_verify_warnings}"; then
     :  # no output => clean
   else
-    systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' >&2
+    printf '%s\n' "${_verify_warnings}" >&2
     rm -rf "${_t}"
     fail "the rendered systemd units do not verify"
   fi
