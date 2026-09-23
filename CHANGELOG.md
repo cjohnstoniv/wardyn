@@ -77,6 +77,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   goroutine was not tracked, so a SIGTERM during `CreateSandbox` stopped the daemon partway through
   dispatch, and the run stayed `STARTING` until the boot reconcile found it. The launch is now
   tracked like the sign-in launch, and shutdown waits for it within the same bound.
+- **With an Anthropic gateway configured, a subscription credential is mounted only when the run
+  can reach the gateway.** A `*.anthropic.com` or `api.anthropic.com` allowlist entry used to
+  pass the check, mounting the resident credential into a run whose one model dial (to the
+  gateway) the proxy then refused. The gateway's reachability is now judged the way the proxy
+  judges the CONNECT: its host, a covering `*.` wildcard, a port qualifier, and `denied_domains`
+  all count (#508).
+- **`wardyn drive get` prints every allocation, or nothing.** It used to print the first page of
+  allocations only, so `drive get > drives.json` followed by `drive apply` restored a partial
+  set. It now reads every page, and refuses to print when the pages do not add up to the
+  server's `grant_total` (#508).
+- **`push_rules.deny_paths` on a `git_pat` forge other than github.com is now graded.** There the
+  broker cannot show that a push left a path unchanged, so an entry reaching any path the
+  repository already holds refuses every push. The run's risk grade now says so, and
+  POLICIES.md says to deny only paths the repository does not hold yet on such a forge (#508).
+- **The git broker's own reads of api.github.com on a push's behalf are in the run's decision
+  stream** as one `brokered:git:forge-read` row per push that read the forge (#508).
+- **Docs: an `emptyDir` cache volume is writable by the agent without `FSGroup`** (the kubelet
+  creates it `0777`); the Helm README, OPERATIONS.md and the k8s runner no longer claim a
+  root-owned mount the agent cannot write (#508).
 
 ### Changed
 

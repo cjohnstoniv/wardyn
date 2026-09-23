@@ -876,6 +876,13 @@ sidecar's inspection slot, and the credential is normally the one the push's
 own discovery request already minted. In the refusal, a path ending in `/`
 names a directory the push does not carry, and `/` alone names the whole tree.
 
+**On a `git_pat` forge other than github.com, deny only paths the repository
+does not hold yet.** No comparison can be made there, so an entry that reaches
+anything the repository already has — `infra/**` against an existing `infra/`,
+or `Makefile` — refuses every push, including one that never touches it. The
+run's risk grade says so (`push_rules`, `deny_paths on <host>`) before the
+first push does.
+
 **What these rules do not stop.**
 
 - **Building on an older commit of the default branch keeps what that commit

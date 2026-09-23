@@ -444,10 +444,10 @@ type DriveGrantRequest struct {
 }
 
 // DrivesDocument is GET /drives's body and ApplyDrives's parameter: every
-// registered drive, a bounded page of allocations, and the deployment facts
-// an operator cannot derive from the rows alone (whether host_path drives are
-// even authorable here, which substrate this deployment dispatches to, and
-// whether the org switch is off). `wardyn drive get` prints this verbatim;
+// registered drive, every allocation (GetDrives reads every page), and the
+// deployment facts an operator cannot derive from the rows alone (whether
+// host_path drives are even authorable here, which substrate this deployment
+// dispatches to, and whether the org switch is off). `wardyn drive get` prints this verbatim;
 // ApplyDrives strict-decodes it back — HostRootsConfigured, RunnerTarget,
 // Disabled and GrantTotal are read-only and ignored on write.
 type DrivesDocument struct {
@@ -459,12 +459,38 @@ type DrivesDocument struct {
 	GrantTotal          int                 `json:"grant_total"`
 }
 
-// GetDrives returns every registered drive and a bounded page of allocations.
-// GET /api/v1/drives.
+// GetDrives returns every registered drive and EVERY allocation. GET
+// /api/v1/drives serves allocations one page at a time (X-Wardyn-Truncated),
+// so this reads ?offset= until the flag clears, and then refuses a result
+// whose allocation count is not the server's grant_total: a document that
+// silently dropped allocations would, fed back to ApplyDrives, restore a
+// partial set.
 func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
-	var out DrivesDocument
-	err := c.do(ctx, http.MethodGet, "/api/v1/drives", nil, &out)
-	return out, err
+	grants := []UserDriveGrant{}
+	for {
+		var page DrivesDocument
+		var hdr http.Header
+		path := appendListOpts("/api/v1/drives", []ListOpts{{Offset: len(grants)}})
+		if err := c.do(ctx, http.MethodGet, path, nil, &page, &hdr); err != nil {
+			return DrivesDocument{}, err
+		}
+		grants = append(grants, page.Grants...)
+		more := hdr.Get("X-Wardyn-Truncated") == "true"
+		// Past grant_total, or no progress, is a server not paging the way this
+		// loop reads it; stopping there is what bounds the loop.
+		if len(grants) > page.GrantTotal || more && len(page.Grants) == 0 {
+			return DrivesDocument{}, fmt.Errorf("drives: the server's allocation pages do not add up (%d read, %d reported); retry",
+				len(grants), page.GrantTotal)
+		}
+		if !more {
+			if len(grants) != page.GrantTotal {
+				return DrivesDocument{}, fmt.Errorf("drives: read %d allocations but the server reports %d; allocations changed while being read, retry",
+					len(grants), page.GrantTotal)
+			}
+			page.Grants = grants
+			return page, nil
+		}
+	}
 }
 
 // ApplyDrives upserts every drive and grant doc names, over the existing

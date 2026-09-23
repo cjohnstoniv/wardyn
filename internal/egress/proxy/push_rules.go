@@ -88,6 +88,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -103,6 +104,10 @@ const (
 	// ruleSourceGitPackBlind marks a brokered push refused because the
 	// inspector could not answer from the request's own bytes.
 	ruleSourceGitPackBlind = "brokered:git:push-uninspectable"
+	// ruleSourceGitForgeRead marks the broker's OWN credentialed reads of
+	// api.github.com on a push's behalf: one ALLOW row per push that read the
+	// forge at all, so an egress review of the run sees them.
+	ruleSourceGitForgeRead = "brokered:git:forge-read"
 	// defaultInspectPackMiB is the ceiling a run that sets push_rules without
 	// naming max_inspect_pack_mib gets. It sits BELOW the 0..64 range
 	// validatePushRules admits on purpose: raising the ceiling is the stated
@@ -492,6 +497,8 @@ func (p *Proxy) deniedPaths(r *http.Request, rules *pushRuleSet, res gitpack.Res
 		sample, total = claim(sample, total, c)
 	}
 	if forge != nil && forge.reads > 0 {
+		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: githubAPIHost, Port: 443,
+			Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
 		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
 			slog.String("run_id", p.runID.String()),
 			subject,
