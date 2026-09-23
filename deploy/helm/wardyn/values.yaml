@@ -396,7 +396,10 @@ networkPolicy:
     # DB port wardynd is allowed to egress to.
     port: 5432
   ingress:
-    # List of NetworkPolicyPeer entries allowed to reach the HTTP port.
+    # List of NetworkPolicyPeer entries allowed to reach the HTTP port. It is
+    # NEVER applied to service.internalPort: the proxy-facing TLS listener has
+    # its own rule (this namespace + k8s.runsNamespace), so a peer you add here
+    # for the console cannot reach the port credentials are resolved on.
     # Empty => `podSelector: {}`, i.e. all pods in THIS namespace only; add peers
     # (e.g. your ingress controller's namespace) to widen. Do NOT widen with a
     # bare `namespaceSelector: {}` — that means ALL namespaces, not this one.

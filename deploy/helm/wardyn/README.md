@@ -464,8 +464,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   `kubernetes.io/metadata.name` label, since an operator-created namespace
   carries no chart labels) so its proxy sidecars can still reach wardynd's
   `internal` TLS port for credential resolves and mints, approval checks, and
-  recording uploads (`http` stays on that peer only so a run already in flight
-  at an upgrade from 0.7.11 finishes).
+  recording uploads. That port has its own NetworkPolicy rule (this namespace
+  plus the runs namespace) and never inherits `networkPolicy.ingress.from`. A
+  separate `http` peer for the runs namespace stays only so a run already in
+  flight at an upgrade from 0.7.11 finishes.
 - `k8s.proxyImage`: the wardyn-proxy sidecar image (`WARDYN_PROXY_IMAGE`) —
   also what the boot-time egress canary launches. **Required — the chart
   refuses to render without it** (like `serviceAccount.automount` above): the
@@ -782,7 +784,10 @@ Each proxy gets the CA certificate in its sealed per-run Secret and trusts it
 alone. `/healthz` reports `"proxy_hop_tls": true`.
 
 `service.internalPort` must differ from the other wardynd ports (the render
-refuses a collision). Never route it through an Ingress. If a cluster-wide
+refuses a collision). Never route it through an Ingress. Its NetworkPolicy rule
+admits only this namespace and `k8s.runsNamespace` — the peers you add to
+`networkPolicy.ingress.from` for the console (an ingress controller, a
+scraper) are not granted it. If a cluster-wide
 policy outside this chart (a baseline default-deny, a mesh authorization
 policy) restricts pod-to-pod ports, allow the runs namespace to reach wardynd
 on this port. Details, the per-shape table and rotation:

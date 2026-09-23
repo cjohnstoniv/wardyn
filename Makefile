@@ -634,7 +634,12 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -A1 "name: WARDYN_CONTROL_PLANE_URL" | grep -q 'value: "https://wardyn.default.svc.cluster.local:8443"' || { echo "k8s.enabled did not render WARDYN_CONTROL_PLANE_URL as https on the internal port — wardynd refuses to boot on a non-loopback http URL, and the proxy would resolve credentials in cleartext"; exit 1; }; \
 	echo "$$out" | grep -q "http://wardyn.default.svc" && { echo "an http:// control-plane URL is still rendered"; exit 1; }; \
-	echo "$$out" | grep -A6 "kubernetes.io/metadata.name: wardyn-runs" | grep -q "port: internal" || { echo "the runs-namespace NetworkPolicy peer is not granted the internal TLS port — every proxy in k8s.runsNamespace loses its control plane"; exit 1; }; \
+	rules=$$(echo "$$out" | awk '/^kind: NetworkPolicy/{n=1} n && /^  egress:/{n=0} n && /^    - from:/{i++} n && i {print i": "$$0}'); \
+	ir=$$(echo "$$rules" | awk -F': ' '/port: internal$$/{print $$1}' | sort -u); \
+	[ "$$(echo "$$ir" | wc -w)" = "1" ] || { echo "the internal TLS port must be granted by exactly ONE NetworkPolicy ingress rule (got rules: $$ir)"; exit 1; }; \
+	echo "$$rules" | grep "^$$ir: " | grep -qE "ingress-nginx|monitoring" && { echo "the internal TLS port rides networkPolicy.ingress.from — the console's ingress controller and scrapers can reach the port proxies resolve credentials on"; exit 1; }; \
+	echo "$$rules" | grep "^$$ir: " | grep -q "podSelector: {}" || { echo "the internal TLS port rule lost its same-namespace peer — run proxies in this namespace lose their control plane"; exit 1; }; \
+	echo "$$rules" | grep "^$$ir: " | grep -q "kubernetes.io/metadata.name: wardyn-runs" || { echo "the internal TLS port rule lost the runs-namespace peer — every proxy in k8s.runsNamespace loses its control plane"; exit 1; }; \
 	true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set service.internalPort=8080 2>&1 | grep -q "service.internalPort 8080 collides" || { echo "chart no longer refuses service.internalPort == service.port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }

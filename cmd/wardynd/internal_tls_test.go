@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"net"
 	"net/http"
@@ -165,5 +166,25 @@ func TestInternalListener_BindFailureIsFatal(t *testing.T) {
 	}
 	if startInternalListener(nil, &bootFlags{}, http.NotFoundHandler(), errCh) != nil {
 		t.Fatal("a local install has no listener")
+	}
+}
+
+// The listener's floor is TLS 1.3: a client capped at TLS 1.2 is refused even
+// when it pins the right CA.
+func TestInternalListener_RefusesTLS12Client(t *testing.T) {
+	hop, err := loadHopTLS(context.Background(), mapKeyStore{}, "https://127.0.0.1:8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(internalRoutesOnly(http.NotFoundHandler()))
+	srv.TLS = hop.server
+	srv.StartTLS()
+	defer srv.Close()
+	cfg, _ := hoptls.ClientConfig(hop.caPEM)
+	cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS12, tls.VersionTLS12
+	c := &http.Client{Transport: &http.Transport{TLSClientConfig: cfg}, Timeout: 5 * time.Second}
+	_, err = c.Get(srv.URL + "/healthz")
+	if err == nil || !strings.Contains(err.Error(), "protocol version") {
+		t.Fatalf("a TLS 1.2 client must be refused, got %v", err)
 	}
 }
