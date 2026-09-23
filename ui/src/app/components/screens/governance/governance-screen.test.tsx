@@ -639,7 +639,7 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
 
   // R4/F032: the cell must not test the three BOOLEAN doors only, or a
   // profile whose one limit is a run quota reads "None" — while
-  // denyMemberRunQuota (internal/api/runs_create_validate.go) still refuses
+  // denyUserRunQuota (internal/api/runs_create_validate.go) still refuses
   // that member's next run with a 422. "None" is a claim about every field
   // of GovernanceLimits.
   it("a quota-only profile names its cap and never reads 'None'", async () => {

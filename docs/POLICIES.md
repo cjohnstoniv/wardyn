@@ -577,7 +577,7 @@ scope.** Once an admin enforces the `egress_host` capability
 ([OPERATIONS.md](OPERATIONS.md) → "Capabilities: what one member, or one
 group, may do"), a member deciding an `egress_domain` approval must hold a
 grant covering the approval's **own** requested host — never a host the client
-sent — or the decision is refused with a `403` (`authorizeMemberDecision`,
+sent — or the decision is refused with a `403` (`authorizeUserDecision`,
 `internal/api/approvals.go`). It is checked after the approval's kind and the
 run's ownership are both proven, so it discloses nothing the member didn't
 already know, and before any of the scope rules here run. Admins, the admin

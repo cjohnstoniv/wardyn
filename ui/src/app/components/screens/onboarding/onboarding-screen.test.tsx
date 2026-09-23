@@ -181,7 +181,7 @@ describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
   // R4/F034: the guard was two-valued (`role === "user"`) after role became
   // three-valued, so a security admin fell THROUGH to the deployer funnel —
   // built from a SetupStatus the server redacts for them
-  // (redactSetupStatusForMember zeroes Checks/Providers/Secrets,
+  // (redactSetupStatusForUser zeroes Checks/Providers/Secrets,
   // internal/api/setup.go), driving mutations that are super-admin-only.
   // setupGateActive already reads `!== "admin"` for exactly this reason.
   it("a security admin sees the member Getting Started, not the deployer funnel", async () => {

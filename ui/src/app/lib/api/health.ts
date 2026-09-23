@@ -61,7 +61,7 @@ export interface Me {
   // M3 — presentational label of this member's WARDYN_MEMBER_WORKSPACE_ROOTS
   // /_MAP constraint (e.g. "/home/agent-projects"). null/absent when no root
   // applies (member-role-desktop.md §DECISIONS O1). Never a value to trust —
-  // AddWorkspaceDialog shows it as a hint; ValidateMemberMountSource enforces.
+  // AddWorkspaceDialog shows it as a hint; ValidateUserMountSource enforces.
   member_local_dir_root?: string | null;
   // The caller's own user drive, null-means-no-allocation — see MeUserDrive.
   // Absent on a pre-0.7 daemon, which reads the same as "none".

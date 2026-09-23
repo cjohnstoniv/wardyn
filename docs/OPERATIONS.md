@@ -878,7 +878,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
-| `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
+| `devcontainer_repo` on a run (`denyUserRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
 | the `/drives` routes that NAME A HOST PATH — creating, listing, updating, and removing the **user drive** itself (`GET`/`POST /drives`, `PUT`/`DELETE /drives/{id}`, `mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
@@ -1081,7 +1081,7 @@ migration `0050`)** are the second and third owned nouns after runs.
   `anthropic_api_key`/`openai_api_key` integration row exactly as the operator's
   does (`resolveIntegrationRef`), so `GET /integrations` lists it, a run
   selecting it resolves model access, and no false "no model access" warning
-  fires. `filterMemberGrants` admits the matching hand-authored inline `api_key`
+  fires. `filterUserGrants` admits the matching hand-authored inline `api_key`
   grant with no operator eligible-grant pairing when ALL hold: the host is a
   model-provider host (the anthropic.com/openai.com convention, or a configured
   internal gateway) that the run's own already-clamped egress allows, and the
@@ -1154,7 +1154,7 @@ the four scopes is gated on ROLE, not ownership.** A member who owns the run may
 choose `once`, `run`, or `until`; each stays inside that run's own proxy cache.
 `always` is **admin or `security_admin`, regardless of run ownership**
 (`decide()` rule 6, same file; the check is `isSecurityOperator`, in LOCKSTEP
-with `authorizeMemberDecision`): it writes a durable entry onto the run's
+with `authorizeUserDecision`): it writes a durable entry onto the run's
 workspace (`approved_egress` on approve, `denied_egress` on deny) — the SAME two
 columns the `approved-egress`/`denied-egress` routes write, and those routes sit
 on that same `securityOps` tier, so the gate keeps the approval queue from being
@@ -1686,9 +1686,9 @@ untouched no matter what a member holds.
 
 | Kind | Value | Direction | What it bounds, and where |
 |---|---|---|---|
-| `egress_host` | a host, or a `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeMemberDecision`, `internal/api/approvals.go`), and which hosts survive on a member's own `inline_policy` allowlist (`narrowMemberInlinePolicy`, `internal/api/inline_policy.go`) |
+| `egress_host` | a host, or a `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeUserDecision`, `internal/api/approvals.go`), and which hosts survive on a member's own `inline_policy` allowlist (`narrowUserInlinePolicy`, `internal/api/inline_policy.go`) |
 | `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, `internal/api/secrets.go`) |
-| `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyMemberRequest`, `internal/api/runs_create_validate.go`) |
+| `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyUserRequest`, `internal/api/runs_create_validate.go`) |
 | `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `integration` | exact integration id | narrows | which AI-provider integration a member may name on a run (`integration_id`, same seam) — and nothing else. **Tier 1 only**: a workspace's own `LLMCred` pin and your `DefaultFor: agent_runs` site default are operator-authored and are never gated, or one `all` deny row would strip the deployment's model access |
@@ -2176,11 +2176,11 @@ admin walking the member path, not an incident.
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | 🟡 drop |
-| `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
+| `capability_agent` | `agent`: a member named an agent they aren't granted (`denyUserRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
-| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
-| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyUserDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 | `harness_login_mechanism_principal` | 0.7.3: `POST /setup/harness-login` under a `per_user` row, reached by the shared admin bearer token WITH OIDC CONFIGURED (`refuseHarnessLoginMechanismPrincipal`) — every capture made with that token would land in one namespace and overwrite the last person's session; a real console sign-in or `wdn_` token is reachable instead. Target `setup.harness_login`. Does not fire with no OIDC configured, where the admin token is the only working capture path — see "AWS SSO per person" | ⛔ `422` |
@@ -2198,7 +2198,7 @@ reason with the affected values beside it, not one per dropped host. A preflight
 dry-run writes no **drop** rows — a drop is not a denial, and it is recorded at
 launch. A dry run that is **refused** does audit, though: every gate preflight
 reproduces is the real gate, so a refused door writes its own `authz.denied` row
-from inside the shared path (`denyMemberField`) — one row per refused door per
+from inside the shared path (`denyUserField`) — one row per refused door per
 call, with **`run_id` NULL**, because there is no run. A dry run that passes
 writes nothing at all. That is deliberate rather than suppressed: the row records
 that this principal was refused this capability, which is true whether or not
@@ -4592,7 +4592,7 @@ it cannot recover a key you have already lost.
 
 ## Renamed in 0.8
 
-The non-admin tier's name changed from `member` to `user` across 0.7's tier-rename
+The non-admin tier's name changed from `member` to `user` across 0.8's tier-rename
 work (#608), and 0.8 follows it with a matching server rename sweep (#617) —
 mechanical, no behaviour change, and never a wire alias: an integration built
 against the old names gets a `404`/`400` on 0.8, not a warning. History is not
@@ -4606,8 +4606,9 @@ names forever; only what the server emits GOING FORWARD changed.
 | Audit action | `auth.member_mode` | `auth.user_view` — **dual-emitted** alongside `auth.member_mode` (identical `Data`) for one minor (0.8.x, OD-18), so a dashboard or SIEM rule still filtering on the old name keeps seeing rows; the compat row is removed in 0.9 |
 | `authz.denied` datum | `member_mode: true` | `user_view: true` — a clean rename, not dual-emitted (it lives inside `authz.denied`'s own row, which is not itself renamed) |
 | `authz.denied` reason | `byoi_member` | `byoi_user` |
-| Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots` | `UserMountPolicy`, `SandboxSpec.UserMountRoots` |
-| Go: `internal/api`/`internal/auth/oidc` | `denyMember*`, `filterMemberGrants`, `narrowMemberInlinePolicy`, `redactSetupStatusForMember`, `redactSpecForMember`, `memberModelAccess`, `memberSafeIntegration(s)`, `memberMountPosture`, `SetMemberMode`, `handleSetMemberMode`, and the rest of the ~30 `*Member*` functions the CHANGELOG entry for #617 names | their `*User*` counterparts (`denyUser*`, `filterUserGrants`, …, `SetUserView`, `handleSetUserView`) |
+| Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots`, `ParseMemberMountPolicy`, `ValidateMemberMount`, `ValidateMemberMountSource`, `deniedMemberSegment`, `memberCeilingRoots`, `validateMemberSource` | `UserMountPolicy`, `SandboxSpec.UserMountRoots`, `ParseUserMountPolicy`, `ValidateUserMount`, `ValidateUserMountSource`, `deniedUserSegment`, `userCeilingRoots`, `validateUserSource` |
+| Go: `internal/auth/oidc` | `SetMemberMode` | `SetUserView` |
+| Go: `internal/api` | `auditMemberPolicyDrops`, `authorizeMemberDecision`, `boundMemberSpec`, `denyMemberCapability`, `denyMemberDrive`, `denyMemberField`, `denyMemberGovernance`, `denyMemberRequest`, `denyMemberRunQuota`, `denyMemberSeededImage`, `denyMemberWorkspaceProviders`, `filterMemberGrants`, `handleSetMemberMode`, `memberDropsIntegration`, `memberEnvSecretIsAdminOnly`, `memberModeRequest`, `memberModelAccess`, `memberMountAllowed`, `memberMountPosture`, `memberPreviewApplies`, `memberSafeCapabilities`, `memberSafeIntegration`, `memberSafeIntegrations`, `memberSourcesAllowed`, `memberVisibleOperatorSecretNames`, `narrowMemberInlinePolicy`, `redactSetupStatusForMember`, `redactSpecForMember` | `auditUserPolicyDrops`, `authorizeUserDecision`, `boundUserSpec`, `denyUserCapability`, `denyUserDrive`, `denyUserField`, `denyUserGovernance`, `denyUserRequest`, `denyUserRunQuota`, `denyUserSeededImage`, `denyUserWorkspaceProviders`, `filterUserGrants`, `handleSetUserView`, `userDropsIntegration`, `userEnvSecretIsAdminOnly`, `userViewRequest`, `userModelAccess`, `userMountAllowed`, `userMountPosture`, `userPreviewApplies`, `userSafeCapabilities`, `userSafeIntegration`, `userSafeIntegrations`, `userSourcesAllowed`, `userVisibleOperatorSecretNames`, `narrowUserInlinePolicy`, `redactSetupStatusForUser`, `redactSpecForUser` |
 
 **Not renamed in this pass** — each is a separate, later issue, so the old name
 is still correct until its own PR lands:
@@ -4619,9 +4620,10 @@ is still correct until its own PR lands:
   member mode as an admin") — #620, the docs pass.
 - The console's own "View as member" control names and copy (`MemberModeBanner`,
   `MemberModeMenuItem`, the `MEMBER_MODE` strings) — mock-gated, #618 (UT-7a).
-- `RoleMember`/`oidc.LegacyRoleMemberWarning` and the `member` role-map value
-  itself, which keep working and warn through 0.8.x by design (see "A chart
-  that still says `=member`" below) — removed in 0.9, not renamed now.
+- `oidc.LegacyRoleMember`/`oidc.LegacyRoleMemberWarning` and the `member`
+  role-map value itself, which keep working and warn through 0.8.x by design
+  (see "A chart that still says `=member`" in the CHANGELOG's #608 entry) —
+  removed in 0.9, not renamed now.
 - The `classMember` route-classification identifier (`internal/api`'s authz
   matrix) — a tier classification, not this feature; out of scope.
 

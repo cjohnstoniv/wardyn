@@ -39,7 +39,7 @@
 //
 // WHO MAY DECIDE (round-2 fix): canDecideAdoCapability(securityOperator,
 // isRunOwner) — the run's OWNER or a security operator, mirroring
-// authorizeMemberDecision/ownsRunOrAdmin exactly. securityOperator already
+// authorizeUserDecision/ownsRunOrAdmin exactly. securityOperator already
 // INCLUDES a plain admin: isSecurityOperator (internal/api/http.go) is true
 // for oidc.RoleAdmin as well as oidc.RoleSecurityAdmin ("a super admin is a
 // security admin too — the tiers overlap on this surface"). There is no

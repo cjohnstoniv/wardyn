@@ -416,7 +416,7 @@ describe("LiveApprovals", () => {
   });
 
   // F-12 (0.7 SSO Phase 3): the inline gate must mirror server truth
-  // (authorizeMemberDecision, internal/api/approvals.go) — a member may decide
+  // (authorizeUserDecision, internal/api/approvals.go) — a member may decide
   // an egress_domain approval (this strip only ever shows rows on runs the
   // viewer owns), never credential/tool_call, regardless of role.
   describe("F-12 — member gating mirrors canDecideApproval, not a blanket operator check", () => {

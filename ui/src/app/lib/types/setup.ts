@@ -296,7 +296,7 @@ export interface SetupModelAccess {
   // the shell strip and the New Run rail, absoluteTime in the two card rows —
   // lib/workspace-providers-copy.ts's modelAccessActionLine). Absent for every state that
   // names no instant, and from a pre-0.7.6 daemon: render `action` verbatim
-  // then. NEVER sent to a member under a `shared` row — memberModelAccess
+  // then. NEVER sent to a member under a `shared` row — userModelAccess
   // builds a fresh struct that drops it, which is the leak that projection
   // exists to close.
   deadline?: string;
@@ -344,7 +344,7 @@ export interface SetupStatus {
   // absent as "unknown", not "false".
   llm_ready?: boolean;
   // X3-F1 — true on a body the server stripped for this caller's tier
-  // (redactSetupStatusForMember). It exists so the console can tell "withheld"
+  // (redactSetupStatusForUser). It exists so the console can tell "withheld"
   // from "absent": treating an empty `checks` list as a FACT about the
   // deployment would show a member "Image builder · Off" / operator-shaped
   // runner fix advice for detail that is merely hidden from them. Absent on an
@@ -398,7 +398,7 @@ export interface SetupStatus {
     // be surface for the two to drift.
     // What actually binds a run's Resources.DiskMiB on THIS deployment —
     // orchestrator-aggregated, weakest-across-substrates (runner.Capabilities.
-    // EphemeralDiskEnforcement). Stripped for a member by redactSetupStatusForMember
+    // EphemeralDiskEnforcement). Stripped for a member by redactSetupStatusForUser
     // (internal/api/setup.go) — only the /providers screen (SUPER) renders it,
     // under the ephemeral-scratch fields, via DRIVES.ENFORCEMENT_*. Absent on an
     // older daemon or on Docker with no runner detected; empty reads as "none".

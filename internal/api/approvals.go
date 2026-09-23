@@ -912,7 +912,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 		// nobody can prove was tried. security_admin_surface is the reason for
 		// this predicate — the same one requireSecurityOperator writes.
 		// authzDeniedDatum (membermode.go), never a hand-rolled map: the datum
-		// carries the member_mode MARKER, and a marker missing from one
+		// carries the user_view MARKER, and a marker missing from one
 		// admin-tier refusal is a marker a denial-stream filter cannot rely on
 		// at any of them. An admin in member mode reaching for `always` on
 		// their OWN run is the walk the member Getting Started card invites.

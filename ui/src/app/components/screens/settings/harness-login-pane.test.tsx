@@ -552,7 +552,7 @@ describe("serverConfirmsCapture", () => {
   });
 
   // The MEMBER-REDACTED shape — {provider, captured, expired,
-  // source_run_id} and nothing else (setup.go's redactSetupStatusForMember).
+  // source_run_id} and nothing else (setup.go's redactSetupStatusForUser).
   it("aws: the member-redacted row shape confirms on its own", () => {
     expect(
       serverConfirmsCapture(

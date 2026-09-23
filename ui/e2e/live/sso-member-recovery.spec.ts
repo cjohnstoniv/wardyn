@@ -599,7 +599,7 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
 
   const after = await ownAWSRow(page);
   expect(after.source_run_id, "the stored capture did not move to the retry's run").not.toBe(before.source_run_id);
-  // source_run_id is the WHOLE witness, by design: redactSetupStatusForMember
+  // source_run_id is the WHOLE witness, by design: redactSetupStatusForUser
   // keeps it on the caller's own per_user aws row and strips captured_at
   // ("operator credential-lifecycle detail"), so a member's session — the only
   // one this case may use — never sees a capture time to compare.

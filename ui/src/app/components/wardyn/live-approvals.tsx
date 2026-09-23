@@ -181,7 +181,7 @@ export function LiveApprovals({
   // record-pane.tsx's two) — see approvals.tsx's PendingCard for the
   // queue-screen equivalent.
   //
-  // useSecurityOperator, not useOperator (0.7 §B): authorizeMemberDecision
+  // useSecurityOperator, not useOperator (0.7 §B): authorizeUserDecision
   // early-returns for isSecurityOperator (approvals.go:392) and
   // decision_scope=always is its lockstep pair (approvals.go:604), so the
   // security tier decides any kind, on any run, at any scope.
@@ -509,7 +509,7 @@ export function LiveApprovals({
                 exactly "Approve"/"Deny" for e2e; this caret's own accessible
                 name must never contain "approve" (an unanchored /approve/i
                 query in the suite would then match two buttons). */}
-            {/* F-12: align with server truth (authorizeMemberDecision,
+            {/* F-12: align with server truth (authorizeUserDecision,
                 internal/api/approvals.go) instead of a blanket !operator —
                 canDecideApproval mirrors decide() exactly: a member may
                 decide an egress_domain approval (this strip only ever shows

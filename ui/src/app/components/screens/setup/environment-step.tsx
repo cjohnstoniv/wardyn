@@ -173,7 +173,7 @@ export function EnvironmentStep({
 }) {
   const classes = status.runner.confinement_classes ?? [];
   // No barrier can be built -> runs can't launch. Matrix stays visible read-only.
-  // HIGH-4: a member's redacted runner is Driver:"" (redactSetupStatusForMember
+  // HIGH-4: a member's redacted runner is Driver:"" (redactSetupStatusForUser
   // zeroes the struct, whose Go zero value is "", not the sentinel "none") —
   // treat both as no-driver, or a member landing here (e.g. a stale direct
   // /setup visit before B4's honest-landing redirect) sees the wrong "start

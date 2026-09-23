@@ -34,10 +34,10 @@ import (
 // path under no member root, which is what every real deployment looks like.
 const memberCredsSource = "/var/lib/wardyn/claude-creds"
 
-// memberDispatchHarness is ownerHarness (OIDC on, real workspace list) plus the
+// userDispatchHarness is ownerHarness (OIDC on, real workspace list) plus the
 // two things a DISPATCH assertion needs: a runner that captures the SandboxSpec
 // and the operator ceiling that blesses the subscription credential mount.
-func memberDispatchHarness(t *testing.T, mounts runner.UserMountPolicy) (*Server, *ownerStore, *fakeRunner) {
+func userDispatchHarness(t *testing.T, mounts runner.UserMountPolicy) (*Server, *ownerStore, *fakeRunner) {
 	t.Helper()
 	st := newOwnerStore()
 	h := newHarness(t)
@@ -103,7 +103,7 @@ func memberOwnedWorkspace(st *ownerStore, owner, path string) uuid.UUID {
 // lives under no member root.
 func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 	root, project := memberProjectRoot(t)
-	srv, st, fr := memberDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 
 	spec := createMemberRun(t, srv, fr, member, memberOwnedWorkspace(st, ownerMemberSub, project))
@@ -126,7 +126,7 @@ func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 // be satisfied by threading them onto every run.
 func TestMemberMountPosture_OperatorRunUnstamped(t *testing.T) {
 	root, project := memberProjectRoot(t)
-	srv, st, fr := memberDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	spec := createMemberRun(t, srv, fr, admin, memberOwnedWorkspace(st, "", project))
@@ -151,7 +151,7 @@ func TestCreateRun_MemberSourceOutsideRootsIs422(t *testing.T) {
 	// A different root tree entirely: the workspace's dir is no longer inside
 	// anything the operator allows.
 	_, stranded := memberProjectRoot(t)
-	srv, st, fr := memberDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	wsID := memberOwnedWorkspace(st, ownerMemberSub, stranded)
 

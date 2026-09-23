@@ -487,7 +487,7 @@ export interface PreflightResult {
   risk_assessment?: RiskItem[];
   overall_risk?: RiskLevel;
   // Clamp notices — non-empty only for a MEMBER whose inline_policy the server
-  // bounded (composer.Clamp) or whose grant it dropped (filterMemberGrants). The
+  // bounded (composer.Clamp) or whose grant it dropped (filterUserGrants). The
   // same benign "Tightened by policy:" class the compose Review shows; here it
   // tells the member WHY the enforced policy differs from what they typed, since
   // launch itself stays silent. Absent on an older server that predates it.

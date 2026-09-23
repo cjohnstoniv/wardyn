@@ -216,7 +216,7 @@ export function isAdoConsentRequest(
   );
 }
 
-// canDecideApproval's ADO carve-out: authorizeMemberDecision
+// canDecideApproval's ADO carve-out: authorizeUserDecision
 // (internal/api/approvals.go) lets the run's OWNER decide their own run's
 // escalation, on top of the security-operator tier ownsRunOrAdmin
 // (internal/api/helpers.go) already covers — unlike every other tool_call,

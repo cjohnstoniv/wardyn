@@ -27,9 +27,9 @@ package oidc
 
 import "net/http"
 
-// SetUserView flips this request's session into or out of "view as member"
-// mode, writes the re-encoded cookie to w, and returns the session's STAMPED
-// role — what the mode pauses.
+// SetUserView flips this request's session into or out of the user view,
+// writes the re-encoded cookie to w, and returns the session's STAMPED
+// role — what the view pauses.
 //
 // The stamped role is returned rather than left for the caller to re-derive
 // because the caller CANNOT: RoleFromContext is already clamped to member while
@@ -54,10 +54,10 @@ import "net/http"
 // already member, asking to turn the mode ON, gets no cookie at all. There is
 // nothing to pause — but the flag does not know that, and everything that reads
 // it keys on the flag rather than on the tier: /me would answer
-// member_mode:true, the console would paint a banner naming an admin role this
+// user_view:true, the console would paint a banner naming an admin role this
 // human does not hold, and BOTH credential-mint doors (which read
 // MemberModeFromContext, not the stamped role) would refuse this member their
-// own SSH key and API token with "Exit member mode…" — breaking the member
+// own SSH key and API token with "Exit the user view…" — breaking the member
 // Getting Started's own "Connect your tools" card until they found the banner's
 // Exit. The route is classMember so that the EXIT is always reachable, which
 // makes this state reachable too. Turning it OFF still re-signs, always: that

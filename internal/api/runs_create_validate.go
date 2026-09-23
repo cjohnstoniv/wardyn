@@ -636,7 +636,7 @@ func (s *Server) denyUserSeededImage(w http.ResponseWriter, r *http.Request, see
 // new gate cannot ship the error without the audit event.
 //
 // The datum comes from authzDeniedDatum (membermode.go) rather than a map
-// written here, which buys two things at once: the member_mode MARKER rides
+// written here, which buys two things at once: the user_view MARKER rides
 // every refusal this helper writes — including the `workspaces.llm_cred`
 // admin-tier arm, which an admin in member mode reaches by creating a workspace
 // — and the row carries `method`, so it is shape-identical to the middleware's

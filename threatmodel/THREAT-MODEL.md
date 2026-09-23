@@ -421,7 +421,7 @@ row the repositories a member's work comes from may belong to: the row
 doors a member can reach a clone through — `POST /runs` over both the resolved
 spec and the legacy `repo` field, workspace create and EDIT, and the two
 server-side clones, Scan and Build). The last three request-level kinds are
-enforced at `denyMemberRequest`. `workspace_provider` is deliberately a bound on
+enforced at `denyUserRequest`. `workspace_provider` is deliberately a bound on
 the PROVIDER ROW and not on the repository: admission here is URL-prefix
 matching, not a repo ACL, and the row is the unit an admin writes down (the
 traversable spellings a prefix comparison would otherwise admit are refused at the
@@ -451,9 +451,9 @@ direction, so a narrower request cannot slip under a broader deny nor a broader
 one over a narrower deny; every other kind is an exact compare, and grant values
 are shape-validated at the write boundary.
 
-Enforcement seams: `narrowMemberInlinePolicy` (a member's own `inline_policy`
-allowlist and secret refs), `denyMemberRequest` (`workspace_id`, `image`,
-`devcontainer_repo`, `agent`, `integration_id`), `authorizeMemberDecision` (which
+Enforcement seams: `narrowUserInlinePolicy` (a member's own `inline_policy`
+allowlist and secret refs), `denyUserRequest` (`workspace_id`, `image`,
+`devcontainer_repo`, `agent`, `integration_id`), `authorizeUserDecision` (which
 host a member may decide an `egress_domain` approval for) and `handleListSecrets`
 (which names `GET /secrets` lists back).
 
@@ -591,7 +591,7 @@ allocation, and `read_only: false` against a read-only one is a `422`, never a
 widening (`driveMountFor`, `internal/api/user_drives_run.go`). A governance
 profile can shut the door outright: `GovernanceLimits.DenyUserDrive`
 (`internal/types/governance.go`) refuses the mount for every member under that
-profile as an audited `403` (`denyMemberDrive` — `authz.denied`, reason
+profile as an audited `403` (`denyUserDrive` — `authz.denied`, reason
 `governance_profile`, target `runs.drive`, no new `reason` enum value).
 
 **Read-only is TOP-LEVEL on a runtime that does not declare `rro`.** A bind's
@@ -654,7 +654,7 @@ registered at all**, the posture `WARDYN_MEMBER_WORKSPACE_ROOTS` takes one level
 down. The root must exist on this host (fail-closed on any resolve error, no
 lexical fallback), must pass the same host bind-mount deny-list every authored
 source does, and must neither BE nor TRAVERSE a credential dotfile path — the
-`deniedMemberSegment` list of §4.4, applied to a drive's resolved root.
+`deniedUserSegment` list of §4.4, applied to a drive's resolved root.
 
 **And the per-person isolation this ceiling buys is only as good as the OTHER
 ceiling's disjointness.** `WARDYN_MEMBER_WORKSPACE_ROOTS` bounds a different
@@ -947,7 +947,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     | Route cluster | Operator list SET | List UNSET |
     |---|---|---|
     | Policy CRUD; workspace CRUD incl. the scoped `approved-egress` / `llm-cred` / `requirements` widening writes; `GET`/`PUT /site-config` + its two connectivity probes (each launches a sandbox on the operator's behalf); the managed harness credential (`POST /setup/harness-login`, `PUT`/`DELETE /setup/harness-credential/{provider}` — the shared subscription EVERY run inherits); source-library and base-image catalog CRUD; integration writes (`PUT`/`DELETE /integrations/{id}`); the attach WebSocket's ticket-LESS fallback lane (`GET /runs/{id}/attach` falling back to session-cookie auth when no `?ticket=` is presented) | 403 for members | any signed-in human, via the one `humanOrAdminAuth` group (`internal/api/http.go`; the route registrations in `internal/api/routes.go` say so at each site) |
-    | Minting an attach ticket (`POST /runs/{id}/attach-ticket`); deciding an `egress_domain` approval on a run one owns | owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.** The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`); `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17) — and "admin tier" now means `isSecurityOperator`, which `authorizeMemberDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run | same |
+    | Minting an attach ticket (`POST /runs/{id}/attach-ticket`); deciding an `egress_domain` approval on a run one owns | owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.** The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`); `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17) — and "admin tier" now means `isSecurityOperator`, which `authorizeUserDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run | same |
     | Secret write/delete/list (`PUT`/`DELETE /secrets/{name}`, `GET /secrets`) | **self-service since v0.7** (migration `0050_secret_owned_by.sql`), so it is NOT in the 403 cluster above: any signed-in human manages their OWN row, scoped by `secretOwnerFromRequest`. A member never reaches another principal's row (the store is namespaced per owner — `Secrets.For(owner)` cannot resolve it) nor the four reserved Bedrock/SigV4 names; cross-principal reads/deletes go through `?owner=` and stay operator-only. The LIST returns names only, never values, and is capability-narrowed (`handleListSecrets`, kind `secret`) | same |
     | Capability-grant CRUD (`/permissions`) and the per-kind enforcement switches | **`securityOps`, not `operatorOnly`** (`mountPermissionRoutes`): admin OR `security_admin`. So the tier that WRITES the rows is not the tier they BOUND — grants bound members, and the resolver exempts `isOperator` only. `/access` role mappings, by contrast, stay `operatorOnly` (asset #8): the second tier governs posture and cannot mint a tier | same |
     | `POST /runs`, every read | open to any signed-in human, by design | same |
@@ -1067,7 +1067,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
     **v0.6 narrows this, conditionally.** With `egress_host` ENFORCED (residual
     #20 — it ships off), a member may decide an `egress_domain` approval only for a
-    host they hold a grant for: `authorizeMemberDecision` resolves it through
+    host they hold a grant for: `authorizeUserDecision` resolves it through
     `capSeamAllowed` and answers `403` otherwise, audited `authz.denied` /
     `capability_egress_host`. A matching DENY bites even with the switch off. A
     blunter lever — `WARDYN_EGRESS_SECOND_HUMAN=1`, § "Four-eyes on egress
@@ -1496,7 +1496,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 35. **The credential-dotfile deny-list now matches a DRIVE's real path too, and
     that is the whole of what it covers.** The list §4.4 applies to member mount
     sources (`.ssh`, `.aws`, `.claude`, `.kube`, `.config/gh`, …) runs on a
-    drive's resolved `host_root` as well (`deniedMemberSegment` inside
+    drive's resolved `host_root` as well (`deniedUserSegment` inside
     `UserDriveHostRootCheck`), so a share whose mount point is or traverses a
     credential directory — or a symlink that lands in one — is refused at
     authoring and again at bind time, and the claim residual #25 makes about

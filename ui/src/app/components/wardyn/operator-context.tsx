@@ -36,7 +36,7 @@ const PrincipalContext = React.createContext<string>("");
 // is empty) — the fail-closed default (unresolved /me, a failed fetch, an
 // unwrapped test all read as "no root", which shows AddWorkspaceDialog's
 // local_dir-unavailable state rather than a path field that would just be
-// refused server-side). Never the enforcement point — ValidateMemberMountSource
+// refused server-side). Never the enforcement point — ValidateUserMountSource
 // at bind time is (member-role-desktop.md §c).
 const MemberLocalDirRootContext = React.createContext<string | null>(null);
 

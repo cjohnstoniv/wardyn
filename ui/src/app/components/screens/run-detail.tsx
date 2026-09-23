@@ -562,7 +562,7 @@ function Cockpit({
   // pane reads it below.
   const createRequest = createRequestFromAudit(audit);
   // useSecurityOperator, not useOperator (0.7 §B): this banner says "you can't
-  // decide any of these", and authorizeMemberDecision (approvals.go:392)
+  // decide any of these", and authorizeUserDecision (approvals.go:392)
   // early-returns for the security tier — so a security admin can decide every
   // one of them and must never be told otherwise. The SUPER-only surfaces on
   // this page (attach, take-over) read useOperator in their own components.
@@ -689,7 +689,7 @@ function ApprovalsTab({
   onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
 }) {
   // useSecurityOperator (0.7 §B): the only thing this reads is
-  // canDecideApproval, which mirrors authorizeMemberDecision's early return
+  // canDecideApproval, which mirrors authorizeUserDecision's early return
   // for the security tier (approvals.go:392).
   const securityOperator = useSecurityOperator();
   const principal = usePrincipal();

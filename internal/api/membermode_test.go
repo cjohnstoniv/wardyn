@@ -9,6 +9,7 @@ package api
 // walk driven by an ADMIN cookie carrying the flag.
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -709,29 +710,72 @@ func TestUserView_ViewFieldReplacesEnabled(t *testing.T) {
 	})
 }
 
+// countAuditEvents returns how many recorded events carry the given action —
+// TestUserView_DualEmitsTheLegacyAuditAction uses it to pin "exactly one per
+// toggle", which lastAuditEvent (LAST match) cannot see a double-emit past.
+func countAuditEvents(events []types.AuditEvent, action string) int {
+	n := 0
+	for _, ev := range events {
+		if ev.Action == action {
+			n++
+		}
+	}
+	return n
+}
+
 // TestUserView_DualEmitsTheLegacyAuditAction (#617, OD-18) pins the one-minor
 // compat window: every toggle writes BOTH auth.user_view (the 0.8 name) and
-// auth.member_mode (the pre-0.8 name it replaces), with byte-identical Data,
-// so a dashboard or SIEM rule still filtering on the old action name keeps
-// seeing rows. docs/AUDIT-ACTIONS.md and docs/OPERATIONS.md's "Renamed in
-// 0.8" appendix both say the compat row is removed in 0.9 — this test is the
-// one to delete then.
+// auth.member_mode (the pre-0.8 name it replaces), with byte-identical Data —
+// checked as raw bytes, not a couple of hand-picked fields, so a compat row
+// that silently lost a key (e.g. no_credential) fails this test — and each
+// action exactly once, so a dashboard or SIEM rule still filtering on the old
+// action name keeps seeing rows without double-counting them. Two toggles are
+// covered: the plain one and the no-credential preview posture, since that
+// second key is the one most likely to go missing from just one of the two
+// rows. docs/AUDIT-ACTIONS.md and docs/OPERATIONS.md's "Renamed in 0.8"
+// appendix both say the compat row is removed in 0.9 — this test is the one
+// to delete then.
 func TestUserView_DualEmitsTheLegacyAuditAction(t *testing.T) {
-	srv, h := memberModeServer(t)
-	admin := ssoSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin)
-
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	assertDualEmit := func(t *testing.T, events []types.AuditEvent, wantNoCredential bool) {
+		t.Helper()
+		if got := countAuditEvents(events, "auth.user_view"); got != 1 {
+			t.Errorf("auth.user_view count = %d, want exactly 1", got)
+		}
+		if got := countAuditEvents(events, "auth.member_mode"); got != 1 {
+			t.Errorf("auth.member_mode count = %d, want exactly 1", got)
+		}
+		newRow := lastAuditEvent(t, events, "auth.user_view")
+		oldRow := lastAuditEvent(t, events, "auth.member_mode")
+		if newRow.Actor != memberModeAdminSub || oldRow.Actor != memberModeAdminSub {
+			t.Errorf("actor = %q / %q, want %q on both", newRow.Actor, oldRow.Actor, memberModeAdminSub)
+		}
+		if !bytes.Equal(newRow.Data, oldRow.Data) {
+			t.Errorf("Data = %s / %s, want byte-identical", newRow.Data, oldRow.Data)
+		}
+		if _, present := auditData(t, newRow)["no_credential"]; present != wantNoCredential {
+			t.Errorf("no_credential present = %v, want %v", present, wantNoCredential)
+		}
 	}
 
-	newRow := lastAuditEvent(t, h.audit.events, "auth.user_view")
-	oldRow := lastAuditEvent(t, h.audit.events, "auth.member_mode")
-	if newRow.Actor != memberModeAdminSub || oldRow.Actor != memberModeAdminSub {
-		t.Errorf("actor = %q / %q, want %q on both", newRow.Actor, oldRow.Actor, memberModeAdminSub)
-	}
-	newData, oldData := auditData(t, newRow), auditData(t, oldRow)
-	if newData["real_role"] != oldData["real_role"] || newData["enabled"] != oldData["enabled"] {
-		t.Errorf("Data = %#v / %#v, want identical", newData, oldData)
-	}
+	t.Run("plain", func(t *testing.T) {
+		srv, h := memberModeServer(t)
+		admin := ssoSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin)
+
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+		}
+		assertDualEmit(t, h.audit.events, false)
+	})
+
+	t.Run("no_credential preview", func(t *testing.T) {
+		srv, audit, _, _ := memberPreviewSrv(t)
+		admin := memberPreviewSessionAs(t, memberModeAdminSub, oidc.RoleAdmin, false, false)
+
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","no_credential":true}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+		}
+		assertDualEmit(t, audit.rows, true)
+	})
 }

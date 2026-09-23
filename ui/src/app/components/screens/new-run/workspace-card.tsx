@@ -230,7 +230,7 @@ export function WorkspaceCard({
   driveUnavailable?: string;
 }) {
   // Whether the workspace this run is aimed at is one the caller may launch
-  // against. Advisory — denyMemberRequest is the real gate.
+  // against. Advisory — denyUserRequest is the real gate.
   const pickedWorkspaceId = state.workspaces[0]?.workspaceId;
   const pickedWorkspace = workspaces.find((w) => w.id === pickedWorkspaceId);
   const selectedWorkspaceUngranted =

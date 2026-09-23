@@ -121,7 +121,7 @@ test.describe("member Getting Started (mocked /me role)", () => {
 
   // U-1 (W6 blind lens) — a SHARED bedrock_sso roster row with model_access
   // `live`: the wire shape every member of such a deployment gets
-  // (memberModelAccess projects the ADMIN's credential for them). The chip row
+  // (userModelAccess projects the ADMIN's credential for them). The chip row
   // used to read "Model access · Your AWS sign-in" over a card saying "Provided
   // by your admin" — a sign-in this member has never done. One owner, one chip.
   test("a shared bedrock row's live credential is the ADMIN's on the chip row too", async ({ page }) => {
@@ -347,7 +347,7 @@ test.describe("admin session at /setup (unmocked — negative control)", () => {
 // R4/F034: the guard in GettingStarted was `role === "member"` after role went
 // three-valued, so a SECURITY ADMIN fell through to the deployer funnel — built
 // from a SetupStatus the server redacts for every non-operator
-// (redactSetupStatusForMember zeroes Checks/Providers/Secrets,
+// (redactSetupStatusForUser zeroes Checks/Providers/Secrets,
 // internal/api/setup.go), over mutations that are super-admin-only. It reads
 // `role !== "admin"` now, the way setupGateActive already did.
 //

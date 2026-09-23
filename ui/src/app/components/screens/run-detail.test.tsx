@@ -708,7 +708,7 @@ describe("RunDetailScreen — its approvals are scoped server-side", () => {
 
 // ui-member-cluster review sweep: canDecideApproval on this tab reads
 // securityOperator (the SECURITY tier — admin OR security admin,
-// authorizeMemberDecision's early return), not plain isOperator — so the
+// authorizeUserDecision's early return), not plain isOperator — so the
 // refusal chip must name SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON,
 // which undersells who the gate actually admits.
 describe("RunDetailScreen — the Approvals tab's decision gate names the security tier, not plain admin", () => {

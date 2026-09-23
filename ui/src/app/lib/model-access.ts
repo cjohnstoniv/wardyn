@@ -121,7 +121,7 @@ export const NO_MODEL_ACCESS_DOOR = NO_DOOR;
  * a member under that row keeps the admin instruction and no button.
  *
  * There is deliberately NO perUser gate on the per-user states: the server
- * admits an operator's sign-in unconditionally, and memberModelAccess already
+ * admits an operator's sign-in unconditionally, and userModelAccess already
  * guarantees a member under a shared row never sees an actionable state — so
  * gating on perUser would break the shared-row admin's working repair path.
  */
