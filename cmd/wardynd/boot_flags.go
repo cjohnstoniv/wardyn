@@ -317,17 +317,22 @@ var deprecatedEnvAliases = [][2]string{
 	{"WARDYN_ALLOW_USER_ENV_SECRET", "WARDYN_ALLOW_MEMBER_ENV_SECRET"},
 }
 
-// resolveDeprecatedEnvAliases applies deprecatedEnvAliases and WARNs once per
-// aliased entry actually in use, naming 0.9 as the removal release — the
-// aliasing itself (cliutil.EnvAlias) never logs, so every caller controls its
-// own wording.
+// resolveDeprecatedEnvAliases applies deprecatedEnvAliases. It WARNs once per
+// deprecated name actually carrying a value, naming 0.9 as the removal release,
+// and WARNs when both spellings are set to different values, naming the one it
+// ignored — for WARDYN_USER_WRITABLE_DENY a silently dropped old list would
+// widen the writable set.
 func resolveDeprecatedEnvAliases() {
 	for _, pair := range deprecatedEnvAliases {
 		newEnv, oldEnv := pair[0], pair[1]
-		cliutil.EnvAlias(newEnv, oldEnv, func(newEnv, oldEnv, _ string) {
-			slog.Warn(fmt.Sprintf("wardynd: %s is no longer a variable name; use %s instead. Accepted through 0.8.x, removed in 0.9.", oldEnv, newEnv),
-				slog.String("old_env", oldEnv), slog.String("new_env", newEnv))
-		})
+		aliased, ignored := cliutil.EnvAlias(newEnv, oldEnv)
+		attrs := []any{slog.String("old_env", oldEnv), slog.String("new_env", newEnv)}
+		switch {
+		case aliased:
+			slog.Warn(fmt.Sprintf("wardynd: %s is no longer a variable name; use %s instead. Accepted through 0.8.x, removed in 0.9.", oldEnv, newEnv), attrs...)
+		case ignored:
+			slog.Warn(fmt.Sprintf("wardynd: %s and %s are both set, to different values; using %s and ignoring %s. Unset %s, which is removed in 0.9.", newEnv, oldEnv, newEnv, oldEnv, oldEnv), attrs...)
+		}
 	}
 }
 

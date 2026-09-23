@@ -215,10 +215,10 @@ the developer is a **member**.
 | `WARDYN_LOCAL_MODE` | `true` — loopback callers are always admins | **`false`**, mandatory. Local mode bypasses public-API auth and would hand the developer admin outright |
 | OIDC | absent | **required** — the org IdP authenticates the developer and `deriveRole` maps them to `member`. `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS` are MDM-set, and the developer is on neither |
 | `WARDYN_ADMIN_TOKEN` | not used | a **process credential** MDM injects and the developer does not read. It is never surfaced to the browser UI |
-| `WARDYN_MEMBER_MODE` | unset | **`true`** — asserts the above rather than enforcing anything new |
+| `WARDYN_USER_DESKTOP` | unset | **`true`** — asserts the above rather than enforcing anything new |
 
 The invariant the whole profile turns on is: **`isOperator(ctx)` is false for the
-developer's every request.** `WARDYN_MEMBER_MODE` adds no middleware — the
+developer's every request.** `WARDYN_USER_DESKTOP` adds no middleware — the
 admin/member split in `internal/api` already does the enforcement — it makes the
 assumption *checkable*, refusing to boot when local mode is on or OIDC is
 unconfigured, either of which would silently make the developer an admin again.
@@ -262,10 +262,10 @@ operator/MDM-set env, never by anything the developer writes:
 
 | Variable | What it bounds |
 |---|---|
-| `WARDYN_MEMBER_WORKSPACE_ROOTS` | the absolute host directories a member's `local_dir` source may resolve into. **Unset = members may not mount host directories at all** (repos and operator-owned workspaces still work) |
-| `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` | per-member roots, JSON `{"<principal>": ["/abs/root"]}`. An entry **REPLACES** the shared list for that principal — per-member exists to narrow |
-| `WARDYN_MEMBER_WRITABLE_ROOTS` | where a member may mark their own mount writable. **Unset = every member mount is read-only** |
-| `WARDYN_MEMBER_WRITABLE_DENY` | carve-outs from the line above. **Deny wins**, and is checked first |
+| `WARDYN_USER_WORKSPACE_ROOTS` | the absolute host directories a member's `local_dir` source may resolve into. **Unset = members may not mount host directories at all** (repos and operator-owned workspaces still work) |
+| `WARDYN_USER_WORKSPACE_ROOTS_MAP` | per-member roots, JSON `{"<principal>": ["/abs/root"]}`. An entry **REPLACES** the shared list for that principal — per-member exists to narrow |
+| `WARDYN_USER_WRITABLE_ROOTS` | where a member may mark their own mount writable. **Unset = every member mount is read-only** |
+| `WARDYN_USER_WRITABLE_DENY` | carve-outs from the line above. **Deny wins**, and is checked first |
 
 Point the roots at a dedicated projects directory. **Never `$HOME`, never `/`** —
 boot warns and starts anyway (a malformed root, by contrast, refuses boot), and a

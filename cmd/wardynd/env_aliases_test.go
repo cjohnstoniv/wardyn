@@ -4,56 +4,143 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
-// TestDeprecatedEnvAliases_AllSixPairs pins UT-5's six WARDYN_MEMBER_* ->
-// WARDYN_USER_* renames (user-types-design.md rev 4 §6): the deprecated name
-// still works, one minor (0.8.x), and the new name always wins when both are
-// set. Runs resolveDeprecatedEnvAliases directly rather than the full
-// parseBootFlags — cliutil.EnvAlias itself is pinned in internal/cliutil, so
-// this test's job is only that boot_flags.go wired all six pairs correctly.
-func TestDeprecatedEnvAliases_AllSixPairs(t *testing.T) {
-	for _, pair := range deprecatedEnvAliases {
-		newEnv, oldEnv := pair[0], pair[1]
-		t.Run(oldEnv, func(t *testing.T) {
-			t.Setenv(newEnv, "")
-			t.Setenv(oldEnv, "aliased-value")
-			resolveDeprecatedEnvAliases()
-			if got := os.Getenv(newEnv); got != "aliased-value" {
-				t.Errorf("%s = %q after resolveDeprecatedEnvAliases with only %s set, want the deprecated value carried over", newEnv, got, oldEnv)
-			}
-		})
+// wantEnvAliases is UT-5's six renames written out literally
+// (user-types-design.md rev 4 §6), so a dropped pair or a misspelled name in
+// deprecatedEnvAliases fails here instead of passing a loop over itself.
+var wantEnvAliases = [][2]string{
+	{"WARDYN_USER_DESKTOP", "WARDYN_MEMBER_MODE"},
+	{"WARDYN_USER_WORKSPACE_ROOTS", "WARDYN_MEMBER_WORKSPACE_ROOTS"},
+	{"WARDYN_USER_WORKSPACE_ROOTS_MAP", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP"},
+	{"WARDYN_USER_WRITABLE_ROOTS", "WARDYN_MEMBER_WRITABLE_ROOTS"},
+	{"WARDYN_USER_WRITABLE_DENY", "WARDYN_MEMBER_WRITABLE_DENY"},
+	{"WARDYN_ALLOW_USER_ENV_SECRET", "WARDYN_ALLOW_MEMBER_ENV_SECRET"},
+}
+
+func TestDeprecatedEnvAliases_ExactPairs(t *testing.T) {
+	if len(deprecatedEnvAliases) != len(wantEnvAliases) {
+		t.Fatalf("deprecatedEnvAliases has %d pairs, want %d: %v", len(deprecatedEnvAliases), len(wantEnvAliases), deprecatedEnvAliases)
+	}
+	for i, want := range wantEnvAliases {
+		if deprecatedEnvAliases[i] != want {
+			t.Errorf("deprecatedEnvAliases[%d] = %v, want %v", i, deprecatedEnvAliases[i], want)
+		}
 	}
 }
 
-// TestDeprecatedEnvAliases_NewNameWins pins that an operator who sets BOTH
-// spellings is never surprised: the new name is never overwritten by the
-// deprecated one.
-func TestDeprecatedEnvAliases_NewNameWins(t *testing.T) {
-	newEnv, oldEnv := "WARDYN_USER_DESKTOP", "WARDYN_MEMBER_MODE"
-	t.Setenv(newEnv, "true")
-	t.Setenv(oldEnv, "false")
-	resolveDeprecatedEnvAliases()
-	if got := os.Getenv(newEnv); got != "true" {
-		t.Errorf("%s = %q, want unchanged (new name must win over the deprecated one)", newEnv, got)
-	}
+// captureSlog routes the default logger into a buffer for the test.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
 }
 
-// TestParseBootFlags_HonoursDeprecatedMemberModeEnv is an end-to-end pin,
-// through the real parseBootFlags, that a chart or compose file still setting
-// WARDYN_MEMBER_MODE keeps working — the exact scenario D5's boot WARN exists
-// for (user-types-design.md rev 4 §4).
-func TestParseBootFlags_HonoursDeprecatedMemberModeEnv(t *testing.T) {
+// TestParseBootFlags_HonoursDeprecatedNames drives the real parseBootFlags with
+// only the deprecated spellings set and checks each lands in the field its new
+// name feeds — the security-relevant deny list and env-secret opt-in included —
+// and that each one WARNs naming both names and 0.9.
+func TestParseBootFlags_HonoursDeprecatedNames(t *testing.T) {
 	resetFlags(t)
-	t.Setenv("WARDYN_USER_DESKTOP", "")
+	for _, p := range wantEnvAliases {
+		t.Setenv(p[0], "")
+	}
 	t.Setenv("WARDYN_MEMBER_MODE", "true")
+	t.Setenv("WARDYN_MEMBER_WORKSPACE_ROOTS", "/srv/src")
+	t.Setenv("WARDYN_MEMBER_WORKSPACE_ROOTS_MAP", `{"a@example.com":["/srv/a"]}`)
+	t.Setenv("WARDYN_MEMBER_WRITABLE_ROOTS", "/srv/src/rw")
+	t.Setenv("WARDYN_MEMBER_WRITABLE_DENY", "/srv/src/rw/locked")
+	t.Setenv("WARDYN_ALLOW_MEMBER_ENV_SECRET", "true")
 	oldArgs := os.Args
 	os.Args = []string{"wardynd-test"}
 	t.Cleanup(func() { os.Args = oldArgs })
+	logs := captureSlog(t)
+
 	f := parseBootFlags()
+
 	if !*f.memberMode {
-		t.Error("parseBootFlags did not honour the deprecated WARDYN_MEMBER_MODE=true with WARDYN_USER_DESKTOP unset")
+		t.Error("WARDYN_MEMBER_MODE=true did not turn member mode on")
+	}
+	for name, got := range map[string]string{
+		"memberRoots (WARDYN_MEMBER_WORKSPACE_ROOTS)":                         *f.memberRoots,
+		"memberRootsMap (WARDYN_MEMBER_WORKSPACE_ROOTS_MAP)":                  *f.memberRootsMap,
+		"memberWritableRoots (WARDYN_MEMBER_WRITABLE_ROOTS)":                  *f.memberWritableRoots,
+		"memberWritableDeny (WARDYN_MEMBER_WRITABLE_DENY)":                    *f.memberWritableDeny,
+		"WARDYN_ALLOW_USER_ENV_SECRET (api's reader, pinned in internal/api)": os.Getenv("WARDYN_ALLOW_USER_ENV_SECRET"),
+	} {
+		if got == "" {
+			t.Errorf("%s is empty: the deprecated name's value never reached it", name)
+		}
+	}
+	if *f.memberWritableDeny != "/srv/src/rw/locked" {
+		t.Errorf("memberWritableDeny = %q, want the deprecated WARDYN_MEMBER_WRITABLE_DENY value", *f.memberWritableDeny)
+	}
+	out := logs.String()
+	for _, p := range wantEnvAliases {
+		// Suffix match: WARDYN_MEMBER_WORKSPACE_ROOTS is a prefix of its _MAP
+		// sibling, so a substring match would accept the sibling's line.
+		line := ""
+		for _, l := range strings.Split(out, "\n") {
+			if strings.HasSuffix(l, "old_env="+p[1]+" new_env="+p[0]) {
+				line = l
+			}
+		}
+		if line == "" {
+			t.Errorf("no boot WARN for deprecated %s; log:\n%s", p[1], out)
+			continue
+		}
+		for _, want := range []string{"level=WARN", p[1], p[0], "removed in 0.9"} {
+			if !strings.Contains(line, want) {
+				t.Errorf("boot WARN for %s lacks %q: %s", p[1], want, line)
+			}
+		}
+	}
+}
+
+// TestDeprecatedEnvAliases_NewNameWinsAndNamesTheIgnoredOne pins both spellings
+// set to different values: the new one is kept, and the WARN names the old one
+// as ignored, so a leftover (possibly longer) deny list is never dropped
+// silently.
+func TestDeprecatedEnvAliases_NewNameWinsAndNamesTheIgnoredOne(t *testing.T) {
+	for _, p := range wantEnvAliases {
+		t.Setenv(p[0], "")
+		t.Setenv(p[1], "")
+	}
+	t.Setenv("WARDYN_USER_WRITABLE_DENY", "/srv/a")
+	t.Setenv("WARDYN_MEMBER_WRITABLE_DENY", "/srv/a,/srv/b")
+	logs := captureSlog(t)
+
+	resolveDeprecatedEnvAliases()
+
+	if got := os.Getenv("WARDYN_USER_WRITABLE_DENY"); got != "/srv/a" {
+		t.Errorf("WARDYN_USER_WRITABLE_DENY = %q, want the new name's value kept", got)
+	}
+	out := logs.String()
+	for _, want := range []string{"level=WARN", "ignoring WARDYN_MEMBER_WRITABLE_DENY", "removed in 0.9"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("both-set WARN lacks %q; log:\n%s", want, out)
+		}
+	}
+}
+
+// TestDeprecatedEnvAliases_NoWarnWhenOnlyNewNamesSet pins the quiet path: a
+// compose file forwards every old name as "", which must not WARN.
+func TestDeprecatedEnvAliases_NoWarnWhenOnlyNewNamesSet(t *testing.T) {
+	for _, p := range wantEnvAliases {
+		t.Setenv(p[0], "x")
+		t.Setenv(p[1], "")
+	}
+	logs := captureSlog(t)
+	resolveDeprecatedEnvAliases()
+	if out := logs.String(); out != "" {
+		t.Errorf("WARNed with only the new names set: %s", out)
 	}
 }

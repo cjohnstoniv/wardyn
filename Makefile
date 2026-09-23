@@ -737,7 +737,11 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" && { echo "auth.ssoOnly=true rendered a WARDYN_ADMIN_TOKEN — sso-only asserts SSO is the only way in, and a rendered admin bearer is a second one"; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "no OIDC issuer is configured" || { echo "chart no longer refuses auth.ssoOnly=true with no OIDC issuer — sso-only with no SSO at all would leave the console with no usable sign-in"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com 2>&1 | grep -q "auth.ssoOnly is set together with an admin token" || { echo "chart no longer refuses auth.ssoOnly=true alongside an admin token"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com --set env.WARDYN_MEMBER_MODE=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_MEMBER_MODE" || { echo "chart no longer refuses auth.ssoOnly=true alongside WARDYN_MEMBER_MODE — member mode relies on the admin token as a process credential, which sso-only forbids outright"; exit 1; }
+	@# One line per spelling: the template's refusal checks the new name and the
+	@# deprecated alias as two separate hasKey terms, each needing its own proof.
+	@for k in WARDYN_USER_DESKTOP WARDYN_MEMBER_MODE; do \
+		helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com --set env.$$k=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_USER_DESKTOP (or its deprecated alias WARDYN_MEMBER_MODE" || { echo "chart no longer refuses auth.ssoOnly=true alongside env.$$k — member mode relies on the admin token as a process credential, which sso-only forbids outright"; exit 1; }; \
+	done
 	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST" || { echo "chart no longer refuses auth.ssoOnly=true alongside WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST — that override is exactly the ambiguity sso-only exists to close off"; exit 1; }
 	@# A WARDYN_SSO_ONLY=true set straight in env (not auth.ssoOnly) declares the same posture to the
 	@# daemon, so it must hit the same refusals — otherwise it renders clean and crash-loops at boot.
@@ -963,6 +967,18 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).
 	docker compose --env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml config >/dev/null
+	@# #616: an m' envelope still using only the deprecated WARDYN_MEMBER_* names
+	@# must reach wardynd with every new name EMPTY, or the new name wins over the
+	@# old one in cmd/wardynd's alias (empty = unset) and member mode boots off.
+	@envf=$$(mktemp); \
+	sed -E -e 's/^WARDYN_USER_DESKTOP=/WARDYN_MEMBER_MODE=/' -e 's/^WARDYN_USER_(WORKSPACE_ROOTS|WORKSPACE_ROOTS_MAP|WRITABLE_ROOTS|WRITABLE_DENY)=/WARDYN_MEMBER_\1=/' deploy/desktop/wardyn.env.m-prime.example > "$$envf"; \
+	grep -q '^WARDYN_MEMBER_MODE=true$$' "$$envf" || { rm -f "$$envf"; echo "compose: the m-prime envelope no longer sets WARDYN_USER_DESKTOP=true, so the deprecated-name check below proves nothing"; exit 1; }; \
+	out=$$(env -u WARDYN_USER_DESKTOP -u WARDYN_USER_WORKSPACE_ROOTS -u WARDYN_USER_WORKSPACE_ROOTS_MAP -u WARDYN_USER_WRITABLE_ROOTS -u WARDYN_USER_WRITABLE_DENY docker compose --env-file "$$envf" -f deploy/desktop/docker-compose.yaml config 2>&1); rm -f "$$envf"; \
+	echo "$$out" | grep -q 'WARDYN_MEMBER_MODE: "true"' || { echo "compose: an envelope setting the deprecated WARDYN_MEMBER_MODE=true does not forward it to wardynd: $$out"; exit 1; }; \
+	echo "$$out" | grep -q 'WARDYN_MEMBER_WRITABLE_DENY: /' || { echo "compose: an envelope setting the deprecated WARDYN_MEMBER_WRITABLE_DENY does not forward it to wardynd"; exit 1; }; \
+	for k in WARDYN_USER_DESKTOP WARDYN_USER_WORKSPACE_ROOTS WARDYN_USER_WORKSPACE_ROOTS_MAP WARDYN_USER_WRITABLE_ROOTS WARDYN_USER_WRITABLE_DENY; do \
+		echo "$$out" | grep -q "^ *$$k: \"\"$$" || { echo "compose: $$k does not render empty for an envelope using only the deprecated names — a non-empty compose default outranks the deprecated value and wardynd never sees it"; exit 1; }; \
+	done
 	@# R5 F022: the SSO callback must FOLLOW the published port and honour an
 	@# explicit override, or `WARDYN_UP_PORT=8090 --profile sso` sends the browser
 	@# to a port nothing serves and the documented WARDYN_OIDC_REDIRECT_URL is inert.

@@ -45,26 +45,26 @@ func EnvOr(key, def string) string {
 // EnvAlias lets a deprecated env var name go on working for one deprecation
 // window while a new name takes over (UT-5, user-types-design.md rev 4 §6: six
 // WARDYN_MEMBER_* names replaced by WARDYN_USER_* through 0.8.x, removed in
-// 0.9). When newEnv is unset and oldEnv is set, it copies oldEnv's value into
-// newEnv — so every downstream FlagEnv/FlagBool/EnvBool/os.Getenv(newEnv) read
-// needs no change of its own — and calls warn once with both names, so the
-// caller can log a boot WARN naming the removal release. No-op when newEnv is
-// already set (newEnv always wins, so an operator who sets both is never
-// surprised) or when neither is set. Callers aliasing several pairs at boot
-// must call this before ANY flag is parsed or any of the pair is otherwise
-// read, so the substitution is in place for every reader.
-func EnvAlias(newEnv, oldEnv string, warn func(newEnv, oldEnv, value string)) {
-	if os.Getenv(newEnv) != "" {
-		return
+// 0.9). Empty counts as unset for both names, as it does for FlagEnv/FlagBool —
+// a compose `${VAR:-}` passthrough forwards every name, set or not.
+//
+// When newEnv is unset and oldEnv is set, it copies oldEnv's value into newEnv —
+// so every downstream FlagEnv/FlagBool/os.Getenv(newEnv) read needs no change of
+// its own — and reports aliased. When both are set, newEnv wins; if the values
+// differ it reports ignored, because a dropped old value can be a longer deny
+// list the operator still believes is in force. EnvAlias never logs: the caller
+// names the removal release in its own WARN. Callers must run it before ANY flag
+// is parsed or either name is otherwise read.
+func EnvAlias(newEnv, oldEnv string) (aliased, ignored bool) {
+	oldV := os.Getenv(oldEnv)
+	if oldV == "" {
+		return false, false
 	}
-	v, ok := os.LookupEnv(oldEnv)
-	if !ok || v == "" {
-		return
+	if newV := os.Getenv(newEnv); newV != "" {
+		return false, newV != oldV
 	}
-	if warn != nil {
-		warn(newEnv, oldEnv, v)
-	}
-	os.Setenv(newEnv, v) //nolint:errcheck // this process's own env; Setenv cannot fail here
+	os.Setenv(newEnv, oldV) //nolint:errcheck // this process's own env; Setenv cannot fail here
+	return true, false
 }
 
 // FlagEnv defines a string flag whose default is overridden by an env var.

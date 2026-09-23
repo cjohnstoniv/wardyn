@@ -474,3 +474,13 @@ func TestDispatchEnvSplit_BedrockCredentialsLeaveEnv(t *testing.T) {
 		})
 	}
 }
+
+// TestEnvAllowMemberEnvSecret_Name pins the name this package reads to the new
+// spelling cmd/wardynd's deprecated-alias table (env_aliases_test.go) copies
+// WARDYN_ALLOW_MEMBER_ENV_SECRET into; a drift here would leave the alias
+// setting a variable nothing reads.
+func TestEnvAllowMemberEnvSecret_Name(t *testing.T) {
+	if envAllowMemberEnvSecret != "WARDYN_ALLOW_USER_ENV_SECRET" {
+		t.Errorf("envAllowMemberEnvSecret = %q, want WARDYN_ALLOW_USER_ENV_SECRET", envAllowMemberEnvSecret)
+	}
+}

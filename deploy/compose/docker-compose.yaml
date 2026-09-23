@@ -257,7 +257,11 @@ services:
       # ordinary admin-token tier; the roots unforwarded left every member host
       # mount REFUSED (unset = "members may not mount host directories"), which
       # is the one power m' exists to add. Defaults here are docs/ENV.md's own:
-      # member mode off, and every root list unset = fail closed.
+      # member mode off, and every root list unset = fail closed. Every default
+      # is EMPTY, never "false": wardynd reads empty as unset, and a non-empty
+      # new name would win over an envelope still setting the deprecated
+      # WARDYN_MEMBER_MODE=true, booting that laptop with member mode off and no
+      # WARN (`make compose-config` renders exactly that envelope).
       #
       # The roots are HOST paths and this wardynd resolves symlinks in its OWN
       # process, so the tree has to be visible inside this container too — same
@@ -283,7 +287,7 @@ services:
       # proves this: a writable member mount still binds writable even when the
       # source itself is unwritable. This block's own env line below is the
       # real gate.
-      WARDYN_USER_DESKTOP: "${WARDYN_USER_DESKTOP:-false}"
+      WARDYN_USER_DESKTOP: "${WARDYN_USER_DESKTOP:-}"
       WARDYN_USER_WORKSPACE_ROOTS: "${WARDYN_USER_WORKSPACE_ROOTS:-}"
       WARDYN_USER_WORKSPACE_ROOTS_MAP: "${WARDYN_USER_WORKSPACE_ROOTS_MAP:-}"
       WARDYN_USER_WRITABLE_ROOTS: "${WARDYN_USER_WRITABLE_ROOTS:-}"
