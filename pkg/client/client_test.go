@@ -521,6 +521,42 @@ func TestMissingToken_Returns401(t *testing.T) {
 	assertAPIError(t, err, http.StatusUnauthorized)
 }
 
+// TestAPIError_ReasonSurfacesFromEnvelope pins #204's SDK half: a route that
+// sends the {"error","reason"} envelope must reach the caller's Reason field,
+// not just Error()'s prose — a caller branching on why a call failed reads
+// this, never the human sentence.
+func TestAPIError_ReasonSurfacesFromEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error":  "this run's Azure DevOps credential is no longer the one it was dispatched with",
+			"reason": "scope_changed",
+		})
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(srv).ListRuns(context.Background())
+	apiErr := assertAPIError(t, err, http.StatusForbidden)
+	if apiErr.Reason != "scope_changed" {
+		t.Errorf("got Reason %q, want scope_changed", apiErr.Reason)
+	}
+}
+
+// TestAPIError_ReasonEmptyWhenAbsent is the same route family with no
+// `reason` in the envelope — a route #204 has not reached yet — pinning that
+// Reason stays "" rather than the parser inventing one.
+func TestAPIError_ReasonEmptyWhenAbsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(srv).ListRuns(context.Background())
+	apiErr := assertAPIError(t, err, http.StatusNotFound)
+	if apiErr.Reason != "" {
+		t.Errorf("got Reason %q, want empty", apiErr.Reason)
+	}
+}
+
 func TestPrincipalHeader_IsSent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-Wardyn-Principal"); got != "alice" {

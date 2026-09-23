@@ -126,6 +126,16 @@ func TestResolveADOInjection_RefusesOwnerMismatch(t *testing.T) {
 	if d := rf.failureReason(t); d["reason"] != "owner_not_caller" {
 		t.Errorf("reason = %v, want owner_not_caller", d["reason"])
 	}
+	// #204: the audited reason must also reach the wire body, not just the
+	// audit row — the proxy has no audit access and used to see only the
+	// human sentence.
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != "owner_not_caller" {
+		t.Errorf("wire reason = %q, want owner_not_caller", body.Reason)
+	}
 }
 
 // SNAPSHOT DRIFT is a refusal, never a substitution: each live-row change

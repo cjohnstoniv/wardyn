@@ -180,7 +180,10 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		}
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", types.ADOEntraAccessTokenSecret, "failure", mustJSON(data)))
-		writeError(w, status, body)
+		// reason reaches the wire now (#204): the same machine class already
+		// recorded on the audit row, so the proxy can branch on it instead of
+		// string-matching the human sentence in body.
+		writeJSON(w, status, errorBody{Error: body, Reason: reason})
 		return true
 	}
 
