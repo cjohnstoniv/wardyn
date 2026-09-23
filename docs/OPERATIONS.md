@@ -3191,6 +3191,43 @@ explicit `http://`, `443` otherwise). A `to` whose port is not a decimal
 1-65535 is refused at `PUT /site-config` rather than silently read as `443` by
 one reader and rejected outright by another.
 
+### Git push confinement and content rules
+
+Two independent controls sit on the brokered git lanes (`github_token`,
+`git_pat`), and an operator tuning one must not assume it moves the other.
+
+- **WHERE a push may land.** Branch-namespace confinement
+  (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`, on by default for the App lane;
+  `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, off by default for `git_pat`) —
+  see [docs/ENV.md](ENV.md) for both rows.
+- **WHAT a push may touch.** `push_rules` (`deny_paths`,
+  `max_inspect_pack_mib`) — a policy field, not an env var, set per run or
+  clamped by an operator ceiling exactly like any other policy field. See
+  [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec) for the field
+  reference, the pattern language, and what the inspector can and cannot see.
+
+The residuals an operator should plan for:
+
+- **A push over the inspection ceiling is refused, not held** — the remedy is
+  raising `max_inspect_pack_mib` (bounded 0..64 at write time), never a
+  console approval, because holding would ask a person to approve a push
+  nobody inspected.
+- **`ssh_key` is ungovernable by construction.** git's own SSH transport has
+  no broker seam, so `push_rules` cannot be enforced on it; a policy that sets
+  `push_rules` while `ssh_key` is the run's only git-capable grant is legal
+  but graded a medium-risk item on the Review rail rather than blocked.
+- **`git_pat` is governed only behind its switch.** Content rules themselves
+  bind the `git_pat` lane unconditionally (independent of either
+  branch-namespace switch), but a PAT carries whatever scope the operator
+  issued it with — Wardyn narrows what it can inspect, not what the
+  credential itself is scoped to.
+- **A first push to a new branch over-reports its changed paths.** Under
+  branch-namespace confinement the pushed commit's parent stays on the forge,
+  so the broker enumerates the whole new tree rather than diffing it — a
+  legitimate rename, restore or directory move reads the same as an add. See
+  "What the rules see, and what they do not" in
+  [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec).
+
 ### Internal hosts
 
 The proxy's unconditional private/loopback/link-local/metadata/CGNAT/NAT64 IP
