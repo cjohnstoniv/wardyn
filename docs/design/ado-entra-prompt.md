@@ -25,7 +25,7 @@ states side by side, so there is no clickable prototype); `mock.css` is the work
 round's stylesheet verbatim plus four listed idioms. Frozen strings: §7 below. No TS copy module
 exists yet. The implementation stage creates `ui/src/app/lib/ado-entra-copy.ts` **from §7 verbatim**;
 every product string in the mock matches §7 byte-for-byte (checked mechanically, see §7's freeze note), and §7.2 onwards is exactly two columns,
-`Key` and `String`, so `parseFrozenTables()` clones over it the way `user-drives-copy.test.ts` does.
+`Key` and `String`, so `parseFrozenTables()` (now shared: `ui/src/test/canon-doc-parser.ts`) clones over it the way `user-drives-copy.test.ts` does.
 
 ---
 

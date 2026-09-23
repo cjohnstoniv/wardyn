@@ -15,8 +15,8 @@ import { parseFrozenTables } from "../../test/canon-doc-parser";
 // docs/design/signin-first-contact-canon.md's "Frozen strings" table back out
 // of the doc and compares every key. A swapped hyphen, a dropped ellipsis, a
 // reworded clause, a new doc row or a deleted one all fail here rather than
-// shipping. This is the "0 drift today by script only" row the design doc
-// itself flags (T-66) — a real vitest pin replaces the manual check.
+// shipping. This is the "0 drift today by script only" row of the 0.8
+// testing-gap audit's T-66 — a real vitest pin replaces the manual check.
 //
 // Unlike the ado-entra/governance/user-drives/workspace-providers docs (one
 // module's flat namespace per doc), this doc's single table carries rows for

@@ -23,7 +23,7 @@ Frozen strings: §7 below. No TS copy module exists yet — this is a mock round
 governance round preceded `ui/src/app/lib/governance-copy.ts`. The implementation stage creates
 `ui/src/app/lib/user-drives-copy.ts` **from §7 verbatim**; it does not retype copy from this
 document, and every string in the mock HTML matches §7 byte-for-byte. Its test,
-`user-drives-copy.test.ts`, clones `governance-copy.test.ts`'s `parseFrozenTables()` over
+`user-drives-copy.test.ts`, clones `governance-copy.test.ts`'s `parseFrozenTables()` (now shared: `ui/src/test/canon-doc-parser.ts`) over
 §7.2–§7.8 of this file — which is why every table from §7.2 on is exactly two columns, `Key`
 and `String`, and why §7.1 (reused canon and server strings) is not.
 
