@@ -21,7 +21,7 @@ import { HttpError } from "../../../lib/api/core";
 import { health as api } from "../../../lib/api/health";
 import { getErrorMessage } from "../../../lib/format";
 import { SIGNIN_HELP, SIGNIN_HELP_TEXT_MAX } from "../../../lib/access-posture-copy";
-import { SIGNIN } from "../../../lib/people-access-copy";
+import { SIGNIN } from "../../../lib/sign-in-copy";
 import type { SiteConfig } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";

@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 
 import { HttpError } from "../../../lib/api/core";
 import { SIGNIN_HELP } from "../../../lib/access-posture-copy";
-import { SIGNIN } from "../../../lib/people-access-copy";
+import { SIGNIN } from "../../../lib/sign-in-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 
 const getSnapshot = vi.fn();
