@@ -362,6 +362,9 @@ func TestADOCapability_RaiseFailureIsAudited(t *testing.T) {
 	f := newADOCapFixture(t)
 	f.approvals.requestErr = errors.New("approvals store unavailable")
 	f.assertRaiseFailed(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath))
+	if _, ok := f.failureReasonOf(t)["capability"]; !ok {
+		t.Error("the capability raise's failure row does not name the capability")
+	}
 }
 
 func TestADOCapability_ConsentRaiseFailureIsAudited(t *testing.T) {
@@ -371,6 +374,10 @@ func TestADOCapability_ConsentRaiseFailureIsAudited(t *testing.T) {
 	f.fake.SetConsentRequired(true)
 	f.approvals.requestErr = errors.New("approvals store unavailable")
 	f.assertRaiseFailed(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath))
+	// The consent arm's row carries no capability key; the capability arm's does.
+	if c, ok := f.failureReasonOf(t)["capability"]; ok {
+		t.Errorf("the consent raise failed through the capability arm (capability=%v)", c)
+	}
 }
 
 // assertRaiseFailed: a 503, exactly one secret.read failure row, and reason

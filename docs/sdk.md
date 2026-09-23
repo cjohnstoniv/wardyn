@@ -155,10 +155,11 @@ if errors.As(err, &apiErr) && apiErr.Reason == "scope_changed" {
 ```
 
 **Coverage is being phased in route by route (#204), not uniform yet.** Today
-the per-person Azure DevOps injection lane (`internal/api/injection_ado*.go`)
-sends a reason on every refusal; most other routes still send `error` alone,
-so `apiErr.Reason == ""` does not mean "no error", only "this route has not
-been converted yet". The Azure DevOps lane's reasons:
+the per-person Azure DevOps injection resolve (`GET
+/api/v1/internal/injection/{grantID}` for an Azure DevOps grant) sends a reason
+on every refusal; most other routes, including deciding an Azure DevOps
+approval, still send `error` alone, so `apiErr.Reason == ""` does not mean "no
+error", only "this route has not been converted yet". That resolve's reasons:
 
 | Reason | Meaning |
 |---|---|
@@ -167,7 +168,7 @@ been converted yet". The Azure DevOps lane's reasons:
 | `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. |
 | `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. |
 | `token_mode` / `signin_unconfigured` / `signin_unreadable` | The organisation is in token mode, has no sign-in app registration configured, or its sign-in configuration could not be read (`adoEntraConfigFor`). |
-| `host-not-organisation` | The requested host is outside the snapshot's organisation. |
+| `host_not_organisation` | The requested host is outside the snapshot's organisation. |
 | `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. |
 | `approval_mismatch` / `approvals_unreadable` / `once_unspendable` | The named approval does not match, could not be read, or was already spent. |
 | `signin_closed` / `signin_holds_exhausted` | The sign-in hold chain's refusals — see `injection_ado_signin.go`. |

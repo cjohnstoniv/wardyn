@@ -649,7 +649,9 @@ func resolveInjectionQuery(ctx context.Context, base, token string, grantID uuid
 		// SANDBOX on the MITM refresh-failure path (serveMITMRequest), so it is an
 		// amplifier for control-plane text. Enough to diagnose a fail-closed
 		// startup, not a 4 KiB relay. (The mask still covers it — see httpError.)
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		// 1 KiB, not less: the longest Azure DevOps refusal plus its reason is
+		// past 256 bytes, and a cut body parses as no sentence at all.
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		// 423 is not a refusal: the control plane is asking for a human. It is
 		// answered by exactly one resolve (the captured-AWS-SSO session, whose
 		// owner has to sign in again) and becomes a typed error the re-resolve

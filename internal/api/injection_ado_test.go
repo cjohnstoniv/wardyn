@@ -168,8 +168,13 @@ func TestResolveADOInjection_RefusesSnapshotDrift(t *testing.T) {
 func TestResolveADOInjection_PinsHostToOrganisation(t *testing.T) {
 	for _, host := range []string{"fabrikam.visualstudio.com", "evil.example"} {
 		rf := newADOResolveFixture(t)
-		if w := rf.resolve(t, rf.subject, host); w.Code != http.StatusForbidden {
+		w := rf.resolve(t, rf.subject, host)
+		if w.Code != http.StatusForbidden {
 			t.Errorf("host %q: status %d, want 403", host, w.Code)
+		}
+		var body errorBody
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Reason != "host_not_organisation" {
+			t.Errorf("host %q: wire reason = %q (%v), want host_not_organisation", host, body.Reason, err)
 		}
 	}
 }
