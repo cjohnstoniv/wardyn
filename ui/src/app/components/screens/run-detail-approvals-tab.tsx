@@ -55,9 +55,9 @@ export function ApprovalsTab({
   const principal = usePrincipal();
   // The id of the row currently deciding, and which of its two actions
   // (#458) — see AdoCapabilityCard's own `busy` doc for why a single
-  // boolean isn't enough.
-  const [adoBusy, setAdoBusy] = React.useState<{ id: string; action: "approve" | "deny" } | null>(null);
-  const [pushBusyId, setPushBusyId] = React.useState<string | null>(null);
+  // boolean isn't enough. The push card follows the same rule.
+  const [busy, setBusy] = React.useState<{ id: string; action: "approve" | "deny" } | null>(null);
+  const busyFor = (id: string) => (busy?.id === id ? busy.action : null);
   if (approvals.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card">
@@ -95,16 +95,16 @@ export function ApprovalsTab({
               securityOperator={securityOperator}
               viewerPrincipal={principal}
               run={run}
-              busy={adoBusy?.id === a.id ? adoBusy.action : null}
+              busy={busyFor(a.id)}
               onApprove={async (opts) => {
-                setAdoBusy({ id: a.id, action: "approve" });
+                setBusy({ id: a.id, action: "approve" });
                 await onAdoDecide(a.id, true, opts);
-                setAdoBusy(null);
+                setBusy(null);
               }}
               onDeny={async (opts) => {
-                setAdoBusy({ id: a.id, action: "deny" });
+                setBusy({ id: a.id, action: "deny" });
                 await onAdoDecide(a.id, false, opts);
-                setAdoBusy(null);
+                setBusy(null);
               }}
             />
           );
@@ -121,16 +121,16 @@ export function ApprovalsTab({
               item={a}
               securityOperator={securityOperator}
               run={run}
-              busy={pushBusyId === a.id}
+              busy={busyFor(a.id)}
               onApprove={async () => {
-                setPushBusyId(a.id);
+                setBusy({ id: a.id, action: "approve" });
                 await onPushDecide(a.id, true);
-                setPushBusyId(null);
+                setBusy(null);
               }}
               onDeny={async () => {
-                setPushBusyId(a.id);
+                setBusy({ id: a.id, action: "deny" });
                 await onPushDecide(a.id, false);
-                setPushBusyId(null);
+                setBusy(null);
               }}
             />
           );

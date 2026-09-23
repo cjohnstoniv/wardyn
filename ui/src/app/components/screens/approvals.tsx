@@ -444,8 +444,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // Approve/Deny-and-scope control with no reason field and no modal, unlike
   // every other kind on this screen. `opts` always carries an explicit
   // decision_scope — see ado-capability-card.tsx's adoDecisionArgs for why a
-  // bodyless decide can't be used here.
-  const decideAdoDirect = async (id: string, approve: boolean, opts: [DecisionOptions]): Promise<void> => {
+  // bodyless decide can't be used here. The push card passes no opts at all.
+  const decideAdoDirect = async (id: string, approve: boolean, opts: [] | [DecisionOptions]): Promise<void> => {
     try {
       if (approve) await api.approve(id, "approved", ...opts);
       else await api.deny(id, "denied", ...opts);
@@ -466,21 +466,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // approvals_push.go), and no ReasonDialog: the frozen mock (packet 7)
   // draws this card's own Approve/Deny pair, the same direct-decide shape
   // decideAdoDirect above takes for its own kind, minus the scope.
-  const decidePushDirect = async (id: string, approve: boolean): Promise<void> => {
-    try {
-      if (approve) await api.approve(id, "approved");
-      else await api.deny(id, "denied");
-      toast.success(approve ? "Request approved" : "Request denied");
-      fetchAll().catch(() => {
-        /* transient refresh failure — the decide itself already succeeded */
-      });
-      onChanged?.();
-    } catch (err) {
-      toast.error(approve ? "Failed to approve request" : "Failed to deny request", {
-        description: getErrorMessage(err),
-      });
-    }
-  };
+  const decidePushDirect = (id: string, approve: boolean): Promise<void> => decideAdoDirect(id, approve, []);
 
   // The pending queue's own tool_call items, and only those — the screen-
   // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
@@ -685,9 +671,9 @@ function PendingCard({
   const principal = usePrincipal();
   // "approve" | "deny" while that decision is in flight, else null (#458) —
   // see AdoCapabilityCard's own `busy` doc for why a single boolean isn't
-  // enough to spin only the pressed button.
+  // enough to spin only the pressed button. The push card follows the same rule.
   const [adoBusy, setAdoBusy] = React.useState<"approve" | "deny" | null>(null);
-  const [pushBusy, setPushBusy] = React.useState(false);
+  const [pushBusy, setPushBusy] = React.useState<"approve" | "deny" | null>(null);
   // N1 (round 2): PendingCard only ever receives PENDING rows today
   // (pendingItems is fetched via api.listApprovals("PENDING")), but the
   // state check is explicit here too — defense-in-depth against this
@@ -734,14 +720,14 @@ function PendingCard({
           run={run}
           busy={pushBusy}
           onApprove={async () => {
-            setPushBusy(true);
+            setPushBusy("approve");
             await onPushDecide(item.id, true);
-            setPushBusy(false);
+            setPushBusy(null);
           }}
           onDeny={async () => {
-            setPushBusy(true);
+            setPushBusy("deny");
             await onPushDecide(item.id, false);
-            setPushBusy(false);
+            setPushBusy(null);
           }}
         />
       </div>

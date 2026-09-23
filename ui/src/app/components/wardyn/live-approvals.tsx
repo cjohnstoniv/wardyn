@@ -351,7 +351,7 @@ export function LiveApprovals({
   // instead of decide() above for exactly the reason its comment gives: this
   // card ALWAYS sends an explicit decision_scope (adoDecisionArgs in
   // ado-capability-card.tsx), never decisionArgs()'s omit-for-"run" shape.
-  const decideAdo = async (a: ApprovalRequest, approve: boolean, opts: [DecisionOptions]) => {
+  const decideAdo = async (a: ApprovalRequest, approve: boolean, opts: [] | [DecisionOptions]) => {
     setBusy(a.id);
     setBusyAction(approve ? "approve" : "deny");
     try {
@@ -372,18 +372,7 @@ export function LiveApprovals({
   // push_content — approvals_push.go), so it cannot go through
   // decisionArgs()'s omit-for-"run" convention either — that convention still
   // sends a body, just an empty options list; this card never builds one.
-  const decidePush = async (a: ApprovalRequest, approve: boolean) => {
-    setBusy(a.id);
-    try {
-      if (approve) await api.approve(a.id, reasonApprove);
-      else await api.deny(a.id, reasonDeny);
-      await refresh();
-    } catch (e) {
-      toast.error(approve ? "Approve failed" : "Deny failed", { description: getErrorMessage(e) });
-    } finally {
-      setBusy(null);
-    }
-  };
+  const decidePush = (a: ApprovalRequest, approve: boolean) => decideAdo(a, approve, []);
 
   const confirmDeny = async () => {
     if (!denyTarget) return;
@@ -518,7 +507,7 @@ export function LiveApprovals({
               item={a}
               securityOperator={securityOperator}
               run={run}
-              busy={busy === a.id}
+              busy={busy === a.id ? busyAction : null}
               onApprove={() => decidePush(a, true)}
               onDeny={() => decidePush(a, false)}
             />

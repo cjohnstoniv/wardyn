@@ -55,10 +55,9 @@ export function PushContentCard({
   item: ApprovalRequest & { requested_scope: PushContentScope };
   securityOperator: boolean;
   run: PushCardRun | null | undefined;
-  /** True while EITHER decide call is in flight — both buttons disable and
-   *  carry the spinner together, the same shared-flag shape
-   *  ado-capability-card.tsx's own Approve/Deny pair uses. */
-  busy: boolean;
+  /** Which decide call is in flight, else null — both buttons disable, only
+   *  the pressed one spins (#458, the same shape as ado-capability-card.tsx). */
+  busy: "approve" | "deny" | null;
   onApprove: () => void;
   onDeny: () => void;
 }) {
@@ -142,11 +141,11 @@ export function PushContentCard({
           <p className="max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
         ) : securityOperator ? (
           <>
-            <Button size="sm" variant="info" disabled={busy} onClick={onApprove}>
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} Approve
+            <Button size="sm" variant="info" disabled={busy !== null} onClick={onApprove}>
+              {busy === "approve" ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} Approve
             </Button>
-            <Button size="sm" variant="outline" disabled={busy} onClick={onDeny}>
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />} Deny
+            <Button size="sm" variant="outline" disabled={busy !== null} onClick={onDeny}>
+              {busy === "deny" ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />} Deny
             </Button>
           </>
         ) : (

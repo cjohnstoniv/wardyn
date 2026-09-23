@@ -332,8 +332,8 @@ export function RunDetailScreen() {
   // carries no reason field, and `opts` ALWAYS carries an explicit
   // decision_scope — decisionArgs()'s omit-for-"run" shape would collide
   // with adoDecisionRule's different bodyless default (see ado-capability-
-  // card.tsx's adoDecisionArgs).
-  const decideAdoDirect = async (id: string, approve: boolean, opts: [DecisionOptions]): Promise<void> => {
+  // card.tsx's adoDecisionArgs). The push card passes no opts at all.
+  const decideAdoDirect = async (id: string, approve: boolean, opts: [] | [DecisionOptions]): Promise<void> => {
     try {
       if (approve) await approvalsApi.approve(id, "approved", ...opts);
       else await approvalsApi.deny(id, "denied", ...opts);
@@ -349,16 +349,7 @@ export function RunDetailScreen() {
   // ReasonDialog/submitDecision: the card's own control carries no reason
   // field — but unlike ADO, NO opts at all (decide's rule 4 refuses a
   // decision_scope on this kind).
-  const decidePushDirect = async (id: string, approve: boolean): Promise<void> => {
-    try {
-      if (approve) await approvalsApi.approve(id, "approved");
-      else await approvalsApi.deny(id, "denied");
-      toast.success(approve ? "Request approved" : "Request denied");
-      load(false);
-    } catch (err) {
-      toast.error(approve ? "Failed to approve" : "Failed to deny", { description: getErrorMessage(err) });
-    }
-  };
+  const decidePushDirect = (id: string, approve: boolean): Promise<void> => decideAdoDirect(id, approve, []);
 
   // ----- top-level states -----
   const pending = approvals.filter((a) => a.state === "PENDING");

@@ -11,6 +11,7 @@
 // Only a browser proves the round trip actually posts, and that a member
 // sees the card without a decision control.
 import { test, expect, gotoConsole, navTo, mockMemberRole, sql } from "./fixtures";
+import { APPROVALS } from "../src/app/lib/approvals-copy";
 
 const APPROVAL_ID = "e2e-held-push-1";
 
@@ -72,6 +73,8 @@ test.describe("Approvals — a held push (#181)", () => {
 
     await card.getByRole("button", { name: "Approve" }).click();
 
+    // The canon toast every approval kind uses (#458), not a hand-typed one.
+    await expect(page.getByText(APPROVALS.TOAST_APPROVED)).toBeVisible();
     await expect(card).toHaveCount(0);
     // No ReasonDialog, no decision_scope — decide's rule 4 refuses one on
     // this kind, and this card never builds one.
