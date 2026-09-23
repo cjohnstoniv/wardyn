@@ -22,7 +22,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   audit row; the resolve refusal, and the AWS SSO re-auth hold's terminal/exhausted/raise-failed
   refusals, now send it in the body too. The reason vocabulary is now one closed set
   (`internal/api/reasons.go`) shared across all three lanes, so the same reason means the same
-  thing regardless of which lane sent it (#656, continuing #204's sweep).
+  thing regardless of which lane sent it (#656, continuing #204's sweep). The AWS SSO host-pin
+  refusal's reason, written to the audit row as `sso-host-not-portal` until now, is spelled
+  `sso_host_not_portal` on the audit row and the wire alike, matching the rest of the set.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

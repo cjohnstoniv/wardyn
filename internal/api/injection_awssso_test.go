@@ -337,7 +337,7 @@ func TestResolveAWSSSOInjection_HostPinRefusesAnotherHost(t *testing.T) {
 	if strings.Contains(w.Body.String(), reauthToken) {
 		t.Fatal("the refusal body echoed the session token")
 	}
-	if !f.audit.hasReason("secret.read", "sso-host-not-portal") {
+	if !f.audit.hasReason("secret.read", "sso_host_not_portal") {
 		t.Error("no secret.read failure naming the host pin")
 	}
 }
@@ -1083,5 +1083,26 @@ func TestResolveAWSSSOInjection_RaiseFailureCarriesReasonOnWire(t *testing.T) {
 	}
 	if body.Reason != reasonRaiseFailed {
 		t.Errorf("wire reason = %q, want %q", body.Reason, reasonRaiseFailed)
+	}
+}
+
+// #656: the re-auth hold's approvals_unreadable refusal answers outside fail(),
+// so it gets its own wire assertion like its three siblings: a dead session
+// whose run approvals cannot be listed is a 503 carrying that reason.
+func TestResolveAWSSSOInjection_ApprovalsUnreadableCarriesReasonOnWire(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.putBlob(t, "alice@example.com", deadSSOBlob())
+	f.st.approvals.listErr = errors.New("approvals store unavailable")
+
+	w := f.resolve(t)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("resolve: code = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != "approvals_unreadable" {
+		t.Errorf("wire reason = %q, want %q", body.Reason, "approvals_unreadable")
 	}
 }

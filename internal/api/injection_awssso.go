@@ -175,7 +175,7 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		// precedent): the same machine class already recorded on the audit
 		// row, so the proxy can branch on it instead of string-matching the
 		// human sentence in body.
-		writeJSON(w, status, errorBody{Error: body, Reason: reason})
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 
@@ -298,8 +298,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		// Fail closed: an unbounded raise path is the thing being bounded, so
 		// "we could not tell how many this run has" must not read as "raise
 		// another one".
-		writeJSON(w, http.StatusServiceUnavailable,
-			errorBody{Error: credentialReauthApprovalsUnreadableBody, Reason: reasonApprovalsUnreadable})
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonApprovalsUnreadable, credentialReauthApprovalsUnreadableBody)
 		return true
 	}
 	workflows := 0
@@ -333,13 +332,11 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		// the measured ~30 s SDK cadence one cancelled row would score dozens of
 		// "outcomes". expired and cancelled are counted where the state changes
 		// — the sweeper and cancelRunApprovals.
-		writeJSON(w, http.StatusForbidden,
-			errorBody{Error: credentialReauthClosedRefusal(terminal.State), Reason: reasonSigninClosed})
+		writeErrorReason(w, http.StatusForbidden, reasonSigninClosed, credentialReauthClosedRefusal(terminal.State))
 		return true
 	}
 	if workflows >= maxReauthHolds {
-		writeJSON(w, http.StatusForbidden,
-			errorBody{Error: credentialReauthTooManyRefusal, Reason: reasonSigninHoldsExhausted})
+		writeErrorReason(w, http.StatusForbidden, reasonSigninHoldsExhausted, credentialReauthTooManyRefusal)
 		return true
 	}
 
@@ -365,8 +362,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		ID: raisedID, RunID: claims.RunID, Kind: types.ApprovalCredentialReauth, RequestedScope: reqScope,
 	})
 	if aerr != nil {
-		writeJSON(w, http.StatusServiceUnavailable,
-			errorBody{Error: credentialReauthRaiseFailedBody + aerr.Error(), Reason: reasonRaiseFailed})
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRaiseFailed, credentialReauthRaiseFailedBody+aerr.Error())
 		return true
 	}
 	if created.ID != raisedID {

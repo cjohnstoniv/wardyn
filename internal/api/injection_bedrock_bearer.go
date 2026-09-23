@@ -84,7 +84,7 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 		// precedent): the same machine class already recorded on the audit
 		// row, so the proxy can branch on it instead of string-matching the
 		// human sentence in body.
-		writeJSON(w, status, errorBody{Error: body, Reason: reason})
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 

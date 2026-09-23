@@ -65,15 +65,23 @@ import (
 // sshExecStreamErrorMessage callers in sshgateway_channels.go, a channel
 // stderr write that is not an HTTP 5xx body at all and this guard does not
 // watch) in one step.
+//
+// #656's REASON-CARRYING WRITERS. writeErrorReason(w, status, reason, msg) is
+// writeError with a machine reason, so the direct shape matches it too, with
+// its message one argument later (directErrorWriters). A body written with
+// writeJSON(w, <5xx>, v) straight — errorBody{...} or any other value — is
+// matched when anything in v calls err.Error(): that is the shape a
+// reason-carrying refusal took before writeErrorReason existed, and it hid
+// from a guard that only read writeError.
 var serverErrorDriverTextAllowlist = map[string]string{
-	// injection_awssso.go's raise-failure arm (credentialReauthRaiseFailedBody
-	// + aerr.Error(), still the same DELIBERATELY MODELLED body #173 allowlisted
-	// — docs/design/0.8/PLAN.md's AWS SSO lane, aerr never driver/substrate
-	// text) moved off writeError onto writeJSON(errorBody{...}) in #656, so it
-	// carries a machine reason on the wire; this guard's AST scan is scoped to
-	// writeError calls (see its doc comment), so the site is out of its sight
-	// now rather than allowlisted in it. No entry needed here any more.
-	//
+	// handleInternalCredentialReauth's raise-failure arm is a
+	// DELIBERATELY MODELLED body (docs/design/0.8/PLAN.md's AWS SSO lane):
+	// credentialReauthRaiseFailedBody is a frozen operator-facing sentence and
+	// aerr here is s.cfg.Approvals.Request's own error, never driver/substrate
+	// text. #173's DO NOT TOUCH names this site explicitly. It writes through
+	// writeErrorReason since #656 (reason raise_failed on the wire), which this
+	// guard reads exactly as it reads writeError.
+	"injection_awssso.go:365": "modelled AWS SSO reauth-raise body; #173 DO NOT TOUCH",
 	// handleRunResourcesExecStream's unsupported arm is reached only after errors.Is(err,
 	// runner.ErrExecStreamUnsupported) just matched, so err.Error() here is
 	// always that sentinel's own fixed text ("runner: ExecStream not
@@ -84,8 +92,16 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	"run_resources.go:201": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
 	// Every other site #173 found was FIXED, not allowlisted — a new entry
 	// here needs the same kind of justification (a named fixed sentinel or a
-	// design record, plus a pinning test) as this one, not just a passing
+	// design record, plus a pinning test) as these two, not just a passing
 	// build.
+}
+
+// directErrorWriters maps each body writer this guard reads directly to its
+// message argument's position; the status is argument 1 for all of them.
+var directErrorWriters = map[string]int{
+	"writeError":       2, // writeError(w, status, msg)
+	"writeErrorReason": 3, // writeErrorReason(w, status, reason, msg)
+	"writeJSON":        2, // writeJSON(w, status, v)
 }
 
 // serverErrorForwarder names one hop this guard follows: a function or
@@ -208,9 +224,11 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.CallExpr:
-				// Direct shape: writeError(w, <5xx>, <msg with err.Error()>).
-				if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(node.Args) >= 3 {
-					if is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[2]) {
+				// Direct shape: writeError(w, <5xx>, <msg with err.Error()>),
+				// its reason-carrying twin, and a raw writeJSON 5xx body.
+				if fn, ok := node.Fun.(*ast.Ident); ok && directErrorWriters[fn.Name] > 0 {
+					msgArg := directErrorWriters[fn.Name]
+					if len(node.Args) > msgArg && is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[msgArg]) {
 						pos := fset.Position(node.Pos())
 						key := fmt.Sprintf("%s:%d", name, pos.Line)
 						found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
@@ -265,7 +283,7 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 			"use writeServerError(w, r, \"<action>\", err) for a 500, or "+
 			"writeError(w, code, loggedMsg(ctx, \"<action>\", err)) for another 5xx — "+
 			"see internal/api/writeservererror.go. If this is deliberately modelled "+
-			"(like run_resources.go's ErrExecStreamUnsupported sentinel), add it to "+
+			"(like injection_awssso.go's AWS reauth body), add it to "+
 			"serverErrorDriverTextAllowlist with the same kind of justification "+
 			"that entry carries.", k, found[k])
 	}

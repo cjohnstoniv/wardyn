@@ -175,7 +175,7 @@ means the same thing regardless of which lane sent it:
 | `store_error` | The credential store read failed. AWS SSO. |
 | `token_mode` / `signin_unconfigured` / `signin_unreadable` | The organisation is in token mode, has no sign-in app registration configured, or its sign-in configuration could not be read (`adoEntraConfigFor`). Azure DevOps. |
 | `host_not_organisation` | The requested host is outside the snapshot's organisation. Azure DevOps. |
-| `sso-host-not-portal` | The requested host is outside the credential's own SSO portal. AWS SSO. |
+| `sso_host_not_portal` | The requested host is outside the credential's own SSO portal. AWS SSO. |
 | `per_user_bearer_absent` / `bearer_absent` | The roster names a per-user bearer this owner has none of, or no `bedrock-api-key` secret is in the store. Bedrock bearer. |
 | `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. Azure DevOps. |
 | `approval_mismatch` / `approvals_unreadable` / `once_unspendable` | The named approval does not match, could not be read, or was already spent. Azure DevOps; `approvals_unreadable` also AWS SSO's re-auth hold. |

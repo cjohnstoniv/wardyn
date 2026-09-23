@@ -6,12 +6,14 @@ package api
 // The machine-readable refusal reasons the credential-injection lanes (Azure
 // DevOps, AWS SSO, Bedrock bearer) send on the wire alongside their human
 // sentence — internal/api's half of client.APIError.Reason (#204, #656).
-// This is the CLOSED SET docs/sdk.md documents: a lane's fail() closure
-// picks one of these, never an ad-hoc string, so a wrong grouping (two
-// different causes sharing one label, or one cause split across two) never
-// happens by accident, and a lane that shares a SHAPE with another — a hold
-// gone terminal, an approval store that could not be read — shares its
-// reason too, instead of inventing a lane-local synonym.
+// docs/sdk.md documents this set. By convention a lane's refusal picks one of
+// these rather than an ad-hoc string, and a lane that shares a SHAPE with
+// another — a hold gone terminal, an approval store that could not be read —
+// shares its reason too, instead of inventing a lane-local synonym. Nothing
+// enforces the convention yet: the fail() closures take a plain string, and
+// the Azure DevOps redemption passes ADOEntraFailure's own values
+// (ado_entra_store.go) through unchanged. #656's guard-test acceptance item
+// is where that check lands.
 //
 // Reason coverage is being swept lane by lane (#656); this set grows as
 // each lane converts. A reason only one lane currently sends still lives
@@ -33,13 +35,8 @@ const (
 	reasonSigninUnconfigured  = "signin_unconfigured"   // no Entra app registration for this organisation
 	reasonSigninUnreadable    = "signin_unreadable"     // the Entra roster row could not be read
 
-	// AWS SSO resolve only. Kept hyphenated (not the underscore style
-	// above) because it already reached one audit row spelled this way
-	// before #656 put it on the wire; changing the spelling now, before any
-	// caller reads it off the wire, would be free — but the audit trail
-	// already written keeps this exact string regardless, so the two stay
-	// byte-identical rather than diverging.
-	reasonSSOHostNotPortal = "sso-host-not-portal" // the requested host is outside the credential's own SSO portal
+	// AWS SSO resolve only.
+	reasonSSOHostNotPortal = "sso_host_not_portal" // the requested host is outside the credential's own SSO portal
 
 	// Bedrock bearer resolve only.
 	reasonPerUserBearerAbsent = "per_user_bearer_absent" // the roster names a per-user bearer this owner has none of

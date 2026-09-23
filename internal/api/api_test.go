@@ -75,6 +75,7 @@ type fakeApprovals struct {
 	byID       map[uuid.UUID]types.ApprovalRequest
 	decideErr  error
 	requestErr error
+	listErr    error
 	cancelErr  error
 	cancelled  []cancelCall
 	countErr   error
@@ -165,6 +166,9 @@ func (f *fakeApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalRequ
 func (f *fakeApprovals) List(_ context.Context, _ types.ApprovalState) ([]types.ApprovalRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	out := make([]types.ApprovalRequest, 0, len(f.byID))
 	for _, ap := range f.byID {
 		out = append(out, ap)
