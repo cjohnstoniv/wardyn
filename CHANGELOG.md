@@ -27,6 +27,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The Claude sign-in image is a checked prerequisite for `anthropic_subscription` model
+  providers (#524).** "Resolves" is now two things, not one: `WARDYN_AGENT_IMAGES["claude-code"]`
+  must be pinned, and, when the wired Runner can confirm its local image store (the Docker
+  substrate), the pinned ref must actually be present — a pin alone was not proof of a build, since
+  the compose/run-host defaults already bake one in unconditionally. `PUT /model-providers` and
+  `PUT /site-config` refuse to add or keep an `anthropic_subscription` provider until both hold, and
+  `GET /setup/status` carries the state as its own `claude_signin_image` row (never blocking — the
+  kind is optional). See `docs/OPERATIONS.md` § Claude sign-in image.
+
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

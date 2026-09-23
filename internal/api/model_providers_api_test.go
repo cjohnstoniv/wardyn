@@ -193,6 +193,64 @@ func TestModelProvidersPutKeepsDefaults(t *testing.T) {
 	}
 }
 
+// TestModelProvidersPutSubscriptionNeedsSignInImage is the E4 refusal (multi-
+// provider design 2.2, 5.2 E4): a PUT that adds/keeps an anthropic_subscription
+// provider is refused until the Claude sign-in image resolves — proven live
+// against the write door, not just the pure validator.
+func TestModelProvidersPutSubscriptionNeedsSignInImage(t *testing.T) {
+	const ref = "wardyn/agent-claude-code:local"
+	body := `{"providers":[{"id":"claude-sub","kind":"anthropic_subscription","harnesses":[{"harness":"claude-code"}]}]}`
+
+	t.Run("no pin at all: refused", func(t *testing.T) {
+		h := newHarness(t)
+		cfg := baseTestConfig(h, &fakeSiteConfigStore{})
+		srv := New(cfg)
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("PUT = %d, want 400; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "sign-in image") {
+			t.Errorf("400 body = %s, want the E4 sentence", w.Body.String())
+		}
+	})
+
+	t.Run("pinned but the Docker runner does not have it yet: refused", func(t *testing.T) {
+		h := newHarness(t)
+		cfg := baseTestConfig(h, &fakeSiteConfigStore{})
+		cfg.AgentImages = map[string]string{"claude-code": ref}
+		cfg.Runner = &imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{}}
+		srv := New(cfg)
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("a pin the daemon does not actually have must still be refused: PUT = %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("pinned and present: accepted", func(t *testing.T) {
+		h := newHarness(t)
+		cfg := baseTestConfig(h, &fakeSiteConfigStore{})
+		cfg.AgentImages = map[string]string{"claude-code": ref}
+		cfg.Runner = &imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{ref: true}}
+		srv := New(cfg)
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("pinned with no way to verify locally (k8s): trusted, accepted", func(t *testing.T) {
+		h := newHarness(t)
+		cfg := baseTestConfig(h, &fakeSiteConfigStore{})
+		cfg.AgentImages = map[string]string{"claude-code": ref}
+		cfg.Runner = &fakeRunner{} // does not implement runner.ImageChecker
+		srv := New(cfg)
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
 // modelProvidersStatusSrv is a /setup/status server whose site config carries
 // the given providers and roster, with the capability store a member reads.
 func modelProvidersStatusSrv(t *testing.T, site types.SiteConfig, cs *capStore) *Server {

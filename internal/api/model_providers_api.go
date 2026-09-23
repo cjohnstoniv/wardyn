@@ -75,10 +75,14 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid model providers: "+err.Error())
 		return
 	}
+	ctx := r.Context()
+	if err := validateModelProviderImagePrereqs(ctx, block, s.cfg.AgentImages, s.cfg.Runner); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid model providers: "+err.Error())
+		return
+	}
 	// SEAM-1, handlePutAgentProviders's reason: the same singleton document.
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
-	ctx := r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeServerError(w, r, "get site config", err)

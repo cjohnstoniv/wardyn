@@ -4479,6 +4479,42 @@ An agent CLI is present there only if the repo's own devcontainer installs it; a
 agent run on an image without one fails at the CLI, visibly, rather than being
 silently patched.
 
+## Claude sign-in image
+
+The `anthropic_subscription` model-provider kind (each person's own Claude
+subscription, captured by a container sign-in) needs a login sandbox that carries
+the real `claude` CLI. Wardyn does not publish that image — `agent-claude-code`
+bundles a vendor CLI that is not open-source and whose terms are not readable
+from the image (`deploy/images/THIRD-PARTY-TERMS.md`) — so every install that
+wants to offer the kind builds it locally and the daemon must be told where it
+is:
+
+```
+make agent-images-core            # builds wardyn/agent-claude-code:local (+ the other core images)
+```
+
+`make setup` (both containerized and host mode) already runs this and pins the
+result: the compose stack's `WARDYN_AGENT_IMAGES` default and `scripts/run-host.sh`'s
+own default both name `wardyn/agent-claude-code:local` for `claude-code`, so a
+stock `make setup` needs nothing further. Point at a different image (a
+registry mirror, a corp-built tag) with `WARDYN_AGENT_IMAGES='{"claude-code":"<ref>"}'`
+(compose: in `deploy/compose/.env`; host mode: exported before `run-host.sh`).
+
+**"Resolves" is two checks, not one.** A pin alone is not proof the image
+exists — this repo's own defaults pin it unconditionally, build or no build —
+so Wardyn also asks the wired Runner to confirm the pinned ref is actually
+present (the docker substrate's local image store; on Kubernetes, which pulls
+fresh per launch, the pin is trusted and a missing image surfaces at the login
+run itself, naming it). Until both hold, `PUT /model-providers` and
+`PUT /site-config` refuse to add or keep an `anthropic_subscription` provider
+(E4): *"Claude subscriptions need the Claude Code sign-in image, which this
+install hasn't built yet."*
+
+`GET /api/v1/setup/status` carries this as its own row, `claude_signin_image` —
+`info` once it resolves, `warn` with the fix above when it does not. It is
+never `blocking`: the kind is optional, so an install offering only API-key or
+Bedrock providers is never funneled back into setup over it.
+
 ## Rotating the age key
 
 The secret store binds **one** age identity for both encryption and decryption

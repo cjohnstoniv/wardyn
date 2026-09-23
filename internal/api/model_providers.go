@@ -11,6 +11,7 @@ package api
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -22,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -55,6 +57,7 @@ const (
 	mp400Model        = "model_providers: %q: %s: model %q is not a model id — letters, digits and ._:/@+[]- , at most 256 characters"
 	mp400EndpointOnly = "model_providers: %q: %s: path, auth_header and auth_format apply only to a custom_endpoint provider"
 	mp400Path         = "model_providers: %q: %s: path %q must start with a single / and carry no query, fragment, backslash, whitespace or .. segment"
+	mp400SignInImage  = "model_providers: %q: Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image."
 )
 
 // Name is the one free-text field on a record a member reads; bounded so a
@@ -224,6 +227,25 @@ func validateModelProviders(p *types.ModelProviders) error {
 			if err := check(mp); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// validateModelProviderImagePrereqs is the E4 refusal (multi-provider design
+// 2.2, 5.2 E4): an anthropic_subscription provider is refused unless the
+// Claude sign-in image resolves (setup_claude_signin_image.go). Kept OUT of
+// validateModelProviders, which stays pure and needs no server state — this
+// check needs the boot agent-image map and the wired Runner, exactly the
+// reason validateAgentProviders is its own call at each write door instead of
+// living inside validateSiteConfig (see that function's doc).
+func validateModelProviderImagePrereqs(ctx context.Context, p *types.ModelProviders, images map[string]string, rnr runner.Runner) error {
+	if p == nil {
+		return nil
+	}
+	for _, mp := range p.Providers {
+		if mp.Kind == types.ModelProviderAnthropicSubscription && !claudeSignInImageResolves(ctx, images, rnr) {
+			return fmt.Errorf(mp400SignInImage, mp.ID)
 		}
 	}
 	return nil
