@@ -55,6 +55,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The key services now have a live suite (T-33, #693).** `make test-kek-conformance` runs the
+  Vault Transit key-encryption key and the Vault KV store against the official `hashicorp/vault`
+  and `openbao/openbao` dev images, and the PR `conformance` job runs it. It checks that a wrap is
+  bound to its row, that rotation and `min_decryption_version` retire old versions, and that
+  `-rewrap` resumes and is idempotent. A deleted key is refused outright; a paused server is
+  transient within a minute and blocks boot. Every read is one decrypt in the server's audit log.
+  `make test-kek-conformance-kind` installs Vault from its Helm chart on kind and logs in with
+  Kubernetes auth. It stores one secret of each kind and runs the key-encryption-key suite; the
+  nightly `kek-conformance` job runs both. A skipped test fails either run. New unit and Postgres
+  cases pin the first-boot seam: under the local key, Transit and both external stores, a tampered
+  or lost value is never reported as not-found, and boot mints no platform key over one. They also
+  check that Kubernetes auth re-reads the service-account token at each login, and that the Vault
+  client's TLS config is its own.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

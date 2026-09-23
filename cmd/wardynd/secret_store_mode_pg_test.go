@@ -13,10 +13,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -163,11 +165,10 @@ func (v *miniVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-// Rule 17 through the real Vault client: a writer at Vault replaced the
-// signing key's data with another shape (its custom_metadata survives a data
-// write, so the binding still matches). Boot refuses it rather than reading
-// zero bytes and minting a fresh signing key over it.
-func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T) {
+// miniVaultStore is the store-mode secret store over a miniVault, through the
+// real Vault client.
+func miniVaultStore(t *testing.T) (*miniVault, secretstore.Store) {
+	t.Helper()
 	pool := envelopeDB(t)
 	v := &miniVault{meta: map[string]any{}, data: map[string]any{}}
 	srv := httptest.NewServer(v)
@@ -185,6 +186,47 @@ func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return v, s
+}
+
+// Rule 17 at boot for every platform key: each one's pointer row stays, its
+// value at Vault is gone (Vault answers 404). Boot refuses each, and writes
+// nothing to Vault — a boot key is never minted over a lost one.
+func TestLoadOrCreateSecret_EveryPlatformKeyRefusesA404BehindItsPointer(t *testing.T) {
+	v, s := miniVaultStore(t)
+	names := slices.Sorted(maps.Keys(secretstore.PlatformNames))
+	load := func(name string) error {
+		_, err := loadOrCreateSecret(t.Context(), s, name, func(b []byte) bool { return len(b) > 0 },
+			func() ([]byte, error) { return []byte("minted-" + name), nil })
+		return err
+	}
+	for _, n := range names {
+		if err := load(n); err != nil {
+			t.Fatalf("first boot mints %s: %v", n, err)
+		}
+	}
+	v.mu.Lock()
+	v.meta, v.data = map[string]any{}, map[string]any{}
+	writes := v.dataWrites
+	v.mu.Unlock()
+	for _, n := range names {
+		if err := load(n); err == nil {
+			t.Errorf("boot minted %s over a pointer row whose value Vault no longer holds", n)
+		}
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.dataWrites != writes {
+		t.Fatalf("%d boot key(s) written over lost ones", v.dataWrites-writes)
+	}
+}
+
+// Rule 17 through the real Vault client: a writer at Vault replaced the
+// signing key's data with another shape (its custom_metadata survives a data
+// write, so the binding still matches). Boot refuses it rather than reading
+// zero bytes and minting a fresh signing key over it.
+func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T) {
+	v, s := miniVaultStore(t)
 	if _, err := loadOrCreateSigningKey(t.Context(), s); err != nil {
 		t.Fatalf("first boot mints the signing key: %v", err)
 	}

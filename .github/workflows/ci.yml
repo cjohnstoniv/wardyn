@@ -515,8 +515,9 @@ jobs:
   conformance:
     runs-on: ubuntu-latest
     # Two image builds (one of them a bookworm + node + `npm install -g` layer)
-    # in front of a suite whose own `go test -timeout` is 20m.
-    timeout-minutes: 45
+    # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
+    # key-service leg.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -524,6 +525,12 @@ jobs:
           go-version-file: go.mod
       - name: Docker smoke check
         run: docker run --rm hello-world
+      # T-33: the Vault Transit KEK and the Vault KV store against the official
+      # hashicorp/vault and openbao/openbao dev images (a paused server must be
+      # transient, a deleted key definitive, every read one audited decrypt).
+      # Needs no image build, so it runs first.
+      - name: Key-service conformance (Vault + OpenBao dev servers)
+        run: make test-kek-conformance
       - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
         run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - name: Build agent-claude-code image (local only — the boot under measurement)

@@ -7,11 +7,14 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek/kektest"
 )
 
 func testDEK() []byte { return bytes.Repeat([]byte{7}, kek.DEKSize) }
@@ -159,4 +162,31 @@ func TestTransit_SendsAssociatedData(t *testing.T) {
 	if len(ads) == 0 || ads[len(ads)-1] != base64.StdEncoding.EncodeToString(want) {
 		t.Fatalf("associated_data sent = %q; want base64 of kek.WrapAAD", ads)
 	}
+}
+
+// The fake Transit engine held to the KEK contract, with every hook: a
+// rotation, min_decryption_version, a sealed Vault and a deleted key.
+func TestTransit_KEKConformance(t *testing.T) {
+	f := newFakeVault(t)
+	f.transitKey("wardyn")
+	set := func(fn func()) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		fn()
+	}
+	kektest.Run(t, func(t *testing.T) kek.KEK {
+		tr, err := openFakeTransit(t, f)
+		if err != nil {
+			t.Fatalf("NewTransit: %v", err)
+		}
+		return tr
+	}, kektest.Hooks{
+		Rotate: func(*testing.T) { f.rotateTransit() },
+		Retire: func(_ *testing.T, n int) { set(func() { f.transit.minDecrypt = n }) },
+		Unreachable: func(*testing.T) func() {
+			set(func() { f.force = slices.Repeat([]int{http.StatusServiceUnavailable}, 100) })
+			return func() { set(func() { f.force = nil }) }
+		},
+		Disable: func(*testing.T) { set(func() { f.transit.name = "" }) },
+	})
 }

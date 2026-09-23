@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
@@ -239,5 +240,73 @@ func testDeleteOwnerRowLeavesOperatorRow(t *testing.T, ctx context.Context, newS
 	gotA, err := op.For(a).Get(ctx, name)
 	if err != nil || string(gotA) != "operator-value" {
 		t.Fatalf("For(a).Get after deleting A's own row = (%q, %v), want the fallback to operator-value", gotA, err)
+	}
+}
+
+// RunTamperConformance holds a store to the first-boot seam: a value damaged
+// where it is kept is a refusal, never secretstore.ErrNotFound. Boot mints a
+// fresh key only on ErrNotFound (cmd/wardynd loadOrCreateSecret), so a
+// tampered boot key reported absent would be replaced without a word.
+//
+// corrupt damages the value held for (owner, name) by whatever means the
+// backend allows: a flipped ciphertext byte, a wrap Transit no longer opens,
+// the value removed at the external store.
+func RunTamperConformance(t *testing.T, newStore func(t *testing.T) secretstore.Store, corrupt func(t *testing.T, owner, name string)) {
+	ctx := context.Background()
+	uniq := func(p string) string { return "tamper-" + p + "-" + uuid.NewString() }
+	refused := func(t *testing.T, what string, got []byte, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s = %q; want a refusal", what, got)
+		}
+		if errors.Is(err, secretstore.ErrNotFound) {
+			t.Fatalf("%s = %v; a tampered value must NOT be ErrNotFound (boot would mint over it)", what, err)
+		}
+	}
+
+	t.Run("tampered_operator_value_is_not_not_found", func(t *testing.T) {
+		s := newStore(t)
+		n := uniq("op")
+		t.Cleanup(func() { _ = s.Delete(ctx, n) })
+		if err := s.Put(ctx, n, []byte("boot-key")); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+		corrupt(t, "", n)
+		got, err := s.Get(ctx, n)
+		refused(t, "Get of a tampered value", got, err)
+	})
+
+	// A person's tampered row neither reads as absent nor falls back to the
+	// operator's row of the same name: that would hand them another value.
+	t.Run("tampered_owner_value_does_not_fall_back", func(t *testing.T) {
+		s := newStore(t)
+		n, owner := uniq("shared"), uniq("owner")
+		t.Cleanup(func() { _ = s.Delete(ctx, n); _ = s.For(owner).Delete(ctx, n) })
+		if err := s.Put(ctx, n, []byte("operator-value")); err != nil {
+			t.Fatalf("Put operator row: %v", err)
+		}
+		if err := s.For(owner).Put(ctx, n, []byte("owner-value")); err != nil {
+			t.Fatalf("For(owner).Put: %v", err)
+		}
+		corrupt(t, owner, n)
+		got, err := s.For(owner).Get(ctx, n)
+		refused(t, "For(owner).Get of a tampered row", got, err)
+		if v, err := s.Get(ctx, n); err != nil || string(v) != "operator-value" {
+			t.Fatalf("operator Get after the person's row was tampered = (%q, %v); want it untouched", v, err)
+		}
+	})
+}
+
+// FlipCiphertext is a RunTamperConformance corrupt func for a row sealed in
+// Postgres: it flips one bit of the row's sealed value.
+func FlipCiphertext(pool *pgxpool.Pool) func(t *testing.T, owner, name string) {
+	return func(t *testing.T, owner, name string) {
+		t.Helper()
+		tag, err := pool.Exec(context.Background(), `UPDATE secrets
+			SET ciphertext = set_byte(ciphertext, length(ciphertext)-1, get_byte(ciphertext, length(ciphertext)-1) # 1)
+			WHERE owned_by=$1 AND name=$2 AND length(ciphertext) > 0`, owner, name)
+		if err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("flip the ciphertext of (%q, %q): %d rows, %v", owner, name, tag.RowsAffected(), err)
+		}
 	}
 }

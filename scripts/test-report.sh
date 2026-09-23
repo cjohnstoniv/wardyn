@@ -82,6 +82,13 @@ fi
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "unit" ]; then
   REQUIRE_PASS='^(TestF7_|TestRedirectProbe)'
 fi
+# The live key-service suites (scripts/kek-conformance.sh) exist only to run
+# against a real server: every one of their tests must pass, none skip.
+if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "kek-k8s" ]; then
+  REQUIRE_PASS='^TestLive_KubernetesAuth'
+elif [ -z "$REQUIRE_PASS" ] && [[ "$SUITE" == kek-* ]]; then
+  REQUIRE_PASS='^TestLive_(Transit|VaultKV)'
+fi
 if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
   # go test -json emits one event per line; a top-level test's outcome is the
   # event whose Test is the bare name (subtests carry a "/"). Extracted with
@@ -101,7 +108,10 @@ if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
   elif [ -n "$SKIPPED" ]; then
     echo ">> SKIP FLOOR: these probes SKIPPED:" >&2
     echo "$SKIPPED" | sed 's/^/>>   /' >&2
-    if [ "$SUITE" = "pg" ]; then
+    if [[ "$SUITE" == kek-* ]]; then
+      echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Run the suite through" >&2
+      echo ">> scripts/kek-conformance.sh or scripts/kek-conformance-kind.sh, which set every variable they need." >&2
+    elif [ "$SUITE" = "pg" ]; then
       echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Give the lane a CREATE ROLE-capable" >&2
       echo ">> role over a URL-form DSN, or set WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2
     else

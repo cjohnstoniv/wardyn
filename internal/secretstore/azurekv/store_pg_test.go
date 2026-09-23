@@ -91,6 +91,25 @@ func TestAzureKV_Conformance(t *testing.T) {
 	secretstoretest.RunConformance(t, func(t *testing.T) secretstore.Store { return storeMode(t, pool, ext, nil) })
 }
 
+// A value removed at Key Vault behind a pointer row is a refusal, never
+// not-found, for the operator's row and a person's alike.
+func TestAzureKV_TamperConformance(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeKV(t)
+	ext := newFakeStore(t, f)
+	secretstoretest.RunTamperConformance(t, func(t *testing.T) secretstore.Store { return storeMode(t, pool, ext, nil) },
+		func(t *testing.T, owner, name string) {
+			ref := kekID(t, pool, owner, name)
+			sn := secretstore.RefObject(ref[strings.LastIndexByte(ref, '/')+1:])
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.secrets[sn] == nil {
+				t.Fatalf("no secret %s to remove (row ref %s)", sn, ref)
+			}
+			delete(f.secrets, sn)
+		})
+}
+
 // The row is a pointer: kek_id "azurekv:<vault-host>/<stem>-g<gen>#<n>", no
 // ciphertext; a replace is a new version of the same name, counted.
 func TestStoreMode_RowIsAPointerAndAReplaceIsAVersion(t *testing.T) {

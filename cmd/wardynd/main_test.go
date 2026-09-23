@@ -78,6 +78,34 @@ func TestLoadOrCreateSecret_DecryptErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// The first-boot seam: loadOrCreateSecret mints only on secretstore.ErrNotFound.
+// Every other shape of Get error — a store outage, a decrypt failure, an
+// error whose text merely says "not found" — fails closed with no Put.
+func TestLoadOrCreateSecret_MintsOnlyOnErrNotFound(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		err   error
+		mints bool
+	}{
+		{"wrapped ErrNotFound", notFoundErr(), true},
+		{"store unavailable", fmt.Errorf("transit KEK: vault POST transit/decrypt/wardyn: 503: %w", secretstore.ErrUnavailable), false},
+		{"decrypt failure", decryptErr(), false},
+		{"text says not found", errors.New("vault GET wardyn/data/ns1/platform/wardyn-signing-key: 404 (secret not found)"), false},
+		{"unavailable and not found joined", errors.Join(secretstore.ErrUnavailable, errors.New("not found")), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store := &fakeSecretStore{getErr: c.err}
+			_, err := loadOrCreateSecret(context.Background(), store, "wardyn-signing-key",
+				func(b []byte) bool { return len(b) > 0 },
+				func() ([]byte, error) { return []byte("new"), nil },
+			)
+			if minted := len(store.putCalls) > 0; minted != c.mints || (err == nil) != c.mints {
+				t.Fatalf("Get error %v: err=%v, Put calls=%d; want mint=%v", c.err, err, len(store.putCalls), c.mints)
+			}
+		})
+	}
+}
+
 // Finding A: a TRUE not-found generates a fresh key and persists it.
 func TestLoadOrCreateSecret_NotFoundGeneratesAndPuts(t *testing.T) {
 	store := &fakeSecretStore{getErr: notFoundErr()}

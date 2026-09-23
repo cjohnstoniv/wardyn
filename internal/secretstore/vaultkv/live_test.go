@@ -28,6 +28,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek/kektest"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest"
 )
 
@@ -80,7 +82,8 @@ path "%[1]s/metadata/%[2]s/*" { capabilities = ["create", "update", "read", "del
 `, mount, prefix)
 }
 
-func liveSetup(t *testing.T) (liveAdmin, string, string) {
+// liveAdminEnv is the admin of the live server, or skips the test.
+func liveAdminEnv(t *testing.T) liveAdmin {
 	addr := os.Getenv("WARDYN_TEST_VAULT")
 	tokFile := os.Getenv("WARDYN_TEST_VAULT_TOKEN_FILE")
 	if addr == "" || tokFile == "" {
@@ -90,7 +93,11 @@ func liveSetup(t *testing.T) (liveAdmin, string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := liveAdmin{t: t, addr: strings.TrimRight(addr, "/"), token: strings.TrimSpace(string(b))}
+	return liveAdmin{t: t, addr: strings.TrimRight(addr, "/"), token: strings.TrimSpace(string(b))}
+}
+
+func liveSetup(t *testing.T) (liveAdmin, string, string) {
+	a := liveAdminEnv(t)
 	mount := "wardyn-live-" + uuid.NewString()[:8]
 	a.must(http.MethodPost, "sys/mounts/"+mount, map[string]any{"type": "kv", "options": map[string]string{"version": "2"}})
 	t.Cleanup(func() { a.do(http.MethodDelete, "sys/mounts/"+mount, nil) })
@@ -255,19 +262,41 @@ func TestLive_KubernetesAuth(t *testing.T) {
 		return s
 	}
 	s := open(claims.K8s.Namespace)
-	ref, err := s.Put(t.Context(), "alice", "pat", "", []byte("v"), false)
-	if err != nil {
-		t.Fatalf("Put under the service account's namespace: %v", err)
-	}
-	if v, err := s.Get(t.Context(), "alice", "pat", ref); err != nil || string(v) != "v" {
-		t.Fatalf("Get = (%q, %v)", v, err)
-	}
-	if err := s.Delete(t.Context(), "alice", "pat", ref); err != nil {
-		t.Fatalf("Delete: %v", err)
+	// One secret of each kind: a boot key, an operator credential, a person's.
+	for _, r := range [][2]string{{"", "wardyn-signing-key"}, {"", "github-app-key"}, {"alice", "pat"}} {
+		ref, err := s.Put(t.Context(), r[0], r[1], "", []byte("v-"+r[1]), false)
+		if err != nil {
+			t.Fatalf("Put %s (%s) under the service account's namespace: %v", r[1], secretstore.Kind(r[0], r[1]), err)
+		}
+		if v, err := s.Get(t.Context(), r[0], r[1], ref); err != nil || string(v) != "v-"+r[1] {
+			t.Fatalf("Get %s = (%q, %v)", r[1], v, err)
+		}
+		if err := s.Delete(t.Context(), r[0], r[1], ref); err != nil {
+			t.Fatalf("Delete %s: %v", r[1], err)
+		}
 	}
 	other := open("another-namespace")
 	_, err = other.Put(t.Context(), "alice", "pat", "", []byte("v"), false)
 	if err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("Put under another namespace's prefix = %v; want a definitive 403 from the templated policy", err)
 	}
+}
+
+// TestLive_KubernetesAuthTransit is the Transit KEK logged in the way a
+// cluster install logs in (WARDYN_TEST_VAULT_K8S_JWT_FILE, role "wardyn", the
+// key "wardyn" on mount "transit" under the documented two-path policy), held
+// to the kektest contract.
+func TestLive_KubernetesAuthTransit(t *testing.T) {
+	addr, jwtFile := os.Getenv("WARDYN_TEST_VAULT"), os.Getenv("WARDYN_TEST_VAULT_K8S_JWT_FILE")
+	if addr == "" || jwtFile == "" {
+		t.Skip("WARDYN_TEST_VAULT / WARDYN_TEST_VAULT_K8S_JWT_FILE not set; skipping the live Kubernetes-auth Transit case")
+	}
+	kektest.Run(t, func(t *testing.T) kek.KEK {
+		tr, err := NewTransit(t.Context(), Config{Addr: addr, Auth: AuthKubernetes, AuthMount: "kubernetes", Role: "wardyn",
+			K8sTokenFile: jwtFile}, "transit", "wardyn")
+		if err != nil {
+			t.Fatalf("NewTransit with kubernetes login: %v", err)
+		}
+		return tr
+	}, kektest.Hooks{})
 }
