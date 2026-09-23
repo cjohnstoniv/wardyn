@@ -24,7 +24,7 @@ import {
   type BrowserContextOptions,
   type Page,
 } from "@playwright/test";
-import { SIGNIN } from "../../src/app/lib/people-access-copy";
+import { SIGNIN } from "../../src/app/lib/sign-in-copy";
 import { identities, missing, whereIs } from "./harness";
 
 const BASE = process.env.WARDYN_LIVE_BASE_URL || "";

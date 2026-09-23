@@ -10,6 +10,7 @@ import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/log
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
+import { STATES } from "../src/app/components/wardyn/states";
 import {
   CHIP_IMAGE_PULL_FAILED,
   CHIP_SETTING_UP,
@@ -946,7 +947,7 @@ test.describe("Run detail — a failing side fetch is not an outage", () => {
     await expect(page).toHaveURL(/\/runs\/.+/);
 
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
-    await expect(page.getByText("We couldn't reach the Wardyn control plane. Please try again.")).toHaveCount(0);
+    await expect(page.getByText(STATES.ERROR_DEFAULT)).toHaveCount(0);
     // The one control that ends a runaway run is still reachable.
     await expect(page.getByRole("button", { name: "Kill" })).toBeVisible();
 
