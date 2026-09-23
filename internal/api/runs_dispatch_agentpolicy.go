@@ -35,17 +35,23 @@ type runAgentPolicy struct {
 	hold bool
 }
 
-// holdLane is whether this dispatch launches agent-run's hold lane: the one
-// predicate the sandbox env (WARDYN_TOOL_APPROVALS) and the managed settings
-// both read, so a run cannot get one without the other.
+// holdLane is whether a run launches agent-run's hold lane: the one predicate
+// the sandbox env (WARDYN_TOOL_APPROVALS), the managed settings and the 201's
+// undelivered warning all read, so a run cannot get one without the other.
+func holdLane(interactive bool, toolApprovals string) bool {
+	return !interactive && toolApprovals == "hold"
+}
+
+// holdLane is holdLane for this dispatch.
 func (p dispatchParams) holdLane() bool {
-	return !p.Interactive && p.ToolApprovals == "hold"
+	return holdLane(p.Interactive, p.ToolApprovals)
 }
 
 // agentPolicyBasis names what a run's managed settings were generated from,
-// for a failure hint.
+// for a failure hint or a 201 warning: the hold lane when it, not the level,
+// chose the document.
 func agentPolicyBasis(level types.AutonomyLevel, hold bool) string {
-	if level == "" && hold {
+	if hold && agentpolicy.HoldTakesOver(level) {
 		return "tool approvals on hold"
 	}
 	return "autonomy level " + string(level)
@@ -125,24 +131,30 @@ func managedFilesGap(caps runner.Capabilities, class types.ConfinementClass) (re
 
 // managedSettingsUndeliveredWarning is the 201's half of delivered:false: the
 // same fact the run.agent_policy row records, said where the person launching
-// the run reads it. Empty when the level generates no file or the row will say
-// delivered. A Capabilities error says nothing here: dispatch fails that run
-// with the reason.
-func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, agent string, level types.AutonomyLevel, hold bool, class types.ConfinementClass) string {
-	if _, _, ok := agentpolicy.ForAgent(agent, level, hold); !ok || s.cfg.Runner == nil {
-		return ""
+// the run reads it. None when the run generates no file or the row will say
+// delivered, and none for an exec run, which has no agent process to say it
+// about. A Capabilities error says nothing here: dispatch fails that run with
+// the reason.
+//
+// req is read once the gate may have derived its hold, and through
+// requestIsInteractive: preflight never runs the no-task coercion, so the raw
+// field would disagree with the launch about which lane a task-less run takes.
+func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, req *createRunRequest, level types.AutonomyLevel, class types.ConfinementClass) []string {
+	hold := holdLane(requestIsInteractive(*req), req.ToolApprovals)
+	if _, _, ok := agentpolicy.ForAgent(req.Agent, level, hold); !ok || s.cfg.Runner == nil || req.TaskMode == "exec" {
+		return nil
 	}
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil {
-		return ""
+		return nil
 	}
 	reason, _ := managedFilesGap(caps, class)
 	if reason == "" {
-		return ""
+		return nil
 	}
-	return fmt.Sprintf(
-		"%s's managed settings for autonomy level %s are not delivered: %s, so this run's agent runs under its launch flags alone and a repository's own settings can let it run tools without asking",
-		autonomyAgentLabel(agent), level, reason)
+	return []string{fmt.Sprintf(
+		"%s's managed settings for %s are not delivered: %s, so this run's agent runs under its launch flags alone and a repository's own settings can let it run tools without asking",
+		autonomyAgentLabel(req.Agent), agentPolicyBasis(level, hold), reason)}
 }
 
 // auditAgentPolicy records run.agent_policy once the agent's container exists,
@@ -178,7 +190,8 @@ func (s *Server) auditAgentPolicy(ctx context.Context, run types.AgentRun, p run
 		"delivered": delivered,
 	}
 	if p.hold {
-		// Says why a run with no level, or an L2/L3 one, got the gated document.
+		// On every hold-lane run: what says why a run with no level, or an
+		// L2/L3 one, got the gated document.
 		data["tool_approvals"] = "hold"
 	}
 	if !delivered {

@@ -159,7 +159,7 @@ func ForAgent(agent string, level types.AutonomyLevel, hold bool) (path string, 
 	}
 	var doc string
 	switch {
-	case hold && (level == "" || level == types.AutonomyL2 || level == types.AutonomyL3):
+	case hold && HoldTakesOver(level):
 		// A hold run whose level brings no gate-protecting document (#358).
 		// The hold lane's gate is a gate only if nothing answers a tool call
 		// before it, and a repository or user `permissions.allow` rule does:
@@ -171,8 +171,9 @@ func ForAgent(agent string, level types.AutonomyLevel, hold bool) (path string, 
 		doc = claudeL1
 	case level == "":
 		// No profile, no rubric, or a rubric that caps nothing at this
-		// posture. Byte for byte the run this deployment launched before the
-		// feature existed — the absent-row rule every governance limit follows.
+		// posture, off the hold lane. Byte for byte the run this deployment
+		// launched before the feature existed — the absent-row rule every
+		// governance limit follows.
 		return "", nil, false
 	case level == types.AutonomyL3:
 		// The top rung permits task_mode=exec, the door that routes around
@@ -194,4 +195,13 @@ func ForAgent(agent string, level types.AutonomyLevel, hold bool) (path string, 
 		doc = claudeL0
 	}
 	return ClaudeCodeManagedSettingsPath, []byte(doc), true
+}
+
+// HoldTakesOver reports whether a hold run at level gets the hold lane's
+// document (L1's) instead of what its level brings: no level, and the two
+// rungs whose own answer leaves the gate unprotected (L3 no file, L2 no
+// allowManagedPermissionRulesOnly). The one spelling of that set, for ForAgent
+// and for a caller naming why a run got its file.
+func HoldTakesOver(level types.AutonomyLevel) bool {
+	return level == "" || level == types.AutonomyL2 || level == types.AutonomyL3
 }

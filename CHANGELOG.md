@@ -15,7 +15,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   of L0 or L1 got Claude Code's managed settings, whose `allowManagedPermissionRulesOnly` stops a
   repository or user `permissions.allow` rule from running a tool before `wardyn-toolgate` is asked.
   Every claude-code hold run now gets that managed file (the L1 document), including a run at L2,
-  at L3, or with no level. Its `run.agent_policy` audit row carries `"tool_approvals": "hold"`.
+  at L3, or with no level. Its `run.agent_policy` audit row carries `"tool_approvals": "hold"`, and
+  on a runner that cannot deliver the file the create response says so, as it does for a gated run.
 
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without

@@ -61,7 +61,7 @@ type agentPolicyDatum struct {
 	Bytes     int    `json:"bytes"`
 	Delivered bool   `json:"delivered"`
 	Reason    string `json:"reason"`
-	// ToolApprovals is "hold" when the hold lane, not the level, chose the file.
+	// ToolApprovals is "hold" on a hold-lane run.
 	ToolApprovals string `json:"tool_approvals"`
 }
 

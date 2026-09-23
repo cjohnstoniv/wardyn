@@ -59,11 +59,14 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// No profile, or a profile with no rubric: the zero value and no bound. An
 	// UNASSIGNED member — and every operator — is byte-for-byte what they were
 	// before this gate existed, the same absent-row rule every other
-	// GovernanceLimits field follows. Nothing below runs.
+	// GovernanceLimits field follows. Nothing below runs. The one sentence
+	// that still applies is the managed-settings one: a hold run gets its file
+	// at no level too (#358).
 	if ceiling.Profile == nil || ceiling.Limits.AutonomyRubric == nil {
 		// adoEntraUngraded: nothing capped this run, so dispatch has no grade to
 		// be held to and resolves the lane exactly as it always did.
-		return types.AutonomyResolution{}, nil, scmSite, adoEntraUngraded(), true
+		return types.AutonomyResolution{}, s.managedSettingsUndeliveredWarning(r.Context(), req, "", enforced),
+			scmSite, adoEntraUngraded(), true
 	}
 	// THE PER-PERSON AZURE DEVOPS LANE, resolved ONCE here and used twice: the
 	// posture is graded on it, and the frozen answer travels to dispatch on the
@@ -88,17 +91,14 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// doc). The posture still travels, so the audit row and Review record what
 	// was graded even when nothing bound it.
 	if level == "" {
-		return res, nil, scmSite, grade, true
+		return res, s.managedSettingsUndeliveredWarning(r.Context(), req, "", enforced), scmSite, grade, true
 	}
 	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade), ceiling.Profile.Name)
 	// Here rather than in the ladder: whether the managed settings land depends
-	// on the ENFORCED class's substrate, which only this function holds. No
-	// agent process on an exec run to say it about.
-	if ok && req.TaskMode != "exec" {
-		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level,
-			!req.Interactive && req.ToolApprovals == "hold", enforced); msg != "" {
-			warnings = append(warnings, msg)
-		}
+	// on the ENFORCED class's substrate, which only this function holds. After
+	// it, because the ladder may derive the hold that brings the file.
+	if ok {
+		warnings = append(warnings, s.managedSettingsUndeliveredWarning(r.Context(), req, level, enforced)...)
 	}
 	return res, warnings, scmSite, grade, ok
 }
