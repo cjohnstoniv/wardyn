@@ -28,6 +28,12 @@
 #   9. .gitleaksignore never grows a 4th un-scoped per-commit fingerprint for
 #      the same path — that's a churning fixture that belongs in
 #      .gitleaks.toml's path-scoped [allowlist] instead (SF-15).
+#  10. every actions/upload-artifact step in .github/workflows/*.yml has a
+#      non-empty `with.path` — a step landing between a `path: |` block and
+#      its own globs folds the globs into ITS run: string instead, and the
+#      upload silently gets an empty path forever (#372/SD-8; actionlint
+#      does not catch this, since a present-but-empty `path:` is still a
+#      valid input).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -254,26 +260,52 @@ fi
 
 # ── 9. .gitleaksignore fingerprint churn — a fixture whose flagged value
 #      changes every commit (a uuid-suffixed fake token, say) mints a fresh
-#      commit fingerprint AT THE SAME file:line every time, so .gitleaksignore
-#      grows one entry per commit forever instead of being fixed once. Grouped
-#      by path:line, not just path — a file legitimately allowlisted at
-#      several distinct static lines (docs/OPERATIONS.md, say) is not churn.
-#      Past a 4th fingerprint for the same file:line, it belongs in
-#      .gitleaks.toml's path-scoped [allowlist] instead (SF-15) — this guard
-#      refuses to let a new one accumulate un-scoped the way
+#      commit fingerprint for the same path every time, so .gitleaksignore
+#      grows one entry per commit forever instead of being fixed once. A path
+#      trips this only when BOTH hold: it carries >=4 fingerprints in total
+#      (path-wide, since the fixture's own line drifts as unrelated edits
+#      land above it — line alone under-counts) AND at least one single
+#      file:line under that path repeats >=3 times (the churn signature: the
+#      same spot re-fingerprinted commit after commit). A file legitimately
+#      allowlisted at several distinct STABLE lines (docs/OPERATIONS.md, say)
+#      never repeats any one line that often, so it does not trip. Past that,
+#      it belongs in .gitleaks.toml's path-scoped [allowlist] instead (SF-15)
+#      — this guard refuses to let a new one accumulate un-scoped the way
 #      internal/egress/proxy/pat_broker_mask_test.go's did.
 churn_fail=0
-gitleaksignore_lines="$(grep -v '^#' .gitleaksignore | grep -v '^[[:space:]]*$' | awk -F: '{print $2":"$4}' | sort -u)"
-for pl in $gitleaksignore_lines; do
-    p="${pl%:*}"
-    count="$(grep -v '^#' .gitleaksignore | grep -v '^[[:space:]]*$' | awk -F: -v pl="$pl" '$2":"$4==pl' | wc -l)"
-    [ "$count" -ge 4 ] || continue
+gitleaksignore_paths="$(grep -v '^#' .gitleaksignore | grep -v '^[[:space:]]*$' | awk -F: '{print $2}' | sort -u)"
+for p in $gitleaksignore_paths; do
+    total="$(grep -v '^#' .gitleaksignore | grep -v '^[[:space:]]*$' | awk -F: -v p="$p" '$2==p' | wc -l)"
+    [ "$total" -ge 4 ] || continue
+    hot_line_count="$(grep -v '^#' .gitleaksignore | grep -v '^[[:space:]]*$' | awk -F: -v p="$p" '$2==p{print $4}' | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}')"
+    [ "${hot_line_count:-0}" -ge 3 ] || continue
     esc_p="$(printf '%s' "$p" | sed 's/\./\\./g')"
     grep -qF -- "$esc_p" .gitleaks.toml && continue   # already path-scoped: redundant fingerprints, not churn
-    bad ".gitleaksignore: '$pl' carries $count per-commit fingerprints at the same line and is not in .gitleaks.toml's path-scoped [allowlist] — a fixture whose flagged value changes every commit belongs there instead (SF-15), not a growing pile of fingerprints"
+    bad ".gitleaksignore: '$p' carries $total per-commit fingerprints ($hot_line_count at one file:line) and is not in .gitleaks.toml's path-scoped [allowlist] — a fixture whose flagged value changes every commit belongs there instead (SF-15), not a growing pile of fingerprints"
     churn_fail=1
 done
-if [ "$churn_fail" = 0 ]; then ok "no .gitleaksignore path has un-scoped fingerprint churn (>=4 entries)"; fi
+if [ "$churn_fail" = 0 ]; then ok "no .gitleaksignore path has un-scoped fingerprint churn (>=4 entries, >=3 at one line)"; fi
+
+# ── 10. every upload-artifact step has a non-empty path ─────────────────────
+if ! command -v yq >/dev/null 2>&1; then
+    echo "skip: yq not installed — upload-artifact path check needs it"
+else
+    empty_upload_fail=0
+    for wf in .github/workflows/*.yml; do
+        empty_steps="$(yq -r '
+            .jobs[].steps[]?
+            | select((.uses // "") | test("^actions/upload-artifact@"))
+            | select((.with.path // "" | trim) == "")
+            | (.name // .uses)
+        ' "$wf")"
+        [ -z "$empty_steps" ] && continue
+        while IFS= read -r step; do
+            bad "$wf: upload-artifact step '$step' has an empty with.path — nothing uploads, and the job stays green with no reports attached (#372/SD-8)"
+        done <<<"$empty_steps"
+        empty_upload_fail=1
+    done
+    if [ "$empty_upload_fail" = 0 ]; then ok "every upload-artifact step across .github/workflows/*.yml has a non-empty path"; fi
+fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

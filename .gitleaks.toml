@@ -27,8 +27,8 @@ regexes = [
     # internal/secretstore/pg's AAD domain-separation label: a constant string
     # shaped like generic-api-key, not a secret. Regex- not path-scoped: the
     # file it lives in stores real secret envelopes and must stay scannable.
-    # Was fingerprinted per-commit before this rule (SF-15); see .gitleaksignore
-    # for the now-superseded entries this replaces.
+    # Was fingerprinted per-commit before this rule; regex-scoped here instead
+    # so no future value churns a fresh .gitleaksignore entry (SF-15).
     '''wardyn/secret/v1''',
 ]
 paths = [

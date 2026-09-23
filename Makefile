@@ -492,7 +492,14 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
-	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+	# -shellcheck= disables actionlint's embedded shellcheck pass: whether it
+	# runs, and which findings it reddens the build on, depends on whatever
+	# shellcheck happens to be on the runner's PATH (or absent, as it is on a
+	# bare local checkout) — the rest of the repo treats shellcheck as
+	# best-effort (scripts/test-desktop-profile.sh, scripts/test-install-sh.sh
+	# only run it `if command -v shellcheck`), and actionlint's own YAML/
+	# expression checks are what this gate is actually for.
+	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION) -shellcheck=
 
 # The shell half of the test suite: each of these pins a fixed regression in
 # scripts/ that no Go test can see (up.sh's reset warnings, the compose
