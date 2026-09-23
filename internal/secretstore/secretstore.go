@@ -123,11 +123,14 @@ type External interface {
 // (cmd/wardynd loadOrCreateSecret). An external store files them under their
 // own kind, so the org can audit, filter and (with a second identity)
 // restrict them apart from people's credentials (design §2.13).
+// cmd/wardynd's TestBootKeysAreThePlatformSet derives the boot keys from the
+// loadOrCreateSecret call sites and fails if this map differs.
 var PlatformNames = map[string]bool{
 	"wardyn-signing-key":    true,
 	"wardyn-session-key":    true,
 	"wardyn-ui-session-key": true,
 	"wardyn-ssh-host-key":   true,
+	"wardyn-internal-ca":    true,
 }
 
 // Kind is the store-side kind of the row (owner, name): "platform" for a boot

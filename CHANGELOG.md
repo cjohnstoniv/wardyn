@@ -155,6 +155,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **Store mode files the internal CA with Wardyn's other boot keys (#689).** `wardyn-internal-ca`
+  (the CA every run's proxy pins for the control-plane hop) was filed as an operator credential:
+  under Vault's `operator/` path and Key Vault's `-operator-` names instead of `platform/` and
+  `-platform-`, where a policy or role restricting Wardyn's own keys would not cover it. It now sits
+  with the signing, session, UI-session and SSH host keys, and the list of platform keys is checked
+  against the keys wardynd actually mints at boot, so a new one cannot be left out again.
+
 - **Store mode in Azure Key Vault (#645).** `WARDYN_SECRET_STORE=azurekv` writes every stored
   credential to the organisation's Key Vault as a secret and keeps only a pointer row, like
   `vaultkv`; no Azure SDK is involved. wardynd authenticates with AKS workload identity (a
