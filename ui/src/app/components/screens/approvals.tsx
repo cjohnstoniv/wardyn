@@ -10,6 +10,7 @@ import {
   Check,
   ChevronRight,
   Code2,
+  GitBranch,
   Globe,
   KeyRound,
   ShieldCheck,
@@ -22,6 +23,7 @@ import {
   decisionArgs,
   isAdoCapabilityRequest,
   isAdoConsentRequest,
+  isPushContentRequest,
   isTerminalRunState,
   type AgentRun,
   type ApprovalKind,
@@ -42,6 +44,7 @@ import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives
 import { RunContextRow } from "../wardyn/run-context-row";
 import { JsonBlock } from "../wardyn/code-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
+import { PushContentCard } from "../wardyn/push-content-card";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
@@ -52,6 +55,7 @@ import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../ward
 import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
+import { PUSH } from "../wardyn/copy/push";
 import {
   APPROVAL,
   APPROVAL_BANNER_LABEL,
@@ -88,6 +92,7 @@ const KIND_ICON: Record<string, React.ElementType> = {
   credential: KeyRound,
   egress_domain: Globe,
   tool_call: SquareTerminal,
+  push_content: GitBranch,
 };
 
 function kindLabel(kind: ApprovalKind): string {
@@ -164,6 +169,13 @@ function deriveTitle(kind: ApprovalKind, scope: Scope): string {
     // painted a blast-radius banner over a row that grants nothing.
     case "credential_reauth":
       return REAUTH_TITLE;
+    // Only reached by DecidedRow — PendingCard's own push_content branch
+    // returns before this function is ever called (it renders PUSH.CARD_TITLE
+    // directly, which is PENDING-tense and would read wrong on a decided row).
+    case "push_content": {
+      const repo = str(scope, "repo");
+      return repo ? `Push to ${repo}` : PUSH.KIND_LABEL;
+    }
     default:
       return kindLabel(kind);
   }
@@ -451,6 +463,27 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     }
   };
 
+  // decidePushDirect — the push_content card's own decide path. NO scope
+  // args at all (decide's rule 4 refuses a decision_scope on this kind —
+  // approvals_push.go), and no ReasonDialog: the frozen mock (packet 7)
+  // draws this card's own Approve/Deny pair, the same direct-decide shape
+  // decideAdoDirect above takes for its own kind, minus the scope.
+  const decidePushDirect = async (id: string, approve: boolean): Promise<void> => {
+    try {
+      if (approve) await api.approve(id, "approved");
+      else await api.deny(id, "denied");
+      toast.success(approve ? "Request approved" : "Request denied");
+      fetchAll().catch(() => {
+        /* transient refresh failure — the decide itself already succeeded */
+      });
+      onChanged?.();
+    } catch (err) {
+      toast.error(approve ? "Failed to approve request" : "Failed to deny request", {
+        description: getErrorMessage(err),
+      });
+    }
+  };
+
   // The pending queue's own tool_call items, and only those — the screen-
   // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
   // when a tool_call approval is actually in view.
@@ -530,6 +563,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
                 caps={caps}
                 onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
                 onAdoDecide={decideAdoDirect}
+                onPushDecide={decidePushDirect}
               />
             ))}
           </div>
@@ -576,6 +610,7 @@ function PendingCard({
   caps,
   onAct,
   onAdoDecide,
+  onPushDecide,
 }: {
   item: ApprovalRequest;
   // The viewer's own capability set, or null when the question doesn't apply
@@ -585,6 +620,9 @@ function PendingCard({
   // S10 — the Azure DevOps capability card's own decide path; see
   // decideAdoDirect's doc above for why it bypasses onAct/ReasonDialog.
   onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
+  // #181 — the push_content card's own decide path; see decidePushDirect's
+  // doc above for why it bypasses onAct/ReasonDialog too, minus the scope.
+  onPushDecide: (id: string, approve: boolean) => Promise<void>;
 }) {
   const scope = item.requested_scope ?? {};
   const KindIcon = KIND_ICON[item.kind] ?? ShieldCheck;
@@ -666,6 +704,7 @@ function PendingCard({
   // see AdoCapabilityCard's own `busy` doc for why a single boolean isn't
   // enough to spin only the pressed button.
   const [adoBusy, setAdoBusy] = React.useState<"approve" | "deny" | null>(null);
+  const [pushBusy, setPushBusy] = React.useState(false);
   // N1 (round 2): PendingCard only ever receives PENDING rows today
   // (pendingItems is fetched via api.listApprovals("PENDING")), but the
   // state check is explicit here too — defense-in-depth against this
@@ -692,6 +731,34 @@ function PendingCard({
             setAdoBusy("deny");
             await onAdoDecide(item.id, false, opts);
             setAdoBusy(null);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // #181 — a held push gets its OWN card too: it needs fields (repository,
+  // branch, the paths under review) this generic card has no slot for, and
+  // an admin-only decide with no scope menu (see push-content-card.tsx's own
+  // doc). Same "PENDING only" defense-in-depth as the ADO branch above.
+  if (isPushContentRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        <RunContextRow runId={item.run_id} onRun={setRun} />
+        <PushContentCard
+          item={item}
+          securityOperator={securityOperator}
+          run={run}
+          busy={pushBusy}
+          onApprove={async () => {
+            setPushBusy(true);
+            await onPushDecide(item.id, true);
+            setPushBusy(false);
+          }}
+          onDeny={async () => {
+            setPushBusy(true);
+            await onPushDecide(item.id, false);
+            setPushBusy(false);
           }}
         />
       </div>
@@ -850,6 +917,12 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
           under the row rather than a fourth column. */}
       {item.state === "CANCELLED" && (
         <p className="basis-full text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
+      )}
+      {/* #181 — a held push that timed out: refused, and honest about why
+          (nobody answered), same "basis-full sentence under the row" shape
+          the CANCELLED case above uses. */}
+      {item.kind === "push_content" && item.state === "EXPIRED" && (
+        <p className="basis-full text-xs text-muted-foreground">{PUSH.TIMEOUT_BODY}</p>
       )}
     </div>
   );

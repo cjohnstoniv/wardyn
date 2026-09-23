@@ -222,6 +222,16 @@ export interface PushRulesSpec {
   hold_seconds?: number;
 }
 
+// pushRulesIsSet mirrors types.PushRulesSpec.IsSet() (internal/types/policy.go)
+// EXACTLY: what "the policy has push rules" means everywhere it's asked,
+// which is NOT a bare truthiness check on the field. An all-zero-but-present
+// {} (a literal `push_rules: {}`) carries no actual rule and must read like
+// an absent field, same as the Go reader — a policy stored before this field
+// existed, and one that sets it to nothing, look identical.
+export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
+  return !!s && ((s.deny_paths?.length ?? 0) > 0 || (s.require_review_paths?.length ?? 0) > 0 || (s.max_inspect_pack_mib ?? 0) > 0);
+}
+
 export interface RunPolicySpec {
   // The key is always present (no `,omitempty` on
   // internal/types/policy.go's AllowedDomains), but the VALUE can be `null` on

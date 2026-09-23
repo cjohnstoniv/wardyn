@@ -21,6 +21,7 @@ import { Link } from "react-router-dom";
 import { cn } from "../ui/utils";
 import { ruleSourceLabel, toolRuleDecision, type AuditEvent } from "../../lib/types";
 import { Chip } from "./primitives";
+import { PUSH } from "./copy/push";
 
 // toolRuleDecision and RuleDecision moved to lib/types/audit.ts: egressFromAudit
 // (lib/api/audit.ts) has to exclude exactly the rows this component relabels,
@@ -90,6 +91,19 @@ export function RuleSourceChip({ event, className }: { event: AuditEvent; classN
       <span className={wrapperClassName}>
         <Link to="/approvals?tab=decided">{chip}</Link>
         {causeSpan}
+      </span>
+    );
+  }
+  // #181 — a push_rules.deny_paths refusal carries no cause text at all (the
+  // offending paths ride the sidecar's structured log and the refusal body,
+  // never the decision log — push_rules.go's own doc), so the canned
+  // explanation substitutes for the causeSpan every OTHER refusal above gets
+  // from real data.
+  if (source === "brokered:git:push-rules") {
+    return (
+      <span className={wrapperClassName}>
+        {chip}
+        <span className="min-w-0 truncate text-meta text-muted-foreground">{PUSH.DENIED_PATH_BODY}</span>
       </span>
     );
   }

@@ -8,7 +8,10 @@
 // the proxy is holding its next credential exchange while the credential's
 // owner signs in again. It is a REQUEST, never a decision — see
 // canDecideApproval below and internal/types/types.go ApprovalCredentialReauth.
-export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth";
+// push_content (#181/#494): a brokered git push matched push_rules.
+// require_review_paths and is parked at the proxy for an admin's decision —
+// see PushContentScope below and internal/types/push_content.go.
+export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth" | "push_content";
 
 // CANCELLED is the terminal state a run's own end writes: the run reached
 // COMPLETED/FAILED/STOPPED/KILLED while this approval was still PENDING, so
@@ -132,6 +135,14 @@ const HOLD_TIMEOUT_MS = 30_000;
 // number instead of two independently-maintained 240_000s that could drift.
 export const ADO_HOLD_WINDOW_MS = 240_000;
 
+// internal/egress/proxy/approvals.go's maxHoldTimeout — the proxy's own
+// absolute ceiling on push_rules.hold_seconds (any larger configured value is
+// clamped to it server-side). Used as isHeld's push_content window; exported
+// so push-content-card.tsx's own held-vs-expired timer can schedule its
+// re-render off the SAME number isHeld uses — two independently-typed
+// 600_000s would be two constants that could drift apart.
+export const PUSH_HOLD_CEILING_MS = 600_000;
+
 // True once `requestedAt` is old enough to cross `ceilingMs` — and only once:
 // an unparseable timestamp fails TOWARD showing the hold (not stale), the same
 // direction isHeld's own unparseable case below takes.
@@ -140,8 +151,8 @@ function isStale(requestedAt: string, ceilingMs: number): boolean {
   return !Number.isNaN(t) && Date.now() - t >= ceilingMs;
 }
 
-// A held request is one the sandbox is still parked on. TWO shapes reach that
-// state and only one of them carries a mode:
+// A held request is one the sandbox is still parked on. THREE shapes reach
+// that state, and only one of them carries a mode:
 //
 //  - tool_call — wardyn-toolgate blocks the agent's tool call on the PENDING
 //    row itself and polls until it is decided (cmd/wardyn-toolgate/main.go's
@@ -163,6 +174,11 @@ function isStale(requestedAt: string, ceilingMs: number): boolean {
 //    "still holding the sandbox": the connection fails closed at
 //    HOLD_TIMEOUT_MS while the approval row itself stays PENDING for up to 24h
 //    afterward.
+//  - push_content — the SAME shape as egress wait_for_review, not tool_call:
+//    the proxy parks git for a BOUNDED window (push_rules.hold_seconds, at
+//    most maxHoldTimeout) and then refuses with a timeout, leaving the row
+//    PENDING for the sweeper's own 24h window — see isHeld's own arm below
+//    for the retry-re-hold caveat.
 //
 // Exported because the run cockpit's command bar and the board's card state
 // the same fact ("N waiting · sandbox held"). Two copies of this test would be
@@ -225,6 +241,32 @@ export function isAdoConsentRequest(
   );
 }
 
+// The canonical scope of a push_content approval — mirrors
+// internal/types/push_content.go's PushContentScope exactly. ActsAsKind/
+// ActsAsLabel are SERVER-SET (the control plane resolves and stamps them
+// before the row is stored); a raise that carried either is refused, so
+// every row this console ever reads has both. Commits is present on the
+// wire but MUST NEVER be rendered as "commits": for an Azure DevOps REST
+// push it is the SHA-256 of the request body, not an object id (see
+// push_content.go's own field doc).
+export interface PushContentScope {
+  repo: string;
+  branch: string;
+  acts_as: string;
+  paths: string[];
+  paths_total: number;
+  commits: string[];
+  paths_digest: string;
+  acts_as_kind: "github_app" | "git_pat" | "ado_entra";
+  acts_as_label: string;
+}
+
+export function isPushContentRequest(
+  a: Pick<ApprovalRequest, "kind" | "requested_scope">,
+): a is ApprovalRequest & { requested_scope: PushContentScope } {
+  return a.kind === "push_content";
+}
+
 // canDecideApproval's ADO carve-out: authorizeUserDecision
 // (internal/api/approvals.go) lets the run's OWNER decide their own run's
 // escalation, on top of the security-operator tier ownsRunOrAdmin
@@ -256,9 +298,23 @@ export function isHeld(a: ApprovalRequest): boolean {
   // the egress lane — so without this it would read as a passive pending and
   // the run would show no hold while a model call was parked.
   if (a.kind === "credential_reauth") return a.state === "PENDING";
+  // push_content is DIFFERENT from tool_call/credential_reauth (review
+  // finding, #181): the proxy parks git for at most push_rules.hold_seconds
+  // (internal/egress/proxy/push_hold.go's defaultPushHold, 120s unset, or the
+  // caller's own value clamped to maxHoldTimeout, 600s) and then REFUSES with
+  // a timeout — the row stays PENDING (holdPush's own doc: "a hold that times
+  // out leaves its row PENDING, and a retry waits on that same row instead of
+  // raising a second one"). So past the hold window a PENDING push_content
+  // row is a PASSIVE pending, exactly like an egress wait_for_review past its
+  // own HOLD_TIMEOUT_MS — the sandbox is NOT parked on it, though a retry of
+  // the same push (identical commits) rejoins the SAME row and re-enters the
+  // hold. No console surface reads a run's resolved push_rules.hold_seconds
+  // today, so PUSH_HOLD_CEILING_MS (the proxy's own absolute ceiling,
+  // maxHoldTimeout) is the conservative bound: this never reports "not held"
+  // while the proxy could still legitimately be holding it.
+  if (a.kind === "push_content") return a.state === "PENDING" && !isStale(a.requested_at, PUSH_HOLD_CEILING_MS);
   if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
   const requestedAt = Date.parse(a.requested_at);
   if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
   return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
 }
-
