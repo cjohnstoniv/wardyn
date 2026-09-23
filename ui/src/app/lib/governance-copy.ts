@@ -362,12 +362,14 @@ export const DIRECTORY = {
   LOOKUP_FAILED: "Couldn't check your directory — type the value yourself.",
 } as const;
 
-// #96/#93 — the autonomy rubric (0.8, #77). The mock round's frozen strings
-// table (autonomy-launch.html surface 1), transcribed verbatim — not parsed
-// back out of a doc like §7.2-§7.9 above, because the mock lives in a
-// scratchpad rather than in this repo's docs/. Two rulings from #96's review
-// (recorded on #96, applied here rather than in the mock, which froze before
-// they were made):
+// #96/#93 — the autonomy rubric (0.8, #77). Transcribed verbatim from #96's
+// mock (autonomy-launch.html surface 1, a scratchpad, never landed in this
+// repo). #768 backfilled docs/design/governance-prompt.md §7.10-§7.13 from
+// THIS module rather than the mock — the owner's 2026-09-23 ruling on #768
+// makes the strings as shipped here (in #339) canon — so governance-copy.
+// test.ts now parses §7.10-§7.13 back out the same way it parses §7.2-§7.9
+// above. Two rulings from #96's review (recorded on #96, applied here rather
+// than in the mock, which froze before they were made):
 //
 //   1. bound_by is a LIST. A tie at the resolved level names EVERY cause, not
 //      the first — autonomyBoundSentence below composes it.
