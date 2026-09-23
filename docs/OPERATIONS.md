@@ -4551,8 +4551,9 @@ silently patched.
 Every secret-carrying `wardynd` boot setting has a `<VAR>_FILE` twin that holds
 a **path** instead of the value: `WARDYN_PG_DSN_FILE`,
 `WARDYN_PG_MIGRATE_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_AGE_KEY_FILE`,
-`WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE` and
-`WARDYN_AUDIT_SINKS_FILE` ([ENV.md](ENV.md)). Use them when a control requires
+`WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`,
+`WARDYN_AUDIT_SINKS_FILE` and `WARDYN_ORG_ENROLMENT_TOKEN_FILE`
+([ENV.md](ENV.md)). Use them when a control requires
 secrets delivered at runtime (Vault Agent injector, Secrets Store CSI driver,
 projected volumes), or when a posture scanner flags secret env vars.
 
