@@ -31,9 +31,11 @@ func main() {
     // 1. Create a client. Token is the AdminToken configured in wardynd.
     c := client.New("https://wardyn.example.com", "my-admin-token")
 
-    // 2. Submit a run. Returns client.CreateRunResult: the created
-    //    client.AgentRun (state PENDING or RUNNING), embedded, plus any
-    //    ADVISORY warnings — the run is live either way, so surface them.
+    // 2. Submit a run. Answers as soon as the run row exists, so the result's
+    //    client.AgentRun (embedded) reads state PENDING — the image build and
+    //    dispatch continue server-side; poll or GetRun for RUNNING/FAILED.
+    //    Also carries any ADVISORY warnings — the run is live either way, so
+    //    surface them.
     created, err := c.CreateRun(ctx, client.CreateRunRequest{
         Agent: "claude-code",
         Repo:  "org/repo",

@@ -406,7 +406,8 @@ type CreateRunResult struct {
 }
 
 // CreateRun submits a new agent run to the control plane.
-// Returns the created run (state PENDING or RUNNING) plus any advisory warnings.
+// Answers once the run row exists (state PENDING, never RUNNING) plus any
+// advisory warnings; the image build and dispatch continue server-side.
 // Status 201 on success; 400 on validation failure; 422 on policy/confinement
 // mismatch; 503 when the runner is unavailable.
 func (c *Client) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
