@@ -38,6 +38,7 @@ import type { AccessLoadState } from "./access-panel";
 import { resolveDefaultCc } from "../../wardyn/default-confinement";
 import { deploymentMode, deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
@@ -220,6 +221,14 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         setAccessState(e instanceof HttpError && e.status === 503 ? "sso_unavailable" : "fetch_failed");
       });
   }, []);
+  // A role-mapping write can end the everyone-is-an-admin state, and the
+  // shell's banner reads the SHELL's /setup/status (polled every few minutes),
+  // not this screen's — so every access reload re-reads that one too.
+  const { refresh: refreshShellStatus } = useShellSetupStatus();
+  const reloadAccessAndShell = React.useCallback(() => {
+    void loadAccess();
+    void refreshShellStatus();
+  }, [loadAccess, refreshShellStatus]);
   // Default-barrier pick (E3), IN-SESSION only (0.7.8: the default is a
   // server fact — the strongest installed class at or above the policy floor
   // — so there is nothing left to persist here). Null until an explicit
@@ -777,7 +786,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           />
         )}
         {stepId === "people" && (
-          <DeploymentStep status={status} access={access} accessState={accessState} onReloadAccess={loadAccess} />
+          <DeploymentStep status={status} access={access} accessState={accessState} onReloadAccess={reloadAccessAndShell} />
         )}
         {stepId === "corp_network" && (
           <CorpNetworkStep

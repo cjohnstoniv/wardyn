@@ -33,6 +33,7 @@ func TestPlatformSecretsAreReservedEverywhere(t *testing.T) {
 		secretSessionKey,
 		secretSSHHostKey,
 		secretUISessionKey,
+		secretInternalCA,
 	} {
 		if !api.ReservedPlatformSecret(name) {
 			t.Errorf("%s: not in internal/api's reserved set — GET /secrets lists it and PUT/DELETE clobbers it", name)
