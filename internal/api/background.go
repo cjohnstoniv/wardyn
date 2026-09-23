@@ -55,3 +55,11 @@ func (s *Server) WaitBackground() {
 			"still running; abandoning it", slog.Duration("budget", budget))
 	}
 }
+
+// HTTPShutdownTimeout bounds cmd/wardynd's http.Server.Shutdown, the step that
+// runs before WaitBackground. The two budgets run back to back, so together
+// with the audit sinks' final flush they set the shortest grace period
+// wardynd needs before SIGKILL. deploy/helm's terminationGracePeriodSeconds
+// and deploy/compose's stop_grace_period are 60s for that reason, and
+// TestShutdownGraceCoversTheBudget fails if either falls below the sum.
+const HTTPShutdownTimeout = 15 * time.Second

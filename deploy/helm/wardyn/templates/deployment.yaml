@@ -128,6 +128,9 @@ spec:
       # serviceAccount.create=false points at an SA whose own automount default
       # is true, and the pod-level field wins over the SA-level one.
       automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      # `default 60` carries a --reuse-values upgrade from a chart that had no
+      # such value; see values.yaml for why 60.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 60 }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.image.pullSecrets }}

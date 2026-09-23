@@ -589,6 +589,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }; \
 	echo "$$out" | grep -q "runAsNonRoot: true" || { echo "chart rendered no runAsNonRoot: true securityContext"; exit 1; }; \
 	echo "$$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }; \
+	echo "$$out" | grep -q "terminationGracePeriodSeconds: 60" || { echo "chart no longer renders terminationGracePeriodSeconds: 60 — the Kubernetes default of 30s SIGKILLs wardynd's orderly stop (HTTP 15s + detached work 35s + audit flush) mid-teardown"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" || { echo "chart rendered no WARDYN_ADMIN_TOKEN — the API would 401 every request"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_RECORDING_STORE" | grep -q 'value: "off"' || { echo "chart no longer pins WARDYN_RECORDING_STORE=off on a stock install — with wardynd's pg default it silently persists every PTY asciicast into Postgres, forever, while values.yaml/README say recording is off (and 0.7.0's fs + empty-dir spelling crash-looped the pod)"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_RECORDING_DIR" && { echo "chart set WARDYN_RECORDING_DIR without persistence — an empty value keeps wardynd's default, which writes to the read-only root FS"; exit 1; }; \
@@ -607,6 +608,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
+	echo "$$out" | grep -q "terminationGracePeriodSeconds: 90" || { echo "terminationGracePeriodSeconds is not carried into the pod spec"; exit 1; }; \
 	echo "$$out" | grep -q 'value: "/data/recordings"' || { echo "WARDYN_RECORDING_DIR does not follow the persistent mount"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" || { echo "inline secrets.ageKey is not injected — every stored secret dies on restart"; exit 1; }; \
 	echo "$$out" | grep -q "name: wardyn-oidc" || { echo "extraEnv did not render (secret-bearing env has no secretKeyRef path)"; exit 1; }; \

@@ -183,6 +183,9 @@ resources:
 podAnnotations:
   prometheus.io/scrape: "true"
 
+# Raised above the 60s default; the render must carry the operator's value.
+terminationGracePeriodSeconds: 90
+
 nodeSelector:
   kubernetes.io/os: linux
 

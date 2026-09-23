@@ -52,6 +52,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
   revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
   already detached from itself.
+- **The Helm chart and the compose stack give `wardynd` 60 seconds to stop (#554).** An orderly
+  stop drains HTTP for up to 15s, waits up to 35s for detached work (a run launch, a superseded
+  sign-in's teardown) and then flushes the audit sinks. The Kubernetes default grace of 30s and
+  `docker stop`'s 10s could SIGKILL a teardown partway through, leaving a run `KILLED` with its
+  sandbox up and no `run.kill` row. The chart sets `terminationGracePeriodSeconds: 60` (a new
+  value), and the `wardynd` compose service sets `stop_grace_period: 60s`. A unit test fails if
+  either falls below the daemon's own shutdown budget.
 
 ### Added
 

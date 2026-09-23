@@ -161,6 +161,10 @@ services:
     # sidecar is launched by the docker runner (not a compose service), so its
     # restart posture is set container-side, not here.
     restart: unless-stopped
+    # docker stop's default 10s would SIGKILL wardynd's orderly stop, which
+    # needs up to ~60s (HTTP drain, detached launches and teardowns, audit
+    # flush); see terminationGracePeriodSeconds in the Helm values.
+    stop_grace_period: 60s
     # The docker runner needs to reach the host daemon to create sandboxes.
     # Run as root inside the container so it can open the bind-mounted socket
     # (demo only; see the DAEMON-TRUST note above).

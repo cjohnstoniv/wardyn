@@ -270,7 +270,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		return fmt.Errorf("serve: %w", err)
 	}
 
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
 	defer shutCancel()
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
