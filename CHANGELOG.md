@@ -104,19 +104,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   guards over the result, and names every PR that breaks them. It also flags
   any open PR stacked on a branch that is no longer open (merged or closed) and
   so should have been retargeted to `main`.
-- **Boot secrets from files: a `<VAR>_FILE` twin for every secret-carrying `wardynd` setting
-  (#596).** `WARDYN_PG_DSN`, `WARDYN_PG_MIGRATE_DSN`, `WARDYN_ADMIN_TOKEN`, `WARDYN_AGE_KEY`,
-  `WARDYN_OIDC_CLIENT_SECRET`, `WARDYN_DIRECTORY_CLIENT_SECRET`, `WARDYN_AUDIT_SINKS` and
-  `WARDYN_ORG_ENROLMENT_TOKEN` each accept a `_FILE` path. `wardynd` reads the file once at boot,
-  so a Vault Agent injector, the Secrets Store CSI driver or a projected Secret volume can deliver
-  the value without it entering the process environment. Setting a variable both ways refuses boot,
-  and the chart refuses to render it. Boot is also refused on an unreadable or empty file, a group-
-  or world-writable one, or one wardynd's own non-root uid owns that others can read. The error
-  names the variable and the path, never the content. One trailing newline is trimmed. The chart's new `secretFiles.enabled`
-  (off by default) mounts the Secrets it already wires as files and renders no `secretKeyRef` env.
-  A `WARDYN_*_FILE` in `env`/`extraEnv` counts as wired in every render check, and
-  `extraVolumes`/`extraVolumeMounts` carry a CSI volume. Examples are in `docs/OPERATIONS.md`,
-  "Secrets from files (Vault Agent / CSI)".
 - **Admins can tell a refused person what to do next (#484).** The People step has a new
   "When someone can't sign in" card: a short plain-text message (up to 1,000 characters) and an
   optional `http(s)` link, saved as the site-config fields `sign_in_help_text` and
@@ -168,30 +155,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
-- **Secret-carrying boot settings no longer have to live in environment variables (#596).** Cloud
-  posture scanners flag a pod with a secret in its env, and a "secrets delivered at runtime"
-  control rules it out. The `_FILE` twins and the chart's `secretFiles.enabled` close both.
-  `threatmodel/THREAT-MODEL.md` residual #49 now records a related risk: `WARDYN_AGE_KEY` guards
-  every stored credential **and** up to four boot keys in the same store (the identity signing
-  key always; the OIDC session, UI-sandbox session and SSH host keys when those features are on). The age key plus a read of the database
-  therefore yields all of them. Splitting those keys is planned for 0.8.
-
-- **Stored credentials are encrypted with AES-256-GCM, bound to their row, and can no longer be
-  forged (#562).** A `secrets` row was one age payload (X25519 + ChaCha20-Poly1305) with no
-  associated data: a database writer could move a ciphertext to another person or another name
-  undetected, and, age being public-key, anyone holding the deployment's public recipient could
-  write a row that decrypted. Every row is now envelope v1 (migration `0069_secret_envelope_v1`):
-  each save draws a fresh 32-byte data key, seals the value with AES-256-GCM bound to the row's
-  `(owned_by, name)`, and wraps the data key with AES-256-GCM under a key-encryption key.
-  `WARDYN_AGE_KEY` stays the only key input and is used through HKDF-SHA256 alone to derive that
-  key-encryption key, which is symmetric and so cannot be derived from the public recipient; age
-  itself is used only once, to convert legacy rows. A moved, forged or tampered row is refused with
-  an error that names the row, never its value, and is never read as missing, so a tampered boot
-  key fails boot rather than being replaced. `wardynd -rotate-age-key` now rewraps data keys only
-  and never decrypts a value (`secret.rekey` is unchanged). With `WARDYN_AGE_KEY` unset, wardynd
-  now refuses to start while any row is sealed under an age key, instead of minting an ephemeral
-  key that strands them. Still open: a database writer can copy an older row back into its own
-  slot (THREAT-MODEL residual 48).
 - **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
   view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
   The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `member`,
@@ -237,14 +200,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
   `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
   handler written in this indirect style no longer passes CI clean.
-- **An Azure DevOps address's host could be misread past a `#` or `?`, and an invalid-UTF-8 name
-  could reach storage.** `splitRepoAddress` ended the host at the first `/`, so
-  `https://github.com#@dev.azure.com/acme/x%20y` let a fragment's `@host` be read back as the real
-  host by the `@`-strip that follows, making a non-Azure-DevOps address pass as one that carries
-  `%`-escapes; the host now ends at the first `/`, `?` or `#` (#563). Separately, `UnescapeName`
-  accepted a decoded name that was not valid UTF-8 (e.g. `%C0%AF`, `%FF`), which a store column
-  would likely reject with a Postgres error where a 400 was expected; it now refuses one, in the
-  same shape as every other refused spelling.
 - **A run that will hold a person's Azure DevOps Entra bearer no longer grades its secrets
   `none` (#503, closing #474).** The autonomy rubric graded a run from its eligible grants
   alone, but dispatch authors the per-person Azure DevOps grant later, for `dev.azure.com`.
