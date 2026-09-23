@@ -25,7 +25,7 @@ every emitted action literal has either a row here or an entry in
 `auditActionAllow` (`cmd/wardynd/audit_actions_forward_guard_test.go`'s own
 escape hatch for a literal deliberately outside the registry — empty today,
 so nothing is currently excluded this way); all three run in
-`cmd/wardynd` and gate `make ci` via `test-race`. The residual gap is
+`cmd/wardynd` and gate `make ci` via `cover-check`'s `test-report` suite. The residual gap is
 narrower now than "no CI check" — a `Data:` field can still go undocumented or
 drift unguarded (see `internal/api/audit.go`'s `parseAuditFilter` for the
 filterable envelope fields, which are stable regardless of action): the
@@ -415,7 +415,7 @@ is `types.ActorSystem` and `Actor` is a fixed component name
   / `TestAuditActionsForwardGuardCoversEveryEmitShape`, and a row whose
   citation no longer names what it claims fails
   `TestAuditActionsDocCitationsAreLive` (all three `cmd/wardynd`, gating
-  `make ci`'s `test-race`). What is NOT enforced is the `Data` field list
+  `make ci`'s `cover-check`). What is NOT enforced is the `Data` field list
   inside a row — see the next point.
 - `Data` field lists were read from the `mustJSON(map[string]any{...})` or
   `Data:` literal at the cited call site; a field marked here can still be

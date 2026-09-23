@@ -148,28 +148,16 @@ test: ## Run all Go tests
 	@echo "Running Go tests..."
 	WARDYN_TEST_PG= go test ./...
 
-# Race-detector sweep. The kill/dispatch FSM has dedicated concurrent tests
-# (internal/api/kill_dispatch_race_test.go) that only mean something under -race;
-# the rest of the tree rides along. Required green before restructuring runs.go.
-# ALL THREE tag sets: the tagless pass alone never compiles the -tags docker
-# runner tree (internal/runner/docker, internal/envbuild) — the concurrency-heavy
-# sandbox lifecycle — so it would get zero race coverage. The docker-tagged pass
-# needs no daemon (the real-Docker cases self-skip unless WARDYN_TEST_DOCKER=1).
-# The k8s pass is the same argument for the OTHER substrate, and it was missing:
-# internal/runner/k8s compiles under `-tags k8s` alone, so both passes above
-# skipped the whole L1 substrate — its drive provisioning, its teardown
-# wait-for-gone poll and its orphan sweep all run concurrently with a live
-# apiserver and none of it was ever under the detector. Daemon-free too: every
-# test there drives a fake clientset.
-# ALIAS, not a fourth pass: -race now rides along INSIDE the three
-# test-report-* suites below (see cover-check), so this target no longer runs
-# its own separate tagless/docker/k8s sweep — that was six full Go passes
-# (three for coverage, three more for race) where three, each doing both,
-# suffice. Kept as a name developers already type.
+# Alias kept as a name developers already type: -race rides along INSIDE the
+# three test-report* suites below (see their comments and cover-check), so this
+# target no longer runs its own separate tagless/docker/k8s sweep — that was six
+# full Go passes (three for coverage, three more for race) where three, each
+# doing both, suffice.
 test-race: cover-check ## Alias: race coverage now rides along inside the test-report suites (see cover-check)
 
-# THE PG LANE UNDER -race. `test-race` above deliberately strips the DSN
-# (WARDYN_TEST_PG=), so every WARDYN_TEST_PG-gated test is SKIPPED there — and
+# THE PG LANE UNDER -race. The race passes in cover-check's three test-report*
+# suites deliberately strip the DSN (WARDYN_TEST_PG=), so every
+# WARDYN_TEST_PG-gated test is SKIPPED there — and
 # `test-report-pg`, the one target that sets the DSN, runs without -race. The
 # result was that internal/broker's exactly-once concurrency proofs
 # (concurrency_pg_test.go: TestPG_ConcurrentMint_ExactlyOnceWins,
@@ -206,8 +194,10 @@ test-report: ## Go unit suite with per-suite JSON + coverage artifacts, under th
 # `WARDYN_TEST_PG=… make release-check`) re-runs them in PARALLEL packages
 # against the one shared DB, resurrecting the site_config race. CI matches:
 # only the pg job sets the DSN (ci.yml).
-# -race: this suite is also test-race's tagless pass now — one pass, not two
-# (see the test-race alias above).
+# -race: the kill/dispatch FSM has dedicated concurrent tests
+# (internal/api/kill_dispatch_race_test.go) that only mean something under
+# -race; the rest of the tree rides along. This suite is the tagless race pass,
+# one pass for coverage and race rather than two.
 	@echo "Running Go unit suite with detailed reports (-race)..."
 	WARDYN_TEST_PG= ./scripts/test-report.sh unit -race ./...
 
@@ -226,7 +216,8 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # The whole tree under -tags docker, so the container-hardening driver
 # (internal/runner/docker), internal/envbuild and the wardynd wiring that calls
 # them — none of which the tagless build can even compile — are actually tested
-# and measured. No daemon needed: the real-Docker cases self-skip unless
+# and measured, under -race (the concurrency-heavy sandbox lifecycle gets no
+# race coverage from the tagless pass). No daemon needed: the real-Docker cases self-skip unless
 # WARDYN_TEST_DOCKER=1, leaving the fakeDocker-backed tests to run anywhere.
 test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon needed), under the race detector
 	@echo "Running docker-tagged suite with reports (-race; fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
@@ -234,8 +225,9 @@ test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon ne
 
 # The whole tree under -tags k8s, so the k8s confinement substrate
 # (internal/runner/k8s) and the wardynd wiring that calls it — none of which
-# the tagless build can even compile — are actually tested and measured. No
-# cluster needed: the real-cluster case (test/conformance's TestConformanceK8s)
+# the tagless build can even compile — are actually tested and measured, under
+# -race (drive provisioning, the teardown wait-for-gone poll and the orphan
+# sweep all run concurrently against the apiserver). No cluster needed: the real-cluster case (test/conformance's TestConformanceK8s)
 # self-skips unless WARDYN_TEST_K8S=1, leaving the fake-clientset-backed unit
 # tests (internal/runner/k8s/*_test.go) to run anywhere.
 test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed), under the race detector

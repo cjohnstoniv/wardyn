@@ -20,8 +20,9 @@ import (
 // credential mint — the tests most in need of the race detector in the tree.
 // No gate ran them under it:
 //
-//   - `make test-race`, the ONLY race job in ci.yml, strips the DSN in both of
-//     its passes (`WARDYN_TEST_PG= go test -race ./...`), so every
+//   - the race passes in ci.yml's build job — test-report, test-report-docker
+//     and test-report-k8s, all three run by `make cover-check` — strip the DSN
+//     (`WARDYN_TEST_PG= ./scripts/test-report.sh <suite> -race ...`), so every
 //     WARDYN_TEST_PG-gated test is skipped there;
 //   - `make test-report-pg`, the only target that SETS the DSN, shells out to
 //     scripts/test-report.sh, whose `go test -json -covermode=atomic ...`
@@ -29,8 +30,10 @@ import (
 //
 // This guard holds the property in both directions, so neither half can be
 // removed quietly: the pg job must run a race pass over the pg lane, and
-// test-race must keep stripping the DSN (if it ever stopped, the pg lane would
-// run in PARALLEL packages against one shared database — the very race
+// the three cover-check suites must keep both -race (they are the tree's only
+// race passes; dropping it from one silently removes race detection for that
+// tag set) and the DSN strip (if they ever stopped stripping it, the pg lane
+// would run in PARALLEL packages against one shared database — the very race
 // test-report-pg's -p 1 exists to avoid).
 func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	root := repoRoot(t)
@@ -40,6 +43,10 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 		t.Fatalf("read Makefile: %v", err)
 	}
 	makefile := string(mk)
+	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
 
 	// (a) A target exists that runs the pg lane under -race.
 	raceTarget := makeTargetBody(t, makefile, "test-race-pg")
@@ -53,18 +60,30 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 		t.Errorf("test-race-pg STRIPS the DSN, so every pg-gated test it names would skip:\n%s", raceTarget)
 	}
 
-	// (b) test-race still strips the DSN — the reason a separate target is needed.
-	if body := makeTargetBody(t, makefile, "test-race"); !strings.Contains(body, "WARDYN_TEST_PG=") {
-		t.Errorf("test-race no longer strips WARDYN_TEST_PG; the pg lane would then run under "+
-			"parallel packages against ONE shared database:\n%s", body)
+	// (b) The three cover-check suites run under -race and strip the DSN — the
+	// reason a separate pg race target is needed. Recipe lines only, so a
+	// neighbouring target's comment prose cannot satisfy either check.
+	for _, target := range []string{"test-report", "test-report-docker", "test-report-k8s"} {
+		recipe := makeRecipeLines(t, makefile, target)
+		if !strings.Contains(recipe, " -race") {
+			t.Errorf("%s no longer passes -race; that tag set then has no race pass in CI at all:\n%s", target, recipe)
+		}
+		if !strings.Contains(recipe, "WARDYN_TEST_PG=") {
+			t.Errorf("%s no longer strips WARDYN_TEST_PG; the pg lane would then run under "+
+				"parallel packages against ONE shared database:\n%s", target, recipe)
+		}
+	}
+	if body := makeTargetBody(t, makefile, "cover-check"); !strings.Contains(body, "test-report test-report-docker test-report-k8s") {
+		t.Errorf("cover-check no longer depends on all three race suites:\n%s", body)
+	}
+
+	// ...and CI runs cover-check, or none of those race passes gate anything.
+	if build := ciJobBlock(t, string(wf), "build"); !strings.Contains(build, "run: make cover-check") {
+		t.Errorf("ci.yml's build job never runs `make cover-check`, so no race pass gates a PR:\n%s", build)
 	}
 
 	// (c) CI actually runs it, in the job that has a Postgres service and sets
 	// the DSN. A target nothing invokes is not a gate.
-	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
-	if err != nil {
-		t.Fatalf("read ci.yml: %v", err)
-	}
 	job := ciJobBlock(t, string(wf), "test-pg")
 	if !strings.Contains(job, "make test-race-pg") {
 		t.Errorf("ci.yml's test-pg job never runs `make test-race-pg`, so the broker's exactly-once "+
@@ -98,6 +117,20 @@ func makeTargetBody(t *testing.T, makefile, target string) string {
 		}
 		b.WriteString(ln)
 		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// makeRecipeLines returns only the tab-indented recipe lines of one Makefile
+// target, dropping the comments makeTargetBody also collects.
+func makeRecipeLines(t *testing.T, makefile, target string) string {
+	t.Helper()
+	var b strings.Builder
+	for _, ln := range strings.Split(makeTargetBody(t, makefile, target), "\n") {
+		if strings.HasPrefix(ln, "\t") {
+			b.WriteString(ln)
+			b.WriteString("\n")
+		}
 	}
 	return b.String()
 }
