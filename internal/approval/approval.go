@@ -275,6 +275,46 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 	return expired, byKind, errors.Join(failures...)
 }
 
+// ExpireOne transitions a single PENDING approval straight to EXPIRED,
+// regardless of age — the same terminal state and audit action
+// ExpireStaleByKind's periodic sweep gives a stale row, but raised eagerly by
+// the CLIENT that is giving up on it (wardyn-toolgate at its own -deadline)
+// rather than waited out by the sweep's next tick. Without this, a row the
+// gate has already treated as denied stays PENDING — and approvable in the
+// console — for up to one sweep interval after the gate stopped waiting for
+// it (#811).
+//
+// Idempotent: a row already decided, by a human or by a concurrent sweep, is
+// left untouched — ErrAlreadyDecided is swallowed as the race it is, exactly
+// as ExpireStaleByKind and CancelForRun already treat it.
+func ExpireOne(ctx context.Context, st Store, id uuid.UUID, reason string) error {
+	result, err := st.DecideApproval(ctx, id, types.ApprovalDecision{
+		State: types.ApprovalExpired, DecidedBy: "system", Reason: reason,
+	})
+	if err != nil {
+		if errors.Is(err, ErrAlreadyDecided) {
+			return nil
+		}
+		return fmt.Errorf("approval: expire %s: %w", id, err)
+	}
+	auditData, _ := json.Marshal(map[string]any{"approval_id": id, "reason": reason})
+	ev := types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      time.Now().UTC(),
+		RunID:     &result.RunID,
+		ActorType: types.ActorSystem,
+		Actor:     "wardyn/toolgate",
+		Action:    "approval.expire",
+		Target:    id.String(),
+		Outcome:   "success",
+		Data:      json.RawMessage(auditData),
+	}
+	if err := st.Record(ctx, ev); err != nil {
+		audit.LogWriteFailure(ctx, ev, err)
+	}
+	return nil
+}
+
 // CancelForRun transitions every still-PENDING approval belonging to runID to
 // CANCELLED and returns how many it moved. reason is the transition that ended
 // the run ("run_killed", "run_completed", "run_failed", "run_stopped"), recorded

@@ -385,6 +385,77 @@ func TestExpireStale_AlreadyDecidedRace(t *testing.T) {
 	}
 }
 
+// ─── ExpireOne (#811: the client that raised the row closes it itself) ──────
+
+// TestExpireOne_MovesPendingToExpired is the happy path: a PENDING row is
+// EXPIRED immediately, with no age check (unlike ExpireStale), and the same
+// approval.expire audit action the periodic sweep emits, attributed to
+// wardyn-toolgate as the caller rather than the sweep.
+func TestExpireOne_MovesPendingToExpired(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash"}`)))
+	// Freshly raised — proves the transition is NOT age-gated the way
+	// ExpireStale's is.
+	if err := approval.ExpireOne(ctx, st, ap.ID, "toolgate_deadline"); err != nil {
+		t.Fatalf("expire one: %v", err)
+	}
+
+	got, err := st.GetApproval(ctx, ap.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != types.ApprovalExpired {
+		t.Errorf("want EXPIRED, got %s", got.State)
+	}
+	if got.DecidedBy != "system" {
+		t.Errorf("want decided_by=system, got %s", got.DecidedBy)
+	}
+
+	var expireEvents int
+	for _, ev := range st.audit {
+		if ev.Action == "approval.expire" {
+			expireEvents++
+			if ev.ActorType != types.ActorSystem {
+				t.Errorf("want actor_type=system, got %s", ev.ActorType)
+			}
+		}
+	}
+	if expireEvents != 1 {
+		t.Errorf("expected 1 expire audit event, got %d", expireEvents)
+	}
+}
+
+// TestExpireOne_AlreadyDecidedIsSilent proves the idempotent race handling: a
+// row a human (or the periodic sweep) already decided must not error and must
+// not emit a second, contradicting audit row.
+func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash"}`)))
+	if _, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice@example.com", Reason: "ok",
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	before := len(st.audit)
+
+	if err := approval.ExpireOne(ctx, st, ap.ID, "toolgate_deadline"); err != nil {
+		t.Fatalf("expire one on an already-decided row must be a silent no-op, got: %v", err)
+	}
+	got, _ := st.GetApproval(ctx, ap.ID)
+	if got.State != types.ApprovalApproved {
+		t.Errorf("an already-decided row must not be overwritten, got state %s", got.State)
+	}
+	if len(st.audit) != before {
+		t.Errorf("expected no new audit event for a no-op race, got %d new", len(st.audit)-before)
+	}
+}
+
 // ─── CancelForRun (B4: a run's terminal transition ends its open questions) ──
 
 // TestCancelForRun_MovesOnlyThisRunsPending is the whole contract in one drive:

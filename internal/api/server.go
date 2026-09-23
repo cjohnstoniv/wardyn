@@ -75,6 +75,12 @@ type ApprovalService interface {
 	// the transition ("run_killed", "run_completed", ...). Idempotent by
 	// construction — a second call finds nothing PENDING and emits nothing.
 	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error)
+	// ExpireOne moves a single still-PENDING approval straight to EXPIRED,
+	// idempotently (a no-op if it is already decided). wardyn-toolgate calls
+	// this on its own approval the moment its wait deadline is reached,
+	// instead of leaving the row PENDING for the periodic sweep to catch up
+	// to — see #811.
+	ExpireOne(ctx context.Context, id uuid.UUID, reason string) error
 	// CountForRun returns how many approvals a run has raised, in ANY state —
 	// the per-run cap handleInternalRequestApproval enforces. A sandbox chooses
 	// the hosts it asks about, so without that cap the number of rows one run can

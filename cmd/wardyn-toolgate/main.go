@@ -239,11 +239,37 @@ func (g *gate) decide(params json.RawMessage) any {
 		// the sandbox's own approval, so a persistent error ends at deadline.
 		time.Sleep(g.poll)
 	}
+	// The gate is giving up either way below — tell the control plane so the
+	// row moves to EXPIRED now, not up to one sweep interval later (#811): a
+	// row left PENDING here is still approvable in the console for that whole
+	// window, after this gate has already returned deny to Claude Code for it.
+	// Best-effort: id is already committed to a denial either way, and a
+	// failure to reach the control plane here is no different from any other
+	// poll failure already logged above.
+	g.expire(id)
 	if consecutivePollFailures > 0 {
 		return permissionResult(deny(fmt.Sprintf(
 			"approval gate could not reach the control plane (%d consecutive poll failures) — denied", consecutivePollFailures)))
 	}
 	return permissionResult(deny("approval wait deadline reached — denied"))
+}
+
+// expire tells the control plane this gate is done waiting on id, so the row
+// moves straight to EXPIRED instead of sitting PENDING until the periodic
+// sweep catches up to it (#811). Fire-and-forget: the deny this gate is about
+// to return is already decided regardless of the outcome here, so a failure
+// only gets one stderr line, the same treatment a poll failure gets above.
+func (g *gate) expire(id string) {
+	req, err := http.NewRequest(http.MethodPost, g.base+"/wardyn/v1/approvals/"+id+"/expire", nil)
+	if err != nil {
+		return
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		fmt.Fprintf(g.errOut(), "wardyn-toolgate: expire approval %s: %v\n", id, err)
+		return
+	}
+	_ = resp.Body.Close()
 }
 
 // create POSTs the tool_call approval through the brokered route and returns

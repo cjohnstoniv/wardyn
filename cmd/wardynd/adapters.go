@@ -314,6 +314,9 @@ func (s *approvalService) List(ctx context.Context, state types.ApprovalState) (
 func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
 	return approval.CancelForRun(ctx, s.st, runID, reason)
 }
+func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, reason string) error {
+	return approval.ExpireOne(ctx, s.st, id, reason)
+}
 func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	return s.st.CountApprovalsForRun(ctx, runID)
 }

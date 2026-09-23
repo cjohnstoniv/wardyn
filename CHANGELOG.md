@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`wardyn-toolgate` closes its own approval on giving up, instead of leaving it `PENDING`
+  for the sweeper (#811).** The gate's own `-deadline` and the server's periodic approval
+  sweep shared the same ceiling, but the sweep only catches a stale `PENDING` row on its
+  next tick — up to `approval-expiry-interval` (10m default) after the gate already
+  returned deny for it. In that window an operator could still approve a call the agent had
+  already abandoned. The gate now tells the control plane (`POST
+  /wardyn/v1/approvals/{id}/expire`) the moment it gives up, moving the row straight to
+  `EXPIRED`.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
