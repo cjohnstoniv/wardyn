@@ -109,6 +109,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   person cannot clear alone — no role, an email domain that isn't allowed, too many groups, and a
   missing email claim — with the link labelled "Request access". Both are public: the anonymous
   `/healthz` publishes them, and a stored value that no longer passes its check is left out.
+- **User types: the table and its API (#607).** Migration `0071_user_types` adds the `user_types`
+  table and seeds the built-in `standard` type ("Standard user"), which is editable and can never
+  be removed. `GET`/`POST /user-types` and `PUT`/`DELETE /user-types/{id}` (admin or
+  `security_admin`) list, define, edit and remove the org's own types; each write records a
+  `user_type.write` or `user_type.delete` audit row. A type's id is a lowercase slug derived from
+  its name, never changes, and can never be a role word (`admin`, `security_admin`, `user`,
+  `member`, `denied`). Removing a type is refused (`409`, naming what holds it) while the chart's
+  role map or default role, or a permission, profile or drive row, still names it. Nothing yet
+  assigns a type to a person; sign-in derivation arrives with the tier rename.
 
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
