@@ -74,10 +74,11 @@ func TestReplaceProxy_ALostRunsProxyComesBackAtItsAddress(t *testing.T) {
 	}
 }
 
-// TestReplaceProxy_FailsClosed: a new proxy that cannot start reports
-// ErrProxyReplaceFailed with the old one already gone (the run then has no
-// egress, never the old token's proxy back), and a sandbox whose proxy is gone
-// has no config to read back.
+// TestReplaceProxy_FailsClosed: a proxy image that cannot be pulled fails
+// before the old proxy is touched, without ErrProxyReplaceFailed. A new proxy
+// that cannot start reports ErrProxyReplaceFailed with the old one already
+// gone (the run then has no egress, never the old token's proxy back), and a
+// sandbox whose proxy is gone has no config to read back.
 func TestReplaceProxy_FailsClosed(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
@@ -93,6 +94,12 @@ func TestReplaceProxy_FailsClosed(t *testing.T) {
 		t.Fatalf("ProxyConfig: %v", err)
 	}
 	old := f.containers[proxyContainerName(runID)]
+	present := f.images
+	f.images, f.failImagePull = map[string]bool{}, true
+	if err := d.ReplaceProxy(ctx, sb.Ref, cfg); err == nil || errors.Is(err, runner.ErrProxyReplaceFailed) || old.removed {
+		t.Fatalf("ReplaceProxy with an unpullable image = %v, old proxy removed %v; want a plain error and the old proxy kept", err, old.removed)
+	}
+	f.images, f.failImagePull = present, false
 	f.failCreateContainer = "wardyn-proxy-"
 	if err := d.ReplaceProxy(ctx, sb.Ref, cfg); !errors.Is(err, runner.ErrProxyReplaceFailed) {
 		t.Fatalf("ReplaceProxy with a failing create = %v, want ErrProxyReplaceFailed", err)

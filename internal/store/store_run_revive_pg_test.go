@@ -17,8 +17,10 @@ import (
 // TestPG_RunRevive pins migration 0072 through the revive surface: the sandbox
 // ref records the release that started the proxy; a revive claims a run lost
 // to an outage (clearing the mark and stamping a fresh token so the lapsed
-// sweep leaves it alone) or a live one, but never one lost to a reboot or its
-// end, nor a terminal one; the listing carries every live run with a sandbox.
+// sweep leaves it alone) or a live one, only as it read it (live or lost), but
+// never one lost to a reboot or its end, nor a terminal one; the claim leaves
+// the release alone until the new proxy runs; the listing carries every live
+// run with a sandbox.
 func TestPG_RunRevive(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -62,12 +64,15 @@ func TestPG_RunRevive(t *testing.T) {
 		t.Error("a terminal run is listed")
 	}
 
-	for _, r := range []types.AgentRun{rebooted, finished} {
-		if ok, err := pg.MarkRunRevived(ctx, r.ID, "9.9.9"); err != nil || ok {
-			t.Errorf("MarkRunRevived(%s) = %v, %v; want false", r.State, ok, err)
+	for _, c := range []struct {
+		run      types.AgentRun
+		fromLost bool
+	}{{rebooted, true}, {finished, false}, {outage, false}, {live, true}} {
+		if ok, err := pg.MarkRunRevived(ctx, c.run.ID, c.fromLost); err != nil || ok {
+			t.Errorf("MarkRunRevived(%s, fromLost %v) = %v, %v; want false", c.run.State, c.fromLost, ok, err)
 		}
 	}
-	if ok, err := pg.MarkRunRevived(ctx, outage.ID, "9.9.9"); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, outage.ID, true); err != nil || !ok {
 		t.Fatalf("MarkRunRevived(outage) = %v, %v; want true", ok, err)
 	}
 	run, err := pg.GetRun(ctx, outage.ID)
@@ -84,8 +89,16 @@ func TestPG_RunRevive(t *testing.T) {
 	if slices.ContainsFunc(lapsed, func(r types.AgentRun) bool { return r.ID == outage.ID }) {
 		t.Error("a revived run is listed as lapsed: its token stamp was not refreshed")
 	}
-	if ok, err := pg.MarkRunRevived(ctx, live.ID, "9.9.9"); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, live.ID, false); err != nil || !ok {
 		t.Errorf("MarkRunRevived(live) = %v, %v; want true — a restart", ok, err)
+	}
+	if got := releases(); got[outage.ID.String()] != "" || got[live.ID.String()] != version.Version {
+		t.Errorf("releases after the claims = %v; want them unchanged until a new proxy runs", got)
+	}
+	for _, r := range []types.AgentRun{outage, live} {
+		if err := pg.SetRunProxyRelease(ctx, r.ID, "9.9.9"); err != nil {
+			t.Fatalf("SetRunProxyRelease: %v", err)
+		}
 	}
 	if got := releases(); got[outage.ID.String()] != "9.9.9" || got[live.ID.String()] != "9.9.9" {
 		t.Errorf("releases after revive = %v; want both on 9.9.9", got)

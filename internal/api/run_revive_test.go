@@ -29,15 +29,23 @@ type reviveStore struct {
 	release  string
 }
 
-func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, release string) (bool, error) {
+func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, fromLost bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state != types.RunRunning || (s.run.LostAt != nil && s.run.LostReason != types.LostOutage) {
+	lost := s.run.LostAt != nil
+	if s.state != types.RunRunning || lost != fromLost || (lost && s.run.LostReason != types.LostOutage) {
 		return false, nil
 	}
-	s.run.LostAt, s.run.LostReason, s.release = nil, "", release
+	s.run.LostAt, s.run.LostReason = nil, ""
 	s.lapsed = false
 	return true, nil
+}
+
+func (s *reviveStore) SetRunProxyRelease(_ context.Context, _ uuid.UUID, release string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.release = release
+	return nil
 }
 
 func (s *reviveStore) ListRunProxyReleases(context.Context) ([]store.RunProxyRelease, error) {
@@ -241,24 +249,90 @@ func TestReviveRun_Refusals(t *testing.T) {
 	}
 }
 
-// TestReviveRun_AFailedReplaceLosesTheRunAgain: once claimed, a proxy that
-// cannot be replaced must not leave the run looking live. It is marked lost
-// (outage) again with its proxy stopped, and the failure is audited.
+// TestReviveRun_AFailedReplaceLosesTheRunAgain: once claimed, a lost run whose
+// proxy cannot be replaced, whatever the error, must not look live. It is
+// marked lost (outage) again with its proxy stopped, and the failure is
+// audited. A live run is lost again only when its old proxy may be gone.
 func TestReviveRun_AFailedReplaceLosesTheRunAgain(t *testing.T) {
+	for name, tc := range map[string]struct {
+		live     bool
+		err      error
+		lostKept bool
+	}{
+		"lost, the old proxy removed":   {false, errors.Join(runner.ErrProxyReplaceFailed, errors.New("docker: start proxy: boom")), true},
+		"lost, the old proxy untouched": {false, errors.New("docker: pull wardyn-proxy: denied"), true},
+		"live, the old proxy removed":   {true, errors.Join(runner.ErrProxyReplaceFailed, errors.New("docker: start proxy: boom")), true},
+		"live, the old proxy untouched": {true, errors.New("docker: inspect agent for its proxy address: boom"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newReviveFixture(t)
+			if tc.live {
+				f.st.run.LostAt, f.st.run.LostReason = nil, ""
+			}
+			f.rs.release = "0.7.12"
+			stops := f.lr.proxyStopCount()
+			f.rr.replaceErr = tc.err
+			if code := f.revive(t); code != http.StatusBadGateway {
+				t.Fatalf("revive: code %d, want 502", code)
+			}
+			lostAt, reason := f.st.lost()
+			ev := f.audit.eventsFor(f.run.ID, "run.revive")
+			if len(ev) != 1 || ev[0].Outcome != "failure" {
+				t.Fatalf("run.revive events = %+v, want one failure", ev)
+			}
+			lostAgain := leaseAuditData(t, ev[0])["lost_again"] == true
+			if f.st.State() != types.RunRunning || f.rs.release != "0.7.12" {
+				t.Errorf("state %s, proxy release %q; want RUNNING and the old proxy's release kept", f.st.State(), f.rs.release)
+			}
+			if !tc.lostKept {
+				if lostAt != nil || f.lr.proxyStopCount() != stops || lostAgain {
+					t.Errorf("lost = %v, StopProxy +%d, lost_again %v; want the live run and its proxy left alone",
+						lostAt, f.lr.proxyStopCount()-stops, lostAgain)
+				}
+				return
+			}
+			if lostAt == nil || reason != types.LostOutage || !lostAgain {
+				t.Errorf("lost = %v %q, lost_again %v; want the run lost (outage) again", lostAt, reason, lostAgain)
+			}
+			if f.lr.proxyStopCount() != stops+1 {
+				t.Errorf("StopProxy = %d, want one more: the run must have no proxy", f.lr.proxyStopCount()-stops)
+			}
+		})
+	}
+}
+
+// TestReviveRun_TheClaimIsOnTheRowAsRead: a run read live that a sweep lost
+// before the claim is refused, never revived as if its old proxy still ran.
+func TestReviveRun_TheClaimIsOnTheRowAsRead(t *testing.T) {
 	f := newReviveFixture(t)
-	stops := f.lr.proxyStopCount()
-	f.rr.replaceErr = errors.Join(runner.ErrProxyReplaceFailed, errors.New("docker: start proxy: boom"))
-	if code := f.revive(t); code != http.StatusBadGateway {
-		t.Fatalf("revive: code %d, want 502", code)
+	live := f.run
+	live.LostAt, live.LostReason = nil, ""
+	_, rerr := f.srv.reviveRunProxy(context.Background(), live, types.ActorHuman, "admin")
+	if rerr == nil || rerr.status != http.StatusConflict || len(f.rr.replaced) != 0 {
+		t.Fatalf("revive of a stale live row = %+v, %d replaces; want 409 and no replace", rerr, len(f.rr.replaced))
 	}
-	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostOutage || f.st.State() != types.RunRunning {
-		t.Fatalf("lost = %v %q, state %s; want the run lost (outage) again and kept", lostAt, reason, f.st.State())
+	if lostAt, _ := f.st.lost(); lostAt == nil {
+		t.Error("the refused claim cleared the lost mark")
 	}
-	if f.lr.proxyStopCount() != stops+1 {
-		t.Errorf("StopProxy = %d, want one more: the run must have no proxy", f.lr.proxyStopCount()-stops)
+}
+
+// TestReviveRun_AStaleLeasePassLeavesTheNewProxy: a lease pass must not stop
+// a run's proxy, or revoke its broker, while a revive is in flight or from a
+// row it listed before a revive landed.
+func TestReviveRun_AStaleLeasePassLeavesTheNewProxy(t *testing.T) {
+	f := newReviveFixture(t)
+	stale := f.run
+	stops, revokes := f.lr.proxyStopCount(), f.brk.count(stale.ID)
+	f.srv.reviving.Store(stale.ID, struct{}{})
+	f.srv.leaseRun(context.Background(), f.rs, stale)
+	f.srv.reviving.Delete(stale.ID)
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
 	}
-	if ev := f.audit.eventsFor(f.run.ID, "run.revive"); len(ev) != 1 || ev[0].Outcome != "failure" {
-		t.Errorf("run.revive events = %+v, want one failure", ev)
+	f.srv.leaseRun(context.Background(), f.rs, stale)
+	if f.lr.proxyStopCount() != stops || f.brk.count(stale.ID) != revokes {
+		t.Errorf("StopProxy +%d, broker revokes +%d; want the revived run's proxy and broker left alone",
+			f.lr.proxyStopCount()-stops, f.brk.count(stale.ID)-revokes)
 	}
 }
 

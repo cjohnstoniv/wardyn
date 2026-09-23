@@ -82,6 +82,16 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 			s.stopKeptRun(ctx, run, types.RunStopped, action, data)
 			return
 		}
+		// A revive clears the lost mark before it starts the new proxy, and
+		// this pass listed the run before then: a stale row must neither stop
+		// that proxy nor revoke the revived run's broker. A failed read is
+		// retried next pass.
+		if _, busy := s.reviving.Load(run.ID); busy {
+			return
+		}
+		if cur, err := s.cfg.Store.GetRun(ctx, run.ID); err != nil || cur.LostAt == nil {
+			return
+		}
 		// Re-assert the stop every pass: a crash between the claim and the
 		// stop would otherwise leave a kept run with its proxy and broker
 		// credentials up. The broker revoke writes a row per credential, so it

@@ -134,7 +134,8 @@ func (d *Driver) ProxyConfig(ctx context.Context, ref string) ([]byte, error) {
 // is removed first: it holds the name, and its address is the one the agent
 // pins. The new one takes that address, read from the agent's own hosts entry
 // (immutable, and still there after a stopped proxy gave its address back),
-// and re-joins the control-plane-facing network as at create.
+// and re-joins the control-plane-facing network as at create. Every check
+// that can fail without touching the old sidecar runs before the remove.
 func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
@@ -165,8 +166,9 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	if err := d.ensureImage(ctx, d.cfg.ProxyImage, func() {}); err != nil {
 		return err
 	}
+	// A failed remove may still have removed it.
 	if _, err := d.cli.ContainerRemove(ctx, proxyContainerName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
-		return fmt.Errorf("docker: remove proxy: %w", err)
+		return fmt.Errorf("%w: docker: remove proxy: %w", runner.ErrProxyReplaceFailed, err)
 	}
 	if _, err := d.startProxy(ctx, id, labels, proxyEnvFromJSON(id, cfgJSON, cp.ControlPlaneURL), ip); err != nil {
 		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)

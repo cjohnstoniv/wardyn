@@ -136,7 +136,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   nowhere else. A revive is refused, with nothing changed, when the captured profile no longer
   exists, when the profile now denies a host the run's git broker needs (the agent's grant id
   cannot be withdrawn from a running sandbox), for a run lost to a `reboot` or `ended`, or past
-  its end. A proxy that cannot be replaced leaves the run lost (`outage`) again with no proxy.
+  its end. A proxy that cannot be replaced leaves the run lost (`outage`) again with no proxy,
+  except that a live run whose old proxy was never touched (its image cannot be pulled, say) keeps it.
   Audited as `run.revive` with the actor and the owner as `subject`. Admins get the same path in
   bulk: `POST /api/v1/admin/runs/restart` ("Restart with current limits") and
   `GET /api/v1/admin/runs/proxy-window`, which lists the live runs whose proxy was started by a

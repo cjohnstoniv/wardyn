@@ -672,11 +672,11 @@ type ProxyStopper interface {
 //
 // ReplaceProxy removes the old proxy first, then starts the new one on the
 // run's network at the address the agent's hosts entry pins. An error wrapping
-// ErrProxyReplaceFailed means the old proxy is gone and no new one runs: the
-// sandbox has no egress, and the caller must treat the run as lost. Any other
-// error left the old proxy as it was. A router in front of a substrate without
-// it (Kubernetes: the agent pins the proxy pod's IP) returns
-// ErrReviveUnsupported.
+// ErrProxyReplaceFailed means the old proxy is, or may be, gone and no new one
+// runs: the sandbox has no egress, and the caller must treat the run as lost.
+// Any other error came before the old proxy was touched and left it as it
+// was. A router in front of a substrate without it (Kubernetes: the agent pins
+// the proxy pod's IP) returns ErrReviveUnsupported.
 type ProxyReviver interface {
 	ProxyConfig(ctx context.Context, ref string) ([]byte, error)
 	ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error
@@ -686,9 +686,9 @@ type ProxyReviver interface {
 // for ref cannot replace a proxy in place.
 var ErrReviveUnsupported = errors.New("runner: this substrate cannot replace a sandbox's proxy")
 
-// ErrProxyReplaceFailed marks a ReplaceProxy that removed the old proxy and
-// could not start the new one.
-var ErrProxyReplaceFailed = errors.New("runner: the old proxy was removed and the new one did not start")
+// ErrProxyReplaceFailed marks a ReplaceProxy that removed, or may have
+// removed, the old proxy and did not start the new one.
+var ErrProxyReplaceFailed = errors.New("runner: the old proxy may be gone and the new one did not start")
 
 // Freezer is an OPTIONAL Runner capability: pause and resume the AGENT
 // container in place, without stopping it (runner Freeze/Thaw, long-holds

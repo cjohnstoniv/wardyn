@@ -96,8 +96,9 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun) (reviveR
 
 // reviveRunProxy replaces run's proxy with its own config under a fresh token
 // and the owner's current denies. Every refusal before the claim leaves the run
-// as it was. After the claim, a proxy that cannot be replaced puts the run back
-// to lost (outage), so it never runs without the proxy it was promised.
+// as it was, and so does a failure before a live run's old proxy is touched.
+// Otherwise a proxy that cannot be replaced puts the run back to lost (outage),
+// so it never runs without the proxy it was promised.
 func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) (reviveResult, *reviveError) {
 	reviver, ok := s.cfg.Store.(store.RunReviver)
 	if !ok || s.cfg.Runner == nil {
@@ -142,13 +143,14 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 
 	// The claim comes BEFORE the new proxy starts: once the run is no longer
 	// lost, the lease sweep stops re-asserting the old proxy's stop, and the
-	// fresh token stamp keeps the lapsed-token sweep off it.
-	claimed, err := reviver.MarkRunRevived(ctx, run.ID, version.Version)
+	// fresh token stamp keeps the lapsed-token sweep off it. It lands only on
+	// the row as read here, so a run read live still had its old proxy running.
+	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostAt != nil)
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, "claim the run for revive: "+err.Error())
 	}
 	if !claimed {
-		return reviveResult{}, reviveRefused(http.StatusConflict, "run is no longer running or revivable")
+		return reviveResult{}, reviveRefused(http.StatusConflict, "the run changed while it was being revived (it ended, was lost or was revived); try again")
 	}
 	data := map[string]any{
 		"subject":                 run.CreatedBy,
@@ -163,6 +165,14 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	if err := rv.ReplaceProxy(ctx, run.SandboxRef, cfgJSON); err != nil {
 		data["error"] = err.Error()
+		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
+			// The old proxy was never touched (an image that cannot be pulled, a
+			// failed inspect): a live run keeps it, renewing its own token. Only
+			// the claim's token stamp moved.
+			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
+			return reviveResult{}, reviveRefused(http.StatusBadGateway,
+				"the run's proxy was not replaced, and the run keeps its current proxy: "+err.Error())
+		}
 		data["lost_again"] = true
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 		s.reloseRun(ctx, run)
@@ -170,6 +180,12 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			msg: "the run's proxy could not be replaced, so the run has no egress and is lost until revived: " + err.Error()}
 	}
 	s.leaseEnded.Delete(run.ID)
+	if err := reviver.SetRunProxyRelease(ctx, run.ID, version.Version); err != nil {
+		// The row keeps the old release, so the proxy-window listing may name
+		// this run again: a second restart, never a missed one.
+		slog.WarnContext(ctx, "wardynd: recording a revived run's proxy release failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "success", mustJSON(data)))
 	return reviveResult{RunID: run.ID, DeniedAdded: re.added, ProxyRelease: version.Version}, nil
 }

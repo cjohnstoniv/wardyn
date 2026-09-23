@@ -20,13 +20,17 @@ import (
 // doubles that embed store.Store would route these calls to a nil interface.
 // The api layer type-asserts; production is always PG.
 type RunReviver interface {
-	// MarkRunRevived claims run id for a new proxy started by release: while it
-	// is RUNNING and either live or lost to an outage (the one kept run whose
-	// agent still runs), it clears the lost mark, stamps the token as just
-	// renewed (the revive mints a fresh one, and the lapsed-token sweep must
-	// not read the old stamp) and records release. false means the run went
-	// terminal, ended or was lost otherwise, and must get no proxy.
-	MarkRunRevived(ctx context.Context, id uuid.UUID, release string) (bool, error)
+	// MarkRunRevived claims run id for a new proxy: while it is RUNNING and
+	// still as the revive read it, live (fromLost false) or lost to an outage
+	// (fromLost true, the one kept run whose agent still runs), it clears the
+	// lost mark and stamps the token as just renewed (the revive mints a fresh
+	// one, and the lapsed-token sweep must not read the old stamp). false means
+	// the run went terminal, ended, was lost or revived since, and must get no
+	// proxy.
+	MarkRunRevived(ctx context.Context, id uuid.UUID, fromLost bool) (bool, error)
+	// SetRunProxyRelease records release as the one that started run id's
+	// proxy, once a revive's new proxy runs.
+	SetRunProxyRelease(ctx context.Context, id uuid.UUID, release string) error
 	// ListRunProxyReleases returns every non-terminal run that has a sandbox,
 	// with the release that started its proxy ("" before migration 0072).
 	ListRunProxyReleases(ctx context.Context) ([]RunProxyRelease, error)
@@ -44,16 +48,23 @@ type RunProxyRelease struct {
 var _ RunReviver = PG{}
 
 // MarkRunRevived — see RunReviver.
-func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, release string) (bool, error) {
+func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, fromLost bool) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=NULL, lost_reason='', token_renewed_at=now(),
-		       proxy_release=$2, updated_at=now()
-		WHERE id=$1 AND state=$3 AND (lost_at IS NULL OR lost_reason=$4)`,
-		id, release, string(types.RunRunning), string(types.LostOutage))
+		UPDATE agent_runs SET lost_at=NULL, lost_reason='', token_renewed_at=now(), updated_at=now()
+		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = $3 AND (lost_at IS NULL OR lost_reason=$4)`,
+		id, string(types.RunRunning), fromLost, string(types.LostOutage))
 	if err != nil {
 		return false, fmt.Errorf("store: mark run revived: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// SetRunProxyRelease — see RunReviver.
+func (s PG) SetRunProxyRelease(ctx context.Context, id uuid.UUID, release string) error {
+	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET proxy_release=$2, updated_at=now() WHERE id=$1`, id, release); err != nil {
+		return fmt.Errorf("store: set run proxy release: %w", err)
+	}
+	return nil
 }
 
 // ListRunProxyReleases — see RunReviver.
