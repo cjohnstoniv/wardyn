@@ -114,7 +114,7 @@ request, and reviewed before it reaches `main`.
   agentic, not a branch-protection approval count, for PRs the maintainer
   authors — an outside contributor's PR still needs the code owner's approval,
   since branch protection requires code owner review and
-  [CODEOWNERS](./CODEOWNERS) is `* @cjohnstoniv`). Nobody pushes to `main`
+  [CODEOWNERS](./.github/CODEOWNERS) is `* @cjohnstoniv`). Nobody pushes to `main`
   directly except the maintainer's release commit (see
   [RELEASING.md](./RELEASING.md)).
 - Dependent work stacks: branch from the previous PR's branch, write
