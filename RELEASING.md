@@ -182,6 +182,12 @@ another maintainer. Use the chosen version throughout this checklist.
    nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
    `make test-gaps` is a standalone target, not in `make ci`.
 
+   **Also snapshot the proxy config key set:** copy
+   `internal/egress/proxy/testdata/config-keys/current.txt` to `vX.Y.Z.txt` beside it and set
+   `previousProxyTag` in `internal/api/proxy_config_skew_test.go` to `vX.Y.Z`, removing the older
+   file. Operators pin the proxy image apart from wardynd, and that test loads every config dispatch
+   writes against the last release's key set.
+
    **`docs/VERIFY.md` is deliberately NOT on that list.** Every command in it is
    parameterised on `$WARDYN_VERSION`, which its own step 0 resolves, so it needs
    no bump — and hard-coding this release's number into one of those commands is
