@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as AdoEntraCopy from "./ado-entra-copy";
 import { ADO } from "./ado-entra-copy";
+import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE (the drives/providers
 // precedent, workspace-providers-copy.test.ts's parseFrozenTables()): this
@@ -50,47 +50,16 @@ import { ADO } from "./ado-entra-copy";
 // this suite (`pnpm vitest run`, `pnpm test`, make ci).
 const DOC = resolve(process.cwd(), "../docs/design/ado-entra-prompt.md");
 
-const unmono = (s: string) => s.replace(/`/g, "");
-
-/** key -> frozen string, for every row of §7.2-§7.8's and §10's tables. */
-function parseFrozenTables(): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      // §7.2-§7.8 — §7.1 is reused canon + the server-composed table (no Key
-      // column, and not this module's to carry) — plus §10's own subsections
-      // (the capability card's post-freeze addendum, S10 round 2/3).
-      inSection = /^### 7\.[2-8]\b/.test(line) || /^### 10\.\d+\b/.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key") continue; // header
-    if (/^:?-+:?$/.test(cells[0])) continue; // separator
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const doc = parseFrozenTables();
+// §7.2-§7.8 — §7.1 is reused canon + the server-composed table (no Key
+// column, and not this module's to carry) — plus §10's own subsections (the
+// capability card's post-freeze addendum, S10 round 2/3).
+const doc = parseFrozenTables(DOC, /^### (7\.[2-8]|10\.\d+)\b/);
 
 // The keys whose doc cell carries an "A / B" pluralisation alternation rather
 // than a single renderable string — checked in their own test below.
 const PLURALISED = ["CONSENT_SOME_MISSING(n)", "SAVED_NARROWED_RUNS(n, capability)"];
 
-/** `REQ_PROTECTED_REF_TITLE(ref)` -> ["REQ_PROTECTED_REF_TITLE", ["ref"]]. */
-function splitKey(docKey: string): [string, string[]] {
-  const m = /^([A-Z0-9_]+)\((.*)\)$/.exec(docKey);
-  return m ? [m[1], m[2].split(",").map((a) => a.trim())] : [docKey, []];
-}
-
-function render(docKey: string): string {
-  const [name, args] = splitKey(docKey);
-  const value = (ADO as Record<string, unknown>)[name];
-  if (value === undefined) throw new Error(`${docKey}: no such key in ADO`);
-  return typeof value === "function" ? (value as (...a: string[]) => string)(...args.map((a) => `{${a}}`)) : String(value);
-}
+const render = (docKey: string) => renderFromNamespaces(docKey, [ADO]);
 
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 

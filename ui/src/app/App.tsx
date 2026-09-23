@@ -32,6 +32,7 @@ import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
 import { AttentionPublisherProvider, type AttentionCounts } from "./lib/attention-context";
 import { ModelAccessProvider } from "./components/wardyn/model-access-context";
+import { ViewGate, screenPath, useViewAccess, viewLanding } from "./components/wardyn/console-view";
 import type {
   AgentRun,
   ApprovalRequest,
@@ -171,6 +172,10 @@ function RouteFallback() {
   );
 }
 
+function suspend(screen: React.ReactNode) {
+  return <React.Suspense fallback={<RouteFallback />}>{screen}</React.Suspense>;
+}
+
 // `/setup` is a member's landing route too (setup-gate.ts's setupGateActive
 // redirects a gated install here regardless of role) — reached on a COLD
 // document load (bookmark, reload, the SSO callback's return) before the real
@@ -229,8 +234,12 @@ function SetupRoute({
 // under the role context's fail-open "admin" default, which reads has_runs
 // against the wrong rule. Hooks are called unconditionally, before either
 // early return, per the rules of hooks.
-export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
+//
+// `admin` is the Admin view's own landing (`/admin`); `/` lands by view
+// (console-view.tsx#viewLanding).
+export function FirstRunLanding({ status, admin = false }: { status: SetupStatus | null; admin?: boolean }) {
   const role = useRole();
+  const access = useViewAccess();
   const roleResolved = useRoleResolved();
   // B1: "settled" is not "answered". roleResolved flips on a FAILED /me too (it
   // is the stop-spinning signal and must stay that), which left this gate
@@ -241,7 +250,10 @@ export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
   const identityResolved = useOperatorResolved();
   if (roleResolved && !identityResolved) return null;
   if (status === null || !roleResolved) return <RouteFallback />;
-  return <Navigate to={firstRunLanding(status, role)} replace />;
+  const base = firstRunLanding(status, role);
+  // A user's landing is theirs alone, whatever the view context says.
+  const to = admin ? `/admin${base}` : role === "member" ? base : viewLanding(base, access);
+  return <Navigate to={to} replace />;
 }
 
 // The hard gate: while the daemon marks any setup check `blocking`, every route
@@ -283,7 +295,8 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
   // See setup-gate.ts's gateFiredThisLoad for why this is module state.
   if (!gateAlreadyFired() && setupGateActive(status, role)) {
     markGateFired();
-    return <Navigate to="/setup" replace />;
+    // Only an admin is ever gated, and the funnel is the Admin view's.
+    return <Navigate to="/admin/setup" replace />;
   }
   return <Outlet />;
 }
@@ -324,11 +337,13 @@ const MODEL_ACCESS_POLL_MS = 300_000;
 // self-service routes with no sidebar entry at all (/secrets: WRITE/DELETE
 // are self-service since migration 0050, routes.go; /settings and
 // /ssh-keys: the account menu renders both for every role,
-// app-shell.tsx:820-831). /drives and /providers are the two SUPER-only
-// routes with no nav entry for anyone, gated operatorOnly server-side —
-// restorable only for an actual admin, never a security admin either.
-const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/settings", "/ssh-keys"];
-const OPERATOR_ONLY_PREFIXES = ["/drives", "/providers"];
+// app-shell.tsx:820-831). Providers is the SUPER-only route, gated
+// operatorOnly server-side — restorable only for an actual admin, never a
+// security admin either. Drives is not: a security admin manages its grants
+// and preview (securityOps), so their return path there is honoured. Nothing
+// under /admin is reachable for a user; /account is their own page.
+const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/account", "/settings", "/ssh-keys"];
+const OPERATOR_ONLY_PREFIXES = ["/providers", "/admin/providers"];
 export function roleCanReach(path: string, role: string): boolean {
   const under = (prefixes: string[]) =>
     prefixes.some((p) => path === p || path.startsWith(`${p}/`));
@@ -442,7 +457,7 @@ export default function App() {
   // publishAttention below — pausing this tick with nothing feeding the
   // badges from the other side would freeze both of them for as long as the
   // operator sat on /runs.
-  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || location.pathname === "/runs");
+  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || screenPath(location.pathname) === "/runs");
   // R-1: the setter side of the publish — RunsScreen calls this (via
   // usePublishAttention) every time its own fetch resolves, driving the SAME
   // state the paused poll above would have updated. Stable identity so it is
@@ -638,6 +653,7 @@ export default function App() {
             />
           }
         >
+          <Route element={<ViewGate fallback={<RouteFallback />} />}>
           {/* /demos is gone — Getting Started IS the demos surface now, one
               step per demo, so a second page listing the same catalog would be
               a page inside a page. Same redirect precedent /integrations
@@ -660,11 +676,40 @@ export default function App() {
               />
             }
           />
+          {/* The Admin view's funnel: outside RequireSetup for the same reason
+              /setup is. onDone lands on /runs, which an SSO admin in the Admin
+              view is redirected from to its twin, and a single-operator install
+              is meant to reach once setup is done (D1). */}
+          <Route
+            path="/admin/setup"
+            element={<SetupRoute onDone={() => navigate("/runs")} status={setupStatus} />}
+          />
           <Route element={<RequireSetup status={setupStatus} />}>
             <Route
               path="/"
               element={<FirstRunLanding status={setupStatus} />}
             />
+            {/* The Admin view mounts today's screens unchanged; the server
+                scopes their data by the caller's real role. /admin/settings
+                and /account both mount the unsplit Settings until M-5. */}
+            <Route path="/admin" element={<FirstRunLanding status={setupStatus} admin />} />
+            <Route path="/admin/runs" element={<RunsScreen />} />
+            <Route path="/admin/runs/new" element={<Navigate to="/admin/runs" replace />} />
+            <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
+            <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
+            <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
+            <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
+            <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
+            <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
+            <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />
+            <Route path="/admin/secrets" element={suspend(<SecretsScreen />)} />
+            <Route path="/admin/audit" element={suspend(<AuditScreen />)} />
+            <Route path="/admin/recordings" element={suspend(<RecordingScreen />)} />
+            <Route path="/admin/settings" element={suspend(<SettingsScreen />)} />
+            <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
+            <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
+            <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
+            <Route path="/account" element={suspend(<SettingsScreen />)} />
             <Route path="/runs" element={<RunsScreen />} />
             {/* Ahead of /runs/:id so "new" is never read as a run id. */}
             <Route
@@ -812,6 +857,7 @@ export default function App() {
               }
             />
             <Route path="*" element={<Navigate to="/runs" replace />} />
+          </Route>
           </Route>
         </Route>
       </Routes>
