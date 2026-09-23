@@ -53,7 +53,7 @@ copy is permanent.
 |---|---|---|---|
 | Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
-| Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
+| Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity the `local` key-encryption key is derived from — the key that wraps every stored secret's data key | every secret in Postgres becomes undecryptable ciphertext |
 | User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
 | Audit fallback | `WARDYN_AUDIT_SPOOL` and its `.consumed` / `.quarantine` sidecars; Compose mounts their directory on `<project>_audit` | pending failed-Postgres writes, their replay cursor, and permanently refused events | audit events absent from the database backup |
 
@@ -4489,17 +4489,30 @@ silently patched.
 
 ## Rotating the age key
 
-The secret store binds **one** age identity for both encryption and decryption
-(`internal/secretstore/pg`), so simply changing `WARDYN_AGE_KEY` migrates nothing
-— it strands every existing ciphertext. Startup decrypts the persisted signing
+Each stored secret is an envelope (`internal/secretstore/pg`, since 0.7.12): the
+value is sealed with AES-256-GCM under its own data key, bound to the row's owner
+and name, and that data key is wrapped by the `local` key-encryption key — derived
+from `WARDYN_AGE_KEY` with HKDF-SHA256 and recorded on each row as
+`kek_id` (`local:<fingerprint of the public recipient>`). So simply changing
+`WARDYN_AGE_KEY` migrates nothing — every row still names the old key, and a read
+refuses a row whose `kek_id` is not the configured one. Startup decrypts the persisted signing
 key through `loadOrCreateSigningKey` / `loadOrCreateSecret` and fails closed on
 a mismatch, before serving requests. A healthy start checks that boot key, not
 every application secret; verify a secret-dependent run after recovery too.
 
+The at-rest cipher is AES-256-GCM from the Go standard library
+(`cipher.NewGCMWithRandomNonce`, which draws each 96-bit nonce inside Go's
+cryptographic module) with HKDF-SHA256 key derivation, so Go's FIPS 140-3 mode
+(`GODEBUG=fips140=on`) applies to it — and with the Go version in `go.mod` it also
+runs under `GODEBUG=fips140=only`. That is a statement about this path only: the
+build does not pin a frozen module snapshot (`GOFIPS140`), and age (used once,
+to convert pre-envelope rows) is outside it.
+
 `wardynd -rotate-age-key <key-file>` is the supported rotation, a **maintenance
-mode, not a server start**: it mints a new identity, re-encrypts every row of the
-`secrets` table from the current key to the new one in ONE transaction, replaces
-the key file, writes a `secret.rekey` audit event, and exits. It never opens a
+mode, not a server start**: it mints a new identity, rewraps every row's data key
+from the current key-encryption key to the new one in ONE transaction — the sealed
+values are never decrypted and not rewritten — replaces the key file, writes a
+`secret.rekey` audit event, and exits. It never opens a
 listener and never dispatches a run. Three properties:
 
 - **The daemon must be stopped.** A serving wardynd holds the OLD identity in
@@ -4508,11 +4521,12 @@ listener and never dispatches a run. Three properties:
   lock (`db.SecretRekeyLockKey`) refuses a second concurrent *rotation*, but it
   cannot see a serving daemon, so stopping it is **your** step, not one the tool
   enforces.
-- **All-or-nothing.** The whole re-encryption runs in ONE transaction. A row the
-  current key cannot decrypt aborts everything with an error naming that secret
-  and how far it got (`rekey ABORTED after 3 of 9 rows …`), and nothing is
+- **All-or-nothing.** The whole rewrap runs in ONE transaction. A row whose data
+  key the current key cannot unwrap aborts everything with an error naming that
+  row and how far it got (`rekey ABORTED after 3 of 9 rows …`), and nothing is
   committed — every secret is still readable with the old key. There is no
-  half-rotated state to diagnose.
+  half-rotated state to diagnose. A pre-envelope row aborts it too: boot the
+  upgraded daemon once, which converts them (see [Upgrades](#upgrades)), before rotating.
 - **The CLI never sees the key.** `wardyn` has no rotation surface at all; this
   is a `wardynd` flag, run by whoever has shell access to the key file.
 
@@ -4574,6 +4588,38 @@ Migrations are **forward-only**. `internal/db` records each applied filename in
 `schema_migrations` and applies anything new on boot, under an advisory lock so
 concurrent starts do not race. There are no `down` migrations and no downgrade
 path — a rollback to an older wardynd against a migrated database is unsupported.
+
+**Upgrading from 0.7.11 or earlier converts every stored secret, once, and it
+cannot be undone without the backup.** `0069_secret_envelope_v1` adds the envelope columns, and
+the first boot of 0.7.12 or later re-seals every existing (pre-envelope,
+age-encrypted) row of
+`secrets` as envelope v1 — before it reads its own boot keys, which live in the
+same table. It runs as one transaction under its own advisory lock
+(`db.SecretConvertLockKey`): a second replica starting at the same moment waits,
+then finds nothing left to convert, and every later boot converts nothing. After
+it commits, an older wardynd can read none of these rows. There is **no rolling
+upgrade across this release**:
+
+```sh
+# 0. Take the Postgres dump (see Backup) AND confirm you hold the age key. The
+#    dump plus that key is the ONLY way back to an older wardynd afterwards.
+# 1. Stop EVERY older replica — one-instance locking cannot see it under
+#    -allow-multi-instance. An older binary still running keeps writing
+#    pre-envelope payloads, which the new version refuses by name ("an older
+#    wardynd is still writing"). A NEW name it wrote is converted at the next
+#    restart;
+#    a name it REPLACED is overwritten in place and must be set again.
+# 2. Start the new version with the SAME WARDYN_AGE_KEY. The log says how many it converted:
+#    INFO wardynd: converted stored secrets to envelope v1; … secrets=7
+```
+
+- **A row the key cannot decrypt stops the boot**, naming it —
+  `v0 conversion ABORTED after 2 of 9 rows (nothing committed …): (owned_by="", name="github-app-key") does not decrypt with WARDYN_AGE_KEY`.
+  Nothing was converted and the older binary still reads the store. Set the key
+  that row was written with, or delete that one row if it is dead, and start again.
+- **`WARDYN_AGE_KEY` unset now refuses to start** while any row is sealed under an
+  age key (pre-envelope or `local:`), instead of minting an ephemeral key that
+  would strand them all.
 
 **Upgrading to 0.7 signs every SSO human out, once.** The session payload gained
 a codec version and `decodeSession` requires an exact match
@@ -4736,7 +4782,8 @@ two migrations earlier in the same run, so it is not an instance of the hazard.)
 The same shape recurs one release later: `0067` adds `user_drives.object_scheme`,
 and `user_drives` itself was `0054`'s table — created inside the already-shipped
 0.7 line, not this upgrade's own batch — so an install carried forward from a
-released 0.7.x hits the identical ownership requirement on its next upgrade.
+released 0.7.x hits the identical ownership requirement on its next upgrade —
+as does `0069`, which adds the envelope columns to `secrets` (`0001`'s table).
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does
@@ -4762,7 +4809,7 @@ above that is the first secret write: `0050` moves the `secrets` primary key
 from `(name)` to `(owned_by, name)` (`internal/db/migrations/0050_secret_owned_by.sql:19-24`),
 and the older binary's `INSERT … ON CONFLICT (name)`
 (`internal/secretstore/pg/pg.go:78` at `v0.6.6`; the same statement on this
-branch already reads `ON CONFLICT (owned_by, name)`, `internal/secretstore/pg/pg.go:94`)
+branch already reads `ON CONFLICT (owned_by, name)`, `internal/secretstore/pg/pg.go` `Store.Put`)
 names a constraint that no longer exists, which Postgres refuses as
 `SQLSTATE 42P10` ("no unique or exclusion constraint matching the ON CONFLICT
 specification") on every secret upsert. Take the dump before the upgrade, not
