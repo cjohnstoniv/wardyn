@@ -50,10 +50,10 @@ export const RUN = {
   // network failure rethrows TypeError("Failed to fetch")), so use-launch.ts
   // sets genericFailure=false for both and shows that text instead. The only
   // case that reaches this card is a response with no body and an empty
-  // statusText. "The run was created" was true for none of those, and false
-  // for the commonest one: it told a member a sandbox exists to go check on
-  // when POST /api/v1/runs may never have been answered. This wording claims
-  // only what every one of those cases actually shares.
+  // statusText — meaning POST /api/v1/runs may never have been answered.
+  // "The run was created" is not true of that case: a sandbox may or may
+  // not exist. This wording claims only what that one case actually
+  // supports — an answer never arrived, not that nothing happened.
   LAUNCH_FAILED_TITLE: "Wardyn didn't answer the launch.",
   LAUNCH_FAILED_BODY: "A run may or may not have started — check the Runs board before trying again.",
   LAUNCH_FAILED_OPEN_RUN: "Open Runs",
