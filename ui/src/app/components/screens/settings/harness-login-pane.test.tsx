@@ -17,9 +17,9 @@ import {
   loginFlow,
   SELFRUN_MARKER,
   CAPTURE_NOT_CORROBORATED,
-  LOGIN_SANDBOX_STARTING,
   LOGIN_SANDBOX_UNREADABLE,
 } from "./harness-login-pane";
+import { SIGNIN_PROGRESS } from "./login-pane-copy";
 import { LOGIN_SANDBOX_READ_RETRYING, LOGIN_SANDBOX_SLOW_START } from "./login-start-wait";
 import { CAPTURE_POST_RUN_GRACE_MS } from "./capture-confirm";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
@@ -149,8 +149,22 @@ describe("HarnessLoginPane — the consent gate", () => {
   it("AWS keeps its start-URL gate and now states what happens next above it", () => {
     render(<HarnessLoginPane provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByLabelText(/aws access portal start url/i)).toBeInTheDocument();
-    expect(screen.getByText(/verification page/i)).toBeInTheDocument();
+    expect(screen.getByText(/verification page/i)).toHaveTextContent(`“${SIGNIN_PROGRESS.OPEN("AWS")}” opens it`);
     expect(harnessLoginMock).not.toHaveBeenCalled();
+  });
+
+  // #628: nothing opens on Start any more, so the intro and blurb promise the
+  // Open button, never a tab that "opens" by itself.
+  it("the Claude intro and blurb name the Open button, never a tab that opens on its own", async () => {
+    harnessLoginMock.mockReturnValue(new Promise<string>(() => {}));
+    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
+    const intro = screen.getByTestId("login-intro");
+    expect(intro).toHaveTextContent(`“${SIGNIN_PROGRESS.OPEN("Claude")}” opens it in a new tab`);
+    expect(intro).not.toHaveTextContent(/A new tab opens/);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    const pane = screen.getByTestId("harness-login-pane");
+    expect(pane).toHaveTextContent(`open it with “${SIGNIN_PROGRESS.OPEN("Claude")}”`);
+    expect(pane).not.toHaveTextContent(/opens the Claude login page in a new tab/);
   });
 
   // Under a per_user agent row the server signs in against the ROW's stored
@@ -224,7 +238,7 @@ describe("HarnessLoginPane — the consent gate", () => {
       // interactive attached-phase controls (paste boxes, its own Cancel).
       expect(screen.getByTestId("fake-terminal")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
-      expect(screen.queryByTestId("auth-url-link")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("signin-ready")).not.toBeInTheDocument();
       expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
       expect(onDone).not.toHaveBeenCalled();
     });
@@ -236,15 +250,17 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(screen.queryByText(/session captured/i)).not.toBeInTheDocument();
     });
 
-    // Owner field report, end to end: the opened tab's href is the artifact
+    // Owner field report, end to end: the opened tab's URL is the artifact
     // the owner actually saw junk in. Pin it at the seam they hit — a
     // colorized device URL through the same onOutput callback the real PTY
     // drives — not just at extractDeviceVerificationUrl's own unit tests.
-    it("the AWS verification link's href is clean even when the PTY colorizes the device URL", async () => {
+    it("the AWS verification link and its code are clean even when the PTY colorizes the device URL", async () => {
       await attachAwsRun();
       const clean = "https://d-1234567890.awsapps.com/start/#/device?user_code=ABCD-EFGH";
       await act(async () => lastAttachOutput?.(`\x1b[32m${clean}\x1b[0m\r\n`));
-      expect(await screen.findByTestId("auth-url-link")).toHaveAttribute("href", clean);
+      const ready = await screen.findByTestId("signin-ready");
+      expect(ready).toHaveTextContent(clean);
+      expect(screen.getByTestId("signin-device-code")).toHaveTextContent(/^ABCD-EFGH$/);
     });
   });
 
@@ -737,7 +753,8 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
     try {
       render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
       await user.click(screen.getByRole("button", { name: /start login/i }));
-      expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(LOGIN_SANDBOX_STARTING);
+      expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(SIGNIN_PROGRESS.STEP_START);
+      expect(screen.getByTestId("login-sandbox-starting")).not.toHaveTextContent(LOGIN_SANDBOX_SLOW_START);
 
       for (let i = 0; i < 35; i++) {
         await act(async () => {
