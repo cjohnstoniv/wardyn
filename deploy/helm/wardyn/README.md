@@ -743,6 +743,13 @@ The chart refuses to render `ingress.enabled: true` with no `ingress.hosts`
 deliberately not offered yet: this chart's CI has no Gateway controller to
 render it against, and an untested template is worse than none.
 
+Managed laptops (`deploy/desktop`, the `m'` member-mode envelope) enrol
+against this same control plane over this Ingress: `POST
+/api/v1/devices/enrol` is the anonymous endpoint a device's first boot calls
+with its MDM-minted enrolment token, so it has to be reachable through
+whatever `ingress.hosts` name you set above — there is no separate device
+listener or port to open.
+
 ## Default policy
 
 `defaultPolicy` bakes an operator-chosen policy into a ConfigMap and mounts

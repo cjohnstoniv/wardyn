@@ -461,6 +461,27 @@ jobs:
           for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 2; done
           docker compose -p wardyn-desk-ci logs wardynd
           echo "::error::wardynd did not become healthy"; exit 1
+      - name: Assert boot refuses an org URL with member mode unset (issue #105)
+        # validateHybridPosture (cmd/wardynd/boot_posture.go) runs after
+        # connectAndMigrate, so this needs the real Postgres the "Boot the
+        # desktop compose profile" step above already brought up and
+        # migrated — `docker compose run` reuses that same service/network,
+        # never publishes the wardynd port (no clash with the running -api
+        # container), and --name keeps it out of the running container's way.
+        run: |
+          set +e
+          out=$(docker compose --env-file /etc/wardyn/wardyn.env \
+            -f deploy/desktop/docker-compose.yaml -p wardyn-desk-ci \
+            run --rm -T --name wardyn-desk-ci-hybrid-refusal \
+            -e WARDYN_ORG_URL=https://org-controlplane.example.com -e WARDYN_MEMBER_MODE=false \
+            wardynd 2>&1)
+          code=$?
+          set -e
+          echo "${out}"
+          [ "${code}" -ne 0 ] \
+            || { echo "::error::wardynd booted (exit 0) with WARDYN_ORG_URL set and WARDYN_MEMBER_MODE unset — validateHybridPosture's refusal did not fire"; exit 1; }
+          echo "${out}" | grep -qF 'WARDYN_ORG_URL is set but WARDYN_MEMBER_MODE is not' \
+            || { echo "::error::wardynd refused to boot, but not for the expected reason: ${out}"; exit 1; }
       - name: Assert /policies/default equals the managed file
         run: |
           # handleGetDefaultPolicy re-marshals types.RunPolicySpec, whose

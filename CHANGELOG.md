@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The m' desktop envelope had no pointer to the org control plane and a stale OIDC claim (#105).**
+  `deploy/desktop/wardyn.env.m-prime.example` now carries a commented block naming
+  `WARDYN_ORG_URL`/`WARDYN_ORG_DEVICE_NAME` and pointing `WARDYN_ORG_ENROLMENT_TOKEN` at
+  `secret.env` (`scripts/test-desktop-profile.sh` now asserts both names are present and stay
+  commented), and no longer claims there is "no public-client / PKCE-only path" — `oidc.New`
+  makes the client secret optional. `ci.yml`'s `desktop-envelope` job gained a step that boots
+  the real daemon image with an org URL set and member mode unset and asserts the boot refusal
+  fires. One paragraph in `deploy/helm/wardyn/README.md` (plus a `values.yaml` comment) now says
+  managed laptops enrol through the console Ingress at `POST /api/v1/devices/enrol`.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

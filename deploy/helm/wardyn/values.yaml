@@ -80,6 +80,10 @@ service:
 # controller / class / TLS story differs too much for the chart to guess a
 # working default. Gateway API HTTPRoute is deferred: no Gateway controller
 # in this chart's CI to exercise it against.
+#
+# Managed laptops (deploy/desktop's m' envelope) also enrol through THIS
+# Ingress — POST /api/v1/devices/enrol has no separate listener, so it has
+# to be reachable at whatever host you set below (README "Console Ingress").
 ingress:
   enabled: false
   className: ""
