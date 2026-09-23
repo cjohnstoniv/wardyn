@@ -677,6 +677,29 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
     act(() => ws.message(attachModeFrame(false, "me@example.com")));
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
+
+  // `promoted:true` names the principal, not the socket: the server flips that
+  // principal's FIRST observer, which may be another tab. A displaced panel's
+  // socket is already closed, so the promoted one cannot be ours — returning
+  // on that answer left the panel with no socket and no way out.
+  it("promoted:true on a DISPLACED panel still reconnects — its socket is gone", async () => {
+    const takeover = vi.mocked(runs.takeoverAttach);
+    takeover.mockReset();
+    takeover.mockResolvedValue({ promoted: true });
+
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+    act(() => ws.drop(1008, "taken over by bob@example.com"));
+
+    fireEvent.click(screen.getByRole("button", { name: RUN_COCKPIT.takeOver }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: RUN_COCKPIT.takeOver }));
+
+    await waitFor(() => expect(takeover).toHaveBeenCalledWith("run_1"));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+  });
 });
 
 // R4-F143: every state in this component came off the socket's open/close/error

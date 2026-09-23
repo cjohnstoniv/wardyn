@@ -14,7 +14,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   queued observer socket to writer in place, but the console's take-over button unconditionally
   reconnected afterward — closing that just-promoted socket and handing the writer slot to
   whichever bystander was next in the FIFO queue. `POST /attach/takeover` now reports whether it
-  promoted the caller in place, and the console skips the reconnect on that answer (#507).
+  promoted the caller in place, and a console tab whose socket is still open skips the reconnect on
+  that answer (#507).
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

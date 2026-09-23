@@ -538,7 +538,7 @@ func (s *Server) handleAttachHolder(w http.ResponseWriter, r *http.Request) {
 // live terminal away from another human, which is why it is audited rather than
 // silent:
 //
-//	200 {"taken_over":true,"previous_holder":"alice@example.com","previous_source":"web"}
+//	200 {"taken_over":true,"previous_holder":"alice@example.com","previous_source":"web","promoted":false}
 //	409 nobody is attached (taking over nothing is a client bug worth surfacing)
 //
 // Same owner-or-admin gate as the read above.
@@ -605,10 +605,10 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 		"previous_holder": prev.principal,
 		"previous_source": prev.source,
 		// promoted: the taker already had an observer socket on this run and
-		// it was flipped to writer IN PLACE (announceAttachPromotion's notify
-		// sends that socket a fresh attach-mode frame). The caller must NOT
-		// reconnect on this answer — see doTakeover in attach-terminal.tsx,
-		// which evicts-then-reconnects only when this is false.
+		// its first one was flipped to writer IN PLACE (announceAttachPromotion's
+		// notify sends that socket a fresh attach-mode frame). A caller whose
+		// socket is still open must NOT reconnect on this answer — see
+		// doTakeover in attach-terminal.tsx.
 		"promoted": promoted,
 	})
 }
