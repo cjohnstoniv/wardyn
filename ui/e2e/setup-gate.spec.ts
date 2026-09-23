@@ -109,9 +109,11 @@ async function openPermissionsFromPeople(page: Page): Promise<void> {
   // step's multi-user branch kicks off) are done. Without this the People
   // click below is the first thing to notice the rail isn't there yet, which
   // reads as "the button never appeared" rather than "the funnel is still
-  // loading". The default 5s expect timeout was too tight for the lazy chunk
-  // on a loaded CI host — observed repeatedly as "1 flaky" exits with
-  // "element(s) not found" here specifically. Real slack.
+  // loading". #469 (CI-flake): the default 5s expect timeout was too tight
+  // for the lazy chunk on a loaded CI host — observed repeatedly as "1
+  // flaky" exits with "element(s) not found" here specifically. Real slack,
+  // the same pattern episode-catalog.spec.ts already uses for its own
+  // lazy-chunk wait.
   await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible({ timeout: 15_000 });
   // The rail's steps are buttons; "Open Permissions" is a Link (role=link).
   await page.getByRole("button", { name: /^People/ }).click();

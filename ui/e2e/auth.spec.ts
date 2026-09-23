@@ -371,32 +371,41 @@ test.describe("outage vs. rejection (R4/F027)", () => {
   });
 
   test("the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in", async ({ page }) => {
-    // /healthz is down for the gate's FIRST read only. The one-shot mount fetch
-    // this replaced read that as sso:false and never asked again.
+    // /healthz is down until `healthy` flips. The one-shot mount fetch this
+    // replaced read the outage as sso:false and never asked again.
     //
-    // page.clock, not a real 10s wait: the gate's re-ask rides SSO_POLL_MS
-    // (sign-in.tsx), which the clock API fakes, so the second /healthz is
-    // fulfilled on demand by fast-forwarding instead of this test racing a
-    // real setInterval against a loaded CI host (the old `.poll(timeout:
-    // 30_000)` this replaced).
+    // No request count: App.tsx polls /healthz itself (HEALTH_POLL_MS) in
+    // every auth state, so "served more than once" holds with the gate's own
+    // re-ask paused. What is pinned is the gate's own reads: the outage on
+    // screen first, then the recovery reaching the screen ONLY through the
+    // gate's poll. page.clock drives SSO_POLL_MS (sign-in.tsx) instead of a
+    // real 10s setInterval racing a loaded CI host.
     await page.clock.install();
-    let served = 0;
-    await page.route("**/healthz", async (route) => {
-      served += 1;
-      if (served === 1) return route.fulfill({ status: 503, body: "" });
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) });
-    });
+    let healthy = false;
+    await page.route("**/healthz", (route) =>
+      healthy
+        ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) })
+        : route.fulfill({ status: 503, body: "" }),
+    );
     await clearTokenInit(page);
     await page.goto("/");
-    // #457: the FIRST read is the outage, so the screen is honestly
-    // "checking" until the next poll (SSO_POLL_MS) lands the real answer.
-    await expect(signInToken(page)).toBeVisible();
+    // #457: no answer yet, so the gate is honestly "checking" and offers no door.
+    await expect(page.getByRole("status").filter({ hasText: SIGNIN.CHECKING })).toBeVisible();
+    await expect(signInToken(page)).toBeHidden();
 
-    // What must NOT happen is the posture being frozen on the outage's
-    // answer — fast-forward past SSO_POLL_MS and the gate must have asked
-    // again.
+    // Only the gate's own unanswered reads (mount + two SSO_POLL_MS ticks)
+    // turn "checking" into "still checking" — so its mount read has landed on
+    // the outage before `healthy` flips below. runFor, not fastForward: the
+    // latter fires a due interval at most once.
+    await page.clock.runFor("00:21");
+    await expect(page.getByRole("status").filter({ hasText: SIGNIN.STILL_CHECKING })).toBeVisible();
+    await expect(signInToken(page)).toBeHidden();
+
+    // The daemon comes back. The posture must not stay frozen on the outage:
+    // one more SSO_POLL_MS tick and the gate offers the token door.
+    healthy = true;
     await page.clock.fastForward("00:11");
-    await expect.poll(() => served).toBeGreaterThan(1);
+    await expect(signInToken(page)).toBeVisible();
   });
 });
 

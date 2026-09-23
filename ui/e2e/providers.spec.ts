@@ -761,6 +761,9 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
         // The SAME line again — the marker for "the sandbox reprinted itself",
         // not a second, different URL.
         ws.send(Buffer.from(`${DEVICE_VERIFICATION_URL}\n`));
+        // Frames are handled in order (attach-terminal.tsx's onmessage), so
+        // this marker on screen means the duplicate has been handled too.
+        ws.send(Buffer.from("\r\ne2e-after-duplicate\r\n"));
       });
       await context.route(`${DEVICE_VERIFICATION_URL.split("?")[0]}**`, (route) =>
         route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
@@ -776,8 +779,9 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
       context.on("page", (p) => newPages.push(p));
       await page.getByRole("button", { name: /start login/i }).click();
       await expect(page.getByTestId("auth-url-link")).toBeVisible();
-      // Give the second (duplicate) WS frame time to be processed.
-      await page.waitForTimeout(200);
+      await expect
+        .poll(() => page.locator(".xterm-screen").first().innerText().catch(() => ""))
+        .toContain("e2e-after-duplicate");
 
       expect(newPages).toHaveLength(1);
       expect(pageErrors).toHaveLength(0);
