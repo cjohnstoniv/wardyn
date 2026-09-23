@@ -36,7 +36,7 @@ test.describe("Run detail — Make a policy from this run (X2-F6)", () => {
     await navTo(page, "Runs");
     await expect(page.getByText("e2e fixture 4")).toBeVisible();
     await page.getByText("e2e fixture 4").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     await page.getByRole("tab", { name: "Audit" }).click();
     await page.getByRole("button", { name: "Make a policy from this run" }).click();
