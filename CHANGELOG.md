@@ -119,6 +119,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   colors amber at 80% or more, and falls back to bytes written, labeled as such, when there is no
   used reading. A run's resolved ephemeral disk cap is now captured on the run row (`disk_mib`,
   migration `0071_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
+- **The governance profile editor gets a Run limits section (#579).** The seven run-limit fields
+  (#567) — longest and default end, allow no end, longest and default wait, whether people may
+  change either, and pause-after-idle — are now editable on the profile editor, alongside the
+  existing doors and quotas: a duration input in the field's own unit (days for the end fields,
+  hours for the wait fields, minutes for pause-after-idle), converted to seconds on save, and a
+  switch for each of the two booleans. Zero/blank keeps today's behaviour on every field, the same
+  rule the profile's other numeric limits already follow. The profiles list's Limits column gains a
+  summary chip ("Ends within 30 days · waits up to 8 hours · people may change these") built from
+  whichever of the three fields the profile actually sets; a profile with no run limits still reads
+  "None".
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

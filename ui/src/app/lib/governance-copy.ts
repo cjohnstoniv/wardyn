@@ -34,6 +34,7 @@ import {
   type AutonomyLevel,
   type AutonomyRubric,
   type AutonomyRubricRowKey,
+  type RunLimits,
 } from "./api/governance";
 import { GOVERNANCE_NAV_TITLE } from "./nav-copy";
 
@@ -432,6 +433,74 @@ export const LIMITS_CHIP = {
   // level's AUTONOMY_META label (e.g. "Attended"), looked up by the caller.
   AUTONOMY: (label: string) => `Autonomy: ${label} at the strictest`,
 } as const;
+
+// RL-14 (0.8, #579) — the profile editor's Run limits section
+// (long-holds-design.md rev 4 §2.2/§6, long-holds-packet.html "Run limits for
+// a user type"). Transcribed from the mock packet, the same way RUBRIC above
+// is: the packet lives in a scratchpad, not docs/, so these are pinned
+// directly in governance-copy.test.ts rather than parsed out of a doc.
+//
+// The seven fields ride on GovernanceLimits (embedding types.RunLimits) via
+// the profile a person is assigned to — the packet's "for a user type" is
+// where this rides once user types exist (a separate, not-yet-built design);
+// today a profile is the only assignable ceiling, so the section is titled
+// plainly rather than naming a concept this console doesn't have yet.
+export const RUN_LIMITS = {
+  SECTION_TITLE: "Run limits",
+  SECTION_LEAD:
+    "Bounds how long a run under this profile may last and how long it waits for a decision, and whether the people running it may change either. Extending within the limit never needs the gate.",
+  MAX_END_LABEL: "Longest a run can be set to last",
+  MAX_END_HINT: "Measured from now. People extend before it ends. Leave blank for no limit.",
+  DEFAULT_END_LABEL: "Default end",
+  ALLOW_NO_END_LABEL: "Allow no end",
+  ALLOW_NO_END_HINT:
+    "Runs keep going until someone ends them. They still pause when nobody is there, and keep their memory. Set a concurrent-run limit too.",
+  MAX_WAIT_LABEL: "Longest wait for a decision",
+  MAX_WAIT_HINT:
+    "How long a run may keep a request open (a push, a tool call, a new site, a sign-in) before it's refused. Tool calls wait at most 27 hours.",
+  DEFAULT_WAIT_LABEL: "Default wait",
+  USER_CHANGES_LABEL: "People may change their run's end and wait",
+  USER_CHANGES_HINT:
+    "Anyone can extend within the limit. This also lets them shorten it, choose no end, and change the wait.",
+  PAUSE_IDLE_LABEL: "Pause a run nobody is using after",
+  PAUSE_IDLE_HINT:
+    "No typing, no network traffic (downloads in progress count), and a quiet CPU. Leave blank to pause only runs waiting for a decision.",
+  UNIT_DAYS: "days",
+  UNIT_HOURS: "hours",
+  UNIT_MINUTES: "minutes",
+} as const;
+
+// humanizeRunLimitSec renders a seconds value the way the packet's own
+// examples do — "30 days", "8 hours", "30 minutes" — picking the largest whole
+// unit the value divides into evenly, falling back to seconds for whatever's
+// left (a value only the API or a future finer-grained control would produce).
+function humanizeRunLimitSec(sec: number): string {
+  if (sec % 86400 === 0) return pluralize(sec / 86400, "day");
+  if (sec % 3600 === 0) return pluralize(sec / 3600, "hour");
+  if (sec % 60 === 0) return pluralize(sec / 60, "minute");
+  return pluralize(sec, "second");
+}
+
+function pluralize(n: number, unit: string): string {
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+}
+
+// runLimitsChip composes the profiles-list summary chip the packet's
+// "Summary chip" line previews ("Ends within 30 days · waits up to 8 hours ·
+// people may change these") — the same "category · value" join MEMBER.GS_CHIP
+// uses. Only the fields actually SET contribute a clause (0/false is "no
+// limit" everywhere else in this module, and a clause claiming a bound that
+// doesn't exist would be a lie); null when the profile sets no run limit at
+// all, so the caller can fold it into the same "None" test the door/quota
+// chips already use.
+export function runLimitsChip(l: RunLimits | undefined): string | null {
+  if (!l) return null;
+  const parts: string[] = [];
+  if (l.max_end_ahead_sec) parts.push(`Ends within ${humanizeRunLimitSec(l.max_end_ahead_sec)}`);
+  if (l.max_wait_sec) parts.push(`waits up to ${humanizeRunLimitSec(l.max_wait_sec)}`);
+  if (l.user_changes_limits) parts.push("people may change these");
+  return parts.length ? parts.join(" · ") : null;
+}
 
 // ---- the New Run rail's Autonomy section + the run header (new-run-rail.tsx
 // / run-detail-summary-header.tsx) ----

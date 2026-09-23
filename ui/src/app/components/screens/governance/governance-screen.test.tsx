@@ -608,7 +608,8 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
     await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
 
     const editor = await screen.findByTestId("governance-profile-editor");
-    expect(within(editor).getAllByRole("switch")).toHaveLength(3);
+    // 3 doors + RL-14's two run-limit gates (allow_no_end, user_changes_limits).
+    expect(within(editor).getAllByRole("switch")).toHaveLength(5);
     const door = within(editor).getByRole("switch", { name: GOV.LIMIT_DRIVE_LABEL });
     expect(door).toHaveAttribute("aria-checked", "false");
     expect(within(editor).getByText(GOV.LIMIT_DRIVE_HINT)).toBeInTheDocument();
@@ -695,6 +696,35 @@ describe("GovernanceScreen — the autonomy rubric's strictest-cap chip", () => 
     expect(screen.queryByText(/^Autonomy:/)).toBeNull();
     const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
     const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.getByText(GOV.LIMITS_NONE)).toBeInTheDocument();
+  });
+});
+
+// RL-14 (0.8, #579) — the run-limits summary chip, the packet's "Summary
+// chip" line.
+describe("GovernanceScreen — the run-limits summary chip", () => {
+  it("a profile with run limits set carries the chip, and drops off LIMITS_NONE", async () => {
+    renderScreen(
+      snapshot({
+        profiles: [
+          profile({ limits: { max_end_ahead_sec: 30 * 86400, max_wait_sec: 8 * 3600, user_changes_limits: true } }),
+          PLATFORM,
+        ],
+      }),
+    );
+    await screen.findByText(GREENFIELD.name);
+    const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
+    const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.getByText("Ends within 30 days · waits up to 8 hours · people may change these")).toBeInTheDocument();
+    expect(row.queryByText(GOV.LIMITS_NONE)).toBeNull();
+  });
+
+  it("a profile with no run limits shows no chip and still reads None", async () => {
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
+    const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.queryByText(/^Ends within/)).toBeNull();
     expect(row.getByText(GOV.LIMITS_NONE)).toBeInTheDocument();
   });
 });

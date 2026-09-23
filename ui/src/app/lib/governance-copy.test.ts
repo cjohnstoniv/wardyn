@@ -17,6 +17,8 @@ import {
   MEMBER,
   POSITIONING,
   RUBRIC,
+  RUN_LIMITS,
+  runLimitsChip,
 } from "./governance-copy";
 import { PEOPLE } from "./people-access-copy";
 import { AUTONOMY_RUBRIC_ROW_KEYS, type AutonomyRubricRowKey } from "./api/governance";
@@ -323,6 +325,60 @@ describe("foldAutonomyRubric", () => {
 
   it("setKeys carries every set row, unset rows excluded", () => {
     expect(foldAutonomyRubric({ egress_open: "L1", egress_reviewed: undefined }).setKeys).toEqual(["egress_open"]);
+  });
+});
+
+// RL-14 (0.8, #579) — the profile editor's Run limits section. Like RUBRIC
+// above, these strings are transcribed from long-holds-packet.html, a
+// scratchpad mock outside docs/, so they're pinned directly rather than
+// parsed out of a doc.
+describe("RUN_LIMITS — the profile editor's run-limits section (long-holds-design.md rev 4 §6)", () => {
+  it("pins the seven field labels and their hints, byte-exact from the packet", () => {
+    expect(RUN_LIMITS.MAX_END_LABEL).toBe("Longest a run can be set to last");
+    expect(RUN_LIMITS.MAX_END_HINT).toBe("Measured from now. People extend before it ends. Leave blank for no limit.");
+    expect(RUN_LIMITS.DEFAULT_END_LABEL).toBe("Default end");
+    expect(RUN_LIMITS.ALLOW_NO_END_LABEL).toBe("Allow no end");
+    expect(RUN_LIMITS.ALLOW_NO_END_HINT).toBe(
+      "Runs keep going until someone ends them. They still pause when nobody is there, and keep their memory. Set a concurrent-run limit too.",
+    );
+    expect(RUN_LIMITS.MAX_WAIT_LABEL).toBe("Longest wait for a decision");
+    expect(RUN_LIMITS.MAX_WAIT_HINT).toBe(
+      "How long a run may keep a request open (a push, a tool call, a new site, a sign-in) before it's refused. Tool calls wait at most 27 hours.",
+    );
+    expect(RUN_LIMITS.DEFAULT_WAIT_LABEL).toBe("Default wait");
+    expect(RUN_LIMITS.USER_CHANGES_LABEL).toBe("People may change their run's end and wait");
+    expect(RUN_LIMITS.USER_CHANGES_HINT).toBe(
+      "Anyone can extend within the limit. This also lets them shorten it, choose no end, and change the wait.",
+    );
+    expect(RUN_LIMITS.PAUSE_IDLE_LABEL).toBe("Pause a run nobody is using after");
+    expect(RUN_LIMITS.PAUSE_IDLE_HINT).toBe(
+      "No typing, no network traffic (downloads in progress count), and a quiet CPU. Leave blank to pause only runs waiting for a decision.",
+    );
+  });
+});
+
+describe("runLimitsChip — the packet's Summary chip line", () => {
+  it("renders no chip for an undefined or empty run limits", () => {
+    expect(runLimitsChip(undefined)).toBeNull();
+    expect(runLimitsChip({})).toBeNull();
+  });
+
+  it("renders no chip for a zero/false run limits (0 is unlimited everywhere else in this module)", () => {
+    expect(
+      runLimitsChip({ max_end_ahead_sec: 0, max_wait_sec: 0, user_changes_limits: false }),
+    ).toBeNull();
+  });
+
+  it("matches the packet's own example verbatim", () => {
+    expect(
+      runLimitsChip({ max_end_ahead_sec: 30 * 86400, max_wait_sec: 8 * 3600, user_changes_limits: true }),
+    ).toBe("Ends within 30 days · waits up to 8 hours · people may change these");
+  });
+
+  it("includes only the clauses a field actually sets", () => {
+    expect(runLimitsChip({ max_end_ahead_sec: 86400 })).toBe("Ends within 1 day");
+    expect(runLimitsChip({ max_wait_sec: 1800 })).toBe("waits up to 30 minutes");
+    expect(runLimitsChip({ user_changes_limits: true })).toBe("people may change these");
   });
 });
 
