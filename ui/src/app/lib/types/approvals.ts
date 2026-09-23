@@ -52,6 +52,11 @@ export interface ApprovalRequest {
   // transitions the row once this passes — the console derives "expired"
   // client-side (see copy.ts's approvalScopeBadge).
   decision_expires_at?: string;
+  // When a PENDING request stops waiting and the sweep moves it to EXPIRED:
+  // min(requested_at + the run's wait, the run's end), computed server-side
+  // from the run row (#567). Absent for a run created before run limits; the
+  // deployment's approval expiry still applies.
+  expires_at?: string;
 }
 
 // canDecideApproval mirrors internal/api/approvals.go's decide() exactly: an
