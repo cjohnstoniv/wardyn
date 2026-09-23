@@ -45,9 +45,12 @@ export const RUN = {
   // no reason and no route, and which nothing announced.
   //
   // SF-26: `genericFailure` is set whenever getErrorMessage(e) comes back
-  // empty — a network error, a timeout, or a bodiless 5xx — which includes the
-  // request never reaching the server at all (createRun's fetch itself
-  // throwing). "The run was created" was true for none of those, and false
+  // empty. A timeout and a network failure both carry a message (core.ts
+  // turns a timeout into HttpError(TIMEOUT_STATUS, TIMEOUT_MESSAGE), and a
+  // network failure rethrows TypeError("Failed to fetch")), so use-launch.ts
+  // sets genericFailure=false for both and shows that text instead. The only
+  // case that reaches this card is a response with no body and an empty
+  // statusText. "The run was created" was true for none of those, and false
   // for the commonest one: it told a member a sandbox exists to go check on
   // when POST /api/v1/runs may never have been answered. This wording claims
   // only what every one of those cases actually shares.
