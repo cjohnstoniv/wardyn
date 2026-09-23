@@ -14,6 +14,7 @@ import {
   sidebarLink,
 } from "./fixtures";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
+import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
 // U-15: the starting sentence is a constant in a CSS-free module now — this
@@ -997,5 +998,71 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
     await expect(page.getByText(/Saved bedrock-api-key/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Replace" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Disconnect" })).toBeVisible();
+  });
+});
+
+// UT-7b — the "Available to" control embedded in the git provider row: real
+// writes against /permissions/availability and /permissions/grants, proving
+// the round trip an admin actually performs (not just this file's own
+// component-level coverage in availability-control.test.tsx). The github row
+// already exists by this point in the file (the serial walk above never
+// removes it), so this reuses it rather than adding a third row.
+test.describe("providers — the git provider row's Available to control (UT-7b)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("Everyone by default; turning Only on with nobody listed refuses, verbatim", async ({ page }) => {
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-github");
+    await expect(row).toBeVisible();
+
+    await expect(row.getByRole("button", { name: AVAILABILITY.EVERYONE })).toHaveAttribute("aria-pressed", "true");
+    await row.getByRole("button", { name: AVAILABILITY.ONLY }).click();
+
+    // The server's own availabilityOnlyEmptyMsg (permissions_availability.go),
+    // rendered verbatim — never a console reword.
+    await expect(
+      row.getByText("Add at least one person, group or user type before choosing Only, or nobody could use this."),
+    ).toBeVisible();
+    // The failed PUT never flipped the segment — it still reads Everyone.
+    await expect(row.getByRole("button", { name: AVAILABILITY.EVERYONE })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("adding a user type lands the chip, turns Only on, and both survive a reload", async ({ page }) => {
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-github");
+    await expect(row).toBeVisible();
+
+    // "standard" — the one user type every deployment seeds and can never
+    // delete (UT-1) — is the only type id guaranteed to exist on a fresh e2e
+    // backend: userTypeSubjectExists (permissions.go) refuses a grant naming
+    // an id nobody created.
+    await row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("standard");
+    await row.getByRole("button", { name: AVAILABILITY.ADD_CTA }).click();
+    await expect(row.getByText(/standard/)).toBeVisible();
+
+    await row.getByRole("button", { name: AVAILABILITY.ONLY }).click();
+    await expect(row.getByRole("button", { name: AVAILABILITY.ONLY })).toHaveAttribute("aria-pressed", "true");
+
+    await page.reload();
+    const reloaded = page.getByTestId("provider-row-github");
+    await expect(reloaded).toBeVisible();
+    await expect(reloaded.getByRole("button", { name: AVAILABILITY.ONLY })).toHaveAttribute("aria-pressed", "true");
+    await expect(reloaded.getByText(/standard/)).toBeVisible();
+
+    // The wire itself — restricted, and the allow row naming this exact kind/value.
+    const view = await (
+      await page.request.get("/api/v1/permissions/availability/workspace_provider/github", { headers: auth })
+    ).json();
+    expect(view.restricted).toBe(true);
+    expect(view.allowed_by).toEqual([
+      expect.objectContaining({ subject_type: "user_type", subject: "standard", capability: "workspace_provider", value: "github" }),
+    ]);
+
+    // Clean up: back to Everyone, then remove the audience — this row's
+    // availability must not leak into a later run of this same suite.
+    await reloaded.getByRole("button", { name: AVAILABILITY.EVERYONE }).click();
+    await expect(reloaded.getByRole("button", { name: AVAILABILITY.EVERYONE })).toHaveAttribute("aria-pressed", "true");
+    await reloaded.getByRole("button", { name: /Remove.*standard/i }).click();
+    await expect(reloaded.getByText(/standard/)).toHaveCount(0);
   });
 });

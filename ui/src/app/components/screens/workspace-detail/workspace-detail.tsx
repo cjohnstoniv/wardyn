@@ -22,6 +22,7 @@ import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../../lib/workspace-copy";
 import { Button } from "../../ui/button";
+import { AvailabilityControl } from "../../wardyn/availability-control";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
@@ -409,6 +410,14 @@ export function WorkspaceDetailScreen() {
               setProfileName(suggested);
             }}
           />
+        </DetailSectionCard>
+
+        {/* UT-7b: kind workspace, value = the workspace's own id — one more
+            resource editor carrying the §2.6 "Available to" control, wired
+            here rather than into the /workspaces list row (a table row has
+            no room for it; this detail page is the workspace's editor). */}
+        <DetailSectionCard title="Availability" subtitle="Who may launch a run against this workspace.">
+          <AvailabilityControl kind="workspace" value={ws.id} />
         </DetailSectionCard>
 
         <AllowedHostsCard ws={ws} onWorkspaceUpdated={setWs} />

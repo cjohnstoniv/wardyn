@@ -54,6 +54,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "../ui/sheet";
+import { AvailabilityControl } from "../wardyn/availability-control";
 import { ConfinementChip, Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { Field } from "../wardyn/form-primitives";
 import { POLICY_TEMPLATES, PolicyPanel, egressSummary, lifecycleSummary } from "../wardyn/policy-panel";
@@ -403,6 +404,9 @@ function PolicyDetail({
                 )
               }
             />
+
+            {/* UT-7b: kind policy, value = the policy's own id. */}
+            <AvailabilityControl kind="policy" value={policy.id} />
 
             {/* Raw JSON stays one click away (C7), never the primary content. */}
             <details className="group rounded-lg border border-border">
