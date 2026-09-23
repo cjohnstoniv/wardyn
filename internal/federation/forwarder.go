@@ -32,8 +32,8 @@ const AuditActor = "wardyn/federation"
 // row it keeps: the cursor and the revoked mark (store.PG).
 type Store interface {
 	ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error)
-	GetFederationCursor(ctx context.Context) (int64, error)
-	SetFederationCursor(ctx context.Context, seq int64) error
+	GetFederationCursor(ctx context.Context) (seq int64, rowHash string, err error)
+	SetFederationCursor(ctx context.Context, seq int64, rowHash string) error
 	AuditHeadSeq(ctx context.Context) (int64, error)
 	FederationRevoked(ctx context.Context) (bool, error)
 	MarkFederationRevoked(ctx context.Context) error
@@ -57,13 +57,17 @@ func (s Status) Lag() int64 { return max(s.HeadSeq-s.AckedSeq, 0) }
 // Forwarder pushes this daemon's chained audit rows to the organisation from
 // the durable cursor in org_federation, one batch at a time — at-least-once:
 // the cursor moves only after the organisation acknowledged, and the
-// organisation recognises a re-sent row by its seq and row hash.
+// organisation recognises a re-sent row by its seq and row hash. The cursor
+// is a seq and the row hash acknowledged at it, because a local table reset can
+// reuse the seq.
 type Forwarder struct {
 	client   *Client
 	store    Store
 	cred     Credential
 	audit    audit.Recorder
 	interval time.Duration
+
+	ackedHash string // row_hash of the local row at status.AckedSeq when it was acknowledged
 
 	mu      sync.Mutex
 	status  Status
@@ -95,7 +99,7 @@ func (f *Forwarder) update(fn func(*Status)) {
 // the server starts, so a laptop revoked before a restart refuses new runs from
 // its first request, whether or not the organisation is reachable.
 func (f *Forwarder) Load(ctx context.Context) error {
-	acked, err := f.store.GetFederationCursor(ctx)
+	acked, ackedHash, err := f.store.GetFederationCursor(ctx)
 	if err != nil {
 		return err
 	}
@@ -109,7 +113,7 @@ func (f *Forwarder) Load(ctx context.Context) error {
 			s.LastError = "the organisation revoked this device before this start"
 		}
 	})
-	f.loaded = true
+	f.ackedHash, f.loaded = ackedHash, true
 	return nil
 }
 
@@ -154,24 +158,38 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 	}
 	f.update(func(s *Status) { s.HeadSeq = head })
 	acked := f.Status().AckedSeq
-	if head < acked {
-		// The local table was truncated or restored under a kept cursor: its rows
-		// would never be read again. Start over; the organisation skips what it
-		// already holds and records a genesis row as a chain reset.
-		slog.Error("federation: the local audit head is below the forwarding cursor; resending from the start",
-			"device_id", f.cred.DeviceID, "head_seq", head, "acked_seq", acked)
-		if err := f.store.SetFederationCursor(ctx, 0); err != nil {
-			return f.retry(err, 0), false
-		}
-		acked = 0
-		f.update(func(s *Status) { s.AckedSeq = 0 })
-	}
 
 	var rows []types.FederatedAuditEvent
-	if !f.halted && head > acked {
-		if rows, err = f.store.ListAuditEventsAfterSeq(ctx, acked, batchSize); err != nil {
+	if acked > 0 {
+		// One read, one snapshot: the row at the cursor, then the batch after it.
+		// The row at the cursor must still be the one the organisation
+		// acknowledged. Gone (a truncate or restore below the cursor) or carrying
+		// another hash (a reset that restarted seq and refilled past it), the
+		// local chain was reset: the rows after it would link to nothing the
+		// organisation holds, so start over from genesis — the organisation skips
+		// what it already holds and records the new genesis as a chain reset.
+		if rows, err = f.store.ListAuditEventsAfterSeq(ctx, acked-1, batchSize+1); err != nil {
 			return f.retry(err, 0), false
 		}
+		if len(rows) > 0 && rows[0].Seq == acked && rows[0].RowHash == f.ackedHash {
+			rows = rows[1:]
+		} else {
+			slog.Error("federation: the local audit row at the forwarding cursor is gone or changed; the local table was reset, resending from the start",
+				"device_id", f.cred.DeviceID, "head_seq", head, "acked_seq", acked)
+			if err := f.store.SetFederationCursor(ctx, 0, ""); err != nil {
+				return f.retry(err, 0), false
+			}
+			acked, f.ackedHash, rows = 0, "", nil
+			f.update(func(s *Status) { s.AckedSeq = 0 })
+		}
+	}
+	if acked == 0 && !f.halted {
+		if rows, err = f.store.ListAuditEventsAfterSeq(ctx, 0, batchSize); err != nil {
+			return f.retry(err, 0), false
+		}
+	}
+	if f.halted {
+		rows = nil
 	}
 	chained := slices.DeleteFunc(slices.Clone(rows), func(e types.FederatedAuditEvent) bool { return e.RowHash == "" })
 
@@ -192,9 +210,17 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 		}
 	}
 	if next != acked {
-		if err := f.store.SetFederationCursor(ctx, next); err != nil {
+		// The hash of the row at next, as read; a next that is not a row read
+		// here keeps "", which the next tick reads as a reset and resends from
+		// the start — the safe direction.
+		hash := ""
+		if i := slices.IndexFunc(rows, func(e types.FederatedAuditEvent) bool { return e.Seq == next }); i >= 0 {
+			hash = rows[i].RowHash
+		}
+		if err := f.store.SetFederationCursor(ctx, next, hash); err != nil {
 			return f.retry(err, 0), false
 		}
+		f.ackedHash = hash
 	}
 	f.backoff = 0
 	f.update(func(s *Status) {

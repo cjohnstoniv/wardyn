@@ -265,13 +265,15 @@ func orgDevice(t *testing.T, h *harness, id uuid.UUID) types.Device {
 	return types.Device{}
 }
 
-func laptopCursor(t *testing.T, laptop *pgxpool.Pool) int64 {
+// laptopCursor is the laptop's durable cursor: the seq, and the row hash the
+// organisation acknowledged at it.
+func laptopCursor(t *testing.T, laptop *pgxpool.Pool) (int64, string) {
 	t.Helper()
-	c, err := store.NewPG(laptop).GetFederationCursor(context.Background())
+	c, h, err := store.NewPG(laptop).GetFederationCursor(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c
+	return c, h
 }
 
 func TestFederation_OneAuditStream(t *testing.T) {
@@ -347,7 +349,7 @@ func TestFederation_OneAuditStream(t *testing.T) {
 	}
 
 	if !t.Run("a second pass from a rewound cursor adds nothing", func(t *testing.T) {
-		if err := store.NewPG(laptop).SetFederationCursor(ctx, 0); err != nil {
+		if err := store.NewPG(laptop).SetFederationCursor(ctx, 0, ""); err != nil {
 			t.Fatal(err)
 		}
 		forward(t, h.srv.URL, laptop, cred, func(s federation.Status) bool {
@@ -390,7 +392,7 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		}) {
 			t.Fatal("no device.audit.ingest chain_mismatch failure row on the organisation")
 		}
-		if c := laptopCursor(t, laptop); c != head {
+		if c, _ := laptopCursor(t, laptop); c != head {
 			t.Fatalf("laptop cursor moved to %d, want %d", c, head)
 		}
 		if d := orgDevice(t, h, cred.DeviceID); d.LastSeq != head {
@@ -403,23 +405,26 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		return
 	}
 
-	// purge is a superuser's reset of the laptop's audit table followed by five
+	// purge is a superuser's reset of the laptop's audit table followed by n
 	// new rows: the organisation must record it as a chain reset and hold every
 	// new row, and both cursors must name the new head. reusesSeqs is the case
 	// where the reset restarts seq, so the new rows reuse seqs the organisation
-	// already recorded and matching on seq alone would drop them as re-sends.
-	purge := func(t *testing.T, stmt string, reusesSeqs bool, resets, heldBefore int) {
+	// already recorded and matching on seq alone would drop them as re-sends;
+	// pastCursor is the case where the new head reaches the old cursor, so a
+	// forwarder trusting seq alone would push rows that link to nothing the
+	// organisation holds.
+	purge := func(t *testing.T, stmt string, n int, reusesSeqs, pastCursor bool, resets, heldBefore int) {
 		t.Helper()
-		cursorBefore := laptopCursor(t, laptop)
+		cursorBefore, _ := laptopCursor(t, laptop)
 		asSuperuser(t, laptop, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, stmt)
 			return err
 		})
-		newHead := writeLaptopRows(t, laptop, 5, "after-purge")
+		newHead := writeLaptopRows(t, laptop, n, "after-purge")
 		want := laptopChain(t, laptop)
-		if len(want) != 5 || want[0].prevHash != "" || (newHead < cursorBefore) != reusesSeqs {
-			t.Fatalf("precondition: 5 rows from a genesis, head %d vs cursor %d reusing seqs=%v: %+v",
-				newHead, cursorBefore, reusesSeqs, want)
+		if len(want) != n || want[0].prevHash != "" || (want[0].seq <= cursorBefore) != reusesSeqs || (newHead >= cursorBefore) != pastCursor {
+			t.Fatalf("precondition: %d rows from a genesis, seqs %d..%d vs cursor %d, want reusing seqs=%v past the cursor=%v: %+v",
+				n, want[0].seq, newHead, cursorBefore, reusesSeqs, pastCursor, want)
 		}
 		forward(t, h.srv.URL, laptop, cred, func(s federation.Status) bool {
 			return s.AckedSeq == newHead && s.LastError == ""
@@ -429,30 +434,37 @@ func TestFederation_OneAuditStream(t *testing.T) {
 			t.Fatalf("organisation recorded %d chain resets, want %d", n, resets)
 		}
 		got := orgOrigins(t, org, cred.DeviceID)
-		if len(got) != heldBefore+5 {
-			t.Fatalf("organisation holds %d rows for the device, want %d", len(got), heldBefore+5)
+		if len(got) != heldBefore+n {
+			t.Fatalf("organisation holds %d rows for the device, want %d", len(got), heldBefore+n)
 		}
 		for i, w := range want {
 			if got[heldBefore+i] != w {
 				t.Fatalf("post-purge row %d: organisation holds %+v, laptop chained %+v", i, got[heldBefore+i], w)
 			}
 		}
-		if c := laptopCursor(t, laptop); c != newHead {
-			t.Fatalf("laptop cursor = %d, want %d", c, newHead)
+		headHash := want[n-1].rowHash
+		if c, ch := laptopCursor(t, laptop); c != newHead || ch != headHash {
+			t.Fatalf("laptop cursor = (%d, %s), want (%d, %s)", c, ch, newHead, headHash)
 		}
-		if d := orgDevice(t, h, cred.DeviceID); d.LastSeq != newHead || d.LastRowHash != want[4].rowHash {
-			t.Fatalf("organisation's recorded cursor = (%d, %s), want (%d, %s)", d.LastSeq, d.LastRowHash, newHead, want[4].rowHash)
+		if d := orgDevice(t, h, cred.DeviceID); d.LastSeq != newHead || d.LastRowHash != headHash {
+			t.Fatalf("organisation's recorded cursor = (%d, %s), want (%d, %s)", d.LastSeq, d.LastRowHash, newHead, headHash)
 		}
-		requireChainOK(t, "laptop", laptop, 5)
-		requireChainOK(t, "organisation", org, int64(heldBefore+5))
+		requireChainOK(t, "laptop", laptop, int64(n))
+		requireChainOK(t, "organisation", org, int64(heldBefore+n))
 	}
 
 	if !t.Run("a truncated laptop table is a visible chain reset and ingest resumes", func(t *testing.T) {
-		purge(t, `TRUNCATE audit_events`, false, 1, fedRows)
+		purge(t, `TRUNCATE audit_events`, 5, false, true, 1, fedRows)
 	}) {
 		return
 	}
-	t.Run("a truncate that restarts the laptop's seq is a chain reset, never rows dropped as re-sends", func(t *testing.T) {
-		purge(t, `TRUNCATE audit_events RESTART IDENTITY`, true, 2, fedRows+5)
+	if !t.Run("a truncate that restarts the laptop's seq is a chain reset, never rows dropped as re-sends", func(t *testing.T) {
+		purge(t, `TRUNCATE audit_events RESTART IDENTITY`, 5, true, false, 2, fedRows+5)
+	}) {
+		return
+	}
+	// The cursor is now the fifth post-purge row; eight new rows reach past it.
+	t.Run("a truncate that restarts the laptop's seq and refills past the cursor is a chain reset, never a halt", func(t *testing.T) {
+		purge(t, `TRUNCATE audit_events RESTART IDENTITY`, 8, true, true, 3, fedRows+10)
 	})
 }

@@ -490,6 +490,46 @@ func TestPG_Devices_AResetThatReusesSeqsIsAChainResetNotADroppedResend(t *testin
 	}
 }
 
+// A laptop reset that restarts seq and then writes PAST the old cursor. Sent
+// from the old cursor, as a forwarder that trusted seq alone did, the first new
+// row links to nothing the organisation holds and is refused; sent from its
+// genesis, the new chain is a chain reset accepted in full, the rows at reused
+// seqs included. This is why the forwarder resends from genesis when the row
+// at its cursor no longer carries the hash it had acknowledged.
+func TestPG_Devices_AResetPastTheOldCursorIsAcceptedFromItsGenesis(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	d := federationDevice(t, st)
+	ingest := func(rows ...types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+		return st.IngestDeviceAudit(ctx, d.ID, testPeer, rows)
+	}
+	a1 := federationRow(t, pool, d, "", 1, "a1", json.RawMessage(`{}`))
+	a2 := federationRow(t, pool, d, a1.RowHash, 2, "a2", json.RawMessage(`{}`))
+	if res, err := ingest(a1, a2); err != nil || res.Accepted != 2 {
+		t.Fatalf("first chain: %+v %v", res, err)
+	}
+
+	b := []types.FederatedAuditEvent{federationRow(t, pool, d, "", 1, "b1", json.RawMessage(`{}`))}
+	for i := 2; i <= 4; i++ {
+		b = append(b, federationRow(t, pool, d, b[i-2].RowHash, int64(i), "b"+strconv.Itoa(i), json.RawMessage(`{}`)))
+	}
+	if _, err := ingest(b[2:]...); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the new chain sent from the old cursor: err = %v, want ErrConflict", err)
+	}
+	if res, err := ingest(b...); err != nil || res.Accepted != 4 || !res.Reset {
+		t.Fatalf("the new chain sent from its genesis: %+v %v, want Accepted=4 Reset=true", res, err)
+	}
+	var lastSeq int64
+	var lastHash string
+	if err := pool.QueryRow(ctx, `SELECT last_seq, last_row_hash FROM devices WHERE id = $1`, d.ID).Scan(&lastSeq, &lastHash); err != nil {
+		t.Fatal(err)
+	}
+	if lastSeq != 4 || lastHash != b[3].RowHash {
+		t.Fatalf("recorded head = (%d, %s), want (4, %s)", lastSeq, lastHash, b[3].RowHash)
+	}
+}
+
 // A retry whose already-ingested prefix was edited is refused: every claimed
 // hash is recomputed, the skipped prefix included.
 func TestPG_Devices_RetryWithAnEditedIngestedPrefixIsRefused(t *testing.T) {
@@ -577,7 +617,7 @@ func TestPG_Devices_ConcurrentPushesNeitherDeadlockNorBreakTheChain(t *testing.T
 
 // The laptop's revoked mark lives beside its cursor: set once, kept by a later
 // cursor advance, cleared only by ResetFederation (a re-enrolment), which also
-// returns the cursor to 0.
+// returns the cursor and its row hash to 0 and "".
 func TestPG_Devices_FederationRevokedMark(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -588,7 +628,7 @@ func TestPG_Devices_FederationRevokedMark(t *testing.T) {
 	if revoked, err := st.FederationRevoked(ctx); err != nil || revoked {
 		t.Fatalf("no row: revoked=%v err=%v", revoked, err)
 	}
-	if err := st.SetFederationCursor(ctx, 42); err != nil {
+	if err := st.SetFederationCursor(ctx, 42, "h42"); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
@@ -596,8 +636,11 @@ func TestPG_Devices_FederationRevokedMark(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := st.SetFederationCursor(ctx, 43); err != nil {
+	if err := st.SetFederationCursor(ctx, 43, "h43"); err != nil {
 		t.Fatal(err)
+	}
+	if seq, hash, err := st.GetFederationCursor(ctx); err != nil || seq != 43 || hash != "h43" {
+		t.Fatalf("cursor = (%d, %q) err=%v, want (43, h43)", seq, hash, err)
 	}
 	if revoked, err := st.FederationRevoked(ctx); err != nil || !revoked {
 		t.Fatalf("after mark and a cursor advance: revoked=%v err=%v", revoked, err)
@@ -606,8 +649,8 @@ func TestPG_Devices_FederationRevokedMark(t *testing.T) {
 		t.Fatal(err)
 	}
 	revoked, err := st.FederationRevoked(ctx)
-	cur, cerr := st.GetFederationCursor(ctx)
-	if err != nil || cerr != nil || revoked || cur != 0 {
-		t.Fatalf("after reset: revoked=%v cursor=%d err=%v/%v", revoked, cur, err, cerr)
+	cur, curHash, cerr := st.GetFederationCursor(ctx)
+	if err != nil || cerr != nil || revoked || cur != 0 || curHash != "" {
+		t.Fatalf("after reset: revoked=%v cursor=(%d, %q) err=%v/%v", revoked, cur, curHash, err, cerr)
 	}
 }

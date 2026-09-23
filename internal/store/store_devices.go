@@ -55,8 +55,8 @@ type DeviceStore interface {
 	RevokeDevice(ctx context.Context, id uuid.UUID, now time.Time) (types.Device, error)
 	IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer string, rows []types.FederatedAuditEvent) (DeviceIngestResult, error)
 	ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error)
-	GetFederationCursor(ctx context.Context) (int64, error)
-	SetFederationCursor(ctx context.Context, seq int64) error
+	GetFederationCursor(ctx context.Context) (seq int64, rowHash string, err error)
+	SetFederationCursor(ctx context.Context, seq int64, rowHash string) error
 }
 
 // Compile-time assertion: PG satisfies DeviceStore.
@@ -640,19 +640,21 @@ func scanFederatedAuditEvent(row pgx.Row) (types.FederatedAuditEvent, error) {
 }
 
 // GetFederationCursor returns how far THIS deployment's forwarder has pushed
-// its local audit_events upward — 0 when nothing has been forwarded yet
-// (org_federation carries no row until the first SetFederationCursor call,
+// its local audit_events upward, and the row_hash of the row at that seq when
+// the organisation acknowledged it — 0 and "" when nothing has been forwarded
+// yet (org_federation carries no row until the first SetFederationCursor call,
 // the same zero-value-on-no-row contract GetSiteConfig uses).
-func (s PG) GetFederationCursor(ctx context.Context) (int64, error) {
+func (s PG) GetFederationCursor(ctx context.Context) (int64, string, error) {
 	var seq int64
-	err := s.Pool.QueryRow(ctx, `SELECT last_forwarded_seq FROM org_federation WHERE singleton`).Scan(&seq)
+	var rowHash string
+	err := s.Pool.QueryRow(ctx, `SELECT last_forwarded_seq, last_forwarded_row_hash FROM org_federation WHERE singleton`).Scan(&seq, &rowHash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, nil
+		return 0, "", nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("store: get federation cursor: %w", err)
+		return 0, "", fmt.Errorf("store: get federation cursor: %w", err)
 	}
-	return seq, nil
+	return seq, rowHash, nil
 }
 
 // FederationRevoked reports whether the organisation revoked this laptop's
@@ -687,27 +689,29 @@ func (s PG) MarkFederationRevoked(ctx context.Context) error {
 // clears. The only writer that clears it.
 func (s PG) ResetFederation(ctx context.Context) error {
 	const q = `
-		INSERT INTO org_federation (singleton, last_forwarded_seq, revoked_at, updated_at)
-		VALUES (true, 0, NULL, now())
-		ON CONFLICT (singleton) DO UPDATE SET last_forwarded_seq = 0, revoked_at = NULL, updated_at = now()`
+		INSERT INTO org_federation (singleton, last_forwarded_seq, last_forwarded_row_hash, revoked_at, updated_at)
+		VALUES (true, 0, '', NULL, now())
+		ON CONFLICT (singleton) DO UPDATE SET last_forwarded_seq = 0, last_forwarded_row_hash = '', revoked_at = NULL, updated_at = now()`
 	if _, err := s.Pool.Exec(ctx, q); err != nil {
 		return fmt.Errorf("store: reset federation: %w", err)
 	}
 	return nil
 }
 
-// SetFederationCursor durably advances the forwarder's cursor, upserting the
-// singleton row — the write PutSiteConfig's shape mirrors. Called after a
+// SetFederationCursor durably advances the forwarder's cursor — the seq and
+// the row_hash of the local row at it, so a later tick can tell that row from
+// one a table reset wrote at the same seq — upserting the singleton row — the write PutSiteConfig's shape mirrors. Called after a
 // batch is successfully accepted upstream (docs/design/0.8/PLAN.md: "the
 // forwarder advances a durable cursor"), never before, so a crash between the
 // organisation's accept and this write only ever costs a re-verified,
 // idempotent retry (see IngestDeviceAudit), never a gap.
-func (s PG) SetFederationCursor(ctx context.Context, seq int64) error {
+func (s PG) SetFederationCursor(ctx context.Context, seq int64, rowHash string) error {
 	const q = `
-		INSERT INTO org_federation (singleton, last_forwarded_seq, updated_at)
-		VALUES (true, $1, now())
-		ON CONFLICT (singleton) DO UPDATE SET last_forwarded_seq = EXCLUDED.last_forwarded_seq, updated_at = now()`
-	if _, err := s.Pool.Exec(ctx, q, seq); err != nil {
+		INSERT INTO org_federation (singleton, last_forwarded_seq, last_forwarded_row_hash, updated_at)
+		VALUES (true, $1, $2, now())
+		ON CONFLICT (singleton) DO UPDATE SET last_forwarded_seq = EXCLUDED.last_forwarded_seq,
+			last_forwarded_row_hash = EXCLUDED.last_forwarded_row_hash, updated_at = now()`
+	if _, err := s.Pool.Exec(ctx, q, seq, rowHash); err != nil {
 		return fmt.Errorf("store: set federation cursor: %w", err)
 	}
 	return nil

@@ -21,10 +21,12 @@ import (
 
 // memStore is the local audit table and the org_federation row.
 type memStore struct {
-	mu      sync.Mutex
-	rows    []types.FederatedAuditEvent
-	cursor  int64
-	revoked bool
+	mu         sync.Mutex
+	rows       []types.FederatedAuditEvent
+	cursor     int64
+	cursorHash string
+	gen        int // bumped by a table reset, so a reused seq carries a new hash
+	revoked    bool
 }
 
 func (m *memStore) FederationRevoked(context.Context) (bool, error) {
@@ -43,8 +45,16 @@ func (m *memStore) MarkFederationRevoked(context.Context) error {
 func (m *memStore) ResetFederation(context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.cursor, m.revoked = 0, false
+	m.cursor, m.cursorHash, m.revoked = 0, "", false
 	return nil
+}
+
+// resetTable is TRUNCATE ... RESTART IDENTITY on the local table: the rows are
+// gone and seq starts again at 1, under a kept cursor.
+func (m *memStore) resetTable() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rows, m.gen = nil, m.gen+1
 }
 
 func (m *memStore) add(n int, chained bool) {
@@ -55,7 +65,7 @@ func (m *memStore) add(n int, chained bool) {
 		e := types.FederatedAuditEvent{Seq: seq}
 		e.ID, e.Action, e.Outcome, e.ActorType = uuid.New(), "run.create", "success", types.ActorSystem
 		if chained {
-			e.RowHash = "h" + strconv.FormatInt(seq, 10)
+			e.RowHash = "h" + strconv.Itoa(m.gen) + "." + strconv.FormatInt(seq, 10)
 		}
 		m.rows = append(m.rows, e)
 	}
@@ -73,16 +83,16 @@ func (m *memStore) ListAuditEventsAfterSeq(_ context.Context, seq int64, limit i
 	return out, nil
 }
 
-func (m *memStore) GetFederationCursor(context.Context) (int64, error) {
+func (m *memStore) GetFederationCursor(context.Context) (int64, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.cursor, nil
+	return m.cursor, m.cursorHash, nil
 }
 
-func (m *memStore) SetFederationCursor(_ context.Context, seq int64) error {
+func (m *memStore) SetFederationCursor(_ context.Context, seq int64, rowHash string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.cursor = seq
+	m.cursor, m.cursorHash = seq, rowHash
 	return nil
 }
 
@@ -369,5 +379,50 @@ func TestForwarder_HeadBelowCursorResendsFromTheStart(t *testing.T) {
 	f.step(context.Background())
 	if len(org.pushes) != 1 || len(org.pushes[0]) != 10 || org.pushes[0][0].Seq != 1 || st.cursor != 10 {
 		t.Fatalf("pushes=%d cursor=%d status=%+v", len(org.pushes), st.cursor, f.Status())
+	}
+}
+
+// TestForwarder_AResetThatRefillsTheCursorResendsFromGenesis: a local table
+// reset that restarts seq (TRUNCATE ... RESTART IDENTITY, a restore) and then
+// writes up to or past the old cursor leaves a row at the cursor's seq that the
+// organisation never saw. The forwarder notices by that row's hash and resends
+// from the new genesis, rather than heart-beating over the new rows (head ==
+// cursor) or pushing rows that link to nothing the organisation holds, which
+// it refuses 422 and the forwarder halts on (head past the cursor).
+func TestForwarder_AResetThatRefillsTheCursorResendsFromGenesis(t *testing.T) {
+	for _, refill := range []int{3, 5} {
+		t.Run(strconv.Itoa(refill), func(t *testing.T) {
+			st, rec := &memStore{}, &memRecorder{}
+			st.add(3, true)
+			cred := Credential{DeviceID: uuid.New(), Token: "wdd_test"}
+			org := &orgStub{}
+			f := NewForwarder(NewClient(org.serve(t, cred.DeviceID).URL), st, cred, rec)
+			ctx := context.Background()
+			f.step(ctx)
+			if st.cursor != 3 || st.cursorHash != st.rows[2].RowHash {
+				t.Fatalf("setup: cursor = (%d, %q), want (3, %q)", st.cursor, st.cursorHash, st.rows[2].RowHash)
+			}
+
+			st.resetTable()
+			st.add(refill, true)
+			if _, stop := f.step(ctx); stop {
+				t.Fatal("a reset is not a revocation")
+			}
+			if len(org.pushes) != 2 || len(org.pushes[1]) != refill || org.pushes[1][0].Seq != 1 {
+				t.Fatalf("pushes after the reset = %v, want all %d new rows from seq 1", org.pushes[1:], refill)
+			}
+			last := st.rows[refill-1]
+			if s := f.Status(); st.cursor != last.Seq || st.cursorHash != last.RowHash || s.AckedSeq != last.Seq || s.LastError != "" || f.halted {
+				t.Fatalf("after the resend: cursor = (%d, %q) status = %+v halted = %v, want (%d, %q)",
+					st.cursor, st.cursorHash, s, f.halted, last.Seq, last.RowHash)
+			}
+
+			// A restart over the new chain resumes at its head: nothing resent.
+			g := NewForwarder(NewClient(org.serve(t, cred.DeviceID).URL), st, cred, rec)
+			g.step(ctx)
+			if len(org.pushes) != 2 || g.Status().AckedSeq != last.Seq {
+				t.Fatalf("after a restart: pushes = %d status = %+v", len(org.pushes), g.Status())
+			}
+		})
 	}
 }
