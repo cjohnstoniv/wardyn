@@ -3062,6 +3062,63 @@ grep 'daemon egress proxy configured' <logs>
 A malformed `WARDYN_DAEMON_PROXY_URL` (not `http://`/`https://`, no host, or an embedded credential)
 refuses boot rather than silently falling back to direct — same posture as `WARDYN_TRUSTED_CA_FILE`.
 
+### Control-plane to proxy TLS
+
+Every run's `wardyn-proxy` sidecar calls `wardynd` for everything it does on the
+run's behalf, and one of those calls — `GET /api/v1/internal/injection/{grant}` —
+answers with a credential **value**. Since 0.7.12 that hop is TLS on every install
+shape except a loopback-only local one, and the proxy trusts exactly one root for
+it.
+
+- **wardynd's end.** On first boot `wardynd` mints an internal CA (ECDSA P-256, ten
+  years) and stores it in the secret store as `wardyn-internal-ca`, beside its
+  signing key: age-encrypted in Postgres, in every backup that carries the
+  signing key, reserved from the secrets API and from every grant. At each boot
+  it signs a serving certificate for the host of `WARDYN_CONTROL_PLANE_URL` — the
+  exact name every proxy dials — and serves `/api/v1/internal/*` and `/healthz`
+  on `WARDYN_INTERNAL_LISTEN` (default `:8443`, TLS 1.3 only). A bind failure
+  ends the daemon. The console listener (`WARDYN_LISTEN`) is unchanged.
+- **The proxy's end.** Dispatch puts the CA's public certificate in each run's
+  sealed proxy config (`control_plane_ca_pem`: the docker driver's
+  `WARDYN_PROXY_CONFIG_JSON`, the k8s driver's per-run Secret — where the per-run
+  MITM CA already travels). The proxy trusts that certificate and nothing else
+  for every control-plane call: the resolve, mints, token renewal, decisions,
+  approvals and uploads. Not the system roots, and not `WARDYN_TRUSTED_CA_FILE`:
+  that bundle is for egress, because a TLS-inspecting box sits between the proxy
+  and the internet, never between the proxy and `wardynd`. A wrong CA, a wrong
+  name, or an https URL with no CA fails the call closed — at startup, the proxy
+  does not start.
+- **"Local", precisely.** `http://` is accepted only when the URL's host is
+  `localhost`, an address in `127.0.0.0/8`, or `::1` — matched literally, with no
+  DNS lookup. `wardynd` applies the rule at boot and the proxy at start (one
+  function, `hoptls.CheckURL`); anything else is refused with the fix in the
+  message. `host.docker.internal` is not local: those bytes cross a bridge or the
+  Docker Desktop VM boundary.
+- **Per install shape.** Nothing to configure on any of them:
+
+  | Install | `WARDYN_CONTROL_PLANE_URL` | Notes |
+  |---|---|---|
+  | Helm (`k8s.enabled`) | `https://<release>.<namespace>.svc.cluster.local:8443` | Service port `internal` (`service.internalPort`); the chart's NetworkPolicy grants it to run proxies |
+  | Compose, Desktop, m′ | `https://wardynd:8443` | on `wardyn-internal`; never published to the host |
+  | Host mode (`scripts/run-host.sh`) | `https://host.docker.internal:8443` | `wardynd` binds `:8443` on the host |
+
+- **Checking it.** `/healthz` reports `"proxy_hop_tls": true`, and `wardynd`
+  logs `proxy-facing TLS listener (internal CA)` with the address at boot. A local
+  install reports `false` and logs a warning naming the loopback URL.
+- **Rotation.** The CA is replaced at boot once less than a year of its validity
+  remains. Runs dispatched under the old CA then fail closed on their next
+  control-plane call and must be relaunched. To rotate early, stop `wardynd`,
+  delete the row (`DELETE FROM secrets WHERE owned_by = '' AND name =
+  'wardyn-internal-ca';`) and start it again.
+- **What is not on this hop.** `wardyn-tetragon-ingest` still posts to the
+  console listener in plaintext with an audit-write-only bearer: an integrity
+  exposure, not a confidentiality one — a captured token can forge ground-truth
+  events until it rotates, and cannot read or mint a credential. Moving it onto
+  the TLS listener is #606. The console listener also still serves
+  `/api/v1/internal/*` for test harnesses and for runs dispatched before the
+  upgrade, which finish on the plaintext path they started with. The proxy authenticates to `wardynd` with its run token
+  (bearer, not mTLS — `threatmodel/THREAT-MODEL.md` B6).
+
 ### Corporate TLS-inspection root
 
 A TLS-inspecting upstream proxy — one that terminates and re-signs TLS with its
@@ -4353,7 +4410,8 @@ session recording; absent (never an empty string) otherwise.
 `wardyn-rec`, which PUTs the finished recording to the proxy pod
 (`http://wardyn-proxy:3128/wardyn/v1/recordings/<runID>`), which forwards it to
 `WARDYN_CONTROL_PLANE_URL` — the chart points this at the control plane's
-in-cluster Service FQDN. Delivery failure is deliberately non-fatal to the task
+in-cluster Service FQDN, on the internal TLS port ([Control-plane to proxy
+TLS](#control-plane-to-proxy-tls)). Delivery failure is deliberately non-fatal to the task
 but bounded (`cmd/wardyn-rec/main.go`'s upload client timeout), so it cannot hold
 a finished task's exit longer. A cluster-wide baseline default-deny NetworkPolicy
 or a mesh authorization policy can drop the proxy-pod → control-plane hop even

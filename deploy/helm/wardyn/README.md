@@ -62,7 +62,9 @@ install.
   older image needs `readinessProbe.path` pinned back, see
   [Installation](#installation)); `WARDYN_PG_DSN` and
   `WARDYN_ADMIN_TOKEN` sourced from Secrets.
-- **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`), plus
+- **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`) and
+  the `internal` port (`service.internalPort`, 8443: the proxy-facing TLS
+  listener — see [Control-plane to proxy TLS](#control-plane-to-proxy-tls)), plus
   an SSH port when `ssh.enabled` (same Service, no second object — see
   [Split SSH exposure](#split-ssh-exposure) to expose it differently) and a UI
   port when `uiSandbox.enabled` (which must reach a DIFFERENT hostname — see
@@ -75,8 +77,8 @@ install.
 - **NetworkPolicy** — default-deny ingress/egress (Wardyn's L0 egress posture),
   re-opening DNS, Postgres egress, HTTP (+ SSH and + the UI-sandbox gateway,
   when enabled) ingress from this
-  namespace, and (`k8s.enabled`) API-server egress plus an ingress peer for a
-  separate `k8s.runsNamespace`.
+  namespace, and (`k8s.enabled`) the `internal` TLS port, API-server egress, and
+  an ingress peer for a separate `k8s.runsNamespace`.
 - **Role/RoleBinding + ClusterRole/ClusterRoleBinding** (`k8s.enabled` only,
   unless `k8s.rbac.create=false`) — least-privilege RBAC for the k8s runner
   substrate; see
@@ -460,8 +462,12 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   chart never creates or labels it — and gets its own Role/RoleBinding plus
   an extra NetworkPolicy ingress peer (matched on the namespace's built-in
   `kubernetes.io/metadata.name` label, since an operator-created namespace
-  carries no chart labels) so its proxy sidecars can still reach wardynd for
-  credential mints, approval checks, and recording uploads.
+  carries no chart labels) so its proxy sidecars can still reach wardynd's
+  `internal` TLS port for credential resolves and mints, approval checks, and
+  recording uploads. That port has its own NetworkPolicy rule (this namespace
+  plus the runs namespace) and never inherits `networkPolicy.ingress.from`. A
+  separate `http` peer for the runs namespace stays only so a run already in
+  flight at an upgrade from 0.7.11 finishes.
 - `k8s.proxyImage`: the wardyn-proxy sidecar image (`WARDYN_PROXY_IMAGE`) —
   also what the boot-time egress canary launches. **Required — the chart
   refuses to render without it** (like `serviceAccount.automount` above): the
@@ -777,6 +783,30 @@ always wins over the ConfigMap-backed path (the chart omits its own entry
 when `env.WARDYN_DEFAULT_POLICY` is set, same as `WARDYN_RECORDING_DIR`/
 `WARDYN_AUDIT_SPOOL`, see [Values](#values) below).
 
+## Control-plane to proxy TLS
+
+Every run's proxy resolves credential values from wardynd, so that hop is TLS.
+The chart renders `WARDYN_CONTROL_PLANE_URL` as
+`https://<release>.<namespace>.svc.cluster.local:<service.internalPort>` and
+passes `-internal-listen=:<service.internalPort>` (default 8443). The
+certificate comes from wardynd's **own** internal CA, minted on first boot into
+its secret store (age-encrypted in Postgres, beside the signing key) and kept
+across restarts and upgrades — so there is no CA Secret, no cert-manager
+dependency and nothing to rotate by hand, and a GitOps render (`helm template`,
+Argo CD, Flux) cannot churn it the way a chart-generated certificate would.
+Each proxy gets the CA certificate in its sealed per-run Secret and trusts it
+alone. `/healthz` reports `"proxy_hop_tls": true`.
+
+`service.internalPort` must differ from the other wardynd ports (the render
+refuses a collision). Never route it through an Ingress. Its NetworkPolicy rule
+admits only this namespace and `k8s.runsNamespace` — the peers you add to
+`networkPolicy.ingress.from` for the console (an ingress controller, a
+scraper) are not granted it. If a cluster-wide
+policy outside this chart (a baseline default-deny, a mesh authorization
+policy) restricts pod-to-pod ports, allow the runs namespace to reach wardynd
+on this port. Details, the per-shape table and rotation:
+[docs/OPERATIONS.md § Control-plane to proxy TLS](../../../docs/OPERATIONS.md#control-plane-to-proxy-tls).
+
 ## Corporate CA trust
 
 `trustedCA` bakes a PEM bundle of additional trusted roots into a ConfigMap
@@ -787,7 +817,8 @@ cluster's egress passes through a TLS-inspecting corporate middlebox: without
 it, `wardynd`'s own outbound TLS (OIDC discovery, the GitHub App transport,
 the audit webhook sink), the `wardyn-proxy` sidecar's forwarding transport,
 and every sandbox's own TLS clients on a passthrough CONNECT tunnel all fail
-certificate verification against that middlebox.
+certificate verification against that middlebox. It never widens what a proxy
+trusts for its calls to wardynd (see above).
 
 ```bash
 helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
