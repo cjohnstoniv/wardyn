@@ -4417,7 +4417,7 @@ silently patched.
 
 ## Rotating the age key
 
-Each stored secret is an envelope (`internal/secretstore/pg`, since 0.8): the
+Each stored secret is an envelope (`internal/secretstore/pg`, since 0.7.12): the
 value is sealed with AES-256-GCM under its own data key, bound to the row's owner
 and name, and that data key is wrapped by the `local` key-encryption key — derived
 from `WARDYN_AGE_KEY` with HKDF-SHA256 and recorded on each row as
@@ -4427,6 +4427,14 @@ refuses a row whose `kek_id` is not the configured one. Startup decrypts the per
 key through `loadOrCreateSigningKey` / `loadOrCreateSecret` and fails closed on
 a mismatch, before serving requests. A healthy start checks that boot key, not
 every application secret; verify a secret-dependent run after recovery too.
+
+The at-rest cipher is AES-256-GCM from the Go standard library
+(`cipher.NewGCMWithRandomNonce`, which draws each 96-bit nonce inside Go's
+cryptographic module) with HKDF-SHA256 key derivation, so Go's FIPS 140-3 mode
+(`GODEBUG=fips140=on`) applies to it — and with the Go version in `go.mod` it also
+runs under `GODEBUG=fips140=only`. That is a statement about this path only: the
+build does not pin a frozen module snapshot (`GOFIPS140`), and age (used once,
+to convert pre-envelope rows) is outside it.
 
 `wardynd -rotate-age-key <key-file>` is the supported rotation, a **maintenance
 mode, not a server start**: it mints a new identity, rewraps every row's data key
@@ -4445,8 +4453,8 @@ listener and never dispatches a run. Three properties:
   key the current key cannot unwrap aborts everything with an error naming that
   row and how far it got (`rekey ABORTED after 3 of 9 rows …`), and nothing is
   committed — every secret is still readable with the old key. There is no
-  half-rotated state to diagnose. A pre-envelope row aborts it too: boot the 0.8
-  daemon once, which converts them (see [Upgrades](#upgrades)), before rotating.
+  half-rotated state to diagnose. A pre-envelope row aborts it too: boot the
+  upgraded daemon once, which converts them (see [Upgrades](#upgrades)), before rotating.
 - **The CLI never sees the key.** `wardyn` has no rotation surface at all; this
   is a `wardynd` flag, run by whoever has shell access to the key file.
 
@@ -4509,9 +4517,10 @@ Migrations are **forward-only**. `internal/db` records each applied filename in
 concurrent starts do not race. There are no `down` migrations and no downgrade
 path — a rollback to an older wardynd against a migrated database is unsupported.
 
-**Upgrading to 0.8 converts every stored secret, once, and it cannot be undone
-without the backup.** `0069_secret_envelope_v1` adds the envelope columns, and
-the first 0.8 boot re-seals every existing (pre-envelope, age-encrypted) row of
+**Upgrading from 0.7.11 or earlier converts every stored secret, once, and it
+cannot be undone without the backup.** `0069_secret_envelope_v1` adds the envelope columns, and
+the first boot of 0.7.12 or later re-seals every existing (pre-envelope,
+age-encrypted) row of
 `secrets` as envelope v1 — before it reads its own boot keys, which live in the
 same table. It runs as one transaction under its own advisory lock
 (`db.SecretConvertLockKey`): a second replica starting at the same moment waits,
@@ -4524,10 +4533,11 @@ upgrade across this release**:
 #    dump plus that key is the ONLY way back to an older wardynd afterwards.
 # 1. Stop EVERY older replica — one-instance locking cannot see it under
 #    -allow-multi-instance. An older binary still running keeps writing
-#    pre-envelope payloads, which 0.8 refuses by name ("an older wardynd is
-#    still writing"). A NEW name it wrote is converted at the next 0.8 restart;
+#    pre-envelope payloads, which the new version refuses by name ("an older
+#    wardynd is still writing"). A NEW name it wrote is converted at the next
+#    restart;
 #    a name it REPLACED is overwritten in place and must be set again.
-# 2. Start 0.8 with the SAME WARDYN_AGE_KEY. The log says how many it converted:
+# 2. Start the new version with the SAME WARDYN_AGE_KEY. The log says how many it converted:
 #    INFO wardynd: converted stored secrets to envelope v1; … secrets=7
 ```
 
