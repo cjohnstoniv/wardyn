@@ -4,9 +4,11 @@
 package docker
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -35,8 +37,8 @@ func TestAgentRunIdle_ExitsOnSignal(t *testing.T) {
 		name  string
 		setup func(t *testing.T) (script string, env []string, prepDone string)
 	}{
-		{"claude-code", ccIdleSignalSetup},
-		{"codex-cli", cxIdleSignalSetup},
+		{"claude-code", ccEnvIdleSignalSetup(ccRunnableAgentRun)},
+		{"codex-cli", ccEnvIdleSignalSetup(cxRunnableAgentRun)},
 		{"aws-sso", awsSSOIdleSignalSetup},
 	}
 	signals := []struct {
@@ -64,8 +66,8 @@ func TestAgentRunIdle_ExitsOnSignal(t *testing.T) {
 // runIdleAndSignal starts the real agent-run --idle script as its own process
 // group leader, waits for it to reach the hold-open point (prepDone written —
 // same signal ccRunIdle/runIdle/cxRunIdle wait for, via `timeout`, in the
-// sibling boot-ordering tests), sends sig to the WHOLE GROUP, and returns the
-// exit code.
+// sibling boot-ordering tests) and then for the idle loop's `sleep` child,
+// sends sig to the WHOLE GROUP, and returns the exit code.
 func runIdleAndSignal(t *testing.T, script string, env []string, prepDone string, sig syscall.Signal) int {
 	t.Helper()
 	cmd := exec.Command("bash", script, "--idle")
@@ -95,16 +97,25 @@ func runIdleAndSignal(t *testing.T, script string, env []string, prepDone string
 	// INT case can leave behind.
 	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
 
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, statErr := os.Stat(prepDone); statErr == nil {
-			break
+	waitFor := func(what string, ready func() bool) {
+		deadline := time.Now().Add(5 * time.Second)
+		for !ready() {
+			if time.Now().After(deadline) {
+				t.Fatalf("agent-run --idle never reached the hold-open point (%s)\noutput: %s", what, readOutput())
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("agent-run --idle never reached the hold-open point (prep-done never appeared)\noutput: %s", readOutput())
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
+	waitFor("prep-done never appeared", func() bool {
+		_, err := os.Stat(prepDone)
+		return err == nil
+	})
+	// Each script writes prep-done a few lines BEFORE its two traps; a signal
+	// in that window meets the default TERM/INT action and the case flakes.
+	// The loop's `sleep 3600` child only exists once both traps are in place.
+	waitFor("the idle loop's sleep child never appeared", func() bool {
+		return hasSleepChild(cmd.Process.Pid)
+	})
 
 	if err := syscall.Kill(-cmd.Process.Pid, sig); err != nil {
 		t.Fatalf("signal the process group: %v", err)
@@ -124,42 +135,42 @@ func runIdleAndSignal(t *testing.T, script string, env []string, prepDone string
 	return -1
 }
 
-// ccIdleSignalSetup reuses claude_agent_run_boot_test.go's real-script and
-// fake-tmux plumbing (ccRunnableAgentRun, ccIdleEnv) — the same env ccRunIdle
-// builds, minus the `timeout` wrapper this test replaces with a signal.
-func ccIdleSignalSetup(t *testing.T) (script string, env []string, prepDone string) {
-	home, binDir, tmuxLog := ccIdleEnv(t)
-	env = append(os.Environ(),
-		"HOME="+home,
-		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"TMUX_LOG="+tmuxLog,
-		"CLAUDE_CONFIG_DIR="+filepath.Join(home, "cfg"),
-		"WARDYN_REPOS=",
-		"WARDYN_REPO_URL=",
-		"WARDYN_MITM_CA_PEM=",
-		"WARDYN_GITHUB_GRANT_ID=",
-		"WARDYN_CLAUDE_MANAGED_B64=",
-	)
-	return ccRunnableAgentRun(t), env, filepath.Join(home, ".wardyn", "prep-done")
+// hasSleepChild reports whether pid has a direct child that has exec'd
+// `sleep` (a forked-but-not-yet-exec'd subshell still reads as bash).
+func hasSleepChild(pid int) bool {
+	children, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
+	if err != nil {
+		return false
+	}
+	for _, child := range strings.Fields(string(children)) {
+		comm, err := os.ReadFile("/proc/" + child + "/comm")
+		if err == nil && strings.TrimSpace(string(comm)) == "sleep" {
+			return true
+		}
+	}
+	return false
 }
 
-// cxIdleSignalSetup reuses codex_agent_run_boot_test.go's real-script plumbing
-// (cxRunnableAgentRun) over the claude-code fake tmux (ccIdleEnv) — the same
-// env cxRunIdle builds, minus the `timeout` wrapper.
-func cxIdleSignalSetup(t *testing.T) (script string, env []string, prepDone string) {
-	home, binDir, tmuxLog := ccIdleEnv(t)
-	env = append(os.Environ(),
-		"HOME="+home,
-		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"TMUX_LOG="+tmuxLog,
-		"CLAUDE_CONFIG_DIR="+filepath.Join(home, "cfg"),
-		"WARDYN_REPOS=",
-		"WARDYN_REPO_URL=",
-		"WARDYN_MITM_CA_PEM=",
-		"WARDYN_GITHUB_GRANT_ID=",
-		"WARDYN_CLAUDE_MANAGED_B64=",
-	)
-	return cxRunnableAgentRun(t), env, filepath.Join(home, ".wardyn", "prep-done")
+// ccEnvIdleSignalSetup reuses the real-script plumbing (ccRunnableAgentRun or
+// cxRunnableAgentRun) over the claude-code fake tmux (ccIdleEnv) — the same env
+// ccRunIdle and cxRunIdle build, minus the `timeout` wrapper this test replaces
+// with a signal.
+func ccEnvIdleSignalSetup(runnable func(*testing.T) string) func(*testing.T) (string, []string, string) {
+	return func(t *testing.T) (script string, env []string, prepDone string) {
+		home, binDir, tmuxLog := ccIdleEnv(t)
+		env = append(os.Environ(),
+			"HOME="+home,
+			"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"TMUX_LOG="+tmuxLog,
+			"CLAUDE_CONFIG_DIR="+filepath.Join(home, "cfg"),
+			"WARDYN_REPOS=",
+			"WARDYN_REPO_URL=",
+			"WARDYN_MITM_CA_PEM=",
+			"WARDYN_GITHUB_GRANT_ID=",
+			"WARDYN_CLAUDE_MANAGED_B64=",
+		)
+		return runnable(t), env, filepath.Join(home, ".wardyn", "prep-done")
+	}
 }
 
 // awsSSOIdleSignalSetup reuses awssso_agent_run_idle_test.go's real-script and
