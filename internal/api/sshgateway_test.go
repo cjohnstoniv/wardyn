@@ -566,7 +566,7 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 		Fingerprint:   ssh.FingerprintSHA256(memberPub),
 		Principal:     "mallory@example.com",
 		PublicKey:     string(ssh.MarshalAuthorizedKey(memberPub)),
-		Role:          oidc.RoleMember,
+		Role:          oidc.RoleUser,
 		RoleCheckedAt: &now,
 	})
 
@@ -688,7 +688,7 @@ func TestSSHGateway_OverrideRoleIsBoundedStale(t *testing.T) {
 		Fingerprint:   ssh.FingerprintSHA256(promotedPub),
 		Principal:     "newadmin@example.com",
 		PublicKey:     string(ssh.MarshalAuthorizedKey(promotedPub)),
-		Role:          oidc.RoleMember,
+		Role:          oidc.RoleUser,
 		RoleCheckedAt: &fresh,
 	})
 

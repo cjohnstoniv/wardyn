@@ -713,13 +713,13 @@ func ssoRBACCheck(oidcConfigured, roleMapConfigured, consoleRows bool) (SetupChe
 	if roleMapConfigured || consoleRows {
 		return SetupCheck{
 			ID: "sso_rbac", Label: "SSO role mapping", Status: "ok",
-			Detail: "Role mapping is configured — from WARDYN_OIDC_ROLE_MAP, the People step, or both — so signed-in humans are assigned admin/member from their IdP roles/groups/email.",
+			Detail: "Role mapping is configured — from WARDYN_OIDC_ROLE_MAP, the People step, or both — so signed-in humans are assigned admin/user from their IdP roles/groups/email.",
 		}, true
 	}
 	return SetupCheck{
 		ID: "sso_rbac", Label: "SSO role mapping", Status: "warn",
 		Detail:   "No role mapping is configured — neither WARDYN_OIDC_ROLE_MAP in your chart nor a mapping added on the People step — so every SSO user is an admin, unless your operator allowlist already splits admins from members.",
-		Fix:      "Set WARDYN_OIDC_ROLE_MAP (helm: env.WARDYN_OIDC_ROLE_MAP), or add a mapping on the People step (Setup → People → Role mappings), to map IdP roles/groups/emails to \"admin\" or \"member\".",
+		Fix:      "Set WARDYN_OIDC_ROLE_MAP (helm: env.WARDYN_OIDC_ROLE_MAP), or add a mapping on the People step (Setup → People → Role mappings), to map IdP roles/groups/emails to \"admin\" or \"user\".",
 		Blocking: true,
 	}, true
 }

@@ -83,7 +83,7 @@ describe("AppShell (the model-access strip)", () => {
     method: "sso",
     operator: false,
     security_operator: false,
-    role: "member",
+    role: "user",
     email: "alice@corp.example",
     // Inside SESSION_WARN_MS, so the session strip is on screen too.
     session_expires_at: new Date(Date.now() + 60_000).toISOString(),
@@ -133,7 +133,7 @@ describe("AppShell (the model-access strip)", () => {
             json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
           });
         if (u.endsWith("/api/v1/me"))
-          return Promise.resolve({ ok: true, json: async () => ({ principal: "a@b", role: "member", operator: false }) });
+          return Promise.resolve({ ok: true, json: async () => ({ principal: "a@b", role: "user", operator: false }) });
         return Promise.resolve({ ok: true, json: async () => ({}) });
       }) as unknown as typeof fetch,
     );
@@ -207,7 +207,7 @@ describe("AppShell (the model-access strip)", () => {
     expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
     expect(screen.queryByText(SHARED_ACTION)).toBeNull();
 
-    answer({ principal: "member@corp.example", role: "member", operator: false, security_operator: false });
+    answer({ principal: "member@corp.example", role: "user", operator: false, security_operator: false });
     // …and once it lands, the member reads the server's instruction, with no
     // button: nobody but their admin can repair it.
     expect(await screen.findByText(SHARED_ACTION)).toBeInTheDocument();

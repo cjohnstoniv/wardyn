@@ -312,7 +312,7 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 	doc := unwrapped(operationsDoc(t))
 
 	// deriveRole can return three roles, so the manual cannot describe two.
-	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember} {
+	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser} {
 		if !oidc.ValidRole(role) {
 			t.Fatalf("%q is no longer a role — revisit this guard, not the doc", role)
 		}
@@ -324,7 +324,7 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 		{"a real two-role model",
 			"deriveRole derives three roles (oidc.ValidRole)"},
 		{"**Any match resolving to `admin` wins** over one resolving to `member`",
-			"the fold is roleRank's three ranks: member < security_admin < admin"},
+			"the fold is roleRank's three ranks: user < security_admin < admin"},
 		{"both already `operatorOnly`",
 			"approved-egress and denied-egress are registered on securityOps (routes.go)"},
 		{"(all `operatorOnly` except the last)",
@@ -335,8 +335,8 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 		}
 	}
 	// And it must say what the fold actually is, not merely stop being wrong.
-	if !strings.Contains(doc, "`member` < `security_admin` < `admin`") {
-		t.Error(`OPERATIONS.md's "Deriving the role" never states roleRank's order (member < security_admin < admin)`)
+	if !strings.Contains(doc, "`user` < `security_admin` < `admin`") {
+		t.Error(`OPERATIONS.md's "Deriving the role" never states roleRank's order (user < security_admin < admin)`)
 	}
 }
 

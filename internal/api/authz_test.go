@@ -719,7 +719,7 @@ func TestAuthzMatrix(t *testing.T) {
 	const memberSub = "sub-member"
 	const otherSub = "sub-other-member"
 	adminSess := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-	memberSess := ssoSession(t, memberSub, "member@corp.example", oidc.RoleMember)
+	memberSess := ssoSession(t, memberSub, "member@corp.example", oidc.RoleUser)
 
 	// seedRun creates a RUNNING run owned by createdBy, with a matching cast
 	// pre-saved in the recording store (so GET .../recording/{runID} can
@@ -1008,7 +1008,7 @@ func TestAuthzMatrix(t *testing.T) {
 func TestSecurityAdminRouteTier(t *testing.T) {
 	srv, _, _, _ := newAuthzMatrixServer(t)
 	secSess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
-	memberSess := ssoSession(t, "sub-member-tier", "member-tier@corp.example", oidc.RoleMember)
+	memberSess := ssoSession(t, "sub-member-tier", "member-tier@corp.example", oidc.RoleUser)
 
 	// F155: the owner-scoped half, probed against a REAL, SEEDED, FOREIGN
 	// entity rather than the "x1" placeholder the gated-route loop uses.
@@ -1193,7 +1193,7 @@ func TestDecide_MemberKindRestriction(t *testing.T) {
 	srv := New(cfg)
 
 	const memberSub = "sub-member-kind"
-	member := ssoSession(t, memberSub, "member-kind@corp.example", oidc.RoleMember)
+	member := ssoSession(t, memberSub, "member-kind@corp.example", oidc.RoleUser)
 
 	runID := uuid.New()
 	ast.mu.Lock()

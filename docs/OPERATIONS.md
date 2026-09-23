@@ -757,8 +757,8 @@ forcing a re-login that derives one fresh.
 
 | The merged map (chart `WARDYN_OIDC_ROLE_MAP` + console People-step rows) | Signed-in humans | Admin token / local mode |
 |---|---|---|
-| empty | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **member**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
-| non-empty | mapped by `roles`/`groups`/email claim to **admin**, **`security_admin`** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE` (which takes `admin`/`member` only), or denies the login when that is also unset | always **admin** |
+| empty | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **user**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
+| non-empty | mapped by `roles`/`groups`/email claim to **admin**, **`security_admin`** or **user**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE` (which takes `admin`/`user` only), or denies the login when that is also unset | always **admin** |
 
 A console-added row keys on this exact same table: adding the deployment's
 *first* row (with the chart map also unset) or removing its *last* one moves the
@@ -819,19 +819,19 @@ A few things that don't fit the grid:
   map — the same code the preview panel surfaces when it can't check a row.
 
 **Deriving the role** (`WARDYN_OIDC_ROLE_MAP`, a CSV of `value=role` pairs, e.g.
-`Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin`; full semantics in
+`Wardyn.Admin=admin,eng-team=user,alice@corp.com=admin`; full semantics in
 [ENV.md](ENV.md)): each `value` is matched case-insensitively against the ID
 token's `roles` claim (an Entra App Role — the priority path; app-registration
 walkthrough in `.claude/skills/wardyn-k8s-setup`), its `groups` claim, or the
-signed-in email. Matches fold **highest wins** over three ranks — `member` <
+signed-in email. Matches fold **highest wins** over three ranks — `user` <
 `security_admin` < `admin` — whichever claim produced them (`roleRank`,
 `internal/auth/oidc/derive.go`): a human matching a `security_admin` row and a
-`member` row is a security admin; one matching an `admin` row anywhere is an
+`user` row is a security admin; one matching an `admin` row anywhere is an
 admin, exactly as before 0.7. `WARDYN_OIDC_OPERATOR_EMAILS` is **not
 replaced**: an email on it is still an *additional* `admin` match
 (`LegacyAdminEmails`), so a deployment adopting the role map keeps its current
 operators with zero re-configuration. `WARDYN_OIDC_DEFAULT_ROLE`
-(`admin`/`member`, unset = deny) covers everyone the map doesn't name —
+(`admin`/`user`, unset = deny) covers everyone the map doesn't name —
 `security_admin` is **refused** there and fails boot (`validDefaultRole`,
 `cmd/wardynd/boot_deps.go`): the role map is the only way to reach that tier, so
 it is never the tier granted by fallthrough to everyone nobody named.
@@ -1864,9 +1864,9 @@ the hidden claim was going to wall. Such a login is **denied**
 (`auth_error=claims_overage`), with a server log line naming the claim and the
 var. The check is narrow, so the ordinary posture is untouched: a login whose
 claims genuinely matched is served as-is (a hidden claim can only ever *narrow* a
-highest-wins match), and so is a fallthrough to `member`, the narrowest tier
+highest-wins match), and so is a fallthrough to `user`, the narrowest tier
 there is — a human in 200+ groups still signs in. Only a default WIDER than
-`member` is refused. The remedy is the operator's, and retrying will not clear
+`user` is refused. The remedy is the operator's, and retrying will not clear
 it: carry the tier on Entra App Roles, map the human's email directly, or stop
 defaulting unmatched humans to `admin`.
 
@@ -2094,7 +2094,7 @@ logs out **every** principal and revokes **every** live API token in the
 deployment — CI and automation credentials included — in one audited call. That
 is the tier working as designed. Incident response is the security admin's job,
 the two tiers deliberately do not nest (a security admin still cannot reach into
-a run, and their SSH key and attach ticket still stamp `member`), and a
+a run, and their SSH key and attach ticket still stamp `user`), and a
 revocation only ever *subtracts* reach — it grants the caller nothing.
 
 What bounds it is that a revocation is not a lockout. The session cutoff is a
@@ -2214,13 +2214,13 @@ stamp is written at `POST /me/ssh-keys` time from the registering session's role
 and RE-stamped — both columns — on every OIDC login for that principal, across
 every key they hold. The gateway never reads the role live at connect time (SSH
 carries no session for `requireOperator`), so a demoted admin's key loses the
-override at their next login (re-stamped `role=member`) or once `role_checked_at`
+override at their next login (re-stamped `role=user`) or once `role_checked_at`
 ages past the TTL — whichever comes first; deleting the key (`DELETE
 /me/ssh-keys/{fingerprint}`, self-service) and re-registering is the immediate
 lever. Strictly weaker than the web terminal's live `requireOperator` gate, but no
 longer unboundedly so. The same TTL is why **an admin upgrading from 0.5 (or pre-`0046`)
 does not get the override on the key they already have until it is refreshed**:
-`0043` backfills every pre-existing row as `member` (fail-closed) and `0046`
+`0043` backfills every pre-existing row as `member` (fail-closed; `0070` renames it `user`) and `0046`
 backfills `role_checked_at` as `NULL`, which `sshAuth` treats as infinitely
 stale. A member's key never satisfies the override (`docs/SSH.md`'s Bounds
 section; `threatmodel/THREAT-MODEL.md` residual #15). See
@@ -2261,7 +2261,7 @@ an ungranted capability, a foreign resource — are the ones a member would meet
 identically, and carry no marker.)
 
 **Both admin tiers get the control** — a `security_admin` as well as a super
-admin — and both clamp to `member`, because the clamp knows only one direction;
+admin — and both clamp to `user`, because the clamp knows only one direction;
 exiting restores whichever tier you were actually signed in as. It is offered
 over SSO only: the admin token, local mode and a deployment with no identity
 provider are one shared credential with no per-person role to pause, so there is

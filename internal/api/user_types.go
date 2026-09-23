@@ -29,13 +29,13 @@ var userTypeIDRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // reservedUserTypeIDs are the words a role-map value already means: a type
 // with one of these ids would be a type a map value could never name, or a
-// tier a type could be mistaken for. "user" is the non-admin tier's wire name
-// from 0.8 on.
+// tier a type could be mistaken for. "member" is the pre-0.8 name of the user
+// tier, still accepted as a role-map value until 0.9.
 var reservedUserTypeIDs = map[string]bool{
 	oidc.RoleAdmin:         true,
 	oidc.RoleSecurityAdmin: true,
-	oidc.RoleMember:        true,
-	"user":                 true,
+	oidc.RoleUser:          true,
+	oidc.LegacyRoleMember:  true,
 	accessDeniedRole:       true,
 }
 

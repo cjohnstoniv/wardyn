@@ -324,12 +324,12 @@ function navItemsForRole(role: Role, identityResolved: boolean): NavItem[] {
   // operator-context.tsx: never harden it), because the answer to a guess is
   // not a different guess, it is declining to draw one.
   if (!identityResolved) return [];
-  // `!== "member"` and NOT `=== "admin"`, which is what makes this correct
+  // `!== "user"` and NOT `=== "admin"`, which is what makes this correct
   // unchanged under the three-tier model: a SECURITY ADMIN gets the full nav
   // (they reach approvals, audit, permissions and governance), and each of
   // those screens gates its own writes on the right predicate. Hiding is
   // cosmetic anyway — see the note above.
-  if (role !== "member") return NAV_ITEMS;
+  if (role !== "user") return NAV_ITEMS;
   return NAV_ITEMS.filter((i) => MEMBER_NAV_PATHS.has(i.to));
 }
 

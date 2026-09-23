@@ -119,7 +119,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// tier — the asymmetry the three-tier model exists to express
 	// (internal/auth/oidc's RoleSecurityAdmin). A ladder here would put an
 	// interactive shell in every developer's sandbox.
-	role := oidc.RoleMember
+	role := oidc.RoleUser
 	if s.isOperator(r.Context()) {
 		role = oidc.RoleAdmin
 	}

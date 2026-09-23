@@ -266,14 +266,14 @@ Phase-rail badge (`steps.ts`, unchanged, not part of `PEOPLE_STEP`): `"Multi-use
 | Key | String |
 |---|---|
 | `TABLE_TITLE` | Role mappings |
-| `TABLE_LEAD` | A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or member. |
+| `TABLE_LEAD` | A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or user. |
 | `EFFECT_NOTE` | Takes effect at next sign-in. A person already signed in keeps the role they were given until then. |
 | `COL_VALUE` | Value |
 | `COL_ROLE` | Role |
 | `COL_SOURCE` | Source |
 | `COL_ADDED` | Added |
 | `ROLE_ADMIN` | Admin |
-| `ROLE_MEMBER` | Member |
+| `ROLE_USER` | User |
 | `SOURCE_CHART` | From your chart |
 | `SOURCE_CONSOLE` | Console |
 | `CHART_HINT` | Edit in your chart values. |
@@ -303,12 +303,12 @@ Phase-rail badge (`steps.ts`, unchanged, not part of `PEOPLE_STEP`): `"Multi-use
 | `OPERATOR_EMAILS_EMPTY` | None set. |
 | `IDP_NOTE` | Creating people and groups, and assigning Entra App Roles, happens in your identity provider — mapping a role here only tells Wardyn what to do with a value your IdP already sends. "Assignment required" on the app registration is Entra's gate, not this one's. |
 
-Value shown for `DEFAULT_ROLE_LABEL` when set: `ROLE_ADMIN` or `ROLE_MEMBER`, reused as-is (no
+Value shown for `DEFAULT_ROLE_LABEL` when set: `ROLE_ADMIN` or `ROLE_USER`, reused as-is (no
 separate string) — see Q2 (§9) on the display treatment.
 
 **Casing rule:** `{role}`/`{defaultRole}` interpolations inside a sentence (§7.3, §7.5, §7.7)
 are lowercase — `admin`/`security admin`/`member` — the way prose names a role mid-sentence.
-`ROLE_ADMIN` / `ROLE_MEMBER` above, and `ROLE_SECURITY_ADMIN` (frozen in `governance-prompt.md`
+`ROLE_ADMIN` / `ROLE_USER` above, and `ROLE_SECURITY_ADMIN` (frozen in `governance-prompt.md`
 §7.9, shipped in this module beside them), are the chip/label forms only (`Admin` / `Member` /
 `Security admin`, title case) and are never interpolated into a sentence **as-is**: a sentence
 takes the LOWERCASE of the chip, which for the third tier is `security admin` — so a

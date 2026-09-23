@@ -352,7 +352,7 @@ describe("ApprovalsScreen — empty-state copy by role", () => {
 
   it("member: \"Approvals raised by your runs appear here.\"", async () => {
     render(
-      <RoleProvider role="member">
+      <RoleProvider role="user">
         <MemoryRouter>
           <ApprovalsScreen />
         </MemoryRouter>
@@ -389,7 +389,7 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
   function renderMember() {
     return render(
       <OperatorProvider operator={false} securityOperator={false}>
-        <RoleProvider role="member">
+        <RoleProvider role="user">
           <MemoryRouter>
             <ApprovalsScreen />
           </MemoryRouter>

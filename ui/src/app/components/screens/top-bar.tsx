@@ -229,7 +229,7 @@ export function TopBar({
                 reaches the admin welcome hero or its step query at all, and
                 its own episode catalog is a single flat "Watch" list at the
                 bottom of the page, not a step deep link.
-                `!== "admin"`, never `=== "member"`. Only the SUPER admin's
+                `!== "admin"`, never `=== "user"`. Only the SUPER admin's
                 SetupScreen honours ?step — a security admin's /setup/status is
                 redacted on the same !isOperator predicate (internal/api/setup.go)
                 and App.tsx hands them the same Getting Started, so the deep link

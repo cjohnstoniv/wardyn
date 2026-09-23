@@ -400,7 +400,7 @@ consults the human's role live at connect time — SSH carries no session for
 the browser terminal's `requireOperator` gate, which reads the session's role
 fresh on every attach. What bounds the staleness now: **a demoted admin's
 already-registered key keeps its override only until whichever comes first —
-their own next login (re-stamping `role=member`), `role_checked_at` aging past
+their own next login (re-stamping `role=user`), `role_checked_at` aging past
 `WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again), or the
 key being deleted/re-registered.** An operator who wants the override gone
 immediately (rather than waiting out the TTL, or waiting for the demoted human
@@ -413,10 +413,10 @@ to force a refresh, just the immediate one that does not wait on either a
 login or the TTL. There is still no in-place "update this key's role"
 endpoint.
 
-**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `member`
+**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `user`
 key, and even an `admin`-stamped key loses the override until it is
 refreshed.** `role` is stamped at registration, and migration `0043`
-backfilled every pre-0.6 row as `member` — the fail-closed value, because
+backfilled every pre-0.6 row as `member` (`0070` renames it `user`) — the fail-closed value, because
 nothing in the schema knows what role a pre-0.6 registrant actually held, and
 guessing `admin` would hand every key already in the deployment a cross-user
 reach it was never granted. Migration `0046` adds a second fail-closed

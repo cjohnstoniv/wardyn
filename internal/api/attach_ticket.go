@@ -82,7 +82,7 @@ type ticketActorCtxKey struct{}
 type ticketActor struct {
 	actorType types.ActorType
 	principal string
-	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleMember) at
+	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleUser) at
 	// mint time, stamped by handleAttachTicket. It is the ONLY role source
 	// available in the ?ticket= WS lane (ticketOrHumanAuth bypasses
 	// humanOrAdminAuth for it entirely) — see handleAttachWS's owner-or-admin
@@ -128,7 +128,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// (internal/auth/oidc's RoleSecurityAdmin doc).
 	//
 	// Without this, the mint would still be BLOCKED downstream — the ticket
-	// stamps oidc.RoleMember below (a security admin is not an operator here),
+	// stamps oidc.RoleUser below (a security admin is not an operator here),
 	// and handleAttachWS re-checks owner-or-RoleAdmin on consume. That is an
 	// ACCIDENT of defense-in-depth, not a decision: it holds only while two
 	// other lines in two other files keep their current shape, and it fails as
@@ -159,7 +159,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// See the three-tier doctrine on internal/auth/oidc's RoleSecurityAdmin;
 	// the API-token stamp (apitokens.go) is the ONE snapshot site that moved,
 	// because a token carries a whole session identity rather than run reach.
-	role := oidc.RoleMember
+	role := oidc.RoleUser
 	if s.isOperator(r.Context()) {
 		role = oidc.RoleAdmin
 	}

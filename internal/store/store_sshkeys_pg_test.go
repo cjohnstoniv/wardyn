@@ -137,7 +137,7 @@ func TestPG_SSHKeys_RoleCheckedAtRoundTripsAndRefreshes(t *testing.T) {
 		Fingerprint:   fmt.Sprintf("SHA256:stamped-%s-%d", t.Name(), time.Now().UnixNano()),
 		Principal:     "bob2@example.com",
 		PublicKey:     "ssh-ed25519 AAAAtest3 bob2@laptop",
-		Role:          "member",
+		Role:          "user",
 		RoleCheckedAt: &checkedAt,
 		CreatedAt:     time.Now().UTC(),
 	}

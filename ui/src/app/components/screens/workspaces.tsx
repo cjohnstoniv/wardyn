@@ -133,7 +133,7 @@ export function WorkspacesScreen() {
   // header can't claim "Your" without overclaiming exclusivity over rows that
   // are actually shared. See MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER.
   const description =
-    role === "member"
+    role === "user"
       ? MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER(workspaces.length)
       : "A repo or directory a run can attach. Runs can only attach what's listed here.";
 

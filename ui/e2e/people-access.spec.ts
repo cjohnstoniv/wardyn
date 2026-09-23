@@ -129,7 +129,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
             created_by: "admin",
           },
         ],
-        default_role: "member",
+        default_role: "user",
         operator_emails_present: true,
         operator_emails: ["ops@corp.example", "sre@corp.example"],
       }),
@@ -144,7 +144,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(page.getByRole("button", { name: `${PEOPLE.DELETE} Wardyn.Admin` })).toHaveCount(0);
 
     const defaults = page.getByTestId("access-defaults");
-    await expect(defaults.getByText(PEOPLE.ROLE_MEMBER)).toBeVisible();
+    await expect(defaults.getByText(PEOPLE.ROLE_USER)).toBeVisible();
     await expect(defaults.getByText("ops@corp.example")).toBeVisible();
     await expect(defaults.getByText("sre@corp.example")).toBeVisible();
   });
@@ -155,11 +155,11 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
       page,
       baseAccessBody({
         mappings: [
-          { value: "Wardyn.Contractors", role: "member", source: "chart", shadowed: false, shadow_cause: "" },
+          { value: "Wardyn.Contractors", role: "user", source: "chart", shadowed: false, shadow_cause: "" },
           {
             id: "c2",
             value: "Wardyn.Contractors",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: true,
             shadow_cause: "chart",
@@ -168,7 +168,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
           {
             id: "c3",
             value: "carol@corp.example",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: true,
             shadow_cause: "operator_allowlist",
@@ -192,7 +192,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
           {
             id: "c4",
             value: "bob@corp.example",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: false,
             shadow_cause: "",
@@ -217,7 +217,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
           {
             id: "c4",
             value: "bob@corp.example",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: false,
             shadow_cause: "",
@@ -398,7 +398,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
           {
             id: "c2",
             value: "eng-team",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: false,
             shadow_cause: "",
@@ -503,7 +503,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
       call++;
       const responses = [
         { role: "admin", ok: true, matched: [{ value: "Wardyn.Admin", role: "admin", source: "chart" }] },
-        { role: "member", ok: true, matched: [] },
+        { role: "user", ok: true, matched: [] },
         { role: "", ok: false, matched: [] },
         { role: "", ok: false, matched: [], error: "role_check_unavailable" },
       ];
@@ -520,7 +520,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
 
     await claims.fill("nobody");
     await run.click();
-    await expect(page.getByText(PREVIEW.RESULT_DEFAULT("member"))).toBeVisible();
+    await expect(page.getByText(PREVIEW.RESULT_DEFAULT("user"))).toBeVisible();
 
     await claims.fill("nobody-else");
     await run.click();
@@ -532,7 +532,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
   });
 
   // R4/F033: renderPreviewResult kept the two-role ternary
-  // (`role === "admin" ? "admin" : "member"`) that roleLabel() was introduced
+  // (`role === "admin" ? "admin" : "user"`) that roleLabel() was introduced
   // to kill, so the ONE surface an operator uses to check a mapping before
   // trusting it called a security_admin a member. §7.2's casing rule keeps the
   // in-sentence form lowercase.
@@ -556,7 +556,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await page.getByRole("button", { name: PREVIEW.RUN_CTA }).click();
 
     await expect(page.getByText(PREVIEW.RESULT_MATCHED("security admin", "sec-team"))).toBeVisible();
-    await expect(page.getByText(PREVIEW.RESULT_MATCHED("member", "sec-team"))).toHaveCount(0);
+    await expect(page.getByText(PREVIEW.RESULT_MATCHED("user", "sec-team"))).toHaveCount(0);
   });
 
   // ---------------------------------------------------------------------

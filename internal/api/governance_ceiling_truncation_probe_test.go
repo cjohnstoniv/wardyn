@@ -190,7 +190,7 @@ func TestF2_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
 		st.tokenRaw = apiTokenPrefix + "f2probe"
 		st.token = &types.APIToken{
 			ID: uuid.New(), Principal: "sub-legacy-token", Email: "legacy@corp.example",
-			Role: oidc.RoleMember, Groups: []string{"a-team"}, GroupsTruncated: nil, Name: "legacy",
+			Role: oidc.RoleUser, Groups: []string{"a-team"}, GroupsTruncated: nil, Name: "legacy",
 		}
 		call := func() *httptest.ResponseRecorder {
 			r := httptest.NewRequest(http.MethodGet, "/api/v1/policies/default", nil)

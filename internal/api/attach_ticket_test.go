@@ -80,7 +80,7 @@ func TestAttachTicket(t *testing.T) {
 	}
 
 	// Fresh ticket: redeems once, carries attribution + role, then is gone.
-	tok2, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "bob", oidc.RoleMember, now)
+	tok2, _ := mintAttachTicket(ctx, st, run, types.ActorHuman, "bob", oidc.RoleUser, now)
 	ta, ok, err := consumeAttachTicket(ctx, st, tok2, run, now)
 	if err != nil || !ok {
 		t.Fatalf("valid ticket did not redeem: ok=%v err=%v", ok, err)
@@ -88,8 +88,8 @@ func TestAttachTicket(t *testing.T) {
 	if ta.principal != "bob" || ta.actorType != types.ActorHuman {
 		t.Fatalf("attribution lost: got %v/%q", ta.actorType, ta.principal)
 	}
-	if ta.role != oidc.RoleMember {
-		t.Fatalf("role lost: got %q, want %q", ta.role, oidc.RoleMember)
+	if ta.role != oidc.RoleUser {
+		t.Fatalf("role lost: got %q, want %q", ta.role, oidc.RoleUser)
 	}
 	if _, ok, _ := consumeAttachTicket(ctx, st, tok2, run, now); ok {
 		t.Fatal("ticket redeemed twice")
@@ -164,12 +164,12 @@ func TestAttachWS_TicketRoleAuthorization(t *testing.T) {
 	}
 
 	// The owning member's ticket must get PAST the ticket-role check.
-	if w := attach(mint("alice", oidc.RoleMember)); w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), deniedMsg) {
+	if w := attach(mint("alice", oidc.RoleUser)); w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), deniedMsg) {
 		t.Fatalf("owning member's ticket was refused by the ticket-role check: %s", w.Body.String())
 	}
 	// A non-owning member's ticket must be refused BY THE TICKET-ROLE CHECK
 	// specifically (not merely fail for some unrelated reason).
-	if w := attach(mint("mallory", oidc.RoleMember)); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), deniedMsg) {
+	if w := attach(mint("mallory", oidc.RoleUser)); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), deniedMsg) {
 		t.Fatalf("non-owning member's ticket: code=%d body=%q, want 403 %q", w.Code, w.Body.String(), deniedMsg)
 	}
 	// An admin-role ticket authorizes the run regardless of who minted it.
@@ -223,7 +223,7 @@ func TestAttachWS_TicketDenialsAreAudited(t *testing.T) {
 	}
 
 	// (2) a ticket that resolves but does not authorize this run.
-	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "mallory", oidc.RoleMember, time.Now())
+	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "mallory", oidc.RoleUser, time.Now())
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}

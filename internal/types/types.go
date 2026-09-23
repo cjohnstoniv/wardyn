@@ -741,7 +741,7 @@ type AuditEvent struct {
 // two rows can never disagree about which key they name) and the value shown
 // to a human for "verify on first connect".
 //
-// Role is the registering session's OWN role (oidc.RoleAdmin/RoleMember),
+// Role is the registering session's OWN role (oidc.RoleAdmin/RoleUser),
 // stamped at registration by handleAddSSHKey (migration 0043) and REFRESHED
 // on every OIDC login for the authenticating principal's keys (migration
 // 0046). It is a BOUNDED-STALE stamp, not a live check — SSH carries no

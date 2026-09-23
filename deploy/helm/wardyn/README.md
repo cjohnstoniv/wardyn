@@ -314,8 +314,8 @@ allowlist kept as a safety net:
 ```yaml
 env:
   WARDYN_OIDC_ISSUER: "https://login.microsoftonline.com/<tenant-id>/v2.0"
-  WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=member"
-  WARDYN_OIDC_DEFAULT_ROLE: "member"          # unmatched users land here instead of being denied
+  WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=user"
+  WARDYN_OIDC_DEFAULT_ROLE: "user"          # unmatched users land here instead of being denied
   WARDYN_OIDC_OPERATOR_EMAILS: "platform@corp.example"  # legacy admin safety net, still honored
 
 extraEnv:

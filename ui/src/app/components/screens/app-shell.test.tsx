@@ -20,7 +20,7 @@ import { baseMeDrive } from "../../lib/test-fixtures";
 // items, or loses its aria-expanded/Escape wiring.
 // role is the full three-valued union since 0.7. operator/securityOperator
 // mirror the server's two predicates exactly: "admin" is both, "security_admin"
-// is only the second, "member" is neither.
+// is only the second, "user" is neither.
 function renderMobileNav(role: Role = "admin") {
   return render(
     <MemoryRouter>
@@ -37,7 +37,7 @@ function renderMobileNav(role: Role = "admin") {
           resolved: true,
           identityResolved: true,
           operator: role === "admin",
-          securityOperator: role !== "member",
+          securityOperator: role !== "user",
           role,
           sessionExpiresAt: null,
           memberLocalDirRoot: null,
@@ -214,7 +214,7 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
 
     const menu = screen.getByRole("menu");
     expect(within(menu).queryByText("admin", { exact: true })).toBeNull();
-    expect(within(menu).queryByText("member", { exact: true })).toBeNull();
+    expect(within(menu).queryByText("user", { exact: true })).toBeNull();
   });
 });
 
@@ -458,7 +458,7 @@ describe("SidebarNav (member role — B3)", () => {
   // picker.
   it("shows Runs, Approvals and Workspaces — admin-only items are absent", async () => {
     const user = userEvent.setup();
-    renderMobileNav("member");
+    renderMobileNav("user");
     await user.click(
       screen.getByRole("button", { name: /open navigation menu/i }),
     );
@@ -542,7 +542,7 @@ function renderTopBar(role: Role) {
             resolved: true,
             identityResolved: true,
             operator: role === "admin",
-            securityOperator: role !== "member",
+            securityOperator: role !== "user",
             role,
             sessionExpiresAt: null,
             memberLocalDirRoot: null,
@@ -582,7 +582,7 @@ describe("TopBar — the header states no posture (0.7.3 F6)", () => {
 describe("TopBar — account-menu Demos entry (Phase 5)", () => {
   it("member: no Demos item", async () => {
     const user = userEvent.setup();
-    renderTopBar("member");
+    renderTopBar("user");
     await user.click(screen.getAllByRole("button").at(-1)!);
     const menu = screen.getByRole("menu");
     expect(within(menu).queryByText("Demos")).toBeNull();
@@ -681,7 +681,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
       principal: "alice@corp.example",
       method: "sso",
       operator: false,
-      role: "member",
+      role: "user",
       user_drive: drive,
       user_drive_denied_by_profile: "",
     });
@@ -703,7 +703,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
       principal: "alice@corp.example",
       method: "sso",
       operator: false,
-      role: "member",
+      role: "user",
       user_drive: null,
       user_drive_denied_by_profile: "Greenfield contractors",
     });
@@ -723,7 +723,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
       principal: "alice@corp.example",
       method: "sso",
       operator: false,
-      role: "member",
+      role: "user",
     });
 
     // Let /me land before reading the probe, so this is the RESOLVED value and
@@ -759,7 +759,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
         principal: "alice@corp.example",
         method: "sso",
         operator: false,
-        role: "member",
+        role: "user",
         user_drive: null,
         user_drive_denied_by_profile: "",
         user_drive_unavailable: reason,
@@ -788,7 +788,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
       principal: "alice@corp.example",
       method: "sso",
       operator: false,
-      role: "member",
+      role: "user",
       user_drive: null,
       user_drive_denied_by_profile: "Greenfield contractors",
       user_drive_unavailable: "",

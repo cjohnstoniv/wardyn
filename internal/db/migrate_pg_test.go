@@ -682,8 +682,8 @@ func TestPG_MigrateAppliesTheUpgradeSetOverNonEmptyData(t *testing.T) {
 	if wsOwner != "" || secretOwner != "" {
 		t.Errorf("pre-upgrade rows did not take the '' owner default: workspace=%q secret=%q", wsOwner, secretOwner)
 	}
-	if tokenRole != "member" {
-		t.Errorf("pre-upgrade api_tokens.role = %q, want the column default 'member'", tokenRole)
+	if tokenRole != "user" {
+		t.Errorf("pre-upgrade api_tokens.role = %q, want the column default 'member' as renamed by the tier rename, 'user'", tokenRole)
 	}
 
 	// 0050 REBUILT THE PRIMARY KEY on a table holding a row. Asserted from the

@@ -332,7 +332,7 @@ const OPERATOR_ONLY_PREFIXES = ["/drives", "/providers"];
 export function roleCanReach(path: string, role: string): boolean {
   const under = (prefixes: string[]) =>
     prefixes.some((p) => path === p || path.startsWith(`${p}/`));
-  if (role === "member") return under(MEMBER_REACHABLE_PREFIXES);
+  if (role === "user") return under(MEMBER_REACHABLE_PREFIXES);
   if (under(OPERATOR_ONLY_PREFIXES)) return role === "admin";
   return true;
 }

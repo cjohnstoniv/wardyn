@@ -38,6 +38,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The non-admin tier is renamed `member` → `user` (#608).** `/me.role`, a role-map value and
+  `WARDYN_OIDC_DEFAULT_ROLE` now read `admin`, `security_admin` or `user`, and the console's
+  People step offers "User". Migration `0070_user_tier_rename` rewrites every stored `member`:
+  People-page rows become `user` on the built-in `standard` type (a new `role_mappings.user_type`
+  column, which a type cannot be deleted out from under), and the role snapshots on API tokens,
+  SSH keys and attach tickets become `user`; the `role_mappings` and `api_tokens` CHECKs refuse
+  `member` from then on. The session cookie's codec moves to version 2 and carries the person's
+  user type (`standard` for everyone until sign-in derives one), so **everyone signs in once more
+  after the upgrade**; API tokens keep working. A chart that still says `=member` in
+  `WARDYN_OIDC_ROLE_MAP`, or `WARDYN_OIDC_DEFAULT_ROLE=member`, still boots and signs those
+  people in as `user` (Standard user), with one boot warning per entry; that alias is removed in
+  0.9. `POST /access/mappings` accepts `user` only.
+
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and

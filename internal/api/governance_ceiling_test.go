@@ -66,7 +66,7 @@ func govServer(st *capStore) *Server {
 // identity, group snapshot, and the snapshot's PF-26 completeness bit.
 func govMemberCtx(groups []string, truncated bool) context.Context {
 	return withOIDCGroupsTruncated(
-		withOIDCGroups(operatorCtx("sub-gov-bob", "bob@corp.example", oidc.RoleMember), groups),
+		withOIDCGroups(operatorCtx("sub-gov-bob", "bob@corp.example", oidc.RoleUser), groups),
 		truncated)
 }
 
