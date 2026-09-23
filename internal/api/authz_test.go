@@ -475,6 +475,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/secrets/{name}": {class: classMember},
 	"GET /api/v1/secrets":           {class: classMember},
 	"GET /api/v1/setup/status":      {class: classMember},
+
+	// Each person's own model-provider credential (0.8): the same self-service
+	// shape, written into the caller's own namespace only. Who may reach a
+	// given provider is model_provider_credentials_test.go's job.
+	"PUT /api/v1/model-providers/{id}/credential":    {class: classMember},
+	"DELETE /api/v1/model-providers/{id}/credential": {class: classMember},
+
 	// The workspace READS stay member-class: an operator-owned workspace — every
 	// pre-0048 row — is readable by any authenticated caller exactly as before.
 	// What 0048 adds is that another MEMBER's owned row 404s, which is the same

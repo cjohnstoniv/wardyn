@@ -790,6 +790,13 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		narrowed = &n
 	}
+	// Rule 8 on this door too: it mints UIDs and accepts address changes the
+	// same as PUT /model-providers, so it purges the same way, before the save.
+	invalidated, err := s.purgeProviderCredentials(r.Context(), existing.ModelProviders, cfg.ModelProviders)
+	if err != nil {
+		writeServerError(w, r, "purge model provider credentials", err)
+		return
+	}
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
 		writeServerError(w, r, "put site config", err)
@@ -833,6 +840,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// row it always wrote.
 	if saved.ModelProviders != nil {
 		datum["model_providers"] = enabledModelProviderCount(saved)
+	}
+	if saved.ModelProviders != nil || invalidated > 0 {
+		datum["per_user_credentials_invalidated"] = invalidated
 	}
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {

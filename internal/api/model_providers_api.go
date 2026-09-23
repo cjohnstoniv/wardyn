@@ -28,10 +28,12 @@ const (
 // operatorOnly for both, the sibling blocks' reasoning: the records name the
 // org's gateways, its AWS access portal and account pins. The member-safe
 // projection is a different, narrower document — SetupStatus.ModelProviders.
-// There is no DELETE: removing a provider is a PUT without it.
-func (s *Server) mountModelProviderRoutes(operatorOnly chi.Router) {
+// There is no DELETE: removing a provider is a PUT without it. Each person's
+// own credential door mounts on the authenticated group r beside them.
+func (s *Server) mountModelProviderRoutes(r, operatorOnly chi.Router) {
 	operatorOnly.Get("/model-providers", s.handleGetModelProviders)
 	operatorOnly.Put("/model-providers", s.handlePutModelProviders)
+	s.mountModelProviderCredentialRoutes(r)
 }
 
 // storedModelProviders is the stored block as a VALUE — what GET returns and
@@ -100,6 +102,11 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	assignModelProviderUIDs(block, existing.ModelProviders)
+	invalidated, err := s.purgeProviderCredentials(ctx, existing.ModelProviders, block)
+	if err != nil {
+		writeServerError(w, r, "purge model provider credentials", err)
+		return
+	}
 	candidate := existing
 	candidate.ModelProviders = block
 	candidate.EffectiveScmHosts = nil
@@ -109,9 +116,10 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	savedBlock := storedModelProviders(saved)
+	datum := modelProviderAuditData(storedModelProviders(existing), savedBlock)
+	datum["per_user_credentials_invalidated"] = invalidated
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"model_provider.write", "model_providers", "success",
-		mustJSON(modelProviderAuditData(storedModelProviders(existing), savedBlock))))
+		"model_provider.write", "model_providers", "success", mustJSON(datum)))
 	w.Header().Set("ETag", computeETag(savedBlock))
 	writeJSON(w, http.StatusOK, savedBlock)
 }

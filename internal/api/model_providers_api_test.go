@@ -58,7 +58,7 @@ func TestModelProvidersPut(t *testing.T) {
 		}
 	}
 	want := `{"base_url_changed":[],"disabled":["bedrock-prod"],"harnesses":["claude-code:bedrock-prod","claude-code:corp-gateway","codex-cli:corp-gateway"],` +
-		`"ids":["bedrock-prod","corp-gateway"],"kind_changed":[],"kinds":["bedrock_sso","custom_endpoint"],"pins":["bedrock-prod:123456789012/BedrockUser"],"provider_count":2}`
+		`"ids":["bedrock-prod","corp-gateway"],"kind_changed":[],"kinds":["bedrock_sso","custom_endpoint"],"per_user_credentials_invalidated":0,"pins":["bedrock-prod:123456789012/BedrockUser"],"provider_count":2}`
 	if string(raw) != want {
 		t.Errorf("datum = %s\nwant    %s", raw, want)
 	}

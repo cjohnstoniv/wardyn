@@ -27,6 +27,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Each person's own model-provider credential, strictly namespaced (#525).** `PUT` and
+  `DELETE /model-providers/{id}/credential` store and remove the caller's own key or token for a
+  key or endpoint provider, under `wardyn-provider-<uid>-key` in their own namespace — admins
+  included, never the operator's; the admin token under OIDC holds none. Only a provider serving an
+  agent the caller may launch is offered. The `wardyn-provider-` names are reserved at the generic
+  secrets API and the broker, and the sign-in captures (`-oauth`, `-sso`) at every sink too.
+  Changing a provider's address or header scheme, changing its kind, or removing it deletes every
+  person's credential for it in every namespace before the save, on `PUT /model-providers` and
+  `PUT /site-config` alike; the count is audited as `per_user_credentials_invalidated`. New audit
+  actions `model_provider.credential.write` / `.delete` record `{provider, owner}`, never the value.
+
 - **The Claude sign-in image is a checked prerequisite for `anthropic_subscription` model
   providers (#524).** "Resolves" is now two things, not one: `WARDYN_AGENT_IMAGES["claude-code"]`
   must be pinned, and, when the wired Runner can confirm its local image store (the Docker

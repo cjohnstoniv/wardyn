@@ -141,6 +141,16 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+// DeleteEverywhere removes every owner's row of each name — see
+// secretstore.Store.DeleteEverywhere. Deliberately NOT scoped to s.owner.
+func (s *Store) DeleteEverywhere(ctx context.Context, names []string) (int, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM secrets WHERE name = ANY($1)`, names)
+	if err != nil {
+		return 0, fmt.Errorf("pg secretstore: delete everywhere: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // List returns this view's OWN secret names only, in lexical order — never
 // unioned with the operator's. A caller wanting "everything a principal may
 // see" composes For("").List() ∪ For(owner).List() itself.

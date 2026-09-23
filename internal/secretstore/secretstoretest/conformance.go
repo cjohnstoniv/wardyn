@@ -127,6 +127,9 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) secretstore.Store)
 	t.Run("delete_owner_row_leaves_operator_row", func(t *testing.T) {
 		testDeleteOwnerRowLeavesOperatorRow(t, ctx, newStore, uniq)
 	})
+	t.Run("delete_everywhere_reaches_every_owner_and_only_its_names", func(t *testing.T) {
+		testDeleteEverywhere(t, ctx, newStore, uniq)
+	})
 }
 
 // newStoreFunc and uniqFunc name the two closures every owner-scoping case
@@ -237,5 +240,36 @@ func testDeleteOwnerRowLeavesOperatorRow(t *testing.T, ctx context.Context, newS
 	gotA, err := op.For(a).Get(ctx, name)
 	if err != nil || string(gotA) != "operator-value" {
 		t.Fatalf("For(a).Get after deleting A's own row = (%q, %v), want the fallback to operator-value", gotA, err)
+	}
+}
+
+// testDeleteEverywhere: called on ONE owner's view, it still removes the
+// operator's row and every other owner's row of the named name, counts them,
+// and leaves a different name — in the same namespaces — alone.
+func testDeleteEverywhere(t *testing.T, ctx context.Context, newStore newStoreFunc, uniq uniqFunc) {
+	op := newStore(t)
+	name, other := uniq("purge"), uniq("purge-keep")
+	a, b := uniq("owner-a"), uniq("owner-b")
+	t.Cleanup(func() {
+		_, _ = op.DeleteEverywhere(ctx, []string{name, other})
+	})
+	for _, owner := range []string{"", a, b} {
+		if err := op.For(owner).Put(ctx, name, []byte("v")); err != nil {
+			t.Fatalf("For(%q).Put: %v", owner, err)
+		}
+	}
+	_ = op.For(a).Put(ctx, other, []byte("kept"))
+
+	n, err := op.For(b).DeleteEverywhere(ctx, []string{name})
+	if err != nil || n != 3 {
+		t.Fatalf("For(b).DeleteEverywhere = (%d, %v), want 3 rows removed", n, err)
+	}
+	for _, owner := range []string{"", a, b} {
+		if _, err := op.For(owner).Get(ctx, name); !errors.Is(err, secretstore.ErrNotFound) {
+			t.Fatalf("For(%q).Get after DeleteEverywhere err = %v, want ErrNotFound", owner, err)
+		}
+	}
+	if got, err := op.For(a).Get(ctx, other); err != nil || string(got) != "kept" {
+		t.Fatalf("a name DeleteEverywhere was not given = (%q, %v), want kept", got, err)
 	}
 }
