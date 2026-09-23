@@ -54,7 +54,7 @@ func (s *pauseStore) MarkRunPaused(_ context.Context, _ uuid.UUID, reason types.
 	cur := s.run.ActiveAt
 	sameActive := (cur == nil && activeAt == nil) || (cur != nil && activeAt != nil && cur.Equal(*activeAt))
 	if s.state != types.RunRunning || s.run.LostAt != nil || s.run.PausedAt != nil || !sameActive ||
-		(reason == types.PauseWaiting && !s.waiting) {
+		(reason == types.PauseWaiting && !s.waiting) || (reason == types.PauseIdle && s.open) {
 		return false, nil
 	}
 	now := time.Now().UTC()
@@ -290,6 +290,39 @@ func TestRunPause_IdleNeedsAQuietCPU(t *testing.T) {
 	}
 }
 
+// TestRunPause_IdleNeverLandsOnAnOpenRequest: a run with an open request is
+// never paused idle, however quiet, so its close always finds it running or
+// paused waiting. The sweep skips it (a re-auth request still inside its hold
+// is open but does not count toward a waiting pause either), and a request
+// raised between the CPU read and the mark fails the mark and thaws the agent.
+func TestRunPause_IdleNeverLandsOnAnOpenRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		openAtListing bool
+		freezes       int
+	}{
+		{"open when listed", true, 0},
+		{"opened before the mark", false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPauseFixture(t, time.Hour)
+			f.st.run.RunLimits.PauseIdleAfterSec = 60
+			f.rn.cpu = cpuReading(0)
+			f.st.open = tc.openAtListing
+			f.rn.onFreeze = func() { f.st.open = true }
+			f.sweep(t)
+			freezes, thaws := f.rn.counts()
+			if pausedAt, reason := f.st.paused(); pausedAt != nil || freezes != tc.freezes || thaws != tc.freezes {
+				t.Fatalf("paused %v %q, freezes %d thaws %d; want running, freezes = thaws = %d",
+					pausedAt, reason, freezes, thaws, tc.freezes)
+			}
+			if rows := f.rows("run.pause", "success"); len(rows) != 0 {
+				t.Errorf("run.pause rows = %+v, want none", rows)
+			}
+		})
+	}
+}
+
 // TestRunPause_BackstopResumesWhenTheRequestCloses: a run paused waiting whose
 // requests have all closed without a writer telling it (the expiry sweeper) is
 // thawed by the next pass; one still waiting stays paused.
@@ -317,25 +350,32 @@ func TestRunPause_BackstopResumesWhenTheRequestCloses(t *testing.T) {
 }
 
 // TestRunPause_ApprovalClosedResumesAtOnce: a writer closing the last open
-// request thaws a run paused waiting straight away; an idle-paused run is
-// not the request's to wake.
+// request thaws a paused run straight away, waiting or idle (an idle run can
+// hold a request raised by traffic in flight when it froze); a run with a
+// request still open stays paused.
 func TestRunPause_ApprovalClosedResumesAtOnce(t *testing.T) {
 	for _, reason := range []types.PauseReason{types.PauseWaiting, types.PauseIdle} {
-		f := newPauseFixture(t, time.Hour)
-		paused := time.Now().UTC()
-		f.st.run.PausedAt, f.st.run.PausedReason = &paused, reason
-		f.srv.approvalClosed(context.Background(), f.run.ID)
-		_, thaws := f.rn.counts()
-		if want := map[types.PauseReason]int{types.PauseWaiting: 1, types.PauseIdle: 0}[reason]; thaws != want {
-			t.Errorf("%s: thaws = %d, want %d", reason, thaws, want)
+		for _, open := range []bool{false, true} {
+			f := newPauseFixture(t, time.Hour)
+			paused := time.Now().UTC()
+			f.st.run.PausedAt, f.st.run.PausedReason = &paused, reason
+			f.st.open = open
+			f.srv.approvalClosed(context.Background(), f.run.ID)
+			want := 1
+			if open {
+				want = 0
+			}
+			if _, thaws := f.rn.counts(); thaws != want {
+				t.Errorf("%s, open request %v: thaws = %d, want %d", reason, open, thaws, want)
+			}
 		}
 	}
 }
 
 // TestResumeRun_OwnerThawsAForeignMemberCannot: POST /runs/{id}/resume thaws
-// the owner's paused run and moves its presence clock, audited as the owner; a
-// member who does not own the run gets the byte-identical 404 and thaws
-// nothing.
+// the owner's paused run once and moves its presence clock, audited as the
+// owner; a member who does not own the run gets the byte-identical 404 and
+// thaws nothing.
 func TestResumeRun_OwnerThawsAForeignMemberCannot(t *testing.T) {
 	f := newPauseFixture(t, time.Hour)
 	paused := time.Now().UTC()
@@ -357,8 +397,8 @@ func TestResumeRun_OwnerThawsAForeignMemberCannot(t *testing.T) {
 	if pausedAt, _ := f.st.paused(); pausedAt != nil {
 		t.Errorf("still paused at %v", pausedAt)
 	}
-	if _, thaws := f.rn.counts(); thaws < 1 || f.st.stamps != 1 {
-		t.Errorf("thaws %d stamps %d; want the agent thawed and the presence clock moved", thaws, f.st.stamps)
+	if _, thaws := f.rn.counts(); thaws != 1 || f.st.stamps != 1 {
+		t.Errorf("thaws %d stamps %d; want the agent thawed once and the presence clock moved", thaws, f.st.stamps)
 	}
 	rows := f.rows("run.resume", "success")
 	if len(rows) != 1 || rows[0].Actor != pauseOwner || leaseAuditData(t, rows[0])["reason"] != "resume" {

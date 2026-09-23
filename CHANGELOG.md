@@ -111,7 +111,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   frozen in place (Docker `runc` only; every other confinement class, and Kubernetes, is never
   paused) while the run stays `RUNNING` with its memory, files and proxy. A run with an open
   request pauses after 15 minutes with nothing happening; with its profile's `pause_idle_after_sec`
-  set, any run pauses after that long (at least 630 seconds) once its CPU reads quiet. "Nothing
+  set, a run with no open request pauses after that long (at least 630 seconds) once its CPU reads
+  quiet. "Nothing
   happening" is a new presence clock, `active_at`: a person typing into it, the agent's egress
   decisions (not the tool-call approval poll) and bytes its proxy moved on a tunnel or MITM stream,
   which the proxy reports at most once a minute to the new internal `POST /internal/activity`.

@@ -15,9 +15,9 @@ import (
 )
 
 // TestPG_RunPause pins migration 0071 through the pause surface: the presence
-// stamp, the pause mark's compare on the presence clock and on a still-open
-// request, the columns reading back on the run, clearing, and an end clearing
-// a pause.
+// stamp, the pause mark's compare on the presence clock, on a still-open
+// request (waiting) and on no open request (idle), the columns reading back on
+// the run, clearing, and an end clearing a pause.
 func TestPG_RunPause(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -53,7 +53,8 @@ func TestPG_RunPause(t *testing.T) {
 
 	// An open tool-call request: listed as open and waiting, and the waiting
 	// pause lands exactly once.
-	if _, err := pg.CreateApproval(ctx, newApproval(run.ID, time.Now().UTC())); err != nil {
+	ap, err := pg.CreateApproval(ctx, newApproval(run.ID, time.Now().UTC()))
+	if err != nil {
 		t.Fatalf("create approval: %v", err)
 	}
 	c := pauseCandidate(t, pg, run.ID)
@@ -81,8 +82,15 @@ func TestPG_RunPause(t *testing.T) {
 		}
 	}
 
-	// An end clears a pause.
+	// An idle pause never lands while a request is open; once it is decided,
+	// it does. Then an end clears the pause.
 	fresh, _ := pg.GetRun(ctx, run.ID)
+	if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, fresh.ActiveAt); err != nil || ok {
+		t.Fatalf("idle pause with an open request = %v, %v; want false", ok, err)
+	}
+	if _, err := pg.DecideApproval(ctx, ap.ID, types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "owner"}); err != nil {
+		t.Fatalf("decide approval: %v", err)
+	}
 	if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, fresh.ActiveAt); err != nil || !ok {
 		t.Fatalf("idle pause = %v, %v; want true", ok, err)
 	}

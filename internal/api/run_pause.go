@@ -37,16 +37,21 @@ import (
 // class is never paused:
 //   - waiting: it has an open request, and nothing has happened for
 //     pauseWaitingAfter;
-//   - idle: its profile set pause_idle_after_sec, nothing has happened for that
-//     long (floored at pauseDelayFloor), and its CPU is quiet.
+//   - idle: its profile set pause_idle_after_sec, it has no open request,
+//     nothing has happened for that long (floored at pauseDelayFloor), and its
+//     CPU is quiet. A run with an open request pauses only as waiting, whose
+//     close path resumes it.
 
 const (
 	// pauseWaitingAfter is how long a run with an open request waits, with
 	// nothing happening, before it pauses.
 	pauseWaitingAfter = 900 * time.Second
 	// pauseDelayFloor is the shortest quiet period that ever pauses a run:
-	// longer than the longest connection-level hold (600 s) plus the touch
-	// debounce, so a pause never lands on an agent still parked inside one.
+	// longer than the longest egress hold (600 s) plus the touch debounce. A
+	// credential re-auth hold can run to 1800 s (WARDYN_CREDENTIAL_REAUTH_TIMEOUT's
+	// ceiling), past this floor; the rules cover it instead: its request is open,
+	// so the idle rule never pauses the run, and the waiting rule counts it only
+	// once it is older than store.ReauthHoldMax, when the hold is over.
 	pauseDelayFloor = 630 * time.Second
 	// presenceStampEvery coalesces active_at writes to one per run per minute.
 	// It is far below pauseDelayFloor, so a run stamped within it is never a
@@ -108,36 +113,42 @@ func (c *pauseClocks) clock(presence bool) map[uuid.UUID]time.Time {
 // exec, or pressing Resume — and thaws it first when it is paused. The error is
 // only a paused run that could not be thawed.
 func (s *Server) markPresent(ctx context.Context, runID uuid.UUID, actorType types.ActorType, principal, reason string) error {
+	_, err := s.stampPresence(ctx, runID, actorType, principal, reason)
+	return err
+}
+
+// stampPresence is markPresent, reporting whether it resumed the run.
+func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType types.ActorType, principal, reason string) (bool, error) {
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	now := s.cfg.Now()
 	if !s.pause.stampDue(true, runID, now) {
-		return nil
+		return false, nil
 	}
 	paused, err := pauser.StampRunActive(ctx, runID)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stamping a run's presence failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
-		return nil
+		return false, nil
 	}
 	s.pause.stamped(true, runID, now)
 	if !paused {
-		return nil
+		return false, nil
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return s.resumeRun(ctx, pauser, run, actorType, principal, reason)
+	return true, s.resumeRun(ctx, pauser, run, actorType, principal, reason)
 }
 
 // thawForExec is markPresent for a path about to exec into the sandbox, given
 // the run it just read: a paused run is thawed whatever the stamp debounce
 // says, because the daemon refuses an exec into a paused container.
 func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType types.ActorType, principal, reason string) error {
-	if err := s.markPresent(ctx, run.ID, actorType, principal, reason); err != nil {
+	if resumed, err := s.stampPresence(ctx, run.ID, actorType, principal, reason); err != nil || resumed {
 		return err
 	}
 	pauser, ok := s.cfg.Store.(store.RunPauser)
@@ -195,16 +206,19 @@ func agentActivityDecision(ruleSource string) bool {
 	return ruleSource != ruleSourceApprovalsPoll && ruleSource != ruleSourceCredentialReauthTimeout
 }
 
-// approvalClosed resumes a run paused waiting for a request once it has no open
-// request left. Every writer that moves a request out of PENDING calls it; the
-// pause sweep's backstop catches any that do not (the expiry sweeper).
+// approvalClosed resumes a paused run once it has no open request left: the
+// agent has an answer to act on. Every writer that moves a request out of
+// PENDING calls it; the pause sweep's backstop catches a waiting pause whose
+// request closed without one (the expiry sweeper). It resumes an idle pause
+// too: a request raised by traffic in flight when the run froze is still the
+// agent's to answer.
 func (s *Server) approvalClosed(ctx context.Context, runID uuid.UUID) {
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok {
 		return
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.PausedAt == nil || run.PausedReason != types.PauseWaiting {
+	if err != nil || run.PausedAt == nil {
 		return
 	}
 	if open, err := pauser.RunHasOpenRequest(ctx, runID); err != nil || open {
@@ -274,6 +288,9 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 	for _, c := range cands {
 		run := c.Run
 		if run.PausedAt != nil {
+			// Only a waiting pause is the backstop's: an idle pause is marked
+			// with no request open, so no open request is the state it paused
+			// in, not a reason to wake.
 			if run.PausedReason == types.PauseWaiting && !c.OpenRequest {
 				_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
 			}
@@ -283,7 +300,7 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 		switch {
 		case c.WaitingRequest && quiet >= pauseWaitingAfter && freezable(run.ConfinementClass):
 			s.pauseRun(ctx, pauser, run, types.PauseWaiting, quiet)
-		case run.RunLimits.PauseIdleAfterSec > 0 &&
+		case !c.OpenRequest && run.RunLimits.PauseIdleAfterSec > 0 &&
 			quiet >= max(time.Duration(run.RunLimits.PauseIdleAfterSec)*time.Second, pauseDelayFloor) &&
 			freezable(run.ConfinementClass):
 			idle = append(idle, run)

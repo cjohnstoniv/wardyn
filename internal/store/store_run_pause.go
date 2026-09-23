@@ -54,10 +54,10 @@ type RunPauser interface {
 	// MarkRunPaused marks run id paused for reason, but only while it is still
 	// RUNNING, not kept, not paused, its presence clock still reads activeAt
 	// (the snapshot the caller judged idle; nil is "never stamped"), and — for
-	// a waiting pause — it still has a request the waiting pause counts. The
-	// conditional UPDATE is what makes a keystroke, or the request closing,
-	// between the caller's read and this write win: false means leave the run
-	// running.
+	// a waiting pause — it still has a request the waiting pause counts, or —
+	// for an idle pause — it has no open request. The conditional UPDATE is
+	// what makes a keystroke, or a request closing or opening, between the
+	// caller's read and this write win: false means leave the run running.
 	MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseReason, activeAt *time.Time) (bool, error)
 	// ClearRunPaused clears run id's pause, and reports whether it was paused.
 	ClearRunPaused(ctx context.Context, id uuid.UUID) (bool, error)
@@ -129,7 +129,8 @@ func (s PG) MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseR
 		UPDATE agent_runs SET paused_at=now(), paused_reason=$2
 		WHERE id=$1 AND state=$3 AND lost_at IS NULL AND paused_at IS NULL
 		  AND active_at IS NOT DISTINCT FROM $4
-		  AND ($2 <> '`+string(types.PauseWaiting)+`' OR `+waitingHoldSQL+`)`,
+		  AND ($2 <> '`+string(types.PauseWaiting)+`' OR `+waitingHoldSQL+`)
+		  AND ($2 <> '`+string(types.PauseIdle)+`' OR NOT `+openHoldSQL+`)`,
 		id, string(reason), string(types.RunRunning), activeAt)
 	if err != nil {
 		return false, fmt.Errorf("store: mark run paused: %w", err)
