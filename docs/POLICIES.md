@@ -19,7 +19,7 @@ write time. A guard test fails if a field here drifts from the struct.
 The console has three places a policy gets written, and all three resolve to
 this same JSON through this same validator — there is no separate UI schema.
 
-- **The [`/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
+- **The [`/admin/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
   reusable policy (`POST`/`PUT /policies`).
 - **The run screen's Custom policy.** An `inline_policy` on the create-run
   request, member-authored — this editor carries no operator gate.
@@ -875,6 +875,13 @@ reads happen only for a push the pack alone would refuse, while it holds the
 sidecar's inspection slot, and the credential is normally the one the push's
 own discovery request already minted. In the refusal, a path ending in `/`
 names a directory the push does not carry, and `/` alone names the whole tree.
+
+**On a `git_pat` forge other than github.com, deny only paths the repository
+does not hold yet.** No comparison can be made there, so an entry that reaches
+anything the repository already has — `infra/**` against an existing `infra/`,
+or `Makefile` — refuses every push, including one that never touches it. The
+run's risk grade says so (`push_rules`, `deny_paths on <host>`) before the
+first push does.
 
 **What these rules do not stop.**
 

@@ -14,16 +14,18 @@ import { Settings } from "lucide-react";
 import { cn } from "../ui/utils";
 
 export function SidebarSettingsLink({
+  to,
   navLinkClass,
   onClick,
 }: {
+  to: string;
   navLinkClass: (isActive: boolean) => string;
   onClick: (e: MouseEvent) => void;
 }) {
   return (
     <>
       <div className="my-2 h-px bg-sidebar-border" />
-      <NavLink to="/settings" onClick={onClick} className={({ isActive }) => navLinkClass(isActive)}>
+      <NavLink to={to} onClick={onClick} className={({ isActive }) => navLinkClass(isActive)}>
         {({ isActive }) => (
           <>
             {isActive && (

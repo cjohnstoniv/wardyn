@@ -238,7 +238,7 @@ async function freshCapture(page: Page, request: APIRequestContext): Promise<num
 }
 
 /** The ADMIN's own AWS sign-in, which is NOT on /setup — and NEVER a bare
- *  `page.goto("/providers")`.
+ *  `page.goto("/admin/providers")`.
  *
  *  App.tsx's RequireSetup bounces the FIRST gated-route render of every full
  *  document load into /setup while any setup check grades fail or warn, which a
@@ -255,11 +255,11 @@ async function freshCapture(page: Page, request: APIRequestContext): Promise<num
 async function openAdminLoginPane(page: Page): Promise<void> {
   await page.goto("/runs");
   await expect(async () => {
-    if (!/\/providers$/.test(page.url())) {
+    if (!/\/admin\/providers$/.test(page.url())) {
       await page.evaluate((path) => {
         window.history.pushState({}, "", path);
         window.dispatchEvent(new PopStateEvent("popstate"));
-      }, "/providers");
+      }, "/admin/providers");
     }
     await expect(page.getByRole("button", { name: AGENTS.AGENTS_TITLE })).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 90_000 });
