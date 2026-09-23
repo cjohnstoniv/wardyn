@@ -49,12 +49,21 @@ jobs:
           WARDYN_CI_OUT: ${{ github.workspace }}/ci-artifacts
           #
           # Variant — run a real agent (claude-code) instead: drop the two
-          # WARDYN_CI_IMAGE/TASK_MODE lines, use a policy that grants model
-          # access (see wardyn/examples/policies/claude-llm.json), and seed the
-          # api key from your repo secrets:
+          # WARDYN_CI_IMAGE/TASK_MODE lines and set:
           # WARDYN_CI_TASK: "fix the failing unit test in pkg/foo"
           # WARDYN_CI_REPO: your-org/your-repo
           # WARDYN_CI_POLICY_FILE: ${{ github.workspace }}/wardyn-ci-policy.json
+          #
+          # Model access, on a deployment with model providers configured
+          # (docs/CI.md "CI's identity" — the CI principal stores its own key
+          # once, out of band, through PUT /model-providers/{id}/credential):
+          # WARDYN_CI_TOKEN: ${{ secrets.WARDYN_CI_TOKEN }}
+          # WARDYN_CI_MODEL_PROVIDER: your-provider-id
+          #
+          # Or, on ci-run.sh's own from-nothing stack with none configured
+          # (a policy that grants model access — see
+          # wardyn/examples/policies/claude-llm.json — and the key seeded from
+          # your repo secrets):
           # WARDYN_CI_SECRETS: anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}
         run: wardyn/scripts/ci-run.sh
 

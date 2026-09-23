@@ -41,12 +41,19 @@ Reuse the shipped machinery; never hand-roll what exists.
      up front (`WARDYN_CI_SECRETS` / `wardyn secret set`).
    - Keep `auto_stop_after_sec` bounded (baseline: 3600).
 
-3. **Model access (harness mode only).** API key is the zero-prior-state path:
-   copy the `api_key` grant + `api.anthropic.com` egress from
-   `examples/policies/claude-llm.json`; the pipeline seeds
-   `anthropic-api-key` from its secret store. Bedrock bearer is the
-   enterprise alternative (`docs/CI.md` § model access). Subscription modes
-   need a one-time interactive login — do not propose them for fresh CI.
+3. **Model access (harness mode only).** If `site_config.model_providers` is
+   configured, model access is a **person's own credential**, not a
+   pipeline-seeded secret: the CI principal stores it once through
+   `PUT /model-providers/{id}/credential` (or the console), and the pipeline
+   sets `WARDYN_CI_MODEL_PROVIDER=<id>` so `ci-run.sh` checks it is connected
+   before launching (`docs/CI.md` § "CI's identity"). Nothing in the policy or
+   the env block carries the key. Otherwise (a from-nothing stack with no
+   providers configured — `ci-run.sh`'s own default), the older
+   zero-prior-state path still works: copy the `api_key` grant +
+   `api.anthropic.com` egress from `examples/policies/claude-llm.json`, and
+   the pipeline seeds `anthropic-api-key` from its secret store. Bedrock
+   bearer is the enterprise alternative (`docs/CI.md` § model access).
+   Subscription modes are refused in CI either way — do not propose them.
 
 4. **Validate before shipping the config**: with a control plane up, POST the
    exact create-run body to `/api/v1/runs/preflight` (dry-run, mints nothing)
@@ -65,7 +72,9 @@ Reuse the shipped machinery; never hand-roll what exists.
      `docs/ci/github-actions.yml` / `azure-pipelines.yml`).
    - Existing control plane: `wardyn run --agent <a> [--image <ref>]
      [--task-mode exec] [--repo org/name] --task '<t>' --policy-file <f>
-     --wait --timeout 30m` with `WARDYN_URL` + `WARDYN_ADMIN_TOKEN` set.
+     --wait --timeout 30m` with `WARDYN_URL` + `WARDYN_TOKEN` set — the CI
+     principal's own `wdn_` token (`docs/CI.md` § "CI's identity"), not the
+     shared `WARDYN_ADMIN_TOKEN`.
    - State the exit-code contract (0 / task's code / 2 / 124 — table in
      `docs/CI.md`) so the pipeline gate is explicit.
 

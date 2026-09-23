@@ -59,11 +59,14 @@ carry versions rather than floating refs.
 | `WARDYN_CI_REPO` | `org/name` cloned into the workspace (needs egress + creds, see below) | unset (ephemeral scratch) |
 | `WARDYN_CI_POLICY_FILE` | `RunPolicySpec` JSON | `examples/policies/ci.json` |
 | `WARDYN_CI_SECRETS` | `name=value[,name=value...]` seeded into the secret store pre-run | unset |
+| `WARDYN_CI_MODEL_PROVIDER` | model provider id to verify before launch (harness mode only — see "CI's identity" below) | unset (skipped) |
+| `WARDYN_CI_TOKEN` | the identity every `wardyn` call in this job authenticates as | `WARDYN_ADMIN_TOKEN` |
 | `WARDYN_CI_TIMEOUT` | `wardyn run --wait` bound | `30m` |
 | `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`, `session.cast` — the run's terminal recording, when it has one) | `./ci-artifacts` |
 | `WARDYN_CI_KEEP` | `1` = leave the stack up for debugging | unset |
 | `WARDYN_CI_SKIP_BUILD` | `1` = reuse existing local images | unset |
 | `WARDYN_DOCKER_SOCK` | which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
+| `WARDYN_ADMIN_TOKEN` | this ephemeral stack's own bootstrap admin bearer (compose needs one to exist; see "CI's identity" below) | `demo-admin-token` |
 
 **If this deployment has an agent roster, the CI agent needs a row in it.**
 `ci-run.sh` defaults `WARDYN_CI_AGENT` to `claude-code`, and since 0.7.2 a
@@ -76,6 +79,42 @@ Either give the agent CI uses an enabled row (`PUT /api/v1/agent-providers`, or
 the Providers screen) or point `WARDYN_CI_AGENT` at one that has one. A
 deployment with NO `agent_providers` block refuses nothing — which is every
 install upgraded from 0.7.1 until someone writes the first row.
+
+### CI's identity
+
+`ci-run.sh` brings up its own ephemeral control plane from nothing on every
+invocation, so it has exactly one valid credential — `WARDYN_ADMIN_TOKEN` — and
+no distinguishable people (that needs OIDC, which this script does not wire
+up). `WARDYN_CI_TOKEN` is what every `wardyn` CLI call this job makes
+authenticates as; it defaults to `WARDYN_ADMIN_TOKEN` so the zero-config Quick
+start above keeps working unchanged, and every seeded secret or launched run is
+still attributable to a single, named env var rather than an implicit "the
+admin" — never re-injected onto the host `docker` process argv (see the
+`wardyn()` shim in the script).
+
+**Against a real, persistent deployment** — the "[Driving an existing control
+plane instead](#driving-an-existing-control-plane-instead)" pattern below,
+which is where a genuine per-person credential applies — CI instead
+authenticates as **a dedicated CI principal**: a person in your IdP (or a
+local user) who signs in once, mints their own token
+(`POST /api/v1/me/tokens`, or the console), and stores their model-provider
+credential once (`PUT /model-providers/{id}/credential`, or the console). That
+token is `WARDYN_TOKEN` for the CLI directly, or `WARDYN_CI_TOKEN` for
+`ci-run.sh`. Its audit trail then says "CI", and it can be scoped with
+`capModelProvider`/`capAgent` like any other person — rather than one human's
+token paying for and being blamed for every pipeline run (a real cost of the
+simpler alternative), or CI sharing the operator's own admin bearer at all.
+The Claude subscription kind stays unavailable to it either way (below).
+
+When `WARDYN_CI_MODEL_PROVIDER` names a provider, `ci-run.sh` checks —
+never stores — that this identity's credential for it is `live`
+(`wardyn setup status --json`'s `provider_access`) before launching a harness-
+mode run, and fails naming the provider instead of launching a run that would
+only fail later, opaquely, at dispatch. On `ci-run.sh`'s own from-nothing stack
+this is usually a no-op (a fresh stack starts with no model providers
+configured, so the older per-deployment API-key/Bedrock path below still
+applies); it matters once that stack's `site_config.model_providers` block is
+set, and always against an existing deployment that has one.
 
 ### Exit codes
 
@@ -137,7 +176,19 @@ denied. A non-GitHub SCM host still needs its own `allowed_domains` entry plus a
 
 ### Model access for harness mode (running a real agent)
 
-Two paths work from zero prior state:
+**On a deployment with `site_config.model_providers` configured**, model
+access is a person's own credential (see "CI's identity" above): the CI
+principal stores it once through `PUT /model-providers/{id}/credential` (or
+the console), and the pipeline sets `WARDYN_CI_MODEL_PROVIDER` to that
+provider's id so `ci-run.sh` checks it is connected before launching, or just
+launches (a launch with no credential for the chosen provider is refused, 422,
+naming it). Nothing is seeded pre-run any more; there is no key on the
+pipeline's env block to rotate or leak.
+
+**On `ci-run.sh`'s own from-nothing stack with no model providers
+configured** (its default, since nothing seeds that block), two older paths
+still work from zero prior state — every deployment's `site_config` starts
+this way until an admin configures providers:
 
 - **API key** (simplest): policy grants an `api_key` scoped to
   `api.anthropic.com` (see
@@ -412,8 +463,10 @@ targets when it finishes or stops.
 ## Driving an existing control plane instead
 
 If you already run wardynd somewhere, skip `ci-run.sh` and use the CLI
-directly — it is fully non-interactive with `WARDYN_URL` +
-`WARDYN_ADMIN_TOKEN`:
+directly — it is fully non-interactive with `WARDYN_URL` + `WARDYN_TOKEN`, a
+CI principal's own `wdn_` API token (see "CI's identity" above; not the
+shared `WARDYN_ADMIN_TOKEN`, which has no credential of its own to launch a
+model run with once this deployment configures model providers):
 
 `--task-mode exec` runs the task as a plain shell command, so **no `--agent` is
 needed** — the image is what the run needs, and naming an agent it never invokes
@@ -433,6 +486,24 @@ wardyn audit <id> --json
 launch resolution that mints nothing and prints the `setup_items` blockers plus
 the confinement class that would be enforced. `ci-run.sh` calls the same
 endpoint before launching.
+
+**Provisioning the CI principal, once, against this deployment:**
+
+```sh
+# 1. Sign in once as the CI principal (console, or however this deployment's
+#    IdP works) and mint its own token — it never expires by default, and it
+#    is shown exactly once:
+curl -sS -X POST "$WARDYN_URL/api/v1/me/tokens" \
+  -H "Cookie: $SESSION_COOKIE" -d '{"name":"ci"}' | jq -r .token   # store as WARDYN_TOKEN
+
+# 2. Store its model-provider credential once (repeat per provider CI needs):
+curl -sS -X PUT "$WARDYN_URL/api/v1/model-providers/$PROVIDER_ID/credential" \
+  -H "Authorization: Bearer $WARDYN_TOKEN" -d '{"value":"'"$KEY"'"}'
+
+# 3. Confirm it is live before wiring the pipeline up to launch anything:
+wardyn setup status --json | jq --arg p "$PROVIDER_ID" \
+  '.provider_access[] | select(.provider == $p)'
+```
 
 ## Images
 

@@ -15,18 +15,23 @@
 # Usage:  scripts/ci-run.sh          # env-driven, see the table below
 #
 # Env:
-#   WARDYN_CI_TASK        task text (exec mode: the shell command)   [required]
-#   WARDYN_CI_IMAGE       BYOA base image ref (e.g. ubuntu:24.04)    [optional]
-#   WARDYN_CI_TASK_MODE   harness (agent) | exec (plain command)     [harness]
-#   WARDYN_CI_AGENT       agent name for harness mode / tools source [claude-code]
-#   WARDYN_CI_REPO        org/name to clone into the workspace       [optional]
-#   WARDYN_CI_POLICY_FILE RunPolicySpec JSON path                    [examples/policies/ci.json]
-#   WARDYN_CI_SECRETS     name=value[,name=value...] seeded pre-run  [optional]
-#   WARDYN_CI_TIMEOUT     wardyn run --wait timeout                  [30m]
-#   WARDYN_CI_OUT         artifact dir (run.json, audit.json, .cast) [./ci-artifacts]
-#   WARDYN_CI_KEEP        1 = leave the stack up for debugging       [unset]
-#   WARDYN_CI_SKIP_BUILD  1 = reuse existing local images            [unset]
-#   WARDYN_ADMIN_TOKEN    admin bearer token                         [demo-admin-token]
+#   WARDYN_CI_TASK           task text (exec mode: the shell command)   [required]
+#   WARDYN_CI_IMAGE          BYOA base image ref (e.g. ubuntu:24.04)    [optional]
+#   WARDYN_CI_TASK_MODE      harness (agent) | exec (plain command)     [harness]
+#   WARDYN_CI_AGENT          agent name for harness mode / tools source [claude-code]
+#   WARDYN_CI_REPO           org/name to clone into the workspace       [optional]
+#   WARDYN_CI_POLICY_FILE    RunPolicySpec JSON path                    [examples/policies/ci.json]
+#   WARDYN_CI_SECRETS        name=value[,name=value...] seeded pre-run  [optional]
+#   WARDYN_CI_MODEL_PROVIDER model provider id to verify (harness mode) [unset — skipped]
+#   WARDYN_CI_TIMEOUT        wardyn run --wait timeout                  [30m]
+#   WARDYN_CI_OUT            artifact dir (run.json, audit.json, .cast) [./ci-artifacts]
+#   WARDYN_CI_KEEP           1 = leave the stack up for debugging       [unset]
+#   WARDYN_CI_SKIP_BUILD     1 = reuse existing local images            [unset]
+#   WARDYN_CI_TOKEN          the identity every `wardyn` call in this   [WARDYN_ADMIN_TOKEN]
+#                            job authenticates as — see "CI's identity"
+#                            in docs/CI.md. Defaults to this ephemeral
+#                            stack's own bootstrap bearer.
+#   WARDYN_ADMIN_TOKEN       this stack's bootstrap admin bearer        [demo-admin-token]
 #
 # Exit code: the run's outcome from `wardyn run --wait` — 0 COMPLETED,
 # agent/command exit code on FAILED, 2 KILLED/STOPPED, 124 timeout.
@@ -75,7 +80,20 @@ CI_REPO="${WARDYN_CI_REPO:-}"
 POLICY_FILE="${WARDYN_CI_POLICY_FILE:-${REPO_ROOT}/examples/policies/ci.json}"
 TIMEOUT="${WARDYN_CI_TIMEOUT:-30m}"
 OUT_DIR="${WARDYN_CI_OUT:-./ci-artifacts}"
+MODEL_PROVIDER="${WARDYN_CI_MODEL_PROVIDER:-}"
+# WARDYN_ADMIN_TOKEN is this EPHEMERAL stack's own bootstrap admin bearer —
+# compose interpolates it into wardynd's own environment, so the daemon
+# always needs one to exist, ephemeral or not. It is NOT the identity CI's own
+# actions run as; see wardyn() below and docs/CI.md "CI's identity" (D8).
 export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
+# WARDYN_CI_TOKEN is that identity: every `wardyn` CLI call this job makes
+# authenticates as it, never implicitly as the daemon's own admin bearer.
+# Defaults to the same bootstrap bearer, because a from-nothing stack with no
+# OIDC configured has exactly one valid credential and no distinguishable
+# people — point it at a named CI principal's own `wdn_` API token once this
+# job talks to a deployment that has one (docs/CI.md "Driving an existing
+# control plane instead").
+export WARDYN_CI_TOKEN="${WARDYN_CI_TOKEN:-${WARDYN_ADMIN_TOKEN}}"
 
 [[ -n "${TASK}" ]] || die "WARDYN_CI_TASK is required (the task / command to run)"
 [[ -f "${POLICY_FILE}" ]] || die "policy file not found: ${POLICY_FILE}"
@@ -106,16 +124,24 @@ unset _live
 # wardyn runs the shipped CLI inside the wardynd container (same shim as
 # scripts/demo.sh — no host Go/binary needed at run time).
 #
-# It does NOT re-inject the admin bearer. wardynd already has it: compose
-# interpolates WARDYN_ADMIN_TOKEN (exported above) into the service's own
-# environment, so `exec` inherits it inside the container. Passing it again put
-# a real fleet token on the HOST `docker` process argv — world-readable in `ps`
-# and /proc/<pid>/cmdline to every other user on a shared runner — on every
-# single CLI call this job makes. WARDYN_URL stays: it is an endpoint, not a
-# credential, and the container has no reason to know it otherwise.
+# It authenticates as WARDYN_CI_TOKEN, never the daemon's own admin bearer:
+# docker-compose.ci.yaml bakes WARDYN_CI_TOKEN into the CONTAINER's own env as
+# WARDYN_TOKEN, so `exec` inherits it the same way it always inherited
+# WARDYN_ADMIN_TOKEN — passing the real bearer via `-e` here instead would put
+# it on the HOST `docker` process argv, world-readable in `ps` and
+# /proc/<pid>/cmdline to every other user on a shared runner, on every single
+# CLI call this job makes. WARDYN_ADMIN_TOKEN is explicitly CLEARED for this
+# exec (empty, never sensitive) because the CLI's own precedence tries it
+# FIRST (cmd/wardyn/main.go) — left ambient, it would silently win over
+# WARDYN_TOKEN and every write this job makes would still land as the shared
+# admin instead of the identity CI's own actions should be attributed to (D8,
+# docs/design mock-08/multi-provider-design.md). WARDYN_URL stays: it is an
+# endpoint, not a credential, and the container has no reason to know it
+# otherwise.
 wardyn() {
   "${COMPOSE[@]}" exec -T \
     -e WARDYN_URL="http://localhost:8080" \
+    -e WARDYN_ADMIN_TOKEN= \
     wardynd /usr/local/bin/wardyn "$@"
 }
 
@@ -244,7 +270,7 @@ if [[ -n "${WARDYN_CI_SECRETS:-}" ]]; then
     name="${pair%%=*}"; value="${pair#*=}"
     [[ -n "${name}" && "${pair}" == *"="* ]] || die "WARDYN_CI_SECRETS entry '${pair}' is not name=value"
     log "Seeding secret ${name}"
-    printf '%s' "${value}" | wardyn secret set "${name}" || die "seed secret ${name} (check wardynd health: '${COMPOSE[*]} ps wardynd' / '${COMPOSE[*]} logs wardynd', and that WARDYN_ADMIN_TOKEN is correct)"
+    printf '%s' "${value}" | wardyn secret set "${name}" || die "seed secret ${name} (check wardynd health: '${COMPOSE[*]} ps wardynd' / '${COMPOSE[*]} logs wardynd', and that WARDYN_CI_TOKEN is correct)"
   done
 fi
 
@@ -256,6 +282,38 @@ fi
 # reason rather than connecting something that will not resolve at run time.
 if [[ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]]; then
   die "WARDYN_SUBSCRIPTION_TOKEN is not supported in CI: a subscription credential belongs to one person, and a pipeline runs on behalf of everyone who can trigger it. Use an API key (WARDYN_CI_SECRETS=anthropic-api-key=sk-...) or Bedrock — see docs/CI.md."
+fi
+
+# ── model provider credential check (harness mode only) ──────────────────────
+# WARDYN_CI_MODEL_PROVIDER names a model provider (SiteConfig.ModelProviders)
+# this job's WARDYN_CI_TOKEN identity is expected to already have a credential
+# for — stored ONCE, out of band, through PUT /model-providers/{id}/credential
+# or the console (docs/CI.md "CI's identity"). This never STORES one: a person
+# who has not connected the provider gets a clear, provider-named failure here
+# instead of an opaque one at dispatch. Best-effort: skipped with no jq, and a
+# nil/absent provider_access (no ModelProviders block on this deployment —
+# ci-run.sh's own from-nothing stack, today, always) means there is nothing to
+# check, so the legacy WARDYN_CI_SECRETS path below still applies.
+if [[ "${TASK_MODE:-harness}" != "exec" && -n "${MODEL_PROVIDER}" ]]; then
+  if command -v jq >/dev/null 2>&1; then
+    status_json="$(wardyn setup status --json 2>/dev/null || true)"
+    state="$(printf '%s' "${status_json}" | jq -r --arg p "${MODEL_PROVIDER}" \
+      '((.provider_access // [])[] | select(.provider == $p) | .state) // empty' 2>/dev/null)"
+    if [[ -z "${state}" ]]; then
+      access_count="$(printf '%s' "${status_json}" | jq -r '(.provider_access // []) | length' 2>/dev/null || echo 0)"
+      if [[ "${access_count}" != "0" ]]; then
+        die "model provider '${MODEL_PROVIDER}' (WARDYN_CI_MODEL_PROVIDER) is not one this CI identity may use — check it exists, serves the '${AGENT}' agent, and is granted to it. See docs/CI.md."
+      fi
+      # else: provider_access absent — no ModelProviders block on this
+      # deployment, so nothing to check (see comment above).
+    elif [[ "${state}" != "live" ]]; then
+      die "model provider '${MODEL_PROVIDER}' is not connected for this CI identity (state: ${state}) — store its credential once (PUT /model-providers/${MODEL_PROVIDER}/credential, or the console) before running CI. See docs/CI.md."
+    else
+      log "model provider ${MODEL_PROVIDER}: connected"
+    fi
+  else
+    warn "jq not found: skipping the WARDYN_CI_MODEL_PROVIDER connection check"
+  fi
 fi
 
 # ── launch args (shared by the preflight preview and the real launch) ────────

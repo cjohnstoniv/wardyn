@@ -32,8 +32,10 @@ steps:
       export WARDYN_CI_TASK="echo hello from a governed sandbox && uname -a"
       export WARDYN_CI_OUT="$(Build.ArtifactStagingDirectory)/wardyn-run"
       # Variant — real agent (claude-code): see docs/ci/github-actions.yml's
-      # commented block; seed the key from a secret pipeline variable:
-      # export WARDYN_CI_SECRETS="anthropic-api-key=$(ANTHROPIC_API_KEY)"
+      # commented block for both model-access paths — a deployment with model
+      # providers configured (WARDYN_CI_TOKEN + WARDYN_CI_MODEL_PROVIDER,
+      # docs/CI.md "CI's identity") or ci-run.sh's own from-nothing stack
+      # (WARDYN_CI_SECRETS="anthropic-api-key=$(ANTHROPIC_API_KEY)").
       "$(Agent.TempDirectory)/wardyn/scripts/ci-run.sh"
     displayName: Run the governed sandboxed task
 

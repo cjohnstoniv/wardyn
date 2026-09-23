@@ -134,6 +134,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `PUT /site-config` alike; the count is audited as `per_user_credentials_invalidated`. New audit
   actions `model_provider.credential.write` / `.delete` record `{provider, owner}`, never the value.
 
+- **CI authenticates as a named identity, never the shared admin bearer (#546).** `scripts/ci-run.sh`
+  gains `WARDYN_CI_TOKEN`: every `wardyn` CLI call it makes now authenticates as this identity
+  (`WARDYN_ADMIN_TOKEN` is cleared for those calls), defaulting to the daemon's own bootstrap bearer
+  so the zero-config Quick start is unchanged. Against a real deployment with
+  `site_config.model_providers` configured, this is a dedicated CI principal's own `wdn_` token —
+  `docs/CI.md`'s "Driving an existing control plane instead" section now shows minting one
+  (`POST /me/tokens`) and storing its model-provider credential once
+  (`PUT /model-providers/{id}/credential`) instead of the shared admin token. New
+  `WARDYN_CI_MODEL_PROVIDER` makes `ci-run.sh` check — never store — that credential's connection
+  state (`GET /setup/status`'s `provider_access`) before launching a harness-mode run, failing
+  naming the provider instead of a run that would only fail later, opaquely, at dispatch. The
+  `wardyn-ci` skill and the GitHub Actions/Azure DevOps examples describe both the new
+  per-provider-credential path and the older pipeline-seeded-secret path, which still applies on
+  `ci-run.sh`'s own from-nothing stack until it configures model providers.
+
 - **The Claude sign-in image is a checked prerequisite for `anthropic_subscription` model
   providers (#524).** "Resolves" is now two things, not one: `WARDYN_AGENT_IMAGES["claude-code"]`
   must be pinned, and, when the wired Runner can confirm its local image store (the Docker

@@ -12,6 +12,12 @@ services:
     environment:
       WARDYN_ENVBUILD: "true"
       WARDYN_ENVBUILD_TOOLS_DIR: /wardyn-tools
+      # The identity ci-run.sh's wardyn() shim authenticates every CLI call
+      # as (WARDYN_CI_TOKEN there), baked into the CLI-only WARDYN_TOKEN var
+      # (docs/ENV.md: "no WARDYN_TOKEN fallback here; CLI-only") so `exec`
+      # inherits it the same no-argv-leak way it inherits WARDYN_ADMIN_TOKEN.
+      # The daemon process itself never reads WARDYN_TOKEN.
+      WARDYN_TOKEN: "${WARDYN_CI_TOKEN:?exported by scripts/ci-run.sh}"
     volumes:
       # Runner tools (agent-run, agent-run-lib.sh, wardyn-rec, wardyn-scan,
       # wardyn-git-helper) the finalize stage COPYs into wrapped images.
