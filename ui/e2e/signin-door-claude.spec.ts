@@ -35,12 +35,17 @@ interface Door {
 
 async function openClaudeDoor(page: Page): Promise<Door> {
   let base: Record<string, unknown> | null = null;
-  // No stored subscription, and a deployment that allows one: the lane's
-  // "Sign in" button is on screen.
+  // No subscription of any kind — neither a managed capture nor this host's
+  // own resident Claude CLI login, which the e2e host may well have — and a
+  // deployment that allows one: the lane's "Sign in" button is on screen.
   await page.route("**/api/v1/setup/status*", async (route) => {
     if (!base) base = (await (await route.fetch()).json()) as Record<string, unknown>;
     const auth = { ...((base.auth ?? {}) as Record<string, unknown>), shared_subscription_allowed: true };
-    await route.fulfill({ json: { ...base, auth } });
+    const providers = ((base.providers ?? []) as { tool?: string }[]).map((p) =>
+      p.tool === "claude" ? { ...p, logged_in: false } : p,
+    );
+    const harness = ((base.harness ?? []) as { provider?: string }[]).filter((h) => h.provider !== "anthropic");
+    await route.fulfill({ json: { ...base, auth, providers, harness } });
   });
   const runIds: string[] = [];
   await page.route("**/api/v1/setup/harness-login", async (route) => {
@@ -163,7 +168,7 @@ test.describe("the Claude sign-in door (#628)", () => {
     const door = await openClaudeDoor(page);
     door.setRun({ state: "STARTING", status_detail: PULL_FAILED, status_reason: "ImagePullBackOff" });
 
-    await expect(page.getByRole("alert")).toHaveText(PULL_FAILED);
+    await expect(page.getByTestId("harness-login-pane").getByRole("alert")).toHaveText(PULL_FAILED);
     await expect(step(page, SIGNIN_PROGRESS.STEP_DOWNLOAD_FAILED)).toHaveAttribute("data-state", "failed");
     await expect(page.getByTestId("signin-progress").getByRole("listitem")).toHaveCount(2);
 

@@ -201,7 +201,7 @@ test.describe("the AWS sign-in door (#628)", () => {
     const door = await openAwsDoor(page);
     door.setRun({ state: "STARTING", status_detail: PULL_FAILED, status_reason: "ErrImagePull" });
 
-    await expect(page.getByRole("alert")).toHaveText(PULL_FAILED);
+    await expect(page.getByTestId("harness-login-pane").getByRole("alert")).toHaveText(PULL_FAILED);
     await expect(step(page, SIGNIN_PROGRESS.STEP_DOWNLOAD_FAILED)).toHaveAttribute("data-state", "failed");
     await expect(step(page, SIGNIN_PROGRESS.STEP_START)).toHaveAttribute("data-state", "done");
     await expect(page.getByTestId("signin-progress").getByRole("listitem")).toHaveCount(2);
@@ -211,7 +211,7 @@ test.describe("the AWS sign-in door (#628)", () => {
     await expect.poll(() => door.launches()).toBe(2);
     // The stuck sandbox is still STARTING; Retry stops it rather than leaving it behind.
     expect(door.kills).toContain("3f1b7c26-0000-4000-8000-000000000001");
-    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByTestId("harness-login-pane").getByRole("alert")).toHaveCount(0);
     await expect(step(page, SIGNIN_PROGRESS.STEP_START)).toHaveAttribute("data-state", "active");
   });
 

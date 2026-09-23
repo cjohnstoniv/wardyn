@@ -979,7 +979,7 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
     expect(elapsed, "a terminal reason must end the wait on the reason, not on the 5-minute clock").toBeLessThan(
       20_000,
     );
-    await expect(page.getByRole("alert")).toContainText("no-such-tag-0f0f");
+    await expect(page.getByTestId("harness-login-pane").getByRole("alert")).toContainText("no-such-tag-0f0f");
     // Neither of the two clock-graded sentences: this wait never became "slow",
     // and Wardyn could read the run throughout.
     await expect(page.getByText(LOGIN_SANDBOX_SLOW_START)).toHaveCount(0);
