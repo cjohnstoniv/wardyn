@@ -590,10 +590,13 @@ type loginRunStamp struct {
 	// legacy door: the capture lands under that provider's UID-keyed name, and
 	// SSORegion/Model are the provider's as they read at launch — what an AWS
 	// upload binds to in place of the boot config (provider_signin.go).
-	ModelProvider    string `json:"model_provider,omitempty"`
-	ModelProviderUID string `json:"model_provider_uid,omitempty"`
-	SSORegion        string `json:"sso_region,omitempty"`
-	Model            string `json:"model,omitempty"`
+	// ModelProviderAddress is providerAddressDigest at launch: a capture after
+	// the address moved is refused on both doors.
+	ModelProvider        string `json:"model_provider,omitempty"`
+	ModelProviderUID     string `json:"model_provider_uid,omitempty"`
+	ModelProviderAddress string `json:"model_provider_address,omitempty"`
+	SSORegion            string `json:"sso_region,omitempty"`
+	Model                string `json:"model,omitempty"`
 }
 
 func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunStamp, error) {
@@ -728,6 +731,14 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 	sc, ok := s.siteConfigSnapshot(r.Context())
 	if !ok && s.cfg.Store != nil {
 		writeError(w, http.StatusServiceUnavailable, harnessLoginRosterUnavailable)
+		return types.AgentProvider{}, awsSSOScope{}, false
+	}
+	// Once a model-provider block exists every sign-in is a provider's own
+	// (POST /model-providers/{id}/sign-in): the two doors never both answer.
+	// Decided on this same read, so a blip cannot let one read say "no block"
+	// and another authorize.
+	if sc.ModelProviders != nil {
+		writeError(w, http.StatusConflict, mpsLegacyDoor)
 		return types.AgentProvider{}, awsSSOScope{}, false
 	}
 	// WHOSE credential this may capture, from THIS proved read.

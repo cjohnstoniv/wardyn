@@ -6,11 +6,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,10 +28,30 @@ import (
 // the provider as it read at launch, and answers only that provider's holds.
 
 // signInStore is integStore plus the one read the capture paths make: the
-// login run's own harness.login.started stamp, served from the audit sink.
+// login run's own harness.login.started stamp, served from the audit sink. Its
+// site config can change under a live sign-in (setSite) and blip.
 type signInStore struct {
 	*integStore
-	audit *memAudit
+	audit  *memAudit
+	siteMu sync.Mutex
+	blips  int // site-config reads that fail before one succeeds
+}
+
+func (s *signInStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	s.siteMu.Lock()
+	defer s.siteMu.Unlock()
+	if s.blips > 0 {
+		s.blips--
+		return types.SiteConfig{}, errors.New("site config read blipped")
+	}
+	return s.site, nil
+}
+
+// setSite replaces the live block, as an admin's save would.
+func (s *signInStore) setSite(sc types.SiteConfig) {
+	s.siteMu.Lock()
+	defer s.siteMu.Unlock()
+	s.site = sc
 }
 
 func (s *signInStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
@@ -115,6 +137,19 @@ func TestProviderSignInDoorsNeverBothAnswer(t *testing.T) {
 			t.Fatalf("the legacy door launched %d sign-ins beside a provider block", n)
 		}
 	})
+	// One read decides both: a blip on it is a 503, never a read that says "no
+	// block" beside another that authorizes.
+	t.Run("a blipped read never lets the legacy door launch beside a block", func(t *testing.T) {
+		srv, st, audit, _ := signInFixture(t, nil, credentialSite(ssoProvider()))
+		st.blips = 1
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", admin, `{"provider":"aws","sso_start_url":"https://acme.awsapps.com/start"}`)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("legacy door on a blip = %d %s, want 503", w.Code, w.Body.String())
+		}
+		if n := len(audit.find("harness.login.started")); n != 0 {
+			t.Fatalf("the legacy door launched %d sign-ins beside a provider block", n)
+		}
+	})
 	t.Run("the provider door refuses while there is no block", func(t *testing.T) {
 		srv, _, _, _ := signInFixture(t, nil, types.SiteConfig{})
 		code, body := signIn(t, srv, admin, "bedrock-prod")
@@ -141,10 +176,60 @@ func TestProviderSignInAWSLaunch(t *testing.T) {
 	want := loginRunStamp{
 		SSOStartURL: p.Bedrock.SSOStartURL, CredentialSource: string(types.CredentialSourcePerUser), Owner: st.Owner,
 		SSOAccountID: p.Bedrock.SSOAccountID, SSORoleName: p.Bedrock.SSORoleName,
-		ModelProvider: p.ID, ModelProviderUID: p.UID, SSORegion: p.Bedrock.Region, Model: p.Harnesses[0].Model,
+		ModelProvider: p.ID, ModelProviderUID: p.UID, ModelProviderAddress: providerAddressDigest(p),
+		SSORegion: p.Bedrock.Region, Model: p.Harnesses[0].Model,
 	}
 	if st != want || st.Owner == "" {
 		t.Fatalf("stamp = %+v\nwant  %+v with the member as owner", st, want)
+	}
+}
+
+// An unpinned AWS sign-in is bound to the account of the model the caller may
+// run on the provider, whichever harness serves it; models in two accounts
+// are refused before a sandbox opens, unless a pin decides the account.
+func TestProviderSignInAWSModel(t *testing.T) {
+	const (
+		modelA = "arn:aws:bedrock:us-east-1:111122223333:application-inference-profile/claude"
+		modelB = "arn:aws:bedrock:us-east-1:444455556666:application-inference-profile/codex"
+	)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	provider := func(pinned bool, hs ...types.ProviderHarness) types.ModelProvider {
+		p := ssoProvider()
+		if !pinned {
+			p.Bedrock.SSOAccountID, p.Bedrock.SSORoleName = "", ""
+		}
+		p.Harnesses = hs
+		return p
+	}
+	both := []types.ProviderHarness{{Harness: "claude-code", Model: modelA}, {Harness: "codex-cli", Model: modelB}}
+	for _, tc := range []struct {
+		name  string
+		p     types.ModelProvider
+		code  int
+		model string
+	}{
+		{"a provider serving only codex-cli binds to its model", provider(false, types.ProviderHarness{Harness: "codex-cli", Model: modelB}), http.StatusOK, modelB},
+		{"unpinned, models in two accounts are refused", provider(false, both...), http.StatusUnprocessableEntity, ""},
+		{"a pin outranks the models' accounts", provider(true, both...), http.StatusOK, modelA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _, audit, _ := signInFixture(t, nil, credentialSite(tc.p))
+			code, body := signIn(t, srv, member, tc.p.ID)
+			if code != tc.code {
+				t.Fatalf("sign-in = %d %s, want %d", code, body, tc.code)
+			}
+			if code != http.StatusOK {
+				var eb errorBody
+				_ = json.Unmarshal([]byte(body), &eb)
+				if n := len(audit.find("harness.login.started")); n != 0 || eb.Error != fmt.Sprintf(mpsAccounts, tc.p.ID) {
+					t.Fatalf("refusal %s launched %d sandboxes, want %q and none", body, n, fmt.Sprintf(mpsAccounts, tc.p.ID))
+				}
+				return
+			}
+			if got := loginStamp(t, audit).Model; got != tc.model {
+				t.Fatalf("stamped model = %q, want %q", got, tc.model)
+			}
+		})
 	}
 }
 
@@ -221,7 +306,7 @@ func providerSSOUpload(t *testing.T, p types.ModelProvider, site types.SiteConfi
 			"credential_source": string(types.CredentialSourcePerUser), "owner": owner,
 			"sso_account_id": p.Bedrock.SSOAccountID, "sso_role_name": p.Bedrock.SSORoleName,
 			"model_provider": p.ID, "model_provider_uid": p.UID, "sso_region": p.Bedrock.Region,
-			"model": p.Harnesses[0].Model,
+			"model": p.Harnesses[0].Model, "model_provider_address": providerAddressDigest(p),
 		}),
 	}}
 	srv, sec, tok := newSSOUploadSrvWith(t, events, site, runID)
@@ -276,6 +361,10 @@ func TestProviderSignInAWSCapture(t *testing.T) {
 		{"a sign-in someone else started", "bob@example.com", "", nil, http.StatusConflict},
 		{"the provider was re-addressed while it was open", subOwner, "", func(sc *types.SiteConfig) {
 			sc.ModelProviders.Providers[0].Bedrock.Region = "us-west-2"
+		}, http.StatusConflict},
+		// Rule 8 purges on any address change, the region's or not.
+		{"the provider's Bedrock base URL moved while it was open", subOwner, "", func(sc *types.SiteConfig) {
+			sc.ModelProviders.Providers[0].Bedrock.BaseURL = brBaseURL
 		}, http.StatusConflict},
 		{"the provider was deleted and re-added under its id", subOwner, "", func(sc *types.SiteConfig) {
 			sc.ModelProviders.Providers[0].UID = uuid.NewString()
@@ -378,6 +467,14 @@ func TestProviderSignInClaudeCapture(t *testing.T) {
 				st.mu.Lock()
 				st.states[runID] = types.RunKilled
 				st.mu.Unlock()
+				return capture(t, srv, member, p.ID, runID, token)
+			}, http.StatusConflict},
+			{"the provider was re-addressed while it was open", func(t *testing.T, srv *Server, st *signInStore, runID uuid.UUID) (int, string) {
+				// The same provider (UIDs kept), routed somewhere else.
+				moved := *site.ModelProviders
+				moved.Providers = slices.Clone(moved.Providers)
+				moved.Providers[0].BaseURL = "https://claude-route.corp.example"
+				st.setSite(types.SiteConfig{ModelProviders: &moved})
 				return capture(t, srv, member, p.ID, runID, token)
 			}, http.StatusConflict},
 			{"an AWS provider, whose helper stores it", func(t *testing.T, srv *Server, _ *signInStore, runID uuid.UUID) (int, string) {

@@ -37,13 +37,15 @@ const (
 	mpsOff         = "model provider %q is turned off, so there is nothing to sign in to"
 	mpsNotGranted  = "you are not granted model provider %q — ask an admin to grant it before signing in to it"
 	mpsNoPortal    = "model provider %q has no AWS access portal or region set — ask your admin to set them before you sign in"
+	mpsAccounts    = "model provider %q serves models in more than one AWS account and pins none — ask your admin to pin the account and role before you sign in"
 	mpsNoImage     = "signing in to Claude needs the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image."
 	mpsPreview     = "Exit member mode to sign in — the capture would land on your own identity."
 	mpsUnreadable  = "Wardyn couldn't read its model providers just now — nothing was started. Try again in a moment."
 	mpsCaptureBody = `body must be {"run_id":"<your sign-in run>","token":"<the claude setup-token output>"}`
 	mpsAWSByHelper = "%q stores your AWS sign-in itself when you finish it in the sign-in sandbox — there is nothing to paste"
 	mpsNotYourRun  = "that is not a Claude sign-in you started for model provider %q — start the sign-in again"
-	// The upload's refusals for a provider sign-in (handleUploadSSOToken).
+	// The upload's refusals for a provider sign-in (handleUploadSSOToken); the
+	// second is the Claude PUT's too.
 	mpsCaptureNotOwner = "this sign-in was started by someone else, so it cannot be stored for you — start the sign-in again"
 	mpsCaptureChanged  = "the model provider this sign-in was for was removed, changed or re-addressed while it was open — start the sign-in again"
 )
@@ -57,6 +59,7 @@ type loginTarget struct {
 	pin      awsSSOPin
 	scope    awsSSOScope
 	provider *types.ModelProvider
+	model    string // signInModel's, on the provider door
 }
 
 // stampProvider adds the provider half of harness.login.started (the stamp an
@@ -66,7 +69,28 @@ func (t loginTarget) stampProvider(stamp map[string]any) {
 		return
 	}
 	stamp["model_provider"], stamp["model_provider_uid"] = t.provider.ID, t.provider.UID
-	stamp["sso_region"], stamp["model"] = t.region, providerModel(*t.provider, "claude-code")
+	stamp["model_provider_address"] = providerAddressDigest(*t.provider)
+	stamp["sso_region"], stamp["model"] = t.region, t.model
+}
+
+// signInModel is the model whose account an unpinned AWS sign-in's session is
+// bound to (bindCaptureToPin), from the harnesses on p the caller may launch:
+// one that names an account when any does. ok=false: two name different
+// accounts, which no one session can serve.
+func signInModel(p types.ModelProvider, launchable []string) (model string, ok bool) {
+	for _, h := range p.Harnesses {
+		if !slices.Contains(launchable, h.Harness) {
+			continue
+		}
+		have, next := bedrockModelAccount(model), bedrockModelAccount(h.Model)
+		switch {
+		case model == "" || (have == "" && next != ""):
+			model = h.Model
+		case next != "" && next != have:
+			return model, false
+		}
+	}
+	return model, true
 }
 
 // withModelProvider adds model_provider to an audit datum when there is one.
@@ -94,10 +118,10 @@ func reauthScopeForRun(sc types.SiteConfig, run types.AgentRun, owner string) (a
 
 // storeProviderSignIn stores an AWS provider sign-in only while its provider
 // is still the one the sign-in was launched for: same UID and kind, same
-// region (rule 8's address), portal and pin. Under siteConfigMu, which rule 8's
-// purge also holds, so a purge can never land between the check and the write
-// and leave a session behind for an old address. changed=true: refused,
-// nothing stored.
+// address (rule 8's, digested), region, portal and pin. Under siteConfigMu,
+// which rule 8's purge also holds, so a purge can never land between the check
+// and the write and leave a session behind for an old address. changed=true:
+// refused, nothing stored.
 func (s *Server) storeProviderSignIn(ctx context.Context, stamp loginRunStamp, scope awsSSOScope, blob awsSSOBlob) (bool, error) {
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
@@ -108,7 +132,7 @@ func (s *Server) storeProviderSignIn(ctx context.Context, stamp loginRunStamp, s
 	p, ok := modelProviderByID(sc.ModelProviders, stamp.ModelProvider)
 	b := providerBedrockSettings(p)
 	if !ok || p.UID != stamp.ModelProviderUID || p.Kind != types.ModelProviderBedrockSSO ||
-		b.Region != stamp.SSORegion || b.SSOStartURL != stamp.SSOStartURL ||
+		providerAddressDigest(p) != stamp.ModelProviderAddress || b.Region != stamp.SSORegion || b.SSOStartURL != stamp.SSOStartURL ||
 		b.SSOAccountID != stamp.SSOAccountID || b.SSORoleName != stamp.SSORoleName {
 		return true, nil
 	}
@@ -127,24 +151,29 @@ func (s *Server) mountProviderSignInRoutes(r chi.Router) {
 // it, from sc: the block must exist; the provider must serve an agent the
 // caller may launch (capAgent — the /setup/status projection's own rule, so a
 // provider the caller cannot see is a 404) and be granted by capModelProvider;
-// and it must be on and a sign-in kind. Returns its login convention. ok=false:
-// the refusal is written.
-func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types.SiteConfig) (types.ModelProvider, harnessLogin, bool) {
+// and it must be on and a sign-in kind. Returns its login convention and the
+// harnesses on it the caller may launch. ok=false: the refusal is written.
+func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types.SiteConfig) (types.ModelProvider, harnessLogin, []string, bool) {
 	id := chi.URLParam(r, "id")
 	if sc.ModelProviders == nil {
 		writeError(w, http.StatusConflict, mpsNoBlock)
-		return types.ModelProvider{}, harnessLogin{}, false
+		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
 	p, ok := modelProviderByID(sc.ModelProviders, id)
+	var launchable []string
 	if ok {
-		ok = slices.ContainsFunc(s.setupModelProviders(r.Context(), sc), func(v SetupModelProvider) bool { return v.ID == id })
+		rows := s.setupModelProviders(r.Context(), sc)
+		i := slices.IndexFunc(rows, func(v SetupModelProvider) bool { return v.ID == id })
+		if ok = i >= 0; ok {
+			launchable = rows[i].Harnesses
+		}
 	}
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Sprintf(mpcNotFound, id))
-		return types.ModelProvider{}, harnessLogin{}, false
+		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
 	if s.denyMemberCapability(w, r, capModelProvider, p.ID, "model_provider.sign_in", fmt.Sprintf(mpsNotGranted, p.ID)) {
-		return types.ModelProvider{}, harnessLogin{}, false
+		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
 	login := map[types.ModelProviderKind]string{
 		types.ModelProviderBedrockSSO: awsSSOProvider, types.ModelProviderAnthropicSubscription: "anthropic",
@@ -153,12 +182,12 @@ func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types
 	switch {
 	case !ok:
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpsTyped, p.ID))
-		return types.ModelProvider{}, harnessLogin{}, false
+		return types.ModelProvider{}, harnessLogin{}, nil, false
 	case p.Disabled:
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpsOff, p.ID))
-		return types.ModelProvider{}, harnessLogin{}, false
+		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
-	return p, hl, true
+	return p, hl, launchable, true
 }
 
 // handleProviderSignIn launches the caller's own sign-in for one provider:
@@ -179,7 +208,7 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, mpsUnreadable)
 		return
 	}
-	p, hl, ok := s.signInProvider(w, r, sc)
+	p, hl, launchable, ok := s.signInProvider(w, r, sc)
 	if !ok {
 		return
 	}
@@ -189,13 +218,20 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, mpsPreview)
 		return
 	}
-	t := loginTarget{scope: chosenProvider{provider: p, owner: owner}.awsScope(), provider: &p}
+	model, oneAccount := signInModel(p, launchable)
+	t := loginTarget{scope: chosenProvider{provider: p, owner: owner}.awsScope(), provider: &p, model: model}
 	if hl.regionalSSOEgress {
 		b := providerBedrockSettings(p)
 		t.startURL, t.region = b.SSOStartURL, b.Region
 		t.pin = awsSSOPin{AccountID: b.SSOAccountID, RoleName: b.SSORoleName}
 		if t.region == "" || validateSSOStartURL(t.startURL) != nil {
 			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpsNoPortal, p.ID))
+			return
+		}
+		// A pin outranks the model's account (bindCaptureToPin); unpinned, one
+		// session must serve every model the caller may run here.
+		if !oneAccount && !t.pin.set() {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpsAccounts, p.ID))
 			return
 		}
 	} else if !claudeSignInImageResolves(r.Context(), s.cfg.AgentImages, s.cfg.Runner) {
@@ -255,7 +291,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusServiceUnavailable, mpsUnreadable)
 		return
 	}
-	p, hl, ok := s.signInProvider(w, r, sc)
+	p, hl, _, ok := s.signInProvider(w, r, sc)
 	if !ok {
 		return
 	}
@@ -293,9 +329,11 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 }
 
 // ownProviderSignInRun reports whether runID is a live Claude sign-in this
-// caller launched through the provider door for p. Everything it compares is
-// server-written at launch (the run row and its harness.login.started stamp).
-// ok=false: the refusal is written.
+// caller launched through the provider door for p, while p still has the
+// address it had then (rule 8: a sign-in given for one address must not land
+// after the purge). Everything it compares is server-written at launch (the
+// run row and its harness.login.started stamp). ok=false: the refusal is
+// written.
 func (s *Server) ownProviderSignInRun(w http.ResponseWriter, r *http.Request, runID uuid.UUID, hl harnessLogin, p types.ModelProvider, owner string) bool {
 	run, err := s.cfg.Store.GetRun(r.Context(), runID)
 	if err != nil || run.Task != harnessLoginTask || run.Agent != hl.agent {
@@ -309,6 +347,10 @@ func (s *Server) ownProviderSignInRun(w http.ResponseWriter, r *http.Request, ru
 	}
 	if stamp.ModelProviderUID != p.UID || stamp.Owner != owner {
 		writeError(w, http.StatusConflict, fmt.Sprintf(mpsNotYourRun, p.ID))
+		return false
+	}
+	if stamp.ModelProviderAddress != providerAddressDigest(p) {
+		writeError(w, http.StatusConflict, mpsCaptureChanged)
 		return false
 	}
 	if run.State == types.RunKilled {

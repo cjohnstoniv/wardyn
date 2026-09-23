@@ -100,9 +100,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   boot `WARDYN_BEDROCK_*` values). The capture lands only in the signer's own namespace under the
   provider's own name (`wardyn-provider-<uid>-sso` / `-oauth`), never the roster's shared name or the
   operator's: an AWS sign-in through the sandbox's own upload, bound to the provider as it read at
-  launch and refused (`provider_changed`) if the provider was removed, re-created or re-addressed
-  while it was open; a Claude sign-in through `PUT` on the same path with the printed setup-token,
-  bound to a sign-in run the caller launched for that provider. The door answers only while a
+  launch and refused (`provider_changed`) if the provider was removed, re-created or given any other
+  address (rule 8's) while it was open; a Claude sign-in through `PUT` on the same path with the
+  printed setup-token, bound to a sign-in run the caller launched for that provider and refused the
+  same way after an address change. An unpinned AWS sign-in binds to the account of the model the
+  caller may run on the provider, and is refused before launch when those models name two accounts.
+  A person has one open sign-in sandbox per kind across all providers: starting an AWS sign-in for a
+  second provider ends the first one's, whose capture is then refused. The door answers only while a
   model-provider block exists, and `POST /setup/harness-login` now answers only while none does. The
   caller must be granted the provider and an agent it serves; the admin token under SSO cannot sign
   in. A run whose provider AWS session lapses mid-run is now held for its owner to sign in again,

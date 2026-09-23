@@ -8,6 +8,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -203,6 +205,21 @@ func providerAddressChanged(a, b types.ModelProvider) bool {
 		}
 	}
 	return false
+}
+
+// providerAddressDigest digests every input providerAddressChanged reads, for
+// a sign-in to stamp at launch and compare at capture: a capture for an old
+// address must not land after rule 8's purge. A digest, so no base URL reaches
+// the audit log. Coarser than the predicate on one point only: it also moves
+// when a harness is added or removed, and that capture is refused (sign in
+// again) rather than stored.
+func providerAddressDigest(p types.ModelProvider) string {
+	harnesses := map[string][2]string{}
+	for _, h := range p.Harnesses {
+		harnesses[h.Harness] = [2]string{h.Path, h.AuthHeader}
+	}
+	sum := sha256.Sum256(mustJSON([]any{p.BaseURL, bedrockAddress(p), authHeader(p.Auth), harnesses}))
+	return hex.EncodeToString(sum[:])
 }
 
 func bedrockAddress(p types.ModelProvider) string {

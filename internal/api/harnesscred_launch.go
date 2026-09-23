@@ -88,13 +88,6 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	// Once a model-provider block exists every sign-in is a provider's own
-	// (POST /model-providers/{id}/sign-in): the two doors never both answer. A
-	// failed read falls through to authorizeHarnessLogin's own 503.
-	if sc, ok := s.siteConfigSnapshot(r.Context()); ok && sc.ModelProviders != nil {
-		writeError(w, http.StatusConflict, mpsLegacyDoor)
-		return
-	}
 	provider := strings.TrimSpace(req.Provider)
 	if provider == "" {
 		provider = "anthropic"
