@@ -2,7 +2,7 @@
 # Test gaps — untested exported surface (inventory)
 
 _Generated 2026-09-23 by `scripts/test-gaps.sh` from `test/reports/go/union/coverage-func.txt`
-(union coverage total **79.8%**), cross-checked against the Postgres lane (`test/reports/go/pg/coverage-func.txt`)._
+(union coverage total **79.7%**), cross-checked against the Postgres lane (`test/reports/go/pg/coverage-func.txt`)._
 
 This is an **inventory, not a promise**. An exported func listed here is not
 automatically a bug: a thin pass-through, a driver only a live daemon exercises,
@@ -22,12 +22,12 @@ Refresh: `make cover-check` (+ `make test-report-pg` for the PG cross-check), th
 
 | Bucket | Exported funcs at 0.0% in the union |
 |---|---:|
-| **PG-gated** (proven covered by `ci test-pg`) | 159 |
+| **PG-gated** (proven covered by `ci test-pg`) | 162 |
 | **Docker-gated** (needs `WARDYN_TEST_DOCKER=1`) | 3 |
 | **Kubernetes-gated** (needs a real cluster) | 6 |
-| **Untested** (no test in the tree reaches it) | 96 |
-| Total 0.0% exported | 264 |
-| _(of 842 exported funcs in the union)_ | |
+| **Untested** (no test in the tree reaches it) | 95 |
+| Total 0.0% exported | 266 |
+| _(of 859 exported funcs in the union)_ | |
 
 ## Untested — no test in the tree reaches these
 
@@ -49,7 +49,6 @@ Postgres lane ALSO leaves them at 0.0%.
 - **internal/lifecycle**: Run
 - **internal/recording**: Sweep
 - **internal/runner/orchestrator**: AgentStatus, Attach, ExecStream, ImagePresent, Status, SweepOrphanedSandboxes, Wait
-- **internal/secretstore**: New
 - **internal/secretstore/pg**: Name
 - **internal/store**: ActiveRunsAtWorkspacePath, ClearSourceActiveRun, CountApprovalsForRun, ListGovernanceProfiles, ListWorkspacesPageForOwner, Ping, QueryAuditEventsFilteredPage, RunWatcherFresh, SetWorkspaceBuiltImage, SetWorkspaceImportState, SetWorkspaceLLMCred, SetWorkspaceOwner, UpdateSourceConfig
 - **internal/testlive**: DefaultEndpoints, Errorf, Fatalf, LoadIdentities, LoadSSOToken, Logf, ReadSecretFile, Require, Skipf
@@ -68,7 +67,8 @@ Postgres lane ALSO leaves them at 0.0%.
 - **internal/broker**: BeginReadCommitted, Commit, Exec, MintedCredentials, NewPgxStore, QueryRow, Rollback, Scan
 - **internal/db**: AuditChainCanary, AuditDDLBypassRoutes, AuditDDLProtected, Connect, Migrate, TryAdvisoryLock
 - **internal/recording**: NewPGStore, OpenCast, SaveCast, SaveCastNamed, StatAndTail
-- **internal/secretstore/pg**: Delete, For, Get, List, Put, Rekey
+- **internal/secretstore**: New
+- **internal/secretstore/pg**: ConvertV0, Delete, For, Get, List, LocalRows, Put, Rekey
 - **internal/store**: ActiveRunsByCreator, AddSSHKey, AddWorkspaceEgressDecision, ClaimSourceActiveRun, ClaimStaleRunWatchers, ClaimWorkspaceActiveRun, ClearWorkspaceActiveRun, ConsumeAttachTicket, CountActiveRunsBy, CreateAPIToken, CreateApproval, CreateGrant, CreatePolicy, CreateRun, CreateWorkspace, DecideApproval, DeleteBaseImage, DeleteCapabilityGrant, DeleteGovernanceAssignment, DeleteGovernanceProfile, DeletePolicy, DeleteRef, DeleteRoleMapping, DeleteSSHKey, DeleteSource, DeleteUserDrive, DeleteUserDriveGrant, DeleteWorkspace, GetAPITokenByRaw, GetApproval, GetBaseImage, GetBaseImagesByIDs, GetCapabilityEnforcement, GetGovernanceProfile, GetPolicy, GetRef, GetRun, GetRunLayout, GetSSHKeyByFingerprint, GetSiteConfig, GetSource, GetSourcesByIDs, GetUserDrive, GetWorkspace, HasGroupTierAssignments, HasGroupTierDriveGrants, HeartbeatRunWatcher, InsertAuditEvent, LatestAuditEventByAction, ListAPITokens, ListAPITokensByPrincipal, ListApprovals, ListApprovalsPage, ListApprovalsPageByRun, ListApprovalsPageByRunCreator, ListBaseImages, ListCapabilityGrants, ListCapabilityGrantsFor, ListGovernanceAssignments, ListGrantsByRun, ListGroupDenyGrants, ListPolicies, ListPoliciesPage, ListRoleMappings, ListRuns, ListRunsPage, ListRunsPageByCreator, ListSSHKeysByPrincipal, ListSources, ListUserDriveGrants, ListUserDriveGrantsPage, ListUserDrives, ListWorkspaces, ListWorkspacesPage, MergeWorkspaceRequirements, MintAttachTicket, NewPG, PutCapabilityEnforcement, PutRef, PutRunLayout, PutSiteConfig, QueryAuditEvents, QueryAuditEventsPage, QueryRecentAuditEvents, QueryRecentAuditEventsPage, Record, RefreshAPITokenRoles, RefreshSSHKeyRoles, ResolveGovernanceProfile, ResolveReauthApproval, ResolveUserDrive, RevokeAPIToken, SetRunAgentExecID, SetRunFailureHint, SetRunImage, SetRunStatusDetail, SetSandboxRef, SetSourceScanResult, SetSourceScanResultUnfenced, SetWorkspaceApprovedEgress, SetWorkspaceDeniedEgress, SetWorkspaceRecordResult, SetWorkspaceRequirements, SpendApprovalOnce, TouchAPIToken, TouchRun, UpdateBaseImageName, UpdatePolicy, UpdateRunStateIf, UpdateRunStateIfIdle, UpdateWorkspace, UpsertBaseImage, UpsertCapabilityGrant, UpsertGovernanceAssignment, UpsertGovernanceProfile, UpsertRoleMapping, UpsertSource, UpsertUserDrive, UpsertUserDriveGrant, VerifyAuditChain, WorkspacesAttaching, WorkspacesUsingBaseImage
 - **pkg/client**: CreateSource, DeleteWorkspace, GetSource, GetWorkspace, ListSources, ScanSource
 
