@@ -481,6 +481,38 @@ jobs:
               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=wardyn/wardynd:local|' \
               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=wardyn/wardyn-proxy:local|' \
             deploy/desktop/wardyn.env.example | sudo tee /etc/wardyn/wardyn.env >/dev/null
+      - name: Assert boot refuses an org URL with member mode unset (issue #105)
+        # validateHybridPosture (cmd/wardynd/boot_posture.go) runs after
+        # connectAndMigrate AND after claimSingleInstance's Postgres advisory
+        # lock, so this runs BEFORE the real daemon boots: with it up, this
+        # process would die on the lock, never reaching the refusal.
+        # `docker compose run` brings up postgres/registry itself (depends_on)
+        # and publishes no ports. The WARDYN_MANAGED_DIR env matches the Boot
+        # step's, or /etc/wardyn is empty in the container and LoadPolicySpec
+        # fails first. `timeout` turns "the refusal was removed and the daemon
+        # now serves forever" into exit 124 within two minutes instead of the
+        # job timeout. `down -v` at the end: this boot persisted a signing key
+        # under an ephemeral age identity (the envelope leaves WARDYN_AGE_KEY
+        # to the launcher), which the real daemon's own ephemeral identity
+        # cannot decrypt — so the Boot step starts from an empty database.
+        env:
+          WARDYN_MANAGED_DIR: /etc/wardyn
+        run: |
+          set +e
+          out=$(timeout 120 docker compose --env-file /etc/wardyn/wardyn.env \
+            -f deploy/desktop/docker-compose.yaml -p wardyn-desk-ci \
+            run --rm -T --name wardyn-desk-ci-hybrid-refusal \
+            -e WARDYN_ORG_URL=https://org-controlplane.example.com -e WARDYN_MEMBER_MODE=false \
+            wardynd 2>&1)
+          code=$?
+          set -e
+          echo "${out}"
+          [ "${code}" -ne 0 ] \
+            || { echo "::error::wardynd booted (exit 0) with WARDYN_ORG_URL set and WARDYN_MEMBER_MODE unset — validateHybridPosture's refusal did not fire"; exit 1; }
+          echo "${out}" | grep -qF 'WARDYN_ORG_URL is set but WARDYN_MEMBER_MODE is not' \
+            || { echo "::error::wardynd exited ${code}, but not with the expected refusal (124 = still running after 120s, i.e. it booted): ${out}"; exit 1; }
+          docker compose --env-file /etc/wardyn/wardyn.env \
+            -f deploy/desktop/docker-compose.yaml -p wardyn-desk-ci down -v
       - name: Boot the desktop compose profile
         # WARDYN_MANAGED_DIR is what wardyn-desktop.sh exports on a real laptop;
         # the included stack mounts it read-only at /etc/wardyn in the container.
