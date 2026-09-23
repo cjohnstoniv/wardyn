@@ -95,6 +95,7 @@ vi.mock("../../../lib/api/policies", () => ({
 import { MemberGettingStarted } from "./member-getting-started";
 import type { Me } from "../../../lib/api/health";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { ViewAccessProvider, type ViewAccess } from "../../wardyn/console-view";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
@@ -148,17 +149,19 @@ const sharedBedrockHarness: SetupHarnessTool[] = [
 // The page reads its drive off the shell's ONE GET /me (operator-context's
 // UserDriveContext), not a fetch of its own — so a case states its /me body
 // here, exactly as app-shell hands it down.
-function renderPage(me: Me = baseMe(), initialEntries: string[] = ["/"]) {
+function renderPage(me: Me = baseMe(), initialEntries: string[] = ["/"], access: ViewAccess = "url") {
   return render(
     <MemoryRouter initialEntries={initialEntries}>
-      <OperatorProvider
-        operator={false}
-        securityOperator={false}
-        userDrive={me.user_drive}
-        userDriveDeniedByProfile={me.user_drive_denied_by_profile}
-      >
-        <MemberGettingStarted />
-      </OperatorProvider>
+      <ViewAccessProvider value={access}>
+        <OperatorProvider
+          operator={false}
+          securityOperator={false}
+          userDrive={me.user_drive}
+          userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+        >
+          <MemberGettingStarted />
+        </OperatorProvider>
+      </ViewAccessProvider>
     </MemoryRouter>,
   );
 }
@@ -968,5 +971,25 @@ describe("MemberGettingStarted — demos (M-6 D5)", () => {
     renderPage(baseMe(), ["/?step=agent-in-the-box"]);
     await screen.findByText(T.DEMOS_EGRESS_TITLE);
     expect(screen.queryByTestId("demo-card-agent-in-the-box")).not.toBeInTheDocument();
+  });
+
+  // D5 watch-only: a caller the server answers as a user (an SSO user, or an
+  // SSO admin in the User view) runs a demo through their own ceiling, so a
+  // demo that ceiling rewrites offers no Start. D1 "url" keeps Start on all.
+  it.each([
+    ["session-user", "held-at-the-door", false],
+    ["session-user", "record-a-policy", false],
+    ["user-only", "held-at-the-door", false],
+    ["session-user", "sealed-box", true],
+    ["url", "held-at-the-door", true],
+    ["url", "record-a-policy", true],
+    ["url", "sealed-box", true],
+  ] as const)("%s: %s offers Start: %s", async (access, id, start) => {
+    getSetupStatusMock.mockResolvedValue(redacted);
+    renderPage(baseMe(), [`/?step=${id}`], access);
+    const card = await screen.findByTestId(`demo-card-${id}`);
+    if (start) expect(await within(card).findByTestId(`demo-start-${id}`)).toBeInTheDocument();
+    else expect(screen.queryByTestId(`demo-start-${id}`)).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("demo-ceiling-watch-only") === null).toBe(start);
   });
 });

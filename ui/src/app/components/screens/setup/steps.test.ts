@@ -15,6 +15,7 @@ import {
   STEP_HEADING,
   STEP_LABEL,
   STEP_ORDER,
+  ceilingNarrows,
   corpNetworkGate,
   stepBadges,
   stepDone,
@@ -315,6 +316,31 @@ describe("walkableDemos — conditional demos are offered only once their precon
       baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }),
     );
     expect(order).toContain("agent-in-the-box");
+  });
+});
+
+// ceilingNarrows(demo) — D5's watch-only test, pinned to #850's per-demo
+// table (read against the shipped default policy): the demos whose inline
+// policy a user's ceiling would rewrite, and the ones it leaves alone.
+describe("ceilingNarrows — the demos a user's ceiling would rewrite (#850)", () => {
+  const narrowed = [
+    "held-at-the-door",
+    "lines-that-cant-be-crossed",
+    "denied-however-spelled",
+    "record-a-policy",
+    "key-never-in-the-box",
+    "authorized-not-issued",
+    "rest-api-token",
+    "pat-stdout-only",
+    "ssh-briefly-resident",
+    "github-app-broker",
+    "sts-fail-closed",
+  ];
+  const untouched = ["sealed-box", "fail-then-approve", "agent-in-the-box", "once-or-for-good", "write-only-by-design"];
+
+  it("covers every catalog demo, split per the #850 table", () => {
+    expect([...narrowed, ...untouched].sort()).toEqual(DEMOS.map((d) => d.id).sort());
+    expect(DEMOS.filter(ceilingNarrows).map((d) => d.id).sort()).toEqual([...narrowed].sort());
   });
 });
 
