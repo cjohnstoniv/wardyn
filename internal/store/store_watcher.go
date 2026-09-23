@@ -83,7 +83,7 @@ const nonTerminalRunStates = `'PENDING','STARTING','RUNNING','WAITING_FOR_CONFIR
 //     would hand the caller a run that merely LOOKS abandoned. Cleaning those up
 //     stays boot-only, where the dispatching process is known to be gone.
 //
-// A KEPT run (lost_at set: the lease ended it, migration 0070) is never claimed
+// A KEPT run (lost_at set: the lease ended it, migration 0073) is never claimed
 // either: its agent is stopped on purpose, and a watcher would read that as the
 // agent exiting and finalize the run — tearing down the files it is kept for.
 //

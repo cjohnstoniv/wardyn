@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The run lease (long-holds design rev 4, RL-3; migration 0070): the reads and
+// The run lease (long-holds design rev 4, RL-3; migration 0073): the reads and
 // the two conditional writes the lease sweep needs. Kept out of store.go for
 // the same size reason as store_watcher.go.
 package store

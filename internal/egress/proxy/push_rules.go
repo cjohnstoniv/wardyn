@@ -70,10 +70,9 @@ package proxy
 // other outcome — a different or absent entry, no commit the repository's own
 // history vouches for, a forge that cannot be read — refuses, and says which.
 //
-// Phase one has no size rule, so nothing here compares gitpack.Change.Size.
-// Whoever adds max_file_size_mib must DECIDE what Size == -1 means rather than
-// compare it: -1 is "the pack does not carry this blob", and it passes every
-// "is it under the limit" test by accident.
+// Phase one has no size rule. Whoever adds max_file_size_mib decides with
+// gitpack.Change.Within, which refuses a size the pack does not carry, or reads
+// gitpack.Change.Size, whose pair cannot be compared until unknown is decided.
 
 import (
 	"bytes"

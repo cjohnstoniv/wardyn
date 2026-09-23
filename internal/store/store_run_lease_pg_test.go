@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_RunLease pins migration 0070 through the lease surface: which runs the
+// TestPG_RunLease pins migration 0073 through the lease surface: which runs the
 // sweep lists, the end's claim (once, only at or past the end, only RUNNING),
 // lost_at/lost_reason reading back on the run, and a kept run never being
 // claimed by the stale-watcher sweep.
