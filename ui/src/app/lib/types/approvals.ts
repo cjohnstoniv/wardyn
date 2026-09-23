@@ -240,8 +240,8 @@ export function isHeld(a: ApprovalRequest): boolean {
   // An Azure DevOps capability escalation is a tool_call row, but the proxy
   // releases ITS hold after ADO_HOLD_WINDOW_MS (credhold.go's
   // maxCapabilityHoldTimeout), not the generic 60-minute stale-hold ceiling
-  // below — the ado-capability-card.tsx (HOLD_WINDOW_MS, the same constant)
-  // already flips its own text to "no longer waiting" at that point. Without
+  // below — ado-capability-card.tsx counts down the same ADO_HOLD_WINDOW_MS
+  // and already flips its own text to "no longer waiting" at that point. Without
   // this arm the board and the cockpit header kept saying "sandbox held" for
   // up to an hour after the card itself said the opposite (#725/F1).
   if (isAdoCapabilityRequest(a)) return !isStale(a.requested_at, ADO_HOLD_WINDOW_MS);

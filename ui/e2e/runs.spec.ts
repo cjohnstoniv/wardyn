@@ -564,6 +564,11 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport (
     await expect(chip).toBeVisible();
     const overflow = await chip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
     expect(overflow.scrollWidth, "status chip scrollWidth").toBeLessThanOrEqual(overflow.clientWidth);
+    // The box itself stays capped too: without max-w-[160px] the chip grows to
+    // fit the whole reason and the overflow check above still passes.
+    const chipBox = await chip.boundingBox();
+    expect(chipBox, "status chip boundingBox").not.toBeNull();
+    expect(chipBox!.width, "status chip width").toBeLessThanOrEqual(160);
   });
 
   test("no horizontal overflow at 420px, Kill stays in the viewport, and the hint chip is still visible", async ({
