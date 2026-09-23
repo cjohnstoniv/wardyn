@@ -501,7 +501,12 @@ while read -r kind; do
   [ -n "${kind}" ] || continue
   # Pods -> pods, Secrets -> secrets, NetworkPolicies -> networkpolicies.
   res="$(printf '%s' "${kind}" | tr 'A-Z' 'a-z')"
-  grep -A1 "resources: \[\"${res}\"\]" "${WORK}/rbac-role" | grep -q '"list"' \
+  # CAPTURE, THEN MATCH — never `grep | grep -q` under `pipefail`: `grep -q`
+  # exits on its first match while the upstream grep is still writing, the
+  # upstream takes SIGPIPE, and pipefail reports the pipeline failed even
+  # when the match was found.
+  _rule_block="$(grep -A1 "resources: \[\"${res}\"\]" "${WORK}/rbac-role" || true)"
+  grep -q '"list"' <<<"${_rule_block}" \
     || fail "internal/runner/k8s calls .${kind}(...).List(...) but deploy/helm/wardyn/templates/rbac.yaml's Role grants no \"list\" verb on \"${res}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02)"
 done < "${WORK}/k8s-list-kinds"
 pass "C8h every resource internal/runner/k8s lists has a 'list' verb on the chart's Role"

@@ -236,7 +236,10 @@ export const ADO = {
   // name reaches the wire scope on that path either, so this is a plain
   // string, not a function, as of round 2.
   REQ_CONSENT_BODY: `Microsoft needs your consent before Azure DevOps lets this run use this access. Reconnecting asks Microsoft for it — you'll see a consent screen, and nothing else changes. The run's request stays held meanwhile.`,
-  REQ_CONSENT_CTA: `Allow and continue`,
+  // Changed (#458): was "Allow and continue" — the card's CTA and its
+  // destination's own CTA (CONNECT_ADO) named the same act two different
+  // ways. Both now say "Connect Azure DevOps"; see §10.7.
+  REQ_CONSENT_CTA: `Connect Azure DevOps`,
   REQ_CONSENT_OTHER_BODY: (person: string) => `You allowed it, but only ${person} can give Microsoft the extra permission it needs — the run acts as ${person}, and consent is theirs to give. They've been shown this on their Getting started page.`,
   REQ_NOT_YOURS_CHIP: `Not yours to decide`,
   REQ_NOT_YOURS_BODY: (person: string) => `Only ${person}, who started this run, or an admin can answer this.`,
@@ -321,5 +324,9 @@ export const ADO = {
   // ---- §10.6 `ADO` — the mid-run sign-in card ----
   REQ_REAUTH_HELD_BODY: `This run's Azure DevOps request is held while you sign in again. Sign in and it goes through on its own — the run doesn't have to start over. If the hold runs out first, its next request goes through once you have.`,
   REQ_REAUTH_OTHER_BODY: (person: string) => `Only ${person} can sign in again — the run acts as ${person}. Its Azure DevOps requests go through once they have.`,
+
+  // ---- §10.7 `ADO` — the not-applicable Settings card and the owner fallback (#458) ----
+  NOT_APPLICABLE_BODY: `This sign-in is an admin token, not a person, so it has no Azure DevOps connection of its own. Each person's own connection carries their runs.`,
+  REQ_OWNER_FALLBACK: `the run's owner`,
 
 } as const;

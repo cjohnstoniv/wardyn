@@ -53,10 +53,15 @@ SHAPES=("$@")
 mkdir -p "${EVIDENCE_DIR}"
 
 # ── preflight: one e2e backend at a time, and nothing on our ports ──────────
+# CAPTURE, THEN MATCH — never `ss | grep -q` under `pipefail`: `grep -q`
+# exits on its first match while ss is still writing, ss takes SIGPIPE, and
+# pipefail reports the pipeline failed even though the match was found.
 for p in "${UP_PORT}" "${DEX_PORT}" "${PG_PORT}" "${REGISTRY_PORT}" "${SSH_PORT}" "${UISANDBOX_PORT}"; do
-  ss -ltn "( sport = :${p} )" | grep -q LISTEN && die "port ${p} is taken — another stack? refusing to start"
+  _listen="$(ss -ltn "( sport = :${p} )")"
+  grep -q LISTEN <<<"${_listen}" && die "port ${p} is taken — another stack? refusing to start"
 done
-ss -ltn "( sport = :8088 )" | grep -q LISTEN && die "the hermetic e2e backend (:8088) is up — one e2e backend at a time"
+_listen8088="$(ss -ltn "( sport = :8088 )")"
+grep -q LISTEN <<<"${_listen8088}" && die "the hermetic e2e backend (:8088) is up — one e2e backend at a time"
 pgrep -f "[k]ind-sso-walk.sh" >/dev/null && die "a kind SSO walk is running — one e2e backend at a time"
 for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}"; do
   docker image inspect "${img}" >/dev/null 2>&1 || die "${img} is not on ${DOCKER_HOST:-the default daemon} — build it from this tree (deploy/compose/Dockerfile.wardynd / Dockerfile.proxy)"
