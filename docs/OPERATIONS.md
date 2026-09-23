@@ -4582,6 +4582,86 @@ is the **only** key that reads the store. Save it before doing anything else.
 Whatever you do, **back the key up off-host.** Rotation re-encrypts what is there;
 it cannot recover a key you have already lost.
 
+Rows sealed under Vault Transit (next section) hold nothing under the age key, and
+a rotation leaves them alone.
+
+## Key service: Vault Transit
+
+With `WARDYN_KEK=transit`, each stored credential is still sealed in Postgres
+(AES-256-GCM under its own data key, as above), but the data key is wrapped by
+your Vault's Transit engine instead of a key derived from `WARDYN_AGE_KEY`. The
+key-encryption key never leaves Vault, and every unwrap is one Transit `decrypt`
+in your Vault audit device. The database alone decrypts nothing; neither does
+the database plus anything on the Wardyn host, once no row is sealed under the
+age key and `WARDYN_AGE_KEY` is unset. Wardyn's boot keys are wrapped the same
+way, so **do not restart wardynd during a Vault outage**: it will wait for Vault
+rather than boot. (If your organisation wants Vault to hold the values
+themselves, not a key, that is store mode, below.)
+
+Transit uses the same client as the Vault store: `WARDYN_VAULT_ADDR`,
+`WARDYN_VAULT_NAMESPACE`, Kubernetes or token-file authentication and the TLS
+settings described under "Store mode: credentials in Vault". The key:
+
+```sh
+vault secrets enable transit
+vault write -f transit/keys/wardyn type=aes256-gcm96
+```
+
+**Policy.** Two paths, `update` only. Wardyn never calls `rewrap/` (Vault does
+not document `associated_data` on it, so `wardynd -rewrap` rewraps client-side)
+and never reads `keys/`:
+
+```hcl
+path "transit/encrypt/wardyn" { capabilities = ["update"] }
+path "transit/decrypt/wardyn" { capabilities = ["update"] }
+```
+
+**Binding.** Every wrap carries the row's owner and name as Transit
+`associated_data`, so a wrapped data key moved to another row does not unwrap.
+Only key types that bind it can do that; at boot wardynd wraps a probe data key,
+unwraps it, and tries to unwrap it under another row's `associated_data`. If
+that works, or the probe does not round-trip, **wardynd refuses to start**.
+
+**Moving an install to Transit, and back.** Online, one row per transaction,
+safe while a daemon serves; idempotent and resumable.
+
+```sh
+# 0. Boot this version once with your WARDYN_AGE_KEY (it converts any
+#    pre-envelope rows), and take the Postgres dump (see Backup).
+# 1. Set WARDYN_KEK=transit and WARDYN_VAULT_TRANSIT_KEY=wardyn with the
+#    WARDYN_VAULT_* client settings, keep WARDYN_AGE_KEY, and restart: new
+#    rows are wrapped by Transit, and old ones still read.
+# 2. Rewrap the rest:
+wardynd -rewrap
+#    every sealed secret is wrapped under transit:transit/wardyn version 1; …
+# 3. Unset WARDYN_AGE_KEY and restart. Boot refuses, naming -rewrap, while any
+#    row is still sealed under the age key.
+```
+
+Back: set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep
+`WARDYN_VAULT_TRANSIT_KEY` so Transit still reads its rows, restart, and run
+`wardynd -rewrap` again. Each run writes one `secret.rewrap` audit row. No
+sealed value is decrypted by a rewrap, only its data key.
+
+**Rotating the Transit key.** Rotate in Vault, rewrap, then retire the old
+versions:
+
+```sh
+vault write -f transit/keys/wardyn/rotate
+wardynd -rewrap
+#    every sealed secret is wrapped under transit:transit/wardyn version 2;
+#    raising the Transit key's min_decryption_version to 2 now retires the older versions
+vault write transit/keys/wardyn/config min_decryption_version=2
+```
+
+A row still wrapped under a retired version is refused, naming the row, until
+`min_decryption_version` is lowered again; `-rewrap` first, then raise it.
+
+**When Vault is unavailable.** As for the Vault store: a sealed, throttled or
+unreachable Vault is *transient* (the sink answers 503, "Wardyn couldn't reach
+the service that holds this run's credential"), while a 403, a wrap that does
+not unwrap for its row, or a retired version is *definitive*.
+
 ## Store mode: credentials in Vault
 
 With `WARDYN_SECRET_STORE=vaultkv`, every stored credential's value lives in

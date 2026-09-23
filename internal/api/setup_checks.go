@@ -481,17 +481,34 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 }
 
-// secretStoreCheck is store_external in store mode (design §3,
-// SETUP_CHECK.STORE_EXTERNAL): the credentials live in the organisation's
-// store, and there is no local key to be durable. Otherwise the age-key row.
-func secretStoreCheck(external string, durable bool) SetupCheck {
-	if external == "" {
-		return ageKeyCheck(durable)
+// secretStoreChecks are the credential-storage rows (design §3): store_external
+// in store mode (SETUP_CHECK.STORE_EXTERNAL), where the credentials live in
+// the organisation's store; kek_service when a key service wraps every data
+// key; otherwise the age-key row, plus kek_local (SETUP_CHECK.KEK_LOCAL) on a
+// multi-user install, where whoever holds both the database and the local key
+// reads every person's credentials.
+func secretStoreChecks(external, keyService string, durable, multiUser bool) []SetupCheck {
+	switch {
+	case external != "":
+		return []SetupCheck{{
+			ID: "store_external", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there.",
+		}}
+	case keyService != "":
+		return []SetupCheck{{
+			ID: "kek_service", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials are encrypted with a key held in " + keyService + ". Wardyn holds no copy of it; every unlock is logged there.",
+		}}
 	}
-	return SetupCheck{
-		ID: "store_external", Label: "Credential storage", Status: "ok",
-		Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there.",
+	checks := []SetupCheck{ageKeyCheck(durable)}
+	if durable && multiUser {
+		checks = append(checks, SetupCheck{
+			ID: "kek_local", Label: "Credential key", Status: "warn",
+			Detail: "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart.",
+			Fix:    "Set WARDYN_KEK=transit with a Vault Transit key (docs/OPERATIONS.md), then run `wardynd -rewrap`.",
+		})
 	}
+	return checks
 }
 
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream

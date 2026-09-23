@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/azurekv"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
 )
@@ -27,7 +28,23 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags) (sec
 	if err != nil {
 		return nil, err
 	}
-	return buildSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, ext, *f.vault.timeout)
+	k, writes, err := buildKEK(ctx, f.vault, *f.trustedCAFile)
+	if err != nil {
+		return nil, err
+	}
+	return buildSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, storeClients{ext: ext, kek: k, kekWrites: writes, timeout: *f.vault.timeout})
+}
+
+// storeClients are the configured clients a secret store is built over.
+type storeClients struct {
+	// ext is the external store client, or nil.
+	ext secretstore.External
+	// kek is the key service (Vault Transit), or nil; kekWrites says whether
+	// it wraps new rows (WARDYN_KEK=transit) or only reads its own.
+	kek       kek.KEK
+	kekWrites bool
+	// timeout bounds each call to ext.
+	timeout time.Duration
 }
 
 // buildSecretStore constructs the secret store and readies its rows
@@ -38,13 +55,15 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags) (sec
 // lives in the organisation's store, and a missing key only matters while
 // local rows remain, which convertSecretStore refuses by name. ext is the
 // configured external client, or nil.
-func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, ext secretstore.External, extTimeout time.Duration) (secretstore.Store, error) {
+func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, c storeClients) (secretstore.Store, error) {
 	storeMode := storeName != "" && storeName != "pg"
+	keyService := c.kek != nil && c.kekWrites
 	var id *age.X25519Identity
 	var err error
 	switch {
-	case ageKey == "" && storeMode:
+	case ageKey == "" && (storeMode || keyService):
 		// No local key at all: nothing to generate, nothing to warn about.
+		// Every write goes to the store or is wrapped by the key service.
 	case ageKey == "":
 		id, err = age.GenerateX25519Identity()
 		if err != nil {
@@ -67,7 +86,7 @@ func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName
 			return nil, fmt.Errorf("parse age identity: %w", err)
 		}
 	}
-	deps := secretstore.Deps{Pool: pool, External: ext, ExternalTimeout: extTimeout}
+	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites}
 	if id != nil {
 		// A typed nil in the interface would read as "a key is configured".
 		deps.AgeIdentity = id
@@ -76,7 +95,7 @@ func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName
 	if err != nil {
 		return nil, fmt.Errorf("secret store: %w", err)
 	}
-	if err := convertSecretStore(ctx, s, id, ageKey == "" && !storeMode); err != nil {
+	if err := convertSecretStore(ctx, s, id, ageKey == "" && !storeMode && !keyService); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -99,8 +118,12 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 		if err != nil {
 			return err
 		}
+		way := "`wardynd -rewrap`"
+		if s.Name() != "pg" {
+			way = "`wardynd -migrate-secrets -to=" + s.Name() + "`"
+		}
 		if n > 0 {
-			return fmt.Errorf("refusing to start: WARDYN_AGE_KEY is unset, but %d stored secrets are still sealed under it — set it until `wardynd -migrate-secrets -to=%s` reports none left", n, s.Name())
+			return fmt.Errorf("refusing to start: WARDYN_AGE_KEY is unset, but %d stored secrets are still sealed under it — set it until %s reports none left", n, way)
 		}
 		return nil
 	}
@@ -133,6 +156,9 @@ type vaultFlags struct {
 	kvMount, kvPrefix                                                           *string
 	maxVersions                                                                 *int
 	timeout                                                                     *time.Duration
+	// kek is WARDYN_KEK; transitMount and transitKey name the Transit key it
+	// selects (or, with kek=local, reads).
+	kek, transitMount, transitKey *string
 }
 
 func registerVaultFlags() vaultFlags {
@@ -149,6 +175,9 @@ func registerVaultFlags() vaultFlags {
 		kvPrefix:     flagEnv("vault-kv-prefix", "WARDYN_VAULT_KV_PREFIX", "wardyn", "path prefix under the mount for this install (the chart sets the release namespace)"),
 		maxVersions:  flagIntEnv("vault-kv-max-versions", "WARDYN_VAULT_KV_MAX_VERSIONS", 1, "max_versions set on each secret the vaultkv store creates (1: a replaced value does not linger)"),
 		timeout:      flagDuration("secret-store-timeout", "WARDYN_SECRET_STORE_TIMEOUT", 5*time.Second, "timeout of each call to an external secret store"),
+		kek:          flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY) or "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client)`),
+		transitMount: flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),
+		transitKey:   flagEnv("vault-transit-key", "WARDYN_VAULT_TRANSIT_KEY", "", "Transit key (type aes256-gcm96) that wraps data keys with WARDYN_KEK=transit; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
 	}
 }
 
@@ -170,6 +199,59 @@ func registerAzureFlags() azureFlags {
 		prefix:             flagEnv("azure-kv-prefix", "WARDYN_AZURE_KV_PREFIX", "wardyn", "prefix of every secret name this install writes (the chart sets the release namespace)"),
 		maxVersions:        flagIntEnv("azure-kv-max-versions", "WARDYN_AZURE_KV_MAX_VERSIONS", 100, "versions a secret holds before the next write starts a new name and deletes the old one"),
 		purge:              flagEnv("azure-kv-purge", "WARDYN_AZURE_KV_PURGE", azurekv.PurgeAuto, `"auto": purge a deleted secret when the vault allows it; "never": leave it soft-deleted for the vault's retention`),
+	}
+}
+
+// KEK providers (WARDYN_KEK).
+const (
+	kekLocal   = "local"
+	kekTransit = "transit"
+)
+
+// buildKEK returns the configured key service, or nil, and whether it wraps
+// new rows. WARDYN_KEK=transit writes under the Vault Transit key; with
+// WARDYN_KEK=local a named Transit key is built read-only, so the rows sealed
+// under it stay readable while `wardynd -rewrap` moves them back. The key is
+// proven at boot (vaultkv.NewTransit): a key service that cannot be reached,
+// or that does not bind a wrap to its row, fails boot (design K6).
+func buildKEK(ctx context.Context, v vaultFlags, trustedCAFile string) (kek.KEK, bool, error) {
+	sel := strings.TrimSpace(*v.kek)
+	key := strings.TrimSpace(*v.transitKey)
+	switch sel {
+	case "", kekLocal:
+		if key == "" {
+			return nil, false, nil
+		}
+	case kekTransit:
+		if key == "" {
+			return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK=transit needs WARDYN_VAULT_TRANSIT_KEY")
+		}
+	default:
+		return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK is %q; want %q or %q", sel, kekLocal, kekTransit)
+	}
+	if strings.TrimSpace(*v.addr) == "" {
+		return nil, false, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY is set but WARDYN_VAULT_ADDR is not")
+	}
+	t, err := vaultkv.NewTransit(ctx, vaultConfig(v, trustedCAFile), strings.TrimSpace(*v.transitMount), key)
+	if err != nil {
+		return nil, false, fmt.Errorf("refusing to start: %w", err)
+	}
+	return t, sel == kekTransit, nil
+}
+
+// vaultConfig is the Vault client configuration both the KV store and the
+// Transit KEK use.
+func vaultConfig(v vaultFlags, trustedCAFile string) vaultkv.Config {
+	ca := strings.TrimSpace(*v.caCertFile)
+	if ca == "" {
+		ca = strings.TrimSpace(trustedCAFile)
+	}
+	return vaultkv.Config{
+		Addr: strings.TrimSpace(*v.addr), Namespace: strings.TrimSpace(*v.namespace),
+		Auth: strings.TrimSpace(*v.auth), AuthMount: strings.TrimSpace(*v.authMount), Role: strings.TrimSpace(*v.role),
+		K8sTokenFile: strings.TrimSpace(*v.k8sTokenFile), TokenFile: strings.TrimSpace(*v.tokenFile), CACertFile: ca,
+		Mount: strings.TrimSpace(*v.kvMount), Prefix: strings.TrimSpace(*v.kvPrefix),
+		MaxVersions: *v.maxVersions, Timeout: *v.timeout,
 	}
 }
 
@@ -199,17 +281,7 @@ func buildExternalStore(ctx context.Context, v vaultFlags, az azureFlags, truste
 	case addr == "":
 		return nil, nil
 	}
-	ca := strings.TrimSpace(*v.caCertFile)
-	if ca == "" {
-		ca = strings.TrimSpace(trustedCAFile)
-	}
-	s, err := vaultkv.New(ctx, vaultkv.Config{
-		Addr: addr, Namespace: strings.TrimSpace(*v.namespace),
-		Auth: strings.TrimSpace(*v.auth), AuthMount: strings.TrimSpace(*v.authMount), Role: strings.TrimSpace(*v.role),
-		K8sTokenFile: strings.TrimSpace(*v.k8sTokenFile), TokenFile: strings.TrimSpace(*v.tokenFile), CACertFile: ca,
-		Mount: strings.TrimSpace(*v.kvMount), Prefix: strings.TrimSpace(*v.kvPrefix),
-		MaxVersions: *v.maxVersions, Timeout: *v.timeout,
-	})
+	s, err := vaultkv.New(ctx, vaultConfig(v, trustedCAFile))
 	if err != nil {
 		return nil, fmt.Errorf("refusing to start: %w", err)
 	}
@@ -225,8 +297,18 @@ func storesExternally(s secretstore.Store) string {
 	return ""
 }
 
+// keyService describes the key service that wraps every write ("Vault
+// Transit at vault.example:8200"), or "" when the local key does (the
+// kek_service setup row).
+func keyService(s secretstore.Store) string {
+	if ps, ok := s.(*secretstorepg.Store); ok {
+		return ps.KeyService()
+	}
+	return ""
+}
+
 // secretsDurable reports whether stored secrets survive a restart: a supplied
-// age key, or store mode, where no local key holds anything.
+// age key, store mode or a key service, where no local key holds anything.
 func secretsDurable(ageKey string, s secretstore.Store) bool {
-	return strings.TrimSpace(ageKey) != "" || storesExternally(s) != ""
+	return strings.TrimSpace(ageKey) != "" || storesExternally(s) != "" || keyService(s) != ""
 }

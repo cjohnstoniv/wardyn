@@ -212,3 +212,10 @@ secretStore:
     auth: token-file
     tokenFile: /vault/secrets/token
     kvPrefix: wardyn-ci
+
+# Data keys of rows still sealed in Postgres wrapped by Vault Transit, over the
+# same Vault client.
+kek:
+  provider: transit
+  transit:
+    key: wardyn

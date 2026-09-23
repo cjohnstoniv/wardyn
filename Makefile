@@ -983,6 +983,7 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	docker compose -f $(COMPOSE_FILE) config >/dev/null
 	WARDYN_CI_TOOLS_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.ci.yaml config >/dev/null
 	WARDYN_VAULT_ADDR=https://vault.example:8200 WARDYN_VAULT_TOKEN_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.vault.yaml config >/dev/null
+	WARDYN_VAULT_ADDR=https://vault.example:8200 WARDYN_VAULT_TOKEN_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.transit.yaml config >/dev/null
 	@# The desktop entrypoint too: it `include:`s the base file, and an include
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).

@@ -275,6 +275,8 @@ type bootFlags struct {
 	migrateSecrets *bool
 	migrateTo      *string
 	reconcile      *bool
+	// rewrap is `wardynd -rewrap` (rewrap.go): no env pair, like the above.
+	rewrap *bool
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -481,6 +483,7 @@ func parseBootFlags() *bootFlags {
 		migrateSecrets: flag.Bool("migrate-secrets", false, "MAINTENANCE MODE, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit. Idempotent and resumable. See docs/OPERATIONS.md"),
 		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
 		reconcile:      flag.Bool("reconcile", false, "MAINTENANCE MODE: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit (non-zero on any). Deletes nothing"),
+		rewrap:         flag.Bool("rewrap", false, "MAINTENANCE MODE, safe while a daemon serves: rewrap every sealed secret's data key under the key WARDYN_KEK selects (and its latest version), one row at a time, then exit. Client-side; idempotent and resumable. See docs/OPERATIONS.md"),
 		vault:          registerVaultFlags(),
 		azure:          registerAzureFlags(),
 

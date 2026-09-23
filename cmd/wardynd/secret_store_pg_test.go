@@ -112,7 +112,7 @@ func TestPG_BootConvertsV0BeforeBootKeysAreRead(t *testing.T) {
 	}
 	seedV0Row(t, pool, id, secretSigningKey, pemBytes)
 
-	secrets, err := buildSecretStore(ctx, pool, id.String(), "", nil, 0)
+	secrets, err := buildSecretStore(ctx, pool, id.String(), "", storeClients{})
 	if err != nil {
 		t.Fatalf("first v1 boot: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestPG_BootConvertsV0BeforeBootKeysAreRead(t *testing.T) {
 		t.Fatalf("signing-key row enc_version = %d after boot, want 1", version)
 	}
 
-	if _, err := buildSecretStore(ctx, pool, id.String(), "", nil, 0); err != nil {
+	if _, err := buildSecretStore(ctx, pool, id.String(), "", storeClients{}); err != nil {
 		t.Fatalf("second boot: %v", err)
 	}
 	v2, w2, ct2 := envelopeColumns(t, pool, secretSigningKey)
@@ -145,7 +145,7 @@ func TestPG_BootAbortsOnAnUndecryptableV0Row(t *testing.T) {
 	stray, _ := age.GenerateX25519Identity()
 	seedV0Row(t, pool, stray, "github-app-key", []byte("under-another-key"))
 
-	_, err := buildSecretStore(t.Context(), pool, id.String(), "", nil, 0)
+	_, err := buildSecretStore(t.Context(), pool, id.String(), "", storeClients{})
 	if err == nil {
 		t.Fatal("boot succeeded over an undecryptable v0 row")
 	}
@@ -164,14 +164,14 @@ func TestPG_BootAbortsOnAnUndecryptableV0Row(t *testing.T) {
 // boot instead of minting a key that would strand them. An empty store boots.
 func TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows(t *testing.T) {
 	empty := envelopeDB(t)
-	if _, err := buildSecretStore(t.Context(), empty, "", "", nil, 0); err != nil {
+	if _, err := buildSecretStore(t.Context(), empty, "", "", storeClients{}); err != nil {
 		t.Fatalf("an ephemeral key over an empty store must boot: %v", err)
 	}
 
 	for label, seed := range map[string]func(*testing.T, *pgxpool.Pool){
 		"v1 local rows": func(t *testing.T, pool *pgxpool.Pool) {
 			id, _ := age.GenerateX25519Identity()
-			s, err := buildSecretStore(t.Context(), pool, id.String(), "", nil, 0)
+			s, err := buildSecretStore(t.Context(), pool, id.String(), "", storeClients{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -187,7 +187,7 @@ func TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows(t *testing.T) {
 		t.Run(label, func(t *testing.T) {
 			pool := envelopeDB(t)
 			seed(t, pool)
-			_, err := buildSecretStore(t.Context(), pool, "", "", nil, 0)
+			_, err := buildSecretStore(t.Context(), pool, "", "", storeClients{})
 			if err == nil || !strings.Contains(err.Error(), "WARDYN_AGE_KEY is unset, but 1 stored secrets") {
 				t.Fatalf("ephemeral boot over %s = %v, want the rule-14 refusal", label, err)
 			}
@@ -202,7 +202,7 @@ func TestPG_TamperedBootKeyFailsClosed(t *testing.T) {
 	pool := envelopeDB(t)
 	ctx := t.Context()
 	id, _ := age.GenerateX25519Identity()
-	secrets, err := buildSecretStore(ctx, pool, id.String(), "", nil, 0)
+	secrets, err := buildSecretStore(ctx, pool, id.String(), "", storeClients{})
 	if err != nil {
 		t.Fatal(err)
 	}

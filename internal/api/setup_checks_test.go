@@ -544,12 +544,30 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 // In store mode there is no local key to be durable: the age-key row gives
 // way to store_external, which names the store (design §3).
 func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
-	chk := secretStoreCheck("Vault at vault.example:8200", true)
-	if chk.ID != "store_external" || chk.Status != "ok" || !strings.Contains(chk.Detail, "Vault at vault.example:8200") {
-		t.Fatalf("store mode row = %+v", chk)
+	chks := secretStoreChecks("Vault at vault.example:8200", "", true, true)
+	if len(chks) != 1 || chks[0].ID != "store_external" || chks[0].Status != "ok" || !strings.Contains(chks[0].Detail, "Vault at vault.example:8200") {
+		t.Fatalf("store mode rows = %+v", chks)
 	}
-	if got := secretStoreCheck("", false); got.ID != "age_key" || got.Status != "warn" {
-		t.Fatalf("local mode row = %+v, want the age-key warning unchanged", got)
+	if got := secretStoreChecks("", "", false, false); len(got) != 1 || got[0].ID != "age_key" || got[0].Status != "warn" {
+		t.Fatalf("local mode rows = %+v, want the age-key warning unchanged", got)
+	}
+}
+
+// A key service replaces the age-key row; the local key on a multi-user
+// install adds the amber kek_local row (design §3, K3), and a single-user one
+// does not.
+func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
+	chks := secretStoreChecks("", "Vault Transit at vault.example:8200", true, true)
+	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" || !strings.Contains(chks[0].Detail, "Vault Transit at vault.example:8200") {
+		t.Fatalf("key service rows = %+v", chks)
+	}
+	chks = secretStoreChecks("", "", true, true)
+	if len(chks) != 2 || chks[0].ID != "age_key" || chks[1].ID != "kek_local" || chks[1].Status != "warn" ||
+		chks[1].Detail != "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart." {
+		t.Fatalf("multi-user local key rows = %+v", chks)
+	}
+	if got := secretStoreChecks("", "", true, false); len(got) != 1 || got[0].ID != "age_key" {
+		t.Fatalf("single-user local key rows = %+v, want the age-key row alone", got)
 	}
 }
 
@@ -724,6 +742,7 @@ var setupCheckBlockingStatus = map[string]string{
 // to non-blocking.
 var setupCheckNeverBlocks = map[string]bool{
 	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true,
+	"kek_service": true, "kek_local": true,
 	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
@@ -793,7 +812,15 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
-	assertSetupCheckBlocking(t, secretStoreCheck("Vault at vault.example:8200", true))
+	for _, chks := range [][]SetupCheck{
+		secretStoreChecks("Vault at vault.example:8200", "", true, true),
+		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true),
+		secretStoreChecks("", "", true, true),
+	} {
+		for _, chk := range chks {
+			assertSetupCheckBlocking(t, chk)
+		}
+	}
 
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{}, nil))
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{UpstreamProxySecretRef: "x"}, map[string]bool{}))

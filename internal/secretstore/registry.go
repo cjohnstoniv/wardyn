@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/component"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
 
 // Deps are the platform primitives a secretstore.Store constructor may use. The
@@ -20,7 +21,14 @@ import (
 type Deps struct {
 	Pool        *pgxpool.Pool
 	AgeIdentity age.Identity
-	External    External
+	// KEK is the configured key service (Vault Transit), or nil. It reads the
+	// rows sealed under it; with KEKWrites (WARDYN_KEK=transit) it also wraps
+	// every data key the store writes, while the local KEK keeps reading the
+	// rows sealed under that (design §2.3). Read-only, it lets an install move
+	// back to the local key.
+	KEK       kek.KEK
+	KEKWrites bool
+	External  External
 	// ExternalTimeout is WARDYN_SECRET_STORE_TIMEOUT, the bound on each call
 	// to External (0: its 5 s default); a store-mode write is bounded at six
 	// times it.

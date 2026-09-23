@@ -68,6 +68,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **Vault Transit as the key that wraps stored credentials (#586).** With `WARDYN_KEK=transit`
+  and `WARDYN_VAULT_TRANSIT_KEY`, each credential sealed in Postgres has its data key wrapped by
+  your Vault's (or OpenBao's) Transit key instead of a key derived from `WARDYN_AGE_KEY`, over the
+  same Vault client, auth and TLS as store mode; the key never leaves Vault and every unwrap is in
+  its audit log. Each wrap is bound to its row with `associated_data`, and wardynd refuses to boot
+  on a key that does not enforce it (proved live on Vault 1.20 and OpenBao 2.6) or that it cannot
+  reach. Reads follow each row's `kek_id`, so an install moves online: `wardynd -rewrap` rewraps
+  every data key client-side under the configured key and its latest version (never Transit's
+  server-side `rewrap`), writes one `secret.rewrap` audit row, and says when
+  `min_decryption_version` can retire the old versions; once no row is under the age key, it can be
+  unset. `-rotate-age-key` now leaves Transit rows alone. The chart gains `kek.provider` and
+  `kek.transit.*`, compose `docker-compose.transit.yaml`, and `/setup/status` a `kek_service` row,
+  plus an amber `kek_local` row on a multi-user install still on the local key.
 - **Store mode in Azure Key Vault (#645).** `WARDYN_SECRET_STORE=azurekv` writes every stored
   credential to the organisation's Key Vault as a secret and keeps only a pointer row, like
   `vaultkv`; no Azure SDK is involved. wardynd authenticates with AKS workload identity (a
