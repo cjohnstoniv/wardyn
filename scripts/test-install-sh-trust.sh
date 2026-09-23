@@ -32,9 +32,10 @@
 #   T4 PASS   .env is born 0600 with no chmod at all                        (H6)
 #   T5 PASS   upgrade re-mints an empty/quoted-empty/placeholder token, leaves
 #             a real one alone, and refuses a keyless .env (8 rows)         (H16)
-#   T6 SKIP   tampered compose file is installed — a PUBLISHED accepted risk
-#             (docs/VERIFY.md; THREAT-MODEL §5 residual 32). Set
-#             F10_EXPECT_COMPOSE_INTEGRITY=1 to enforce once a digest exists. (H3)
+#   T6 PASS   pins today's accepted risk — a tampered compose file installs
+#             uncaught (docs/VERIFY.md; THREAT-MODEL §5 residual 32). Set
+#             WARDYN_EXPECT_COMPOSE_DIGEST=1 once a digest exists, to flip
+#             this to asserting the tamper is refused instead.          (H3)
 #   T7 PASS   the documented upgrade — re-run the installer over a RUNNING
 #             stack — completes instead of dying on its own containers  (C01)
 #   T8 PASS   …while a FRESH install colliding with a foreign stack still refuses
@@ -359,14 +360,20 @@ else fail "${t}" "died for an unrelated reason: $(tail -1 "${d}/home/install.out
 # over raw.githubusercontent with no digest/SHA256SUMS check; the file is not
 # among the cosign-signed release assets (release.yml's checksums +
 # cosign-sign-blob steps). Accepted and published for 0.7 — docs/VERIFY.md and
-# THREAT-MODEL §5 residual 32. Once a digest is introduced (a SHA256SUMS row for
-# docker-compose.yaml, or a pinned sha256 in install.sh), this case asserts the
-# fetch fails closed.
-t="T6 tampered compose file is refused (digest/SHA256SUMS mismatch)"
+# THREAT-MODEL §5 residual 32. This case never skips (#463): by default it
+# PINS that accepted-risk state (the tamper is installed uncaught), and only
+# asserts the fetch fails closed once WARDYN_EXPECT_COMPOSE_DIGEST=1 says a
+# digest now exists — so a silent fix or a silent regression both show up.
+t="T6 tampered compose file (pinned accepted-risk, or refused once digest-checked)"
 d="${WORK}/t6"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"; : > "${d}/bin/state/tamper-compose"
-if [ "${F10_EXPECT_COMPOSE_INTEGRITY:-0}" != "1" ]; then
-  skip "${t}" "ACCEPTED RISK until a digest exists (docs/VERIFY.md; THREAT-MODEL §5 residual 32); set F10_EXPECT_COMPOSE_INTEGRITY=1 to enforce"
-elif run_install "${d}/bin" "${d}/home"; then
+if run_install "${d}/bin" "${d}/home"; then accepted=1; else accepted=0; fi
+if [ "${WARDYN_EXPECT_COMPOSE_DIGEST:-0}" != "1" ]; then
+  if [ "${accepted}" = "1" ]; then
+    pass "${t}"
+  else
+    fail "${t}" "install.sh now refuses a tampered compose file — set WARDYN_EXPECT_COMPOSE_DIGEST=1 to pin the fixed state, and update docs/VERIFY.md + THREAT-MODEL §5 residual 32"
+  fi
+elif [ "${accepted}" = "1" ]; then
   fail "${t}" "install.sh accepted a compose file naming evil/wardynd:latest on 0.0.0.0 with WARDYN_LOCAL_MODE=true"
 else
   if grep -qi "checksum\|digest\|mismatch" "${d}/home/install.out"; then pass "${t}"

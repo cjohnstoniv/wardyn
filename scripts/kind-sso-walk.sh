@@ -69,9 +69,16 @@
 # cluster-dependent lane uses.
 set -uo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT}"
+
+# One daemon everywhere (see deploy/kind/sso/overlay.sh): the cluster's node
+# container and every image this walk touches live on the daemon this picker
+# chooses, and run-ui-e2e.sh picks the same one for its own children.
+. "${ROOT}/scripts/lib/common.sh"
+
 if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
-  echo "kind-sso-walk: set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)."
-  exit 0
+  skip_lane "kind-sso-walk: set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)."
 fi
 
 # WARDYN_KIND_SSO_PROFILE=ado is a DIFFERENT walk on a different install: the
@@ -84,13 +91,6 @@ case "${WARDYN_KIND_SSO_PROFILE:-default}" in
   *) echo "ERROR: WARDYN_KIND_SSO_PROFILE must be default or ado (got ${WARDYN_KIND_SSO_PROFILE})" >&2; exit 1 ;;
 esac
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${ROOT}"
-
-# One daemon everywhere (see deploy/kind/sso/overlay.sh): the cluster's node
-# container and every image this walk touches live on the daemon this picker
-# chooses, and run-ui-e2e.sh picks the same one for its own children.
-. "${ROOT}/scripts/lib/common.sh"
 wardyn_pick_docker_host
 
 die() { echo "ERROR: $*" >&2; exit 1; }

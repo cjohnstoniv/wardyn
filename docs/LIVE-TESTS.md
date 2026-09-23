@@ -22,6 +22,16 @@ only.
 
 Every variable is listed in [ENV.md](ENV.md#live-local-harness-opt-in-never-in-ci).
 
+**The kind-cluster walks are a separate, heavier opt-in surface** — not
+LL1-4, and not gated by a `WARDYN_LIVE_*` variable. `scripts/kind-sso-walk.sh`
+(default profile, `WARDYN_TEST_K8S=1`) runs nightly in CI
+(`.github/workflows/nightly.yml`, the `kind-sso-walk` job). Its Azure DevOps
+profile, `WARDYN_KIND_SSO_PROFILE=ado scripts/kind-sso-walk.sh` (recipe in
+[deploy/kind/sso/README.md](../deploy/kind/sso/README.md)), spins up a second
+kind cluster on its own port range and is **manual-only**: it has no
+scheduled nightly leg. Run it by hand before a release that touches the
+Azure DevOps sign-in path.
+
 ## Rules
 
 **Secrets.** A secret is never an environment value. The `*_FILE` variables

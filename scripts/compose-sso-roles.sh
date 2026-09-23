@@ -29,14 +29,13 @@
 # (default: mprime compose-sso).
 set -uo pipefail
 
-if [[ "${WARDYN_TEST_SSO_ROLES:-}" != "1" ]]; then
-  echo "compose-sso-roles: set WARDYN_TEST_SSO_ROLES=1 to bring up the compose SSO role walk (skipping)."
-  exit 0
-fi
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 . "${ROOT}/scripts/lib/common.sh"
+
+if [[ "${WARDYN_TEST_SSO_ROLES:-}" != "1" ]]; then
+  skip_lane "compose-sso-roles: set WARDYN_TEST_SSO_ROLES=1 to bring up the compose SSO role walk (skipping)."
+fi
 wardyn_pick_docker_host
 
 UP_PORT=18480

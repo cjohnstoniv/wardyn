@@ -50,6 +50,14 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# skip_lane MSG — the shared way an opt-in lane script exits when its own gate
+# variable is unset or nothing is there to run against: prints MSG and exits
+# 77 (the reserved "skipped" code: automake's test-driver convention, also
+# what `go test -run` reserves for a filtered-out run), never 0. A CI step
+# that greps a log for a skip message breaks the moment the message is
+# reworded; asserting `rc != 77` does not (#463).
+skip_lane() { printf '%s\n' "$1"; exit 77; }
+
 # image_missing IMAGE_REF — true (0) if IMAGE_REF is not present locally. The
 # build-if-missing scripts differ in build command, failure handling and log
 # text on purpose; only this predicate is shared.

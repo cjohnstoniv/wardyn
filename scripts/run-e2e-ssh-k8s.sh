@@ -51,20 +51,19 @@
 # `make kind-quickstart` leaves behind (deploy/kind/quickstart.sh), and cleans
 # up only what it created (its run, its key). GUARD: self-skips unless
 # WARDYN_TEST_K8S=1, the same knob the other cluster-dependent lanes use — AND
-# self-skips (out loud, exit 0) if WARDYN_TEST_K8S=1 is set but no wardyn
-# install exists in the expected context/namespace, so "asked for but nothing
-# to run against" reports the same as "not asked for" rather than as a red
-# that looks like a real defect.
+# self-skips (out loud, exit 77 via skip_lane) if WARDYN_TEST_K8S=1 is set but
+# no wardyn install exists in the expected context/namespace, so "asked for
+# but nothing to run against" reports the same as "not asked for" rather than
+# as a red that looks like a real defect.
 set -uo pipefail
-
-if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
-  echo "run-e2e-ssh-k8s: set WARDYN_TEST_K8S=1 to run the cluster-dependent SSH e2e (skipping)."
-  exit 0
-fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 source "${ROOT}/scripts/lib/common.sh"
+
+if [[ "${WARDYN_TEST_K8S:-}" != "1" ]]; then
+  skip_lane "run-e2e-ssh-k8s: set WARDYN_TEST_K8S=1 to run the cluster-dependent SSH e2e (skipping)."
+fi
 
 command -v kubectl >/dev/null 2>&1 || die "kubectl not found"
 command -v ssh >/dev/null 2>&1 || die "ssh client not found"
@@ -81,11 +80,10 @@ BASE="http://127.0.0.1:8080"
 # WARDYN_TEST_K8S=1 says "run the cluster-dependent lane"; it does not say a
 # cluster is actually up. A cluster that was asked for but is not there is
 # the SAME "nothing to prove against" case as the guard above, so it gets the
-# same treatment: an out-loud skip (exit 0), never a silent one and never a
-# red that looks like a real defect.
+# same treatment: an out-loud skip_lane (exit 77), never a silent one and
+# never a red that looks like a real defect.
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment wardyn >/dev/null 2>&1 || {
-  echo "run-e2e-ssh-k8s: no wardyn install in context ${CONTEXT}, namespace ${NAMESPACE} — run 'make kind-quickstart' first (this script never creates a cluster) -- skipping." >&2
-  exit 0
+  skip_lane "run-e2e-ssh-k8s: no wardyn install in context ${CONTEXT}, namespace ${NAMESPACE} — run 'make kind-quickstart' first (this script never creates a cluster) -- skipping."
 }
 
 # The install's own admin token, read the way quickstart.sh re-reads it.

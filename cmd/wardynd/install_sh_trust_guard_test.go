@@ -13,8 +13,13 @@
 //
 // H1/H2 (the admin token) and H6 (the .env mode) are FIXED — these now pin the
 // fix. H3 (the compose fetch has no digest) is an accepted risk for 0.7,
-// published in docs/VERIFY.md and threatmodel/THREAT-MODEL.md §5, so
-// TestInstallSh_ComposeFetchIsVerified SKIPS unless F10_EXPECT_COMPOSE_INTEGRITY=1.
+// published in docs/VERIFY.md and threatmodel/THREAT-MODEL.md §5.
+// TestInstallSh_ComposeFetchIsVerified never skips (#463: a permanently-skipped
+// test proves nothing, forever): by default it PINS today's accepted-risk
+// state — no digest check — and fails the moment install.sh starts verifying
+// the fetch without WARDYN_EXPECT_COMPOSE_DIGEST=1 also being set to
+// acknowledge the change. Set WARDYN_EXPECT_COMPOSE_DIGEST=1 once a digest
+// exists to flip the assertion and pin the fixed state instead.
 
 package main
 
@@ -218,12 +223,11 @@ func TestInstallShGuards_AreNotSatisfiedByComments(t *testing.T) {
 // (release.yml's checksums + cosign-sign-blob steps). For 0.7 that is a
 // PUBLISHED accepted risk — docs/VERIFY.md "6. What the one-line installer
 // checks — and what it leaves to you" and threatmodel/THREAT-MODEL.md §5
-// residual 32 — so this skips. Once a digest exists it pins that install.sh
-// consults it and dies on a mismatch.
+// residual 32. This test never skips (#463): by default it PINS that
+// unverified state, and fails if install.sh starts verifying the fetch
+// without WARDYN_EXPECT_COMPOSE_DIGEST=1 also flipping the assertion — so a
+// silent fix here can't go unnoticed, and a silent regression can't either.
 func TestInstallSh_ComposeFetchIsVerified(t *testing.T) {
-	if os.Getenv("F10_EXPECT_COMPOSE_INTEGRITY") != "1" {
-		t.Skip("accepted risk until deploy/compose/docker-compose.yaml is covered by SHA256SUMS or a pinned digest (docs/VERIFY.md; THREAT-MODEL §5 residual 32); set F10_EXPECT_COMPOSE_INTEGRITY=1 to enforce")
-	}
 	src := readInstallSh(t)
 	fetch := strings.Index(src, "deploy/compose/docker-compose.yaml")
 	if fetch < 0 {
@@ -236,8 +240,15 @@ func TestInstallSh_ComposeFetchIsVerified(t *testing.T) {
 	if len(after) > 1600 {
 		after = after[:1600]
 	}
-	if !regexp.MustCompile(`docker-compose\.yaml[\s\S]*?(SHA256SUMS|sha256sum|shasum)[\s\S]{0,400}die "`).MatchString(after) {
-		t.Errorf("install.sh fetches the compose file and never checks it against SHA256SUMS/a digest with a fail-closed die")
+	verified := regexp.MustCompile(`docker-compose\.yaml[\s\S]*?(SHA256SUMS|sha256sum|shasum)[\s\S]{0,400}die "`).MatchString(after)
+	if os.Getenv("WARDYN_EXPECT_COMPOSE_DIGEST") == "1" {
+		if !verified {
+			t.Errorf("install.sh fetches the compose file and never checks it against SHA256SUMS/a digest with a fail-closed die")
+		}
+		return
+	}
+	if verified {
+		t.Errorf("install.sh now verifies the compose fetch against a digest — set WARDYN_EXPECT_COMPOSE_DIGEST=1 to pin the fixed state, and update docs/VERIFY.md + THREAT-MODEL §5 residual 32")
 	}
 }
 
