@@ -24,7 +24,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`AutonomyRubric`/`AutonomyPosture`/`AutonomyResolution`) now have a Go↔TS parity test. Two
   copy nits: the Environment step's "stronger tiers" note and the Recordings screen's loaded-count
   notes now pluralise correctly for exactly one item. An e2e fixture re-typed the admin-token
-  localStorage key by hand instead of importing it.
+  localStorage key by hand; it now imports it from `fixtures.ts`. One known gap stays: while the
+  setup status is still loading, or after a failed read, the Getting Started episode catalog still
+  groups under the "Your deployment — single-user" heading (the readiness chips above it already
+  say "Checking…"). It corrects itself once the status resolves — after a failed read, on the
+  next five-minute status poll.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
