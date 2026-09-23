@@ -44,7 +44,7 @@ function model(status: SetupStatus = baseStatus()) {
 }
 
 // #337: renders as a MEMBER (operator=false) — every other test in this file
-// renders unwrapped, which OperatorContext's fail-open default reads as an
+// renders unwrapped, which useOperator()'s fail-open default reads as an
 // operator (see operator-context.tsx). Needed to pin what a non-operator
 // caller actually sees, not just what an operator sees with `disabled` read
 // off the DOM.

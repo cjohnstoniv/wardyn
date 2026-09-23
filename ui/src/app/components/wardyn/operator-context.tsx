@@ -6,24 +6,15 @@
 import * as React from "react";
 import type { MeUserDrive } from "../../lib/api/health";
 
-// #193 — one /me payload used to ride seven SEPARATE React contexts, each
-// with its own createContext + nested <Xxx.Provider> in OperatorProvider
-// below (grown from six to seven when ConfinementPostureContext landed,
-// 359205f5 — the JSX nesting needed its indentation hand-patched every time
-// one more was added). MeIdentity is the collapse: one interface, one
-// memoized object, one context. Each field keeps the exact doc comment (and
-// exact default) its own createContext carried, because those defaults are
-// deliberate fail-open/fail-closed choices, not incidental — the collapse
-// must not change any of them, and does not.
+// One /me payload, one memoized identity object, one context. Each field's
+// default is a deliberate fail-open or fail-closed choice, explained on the
+// field below; changing one changes what an unresolved /me, a failed read and
+// every unwrapped test read.
 //
-// The one behavioral difference: seven contexts gave an unrelated consumer
-// (one that reads only useConfinementPosture(), say) independent re-render
-// isolation from a change to, say, principal. A single shared identity
-// object loses that isolation — every consumer re-renders when ANY field
-// changes, not just the one it reads. Accepted the same way UserDriveMeta's
-// own "one read per page load" trade is (below): app-shell's /me read is
-// infrequent (mount + heartbeat), not a per-keystroke value, so the coarser
-// granularity costs nothing worth a second context for.
+// The trade: every consumer re-renders when ANY field changes, not only the
+// one it reads. app-shell reads /me at mount and on the heartbeat, never per
+// keystroke, so that is cheap; a field that changes often needs its own
+// context instead.
 export interface MeIdentity {
   // Whether the signed-in caller holds the operator role (see GET
   // /api/v1/me's `operator` field, sourced from the same isOperator
@@ -168,10 +159,7 @@ export interface UserDriveMeta {
 
 const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByProfile: "", unavailable: "" };
 
-// #162 — the network-confinement posture's own type, named ahead of
-// MeIdentity so the interface above and DEFAULT_ME_IDENTITY below can both
-// reference it. See MeIdentity.confinementPosture's doc comment for the
-// fail-quiet rationale.
+// See MeIdentity.confinementPosture for the fail-quiet rationale.
 export type ConfinementPosture = "enforced" | "acknowledged" | "unenforced" | "unknown" | "";
 
 // The single fail-open/fail-closed default every field's own doc comment
@@ -235,8 +223,8 @@ export function OperatorProvider({
     }),
     [userDrive, userDriveDeniedByProfile, userDriveUnavailable],
   );
-  // One memoized identity object for the whole provider — see the module
-  // doc comment above for the re-render-granularity trade this makes.
+  // One memoized identity object for the whole provider — see the comment
+  // above MeIdentity for the re-render trade this makes.
   const identity = React.useMemo<MeIdentity>(
     () => ({
       operator,
@@ -356,9 +344,8 @@ const RoleResolvedContext = React.createContext<boolean>(true);
 
 // RoleProvider is deliberately its OWN provider, separate from
 // OperatorProvider/MeIdentityContext above: Role is additive (see its own
-// doc comment) rather than one of the seven original /me fields the #193
-// collapse folds together, and app-shell nests it inside OperatorProvider's
-// children rather than passing it through the same identity object.
+// doc comment), not a MeIdentity field, and app-shell nests it inside
+// OperatorProvider's children.
 export function RoleProvider({
   role,
   roleResolved = true,

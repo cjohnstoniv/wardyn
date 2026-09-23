@@ -114,6 +114,11 @@ export function NewRunScreen() {
   // confinement_class so the server's own default decides, and its audit
   // trail reads `defaulted` rather than `requested` (confinement_source).
   const [ccTouched, setCcTouched] = React.useState(!!prefill?.state.confinementClass);
+  // The clone's barrier as this form was seeded with it, read once like the
+  // useState seeds above: the top bar's New run navigates to /runs/new with no
+  // state, which keeps this screen mounted and clears `prefill`; that must not
+  // re-run the /setup/status effect below and half-reset the form.
+  const clonedCc = React.useRef(prefill?.state.confinementClass);
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
   const [savedPolicies, setSavedPolicies] = React.useState<{ id: string; name: string; spec: RunPolicySpec }[]>([]);
@@ -146,10 +151,11 @@ export function NewRunScreen() {
   // The Workspace card's drive block: this caller's allocation (nil-means-none)
   // and the door beside it ("" means open), read off the shell's ONE GET /me
   // rather than a second one of this screen's own — app-shell's useMeta already
-  // holds that body and hands it down (operator-context.tsx's UserDriveContext,
-  // the same seam member_local_dir_root rides). With no provider above, on an
-  // older daemon, or after a failed read it is null/"" — which renders as
-  // today's card, the same honest answer the server's own resolver gives.
+  // holds that body and hands it down (operator-context.tsx's
+  // MeIdentity.userDrive, the same seam member_local_dir_root rides). With no
+  // provider above, on an older daemon, or after a failed read it is null/""
+  // — which renders as today's card, the same honest answer the server's own
+  // resolver gives.
   const { drive: userDrive, deniedByProfile: driveDeniedBy, unavailable: driveUnavailable } = useUserDrive();
 
   React.useEffect(() => {
@@ -192,7 +198,7 @@ export function NewRunScreen() {
         // B4b: a CLONE's barrier is the SOURCE RUN's — kept explicit
         // (ccTouched) as long as this host can build it. A vanished tier
         // falls back like any fresh run and stops counting as explicit.
-        const cloned = prefill?.state.confinementClass;
+        const cloned = clonedCc.current;
         const cloneStillAvailable = !!cloned && classes.includes(cloned);
         const resolved = cloneStillAvailable ? cloned : strongestAvailable(classes) ?? "CC1";
         pristineCc.current = resolved;
@@ -206,10 +212,7 @@ export function NewRunScreen() {
     return () => {
       alive = false;
     };
-    // prefill: useLocation().state keeps its identity across re-renders
-    // (it only changes on a real navigation), so this is still a one-shot
-    // mount effect in practice.
-  }, [prefill]);
+  }, []);
 
   React.useEffect(() => {
     policiesApi

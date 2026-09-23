@@ -59,7 +59,7 @@ export interface ShellMeta {
   trustDomain: string;
   identityProvider: string;
   // principal is the OWNERSHIP key (the OIDC sub, "admin-token", "local:…"):
-  // it feeds PrincipalContext and every `usePrincipal() === run.created_by`
+  // it feeds MeIdentity.principal and every `usePrincipal() === run.created_by`
   // gate. email and name are DISPLAY ONLY — what the header shows for "you",
   // in that order of preference — and are "" outside SSO or when the IdP sent
   // none, so the header falls back to the principal there (0.7.1).
@@ -77,7 +77,7 @@ export interface ShellMeta {
   // returns null, so `resolved` flips on a FAILED fetch too. Anything that
   // picks a lane off `operator` rather than merely offering a control needs
   // this one instead (R4-F110; see operator-context.tsx's
-  // OperatorResolvedContext for the attach-WS case that named it).
+  // MeIdentity.operatorResolved for the attach-WS case that named it).
   identityResolved: boolean;
   // Fail-open (see operator-context.tsx): starts true and stays true unless
   // /me resolves and explicitly says otherwise — an unresolved or failed
@@ -96,7 +96,7 @@ export interface ShellMeta {
   // When the SSO session dies outright (no refresh) — null for
   // local/token auth, which has no session to expire.
   sessionExpiresAt: Date | null;
-  // M3 — see operator-context.tsx's MemberLocalDirRootContext. null until /me
+  // M3 — see operator-context.tsx's MeIdentity.memberLocalDirRoot. null until /me
   // resolves and stays null (fail-closed: unavailable) if it never does.
   memberLocalDirRoot: string | null;
   // 0.7 — the caller's own allocation and the profile door beside it, the same
@@ -106,7 +106,7 @@ export interface ShellMeta {
   // The trade that buys is FRESHNESS PER PAGE LOAD, not per navigation — a
   // member paused mid-session keeps the offer until they reload and learns at
   // launch, which is the direction of error this feature can afford (see
-  // operator-context.tsx's UserDriveContext for the whole argument).
+  // operator-context.tsx's UserDriveMeta for the whole argument).
   userDrive: MeUserDrive | null;
   userDriveDeniedByProfile: string;
   // R4/F091 — the THIRD drive key: WHY /me could not answer, "" when it could.

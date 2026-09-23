@@ -459,10 +459,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       // getSetupStatus only ever rejects on a 401 (see its own doc comment) —
       // wfetch has already routed that to the module-level onUnauthorized
       // handler (core.ts) before this rejection reaches here, so there is
-      // nothing left for a caller to do with it. None of recheck()'s five
-      // call sites (mount, the Re-check button, three onRecheck props) used
-      // to catch this, which is exactly #192's class of bug: a rejection with
-      // no handler anywhere in the chain.
+      // nothing left for a caller to do with it. Caught here, once, so none of
+      // recheck()'s five call sites (mount, the Re-check button, three
+      // onRecheck props) leaves an unhandled rejection.
       .catch(() => {})
       .finally(() => setRechecking(false));
   }, [reloadSiteConfig, loadSecrets, loadProviderCount, loadAccess]);

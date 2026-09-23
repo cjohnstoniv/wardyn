@@ -503,7 +503,7 @@ describe("LiveApprovals", () => {
         pending({ id: "e1", requested_scope: { host: "unlisted.example" } }),
         pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
       ]);
-      render(<LiveApprovals runId="r1" />); // default OperatorContext is TRUE
+      render(<LiveApprovals runId="r1" />); // useOperator()'s unwrapped default is TRUE
       const panel = await screen.findByTestId("live-approvals");
       for (const btn of within(panel).getAllByRole("button", { name: /^Approve$/ })) {
         expect(btn).not.toBeDisabled();

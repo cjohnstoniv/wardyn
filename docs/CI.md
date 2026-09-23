@@ -351,6 +351,9 @@ its longest job, so 19 minutes is the floor while `build` is the critical path.
 
 **Where `build`'s time goes**, in one green run (35555137810): `make test-race`
 537 s, `make cover-check` 395 s, `make lint` 120 s.
+`make lint` has since gained the console's ESLint (`ui/eslint.config.js`), so
+`build` also sets up pnpm and node; that install and lint pass are not in the
+120 s above.
 
 **Why `ui-e2e` is one job.** In the same run its Playwright step took 492 s:
 Playwright itself 418 s, the backend and UI build plus the first seed 32 s, and

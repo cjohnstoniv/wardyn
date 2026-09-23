@@ -611,13 +611,13 @@ describe("TopBar — account-menu Demos entry (Phase 5)", () => {
   });
 });
 
-// 0.7 — the shell's ONE GET /me is what fills UserDriveContext: New Run and the
+// 0.7 — the shell's ONE GET /me is what fills MeIdentity.userDrive: New Run and the
 // member Getting Started page read the caller's drive off the context and issue
 // no fetch of their own. That seam had only e2e coverage, and a component test
 // cannot see it: workspace-card.test.tsx renders the block perfectly from props
 // the shell might never actually hand it. Pinned here, at the one place the
 // wire body becomes the context value.
-describe("AppShell — /me's drive bits reach UserDriveContext", () => {
+describe("AppShell — /me's drive bits reach useUserDrive()", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   function DriveProbe() {
@@ -753,7 +753,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
     ["unavailable"],
     ["governance_unavailable"],
   ])(
-    "carries %s through to UserDriveContext beside the suppressed allocation",
+    "carries %s through to useUserDrive() beside the suppressed allocation",
     async (reason) => {
       renderShellWithMe({
         principal: "alice@corp.example",

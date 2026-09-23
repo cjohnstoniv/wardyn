@@ -168,7 +168,7 @@ export function MemberGettingStarted() {
 
   // This member's own drive (nil-means-no-allocation), off the shell's ONE GET
   // /me rather than a second one of this page's own — see
-  // operator-context.tsx's UserDriveContext. null for a member with none, for
+  // operator-context.tsx's UserDriveMeta. null for a member with none, for
   // an older daemon, and for a read that failed: all three render as today's
   // page, no chip and no sentence.
   //

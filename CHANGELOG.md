@@ -38,6 +38,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`make lint` now runs the console's ESLint, so it needs node and pnpm (#193).**
+  `ui/eslint.config.js` turns on `react-hooks/rules-of-hooks`, `react-hooks/exhaustive-deps` and
+  type-aware `@typescript-eslint/no-floating-promises`, and fails on a disable comment for a rule it
+  does not enable; every remaining `eslint-disable` carries its reason on the same line. CI's
+  `build` job now sets up pnpm and node for it.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
