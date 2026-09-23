@@ -181,7 +181,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// already refuses to shed. The cost is one re-mint, and only on a
 		// deployment that actually assigns profiles to groups — the resolver's
 		// refusal is itself gated on a group-tier row existing at all.
-		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.Groups,
+		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.UserType, t.Groups,
 			t.GroupsTruncated == nil || *t.GroupsTruncated)
 		next.ServeHTTP(w, r.WithContext(withAPITokenID(ctx, t.ID)))
 	})
@@ -311,6 +311,14 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if role == "" {
 		role = oidc.RoleUser
 	}
+	// The user type rides beside the role, from the same session. A session
+	// cookie always carries one (the codec refuses a cookie without it), so
+	// the fallback is as unreachable as the role's; Standard user is what every
+	// pre-0.8 token was backfilled to.
+	userType := oidcUserTypeFromContext(ctx)
+	if userType == "" {
+		userType = types.UserTypeStandard
+	}
 	// The group snapshot's completeness marker, stamped from the MINTING
 	// session's own bit (migration 0052's api_tokens.groups_truncated). The
 	// token replays this snapshot into the very same capabilitySubjects the
@@ -360,6 +368,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		Principal:       sub,
 		Email:           oidcEmailFromContext(ctx),
 		Role:            role,
+		UserType:        userType,
 		Groups:          oidcGroupsFromContext(ctx),
 		GroupsTruncated: &groupsTruncated,
 		Name:            name,
@@ -371,7 +380,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"token.create", created.ID.String(), "success",
-		mustJSON(map[string]any{"name": created.Name, "role": created.Role})))
+		mustJSON(map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType})))
 
 	// The ONLY response that carries the plaintext. It is not stored, so this
 	// body is the sole opportunity to read it; a lost token is re-minted, never
@@ -510,11 +519,18 @@ func (s *Server) staleRoleSnapshotCount(ctx context.Context, value string) (int,
 		if t.RevokedAt != nil {
 			continue
 		}
-		if t.Principal == value || (t.Email != "" && strings.EqualFold(t.Email, value)) || slices.Contains(t.Groups, value) {
+		if apiTokenNamesValue(t, value) {
 			n++
 		}
 	}
 	return n, nil
+}
+
+// apiTokenNamesValue reports whether a role-mapping value names this token's
+// holder: by principal, by email (case-insensitively) or by a group in the
+// token's snapshot.
+func apiTokenNamesValue(t types.APIToken, value string) bool {
+	return t.Principal == value || (t.Email != "" && strings.EqualFold(t.Email, value)) || slices.Contains(t.Groups, value)
 }
 
 // apiTokenSnapshotAnswerable reports whether a token's login-time GROUP snapshot
@@ -587,6 +603,16 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // since there is nothing for them to lose. A bare slices.Contains(t.Groups,
 // value) test would undercount for exactly this reason.
 //
+// A TYPE CHANGE revokes too (user-types design §7, owner decision D8): a token
+// never runs under a type its holder no longer has. When the edit changes the
+// type the value derives, every live token still stamped with the OLD type is
+// revoked if it names the value (principal, email or group) or if its group
+// snapshot is unanswerable — a token that cannot prove it does not derive
+// from the value is treated as if it does. A token carrying any other type is
+// not this edit's business. A type change made in the chart has no
+// before/after edit and reaches a token only at its holder's next sign-in
+// (THREAT-MODEL #38).
+//
 // Best effort by contract, like the counter: the mapping edit is already
 // durable when this runs, so a store failure is logged at WARN and reported as
 // zero — never turned into a 500 that would misdescribe what happened.
@@ -595,14 +621,18 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 	if s.cfg.Store == nil || s.cfg.OIDC == nil || value == "" {
 		return 0
 	}
-	was := s.cfg.OIDC.PreviewRoleAgainst(before, userTypes, nil, []string{value}, "").Role
-	now := s.cfg.OIDC.PreviewRoleAgainst(after, userTypes, nil, []string{value}, "").Role
-	if !s.roleSnapshotDrops(was, now) {
+	was := s.cfg.OIDC.PreviewRoleAgainst(before, userTypes, nil, []string{value}, "")
+	now := s.cfg.OIDC.PreviewRoleAgainst(after, userTypes, nil, []string{value}, "")
+	demoted := s.roleSnapshotDrops(was.Role, now.Role)
+	// A value that derived no type before the edit (a refused sign-in) has no
+	// old type for a token to carry.
+	retyped := was.UserType != "" && was.UserType != now.UserType
+	if !demoted && !retyped {
 		return 0
 	}
 	toks, err := s.cfg.Store.ListAPITokens(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "api: could not list api tokens to revoke a demoted role snapshot; the demotion is NOT yet effective for outstanding tokens",
+		slog.WarnContext(ctx, "api: could not list api tokens to revoke a demoted or re-typed role snapshot; the change is NOT yet effective for outstanding tokens",
 			"value", value, "error", err)
 		return 0
 	}
@@ -611,13 +641,8 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 		if t.RevokedAt != nil {
 			continue
 		}
-		if apiTokenSnapshotAnswerable(t) {
-			wasT := s.cfg.OIDC.PreviewRoleAgainst(before, userTypes, nil, t.Groups, t.Email).Role
-			nowT := s.cfg.OIDC.PreviewRoleAgainst(after, userTypes, nil, t.Groups, t.Email).Role
-			if !s.roleSnapshotDrops(wasT, nowT) || !s.roleSnapshotDrops(t.Role, nowT) {
-				continue
-			}
-		} else if !s.roleSnapshotDrops(t.Role, oidc.RoleUser) {
+		if !(demoted && s.tokenLosesTier(t, before, after, userTypes)) &&
+			!(retyped && t.UserType == was.UserType && (!apiTokenSnapshotAnswerable(t) || apiTokenNamesValue(t, value))) {
 			continue
 		}
 		if !slices.Contains(principals, t.Principal) {
@@ -629,15 +654,28 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 		n, rerr := s.revokeAPITokensFor(r, p)
 		revoked += n
 		if rerr != nil {
-			slog.WarnContext(ctx, "api: could not revoke every api token of a demoted principal",
+			slog.WarnContext(ctx, "api: could not revoke every api token of a demoted or re-typed principal",
 				"principal", p, "value", value, "revoked", n, "error", rerr)
 		}
 	}
 	if revoked > 0 {
-		slog.WarnContext(ctx, "api: role mapping demoted a value; the affected principals' api tokens were revoked",
-			"value", value, "was", was, "now", now, "tokens_revoked", revoked, "principals", len(principals))
+		slog.WarnContext(ctx, "api: role mapping demoted or re-typed a value; the affected principals' api tokens were revoked",
+			"value", value, "was", was.Role, "now", now.Role, "was_user_type", was.UserType, "now_user_type", now.UserType,
+			"tokens_revoked", revoked, "principals", len(principals))
 	}
 	return revoked
+}
+
+// tokenLosesTier reports whether the edit from before to after takes a tier
+// away from this token's stamp: re-derived from its own snapshot when that
+// snapshot is answerable, and assumed demoted to user when it is not.
+func (s *Server) tokenLosesTier(t types.APIToken, before, after []oidc.RoleMapping, userTypes []types.UserType) bool {
+	if !apiTokenSnapshotAnswerable(t) {
+		return s.roleSnapshotDrops(t.Role, oidc.RoleUser)
+	}
+	wasT := s.cfg.OIDC.PreviewRoleAgainst(before, userTypes, nil, t.Groups, t.Email).Role
+	nowT := s.cfg.OIDC.PreviewRoleAgainst(after, userTypes, nil, t.Groups, t.Email).Role
+	return s.roleSnapshotDrops(wasT, nowT) && s.roleSnapshotDrops(t.Role, nowT)
 }
 
 // roleSnapshotWarnNote / roleSnapshotWarnRemedy are the operator-facing halves
@@ -653,10 +691,10 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 // this edit already did, what the owner's next login will do, and when the
 // human still has to reach for the lever.
 const (
-	roleSnapshotWarnNote = "counted BEFORE this edit acted; the snapshots this edit demotes were revoked with it (see the revoke line), and the rest keep a role this edit did not change"
+	roleSnapshotWarnNote = "counted BEFORE this edit acted; the snapshots this edit demotes or re-types were revoked with it (see the revoke line), and the rest keep a role and type this edit did not change"
 
-	roleSnapshotWarnRemedy = "nothing further is needed for the principals this edit demoted — they were revoked. For the rest, the owner's next sign-in re-stamps the " +
-		"role on every unrevoked token they hold (store.RefreshAPITokenIdentity, the same OnLogin hook that has refreshed SSH keys since 0.6); POST " +
+	roleSnapshotWarnRemedy = "nothing further is needed for the principals this edit demoted or re-typed — they were revoked. For the rest, the owner's next sign-in re-stamps the " +
+		"role and user type on every unrevoked token they hold (store.RefreshAPITokenIdentity, the same OnLogin hook that has refreshed SSH keys since 0.6); POST " +
 		"/api/v1/sessions/revoke {\"sub\":\"<principal>\"} or DELETE /api/v1/tokens/{id} is the lever when a change has to take effect immediately or " +
 		"the owner will not sign in again"
 )

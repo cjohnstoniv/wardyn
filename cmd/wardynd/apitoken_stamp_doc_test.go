@@ -66,14 +66,15 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// same shape residual #15 already has. Removing either from this list means
 	// the group half stopped being refreshed again and the docs would overstate
 	// what is bounded.
-	allowed := []string{"last_used_at", "revoked_at", "role", "groups", "groups_truncated"}
+	// `user_type` joined with #611, re-stamped in the same UPDATE.
+	allowed := []string{"last_used_at", "revoked_at", "role", "user_type", "groups", "groups_truncated"}
 	for _, c := range updated {
 		if !slices.Contains(allowed, c) {
 			t.Errorf("internal/store/store_apitokens.go now UPDATEs api_tokens.%s — an unexpected column is re-stamped; "+
 				"re-read OPERATIONS.md and residual #38 against what actually happens", c)
 		}
 	}
-	for _, want := range []string{"role", "groups", "groups_truncated"} {
+	for _, want := range []string{"role", "user_type", "groups", "groups_truncated"} {
 		if !slices.Contains(updated, want) {
 			t.Errorf("internal/store/store_apitokens.go no longer UPDATEs api_tokens.%s — the login re-stamp that bounds "+
 				"that half is gone, so OPERATIONS.md and residual #38 overstate what is bounded", want)

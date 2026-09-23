@@ -194,6 +194,7 @@ func TestAPITokenAuth_ContextParityWithSession(t *testing.T) {
 		Principal: tokenMemberSub,
 		Email:     tokenMemberMail,
 		Role:      oidc.RoleUser,
+		UserType:  "portfolio-manager",
 		Groups:    []string{"eng", "oncall"},
 		// A 0.7 mint RECORDS completeness (handleCreateAPIToken stamps the bit);
 		// leaving this nil would make the fixture a pre-0.7 row, which
@@ -222,7 +223,7 @@ func TestAPITokenAuth_ContextParityWithSession(t *testing.T) {
 		t.Fatal("token auth never reached the next handler")
 	}
 
-	want := withHumanIdentity(context.Background(), row.Principal, row.Email, row.Role, row.Groups, false)
+	want := withHumanIdentity(context.Background(), row.Principal, row.Email, row.Role, row.UserType, row.Groups, false)
 	if a, b := oidcHumanFromContext(got), oidcHumanFromContext(want); a != b {
 		t.Errorf("sub = %q, want %q", a, b)
 	}
@@ -231,6 +232,9 @@ func TestAPITokenAuth_ContextParityWithSession(t *testing.T) {
 	}
 	if a, b := oidcRoleFromContext(got), oidcRoleFromContext(want); a != b {
 		t.Errorf("role = %q, want %q", a, b)
+	}
+	if a, b := oidcUserTypeFromContext(got), oidcUserTypeFromContext(want); a != b || a != row.UserType {
+		t.Errorf("user type = %q, want %q (the row's stamp)", a, b)
 	}
 	if a, b := oidcGroupsFromContext(got), oidcGroupsFromContext(want); !slices.Equal(a, b) {
 		t.Errorf("groups = %v, want %v", a, b)

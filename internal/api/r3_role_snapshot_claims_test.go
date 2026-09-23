@@ -18,7 +18,7 @@ import (
 // stylistic quibble but a false statement about the system. If the refresh is
 // ever removed, this stops compiling and the claims below are re-opened for
 // review rather than silently inverted a second time.
-var refreshAPITokenIdentityExists func(store.Store, context.Context, string, string, []string, bool) error = store.Store.RefreshAPITokenIdentity
+var refreshAPITokenIdentityExists func(store.Store, context.Context, string, string, string, []string, bool) error = store.Store.RefreshAPITokenIdentity
 
 // TestRoleSnapshotClaimsMatchTheRefreshThatShipped is F281.
 //

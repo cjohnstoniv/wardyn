@@ -1651,7 +1651,7 @@ func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { retur
 func (s *authzStore) RefreshSSHKeyRoles(context.Context, string, string, time.Time) error {
 	return nil
 }
-func (s *authzStore) RefreshAPITokenIdentity(context.Context, string, string, []string, bool) error {
+func (s *authzStore) RefreshAPITokenIdentity(context.Context, string, string, string, []string, bool) error {
 	return nil
 }
 
@@ -1743,8 +1743,9 @@ func (s *authzStore) CreateUserType(_ context.Context, t types.UserType) (types.
 func (s *authzStore) UpdateUserType(context.Context, types.UserType) (types.UserType, error) {
 	return types.UserType{}, store.ErrNotFound
 }
-func (s *authzStore) UserTypeReferences(context.Context, string) (int, error) { return 0, nil }
-func (s *authzStore) DeleteUserType(context.Context, string) error            { return store.ErrNotFound }
+func (s *authzStore) UserTypeReferences(context.Context, string) (int, error)  { return 0, nil }
+func (s *authzStore) UserTypeTokenStamps(context.Context, string) (int, error) { return 0, nil }
+func (s *authzStore) DeleteUserType(context.Context, string) error             { return store.ErrNotFound }
 
 // ─── governance profiles (migration 0052) ─────────────────────────────────
 //

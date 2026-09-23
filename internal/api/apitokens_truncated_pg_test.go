@@ -315,7 +315,7 @@ func TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates(t *testing.T) {
 	legacyRaw := apiTokenPrefix + "legacy-" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	if _, err := pg.CreateAPIToken(ctx, types.APIToken{
 		ID: uuid.New(), Principal: truncProbeSub, Email: truncProbeSub + "@corp.example",
-		Role: oidc.RoleUser, Groups: []string{truncProbeGroupKept}, GroupsTruncated: nil,
+		Role: oidc.RoleUser, UserType: types.UserTypeStandard, Groups: []string{truncProbeGroupKept}, GroupsTruncated: nil,
 		Name: "legacy", CreatedAt: time.Now().UTC(),
 	}, legacyRaw); err != nil {
 		t.Fatalf("seed legacy token: %v", err)

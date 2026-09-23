@@ -238,13 +238,13 @@ func memberLocalDirRootLabel(roots []string) *string {
 }
 
 // meUserType is /me's user_type: the type stamped on this SSO session at
-// sign-in, with its display name. nil for a caller with no session type — the
-// admin token, local mode, and (until tokens carry a type) an API token. A
-// type the store no longer holds, or a failed read, still names the id with
-// an empty name: this is a label, and the controls that bind a type decide
-// for themselves what a missing one means.
+// sign-in, or on this API token at mint or its holder's last sign-in, with its
+// display name. nil for a caller with no type — the admin token and local
+// mode. A type the store no longer holds, or a failed read, still names the id
+// with an empty name: this is a label, and the controls that bind a type
+// decide for themselves what a missing one means.
 func (s *Server) meUserType(r *http.Request) *meUserTypeView {
-	id := oidc.UserTypeFromContext(r.Context())
+	id := oidcUserTypeFromContext(r.Context())
 	if id == "" {
 		return nil
 	}
