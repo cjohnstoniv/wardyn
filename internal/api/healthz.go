@@ -163,6 +163,21 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
 	}
+	// sign_in_help_text / sign_in_help_url are the admin's own "what to do
+	// next" for the four sign-in refusals a person cannot clear alone. PUBLIC
+	// by design — the reader has, by definition, not signed in — and written
+	// as such (validateSignInHelp). Each value is re-checked here and dropped
+	// if it no longer passes; an unreadable store omits both, like a store
+	// with none set.
+	if sc, ok := s.siteConfigSnapshot(r.Context()); ok {
+		text, link := signInHelpPublic(sc)
+		if text != "" {
+			body["sign_in_help_text"] = text
+		}
+		if link != "" {
+			body["sign_in_help_url"] = link
+		}
+	}
 	writeJSON(w, http.StatusOK, body)
 }
 

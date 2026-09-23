@@ -41,6 +41,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
+  is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
+  set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
+  page, with a link to the People step. Members see neither.
 - **One capability-grant resolver (#735): no decision change; an enforcement-read failure no longer fails a value the grant rows already settled.** `capBatch` now answers every
   capability question: `capAllowed`, `capGranted`, `capSeamAllowed` and `capScan` are one-value doors
   onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
@@ -75,6 +79,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   A `WARDYN_*_FILE` in `env`/`extraEnv` counts as wired in every render check, and
   `extraVolumes`/`extraVolumeMounts` carry a CSI volume. Examples are in `docs/OPERATIONS.md`,
   "Secrets from files (Vault Agent / CSI)".
+- **Admins can tell a refused person what to do next (#484).** The People step has a new
+  "When someone can't sign in" card: a short plain-text message (up to 1,000 characters) and an
+  optional `http(s)` link, saved as the site-config fields `sign_in_help_text` and
+  `sign_in_help_url`. The sign-in page shows them under Wardyn's own sentence on the four refusals a
+  person cannot clear alone — no role, an email domain that isn't allowed, too many groups, and a
+  missing email claim — with the link labelled "Request access". Both are public: the anonymous
+  `/healthz` publishes them, and a stored value that no longer passes its check is left out.
 
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
