@@ -93,7 +93,12 @@ fi
 stop_wardynd() {
   local pids
   if command -v fuser >/dev/null 2>&1; then
-    fuser -k "${BASE_PORT}/tcp" >/dev/null 2>&1 || true
+    # -TERM, not fuser's SIGKILL default: wardynd does a graceful shutdown on
+    # SIGTERM (cmd/wardynd/boot_serve.go waits for background work, adapters.go
+    # flushes audit), and the ss fallback below already sends SIGTERM via plain
+    # `kill`. A bare -k would skip that shutdown and disagree with the fallback
+    # for no reason.
+    fuser -k -TERM "${BASE_PORT}/tcp" >/dev/null 2>&1 || true
   else
     pids="$(ss -ltnpH "sport = :${BASE_PORT}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)"
     # shellcheck disable=SC2086 # one PID per word

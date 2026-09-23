@@ -15,6 +15,10 @@
 #     year is this year or later. An earlier year is always past, so it cannot
 #     expire. The cut-off moves with the calendar, so a file's count only ever
 #     falls: the gate never goes red on its own on 1 January.
+#   - time.Date(YYYY, ... in Go, or new Date(YYYY, ... / Date.UTC(YYYY, ... in
+#     TS, whose year is this year or later. This is the usual way to write a
+#     fixture time — a YYYY-MM-DD string never appears on that line, so the
+#     rule above misses it.
 # Never counted: Go's reference layout 2006-01-02T15:04 (a format string, not a
 # point in time) and Go's zero time 0001-01-01T00:00 ("unset").
 #
@@ -27,11 +31,20 @@ cd "$(dirname "$0")/.."
 
 YEAR="$(date -u +%Y)"
 PATTERN="[\"'\`]?[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2})?"
+CTOR_PATTERN="(time\.Date|new Date|Date\.UTC)\([0-9]{4},"
 
 # literal_dates FILE — prints each literal date in FILE that counts, as LINE:DATE.
 literal_dates() {
-  { grep -noE "${PATTERN}" "$1" || true; } | awk -v year="${YEAR}" '{
+  {
+    grep -noE "${PATTERN}" "$1" || true
+    grep -noE "${CTOR_PATTERN}" "$1" || true
+  } | awk -v year="${YEAR}" '{
     i = index($0, ":"); line = substr($0, 1, i - 1); tok = substr($0, i + 1)
+    if (tok ~ /^(time\.Date|new Date|Date\.UTC)\(/) {
+      y = tok; sub(/^[^(]*\(/, "", y); sub(/,.*/, "", y)
+      if (y + 0 >= year) print line ":" tok
+      next
+    }
     quoted = tok ~ /^["'"'"'`]/
     if (quoted) tok = substr(tok, 2)
     if (tok ~ /T/) {
@@ -39,22 +52,29 @@ literal_dates() {
     } else if (quoted && substr(tok, 1, 4) + 0 >= year) {
       print line ":" tok
     }
-  }'
+  }' | sort -t: -k1,1n
 }
 
 declare -A ALLOWLIST=(
   ["cmd/wardyn-aws-sso/main_test.go"]=6
-  ["cmd/wardyn/commands_test.go"]=4
+  ["cmd/wardyn/commands_test.go"]=6
   ["cmd/wardyn/policyio_test.go"]=2
-  ["cmd/wardyn/siteconfig_test.go"]=3
+  ["cmd/wardyn/siteconfig_test.go"]=4
+  ["cmd/wardynd/login_stamp_test.go"]=1
   ["cmd/wardynd/rekey_test.go"]=1
+  ["internal/api/access_test.go"]=1
+  ["internal/api/ado_entra_test.go"]=1
+  ["internal/api/auth_failed_coalesce_test.go"]=1
   ["internal/api/devices_bounds_test.go"]=1
+  ["internal/api/directory_search_test.go"]=1
   ["internal/api/harnesscred_disconnect_scope_test.go"]=1
+  ["internal/api/harnesscred_supersede_test.go"]=1
   ["internal/api/modelaccess_member_redaction_test.go"]=2
   ["internal/api/modelaccess_test.go"]=1
-  ["internal/api/runs_bedrock_ssoinject_test.go"]=2
+  ["internal/api/runs_bedrock_ssoinject_test.go"]=3
+  ["internal/api/runs_bedrock_test.go"]=1
   ["internal/api/setup_checks_test.go"]=1
-  ["internal/api/setup_onboarding_test.go"]=3
+  ["internal/api/setup_onboarding_test.go"]=8
   ["internal/api/setup_status_scope_failclosed_test.go"]=1
   ["internal/api/setup_test.go"]=2
   ["internal/api/ssotoken_binding_test.go"]=6
@@ -63,7 +83,12 @@ declare -A ALLOWLIST=(
   ["internal/broker/github_revoke_test.go"]=1
   ["internal/broker/github_rotation_test.go"]=4
   ["internal/broker/ruleset_test.go"]=2
+  ["internal/db/appclock_test.go"]=3
+  ["internal/egress/egress_test.go"]=1
   ["internal/egress/proxy/llm_unavailable_detail_test.go"]=3
+  ["internal/runner/k8s/drives_test.go"]=2
+  ["internal/types/types_test.go"]=1
+  ["pkg/client/client_more_test.go"]=2
   ["test/adofake/adofake_test.go"]=3
   ["ui/e2e/drives.spec.ts"]=3
   ["ui/e2e/people-access.spec.ts"]=8
