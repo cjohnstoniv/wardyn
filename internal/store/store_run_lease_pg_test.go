@@ -123,3 +123,61 @@ func TestPG_MarkRunEndingSoon(t *testing.T) {
 		t.Errorf("after the end moved: MarkRunEndingSoon = %v, %v; want true", got, err)
 	}
 }
+
+// TestPG_SetRunEndAndWait pins the change a PATCH lands: only against the end
+// and wait the caller read, never on a kept or terminal run, and No end as NULL.
+func TestPG_SetRunEndAndWait(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	end := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+	later := end.Add(24 * time.Hour)
+	live := newRun(types.RunRunning)
+	live.EndsAt, live.WaitBudgetSec = &end, 600
+	kept := newRun(types.RunRunning)
+	kept.EndsAt = &end
+	finished := newRun(types.RunCompleted)
+	finished.EndsAt = &end
+	for _, r := range []types.AgentRun{live, kept, finished} {
+		persistRun(t, ctx, pool, r)
+	}
+	if _, err := pg.MarkRunEnded(ctx, kept.ID, end); err != nil {
+		t.Fatalf("MarkRunEnded: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		id       uuid.UUID
+		fromEnd  *time.Time
+		fromWait int
+		want     bool
+	}{
+		{"a stale end", live.ID, &later, 600, false},
+		{"a stale wait", live.ID, &end, 60, false},
+		{"a kept run", kept.ID, &end, 0, false},
+		{"a terminal run", finished.ID, &end, 0, false},
+		{"the values read", live.ID, &end, 600, true},
+		{"the same values again", live.ID, &end, 600, false},
+	} {
+		got, err := pg.SetRunEndAndWait(ctx, tc.id, tc.fromEnd, tc.fromWait, &later, 1200)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: SetRunEndAndWait = %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+	moved, err := pg.GetRun(ctx, live.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if moved.EndsAt == nil || !moved.EndsAt.Equal(later) || moved.WaitBudgetSec != 1200 {
+		t.Errorf("run = ends %v wait %d; want %v and 1200", moved.EndsAt, moved.WaitBudgetSec, later)
+	}
+	if got, err := pg.SetRunEndAndWait(ctx, live.ID, &later, 1200, nil, 1200); err != nil || !got {
+		t.Fatalf("to No end: %v, %v; want true", got, err)
+	}
+	if moved, _ := pg.GetRun(ctx, live.ID); moved.EndsAt != nil {
+		t.Errorf("ends_at = %v, want NULL (no end)", moved.EndsAt)
+	}
+	if got, err := pg.SetRunEndAndWait(ctx, live.ID, nil, 1200, &end, 1200); err != nil || !got {
+		t.Errorf("from No end: %v, %v; want true — a NULL end compares as the value read", got, err)
+	}
+}

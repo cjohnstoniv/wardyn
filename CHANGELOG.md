@@ -66,7 +66,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `expires_at` = min(requested_at + the run's wait, the run's end), and the approval sweep expires a
   request at that time as well as at the deployment cutoff. Migration
   `0069_agent_runs_run_limits` adds the four `agent_runs` columns; zero limits keep today's
-  behaviour. Nothing yet lets a user change the end or the wait (#569).
+  behaviour.
 - **A run stops at its end and is kept (#568).** When a run's `ends_at` passes, it is stopped and
   kept: its pending approvals are cancelled (`run_ended`), its broker credentials revoked, its agent
   container stopped but not removed, and its proxy sidecar removed, so it has no network. It stays
@@ -79,6 +79,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   10 minutes before the end; `run.ended` and `run.ended.expired` record the end and the grace running
   out. Migration `0070_agent_runs_lease` adds `lost_at`, `lost_reason`, `ending_soon_for` and
   `ending_soon_sec`.
+- **A person changes their run's end and wait (#569).** `PATCH /api/v1/runs/{id}` takes
+  `ends_at` (a time, or `null` for No end) and `wait_budget_sec`, for the run's owner or a super
+  admin. Extending the end within the run's captured max (measured from now) is always allowed;
+  shortening it, setting No end (where `allow_no_end`) and changing the wait need the run's captured
+  `user_changes_limits` and otherwise answer 403. An over-ask is capped at the limit and the response
+  names it (`capped`, `latest_end`, `max_wait_sec`). A security admin is bounded like anyone and
+  reaches only their own runs; a super admin is bounded by the deployment alone. A finished or ended
+  run answers 409. Audited as `run.end.set` and `run.wait_budget.set`, refusals as `denied`.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

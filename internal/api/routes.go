@@ -187,6 +187,9 @@ func (s *Server) routes() chi.Router {
 			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
+			// The run's end and wait (#569): owner or SUPER admin, clamped to the
+			// run's captured limits — handleSetRunEndAndWait.
+			r.Patch("/runs/{id}", s.handleSetRunEndAndWait)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
 			r.Post("/runs/{id}/kill", s.handleKillRun)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile

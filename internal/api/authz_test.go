@@ -518,6 +518,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// Moving a run's end keeps a sandbox and its credentials alive: a write,
+	// so not the security tier's inspect-or-stop.
+	"PATCH /api/v1/runs/{id}":                 {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/kill":             {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
@@ -1088,9 +1091,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// catches a route that silently leaves classOwner.
 		// 17 since F287 moved GET /workspaces/{id}/env-as-code here from
 		// classMember (its emitted files are the operator's authored
-		// environment, and its write twin was already operatorOnly).
-		if probed != 17 {
-			t.Errorf("probed %d classOwner routes, want 17 — a route that left classOwner takes its tier "+
+		// environment, and its write twin was already operatorOnly); 18 since
+		// #569 added PATCH /runs/{id}.
+		if probed != 18 {
+			t.Errorf("probed %d classOwner routes, want 18 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

@@ -57,6 +57,18 @@ func (s *leaseStore) MarkRunEndingSoon(_ context.Context, _ uuid.UUID, endsAt ti
 	return true, nil
 }
 
+func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.run.EndsAt
+	sameEnd := (fromEnd == nil && cur == nil) || (fromEnd != nil && cur != nil && fromEnd.Equal(*cur))
+	if !sameEnd || fromWait != s.run.WaitBudgetSec || s.run.LostAt != nil || s.state.IsTerminal() {
+		return false, nil
+	}
+	s.run.EndsAt, s.run.WaitBudgetSec = toEnd, toWait
+	return true, nil
+}
+
 func (s *leaseStore) setEnd(endsAt time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
