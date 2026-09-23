@@ -135,8 +135,6 @@ const HOLD_TIMEOUT_MS = 30_000;
 // number instead of two independently-maintained 240_000s that could drift.
 export const ADO_HOLD_WINDOW_MS = 240_000;
 
-// internal/egress/proxy/approvals.go's maxHoldTimeout — the proxy's own
-// absolute ceiling on push_rules.hold_seconds (any larger configured value is
 // clamped to it server-side). Used as isHeld's push_content window; exported
 // so push-content-card.tsx's own held-vs-expired timer can schedule its
 // re-render off the SAME number isHeld uses — two independently-typed

@@ -27,9 +27,10 @@
 // scope, the same direct-decide shape the ADO card's own onApprove/onDeny
 // take, and for the same reason: the frozen mock (packet 7) draws this
 // card's own control, not the generic reason dialog.
+import * as React from "react";
 import { Check, Loader2, X } from "lucide-react";
 import type { AgentRun, ApprovalRequest } from "../../lib/types";
-import { isTerminalRunState, type PushContentScope } from "../../lib/types";
+import { isHeld, isTerminalRunState, PUSH_HOLD_CEILING_MS, type PushContentScope } from "../../lib/types";
 import { relativeTime } from "../../lib/format";
 import { PUSH } from "./copy/push";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON } from "./copy";
@@ -65,6 +66,29 @@ export function PushContentCard({
   const runEnded = !!run && isTerminalRunState(run.state);
   const shown = scope.paths ?? [];
   const moreCount = Math.max(0, (scope.paths_total ?? shown.length) - shown.length);
+
+  // Review finding 2 — the proxy's own hold is BOUNDED (isHeld's own
+  // push_content doc, lib/types/approvals.ts): HELD_NOTE ("lets it through
+  // now") is only true while it is, so the card has to flip to HELD_EXPIRED
+  // on its own once the window passes, the same live-timer shape
+  // ado-capability-card.tsx's stillHeld/REQ_HELD_EXPIRED takes — a poll tick
+  // eventually catches it too, but a member sitting on this card between
+  // ticks must not keep reading a promise that already lapsed.
+  //
+  // No caller hands this card the run's own push_rules.hold_seconds (no
+  // client surface reads a resolved policy — same gap isHeld's own doc
+  // names), so the timer schedules off PUSH_HOLD_CEILING_MS, the same
+  // conservative 600s default isHeld(item) falls back to absent one.
+  const [, forceRerenderAtWindowEnd] = React.useReducer((n: number) => n + 1, 0);
+  React.useEffect(() => {
+    const requestedAt = Date.parse(item.requested_at);
+    if (Number.isNaN(requestedAt)) return; // isHeld already fails toward "held" — nothing to flip to
+    const msLeft = PUSH_HOLD_CEILING_MS - (Date.now() - requestedAt);
+    if (msLeft <= 0) return; // already past the window
+    const id = setTimeout(forceRerenderAtWindowEnd, msLeft);
+    return () => clearTimeout(id);
+  }, [item.requested_at]);
+  const held = isHeld(item);
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4" data-testid="push-content-card">
@@ -135,7 +159,9 @@ export function PushContentCard({
 
       {!runEnded && (
         <>
-          <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">{PUSH.HELD_NOTE}</p>
+          <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">
+            {held ? PUSH.HELD_NOTE : PUSH.HELD_EXPIRED}
+          </p>
           {securityOperator && <p className="mt-1 max-w-[72ch] text-xs text-muted-foreground">{PUSH.APPROVE_NOTE}</p>}
         </>
       )}
