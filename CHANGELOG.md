@@ -436,6 +436,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the whole batch on any mismatch, and accepts a genesis row as a recorded chain reset. Storage and the
   store seam only — no routes, CLI or forwarder yet.
 
+- **A run's autonomy level is now expressed agent-side, as generated managed settings.** A resolved
+  level used to constrain only what the API would accept; inside the sandbox the agent still ran with
+  whatever its harness defaulted to. `internal/agentpolicy` now maps `(agent, level)` to the managed
+  settings that agent is launched under — `/etc/claude-code/managed-settings.json` for `claude-code`,
+  nothing for any other agent, which has no equivalent mechanism and gets one honest line in its own
+  launcher log instead of invented rules it would not honour. `L0` and `L1` refuse the
+  permission-skipping and auto modes, pin the default permission mode, and honour only managed
+  hooks and managed permission rules. Each of those closes a way a checked-out repository — files the
+  agent can write — answered a tool call before the person at `L0` or the Wardyn approval gate at
+  `L1` was asked: a `PreToolUse` hook, a `permissions.allow` rule, or a `defaultMode: acceptEdits`.
+  `L2` sets `acceptEdits` and refuses auto mode, and deliberately does **not** refuse the
+  permission-skipping mode: it is the rung that permits an unattended run, and that launcher branch
+  needs the flag. The unrestricted level, and a run no rubric bound, get no file at all. Every key is byte-for-byte what
+  was exercised against the Claude Code version this tree pins (`CLAUDE_CODE_VERSION=2.1.231`,
+  `deploy/images/claude-code/Dockerfile`), with the verified documents kept as golden files, and the
+  checks must be re-run on every version bump. The level rides the sandbox as
+  `WARDYN_AUTONOMY_LEVEL`, and the document is delivered root-owned at
+  `/etc/claude-code/managed-settings.json` through the runner's managed-files contract. A new
+  `run.agent_policy` audit row records which document was generated for which run and whether it was
+  `delivered`, written once the agent's container exists. On Docker, such a run fails with the
+  driver's reason as its hint when the image runs as root or leaves `/etc` writable, since either
+  would let the agent replace the file. A run whose runner's capabilities cannot be read fails rather
+  than launching without its managed settings.
+  **Known gap, unchanged by this:** a run launched with *"Let it use tools before I attach"* still
+  parks on Claude Code's own Bypass Permissions confirmation until a person attaches and answers it
+  (`threatmodel/THREAT-MODEL.md` §4.7). Whether ticking that box in the console counts as consent to
+  the CLI's own prompt is still an open owner decision, and these managed settings do not answer it.
 - **A run's autonomy level is now resolved once and enforced at launch and on Review.** With an
   `autonomy_rubric` on the assigned governance profile, a run's posture — egress reach (`open` with
   allow-all or any allowlisted host beyond the safe baseline, `reviewed` when first-use approval
@@ -762,6 +789,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Known gaps
 
+- **A runner without managed-file delivery runs a gated claude-code run without its managed
+  settings.** When the runner does not advertise `Capabilities.ManagedFiles`, an `L0`–`L2`
+  claude-code run is not refused: it launches under its CLI-flag levers alone, gets no file, and its
+  `run.agent_policy` row records `delivered:false` with the reason, and the create response carries a
+  warning saying so. Handing that runner the file anyway would place a ceiling the agent could
+  rewrite.
+- **On the exec-less krun runtime, a run's managed settings are placed but not vouched for.** libkrun
+  runs the guest as root and does not apply the image's `USER`, while the file's immutability depends
+  on the agent not being root, and this is not yet verified on a krun host. By ruling, such a run
+  still gets the file, but its `run.agent_policy` row records `delivered:false` with the reason
+  "unverified on this runtime: libkrun may run the guest as root", and the create response carries the
+  same warning as any undelivered run.
 - **An AWS SSO account/role pin does not invalidate a capture already in flight.** A roster edit
   made while a sign-in is running cannot re-point it — the capture binds to the pin as it read at
   launch, never the live roster. Still open at 0.8.
