@@ -183,8 +183,10 @@ func (s PG) ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAs
 	return collect(ctx, s.Pool, "list", "governance assignments", q, nil, scanGovernanceAssignment)
 }
 
-// governanceTierOrder ranks the three subject tiers MOST SPECIFIC FIRST —
-// user > group > all. Written once, as SQL, and spliced into BOTH the resolver
+// governanceTierOrder ranks the four subject tiers MOST SPECIFIC FIRST —
+// user > group > user_type > all. A person's type sits below their groups so
+// a group assignment overrides the type's profile, and above `all` so a type
+// with a profile binds everyone of that type. Written once, as SQL, and spliced into BOTH the resolver
 // and the console listing so the two can never disagree about what "most
 // specific" means.
 //
@@ -193,7 +195,7 @@ func (s PG) ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAs
 // governance_profiles has no subject_type column (migration 0052) — the only
 // other table in that JOIN. A migration that added one would make this
 // ambiguous, and Postgres would say so loudly rather than silently re-rank.
-const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END`
+const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 WHEN 'user_type' THEN 2 ELSE 3 END`
 
 // ResolveGovernanceProfile returns THE ONE profile that applies to a caller, or
 // ErrNotFound when no assignment matches (which the caller reads as "fall
@@ -204,9 +206,10 @@ const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' T
 // second implementation in Go for a caller to skip, mis-order, or forget.
 // Ranked, in order:
 //
-//  1. tier — user > group > all. An assignment is one admin explicitly naming
-//     one principal, so the more specific naming wins outright; no priority in
-//     the group tier can beat a user-tier row.
+//  1. tier — user > group > user_type > all. An assignment is one admin
+//     explicitly naming one principal, so the more specific naming wins
+//     outright; no priority in the group tier can beat a user-tier row. A
+//     person holds one type, so the type tier matches at most one row.
 //
 //  2. within the user tier, a sub-keyed match beats an email-keyed one.
 //     capabilitySubjects returns up to TWO user subjects (lowercased sub, then
@@ -247,7 +250,9 @@ const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' T
 // `x = ANY(NULL)` is NULL rather than false. It fails closed either way, but a
 // predicate whose behavior depends on a driver detail is not one to leave
 // standing at an authorization boundary.
-func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+//
+// userType is the caller's one type id; "" matches no row.
+func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if userSubjects == nil {
 		userSubjects = []string{}
 	}
@@ -260,6 +265,7 @@ func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups [
 		WHERE a.subject_type = 'all'
 		   OR (a.subject_type = 'user'  AND a.subject = ANY($1::text[]))
 		   OR (a.subject_type = 'group' AND a.subject = ANY($2::text[]))
+		   OR (a.subject_type = 'user_type' AND a.subject = $3)
 		ORDER BY
 			` + governanceTierOrder + `,
 			CASE a.subject_type WHEN 'user'
@@ -270,7 +276,7 @@ func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups [
 			a.subject ASC
 		LIMIT 1`
 	var tier string
-	p, err := scanGovernanceProfileInto(s.Pool.QueryRow(ctx, q, userSubjects, groups), &tier)
+	p, err := scanGovernanceProfileInto(s.Pool.QueryRow(ctx, q, userSubjects, groups, userType), &tier)
 	if err != nil {
 		return nil, "", err
 	}

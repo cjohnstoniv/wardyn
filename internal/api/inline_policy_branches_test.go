@@ -36,7 +36,7 @@ func (s *memberBoundStore) GetSiteConfig(context.Context) (types.SiteConfig, err
 	return s.site, nil
 }
 
-func (s *memberBoundStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *memberBoundStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return s.profile, types.CapabilitySubjectUser, nil
 }
 func (s *memberBoundStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
@@ -55,7 +55,7 @@ func (s *memberBoundStore) ListGroupDenyGrants(context.Context, string) ([]types
 	return nil, nil
 }
 
-func (s *memberBoundStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *memberBoundStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *memberBoundStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {

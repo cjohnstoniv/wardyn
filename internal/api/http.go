@@ -171,12 +171,13 @@ func oidcExpiryFromContext(ctx context.Context) time.Time {
 	return t
 }
 
-// withHumanIdentity publishes the five keys that TOGETHER describe an
+// withHumanIdentity publishes the six keys that TOGETHER describe an
 // authenticated human: who they are (sub), the email an admin may have written
-// a grant against, the role isOperator gates on, the group snapshot the
-// capability resolver matches, and whether that snapshot is COMPLETE. It exists
-// so the SSO-session branch and the api-token branch of humanOrAdminAuth cannot
-// DRIFT: a sixth identity key added to one path and forgotten on the other is
+// a grant against, the role isOperator gates on, the user type a `user_type`
+// row names, the group snapshot the capability resolver matches, and whether
+// that snapshot is COMPLETE. It exists so the SSO-session branch and the
+// api-token branch of humanOrAdminAuth cannot DRIFT: a seventh identity key
+// added to one path and forgotten on the other is
 // exactly how a token would silently resolve to a different permission set than
 // the session that minted it — and for a DENY grant, silently resolving to "no
 // match" is a breach, not a degradation. Both branches call this and nothing
@@ -190,10 +191,11 @@ func oidcExpiryFromContext(ctx context.Context) time.Time {
 // Session EXPIRY is deliberately NOT here. It is a property of a cookie, not of
 // an identity: an api token has no session to expire, so the key stays zero for
 // one and is set by the SSO branch alone (see oidcExpiryCtxKey).
-func withHumanIdentity(ctx context.Context, sub, email, role string, groups []string, groupsTruncated bool) context.Context {
+func withHumanIdentity(ctx context.Context, sub, email, role, userType string, groups []string, groupsTruncated bool) context.Context {
 	ctx = withOIDCHuman(ctx, sub)
 	ctx = withOIDCEmail(ctx, email)
 	ctx = withOIDCRole(ctx, role)
+	ctx = withOIDCUserType(ctx, userType)
 	ctx = withOIDCGroupsTruncated(ctx, groupsTruncated)
 	return withOIDCGroups(ctx, groups)
 }
@@ -430,6 +432,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			ctx := withHumanIdentity(r.Context(), sub,
 				oidc.EmailFromContext(r.Context()),
 				oidc.RoleFromContext(r.Context()),
+				oidc.UserTypeFromContext(r.Context()),
 				oidc.GroupsFromContext(r.Context()),
 				oidc.GroupsTruncatedFromContext(r.Context()))
 			// The display name rides along for /me only — outside

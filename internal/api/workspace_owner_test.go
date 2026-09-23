@@ -53,11 +53,11 @@ func (s *ownerStore) GetCapabilityEnforcement(ctx context.Context) (map[string]b
 	return s.caps.GetCapabilityEnforcement(ctx)
 }
 
-func (s *ownerStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (s *ownerStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
 	if s.caps == nil {
-		return s.authzStore.ListCapabilityGrantsFor(ctx, users, groups)
+		return s.authzStore.ListCapabilityGrantsFor(ctx, users, groups, userType)
 	}
-	return s.caps.ListCapabilityGrantsFor(ctx, users, groups)
+	return s.caps.ListCapabilityGrantsFor(ctx, users, groups, userType)
 }
 
 func (s *ownerStore) ListGroupDenyGrants(ctx context.Context, capability string) ([]types.CapabilityGrant, error) {

@@ -181,7 +181,10 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// already refuses to shed. The cost is one re-mint, and only on a
 		// deployment that actually assigns profiles to groups — the resolver's
 		// refusal is itself gated on a group-tier row existing at all.
-		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.Groups,
+		//
+		// No user type: a token row carries none yet, so "" publishes here and
+		// callerSubjects reads it as the built-in type.
+		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, "", t.Groups,
 			t.GroupsTruncated == nil || *t.GroupsTruncated)
 		next.ServeHTTP(w, r.WithContext(withAPITokenID(ctx, t.ID)))
 	})

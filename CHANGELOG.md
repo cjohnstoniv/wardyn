@@ -78,6 +78,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A user type is a subject (#610).** Migration `0071_user_type_subject` lets a capability
+  grant, a governance assignment and a drive grant name `subject_type: "user_type"` with a type's
+  id. A grant on a type is one more subject beside user and group: an allow lets that type's
+  people in, and a deny is a wall no user or group allow lifts (a `security_admin` of that type
+  included). For the governance ceiling and drives the type is a tier: user > group > user type >
+  all. Writing a row against a type that doesn't exist is refused (`400`). A session whose type
+  was deleted after sign-in is refused `403` wherever a control names a type, with an
+  `authz.denied` row (reason `user_type_unknown`). API tokens carry no type yet and answer as
+  Standard user. The governance and drive previews take an optional `user_type`.
+
 - **User types: the table and its API (#607).** Migration `0069_user_types` adds the `user_types`
   table and seeds the built-in `standard` type ("Standard user"), which is editable and can never
   be removed. `GET`/`POST /user-types` and `PUT`/`DELETE /user-types/{id}` (admin or

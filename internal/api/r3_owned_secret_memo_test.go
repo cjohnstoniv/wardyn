@@ -23,7 +23,7 @@ type r3PlainStore struct {
 	store.Store
 }
 
-func (r3PlainStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (r3PlainStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", nil
 }
 func (r3PlainStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
@@ -33,7 +33,7 @@ func (r3PlainStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGra
 func (r3PlainStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (r3PlainStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (r3PlainStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (r3PlainStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {

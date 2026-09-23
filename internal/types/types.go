@@ -827,13 +827,19 @@ const (
 	// CapabilitySubjectAll is every signed-in human — the baseline for an IdP
 	// that emits no usable groups claim. Subject is "" for this type.
 	CapabilitySubjectAll CapabilitySubjectType = "all"
+	// CapabilitySubjectUserType is everyone of one user type, named by the
+	// type's id (UserType.ID). A person holds exactly one type, stamped at
+	// sign-in. For the governance ceiling and drives it is a tier between
+	// group and all; for capability grants it is one more subject, so a DENY
+	// written against a type is a wall no user or group allow lifts.
+	CapabilitySubjectUserType CapabilitySubjectType = "user_type"
 )
 
-// Valid reports whether t is one of the three subject types. Used to reject a
+// Valid reports whether t is one of the four subject types. Used to reject a
 // garbage value at the API write boundary, mirroring ApprovalScope.Valid.
 func (t CapabilitySubjectType) Valid() bool {
 	switch t {
-	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll:
+	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll, CapabilitySubjectUserType:
 		return true
 	default:
 		return false

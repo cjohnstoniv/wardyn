@@ -336,7 +336,8 @@ const (
 
 // CapabilitySubjectType values.
 const (
-	CapabilitySubjectUser  = types.CapabilitySubjectUser
-	CapabilitySubjectGroup = types.CapabilitySubjectGroup
-	CapabilitySubjectAll   = types.CapabilitySubjectAll
+	CapabilitySubjectUser     = types.CapabilitySubjectUser
+	CapabilitySubjectGroup    = types.CapabilitySubjectGroup
+	CapabilitySubjectAll      = types.CapabilitySubjectAll
+	CapabilitySubjectUserType = types.CapabilitySubjectUserType
 )

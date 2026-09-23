@@ -129,7 +129,7 @@ func TestPG_CapabilityGrants_ListForSubject(t *testing.T) {
 		t.Cleanup(func() { _ = st.DeleteCapabilityGrant(ctx, saved.ID) })
 	}
 
-	got, err := st.ListCapabilityGrantsFor(ctx, []string{"sub-alice", "alice@example.com"}, []string{"eng"})
+	got, err := st.ListCapabilityGrantsFor(ctx, []string{"sub-alice", "alice@example.com"}, []string{"eng"}, "")
 	if err != nil {
 		t.Fatalf("list for subject: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestPG_CapabilityGrants_ListForSubject(t *testing.T) {
 
 	// A caller with NO groups and no user match still sees the `all` row and
 	// nothing else — the IdP-without-groups baseline.
-	bare, err := st.ListCapabilityGrantsFor(ctx, nil, nil)
+	bare, err := st.ListCapabilityGrantsFor(ctx, nil, nil, "")
 	if err != nil {
 		t.Fatalf("list for bare subject: %v", err)
 	}

@@ -197,6 +197,13 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 		}
 		g.Subject = subject
+	} else if g.SubjectType == types.CapabilitySubjectUserType {
+		// A type id is matched verbatim against the caller's stamped type, so
+		// it is never folded: only the slug shape the user_types table holds
+		// can ever match. Existence is the handler's check (a store read).
+		if !oidc.UserTypeIDWellFormed(g.Subject) {
+			return fmt.Errorf("subject: %q is not a user type id", g.Subject)
+		}
 	} else {
 		// A USER subject gets canonicalUserSubject, not a bare ToLower. The
 		// fold is UNICODE: U+212A folds to ASCII 'k' and U+0130 to ASCII 'i',
@@ -328,6 +335,9 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid grant: "+err.Error())
 		return
 	}
+	if !s.userTypeSubjectExists(w, r, g.SubjectType, g.Subject) {
+		return
+	}
 	// A fresh candidate id: UpsertCapabilityGrant returns the EXISTING row's id
 	// on a natural-key conflict, never this one — comparing the two is how the
 	// handler tells created from updated without a separate existence read.
@@ -444,8 +454,12 @@ type meCapabilitiesResponse struct {
 // session with no group claim at all must read as "can't tell yet", not as
 // silently holding no group grants.
 func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
-	users, groups, stale := capabilitySubjects(r.Context())
-	grants, err := s.cfg.Store.ListCapabilityGrantsFor(r.Context(), users, groups)
+	subj, err := s.callerSubjects(r.Context())
+	if err != nil {
+		writeServerError(w, r, "resolve capability subjects", err)
+		return
+	}
+	grants, err := s.cfg.Store.ListCapabilityGrantsFor(r.Context(), subj.users, subj.groups, subj.userType)
 	if err != nil {
 		writeServerError(w, r, "list capability grants", err)
 		return
@@ -465,7 +479,7 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meCapabilitiesResponse{
 		Grants:              grants,
 		Enforcement:         enf,
-		SessionGroups:       groups,
-		GroupsSnapshotStale: stale,
+		SessionGroups:       subj.groups,
+		GroupsSnapshotStale: subj.stale,
 	})
 }

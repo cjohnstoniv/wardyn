@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 )
@@ -29,7 +30,15 @@ import (
 // The caller keeps writing its own msg rather than a generic one: "get run"
 // and "list approvals" failing are different incidents to the human reading
 // the console, and the action name discloses nothing the route did not.
+//
+// One resolver failure is not a 5xx: errUserTypeUnknown is a refusal about the
+// caller, raised through the same (bool, error) seams a store failure takes, so
+// it is answered 403 with its sentence here rather than at every seam.
 func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err error) {
+	if errors.Is(err, errUserTypeUnknown) {
+		writeError(w, http.StatusForbidden, userTypeUnknownMsg)
+		return
+	}
 	slog.ErrorContext(r.Context(), "api: "+msg,
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),

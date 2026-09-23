@@ -105,7 +105,9 @@ func (s PG) ListGroupDenyGrants(ctx context.Context, capability string) ([]types
 // ListCapabilityGrantsFor returns every grant that could apply to one caller:
 // the `all` rows, plus `user` rows naming any of users (the caller's lowercased
 // sub AND email — a grant on either hits), plus `group` rows naming any of
-// groups (the login-time claim snapshot).
+// groups (the login-time claim snapshot), plus `user_type` rows naming the
+// caller's one type. An empty userType matches no row: the write boundary
+// refuses an empty subject.
 //
 // Deliberately NOT filtered by capability: the resolver needs one kind and
 // GET /me/capabilities needs all four, and a deployment's grant list is small
@@ -117,7 +119,7 @@ func (s PG) ListGroupDenyGrants(ctx context.Context, capability string) ([]types
 // index; a process-local cache is the HA blocker OPERATIONS already names for
 // other state, and a stale permission cache is a security bug, not a slow page.
 // Add one only behind a shared invalidation channel.
-func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
 	// A nil Go slice binds as SQL NULL, and `x = ANY(NULL)` is NULL, not false —
 	// harmless here (it fails closed) but it makes the query's behavior depend on
 	// a driver detail. Normalize so the predicate is always a real empty array.
@@ -131,9 +133,10 @@ func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string)
 		WHERE subject_type = 'all'
 		   OR (subject_type = 'user'  AND subject = ANY($1::text[]))
 		   OR (subject_type = 'group' AND subject = ANY($2::text[]))
+		   OR (subject_type = 'user_type' AND subject = $3)
 		ORDER BY capability, subject_type, subject, value`
 	return collect(ctx, s.Pool, "list", "capability grants for subject", q,
-		[]any{users, groups}, scanCapabilityGrant)
+		[]any{users, groups, userType}, scanCapabilityGrant)
 }
 
 // GetCapabilityEnforcement returns the per-kind switch map. An ABSENT row means

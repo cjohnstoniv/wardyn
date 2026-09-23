@@ -1702,7 +1702,7 @@ func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGr
 func (s *authzStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (s *authzStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *authzStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *authzStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
@@ -1776,7 +1776,7 @@ func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) erro
 func (s *authzStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
 	return nil, nil
 }
-func (s *authzStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *authzStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
 func (s *authzStore) HasGroupTierAssignments(context.Context) (bool, error) {
@@ -1814,7 +1814,7 @@ func (s *authzStore) DeleteUserDriveGrant(context.Context, uuid.UUID) (types.Use
 func (s *authzStore) ListUserDriveGrants(context.Context) ([]types.UserDriveGrant, error) {
 	return nil, nil
 }
-func (s *authzStore) ResolveUserDrive(context.Context, []string, []string) (
+func (s *authzStore) ResolveUserDrive(context.Context, []string, []string, string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	return nil, nil, "", store.ErrNotFound
 }

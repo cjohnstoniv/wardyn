@@ -107,6 +107,8 @@ func driveUnavailableReason(err error) string {
 		return driveUnavailableUnknown
 	case errors.Is(err, errGroupsSnapshotStale):
 		return driveUnavailableGroups
+	case errors.Is(err, errUserTypeUnknown):
+		return driveUnavailableUserType
 	case errors.Is(err, errDriveUnmountable):
 		return driveUnavailableUnmountable
 	default:
@@ -126,14 +128,17 @@ func driveUnavailableReason(err error) string {
 // says 403 groups_snapshot_stale (sign in again) — showing the member the one
 // remedy that is not theirs.
 //
-// Two arms only, and deliberately not driveUnavailableReason's three: what
-// failed here is the CEILING, so "the allocation could not be read" is not one
-// of the answers. Everything that is not the stale snapshot is
+// Only the refusals about the caller get their own arm — the stale snapshot
+// and the unknown user type; what failed here is the CEILING, so "the
+// allocation could not be read" is not one of the answers. Everything else is
 // governance_unavailable — the token whose documented meaning is "nothing is
 // wrong with the allocation; what is unknown is permission".
 func ceilingUnavailableReason(err error) string {
 	if errors.Is(err, errGroupsSnapshotStale) {
 		return driveUnavailableGroups
+	}
+	if errors.Is(err, errUserTypeUnknown) {
+		return driveUnavailableUserType
 	}
 	return driveUnavailableGovernance
 }
@@ -145,6 +150,9 @@ const (
 	// driveUnavailableGroups: the caller's group snapshot cannot answer the
 	// group tier, so an allocation may exist and be invisible. 403 at launch.
 	driveUnavailableGroups = "groups_snapshot_stale"
+	// driveUnavailableUserType: the caller's stamped user type no longer
+	// exists, so nothing a type names can be resolved. 403 at launch.
+	driveUnavailableUserType = "user_type_unknown"
 	// driveUnavailableUnmountable: an allocation EXISTS and cannot be mounted —
 	// a home name that cannot name a directory, a share that is not there. 422
 	// at launch, and the one state whose remedy is an admin's, not the member's.
@@ -167,6 +175,8 @@ func writeDriveError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
 	case errors.Is(err, errGroupsSnapshotStale):
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
+	case errors.Is(err, errUserTypeUnknown):
+		writeError(w, http.StatusForbidden, userTypeUnknownMsg)
 	case errors.Is(err, errDriveUnmountable):
 		// The sentinel's own name is stripped: what is left is the frozen
 		// MEMBER sentence (docs/design/user-drives-prompt.md's DRIVE_MEMBER
@@ -212,8 +222,11 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 	if s.cfg.Store == nil {
 		return nil, nil
 	}
-	users, groups, stale := capabilitySubjects(ctx)
-	if len(users) == 0 {
+	subj, err := s.callerSubjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(subj.users) == 0 {
 		return nil, nil
 	}
 	ceiling, err := s.driveSizeCeilingFor(ctx, profileMaxDriveMiB)
@@ -225,10 +238,10 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 	// in enough groups holds one that is present, non-nil and INCOMPLETE — and
 	// the group whose grant carries their drive is exactly as likely to be
 	// missing as any other.
-	if stale || oidcGroupsTruncatedFromContext(ctx) {
-		return s.driveWithUnusableGroups(ctx, users, ceiling)
+	if subj.stale || oidcGroupsTruncatedFromContext(ctx) {
+		return s.driveWithUnusableGroups(ctx, subj.users, subj.userType, ceiling)
 	}
-	return s.resolveUserDriveFor(ctx, users, groups, ceiling)
+	return s.resolveUserDriveFor(ctx, subj.users, subj.groups, subj.userType, ceiling)
 }
 
 // driveWithUnusableGroups is step 3: the caller's group identity cannot be
@@ -255,8 +268,8 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 // HasGroupTierDriveGrants stays a SEPARATE read, deliberately: the case that
 // most needs it is the one where the resolver matched NOTHING, and a zero-row
 // result carries no columns to have piggybacked the answer on.
-func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
-	d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, nil)
+func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, userType string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
+	d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, nil, userType)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("api: resolve user drive: %w", err)
 	}
@@ -360,11 +373,11 @@ func isDisplayRead(ctx context.Context) bool {
 // The nil-store guard is repeated here rather than left to resolveUserDrive
 // because THIS is the door the preview handler enters through, and the ~30
 // nil-store doubles in this package must not start panicking on it.
-func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
+func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string, userType string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	if s.cfg.Store == nil {
 		return nil, nil
 	}
-	d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, groups)
+	d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, groups, userType)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("api: resolve user drive: %w", err)
 	}

@@ -309,7 +309,7 @@ type ceilingRecordStore struct {
 	profile *types.GovernanceProfile
 }
 
-func (s ceilingRecordStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s ceilingRecordStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return s.profile, types.CapabilitySubjectUser, nil
 }
 

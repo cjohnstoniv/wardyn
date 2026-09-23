@@ -311,8 +311,11 @@ func (s *Server) capGranted(ctx context.Context, kind, value string) (bool, erro
 // catch it. So when the snapshot is unanswerable and a group deny row COULD
 // cover this value, the scan reports the deny it cannot rule out.
 func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow bool, err error) {
-	users, groups, stale := capabilitySubjects(ctx)
-	grants, err := s.cfg.Store.ListCapabilityGrantsFor(ctx, users, groups)
+	subj, err := s.callerSubjects(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	grants, err := s.cfg.Store.ListCapabilityGrantsFor(ctx, subj.users, subj.groups, subj.userType)
 	if err != nil {
 		return false, false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 	}
@@ -330,7 +333,7 @@ func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow b
 			allow = true
 		}
 	}
-	if stale {
+	if subj.stale {
 		unresolved, uerr := s.capUnresolvableGroupDeny(ctx, kind, value)
 		if uerr != nil {
 			return false, false, uerr
@@ -526,8 +529,7 @@ type capBatch struct {
 	operator bool
 	noStore  bool
 
-	users, groups []string
-	stale         bool
+	subj callerSubjects
 
 	loaded bool
 	grants []types.CapabilityGrant
@@ -551,17 +553,23 @@ func (s *Server) newCapBatch(ctx context.Context) *capBatch {
 	b := &capBatch{s: s, noStore: s.cfg.Store == nil}
 	if !b.noStore {
 		b.operator = s.isOperator(ctx)
-		b.users, b.groups, b.stale = capabilitySubjects(ctx)
 	}
 	return b
 }
 
-// load performs the two per-request reads, once.
+// load performs the per-request reads, once: the caller's subjects (an unknown
+// user type fails the whole batch, never resolving it without the type), their
+// grants and the enforcement map.
 func (b *capBatch) load(ctx context.Context) error {
 	if b.loaded {
 		return nil
 	}
-	grants, err := b.s.cfg.Store.ListCapabilityGrantsFor(ctx, b.users, b.groups)
+	subj, err := b.s.callerSubjects(ctx)
+	if err != nil {
+		return err
+	}
+	b.subj = subj
+	grants, err := b.s.cfg.Store.ListCapabilityGrantsFor(ctx, b.subj.users, b.subj.groups, b.subj.userType)
 	if err != nil {
 		return fmt.Errorf("api: resolve capability grants: %w", err)
 	}
@@ -611,7 +619,7 @@ func (b *capBatch) allowed(ctx context.Context, kind, value string) (bool, error
 	// Gating this on !allow would let a value the caller holds a user-tier allow
 	// for slip past a group deny nobody could evaluate — a widening, in the one
 	// direction this resolver exists to refuse.
-	if b.stale {
+	if b.subj.stale {
 		unresolved, err := b.unresolvableGroupDeny(ctx, kind, value)
 		if err != nil {
 			return false, err

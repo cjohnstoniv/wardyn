@@ -810,6 +810,9 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		}
 		g.Subject = subject
 	}
+	if !s.userTypeSubjectExists(w, r, g.SubjectType, g.Subject) {
+		return
+	}
 	// The backend-aware home check, run at the moment the admin types it rather
 	// than at every launch afterwards.
 	//

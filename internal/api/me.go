@@ -192,9 +192,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// that could not answer. userDriveDeniedByProfile now returns that
 		// reason instead of a bool, so the token survives from whichever
 		// resolver actually met it.
-		if unavailable == driveUnavailableGroups || doorReason == driveUnavailableGroups {
+		// The unknown user type survives the same way, for the same reason: its
+		// remedy (another type, then sign in again) is not "wait for an operator".
+		switch {
+		case unavailable == driveUnavailableGroups || doorReason == driveUnavailableGroups:
 			unavailable = driveUnavailableGroups
-		} else {
+		case unavailable == driveUnavailableUserType || doorReason == driveUnavailableUserType:
+			unavailable = driveUnavailableUserType
+		default:
 			unavailable = driveUnavailableGovernance
 		}
 	}

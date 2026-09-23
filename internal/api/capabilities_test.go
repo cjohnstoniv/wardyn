@@ -38,7 +38,7 @@ import (
 // ⇒ Config.DefaultPolicy" is exactly what that deployment does.
 type noGovernanceStore struct{ store.Store }
 
-func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
 
@@ -71,11 +71,16 @@ func (*capStore) ListUserTypes(context.Context) ([]types.UserType, error) {
 	return seededUserTypes, nil
 }
 
-func (*capStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+func (s *capStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	for _, t := range s.userTypes {
+		if t.ID == id {
+			return t, nil
+		}
+	}
 	return seededUserType(id)
 }
 
-func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string) (
+func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string, string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	return nil, nil, "", store.ErrNotFound
 }
@@ -114,7 +119,7 @@ func (noGovernanceStore) LatestAuditEventByAction(context.Context, string) (type
 // double that is non-nil but incomplete must answer the SAME way rather than
 // panic on the call capSeamAllowed's non-nil branch (capAllowed -> capScan)
 // then makes (#338).
-func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 
@@ -205,9 +210,13 @@ type capStore struct {
 	// this knob is what a test for it needs.
 	driveErr             error
 	driveHasGroupTierErr error
+
+	// userTypes are the custom types GetUserType finds beside the seeded
+	// built-in one; a stamped type absent from both is a deleted type.
+	userTypes []types.UserType
 }
 
-func (s *capStore) ResolveUserDrive(context.Context, []string, []string) (
+func (s *capStore) ResolveUserDrive(context.Context, []string, []string, string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	if s.driveErr != nil {
 		return nil, nil, "", s.driveErr
@@ -234,7 +243,7 @@ func (s *capStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.site, nil
 }
 
-func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string, _ string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.govErr != nil {
 		return nil, "", s.govErr
 	}
@@ -283,7 +292,7 @@ func (s *capStore) ListGroupDenyGrants(_ context.Context, capability string) ([]
 	return out, nil
 }
 
-func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -298,6 +307,10 @@ func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []st
 			}
 		case types.CapabilitySubjectGroup:
 			if slices.Contains(groups, g.Subject) {
+				out = append(out, g)
+			}
+		case types.CapabilitySubjectUserType:
+			if userType != "" && g.Subject == userType {
 				out = append(out, g)
 			}
 		}

@@ -215,7 +215,8 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	}
 	// (1) The door, for the claims that were TYPED — the launch path's second
 	// gate, in the launch path's own words.
-	previewed, open := s.drivePreviewDoorIsOpen(w, r, users, groups)
+	userType := strings.TrimSpace(req.UserType)
+	previewed, open := s.drivePreviewDoorIsOpen(w, r, users, groups, userType)
 	if !open {
 		return
 	}
@@ -224,7 +225,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	ceiling.ProfileMiB = previewed.Limits.MaxDriveSizeMiB
 	// (2) The resolver, taking the unusable-groups arm when the request cannot
 	// answer the group tier at all.
-	resolved, err := s.previewResolveUserDrive(r.Context(), users, groups, ceiling)
+	resolved, err := s.previewResolveUserDrive(r.Context(), users, groups, userType, ceiling)
 	if err != nil {
 		writeDriveError(w, err)
 		return
@@ -313,7 +314,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 // (driveSizeCeiling). Discarding it here and resolving a second time is how the
 // preview would come to print a number no launch agrees with — which is the one
 // thing this endpoint exists not to do.
-func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, users, groups []string) (governanceCeiling, bool) {
+func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, users, groups []string, userType string) (governanceCeiling, bool) {
 	// A build with no store holds no profiles, so there is no door — the same
 	// short-circuit resolveUserDrive's step 1 makes, and it has to be here too
 	// because this gate runs BEFORE the resolver.
@@ -323,9 +324,9 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
 	ceiling, err := deployment, error(nil)
 	if len(groups) == 0 {
-		ceiling, err = s.ceilingWithUnusableGroups(r.Context(), users, deployment)
+		ceiling, err = s.ceilingWithUnusableGroups(r.Context(), users, userType, deployment)
 	} else {
-		p, _, rerr := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups)
+		p, _, rerr := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups, userType)
 		ceiling, err = s.ceilingFromProfile(p, rerr, deployment)
 	}
 	if err != nil {
@@ -357,7 +358,7 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 // to a request that cannot tell the two apart, and the console never sends it
 // (previewClaims splits one box into both lists, so an admin who typed anything
 // has typed groups too).
-func (s *Server) previewResolveUserDrive(ctx context.Context, users, groups []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
+func (s *Server) previewResolveUserDrive(ctx context.Context, users, groups []string, userType string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	// The nil-store guard resolveUserDriveFor already keeps, repeated for the
 	// arm below it: driveWithUnusableGroups is written for the enforcement path,
 	// where resolveUserDrive has already short-circuited a store-less build, and
@@ -367,7 +368,7 @@ func (s *Server) previewResolveUserDrive(ctx context.Context, users, groups []st
 		return nil, nil
 	}
 	if len(groups) == 0 {
-		return s.driveWithUnusableGroups(ctx, users, ceiling)
+		return s.driveWithUnusableGroups(ctx, users, userType, ceiling)
 	}
-	return s.resolveUserDriveFor(ctx, users, groups, ceiling)
+	return s.resolveUserDriveFor(ctx, users, groups, userType, ceiling)
 }

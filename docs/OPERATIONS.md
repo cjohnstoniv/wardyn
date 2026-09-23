@@ -1745,7 +1745,21 @@ the grants (or the targeted denies) first, then flip the switch.
 a grant shouldn't have to guess which the IdP made authoritative; a deny on either
 identity hits), `group` (the login-time union of the ID token's `roles` and
 `groups` claims, lowercased and deduped — so Entra App Roles are grantable for
-free), or `all` (every signed-in human).
+free), `user_type` (everyone of one user type, named by the type's id — 0.8), or
+`all` (every signed-in human).
+
+A person holds exactly one user type, stamped at sign-in, so a `user_type` row is
+one more subject in the union above: a type **allow** is one more way in, and a
+type **deny** is a wall no user or group allow lifts for anyone of that type. A
+security admin of that type is bound by it like anyone else; only a super admin
+is exempt. The type must exist when the row is written (`400` otherwise), and a
+type cannot be deleted while any grant, governance assignment or drive grant
+names it. For the governance ceiling and user drives the type is a **tier**,
+not a union: `user > group > user_type > all`, so a group assignment overrides
+the type's profile and the type's profile overrides `all`. An API token carries
+no type yet and answers as the built-in `standard` type. A session whose type
+was deleted after sign-in is refused (`403`, `user_type_unknown`) wherever a
+control names a type, never resolved without it.
 
 A `group` subject must be **printable ASCII**, and the write is refused with that
 reason when it is not — the same rule a console role mapping already gets. The
@@ -2170,6 +2184,7 @@ admin walking the member path, not an incident.
 | `harness_login_mechanism_principal` | 0.7.3: `POST /setup/harness-login` under a `per_user` row, reached by the shared admin bearer token WITH OIDC CONFIGURED (`refuseHarnessLoginMechanismPrincipal`) — every capture made with that token would land in one namespace and overwrite the last person's session; a real console sign-in or `wdn_` token is reachable instead. Target `setup.harness_login`. Does not fire with no OIDC configured, where the admin token is the only working capture path — see "AWS SSO per person" | ⛔ `422` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
+| `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Not written for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
 whose whole allowlist is ungranted gets a run with no member-authored egress, not
