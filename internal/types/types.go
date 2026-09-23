@@ -250,7 +250,7 @@ type AgentRun struct {
 	EndsAt *time.Time `json:"ends_at"`
 	// WaitBudgetSec is how long a request this run raises stays open for a
 	// decision. Captured at create, already folded under the deployment's
-	// approval expiry; 0 (every run created before migration 0069) means the
+	// approval expiry; 0 (every run created before migration 0072) means the
 	// deployment's approval expiry alone.
 	WaitBudgetSec int `json:"wait_budget_sec,omitempty"`
 	// RunLimits are the owner's profile run limits as they stood at create, and
@@ -642,7 +642,7 @@ type ApprovalRequest struct {
 	// min(requested_at + the run's WaitBudgetSec, the run's EndsAt). Computed
 	// on read from the run row, never stored or accepted from a caller, so a
 	// change to the run's end or wait reaches its open requests at once. Nil
-	// when the run has neither (a run created before migration 0069); the
+	// when the run has neither (a run created before migration 0072); the
 	// deployment's approval expiry still applies to every row.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }

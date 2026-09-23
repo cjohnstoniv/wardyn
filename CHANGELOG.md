@@ -65,7 +65,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin's run included; only a super admin's is bounded by the deployment alone. Approvals carry
   `expires_at` = min(requested_at + the run's wait, the run's end), and the approval sweep expires a
   request at that time as well as at the deployment cutoff. Migration
-  `0069_agent_runs_run_limits` adds the four `agent_runs` columns; zero limits keep today's
+  `0072_agent_runs_run_limits` adds the four `agent_runs` columns; zero limits keep today's
   behaviour. Nothing yet stops a run at its end or lets a user change it (#568, #569).
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
