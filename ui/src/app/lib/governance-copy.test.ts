@@ -166,6 +166,7 @@ const rendered: Record<string, string> = {
   "WARN_STORED_CLAMPED(policy, name)": MEMBER.WARN_STORED_CLAMPED("{policy}", "{name}"),
   "WARN_WORKSPACE_DENIED(host, name)": MEMBER.WARN_WORKSPACE_DENIED("{host}", "{name}"),
   "WARN_GRANT_DROPPED(name, kind, reason)": MEMBER.WARN_GRANT_DROPPED("{name}", "{kind}", "{reason}"),
+  "WARN_PUSH_RULES_DROPPED(name)": MEMBER.WARN_PUSH_RULES_DROPPED("{name}"),
   DENIED_STALE_GROUPS: MEMBER.DENIED_STALE_GROUPS,
   "DENIED_SEEDED_IMAGE(image)": MEMBER.DENIED_SEEDED_IMAGE("{image}"),
   DENIED_WORKSPACE_LLM_CRED: MEMBER.DENIED_WORKSPACE_LLM_CRED,
@@ -186,8 +187,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
-  it("finds all 96 frozen keys in the doc", () => {
-    expect(doc.size).toBe(96);
+  it("finds all 97 frozen keys in the doc", () => {
+    expect(doc.size).toBe(97);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
