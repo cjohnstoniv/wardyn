@@ -17,8 +17,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `WARDYN_APPROVAL_EXPIRY_AFTER` (24h default).** An operator back from lunch saw the group chip
   say "1 was held", the card swap Review for Open, and the cockpit drop "sandbox held" — for a run
   whose agent was still frozen waiting for exactly that decision (#509). A PENDING row is now live
-  until the server's own state says otherwise; "was held" is reserved for a row the server has
-  actually moved to EXPIRED.
+  until the server's own state says otherwise; a hold the server has expired or cancelled simply
+  stops showing as held.
 
 ### Added
 

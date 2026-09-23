@@ -1163,17 +1163,17 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
   // #509 — a PENDING tool_call/credential_reauth row is live until the
   // SERVER says otherwise: the sandbox stays parked on it for up to
   // WARDYN_APPROVAL_EXPIRY_AFTER (24h default), so the board must never call
-  // it dead sooner. 25 hours — past both the old 60-minute client ceiling
-  // AND the server's own 24h default — still reads Review/held on the board
+  // it dead sooner. 23 hours — far past the old 60-minute client ceiling
+  // and just inside the server's own 24h expiry — still reads Review/held on the board
   // card, never "Open"/"was held".
-  test("a tool_call PENDING for 25 hours still offers Review and states 'sandbox held' — RunStateBadge unchanged", async ({
+  test("a tool_call PENDING for 23 hours still offers Review and states 'sandbox held' — RunStateBadge unchanged", async ({
     page,
   }) => {
     const solo = await createGroupRun(page, "e2e long-held solo", "long-held solo run");
     sql(`UPDATE agent_runs SET state = 'WAITING_FOR_CONFIRMATION' WHERE id = '${solo}'`);
     sql(
       `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
-       ('${randomUUID()}','${solo}','tool_call','{"tool":"Bash","cmd":"rm -rf build"}'::jsonb,'PENDING',now() - interval '25 hours')`,
+       ('${randomUUID()}','${solo}','tool_call','{"tool":"Bash","cmd":"rm -rf build"}'::jsonb,'PENDING',now() - interval '23 hours')`,
     );
 
     try {
@@ -1197,14 +1197,14 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
   // (canDecideApproval refuses everyone), but it must stay pinned to the
   // Needs-you lane and keep stating the live "AWS sign-in" sentence — never
   // demoted to a "was held" claim — at the same 25-hour age.
-  test("a credential_reauth PENDING for 25 hours stays pinned to Needs-you and keeps stating the live AWS sign-in wait", async ({
+  test("a credential_reauth PENDING for 23 hours stays pinned to Needs-you and keeps stating the live AWS sign-in wait", async ({
     page,
   }) => {
     const solo = await createGroupRun(page, "e2e long-held reauth", "long-held reauth run");
     sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${solo}'`);
     sql(
       `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
-       ('${randomUUID()}','${solo}','credential_reauth','{}'::jsonb,'PENDING',now() - interval '25 hours')`,
+       ('${randomUUID()}','${solo}','credential_reauth','{}'::jsonb,'PENDING',now() - interval '23 hours')`,
     );
 
     try {

@@ -234,16 +234,3 @@ export function isHeld(a: ApprovalRequest): boolean {
   return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
 }
 
-// A tool_call/credential_reauth row whose hold has genuinely ended —
-// distinguishes "was held, now over" from "never held at all" for a caller
-// that has to say something different for the two (the runs board's group
-// chip and card, #160). #509 — "ended" means the server actually moved the
-// row to EXPIRED (approval.ExpireStale), never a client guess from elapsed
-// time: that guess is exactly what let this state fire on a row the server
-// still considered live. Egress wait_for_review is not this arm: past its
-// own HOLD_TIMEOUT_MS it is a passive pending, not a stale hold, because
-// nothing ever promised the connection would still be parked.
-export function isStaleHold(a: ApprovalRequest): boolean {
-  if (a.kind !== "tool_call" && a.kind !== "credential_reauth") return false;
-  return a.state === "EXPIRED";
-}
