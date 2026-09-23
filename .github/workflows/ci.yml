@@ -31,6 +31,13 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history with tags: the CHANGELOG freeze guard
+          # (cmd/wardynd/changelog_frozen_test.go) compares each released
+          # section against its tag or correcting commit, and skips any it
+          # cannot resolve.
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
