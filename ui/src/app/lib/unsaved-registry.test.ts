@@ -33,6 +33,23 @@ describe("unsaved-registry", () => {
     unregister();
   });
 
+  // #460 review — the unregister is IDENTITY-checked: a STALE unregister
+  // (closed over the FIRST registration, called after a second one already
+  // overwrote it under the same id) must never delete the newer entry. This
+  // is the shape a React effect re-running produces — the old cleanup fires
+  // after the new effect has already registered.
+  it("a stale unregister from an overwritten registration never deletes the newer one", () => {
+    const staleUnregister = registerUnsaved("dup2", () => "first");
+    const currentUnregister = registerUnsaved("dup2", () => "second");
+    expect(unsavedSnapshot()).toBe("second");
+
+    staleUnregister(); // the FIRST registration's own unregister, called late
+    expect(unsavedSnapshot()).toBe("second"); // untouched — still the newer one
+
+    currentUnregister(); // the actual current registration's own unregister
+    expect(unsavedSnapshot()).toBeNull();
+  });
+
   it("reads getText lazily, at snapshot time — not at registration time", () => {
     let value = "before";
     const unregister = registerUnsaved("lazy", () => value);

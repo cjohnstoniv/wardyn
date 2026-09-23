@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import * as React from "react";
 import { act } from "react";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter, MemoryRouter, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import { UnsavedGuardProvider, useGuardedNavClick, useUnsavedGuard } from "./use-unsaved-guard";
@@ -214,5 +215,142 @@ describe("UnsavedGuardProvider — browser Back/Forward (popstate)", () => {
 
     expect(goSpy).not.toHaveBeenCalled();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+});
+
+// #460 review round 2 (M12) — the tests above MOCK history.go, so they can't
+// see a bug where the "restore" is a no-op: a broken restore and a working
+// one both satisfy "go(1) was called with these args". This suite uses
+// jsdom's REAL history — its own back()/go() and the popstate it genuinely
+// fires — and asserts on window.location.pathname and the editor's own
+// mount identity, not a spy call.
+let draftMountCount = 0;
+function DraftEditor() {
+  useUnsavedGuard("m12-real-editor", true, () => "unsaved text");
+  // A lazy initializer runs ONCE per mount, never on a re-render of the SAME
+  // instance — if the router incorrectly re-rendered this away and back
+  // (the bug: react-router already saw the blocked pop and remounted a
+  // fresh instance), this number moves; if the guard truly kept it mounted
+  // throughout, it stays the same value across every assertion below.
+  const [mountId] = React.useState(() => ++draftMountCount);
+  return <div data-testid="draft-page">draft page, mount {mountId}</div>;
+}
+function StartPage() {
+  const navigate = useNavigate();
+  return (
+    <div data-testid="start-page">
+      start page
+      <button type="button" onClick={() => navigate("/draft")}>
+        go to draft
+      </button>
+    </div>
+  );
+}
+
+async function setUpAtDraftEntry(user: ReturnType<typeof userEvent.setup>) {
+  render(
+    <BrowserRouter>
+      <UnsavedGuardProvider>
+        <Routes>
+          <Route path="/start" element={<StartPage />} />
+          <Route path="/draft" element={<DraftEditor />} />
+        </Routes>
+      </UnsavedGuardProvider>
+    </BrowserRouter>,
+  );
+  await user.click(screen.getByRole("button", { name: "go to draft" }));
+  await screen.findByTestId("draft-page");
+}
+
+describe("UnsavedGuardProvider — Back with jsdom's REAL history, no mocked go() (M12)", () => {
+  beforeEach(() => {
+    draftMountCount = 0;
+    window.history.replaceState(null, "", "/start");
+  });
+
+  it("Back is restored for real: the URL returns, the draft stays the SAME mounted instance, and the dialog opens", async () => {
+    const user = userEvent.setup();
+    await setUpAtDraftEntry(user);
+    expect(window.location.pathname).toBe("/draft");
+    expect(screen.getByTestId("draft-page")).toHaveTextContent("mount 1");
+
+    act(() => window.history.back());
+
+    // Genuinely restored — not a spy call that could pass on a no-op.
+    await waitFor(() => expect(window.location.pathname).toBe("/draft"));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
+    // Still the FIRST mount — react-router never saw the blocked pop, so it
+    // never unmounted DraftEditor to render StartPage and back.
+    expect(screen.getByTestId("draft-page")).toHaveTextContent("mount 1");
+  });
+
+  it("a second real Back while the dialog is open is ALSO restored — still on the page, still one dialog, draft still mounted", async () => {
+    const user = userEvent.setup();
+    await setUpAtDraftEntry(user);
+    act(() => window.history.back());
+    await screen.findByRole("alertdialog");
+
+    act(() => window.history.back());
+
+    await waitFor(() => expect(window.location.pathname).toBe("/draft"));
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(screen.getByTestId("draft-page")).toHaveTextContent("mount 1");
+  });
+
+  it("Keep editing stays on the real URL, draft still the same mounted instance", async () => {
+    const user = userEvent.setup();
+    await setUpAtDraftEntry(user);
+    act(() => window.history.back());
+    await screen.findByRole("alertdialog");
+
+    await user.click(screen.getByRole("button", { name: UNSAVED.STAY }));
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/draft");
+    expect(screen.getByTestId("draft-page")).toHaveTextContent("mount 1");
+  });
+
+  it("Discard genuinely navigates back one entry — StartPage really renders", async () => {
+    const user = userEvent.setup();
+    await setUpAtDraftEntry(user);
+    act(() => window.history.back());
+    await screen.findByRole("alertdialog");
+
+    await user.click(screen.getByRole("button", { name: UNSAVED.DISCARD }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/start"));
+    expect(await screen.findByTestId("start-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("draft-page")).not.toBeInTheDocument();
+  });
+
+  // A pop to an entry with no `idx` (a fragment jump, e.g. a skip link's
+  // `href="#main-content"`) is not one of react-router's own tagged entries
+  // — falling back to "0" for its missing idx invented a false delta against
+  // whatever page was open, opening a dialog nothing asked for, and a no-op
+  // "restore" attempt left the guard's internal bookkeeping stuck, leaving
+  // the NEXT real Back unguarded. Neither happens here.
+  it("a pop to an entry with no idx opens no dialog, and doesn't corrupt the NEXT real pop's delta", async () => {
+    const user = userEvent.setup();
+    await setUpAtDraftEntry(user);
+    const unregister = registerUnsaved("m12-fragment", () => "unsaved text");
+    try {
+      act(() => {
+        History.prototype.replaceState.call(window.history, null, "", "/draft");
+        window.dispatchEvent(new PopStateEvent("popstate", { state: null }));
+      });
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByTestId("draft-page")).toHaveTextContent("mount 1");
+
+      // Restore the real idx-bearing state the fragment jump displaced, then
+      // prove a genuine Back from here is STILL guarded.
+      History.prototype.replaceState.call(window.history, { idx: 1 }, "", "/draft");
+      act(() => window.history.back());
+
+      await waitFor(() => expect(window.location.pathname).toBe("/draft"));
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    } finally {
+      unregister();
+    }
   });
 });

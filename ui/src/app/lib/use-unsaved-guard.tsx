@@ -23,6 +23,21 @@
 // registry.ts's unsavedSnapshot() (a non-empty snapshot IS dirty), the same
 // registry a sibling branch (#483, forced reauth) also reads, so that flow
 // can see what's unsaved without depending on this file at all.
+//
+// #460 review round 2 — the popstate listener below is installed at MODULE
+// scope (a top-level call, evaluated on import), not inside a React effect.
+// That ordering is load-bearing, not style: BrowserRouter attaches its OWN
+// popstate listener from a layout effect when it mounts, and a plain
+// (passive) `useEffect` in this file mounts AFTER that — so react-router's
+// listener saw every Back/Forward FIRST, had already scheduled the popped
+// route, and the dirty editor unmounted (losing its draft) before this
+// file's own effect-based handler ever got a chance to undo it. A module
+// evaluates fully before `main.tsx` ever calls `render()`, so a listener
+// registered here is GUARANTEED to be attached before <BrowserRouter> ever
+// mounts and attaches its own — and on a blocked pop it calls
+// `event.stopImmediatePropagation()`, so react-router's LATER-registered
+// listener never runs for that event at all. Nothing downstream ever learns
+// the pop happened, so nothing unmounts.
 import * as React from "react";
 import {
   AlertDialog,
@@ -55,40 +70,91 @@ const GuardContext = React.createContext<GuardContextValue>(noopGuard);
 // `idx`, incrementing it on every push and reading it back on every pop — the
 // SAME public, DOM-level fact this reads to compute a POP's own delta, with
 // no dependency on react-router's internals beyond that one field it already
-// writes to the browser's own history.state.
-function getHistoryIndex(): number {
+// writes to the browser's own history.state. null (not 0) when absent: a
+// fragment-only jump (a skip link's `href="#main-content"`, or any other
+// entry react-router never tagged) carries no idx at all, and treating that
+// as "0" invented a fake delta against whatever page happened to be open —
+// see installUnsavedGuard's own null check below.
+function getHistoryIndex(): number | null {
   const idx = (window.history.state as { idx?: number } | null)?.idx;
-  return typeof idx === "number" ? idx : 0;
+  return typeof idx === "number" ? idx : null;
 }
 
-// A FORWARD navigation (react-router's own push, on every `navigate()` or
-// <Link> click) also moves `history.state.idx` — and this file must track
-// that too, to compute a later POP's delta correctly. But it can't lean on
-// react-router's own location context to notice: UnsavedGuardProvider wraps
-// screens that render with no Router in their tests (providers-screen.test.tsx
-// among them), so a hard `useLocation()` dependency would crash there, and
-// native `pushState`/`replaceState` fire no event of their own to listen for
-// (a known browser API gap — `popstate` covers Back/Forward only). So this
-// patches both, ONCE, to broadcast one: still router-agnostic (works with or
-// without a Router in the tree), and only the listener below in
-// UnsavedGuardProvider ever reacts to it.
-const HISTORY_CHANGE_EVENT = "wardyn:historychange";
-let historyPatched = false;
-function ensureHistoryPatched(): void {
-  if (historyPatched || typeof window === "undefined") return;
-  historyPatched = true;
-  const notify = () => window.dispatchEvent(new Event(HISTORY_CHANGE_EVENT));
+// The one fact a MODULE-SCOPE listener (below) can't get from a React
+// component's props: which dialog to open. UnsavedGuardProvider sets this on
+// mount and clears it on unmount — null (the default) makes the listener a
+// no-op, so a popstate anywhere the provider isn't mounted (every screen test
+// that doesn't wrap it) is simply ignored.
+let activeRequestLeave: ((proceed: () => void) => void) | null = null;
+
+// The index this guard currently considers itself PARKED at — i.e. the
+// entry it believes is on screen. Only three things move it: a clean push/
+// replace/pop (nothing to guard), an intentional Discard (see below), or the
+// very first pop this session sees (nothing to compare it against yet).
+let historyIndex: number | null = null;
+
+function trackIndex(): void {
+  const idx = getHistoryIndex();
+  if (idx !== null) historyIndex = idx;
+}
+
+// Installed ONCE, at module evaluation — before `main.tsx` ever calls
+// render() and before <BrowserRouter> exists to attach its OWN popstate
+// listener (see this file's header note for why that ordering is
+// load-bearing). native pushState/replaceState fire no event of their own
+// (a known browser API gap — popstate covers Back/Forward only), so a
+// forward navigation's own index move is tracked right where it happens,
+// inline in the patch, rather than via a second listener elsewhere.
+function installUnsavedGuard(): void {
+  if (typeof window === "undefined") return;
+
   const originalPush = window.history.pushState.bind(window.history);
   window.history.pushState = (...args: Parameters<History["pushState"]>) => {
     originalPush(...args);
-    notify();
+    trackIndex();
   };
   const originalReplace = window.history.replaceState.bind(window.history);
   window.history.replaceState = (...args: Parameters<History["replaceState"]>) => {
     originalReplace(...args);
-    notify();
+    trackIndex();
   };
+
+  window.addEventListener("popstate", (event) => {
+    const newIndex = getHistoryIndex();
+    if (newIndex === null) {
+      // A fragment jump or any other untagged entry — nothing to compute a
+      // delta against. Leave it alone (never stop its propagation) and
+      // never touch `historyIndex`, so the NEXT real pop still compares
+      // against the correct, still-valid baseline instead of a corrupted one.
+      return;
+    }
+    if (historyIndex === null || newIndex === historyIndex || unsavedSnapshot() === null || !activeRequestLeave) {
+      // No established baseline yet, no actual move, nothing dirty, or no
+      // mounted provider to ask through — accept it as the new baseline and
+      // let react-router see it normally.
+      historyIndex = newIndex;
+      return;
+    }
+    const delta = newIndex - historyIndex;
+    // Block it before react-router (or anything else downstream) ever
+    // learns this event happened — `historyIndex` stays at the PARKED
+    // value, deliberately not updated here, so the popstate this restore
+    // itself fires computes delta 0 below and is absorbed silently, no
+    // matter how many more Back/Forward presses arrive while the dialog is
+    // still open (each one re-blocked and re-restored the same way).
+    event.stopImmediatePropagation();
+    window.history.go(-delta);
+    activeRequestLeave(() => {
+      // Discard: update the parked index FIRST, so when THIS go()'s own
+      // popstate arrives it computes delta 0 too and is let through
+      // untouched — react-router sees it normally and renders the real
+      // destination, exactly as an unguarded pop would have.
+      historyIndex = newIndex;
+      window.history.go(delta);
+    });
+  });
 }
+installUnsavedGuard();
 
 /** Wraps the shell (app-shell.tsx#AppShell) — above both every control that
  *  can navigate away and every screen that can register a dirty form below
@@ -101,46 +167,10 @@ export function UnsavedGuardProvider({ children }: { children: React.ReactNode }
     else proceed();
   }, []);
 
-  // Browser Back/Forward: BrowserRouter has no blocker for this, and by the
-  // time `popstate` fires the browser has ALREADY moved — window.location and
-  // history.state already read as the NEW entry. So a dirty pop is undone
-  // immediately (`history.go(-delta)`, which fires its own native popstate
-  // that react-router's own listener resyncs from, exactly like a real
-  // back/forward — never a raw pushState, which it would NOT pick up) and
-  // only THEN asked about; "Discard changes" replays the ORIGINAL delta.
-  const historyIndexRef = React.useRef(getHistoryIndex());
-  // Set once by OUR OWN restore/replay go() call, so the popstate IT fires
-  // is applied silently instead of being treated as a second real pop.
-  const suppressPopRef = React.useRef(false);
   React.useEffect(() => {
-    ensureHistoryPatched();
-    // A push/replace moved the index — stay current so the NEXT pop's delta
-    // is computed against where we actually are, not a stale mount-time read.
-    const onHistoryChange = () => {
-      historyIndexRef.current = getHistoryIndex();
-    };
-    const onPopState = () => {
-      if (suppressPopRef.current) {
-        suppressPopRef.current = false;
-        historyIndexRef.current = getHistoryIndex();
-        return;
-      }
-      const newIndex = getHistoryIndex();
-      const delta = newIndex - historyIndexRef.current;
-      historyIndexRef.current = newIndex;
-      if (delta === 0 || unsavedSnapshot() === null) return;
-      suppressPopRef.current = true;
-      window.history.go(-delta);
-      requestLeave(() => {
-        suppressPopRef.current = true;
-        window.history.go(delta);
-      });
-    };
-    window.addEventListener(HISTORY_CHANGE_EVENT, onHistoryChange);
-    window.addEventListener("popstate", onPopState);
+    activeRequestLeave = requestLeave;
     return () => {
-      window.removeEventListener(HISTORY_CHANGE_EVENT, onHistoryChange);
-      window.removeEventListener("popstate", onPopState);
+      if (activeRequestLeave === requestLeave) activeRequestLeave = null;
     };
   }, [requestLeave]);
 

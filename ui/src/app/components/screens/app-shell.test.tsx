@@ -545,6 +545,50 @@ describe("SidebarNav (member role — B3)", () => {
     expect(screen.queryByRole("link", { name: /^Settings/ })).toBeNull();
   });
 
+  // #460 review (M13) — `role`'s own fail-open default is "admin"
+  // (operator-context.tsx) while identity is still unresolved. Gating only
+  // on `role !== "member"` (as an earlier draft did) would show Settings
+  // during that window for EVERY role — including a member, who then sees
+  // it vanish the instant their real "member" role lands. Pinning
+  // identityResolved directly, independent of role, is what a mutation
+  // dropping that clause back to the old shape would fail here.
+  it("Settings is absent while identity is unresolved, even though role fails open to admin", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <MobileNav
+          pendingApprovals={0}
+          attentionCount={0}
+          meta={{
+            trustDomain: "example.test",
+            identityProvider: "spiffe",
+            principal: "",
+            email: "",
+            name: "",
+            method: "",
+            resolved: false,
+            identityResolved: false,
+            operator: true,
+            securityOperator: true,
+            role: "admin",
+            sessionExpiresAt: null,
+            memberLocalDirRoot: null,
+            userDrive: null,
+            userDriveDeniedByProfile: "",
+            userDriveUnavailable: "",
+            memberMode: false,
+            memberModeNoCredential: false,
+            memberPreviewAvailable: false,
+            runner: "",
+            networkPolicy: "",
+          }}
+        />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.queryByRole("link", { name: /^Settings/ })).toBeNull();
+  });
+
   it("a member still reaches Settings from the account menu", async () => {
     const user = userEvent.setup();
     renderTopBar("member");
@@ -644,6 +688,22 @@ describe("TopBar — account-menu links are guarded (#460 review)", () => {
     await user.click(screen.getAllByRole("button").at(-1)!);
     await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /Settings/ }));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  // #460 review (M9b) — every plain <Link> here is guarded, not only
+  // Settings: the wordmark itself links to /runs and is the FIRST control in
+  // the header, reached before the account menu on every screen.
+  it("the wordmark/logo link (-> /runs) is guarded too", async () => {
+    const user = userEvent.setup();
+    const unregister = registerUnsaved("dirty-logo-test", () => "unsaved text");
+    try {
+      renderTopBar("admin");
+      await user.click(screen.getByRole("link", { name: /Wardyn/i }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
+    } finally {
+      unregister();
+    }
   });
 });
 
