@@ -1,0 +1,69 @@
+name: verify-702-gvisor (temporary, not for merge)
+on:
+  push:
+    branches: ['verify/702-gvisor']
+permissions:
+  contents: read
+jobs:
+  gvisor-cc2-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUNSC_RELEASE: "20260601"
+      RUNSC_SHA512: ea985c4a505a37c50726b35fa5d48fdb8058dce36833d7710d49be035e08623b425869f91deb9133c1c5b35a33a77aed5ddcbc6926801a2dc49ddb0805aed7dc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Install runsc (pinned release, sha512-checked) and register it with dockerd
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o runsc "https://storage.googleapis.com/gvisor/releases/release/${RUNSC_RELEASE}/x86_64/runsc"
+          echo "${RUNSC_SHA512}  runsc" | sha512sum -c -
+          sudo install -m 0755 runsc /usr/local/bin/runsc
+          rm runsc
+          sudo /usr/local/bin/runsc install
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}' | jq -e 'has("runsc")' >/dev/null
+          # The runtime answers, not just its registration: gVisor's dmesg is
+          # its own, never the host kernel's.
+          # Captured first: `| grep -q` under pipefail can fail on dmesg's SIGPIPE.
+          boot="$(docker run --rm --runtime=runsc busybox:latest dmesg)"
+          grep -q gVisor <<<"${boot}" || { echo "::error::--runtime=runsc did not boot gVisor: ${boot}"; exit 1; }
+      - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
+        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
+      - name: Build agent-claude-code image (local only — the boot under measurement)
+        run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+      - name: Docker conformance at CC2 (runsc)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+          WARDYN_TEST_REQUIRE_CLASS: CC2
+        shell: bash # pipefail — see the e2e-live job above
+        run: |
+          mkdir -p test/reports/e2e
+          make test-conformance-docker 2>&1 | tee test/reports/e2e/cc2-conformance.log
+      - name: Live task e2e with CC2 required (oracle lane)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+          WARDYN_TEST_REQUIRE_CLASS: CC2
+        shell: bash # pipefail — see the e2e-live job above
+        run: |
+          make test-e2e-live 2>&1 | tee test/reports/e2e/cc2-task-e2e.log
+      - name: Upload CC2 results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gvisor-cc2-live-results
+          path: test/reports/e2e/cc2-*.log
+          if-no-files-found: error
+
