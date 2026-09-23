@@ -379,7 +379,8 @@ func run() error {
 		Approvals: approvals,
 		Broker:    brk,
 		// The wait ceiling a run's captured wait folds under; the approval
-		// sweeper (runApprovalSweeper) enforces the same value.
+		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
+		// mirrors it onto a hold-mode run's sandbox (RL-1).
 		ApprovalExpiryAfter: *f.approvalExpiryAfter,
 		// Same minter, second use: the setup checklist asks it whether GitHub
 		// confines the App to the run branch namespace. nil when no App is
