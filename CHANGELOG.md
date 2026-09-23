@@ -13,6 +13,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
 
+### Changed
+
+- **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
+  `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
+  `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
+  `killTeardownTail` (`KillSandbox`, both credential revocations, and the `run.kill` audit row).
+  `supersedeOneLoginRun` claims the transition synchronously, so its three-attempt CAS re-read loop
+  is unchanged and the superseded run reads `KILLED` before the launch POST answers, then hands the
+  teardown to a goroutine detached with `context.WithoutCancel`. `killRunCascade` itself is unchanged
+  — claim then tail, back to back — so `handleKillRun`'s own synchronous cascade behaves exactly as
+  before.
+
 ### Added
 
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the

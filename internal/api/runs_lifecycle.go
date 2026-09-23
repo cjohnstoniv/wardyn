@@ -647,34 +647,54 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 // start a new one — rather than a second, drifting copy of a cascade whose
 // ORDER is the security property.
 //
+// It is claimKillTransition then killTeardownTail, called back to back, so
+// handleKillRun (which needs both, synchronously, to answer with a single
+// outcome) is unchanged. supersedeOneLoginRun calls the two halves itself
+// instead of this function — see its own doc comment for why the split
+// matters to that caller.
+//
 // Returns whether the KILLED transition was ours (a lost CAS is `false`, with
 // nothing torn down) and the per-step error map, so the caller decides what a
 // partial cascade means for IT: the handler answers 500 with a run.revoke row,
 // the supersede logs and proceeds — a new sign-in must not be blocked because
 // the old run's revoke failed.
-//
-// `extra` rides the run.kill row's DATA and is deliberately NOT merged into the
-// error map: outcome is computed from the errors ALONE, so a supersede's
-// `reason` cannot make a clean kill audit as a failure (and conjure a
-// run.revoke row for a run that was torn down correctly).
 func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) (bool, map[string]any, error) {
-	id := run.ID
-	// The cascade detaches itself. Once a kill begins it must finish
-	// even if the CALLER's context dies, or a half-applied kill strands exactly
-	// what a kill exists to remove: past the CAS the row reads KILLED while
-	// KillSandbox is cancelled, retryQuick bails on ctx.Done() without revoking
-	// the identity, and the run.kill row itself fails to write — a terminal state
-	// change nothing revisits, since the idle reaper lists RUNNING and the next
-	// supersede selects non-terminal runs only.
-	//
-	// It belongs HERE, not in each caller: the login supersede runs inside the
-	// launch POST, and a person closing that tab mid-launch is the very
-	// orphan-making behaviour that lane exists to end. handleKillRun keeps its
-	// own detach — a second WithoutCancel is a no-op, and the handler's
-	// post-cascade run.revoke row needs a live context too.
+	applied, serr := s.claimKillTransition(ctx, run)
+	if serr != nil {
+		return false, nil, serr
+	}
+	if !applied {
+		return false, nil, nil
+	}
+	killData := s.killTeardownTail(ctx, run, killerType, killer, extra)
+	return true, killData, nil
+}
+
+// claimKillTransition is the CLAIM half of the kill cascade: it wins the
+// KILLED compare-and-swap and cancels the run's pending approvals — the two
+// steps that free the run's max_concurrent_runs slot and silence a queue a
+// human may be looking at. Nothing here can block on the runner or a
+// credential provider, so it is cheap enough to run SYNCHRONOUSLY on a request
+// path.
+//
+// Split out so supersedeOneLoginRun (harnesscred_supersede.go) can claim the
+// KILLED transition inline — its three-attempt CAS re-read loop needs to see
+// whether THIS attempt landed before deciding whether to retry — while handing
+// the slow half (killTeardownTail: KillSandbox, both revocations, the
+// run.kill row) to a detached goroutine. Moving the CAS out of this half would
+// re-open the quota race the supersede exists to close: the concurrency slot
+// is not free until this returns applied==true.
+//
+// Detaches itself for the same reason killTeardownTail does (see that comment):
+// the login supersede runs on the launch POST's own context, and a person
+// closing that tab mid-launch must not cancel a CAS that has already started.
+//
+// Returns whether the KILLED transition was ours (a lost CAS is `false`, with
+// nothing else touched).
+func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	// (1) Win the terminal transition first. Revoking before this CAS meant a
+	// Win the terminal transition first. Revoking before this CAS meant a
 	// kill that then LOST the CAS to a concurrent dispatch forward-transition
 	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
 	// RUNNING run with dead creds behind a silent 409. Own the KILLED transition
@@ -682,22 +702,50 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 	// from the (non-terminal) state we read, so a completion watcher winning
 	// RUNNING->COMPLETED is not clobbered. A re-kill of an already-KILLED run still
 	// CASes KILLED->KILLED (applied), re-running the idempotent teardown.
-	applied, serr := s.casRunState(ctx, id, run.State, types.RunKilled)
+	applied, serr := s.casRunState(ctx, run.ID, run.State, types.RunKilled)
 	if serr != nil {
-		return false, nil, serr
+		return false, serr
 	}
 	if !applied {
-		return false, nil, nil
+		return false, nil
 	}
+	// Approvals: the transition is unambiguously ours, so the run's outstanding
+	// questions are cancelled here — BEFORE teardown, because a PENDING approval
+	// is the one piece of this cascade a human is looking at, and after the CAS
+	// for the same reason revocation is (a kill that lost the CAS must not touch
+	// a still-live run). Kill does NOT route through finalizeRunTail, so this is
+	// the second call site of one function.
+	s.cancelRunApprovals(ctx, run.ID)
+	return true, nil
+}
 
+// killTeardownTail is the TEARDOWN half of the kill cascade, run only after
+// claimKillTransition has already won the KILLED transition: the runner
+// teardown, both revocations, the run.kill audit row, and the
+// workspace/record settlement. `extra` rides the run.kill row's DATA and is
+// deliberately NOT merged into the returned error map: outcome is computed
+// from the errors ALONE, so a supersede's `reason` cannot make a clean kill
+// audit as a failure (and conjure a run.revoke row for a run that was torn
+// down correctly).
+//
+// Detaches itself — context.WithoutCancel plus its own killCascadeTimeout
+// bound — for the reason the undivided cascade always has: once a kill has
+// been claimed it must finish even if the caller's context dies, or a
+// half-applied kill strands exactly what a kill exists to remove — past the
+// CAS the row reads KILLED while KillSandbox is cancelled, retryQuick bails on
+// ctx.Done() without revoking the identity, and the run.kill row itself fails
+// to write. Nothing revisits that state: the idle reaper lists RUNNING and the
+// next supersede selects non-terminal runs only. It belongs HERE, not in each
+// caller: handleKillRun keeps its own detach around the whole cascade too — a
+// second WithoutCancel is a no-op, and its post-cascade run.revoke row needs a
+// live context regardless — while supersedeOneLoginRun runs this on an
+// explicitly detached goroutine (its own doc comment) so the sign-in POST does
+// not wait for it.
+func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) map[string]any {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
+	id := run.ID
 	killData := map[string]any{}
-	// (1b) Approvals: the transition is unambiguously ours, so the run's
-	// outstanding questions are cancelled here — BEFORE teardown, because a
-	// PENDING approval is the one piece of this cascade a human is looking at,
-	// and after the CAS for the same reason revocation is (a kill that lost the
-	// CAS must not touch a still-live run). Kill does NOT route through
-	// finalizeRunTail, so this is the second call site of one function.
-	s.cancelRunApprovals(ctx, id)
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
 	if s.cfg.Runner != nil && run.SandboxRef != "" {
 		if kerr := s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
@@ -745,7 +793,7 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 	s.reconcileWorkspaceRun(ctx, id)
 	s.reconcileRecordRun(ctx, id)
 
-	return true, killData, nil
+	return killData
 }
 
 // killCascadeTimeout bounds a detached kill cascade. The teardown and both
