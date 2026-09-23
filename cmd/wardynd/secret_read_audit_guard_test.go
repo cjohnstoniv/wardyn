@@ -204,8 +204,11 @@ func newCtxScope(info *types.Info, fd *ast.FuncDecl) *ctxScope {
 }
 
 // class says where e, a context expression, comes from. A variable assigned
-// from a mark anywhere in the function counts as marked; otherwise one
-// assignment from anything but a parameter makes it ctxOther.
+// exactly once, from a mark, counts as marked; a variable assigned more than
+// once fails closed as ctxOther even when one of those assignments is a
+// mark, because a Get that reaches it can still run on whichever path
+// skipped the mark — the single-assignment idiom
+// (rctx := secretstore.WithPurpose(...)) is the only shape this guard trusts.
 func (c *ctxScope) class(e ast.Expr, seen map[types.Object]bool) int {
 	switch a := ast.Unparen(e).(type) {
 	case *ast.CallExpr:
@@ -225,6 +228,9 @@ func (c *ctxScope) class(e ast.Expr, seen map[types.Object]bool) int {
 		}
 		seen[obj] = true
 		defer delete(seen, obj)
+		if len(c.assigns[obj]) > 1 {
+			return ctxOther
+		}
 		out, ok := c.params[obj]
 		if !ok {
 			out = ctxNone
@@ -436,6 +442,125 @@ func (s *secretReadScan) firstUnmarked(start string, arg int, why string) string
 		}
 	}
 	return ""
+}
+
+// classifyFixture type-checks src as package p, resolving guardWithPurpose
+// and guardSiteAudited to a synthetic secretstore package so class() sees
+// them exactly as it would the real marks, and returns a ctxScope for fn
+// plus the type-checked function declaration.
+func classifyFixture(t *testing.T, src, fn string) (*ctxScope, *ast.FuncDecl) {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	store := types.NewPackage(guardStorePkg, "secretstore")
+	params := types.NewTuple(
+		types.NewVar(token.NoPos, store, "ctx", types.Typ[types.Int]),
+		types.NewVar(token.NoPos, store, "purpose", types.Typ[types.String]),
+	)
+	results := types.NewTuple(types.NewVar(token.NoPos, store, "", types.Typ[types.Int]))
+	sig := types.NewSignatureType(nil, nil, nil, params, results, false)
+	store.Scope().Insert(types.NewFunc(token.NoPos, store, "WithPurpose", sig))
+	store.Scope().Insert(types.NewFunc(token.NoPos, store, "SiteAudited", sig))
+	store.MarkComplete()
+	imp := importerFunc(func(path string) (*types.Package, error) {
+		if path == guardStorePkg {
+			return store, nil
+		}
+		return nil, fmt.Errorf("unexpected import %q", path)
+	})
+	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
+	conf := types.Config{Importer: imp}
+	if _, err := conf.Check("p", fset, []*ast.File{file}, info); err != nil {
+		t.Fatalf("type-check fixture: %v", err)
+	}
+	var fd *ast.FuncDecl
+	for _, d := range file.Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == fn {
+			fd = f
+		}
+	}
+	if fd == nil {
+		t.Fatalf("fixture has no func %s", fn)
+	}
+	return newCtxScope(info, fd), fd
+}
+
+type importerFunc func(path string) (*types.Package, error)
+
+func (f importerFunc) Import(path string) (*types.Package, error) { return f(path) }
+
+// callArg0 returns the first argument of the named call inside fd's body.
+func callArg0(fd *ast.FuncDecl, callee string) ast.Expr {
+	var arg ast.Expr
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == callee && len(call.Args) > 0 {
+				arg = call.Args[0]
+			}
+		}
+		return true
+	})
+	return arg
+}
+
+// TestCtxScopeClassRejectsAContextMarkedOnOnlyOneBranch pins rule 23's
+// guard-of-the-guard: a context variable marked on one branch (WithPurpose)
+// and left untouched on another must classify as ctxOther, not ctxMarked,
+// because the Get it reaches can still run with no purpose on the untouched
+// path. Before the fix, any marked assignment made class() return ctxMarked
+// immediately, so this mutation — the shape SD-5's review found in
+// resolveLLMInspectionSecrets — passed the guard silently.
+func TestCtxScopeClassRejectsAContextMarkedOnOnlyOneBranch(t *testing.T) {
+	const src = `package p
+
+import "github.com/cjohnstoniv/wardyn/internal/secretstore"
+
+func f(ctx int, name string) {
+	rctx := ctx
+	if len(name) == 0 {
+		rctx = secretstore.WithPurpose(ctx, "x")
+	}
+	get(rctx)
+}
+
+func get(ctx int) {}
+`
+	sc, fd := classifyFixture(t, src, "f")
+	arg := callArg0(fd, "get")
+	if arg == nil {
+		t.Fatal("fixture has no get(...) call")
+	}
+	if got := sc.class(arg, map[types.Object]bool{}); got != ctxOther {
+		t.Errorf("class(rctx) = %d, want ctxOther (%d): a context marked on only one branch must not classify as marked", got, ctxOther)
+	}
+}
+
+// TestCtxScopeClassAcceptsTheSingleAssignmentIdiom is the fix's control: the
+// shape every real WithPurpose call site in this repo uses today, a single
+// unconditional assignment, must still classify as ctxMarked.
+func TestCtxScopeClassAcceptsTheSingleAssignmentIdiom(t *testing.T) {
+	const src = `package p
+
+import "github.com/cjohnstoniv/wardyn/internal/secretstore"
+
+func f(ctx int, name string) {
+	rctx := secretstore.WithPurpose(ctx, "x")
+	get(rctx)
+}
+
+func get(ctx int) {}
+`
+	sc, fd := classifyFixture(t, src, "f")
+	arg := callArg0(fd, "get")
+	if arg == nil {
+		t.Fatal("fixture has no get(...) call")
+	}
+	if got := sc.class(arg, map[types.Object]bool{}); got != ctxMarked {
+		t.Errorf("class(rctx) = %d, want ctxMarked (%d): the single-assignment idiom must still classify as marked", got, ctxMarked)
+	}
 }
 
 func TestEverySecretReadIsAuditedOnce(t *testing.T) {

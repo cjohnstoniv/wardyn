@@ -185,7 +185,7 @@ func RecordRead(ctx context.Context, rec audit.Recorder, p Purpose, owner string
 		outcome = "failure"
 	}
 	data := row.AuditData()
-	data["purpose"], data["owner"] = string(p), owner
+	data["purpose"], data["owner"] = string(p), auditText(owner)
 	raw, _ := json.Marshal(data)
 	ev := types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem, Actor: "wardynd",

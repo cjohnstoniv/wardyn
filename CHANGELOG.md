@@ -101,10 +101,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   0.8 boot records one `migrate` read per legacy row it converts. A guard type-checks every read
   site and fails the build on one that says neither why it reads nor that it records the read
   itself, following the context the read actually receives; a read that still reaches the store
-  with no purpose is refused and recorded as an `unmarked` failure. The row's owner and ref are
-  cut to 512 bytes and stripped of control characters before they are recorded, since a database
-  writer controls them. Deployments that poll setup status often will see more `secret.read` rows:
-  each status check that decrypts a captured sign-in is now one.
+  with no purpose is refused and recorded as an `unmarked` failure. The row's owner, the read's own
+  owner, and ref are all cut to 512 bytes and stripped of control characters before they are
+  recorded, since a database writer controls them. Deployments that poll setup status often will
+  see more `secret.read` rows: each status check that decrypts a captured sign-in is now one.
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's

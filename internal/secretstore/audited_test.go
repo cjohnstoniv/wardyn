@@ -115,7 +115,10 @@ func TestAuditedRecordsARefusedReadAsAFailureWithoutItsError(t *testing.T) {
 	if d := dataOf(t, rec.got[0]); d["ref"] != "fake:bob/k" || d["purpose"] != "boot" {
 		t.Errorf("data = %v, want the refused row's ref and the purpose", d)
 	}
-	if strings.Contains(string(rec.got[0].Data), "refused") {
+	if rec.got[0].Target != "k" {
+		t.Errorf("target = %q, want the bare row name", rec.got[0].Target)
+	}
+	if strings.Contains(string(rec.got[0].Data), "refused") || strings.Contains(rec.got[0].Target, "refused") {
 		t.Error("the event carries the store's error text")
 	}
 }
@@ -184,15 +187,17 @@ func TestAuditedRefusesAReadWithNoPurpose(t *testing.T) {
 }
 
 // The row's owner and ref are text a database writer controls: each is bounded
-// and stripped of non-printing runes before it reaches an audit sink.
+// and stripped of non-printing runes before it reaches an audit sink. So is
+// RecordRead's own owner argument — the boot conversion's migrate rows pass it
+// row.Owner straight from secrets.owned_by (see convertSecretStore).
 func TestAuditedBoundsRowTextFromTheStore(t *testing.T) {
 	long := strings.Repeat("r", 4*auditTextMax)
-	row := Row{Store: "pg", Owner: "eve\nforged\u202e", Name: "k\r", Ref: long, Found: true}
+	row := Row{Store: "pg", Owner: "eve\nforged‮", Name: "k\r", Ref: long, Found: true}
 	rec := &recorded{}
-	RecordRead(t.Context(), rec, PurposeStatus, "eve", row, nil)
+	RecordRead(t.Context(), rec, PurposeStatus, "eve\nforged‮"+long, row, nil)
 
 	d := dataOf(t, rec.got[0])
-	for _, s := range []string{d["row_owner"], d["ref"], rec.got[0].Target} {
+	for _, s := range []string{d["row_owner"], d["ref"], d["owner"], rec.got[0].Target} {
 		if strings.ContainsFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) {
 			t.Errorf("recorded %q with a non-printing rune", s)
 		}
@@ -200,8 +205,14 @@ func TestAuditedBoundsRowTextFromTheStore(t *testing.T) {
 	if d["row_owner"] != "eve?forged?" || rec.got[0].Target != "k?" {
 		t.Errorf("row_owner = %q, target = %q", d["row_owner"], rec.got[0].Target)
 	}
+	if !strings.HasPrefix(d["owner"], "eve?forged?") {
+		t.Errorf("owner = %q, want it sanitized like row_owner", d["owner"])
+	}
 	if len(d["ref"]) > auditTextMax+len("…") {
 		t.Errorf("ref recorded at %d bytes, want at most %d", len(d["ref"]), auditTextMax+len("…"))
+	}
+	if len(d["owner"]) > auditTextMax+len("…") {
+		t.Errorf("owner recorded at %d bytes, want at most %d", len(d["owner"]), auditTextMax+len("…"))
 	}
 }
 
