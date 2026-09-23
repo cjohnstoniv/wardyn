@@ -218,6 +218,10 @@ type createAPITokenRequest struct {
 // revoked".
 const apiTokenNoHumanRefusal = "an API token belongs to a signed-in human — sign in to the console and create one from Account, or keep using the admin token directly"
 
+// apiTokenFeatureRefusal is the 403 body when the api_token feature is not
+// available to the caller.
+const apiTokenFeatureRefusal = "API tokens aren't available to you. Ask your admin."
+
 func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// The credential's authority time, stamped HERE — before a single byte of
 	// the request body is read.
@@ -260,6 +264,10 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// created it. See internal/api/membermode.go.
 	if oidc.MemberModeFromContext(ctx) {
 		writeError(w, http.StatusConflict, memberModeMintRefusal)
+		return
+	}
+	// May this person mint a token at all (capFeature).
+	if s.denyMemberCapability(w, r, capFeature, featureAPIToken, "me.tokens", apiTokenFeatureRefusal) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)

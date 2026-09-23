@@ -48,6 +48,12 @@ func (s *Server) handleListSSHKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, keys)
 }
 
+// sshKeyFeatureRefusal is the 403 body when the ssh_key feature is not
+// available to the caller. The console's Your SSH keys pane shows the same
+// sentence (ui/src/app/lib/permissions-copy.ts DENIED.SSH_KEY_FEATURE), byte
+// for byte.
+const sshKeyFeatureRefusal = "SSH keys aren't available to you. Ask your admin."
+
 // handleAddSSHKey is POST /api/v1/me/ssh-keys: register a public key against
 // the caller's own principal. This endpoint is the gateway's ENTIRE trust
 // root (sshgateway.go's PublicKeyCallback authenticates against nothing else),
@@ -61,6 +67,11 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// internal/api/membermode.go.
 	if oidc.MemberModeFromContext(r.Context()) {
 		writeError(w, http.StatusConflict, memberModeMintRefusal)
+		return
+	}
+	// May this person add a key at all (capFeature). Before the body is read,
+	// so a refused caller learns nothing about their key's validity.
+	if s.denyMemberCapability(w, r, capFeature, featureSSHKey, "me.ssh_keys", sshKeyFeatureRefusal) {
 		return
 	}
 	var req addSSHKeyRequest

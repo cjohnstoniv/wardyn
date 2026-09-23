@@ -658,7 +658,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 // devcontainer_repo, which is deliberately NOT a capability: it executes
 // attacker-authored build config and stays unconditionally admin-only.
 func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
-	want := []string{"egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider"}
+	want := []string{"egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "feature"}
 	if !slices.Equal(capabilityKinds, want) {
 		t.Errorf("capabilityKinds = %v, want %v (and ui/src/app/lib/permissions-copy.ts must match)", capabilityKinds, want)
 	}
@@ -682,7 +682,7 @@ func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
 // DEFAULT arm — nothing was added for them, so nothing but a test proves the
 // default is what they got.
 func TestCapValueMatchesIsExactOffTheHostLane(t *testing.T) {
-	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider} {
+	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capFeature} {
 		if capValueMatches(kind, "*.corp", "api.corp") {
 			t.Errorf("%s: a wildcard-looking grant matched a suffix; only egress_host may do that", kind)
 		}

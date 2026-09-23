@@ -225,8 +225,8 @@ func (s *secAdminRunStore) MintAttachTicket(context.Context, string, store.Attac
 // sandbox.
 func TestSSHKeyNeverStampsSecurityAdmin(t *testing.T) {
 	h := newHarness(t)
-	st := &secAdminRunStore{}
-	cfg := baseTestConfig(h, st)
+	// capStore: a security admin's POST asks the `feature` resolver.
+	cfg := baseTestConfig(h, &capStore{Store: &secAdminRunStore{}})
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 

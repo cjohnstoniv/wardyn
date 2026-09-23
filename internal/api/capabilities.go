@@ -16,13 +16,13 @@ import (
 
 // the closed kind set
 //
-// Seven kinds, and this slice is the ONLY place the set is written down —
+// Eight kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// an eighth kind is a constant here plus its enforcement call site, with no DDL.
+// a ninth kind is a constant here plus its enforcement call site, with no DDL.
 // The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
 // mirrors these ids and must not drift.
 //
-// Six of the seven NARROW what a member may already do; capImage WIDENS (a
+// Seven of the eight NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
 // through the same rules below — the difference lives at the enforcement seam,
 // not here.
@@ -100,16 +100,39 @@ const (
 	// be an ACL this feature does not have (admission is URL-prefix), and the
 	// row is the unit an admin actually writes down.
 	capWorkspaceProvider = "workspace_provider"
+	// capFeature NARROWS: it bounds whether a person may MINT a personal
+	// credential at all. Two values, a closed set (featureValues), plus `*`:
+	// featureSSHKey gates POST /me/ssh-keys and featureAPIToken gates POST
+	// /me/tokens, one check at each mint door beside member mode's 409.
+	//
+	// Narrowing, on capAgent's rule: every signed-in person could already add a
+	// key and mint a token, so the unenforced default stays ALLOWED and an
+	// upgraded deployment is unchanged. A DENY row bites at once, which is how
+	// one user type is turned off ("SSH keys: Blocked" for a Portfolio manager).
+	//
+	// Mint only. A key or token that already exists keeps working until it is
+	// removed or revoked; the kind decides what may be ADDED, never re-checks
+	// what is there.
+	capFeature = "feature"
 )
 
-// capabilityKinds is the closed set, in the order the admin surface shows them.
-var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider}
+// The closed value set of capFeature. canonicalGrantValue refuses any other
+// value, so a misspelt row can never sit in the table protecting nothing.
+const (
+	featureSSHKey   = "ssh_key"
+	featureAPIToken = "api_token"
+)
 
-// validCapabilityKind reports whether kind is one of the seven. The API write
+var featureValues = []string{featureSSHKey, featureAPIToken}
+
+// capabilityKinds is the closed set, in the order the admin surface shows them.
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capFeature}
+
+// validCapabilityKind reports whether kind is one of the eight. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
 
-// capWildcard matches every value of its kind. Spelled the same for all seven so
+// capWildcard matches every value of its kind. Spelled the same for all eight so
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 

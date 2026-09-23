@@ -190,7 +190,8 @@ func TestSSHKeysREST_ScopedToOwnPrincipal(t *testing.T) {
 func TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured(t *testing.T) {
 	h := newHarness(t)
 	st := newSSHMemStore()
-	cfg := baseTestConfig(h, st)
+	// capStore: a signed-in non-admin's POST asks the `feature` resolver.
+	cfg := baseTestConfig(h, &capStore{Store: st})
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
@@ -233,7 +234,8 @@ func TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured(t *testing.T) {
 func TestSSHKeysREST_RoleStampedAtRegistration(t *testing.T) {
 	h := newHarness(t)
 	st := newSSHMemStore()
-	cfg := baseTestConfig(h, st)
+	// capStore: a signed-in non-admin's POST asks the `feature` resolver.
+	cfg := baseTestConfig(h, &capStore{Store: st})
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 

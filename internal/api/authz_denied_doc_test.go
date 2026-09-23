@@ -24,6 +24,7 @@ var authzDeniedReasons = []string{
 	"byoi_member",
 	"capability_" + capAgent,
 	"capability_" + capEgressHost,
+	"capability_" + capFeature,
 	"capability_" + capIntegration,
 	"capability_" + capSecret,
 	"capability_" + capWorkspace,
@@ -87,6 +88,7 @@ var capKindValue = map[string]string{
 	"capAgent":             capAgent,
 	"capIntegration":       capIntegration,
 	"capWorkspaceProvider": capWorkspaceProvider,
+	"capFeature":           capFeature,
 }
 
 // TestAuthzDeniedReasonsAreDocumented pins the CLOSED reason enum to the code

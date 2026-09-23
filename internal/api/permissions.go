@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -261,6 +262,11 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     non-ASCII value can never name one of these rows, and folding first would
 //     let U+212A land on an ASCII name the author never typed.
 //
+//   - feature: LOWERCASED (ASCII guard first, as above), then held to the
+//     closed featureValues set. The mint doors ask about exactly those two
+//     strings, so any other value is a row that can never match — a deny that
+//     turns nothing off.
+//
 //   - agent and image: STORED VERBATIM, and that is a decision rather than an
 //     omission. An agent id is not held to a closed catalog at the run boundary
 //     (a BYOA run names its own), and an image ref's tag may legitimately carry
@@ -293,6 +299,12 @@ func canonicalGrantValue(capability, value string) (string, error) {
 			return "", fmt.Errorf("value: %q is not a workspace id — a workspace capability names a workspace by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v)
 		}
 		return id.String(), nil
+	case capFeature:
+		lowered := strings.ToLower(v)
+		if !oidc.ASCIIOnly(v) || !slices.Contains(featureValues, lowered) {
+			return "", fmt.Errorf("value: %q is not a feature — a feature capability is one of %s, and the resolver compares it exactly, so any other value can never match anything", v, strings.Join(featureValues, ", "))
+		}
+		return lowered, nil
 	case capSecret, capIntegration, capWorkspaceProvider:
 		grammar, what := secretNameRE, "secret name"
 		switch capability {

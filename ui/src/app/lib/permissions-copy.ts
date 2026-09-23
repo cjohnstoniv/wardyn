@@ -23,7 +23,7 @@
 // The closed set, in the order the admin screen renders them. Mirrors the Go
 // slice in internal/api/capabilities.go — a new kind is a Go constant plus a
 // row here, no DDL.
-export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider"] as const;
+export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "feature"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
 // Whether granting this kind takes power away from members ("narrows" — the
@@ -129,6 +129,18 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     unenforced: "Members can launch against a repository on any git provider this deployment admits.",
     enforced:
       "A member can only bring work from providers granted to them — on a run, and on a workspace they create, edit, scan or build. A repository on another provider is refused, naming the provider's kind and nothing more.",
+    direction: "narrows",
+  },
+  // Staged in docs/design/permissioning-prompt.md §7.1 as DRAFT (#614).
+  feature: {
+    // DRAFT (canon pending)
+    label: "SSH keys and API tokens",
+    blurb: "Whether a member may add an SSH key or mint an API token.",
+    valueLabel: "Feature",
+    valueHint: "ssh_key or api_token. Use * for both.",
+    unenforced: "Members can add SSH keys and mint API tokens.",
+    enforced:
+      "A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked.",
     direction: "narrows",
   },
 };
@@ -277,6 +289,11 @@ export const DENIED = {
 
   // Secrets page, member view, `secret` enforced.
   SECRETS_NARROWED: "Only secrets granted to you are listed.",
+
+  // Your SSH keys, `feature` enforced or denied for ssh_key: Add key disables
+  // with this beside it. The server's 403 body, byte for byte
+  // (internal/api/sshkeys.go sshKeyFeatureRefusal; a Go test pins the two).
+  SSH_KEY_FEATURE: "SSH keys aren't available to you. Ask your admin.",
 
   // The member half of the stale-groups story.
   STALE_GROUPS:
