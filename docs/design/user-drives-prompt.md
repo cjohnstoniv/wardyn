@@ -2,8 +2,8 @@
 
 This is the mock round for the user-drives surfaces — the design gate before any console code
 (owner law: the mock is UI source of truth; canon strings are app strings). The model below is
-decided in `local/review-0.7/user-drives/DESIGN.md` (0.7 RC) and its eight owner defaults are
-accepted; nothing here is open for re-design, only for drawing. **Six** drawing-level calls
+decided by the user-drives design doc (0.7 RC) and its eight owner defaults are accepted; nothing
+here is open for re-design, only for drawing. **Six** drawing-level calls
 remain and are listed as Q1–Q6 in §9, with an Adjudication section at the end for owner answers
 and this round's notes.
 

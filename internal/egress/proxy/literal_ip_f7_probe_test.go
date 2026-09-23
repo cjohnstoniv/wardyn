@@ -10,13 +10,11 @@
 //
 // Run (no Postgres, no network):
 //
-//   cp local/review-0.7/deep/F7-redirect-probe-sni-literal-ip/literal_ip_f7_probe_test.go internal/egress/proxy/
 //   nice -n 10 GOMAXPROCS=8 go test -p 4 ./internal/egress/proxy -run 'TestF7_' -count=1 -v
-//   rm internal/egress/proxy/literal_ip_f7_probe_test.go
 //
 // Both tests are EXPECTED RED at fa910735 — they are the data-path halves of
-// hypotheses H-5 and H-6 in ../F7-redirect-probe-sni-literal-ip.md. A green
-// run means the finding was fixed; update the doc.
+// hypotheses H-5 and H-6 of the F7-redirect-probe-sni-literal-ip review lane.
+// A green run means the finding was fixed.
 
 package proxy
 

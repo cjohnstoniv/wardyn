@@ -14,8 +14,6 @@
 // package api alongside uigateway_test.go — it is not standalone.
 //
 // RUN (no Postgres — the harness fakes the store):
-//   cp local/review-0.7/deep/F12-ui-sandbox-origin-isolation/uigateway_origin_isolation_probe_test.go \
-//      internal/api/uigateway_origin_isolation_probe_test.go
 //   nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'F12Probe' -race -count=1 -v
 //   # (no WARDYN_TEST_PG DSN needed: this surface's tests run against the fake store)
 //

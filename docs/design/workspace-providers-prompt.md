@@ -2,8 +2,8 @@
 
 This is the mock round for the Workspace Providers surfaces of 0.7.2 — the design gate before any
 console code (owner law: the mock is UI source of truth; canon strings are app strings). The model
-is decided in `~/.claude/plans/crispy-wondering-raven.md` (v17, FINAL; §3 D1–D11, §4, §5, §5c, §6,
-§9) and nothing here is open for re-design, only for drawing. **Every string in §7.2–§7.7 is a
+is decided by the design plan (v17, FINAL; §3 D1–D11, §4, §5, §5c, §6, §9) and nothing here is
+open for re-design, only for drawing. **Every string in §7.2–§7.7 is a
 DRAFT the owner freezes at this gate**; seven drawing-level calls are Q1–Q7 in §9 (the plan's), with
 the ones this round surfaced after them, and an Adjudication section at the end for owner answers.
 

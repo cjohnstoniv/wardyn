@@ -261,3 +261,69 @@ func TestCommentsCiteSymbolsNotLineNumbers(t *testing.T) {
 	}
 	t.Logf("scanned %d files across %v", scanned, citationRoots)
 }
+
+// privatePathCitation matches a reference to the author's own machine (a
+// `~/.claude` plan or verify-run) or to a private note in the gitignored
+// `local/` tree: a `review…` ledger or a release folder under `local/v0N…`.
+// All of them live outside the published repo, so a citation sends a reader —
+// anyone who is not the one machine that wrote it — to a path that does not
+// exist for them. The published tree must be legible on its own.
+//
+// Not "cites `local/`": the product itself documents real `local/` runtime
+// paths, such as the kind SSO walk's evidence directory (docs/ENV.md,
+// `WARDYN_KIND_SSO_EVIDENCE` = `local/evidence/kind-sso`) and the demo take
+// ledger (RELEASING.md, `local/TAKES-LEDGER.md`) — neither is a `review…` or
+// `v0N…` path, so this guard leaves them alone without needing an allowlist.
+var privatePathCitation = regexp.MustCompile(`~/\.claude/(plans|verify-runs)|(^|[^A-Za-z0-9_])local/(review|v0[0-9]+)`)
+
+// TestNoPrivatePathCitations fails on a tracked Markdown doc, or a non-test Go
+// comment, that cites the author's private plan/review directories. It is
+// deliberately narrower than "cites `local/`" — see privatePathCitation's
+// comment for the real `local/` runtime paths this guard is not meant to flag.
+func TestNoPrivatePathCitations(t *testing.T) {
+	root := repoRoot(t)
+
+	for _, doc := range trackedMarkdown(t, root) {
+		b, err := os.ReadFile(filepath.Join(root, doc))
+		if err != nil {
+			t.Fatalf("read %s: %v", doc, err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if m := privatePathCitation.FindString(line); m != "" {
+				t.Errorf("%s:%d cites %q — a private machine path or gitignored review directory has no meaning for a reader of the published tree; drop the citation or point at what actually ships", doc, i+1, m)
+			}
+		}
+	}
+
+	// citationRoots plus test: the issue names test/e2e/live/harness.go, which
+	// the shared line-number guard's roots do not cover. Scoped to this test
+	// alone — citationRoots stays as-is for TestCommentsCiteSymbolsNotLineNumbers.
+	privatePathRoots := append(append([]string{}, citationRoots...), "test")
+	for _, sub := range privatePathRoots {
+		err := filepath.WalkDir(filepath.Join(root, sub), func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			fset := token.NewFileSet()
+			f, perr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+			if perr != nil {
+				t.Fatalf("parse %s: %v", path, perr)
+			}
+			rel, rerr := filepath.Rel(root, path)
+			if rerr != nil {
+				rel = path
+			}
+			for _, cg := range f.Comments {
+				for _, c := range cg.List {
+					if m := privatePathCitation.FindString(c.Text); m != "" {
+						t.Errorf("%s:%d: comment cites %q — a private machine path or gitignored review directory has no meaning for a reader of the published tree", rel, fset.Position(c.Pos()).Line, m)
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", sub, err)
+		}
+	}
+}

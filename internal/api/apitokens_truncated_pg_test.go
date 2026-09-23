@@ -19,7 +19,7 @@
 // wardyn_inj_* database per test and drops it on cleanup, so nothing here
 // touches shared rows).
 //
-// WHAT IT PINS (the traced invariant, see ../F3-api-token-truncated-snapshot.md):
+// WHAT IT PINS (the invariant traced by the F3-api-token-truncated-snapshot review lane):
 // a wdn_ token replays the minting session's group snapshot TOGETHER WITH that
 // snapshot's completeness, and an UNKNOWN completeness (SQL NULL, a 0.6-era row)
 // reads as INCOMPLETE. Concretely, through the real Postgres store and the real

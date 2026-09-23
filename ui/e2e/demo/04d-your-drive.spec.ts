@@ -11,10 +11,9 @@
  *     WARDYN_DEMO_SKIP_MODEL=1 WARDYN_DEMO_BASE_URL=http://localhost:8280 \
  *       scripts/record-demo.sh --video 04d
  *
- * THE SCRIPT IS ADJUDICATED — local/review-0.7/dialog/04d-script.md, after
- * four persona lanes and the ruling in its §8 (ledger:
- * local/review-0.7/dialog/04d-REWRITE-SET.md). Its §2 beat table and §3
- * transcript are in LOCKSTEP: every caption below is one line of §3, in order,
+ * THE SCRIPT IS ADJUDICATED, after four persona lanes and the ruling in its
+ * §8. Its §2 beat table and §3 transcript are in LOCKSTEP: every caption
+ * below is one line of §3, in order,
  * unedited, and the C-numbers in the comments are that transcript's. Two
  * sentences are FROZEN CANON quoted verbatim on the soundtrack — C19-C22 are
  * DRIVES.HONESTY's four sentences and C60 quotes DRIVES.RECLAIM_HINT — and are
