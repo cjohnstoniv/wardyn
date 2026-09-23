@@ -51,7 +51,12 @@ BASE_IMAGE          ?=
 # Emit "--build-arg NAME=VALUE" only when VALUE is non-empty, so an unset knob
 # never overrides a Dockerfile default with an empty string.
 _build_arg = $(if $(2),--build-arg $(1)="$(2)",)
+# The commit each local image is built from, with "-dirty" when tracked files
+# differ from it. scripts/gpl-source-offer.sh names it in a pre-publication
+# (bootstrap) GPL offer, read back from the image's SBOM (#357).
+IMAGE_REVISION := $(shell git describe --always --dirty --exclude='*' 2>/dev/null)
 DOCKER_BUILD_ARGS = \
+	$(if $(IMAGE_REVISION),--label org.opencontainers.image.revision=$(IMAGE_REVISION),) \
 	$(call _build_arg,NPM_REGISTRY,$(NPM_REGISTRY)) \
 	$(call _build_arg,HTTP_PROXY,$(HTTP_PROXY)) \
 	$(call _build_arg,HTTPS_PROXY,$(HTTPS_PROXY)) \
@@ -519,6 +524,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-gpl-source-offer.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh

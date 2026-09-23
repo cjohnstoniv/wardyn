@@ -52,6 +52,13 @@ cd "$(dirname "$0")/.."
 #     syft "wardyn/agent-novnc:local" -o syft-json \
 #       > "/tmp/sbom/local-sbom-agent-novnc.json"
 #
+# Build it with make, not a hand `docker build`: the Makefile's image targets
+# stamp the build commit on the image as org.opencontainers.image.revision
+# (with a `-dirty` suffix when tracked files differed from it), and the
+# generated note names that commit, read back from the SBOM. An image with no
+# such label, or one built from a dirty tree, is refused: its note would name
+# a commit the image was not built from.
+#
 # The per-image loop below tries the published-digest file first and falls
 # back to this local one automatically — no flag needed once the image is
 # listed in release.yml. To cover an image that is NOT YET in release.yml at
@@ -88,16 +95,6 @@ for b in ${BOOTSTRAP_IMAGES:-}; do
   ((skip)) || ALL_IMAGES+=("$b")
 done
 
-# Commit the bootstrap note below can point at, so "scanned before
-# publication" names something concrete instead of just asserting it. This is
-# HEAD at the time this SCRIPT runs, not necessarily the commit the local
-# image was actually built from — the two drift the moment a commit lands
-# between `make agent-image-<name>` and this script (see the header's
-# bootstrap recipe: build, then scan, then run this). It is the best proxy
-# available; the dirty-tree check below closes the one case that would make
-# it actively wrong rather than merely stale.
-SCAN_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-
 # ── manual supplements: components syft cannot see ──────────────────────────
 #
 # syft reads package-manager metadata (dpkg/apk/npm/...). A component
@@ -109,9 +106,9 @@ SCAN_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 # being hand-typed into a file this script overwrites wholesale.
 #
 # Fields: image|package|version|licence|source-url. Keep the version and URL
-# in sync with the Dockerfile ARG that pins them — nothing cross-checks this
-# array against the Dockerfile automatically, so a version bump there needs
-# the matching edit here.
+# in sync with the Dockerfile ARG that pins them. scripts/check-image-pins.sh
+# (`make lint`) fails when the websockify row's version or URL drifts from
+# deploy/images/novnc/Dockerfile; a new entry here needs its own check there.
 MANUAL_ENTRIES=(
   "agent-novnc|websockify|0.13.0|LGPL-3.0|https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz"
 )
@@ -157,18 +154,26 @@ if [ "${#missing[@]}" -gt 0 ]; then
   exit 1
 fi
 
-# A bootstrap entry's note names SCAN_SHA as the commit the local image was
-# built from (see above). On a dirty tree that claim is actively false — the
-# image was built from a working copy no commit describes — so refuse rather
-# than write a note that names the wrong source. Only bootstrap entries use
-# SCAN_SHA at all, so a dirty tree elsewhere (an unrelated in-progress edit)
-# does not block a run that only re-scans already-published images.
-bootstrap_imgs=()
-for img in "${!IS_BOOTSTRAP[@]}"; do
-  [ "${IS_BOOTSTRAP[$img]}" = 1 ] && bootstrap_imgs+=("$img")
+# A bootstrap entry's note names the commit its local image was BUILT from:
+# the org.opencontainers.image.revision label the Makefile stamps at build time
+# (see the header), which syft records under .source.metadata.labels. The
+# working tree at scan time says nothing about the build, so it is not read.
+# No label, or a `-dirty` one, means no commit describes what was built —
+# refuse rather than write a note naming the wrong source.
+declare -A BUILD_REV
+unbuilt=()
+for img in "${ALL_IMAGES[@]}"; do
+  [ "${IS_BOOTSTRAP[$img]}" = 1 ] || continue
+  rev=$(jq -r '.source.metadata.labels["org.opencontainers.image.revision"] // ""' "${SBOM_FILE[$img]}")
+  case "$rev" in
+    "")      unbuilt+=("$img: no org.opencontainers.image.revision label — build it with \`make agent-image-<name>\`, then rescan") ;;
+    *-dirty) unbuilt+=("$img: built from a dirty tree ($rev) — commit, rebuild with make, then rescan") ;;
+    *)       BUILD_REV["$img"]="$rev" ;;
+  esac
 done
-if [ "${#bootstrap_imgs[@]}" -gt 0 ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-  echo "FATAL: working tree is dirty and this run needs SCAN_SHA for bootstrap image(s) ${bootstrap_imgs[*]} — commit or stash first. A dirty-tree build's SCAN_SHA note would name a commit the local image wasn't actually built from." >&2
+if [ "${#unbuilt[@]}" -gt 0 ]; then
+  echo "FATAL: cannot name the build commit of bootstrap image(s):" >&2
+  printf '  %s\n' "${unbuilt[@]}" >&2
   exit 1
 fi
 
@@ -236,7 +241,7 @@ fi
       echo "## \`ghcr.io/cjohnstoniv/${img}\` (not yet published)"
       echo
       echo "_Scanned before publication, from \`wardyn/${img}:local\` built at commit"
-      echo "\`${SCAN_SHA}\` — the same recipe this image will publish from once it"
+      echo "\`${BUILD_REV[$img]}\` — the same recipe this image will publish from once it"
       echo "lands, though apt package versions can float between rebuilds of that"
       echo "recipe. No published digest exists yet to scan; this section will be"
       echo "replaced by a digest scan of the real tag once one exists._"

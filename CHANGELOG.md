@@ -14,13 +14,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   0.6.6–0.7.7 note in `deploy/images/third-party-gpl-historical.md` sat under a heading
   whose opening sentence said conveyance had ceased, while the tags it covers are still
   pullable; it now has its own heading stating the offer stands while they remain
-  pullable. `scripts/gpl-source-offer.sh` now refuses to run a bootstrap scan (the one
-  whose note names a build commit) on a dirty working tree, so it can no longer record a
-  commit the local image wasn't actually built from. `scripts/check-image-pins.sh` now
-  fails if the hand-listed websockify entry in `gpl-source-offer.sh`'s `MANUAL_ENTRIES`
-  drifts from `WEBSOCKIFY_VERSION` in `deploy/images/novnc/Dockerfile`. `docs/CI.md` now
-  says "all seven images" (a release now publishes `agent-vscode` and `agent-novnc` too),
-  matching every other doc already updated for that count.
+  pullable. The Makefile's image targets now stamp the build commit on every local image
+  (`org.opencontainers.image.revision`, suffixed `-dirty` when tracked files differed), and
+  `scripts/gpl-source-offer.sh` names that commit in a pre-publication (bootstrap) section,
+  read from the image's SBOM, instead of whatever HEAD was when the script ran. It refuses
+  an image built from a dirty tree or carrying no build commit. `scripts/check-image-pins.sh`
+  now fails if the hand-listed websockify entry in `gpl-source-offer.sh`'s `MANUAL_ENTRIES`
+  drifts from `deploy/images/novnc/Dockerfile`'s `WEBSOCKIFY_VERSION` pin or download URL.
+  `docs/CI.md` and `ROADMAP.md` now say seven images (a release now publishes
+  `agent-vscode` and `agent-novnc` too).
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

@@ -141,8 +141,9 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   approvals render per-kind (egress-domain approvals a member can act on,
   credential/tool_call ones they can only view).
 - **Signed, published, attested release images.** `.github/workflows/release.yml`
-  builds and publishes the five images a release ships (`wardynd`,
-  `wardyn-proxy`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`) to
+  builds and publishes the seven images a release ships (`wardynd`,
+  `wardyn-proxy`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`,
+  `agent-vscode`, `agent-novnc`) to
   `ghcr.io/cjohnstoniv/<name>` on a `vX.Y.Z` tag push, multi-arch
   (linux/amd64 + linux/arm64), and cosign-signs each keylessly (Fulcio/Rekor via
   the Actions OIDC token — no long-lived signing key to manage). Each digest
