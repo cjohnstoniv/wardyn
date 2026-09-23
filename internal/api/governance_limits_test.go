@@ -333,11 +333,11 @@ func TestGovernanceLimits(t *testing.T) {
 	t.Run("an OPERATOR short-circuits before the limits are ever read", func(t *testing.T) {
 		// denyMemberRequest's first line. An admin under an `all` assignment must
 		// not be bound by a row a security admin can write — and the exemption has
-		// to be the FIRST thing, not a check after the resolve.
+		// to be the FIRST thing, not a check after the resolve. The admin token,
+		// because an SSO session in the Admin view cannot launch at all.
 		srv, _, _ := govEscapeFixture(t, assignedStore(limitsProfile("everyone",
 			types.GovernanceLimits{DenyTaskModeExec: true, DenyInteractive: true})))
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-			ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), `{"agent":"claude-code"}`)
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, `{"agent":"claude-code"}`)
 		if w.Code != http.StatusCreated {
 			t.Errorf("admin create = %d, want 201: %s", w.Code, w.Body.String())
 		}
@@ -1008,8 +1008,7 @@ func TestGovernanceLimitsMaxConcurrentRuns(t *testing.T) {
 		srv := quotaFixture(t, assignedStore(limitsProfile("everyone",
 			types.GovernanceLimits{MaxConcurrentRuns: 1})))
 		for i := range 3 {
-			if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-				ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body); w.Code != http.StatusCreated {
+			if w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body); w.Code != http.StatusCreated {
 				t.Fatalf("admin run %d = %d, want 201: %s", i+1, w.Code, w.Body.String())
 			}
 		}

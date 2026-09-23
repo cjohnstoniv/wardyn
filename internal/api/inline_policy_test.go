@@ -181,7 +181,7 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 		t.Fatalf("member: policy.inline min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
 	}
 
-	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	w = do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
@@ -365,7 +365,7 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	}
 
 	// Operator (ceiling authority) is unclamped - their grant is kept.
-	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	w = do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}

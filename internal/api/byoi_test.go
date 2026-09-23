@@ -86,9 +86,9 @@ func TestBYOI_MemberDenied403(t *testing.T) {
 	// checks, not a replacement for them. devcontainer_repo alone degrades
 	// gracefully with no builder wired (unlike image, a hard 400) — assert the
 	// weaker "not 403" instead of a specific code so this doesn't pin an
-	// unrelated behavior.
-	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", admin, bodies["image"])
+	// unrelated behavior. The admin launches with the admin token: an SSO
+	// session in the Admin view cannot launch at all (refuseAdminViewLaunch).
+	w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, bodies["image"])
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("admin image, no builder: code = %d, want 400 (unchanged): %s", w.Code, w.Body.String())
 	}
@@ -102,7 +102,7 @@ func TestBYOI_MemberDenied403(t *testing.T) {
 	// errCreateRunNoStoreConfigured, not a crash, so it is now the exact code
 	// to assert rather than just "not 403".
 	h.srv.cfg.Store = createRunUnconfiguredStore{}
-	if w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", admin, bodies["devcontainer_repo"]); w.Code != http.StatusInternalServerError {
+	if w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, bodies["devcontainer_repo"]); w.Code != http.StatusInternalServerError {
 		t.Fatalf("admin devcontainer_repo: code = %d, want 500 (errCreateRunNoStoreConfigured — never 403)", w.Code)
 	}
 }

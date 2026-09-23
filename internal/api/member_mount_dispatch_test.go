@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -70,11 +71,17 @@ func mountFor(t *testing.T, spec runner.SandboxSpec, target string) runner.Mount
 }
 
 // createMemberRun drives POST /api/v1/runs for a run attaching ws and returns
-// the SandboxSpec the runner was handed.
+// the SandboxSpec the runner was handed. A nil session launches with the admin
+// token: an SSO session in the Admin view cannot launch (refuseAdminViewLaunch).
 func createMemberRun(t *testing.T, srv *Server, fr *fakeRunner, session *http.Cookie, wsID uuid.UUID) runner.SandboxSpec {
 	t.Helper()
 	body := `{"agent":"claude-code","task":"do the thing","workspace_id":"` + wsID.String() + `"}`
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", session, body)
+	var w *httptest.ResponseRecorder
+	if session == nil {
+		w = do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
+	} else {
+		w = doSSO(t, srv, http.MethodPost, "/api/v1/runs", session, body)
+	}
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
@@ -127,9 +134,8 @@ func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 func TestMemberMountPosture_OperatorRunUnstamped(t *testing.T) {
 	root, project := memberProjectRoot(t)
 	srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
-	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 
-	spec := createMemberRun(t, srv, fr, admin, memberOwnedWorkspace(st, "", project))
+	spec := createMemberRun(t, srv, fr, nil, memberOwnedWorkspace(st, "", project))
 
 	if spec.MemberMountRoots != nil {
 		t.Errorf("spec.MemberMountRoots = %v, want nil for an operator-owned workspace (today's driver path)", spec.MemberMountRoots)

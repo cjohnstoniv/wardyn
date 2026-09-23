@@ -23,6 +23,8 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
@@ -45,6 +47,31 @@ const (
 	// an admin one and outlive the mode that created it.
 	memberModeMintRefusal = "Exit member mode to mint a token or register a key."
 )
+
+// The S1 launch refusal (M-8): a run is a user act, so a browser session in the
+// Admin view does not start one.
+const (
+	adminViewLaunchRefusal = "Runs start in the user view. Use User view at the top of the console to start one."
+	adminViewLaunchReason  = "admin_view"
+)
+
+// refuseAdminViewLaunch answers POST /runs and POST /runs/preflight with a 409
+// when the caller is an SSO browser session in the Admin view, and reports
+// whether it did. The User view needs no test of its own: contextWithPrincipal
+// clamps its role to member, so isSecurityOperator is already false there.
+//
+// The CLI, CI and every bearer are untouched: the admin token and local mode
+// publish no OIDC human, and a wdn_ token carries its token id. A request that
+// carries both a session cookie and a bearer takes the cookie lane
+// (humanOrAdminAuth) and is refused here, the fail-closed direction.
+func (s *Server) refuseAdminViewLaunch(w http.ResponseWriter, r *http.Request) bool {
+	ctx := r.Context()
+	if oidcHumanFromContext(ctx) == "" || apiTokenIDFromContext(ctx) != uuid.Nil || !s.isSecurityOperator(ctx) {
+		return false
+	}
+	writeJSON(w, http.StatusConflict, errorBody{Error: adminViewLaunchRefusal, Reason: adminViewLaunchReason})
+	return true
+}
 
 // memberModeRequest is POST /me/member-mode's body. An ABSENT/empty body
 // decodes to enabled:false and answers 200 — deliberately, because that is what
