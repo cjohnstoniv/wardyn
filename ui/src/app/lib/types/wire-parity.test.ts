@@ -21,13 +21,15 @@
 // standalone probe runnable on its own, per the header comment convention
 // those files already establish.
 //
-// tsInterfaceTopKeys extends that idiom with brace-depth tracking:
-// SetupStatus declares several fields as INLINE anonymous object types
-// (`auth: { mode: ...; ... }`, `runner: { driver: ...; ... }`) rather than
-// named interfaces, so the flat line-by-line regex the other files use would
-// misread "mode"/"driver"/etc. as SetupStatus's OWN keys. Comments are
-// stripped first so example JSON or prose braces in a doc comment can't shift
-// the depth count either.
+// tsMembers extends that idiom with brace-depth tracking: SetupStatus
+// declares several fields as INLINE anonymous object types
+// (`auth: { mode: ...; ... }`, `platform: { os: string; wsl: boolean }`)
+// rather than named interfaces, so the flat line-by-line regex the other files
+// use would misread "mode"/"driver"/etc. as SetupStatus's OWN keys. The same
+// walk hands back each inline body, so those nested shapes are pinned against
+// their Go structs (SetupAuth, SetupRunner, ...) too. Comments are stripped
+// first so example JSON or prose braces in a doc comment can't shift the depth
+// count either.
 //
 // Run: cd ui && pnpm vitest run src/app/lib/types/wire-parity.test.ts
 
@@ -59,30 +61,55 @@ function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 }
 
-// Like the other files' tsInterfaceKeys, but only TOP-LEVEL properties: a
-// key is recorded only while brace depth is 0 (see the file header for why
-// SetupStatus needs this).
-function tsInterfaceTopKeys(src: string, name: string): string[] {
-  const m = new RegExp(`export\\s+interface\\s+${name}\\b[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(stripComments(src));
-  if (!m) throw new Error(`interface ${name} not found`);
-  const keys: string[] = [];
+// The top-level members of one TS object-type body, each mapped to its inline
+// object-type body when the member's type IS an inline `{ ... }` literal (null
+// otherwise). Members split at `;` or a newline, but only at brace depth 0, so
+// a nested key never reads as this body's own and a one-line
+// `platform: { os: string; wsl: boolean }` stays one member.
+function tsMembers(body: string): Map<string, string | null> {
+  const members = new Map<string, string | null>();
   let depth = 0;
-  for (const line of m[1].split("\n")) {
-    if (depth === 0) {
-      const k = /^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:/.exec(line);
-      if (k) keys.push(k[1]);
-    }
-    for (const ch of line) {
-      if (ch === "{") depth++;
-      else if (ch === "}") depth--;
+  let start = 0;
+  for (let i = 0; i <= body.length; i++) {
+    const ch = body[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") depth--;
+    else if (depth === 0 && (i === body.length || ch === ";" || ch === "\n")) {
+      const seg = body.slice(start, i);
+      const k = /^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:\s*(\{)?/.exec(seg);
+      if (k) members.set(k[1], k[2] ? seg.slice(k[0].length, seg.lastIndexOf("}")) : null);
+      start = i + 1;
     }
   }
-  return keys;
+  return members;
+}
+
+function tsInterfaceBody(src: string, name: string): string {
+  const m = new RegExp(`export\\s+interface\\s+${name}\\b[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(stripComments(src));
+  if (!m) throw new Error(`interface ${name} not found`);
+  return m[1];
+}
+
+// Like the other files' tsInterfaceKeys, but only TOP-LEVEL properties (see
+// the file header for why SetupStatus needs this).
+function tsInterfaceTopKeys(src: string, name: string): string[] {
+  return [...tsMembers(tsInterfaceBody(src, name)).keys()];
+}
+
+// The keys of an inline object type declared as one member of an interface —
+// SetupStatus's `auth: { ... }`, `runner: { ... }` and the rest.
+function tsInlineKeys(src: string, iface: string, member: string): string[] {
+  const body = tsMembers(tsInterfaceBody(src, iface)).get(member);
+  if (body == null) throw new Error(`${iface}.${member} is not an inline object type`);
+  return [...tsMembers(body).keys()];
 }
 
 describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   const root = repoRoot();
   const setupGo = readFileSync(join(root, "internal/api/setup.go"), "utf8");
+  const setupChecksGo = readFileSync(join(root, "internal/api/setup_checks.go"), "utf8");
+  const bedrockGo = readFileSync(join(root, "internal/api/runs_bedrock_probe.go"), "utf8");
+  const harnessToolGo = readFileSync(join(root, "internal/api/setup_integrations.go"), "utf8");
   const modelAccessGo = readFileSync(join(root, "internal/api/modelaccess.go"), "utf8");
   const attachGo = readFileSync(join(root, "internal/api/attach_holder.go"), "utf8");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
@@ -102,6 +129,35 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     // -error fallback, never emitted by handleSetupStatus).
     const unknown = tsKeys.filter((k) => k !== "unreachable" && !goTags.includes(k));
     expect(unknown, "TS claims these SetupStatus keys but Go never sends them").toEqual([]);
+  });
+
+  // SetupStatus's nested DTOs — most of the /setup/status surface. The test
+  // above proves only that `auth`, `checks`, ... exist; these pin what is inside
+  // them (SetupCheck.blocking is the 0.7.8 server-side setup gate). Named TS
+  // interfaces first, then the members setup.ts declares as inline types.
+  it.each([
+    ["SetupCheck", setupChecksGo],
+    ["SetupProvider", setupGo],
+    ["SetupHarness", setupGo],
+    ["SetupBedrock", bedrockGo],
+    ["SetupHarnessTool", harnessToolGo],
+  ])("%s: full parity with the TS mirror of the same name", (name, goSrc) => {
+    const goTags = goJSONTags(goSrc, name);
+    expect(goTags.length).toBeGreaterThan(0);
+    expect(new Set(tsInterfaceTopKeys(setupTs, name))).toEqual(new Set(goTags));
+  });
+
+  it.each([
+    ["SetupAuth", "auth"],
+    ["SetupRunner", "runner"],
+    ["SetupSecrets", "secrets"],
+    ["SetupAgeKey", "age_key"],
+    ["SetupPlatform", "platform"],
+    ["SetupDeployment", "deployment"],
+  ])("%s: full parity with SetupStatus.%s's inline TS type", (goName, member) => {
+    const goTags = goJSONTags(setupGo, goName);
+    expect(goTags.length).toBeGreaterThan(0);
+    expect(new Set(tsInlineKeys(setupTs, "SetupStatus", member))).toEqual(new Set(goTags));
   });
 
   it("SetupModelAccess (`model_access`): full parity with the TS mirror", () => {
