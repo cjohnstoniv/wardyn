@@ -141,7 +141,7 @@ describe("approvalSignals — held vs passive", () => {
   });
 
   // A row the server has actually moved off PENDING (decided or expired) is
-  // filtered before isHeld/isStaleHold even run — it produces no signal at
+  // filtered before isHeld even runs — it produces no signal at
   // all, the same as any other decided approval.
   it("an EXPIRED tool_call produces no signal for its run", () => {
     const s = approvalSignals([approval({ kind: "tool_call", state: "EXPIRED" })]);
