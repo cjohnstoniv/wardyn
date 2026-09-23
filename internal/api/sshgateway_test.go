@@ -1250,8 +1250,13 @@ func TestSSHGateway_MaxConnectionsEnforced(t *testing.T) {
 // connection that never sends the SSH version string is closed by the
 // server on its own within sshHandshakeTimeout, not held open forever —
 // ssh.NewServerConn has no default timeout, so this deadline is the only
-// thing that bounds it. Slow by design (waits out the real constant).
+// thing that bounds it. It shrinks sshHandshakeTimeout instead of waiting out
+// the real 15s constant (restored after — see
+// TestSSHHandshakeTimeout_ProductionValueUnchanged).
 func TestSSHGateway_HandshakeTimeoutFires(t *testing.T) {
+	prevTimeout := setSSHHandshakeTimeout(50 * time.Millisecond)
+	t.Cleanup(func() { setSSHHandshakeTimeout(prevTimeout) })
+
 	h := newSSHTestHarness(t, newSSHMemStore(), &sshFakeRunner{})
 
 	conn, err := net.DialTimeout("tcp", h.addr, 2*time.Second)
@@ -1269,11 +1274,20 @@ func TestSSHGateway_HandshakeTimeoutFires(t *testing.T) {
 	// distinguishes "closed by the server's own deadline" (io.Copy reaches
 	// EOF/an error before ours fires) from "held open forever" (ours fires
 	// first, surfacing as a Timeout() net.Error).
-	_ = conn.SetReadDeadline(time.Now().Add(sshHandshakeTimeout + 5*time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(sshHandshakeTimeout() + 5*time.Second))
 	_, rerr := io.Copy(io.Discard, conn)
 	var netErr net.Error
 	if errors.As(rerr, &netErr) && netErr.Timeout() {
 		t.Fatalf("connection stayed open past sshHandshakeTimeout+5s margin — the server-side deadline never closed it")
+	}
+}
+
+// TestSSHHandshakeTimeout_ProductionValueUnchanged guards the production
+// default: a test that shrinks sshHandshakeTimeout must restore it via
+// t.Cleanup, never leave it lowered for a package that ships it.
+func TestSSHHandshakeTimeout_ProductionValueUnchanged(t *testing.T) {
+	if got := sshHandshakeTimeout(); got != 15*time.Second {
+		t.Fatalf("sshHandshakeTimeout() = %v, want the production 15s default", got)
 	}
 }
 

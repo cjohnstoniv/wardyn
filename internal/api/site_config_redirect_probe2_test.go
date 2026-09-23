@@ -176,6 +176,13 @@ func TestRedirectProbe2_AcceptAndHoldIsBypass(t *testing.T) {
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
 	}
+	// Shrink the wait: the property under test is "curl reports bypass", not
+	// the real production budget each held curl stalls against (unset,
+	// redirectProbeScript keeps its 5s/15s defaults — see the doc comment on
+	// redirectProbeScript).
+	t.Setenv("WARDYN_PROBE_CONNECT_TIMEOUT", "1")
+	t.Setenv("WARDYN_PROBE_MAX_TIME", "1")
+
 	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))

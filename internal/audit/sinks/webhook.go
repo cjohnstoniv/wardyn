@@ -37,6 +37,12 @@ type WebhookConfig struct {
 	MaxRetries int `json:"max_retries,omitempty"`
 	// RetryBaseDelay is the initial backoff delay (default 200ms).
 	RetryBaseDelay string `json:"retry_base_delay,omitempty"`
+	// Timeout bounds the HTTP client's per-request wait, including a Close()
+	// drain against a wedged collector (default 15s). Parsed as a duration
+	// string. Exposed purely so a test can shrink it instead of waiting out
+	// the real 15s to exercise the "Close is bounded" shutdown path — the
+	// production default is unchanged when omitted.
+	Timeout string `json:"timeout,omitempty"`
 }
 
 func (c *WebhookConfig) withDefaults() WebhookConfig {
@@ -55,6 +61,9 @@ func (c *WebhookConfig) withDefaults() WebhookConfig {
 	}
 	if out.RetryBaseDelay == "" {
 		out.RetryBaseDelay = "200ms"
+	}
+	if out.Timeout == "" {
+		out.Timeout = "15s"
 	}
 	return out
 }
@@ -113,12 +122,16 @@ func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sinks.webhook: invalid retry_base_delay %q: %w", cfg.RetryBaseDelay, err)
 	}
+	timeout, err := time.ParseDuration(cfg.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("sinks.webhook: invalid timeout %q: %w", cfg.Timeout, err)
+	}
 	return &WebhookSink{
 		cfg:       cfg,
 		interval:  interval,
 		baseDelay: base,
 		queue:     make(chan types.AuditEvent, cfg.BufferSize),
-		client:    &http.Client{Timeout: 15 * time.Second},
+		client:    &http.Client{Timeout: timeout},
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}, nil

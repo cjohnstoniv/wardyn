@@ -170,6 +170,30 @@ func shortBudget(t *testing.T, v string) {
 	t.Setenv(envCredentialReauthTimeout, v)
 }
 
+// shrinkReauthFloor lowers minCredentialReauthTimeout to d for one test,
+// restoring the real 10s production floor after. Used only by tests that wait
+// out a hold's FULL budget to observe its expiry, so they wait d instead of
+// the real 10s — pair it with shortBudget(t, v) where v is below d, so the
+// clamp still lands on the (now-shrunk) floor exactly as it does in
+// production. See TestMinCredentialReauthTimeout_ProductionFloorUnchanged for
+// the guard that every other test leaves the real floor alone.
+func shrinkReauthFloor(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := minCredentialReauthTimeout
+	minCredentialReauthTimeout = d
+	t.Cleanup(func() { minCredentialReauthTimeout = prev })
+}
+
+// TestMinCredentialReauthTimeout_ProductionFloorUnchanged guards the
+// production default: a test that shrinks minCredentialReauthTimeout must
+// restore it via t.Cleanup, never leave it lowered for a package that ships
+// it.
+func TestMinCredentialReauthTimeout_ProductionFloorUnchanged(t *testing.T) {
+	if minCredentialReauthTimeout != 10*time.Second {
+		t.Fatalf("minCredentialReauthTimeout = %v, want the production 10s floor", minCredentialReauthTimeout)
+	}
+}
+
 // THE HAPPY PATH: 423, two PENDING polls, APPROVED, exactly ONE re-resolve, and
 // the header the SDK needed.
 func TestResolveInjectionHolding_HoldsThenResolvesOnce(t *testing.T) {
@@ -241,14 +265,15 @@ func TestResolveInjectionHolding_NonLockedErrorIsUnchanged(t *testing.T) {
 // sentinel that earns the 401 body.
 func TestResolveInjectionHolding_TimesOutInsideItsBudget(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s") // clamped UP to the 10s floor either way
+	shrinkReauthFloor(t, 50*time.Millisecond)
+	shortBudget(t, "1ms") // clamped UP to the (shrunk) floor either way
 	is := newInjectionServer(t, 1000)
 	reader := &fakeApprovalReader{steps: pending(1)}
 	tok := &tokenSource{}
 	tok.Set("t")
 
-	// The BUDGET, not a caller, is what expires a hold. Clamped to the 10s
-	// floor, so the wait is real; the assertion is the sentinel and the bound.
+	// The BUDGET, not a caller, is what expires a hold. Clamped to the floor,
+	// so the wait is real; the assertion is the sentinel and the bound.
 	inj := holdInjector(t, is, reader)
 	start := time.Now()
 	_, _, err := inj.resolveCtx(context.Background(), holdHost)
@@ -763,7 +788,8 @@ func TestResolveCtx_LeaderDisconnectLeavesTheWorkflowAndItsDeadlineAlone(t *test
 // between one recorded expiry and one per retry for ten minutes.
 func TestResolveCtx_LateArrivalAfterTimeoutGetsTheStickyResult(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s")
+	shrinkReauthFloor(t, 50*time.Millisecond)
+	shortBudget(t, "1ms") // clamped UP to the (shrunk) floor; the first call below waits it out
 	is := newInjectionServer(t, 1000) // 423 forever
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := holdInjector(t, is, reader)
@@ -806,7 +832,8 @@ func TestResolveCtx_LateArrivalAfterTimeoutGetsTheStickyResult(t *testing.T) {
 // counted lifecycle and its own budget.
 func TestResolveCtx_ANewApprovalIDStartsASecondCountedWorkflow(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s")
+	shrinkReauthFloor(t, 50*time.Millisecond) // two full-budget waits below
+	shortBudget(t, "1ms")                     // clamped UP to the (shrunk) floor
 	is := newInjectionServer(t, 1000)
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := holdInjector(t, is, reader)

@@ -45,7 +45,8 @@ func reviewInjector(t *testing.T, is *injectionServer, reader approvalReader) *i
 // a NEW counted workflow with a FRESH full budget.
 func TestReview_FollowerThroughResolveCtxQueuesOnReMuAndStartsASecondWorkflow(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s")                  // the clamp's floor
+	shrinkReauthFloor(t, 50*time.Millisecond)
+	shortBudget(t, "1ms")                  // clamped UP to the (shrunk) floor
 	is := newInjectionServer(t, 1_000_000) // the control plane answers 423 forever
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := reviewInjector(t, is, reader)
@@ -85,7 +86,8 @@ func TestReview_FollowerThroughResolveCtxQueuesOnReMuAndStartsASecondWorkflow(t 
 // workflow with a SECOND full budget — N callers, N budgets, one lapse.
 func TestReview_QueuedLiveFollowerOpensASecondFullBudgetWorkflow(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s")
+	shrinkReauthFloor(t, 50*time.Millisecond)
+	shortBudget(t, "1ms") // clamped UP to the (shrunk) floor; two sequential waits below
 	is := newInjectionServer(t, 1_000_000)
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := reviewInjector(t, is, reader)
@@ -103,7 +105,7 @@ func TestReview_QueuedLiveFollowerOpensASecondFullBudgetWorkflow(t *testing.T) {
 	if counted != 1 {
 		t.Errorf("counted workflows = %d, want 1 — the queued caller opened a fresh full-budget hold for the SAME lapse", counted)
 	}
-	if elapsed > 12*time.Second {
-		t.Errorf("one lapse held callers for %v with a 10s budget — two sequential budgets, not one shared workflow", elapsed.Round(time.Second))
+	if elapsed > time.Second {
+		t.Errorf("one lapse held callers for %v with a %v budget — two sequential budgets, not one shared workflow", elapsed.Round(time.Millisecond), minCredentialReauthTimeout)
 	}
 }

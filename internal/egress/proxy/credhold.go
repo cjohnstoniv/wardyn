@@ -50,10 +50,8 @@ const (
 	// order of a device-code window. A hold that outlives the sign-in it waits
 	// for waits for nothing.
 	defaultCredentialReauthTimeout = 600 * time.Second
-	// The clamp. A 1-second budget would make the feature a lie (one poll, then
-	// the same failure as before); an hour-long one would park a sandbox's
+	// The clamp's upper bound. An hour-long budget would park a sandbox's
 	// connection long past any SDK's patience and any person's attention.
-	minCredentialReauthTimeout = 10 * time.Second
 	maxCredentialReauthTimeout = 1800 * time.Second
 	// maxReauthHolds bounds re-auth WORKFLOWS per run — the sidecar half of the
 	// control plane's own cap of the same name. A run that has asked its owner
@@ -81,6 +79,15 @@ const (
 	// read deadline after each point that can hold (rearmBodyDeadline).
 	maxCapabilityHoldTimeout = 240 * time.Second
 )
+
+// minCredentialReauthTimeout is the clamp's lower bound: a 1-second budget
+// would make the feature a lie (one poll, then the same failure as before).
+//
+// A var (not a const) purely so a test that waits out a hold's FULL budget can
+// shrink the floor instead of taking the real 10s — see
+// TestMinCredentialReauthTimeout_ProductionFloorUnchanged for the guard that
+// the production default itself is untouched.
+var minCredentialReauthTimeout = 10 * time.Second
 
 // capabilityHoldBudget is the re-auth knob, clamped to the capability ceiling.
 func capabilityHoldBudget() time.Duration {

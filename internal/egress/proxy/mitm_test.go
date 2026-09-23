@@ -576,6 +576,14 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 	holdPollInterval = 5 * time.Millisecond
 	defer func() { holdPollInterval = prevPoll }()
 
+	// Shrink the clamp floor: the "budget really expired" case below waits out
+	// the whole budget, so this trades the real 10s production floor for a
+	// test-scale one (restored after — see
+	// TestMinCredentialReauthTimeout_ProductionFloorUnchanged).
+	prevFloor := minCredentialReauthTimeout
+	minCredentialReauthTimeout = 50 * time.Millisecond
+	defer func() { minCredentialReauthTimeout = prevFloor }()
+
 	// THE DECISION ROW IS NARROWER THAN THE 401 (security NIT-B). Every case
 	// below ends without a credential and every one of them earns the modelled
 	// 401 — the sandbox has to be told. Only ONE of them expired, and only that
@@ -591,7 +599,7 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 		sentence string
 	}{{
 		name:     "the budget really expired",
-		budget:   "10s", // the clamp's floor
+		budget:   "1ms", // clamped UP to the (shrunk) floor
 		steps:    pending(1),
 		wantRow:  true,
 		sentence: reauthTimedOutSentence,
