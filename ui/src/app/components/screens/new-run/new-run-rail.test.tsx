@@ -51,6 +51,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
+import { aheadByHours } from "../../../lib/test-clock";
 import { AUTONOMY_RAIL, autonomyBoundSentence } from "../../../lib/governance-copy";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import type { AutonomyResolution } from "../../../lib/api/governance";
@@ -480,7 +481,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
   });
 
   it("expiring renders the deadline line, and the run is never called refused", () => {
-    const deadline = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    const deadline = aheadByHours(3);
     renderRail({
       agentRow: modelAccessRow(),
       modelAccess: { state: "expiring", action: `Sign in again before ${deadline}`, deadline },

@@ -71,13 +71,25 @@ if [[ "${WARDYN_E2E_REAL_MODEL:-}" == "1" ]]; then
 fi
 
 # ── wardynd lifecycle (this driver owns it for the duration) ─────────────────
-# ponytail: teardown is PATTERN-based, not PID-based, on purpose — it must also
-# reap a wardynd this script did not start (see start_wardynd below). Do not
-# "improve" it by remembering the nohup'd PID; that reintroduces the false-green
-# this guards against. (run-e2e-live.sh reads its own PID because it has the
-# opposite policy: kill only what it started.)
+# ponytail: teardown targets whatever holds BASE's port, not a remembered PID,
+# on purpose — it must also reap a wardynd this script did not start (see
+# start_wardynd below). Do not "improve" it by remembering the nohup'd PID;
+# that reintroduces the false-green this guards against. (run-e2e-live.sh
+# reads its own PID because it has the opposite policy: kill only what it
+# started.)
+#
+# This used to be `pkill -f 'bin/wardynd'`, which matches every wardynd on the
+# host by command-line substring — including a developer's own daemon serving
+# an unrelated port (#210). Killing only the process bound to BASE's port
+# keeps the "reap a stray/foreign wardynd" property the pattern match was for,
+# without touching one bound elsewhere.
+BASE_PORT="${BASE##*:}"
 stop_wardynd() {
-  pkill -f 'bin/wardynd' >/dev/null 2>&1 || true
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k "${BASE_PORT}/tcp" >/dev/null 2>&1 || true
+  else
+    pkill -f 'bin/wardynd' >/dev/null 2>&1 || true
+  fi
   wait_down "${BASE}" || warn "a wardynd is still answering ${BASE} after stop"
 }
 

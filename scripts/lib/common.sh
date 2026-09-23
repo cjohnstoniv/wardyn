@@ -46,6 +46,17 @@ wait_down() {
   return 1
 }
 
+# pick_free_port — ask the OS for a free TCP port on 127.0.0.1 and print it.
+# Bind then immediately close: the same release-before-use trick
+# scripts/lib/up_doctor_ports_test.sh already uses to deterministically occupy
+# one, run in reverse. There is a small window where another process grabs the
+# port before the caller binds it, but not one worth a lockfile protocol for a
+# test harness — the caller (e2e-backend.sh) already retries once on a bind
+# failure. Requires python3, already relied on elsewhere under scripts/.
+pick_free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }

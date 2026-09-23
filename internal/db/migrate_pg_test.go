@@ -83,21 +83,21 @@ func isConcurrentMigrateRace(err error) bool {
 	return false
 }
 
-// embeddedMigrationCount is the number of *.sql migrations bundled in the embed
-// FS; schema_migrations must track each exactly once after Migrate().
-func embeddedMigrationCount(t *testing.T) int {
+// embeddedMigrationNames is the *.sql filenames bundled in the embed FS;
+// schema_migrations must track each exactly once after Migrate().
+func embeddedMigrationNames(t *testing.T) []string {
 	t.Helper()
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
 	}
-	n := 0
+	var names []string
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			n++
+			names = append(names, e.Name())
 		}
 	}
-	return n
+	return names
 }
 
 // TestMigrateAppliesAndIsIdempotent proves the live-DB idempotency the Migrate()
@@ -109,45 +109,62 @@ func TestMigrateAppliesAndIsIdempotent(t *testing.T) {
 	pool := pgPool(t) // first Migrate() already ran
 	ctx := context.Background()
 
-	want := embeddedMigrationCount(t)
-	if want == 0 {
+	names := embeddedMigrationNames(t)
+	if len(names) == 0 {
 		t.Fatal("no embedded migrations; embed glob is broken")
 	}
 
-	// Every embedded migration must be tracked exactly once after the first run.
-	countRecorded := func() int {
+	// Assert by filename SET, not by a bare COUNT(*): pgPool migrates the
+	// database WARDYN_TEST_PG names, and on a local server that database is
+	// shared across worktrees/branches, each of which may carry its own extra
+	// migration files (#210). A COUNT(*) cannot tell "Migrate skipped one of
+	// ours" apart from "another branch's migration is also in here" — it just
+	// reports an off-by-N against the wrong culprit. Filtering to exactly our
+	// embedded filenames tolerates a foreign row while still catching a
+	// genuine miss or a genuine duplicate, and names which filename is which.
+	recordedCounts := func() map[string]int {
 		t.Helper()
-		var n int
-		if err := pool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
-			t.Fatalf("count schema_migrations: %v", err)
+		rows, err := pool.Query(ctx,
+			`SELECT filename, COUNT(*) FROM schema_migrations WHERE filename = ANY($1) GROUP BY filename`, names)
+		if err != nil {
+			t.Fatalf("count schema_migrations by filename: %v", err)
 		}
-		return n
+		defer rows.Close()
+		counts := make(map[string]int, len(names))
+		for rows.Next() {
+			var filename string
+			var n int
+			if err := rows.Scan(&filename, &n); err != nil {
+				t.Fatalf("scan schema_migrations row: %v", err)
+			}
+			counts[filename] = n
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate schema_migrations: %v", err)
+		}
+		return counts
 	}
-	if got := countRecorded(); got != want {
-		t.Fatalf("schema_migrations rows after first Migrate = %d, want %d", got, want)
+	assertEachAppliedOnce := func(when string) {
+		t.Helper()
+		counts := recordedCounts()
+		for _, name := range names {
+			switch counts[name] {
+			case 0:
+				t.Errorf("%s: %s is not recorded in schema_migrations", when, name)
+			case 1:
+				// expected
+			default:
+				t.Errorf("%s: %s is tracked %d times; Migrate is not idempotent", when, name, counts[name])
+			}
+		}
 	}
+	assertEachAppliedOnce("after first Migrate")
 
-	// No filename is tracked more than once (filename is the PK; a dupe would
-	// mean a migration was applied twice).
-	var maxDupe int
-	if err := pool.QueryRow(ctx, `
-		SELECT COALESCE(MAX(c),0) FROM (
-			SELECT COUNT(*) AS c FROM schema_migrations GROUP BY filename
-		) g`).Scan(&maxDupe); err != nil {
-		t.Fatalf("dupe check: %v", err)
-	}
-	if maxDupe != 1 {
-		t.Errorf("a migration filename is tracked %d times; Migrate is not idempotent", maxDupe)
-	}
-
-	// Re-running Migrate() must be a clean no-op: same row count, no error.
+	// Re-running Migrate() must be a clean no-op: same tracked set, no error.
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("second Migrate (should be no-op): %v", err)
 	}
-	if got := countRecorded(); got != want {
-		t.Errorf("schema_migrations rows after second Migrate = %d, want %d (re-run must not add rows)", got, want)
-	}
+	assertEachAppliedOnce("after second Migrate")
 }
 
 // TestMigrateAdvisoryLockSerializesBoots proves N5: Migrate() takes the

@@ -33,6 +33,21 @@ func makeEvent(action string) types.AuditEvent {
 	}
 }
 
+// pollUntil waits for cond to go true, polling every 5ms up to timeout. A
+// fixed sleep sized to "the flush interval plus some slack" is a guess about
+// how fast the machine running the test is; this waits exactly as long as the
+// condition takes, up to the ceiling.
+func pollUntil(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // collectBatches reads from a channel and counts total events received across
 // all HTTP requests to the httptest server.
 func TestWebhookSink_Batching(t *testing.T) {
@@ -88,8 +103,7 @@ func TestWebhookSink_Batching(t *testing.T) {
 		}
 	}
 
-	// Wait for flush interval + some slack.
-	time.Sleep(200 * time.Millisecond)
+	pollUntil(t, 2*time.Second, func() bool { return int(received.Load()) >= total })
 	cancel()
 	<-done
 
@@ -163,7 +177,7 @@ func TestWebhookSink_RetryOnServerError(t *testing.T) {
 	}()
 
 	_ = sink.Emit(ctx, makeEvent("retry.test"))
-	time.Sleep(500 * time.Millisecond)
+	pollUntil(t, 2*time.Second, func() bool { return attempts.Load() >= 3 })
 	cancel()
 	<-done
 
@@ -258,7 +272,7 @@ func TestWebhookSink_DropCounterOnRetryExhaustion(t *testing.T) {
 	for attempts.Load() < int32(maxRetries) && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	time.Sleep(50 * time.Millisecond)
+	pollUntil(t, 2*time.Second, func() bool { return sink.Drops() != 0 })
 
 	if drops := sink.Drops(); drops != 1 {
 		t.Errorf("drop counter after retry exhaustion: got %d, want 1", drops)

@@ -40,8 +40,32 @@ cd "${REPO_ROOT}"
 . "${REPO_ROOT}/scripts/lib/common.sh"
 wardyn_pick_docker_host
 
-PORT="${WARDYN_E2E_ADDR:-:8088}"; PORT="${PORT#*:}"
-DB="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
+# Two default invocations on one host — two worktrees, two lanes, a developer
+# box and CI at once — used to fight over the same fixed :8088/:8089 and the
+# same "wardyn_e2e" database name (#210). Auto-pick when the caller has not
+# pinned one; an explicit WARDYN_E2E_ADDR/WARDYN_E2E_UI_ADDR/
+# WARDYN_E2E_PG_DBNAME is still honored verbatim, exactly as before.
+if [[ -z "${WARDYN_E2E_ADDR:-}" ]]; then
+  WARDYN_E2E_ADDR=":$(pick_free_port)"
+fi
+if [[ -z "${WARDYN_E2E_UI_ADDR:-}" ]]; then
+  ui_port="$(pick_free_port)"
+  # wardynd refuses to boot with UI_ADDR == ADDR (e2e-backend.sh's own
+  # comment); pick_free_port's bind-then-close race makes that collision rare
+  # but not impossible, so reroll once rather than fail the whole run over it.
+  [[ ":${ui_port}" == "${WARDYN_E2E_ADDR}" ]] && ui_port="$(pick_free_port)"
+  WARDYN_E2E_UI_ADDR=":${ui_port}"
+fi
+export WARDYN_E2E_ADDR WARDYN_E2E_UI_ADDR
+if [[ -z "${WARDYN_E2E_PG_DBNAME:-}" ]]; then
+  # $$ (this script's own PID), not the picked port: two lanes racing to
+  # provision the SAME never-before-seen database name would otherwise both
+  # pass cmd_up's "CREATE DATABASE ... || true" and share one schema reset.
+  WARDYN_E2E_PG_DBNAME="wardyn_e2e_$$"
+fi
+
+PORT="${WARDYN_E2E_ADDR}"; PORT="${PORT#*:}"
+DB="${WARDYN_E2E_PG_DBNAME}"
 # Overridable PG host:port (the default may be held by a foreign container on a
 # shared box); the database name stays coupled to WARDYN_E2E_PG_DBNAME. The
 # seed/reset path (e2e-backend.sh) still goes through `docker exec
