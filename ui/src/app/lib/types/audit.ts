@@ -98,14 +98,18 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   // synchronously, before any approval row exists — push_rules.go), named
   // distinctly rather than falling into the generic "Brokered" label every
   // OTHER brokered:* source gets below.
-  if (source === "brokered:git:push-rules") return { label: "Push refused — path denied by policy", tone: "danger" };
+  //
+  // DRAFT (canon pending owner approval, packet 7b) — review finding 4: these
+  // five labels are the packet-7b proposal, not yet owner-frozen the way the
+  // rest of this function's strings are.
+  if (source === "brokered:git:push-rules") return { label: "Push refused — a denied path", tone: "danger" };
   if (source === "brokered:git:push-held-unattended") {
-    return { label: "Push refused — unattended run, nobody to ask", tone: "danger" };
+    return { label: "Push refused — needs a review nobody can give", tone: "danger" };
   }
-  if (source === "brokered:git:push-held") return { label: "Push refused after review", tone: "danger" };
+  if (source === "brokered:git:push-held") return { label: "Push refused — not approved", tone: "danger" };
   if (source === "brokered:git:push-too-large") return { label: "Push refused — too large to inspect", tone: "danger" };
   if (source === "brokered:git:push-uninspectable") {
-    return { label: "Push refused — could not be inspected", tone: "danger" };
+    return { label: "Push refused — couldn't be inspected", tone: "danger" };
   }
   // builtin:upstream-proxy is the ONE builtin:* value that is an ALLOW, not a
   // refusal: recorded once per run, at proxy construction, to audit the

@@ -278,9 +278,12 @@ export function LiveApprovals({
               // where the sign-in belongs — the same
               // decision-visible-where-it-happens rule the rows above follow.
               a.kind === "credential_reauth" ||
-              // #181 — a held push parks the sandbox live, exactly like a
-              // tool_call hold: git is waiting on the open connection for as
-              // long as this row stays PENDING (push_hold.go).
+              // #181 — a held push parks git on the open connection for at
+              // most push_rules.hold_seconds (isHeld's own push_content doc,
+              // lib/types/approvals.ts), and the row then stays a decidable
+              // passive pending the rest of the way — still surfaced here
+              // either way, since a retry of the same push rejoins this same
+              // row and re-enters the hold.
               a.kind === "push_content" ||
               (a.kind === "credential" && credentialKind(a.requested_scope) === "api_key")),
         ),

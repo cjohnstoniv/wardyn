@@ -171,7 +171,7 @@ function deriveTitle(kind: ApprovalKind, scope: Scope): string {
     // directly, which is PENDING-tense and would read wrong on a decided row).
     case "push_content": {
       const repo = str(scope, "repo");
-      return repo ? `Push to ${repo}` : PUSH.KIND_LABEL;
+      return repo ? PUSH.LIST_TITLE(repo) : PUSH.KIND_LABEL;
     }
     default:
       return kindLabel(kind);

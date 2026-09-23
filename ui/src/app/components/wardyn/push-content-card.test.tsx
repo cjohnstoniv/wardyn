@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, within } from "@testing-library/react";
 import type { ApprovalRequest } from "../../lib/types";
 import type { PushContentScope } from "../../lib/types/approvals";
 import { PushContentCard, type PushCardRun } from "./push-content-card";
@@ -69,8 +69,8 @@ describe("PushContentCard — held (#181)", () => {
     for (const p of paths) expect(within(card).getByText(p)).toBeInTheDocument();
     expect(within(card).getByText(PUSH.PATHS_MORE(4))).toBeInTheDocument();
     expect(within(card).getByText(PUSH.PATHS_NOTE)).toBeInTheDocument();
-    // No expand/"view all" affordance — the collapsed raw-scope <details> is
-    // the only disclosure control this card carries.
+    // No expand/"view all" affordance at all (Q181-2) — the card carries no
+    // raw-scope disclosure control; the full list lives in the audit trail.
     expect(within(card).queryByRole("button", { name: /more|expand|all/i })).not.toBeInTheDocument();
   });
 
@@ -109,6 +109,40 @@ describe("PushContentCard — held (#181)", () => {
     expect(within(card).queryByText(/^Commits$/)).not.toBeInTheDocument();
   });
 
+  // Review finding 7 — a broader guard than the text-only check above:
+  // acts_as must not leak through ANY attribute (title, aria-label, ...) on
+  // ANY element in the card, not just as visible text. innerHTML serializes
+  // every attribute along with text content, so one substring check covers
+  // both.
+  it("never leaks the raw acts_as through any attribute (title/aria-label) anywhere in the card", () => {
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    const card = screen.getByTestId("push-content-card");
+    expect(card.innerHTML).not.toContain("github_token:11111111-1111-1111-1111-111111111111");
+  });
+
+  // Review finding 7 — the ADO REST digest must not render as "Commit"/
+  // "Commits" in ANY form (a label, a title attribute, an aria-label), not
+  // just as a <dt> field.
+  it("never renders 'Commit'/'Commits' in any form for an ADO REST push's body digest", () => {
+    render(
+      <PushContentCard
+        item={push({
+          requested_scope: {
+            acts_as_kind: "ado_entra",
+            commits: ["b".repeat(64)], // a SHA-256 of the request body, not an object id
+          } as Partial<PushContentScope>,
+        })}
+        securityOperator
+        run={RUNNING}
+        busy={false}
+        onApprove={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    );
+    const card = screen.getByTestId("push-content-card");
+    expect(card.innerHTML).not.toMatch(/commit/i);
+  });
+
   it("reuses the approval banner labels for What/Blast, with PUSH.WHAT/BLAST", () => {
     render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
     const card = screen.getByTestId("push-content-card");
@@ -120,6 +154,55 @@ describe("PushContentCard — held (#181)", () => {
     render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
     expect(screen.getByText(PUSH.HELD_NOTE)).toBeInTheDocument();
     expect(screen.getByText(PUSH.APPROVE_NOTE)).toBeInTheDocument();
+  });
+});
+
+// Review finding 2 — HELD_NOTE only holds while the proxy's own bounded
+// window (isHeld's push_content arm, lib/types/approvals.ts) is still open;
+// past it the card flips to HELD_EXPIRED on its own, via a timer, not only on
+// the next poll tick.
+describe("PushContentCard — the held note flips to expired at the window end", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows HELD_NOTE for a fresh row and HELD_EXPIRED once the 600s ceiling passes, with no poll/re-render forced from outside", () => {
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    expect(screen.getByText(PUSH.HELD_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText(PUSH.HELD_EXPIRED)).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(600_001);
+    });
+
+    expect(screen.getByText(PUSH.HELD_EXPIRED)).toBeInTheDocument();
+    expect(screen.queryByText(PUSH.HELD_NOTE)).not.toBeInTheDocument();
+  });
+
+  it("shows HELD_EXPIRED immediately for a row already past the window", () => {
+    const past = new Date(Date.now() - 601_000).toISOString();
+    render(
+      <PushContentCard
+        item={push({ requested_at: past })}
+        securityOperator
+        run={RUNNING}
+        busy={false}
+        onApprove={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(PUSH.HELD_EXPIRED)).toBeInTheDocument();
+  });
+
+  it("clears its timer on unmount (no act() warning, no leaked timer)", () => {
+    const { unmount } = render(
+      <PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+    );
+    unmount();
+    expect(() => vi.advanceTimersByTime(600_001)).not.toThrow();
   });
 });
 

@@ -129,7 +129,11 @@ const HOLD_TIMEOUT_MS = 30_000;
 // clamped to it server-side). Used as isHeld's push_content window when the
 // caller has no run policy in hand to read the real hold_seconds from — see
 // isHeld's own push_content doc below.
-const PUSH_HOLD_CEILING_MS = 600_000;
+// Exported (unlike the other module-private ceilings above) so
+// push-content-card.tsx's own held-vs-expired timer can schedule its re-render
+// off the SAME number isHeld uses — two independently-typed 600_000s would be
+// two constants that could drift apart.
+export const PUSH_HOLD_CEILING_MS = 600_000;
 
 // A held request is one the sandbox is still parked on. THREE shapes reach
 // that state, and only one of them carries a mode:

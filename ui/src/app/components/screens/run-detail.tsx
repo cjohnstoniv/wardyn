@@ -11,7 +11,6 @@ import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowRight,
-  Check,
   LayoutDashboard,
   Loader2,
   RotateCw,
@@ -51,9 +50,8 @@ import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../lib/use-poll";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
-import { absoluteTime, clockTime, getErrorMessage, relativeTime } from "../../lib/format";
+import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
-import { Label } from "../ui/label";
 import {
   Select,
   SelectContent,
@@ -62,30 +60,22 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import {
-  ActorTypeChip,
-  ApprovalKindChip,
-  ApprovalStateBadge,
-  Chip,
-} from "../wardyn/primitives";
+import { ActorTypeChip } from "../wardyn/primitives";
 import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
-import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
-import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
   RECORDING_DISABLED_DESC,
   RECORDING_DISABLED_TITLE,
   RUN_COCKPIT,
-  SECURITY_ONLY_REASON,
   VIEWER_APPROVAL_BLOCKS_NOTE,
-  approvalScopeBadge,
 } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
+import { ApprovalsTab } from "./run-detail-approvals-tab";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { RunCanvas } from "./run-detail/canvas";
 import { RunFailureBlock } from "./run-detail/failure-block";
@@ -353,6 +343,22 @@ export function RunDetailScreen() {
     }
   };
 
+  // decidePushDirect — the Approvals tab's own push_content decide path
+  // (#181, review finding 3). Same reason decideAdoDirect bypasses
+  // ReasonDialog/submitDecision: the card's own control carries no reason
+  // field — but unlike ADO, NO opts at all (decide's rule 4 refuses a
+  // decision_scope on this kind).
+  const decidePushDirect = async (id: string, approve: boolean): Promise<void> => {
+    try {
+      if (approve) await approvalsApi.approve(id, "approved");
+      else await approvalsApi.deny(id, "denied");
+      toast.success(approve ? "Request approved" : "Request denied");
+      load(false);
+    } catch (err) {
+      toast.error(approve ? "Failed to approve" : "Failed to deny", { description: getErrorMessage(err) });
+    }
+  };
+
   // ----- top-level states -----
   const pending = approvals.filter((a) => a.state === "PENDING");
   // F6-F2: run.complete/run.kill/run.autostop rows land here even when the
@@ -475,6 +481,7 @@ export function RunDetailScreen() {
               run={run}
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
               onAdoDecide={decideAdoDirect}
+              onPushDecide={decidePushDirect}
             />
           </TabsContent>
 
@@ -669,144 +676,6 @@ function Cockpit({
 // where the event's TARGET is that very key.
 function attachSessions(audit: AuditEvent[]): AuditEvent[] {
   return audit.filter((e) => e.action === "session.recording" && e.outcome === "success" && e.target);
-}
-
-// Approvals tab (this run's approvals)
-function ApprovalsTab({
-  approvals,
-  run,
-  onDecide,
-  onAdoDecide,
-}: {
-  approvals: ApprovalRequest[];
-  // Round 2 (F2) — this page always has the run loaded by the time this tab
-  // can render (see this file's own `status`/Tabs gate), so unlike
-  // screens/approvals.tsx's per-row RunContextRow fetch, there is no
-  // loading/error tri-state to thread here: it's always the real thing.
-  run: RunDetail;
-  onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
-  onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
-}) {
-  // useSecurityOperator (0.7 §B): the only thing this reads is
-  // canDecideApproval, which mirrors authorizeMemberDecision's early return
-  // for the security tier (approvals.go:392).
-  const securityOperator = useSecurityOperator();
-  const principal = usePrincipal();
-  const [adoBusyId, setAdoBusyId] = React.useState<string | null>(null);
-  if (approvals.length === 0) {
-    return (
-      <div className="rounded-xl border border-border bg-card">
-        <EmptyState
-          icon={ShieldCheck}
-          title="No approvals for this run"
-          description="Credential, egress, and tool-call requests for this run will appear here."
-        />
-      </div>
-    );
-  }
-  return (
-    <div className="flex max-w-3xl flex-col gap-3">
-      {approvals.map((a) => {
-        // S10 round 2 (F2) — an Azure DevOps escalation (or its Entra-consent
-        // chain) gets AdoCapabilityCard, not this tab's generic row: it needs
-        // an explicit decision_scope (never the bodyless decide onDecide's
-        // ReasonDialog path produces) and the ownership-aware decidability
-        // rule canDecideApproval doesn't model.
-        //
-        // N1 (round 2) — gated on PENDING: `approvals` here is EVERY state
-        // this run's approvals ever reached (unlike approvals.tsx's
-        // pendingItems / live-approvals.tsx's pending, both already PENDING-
-        // only), so a DECIDED Azure DevOps row reaches this map too. Without
-        // the state check it rendered live Approve/Deny buttons — and, on an
-        // ended run, a false "nothing to allow" — over a row nobody can act
-        // on any more. A decided row falls through to the generic branch
-        // below, whose `scopeBadge` (approvalScopeBadge, extended F11) reads
-        // "Allowed once"/"Allowed for this run" for it.
-        if ((isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) && a.state === "PENDING") {
-          return (
-            <AdoCapabilityCard
-              key={a.id}
-              item={a}
-              securityOperator={securityOperator}
-              viewerPrincipal={principal}
-              run={run}
-              busy={adoBusyId === a.id}
-              onApprove={async (opts) => {
-                setAdoBusyId(a.id);
-                await onAdoDecide(a.id, true, opts);
-                setAdoBusyId(null);
-              }}
-              onDeny={async (opts) => {
-                setAdoBusyId(a.id);
-                await onAdoDecide(a.id, false, opts);
-                setAdoBusyId(null);
-              }}
-            />
-          );
-        }
-        const pending = a.state === "PENDING";
-        // Owner-scoped page (getRunAuthorized) — canDecideApproval only needs
-        // the KIND question: egress_domain is a member act on an owned run,
-        // credential/tool_call stay admin-OR-security-admin-only (see its doc).
-        const canDecide = canDecideApproval(securityOperator, a.kind);
-        const scopeBadge = approvalScopeBadge(a);
-        return (
-          <div key={a.id} className="rounded-xl border border-border bg-card p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <ApprovalKindChip kind={a.kind} />
-              <ApprovalStateBadge state={a.state} />
-              <span className="ml-auto text-xs text-muted-foreground" title={a.requested_at}>
-                requested {relativeTime(a.requested_at)}
-              </span>
-            </div>
-            <div className="mt-3">
-              <Label className="text-meta uppercase tracking-wide text-muted-foreground">
-                Requested scope
-              </Label>
-              <JsonBlock value={a.requested_scope} className="mt-1.5" />
-            </div>
-            {a.decided_by && (
-              <div className="mt-2 text-xs text-muted-foreground">
-                Decided by <span className="text-foreground">{a.decided_by}</span>
-                {/* Scope badge — the console's DecidedRow shows the same
-                    fact; without it here the cockpit would show a decided
-                    egress row and the console would show it grew a scope,
-                    for the SAME approval. */}
-                {scopeBadge && <> · {scopeBadge}</>}
-                {a.reason && <> · {a.reason}</>}
-              </div>
-            )}
-            {pending && (
-              <div className="mt-3 flex items-center justify-end gap-2 border-t border-border pt-3">
-                {/* Gated on the SECURITY tier (canDecideApproval reads
-                    securityOperator, admin-OR-security-admin), not plain
-                    isOperator — SECURITY_ONLY_REASON says so; OPERATOR_ONLY_
-                    REASON here would undersell who this control actually
-                    admits. */}
-                {!canDecide && <Chip tone="neutral">{SECURITY_ONLY_REASON}</Chip>}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onDecide(a.id, "deny", a.kind)}
-                  disabled={!canDecide}
-                >
-                  Deny
-                </Button>
-                <Button
-                  size="sm"
-                  variant="info"
-                  onClick={() => onDecide(a.id, "approve", a.kind)}
-                  disabled={!canDecide}
-                >
-                  <Check className="size-4" /> Approve
-                </Button>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 // Audit tab (this run's events)

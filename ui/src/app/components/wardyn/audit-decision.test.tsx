@@ -156,22 +156,22 @@ describe("ruleSourceLabel", () => {
   // synchronously, before any approval row exists), and is labelled
   // distinctly rather than falling into the generic "Brokered" bucket every
   // other brokered:* source gets.
-  it("names each push_rules refusal distinctly, ahead of the generic 'Brokered' fallback", () => {
+  it("names each push_rules refusal distinctly, ahead of the generic 'Brokered' fallback — DRAFT strings, packet 7b", () => {
     expect(ruleSourceLabel("brokered:git:push-rules")).toEqual({
-      label: "Push refused — path denied by policy",
+      label: "Push refused — a denied path",
       tone: "danger",
     });
     expect(ruleSourceLabel("brokered:git:push-held-unattended")).toEqual({
-      label: "Push refused — unattended run, nobody to ask",
+      label: "Push refused — needs a review nobody can give",
       tone: "danger",
     });
-    expect(ruleSourceLabel("brokered:git:push-held")).toEqual({ label: "Push refused after review", tone: "danger" });
+    expect(ruleSourceLabel("brokered:git:push-held")).toEqual({ label: "Push refused — not approved", tone: "danger" });
     expect(ruleSourceLabel("brokered:git:push-too-large")).toEqual({
       label: "Push refused — too large to inspect",
       tone: "danger",
     });
     expect(ruleSourceLabel("brokered:git:push-uninspectable")).toEqual({
-      label: "Push refused — could not be inspected",
+      label: "Push refused — couldn't be inspected",
       tone: "danger",
     });
   });
@@ -248,7 +248,7 @@ describe("RuleSourceChip", () => {
   // from real data.
   it("a push_rules refusal renders the distinct chip plus the canned 'nobody was asked' sentence", () => {
     renderChip({ data: { rule_source: "brokered:git:push-rules" } });
-    expect(screen.getByText("Push refused — path denied by policy")).toBeInTheDocument();
+    expect(screen.getByText("Push refused — a denied path")).toBeInTheDocument();
     expect(screen.getByText(PUSH.DENIED_PATH_BODY)).toBeInTheDocument();
   });
 });

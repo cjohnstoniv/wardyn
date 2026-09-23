@@ -58,6 +58,15 @@ describe("New run rail — Push rules section (#181)", () => {
     expect(screen.queryByText(PUSH.RAIL_TITLE)).toBeNull();
   });
 
+  // Review finding 6 — pushRulesIsSet alone is true here (max_inspect_pack_mib
+  // counts toward Go's own IsSet()), but there is nothing to say about PATHS,
+  // and "0 paths denied · 0 paths held for review" would read as a real
+  // (empty) rule rather than "no path rule at all".
+  it("renders no section when only max_inspect_pack_mib is set — nothing to say about paths", () => {
+    renderRail({ max_inspect_pack_mib: 16 });
+    expect(screen.queryByText(PUSH.RAIL_TITLE)).toBeNull();
+  });
+
   it("counts deny_paths and require_review_paths, pluralized", () => {
     renderRail({ deny_paths: [".github/workflows/**", "secrets/**"], require_review_paths: ["infra/**"] });
     expect(screen.getByText(PUSH.RAIL_TITLE)).toBeInTheDocument();
@@ -81,6 +90,16 @@ describe("New run rail — Push rules section (#181)", () => {
 
   it("omits the unattended line for an interactive run", () => {
     renderRail({ require_review_paths: ["infra/**"] }, false);
+    expect(screen.queryByText(PUSH.RAIL_UNATTENDED)).toBeNull();
+  });
+
+  // Review finding 6 — an unattended run with ONLY deny_paths (no review
+  // rule at all) never sees the unattended note: a deny_paths match refuses
+  // identically whether the run is attended or not, so the note would claim
+  // a fact true only of the review half of the section.
+  it("omits the unattended line when the section has deny_paths but no require_review_paths", () => {
+    renderRail({ deny_paths: [".github/workflows/**"] }, true);
+    expect(screen.getByText(PUSH.RAIL_TITLE)).toBeInTheDocument();
     expect(screen.queryByText(PUSH.RAIL_UNATTENDED)).toBeNull();
   });
 });

@@ -49,7 +49,25 @@ decide's rule 4 refuses one on this kind, so the console never builds one.
 | `PUSH.RAIL_UNATTENDED` | Nobody is here to answer, so a push that would be held is refused instead. |
 
 Reused, not reinvented: `APPROVAL.CANCELLED_BODY`, `VIEWER_APPROVAL_BLOCKS_NOTE`,
-`RUN_STATE.WAITING`, `APPROVAL_BANNER_LABEL.what`/`.blast`, `SECURITY_ONLY_REASON`.
+`APPROVAL_BANNER_LABEL.what`/`.blast`, `SECURITY_ONLY_REASON`. State ("Pending"/
+"Approved"/"Denied"/"Expired") comes from the shared `ApprovalStateBadge`
+(primitives.tsx) every approval kind already uses — there is no separate
+`RUN_STATE.WAITING`-style constant for this kind.
+
+### DRAFT — pending owner approval (packet 7b)
+
+Not yet frozen. Marked `DRAFT` at each definition site (`copy/push.ts`,
+`lib/types/audit.ts`) until the owner signs off.
+
+| key | string |
+|---|---|
+| `PUSH.HELD_EXPIRED` | No longer waiting — approving lets the next push of these same commits through. |
+| `PUSH.LIST_TITLE(repo)` | Push to {repository} |
+| rule_source `brokered:git:push-rules` | Push refused — a denied path |
+| rule_source `brokered:git:push-uninspectable` | Push refused — couldn't be inspected |
+| rule_source `brokered:git:push-too-large` | Push refused — too large to inspect |
+| rule_source `brokered:git:push-held` | Push refused — not approved |
+| rule_source `brokered:git:push-held-unattended` | Push refused — needs a review nobody can give |
 
 ## The three mock questions (packet 7)
 
@@ -63,12 +81,29 @@ Reused, not reinvented: `APPROVAL.CANCELLED_BODY`, `VIEWER_APPROVAL_BLOCKS_NOTE`
 ## States
 
 `PushContentCard` (`ui/src/app/components/wardyn/push-content-card.tsx`),
-shared by the standalone `/approvals` queue and the run cockpit's live strip:
+shared by three mounts: the standalone `/approvals` queue
+(`screens/approvals.tsx`), the run cockpit's live strip
+(`live-approvals.tsx`), and the run page's own Approvals tab
+(`run-detail-approvals-tab.tsx`, split out of `run-detail.tsx` to keep that
+file under the 1000-line file-size gate). A DECIDED push_content row on the
+Approvals tab never falls through to that tab's generic `JsonBlock` either
+(review finding 3) — a short repo/branch/acts_as_label summary instead, the
+same fields this card's own header carries.
 
-- **held** — PENDING, admin/security-admin may Approve/Deny directly (no
-  ReasonDialog, no scope menu).
+- **held** — PENDING and within the proxy's own bounded hold window
+  (`push_rules.hold_seconds`, at most `maxHoldTimeout` = 600s —
+  `internal/egress/proxy/approvals.go`). `isHeld` (`lib/types/approvals.ts`)
+  is the ONE predicate this and every other reader (the board, the run
+  cockpit) share; unlike tool_call/credential_reauth (unconditional while
+  PENDING, since #509), push_content's own hold genuinely ends when the proxy
+  times the connection out — a retry of the SAME commits rejoins this row and
+  re-enters the hold, but the sandbox is not parked on it in between. The
+  card carries its own timer (not just the next poll tick) so `PUSH.HELD_NOTE`
+  flips to the DRAFT `PUSH.HELD_EXPIRED` right at the window's end, still
+  admin/security-admin decidable either way (no ReasonDialog, no scope menu).
 - **deciding** — both buttons disabled, one busy flag shared between them.
-- **timed out** — EXPIRED; rendered in the decided list with `PUSH.TIMEOUT_BODY`.
+- **timed out** — EXPIRED (the sweeper's ~24h ceiling, not the hold window
+  above); rendered in the decided list with `PUSH.TIMEOUT_BODY`.
 - **cancelled** — the run ended; reuses `APPROVAL.CANCELLED_BODY`.
 - **member watching** — sees the full card, no decision control
   (`SECURITY_ONLY_REASON`).

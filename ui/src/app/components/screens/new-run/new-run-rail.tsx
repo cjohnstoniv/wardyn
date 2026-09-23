@@ -422,6 +422,15 @@ export function RunRail({
   // resolves at launch when there is nothing to resolve. A resolved credential
   // still states itself — that sentence is read off the verdict, not guessed.
   const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning);
+  // #181 review finding 6 — pushRulesIsSet(pushRules) alone is true for a
+  // policy that sets ONLY max_inspect_pack_mib (no deny_paths/
+  // require_review_paths at all): there is nothing to say about PATHS in
+  // that case, and "0 paths denied · 0 paths held for review" reads as a
+  // real (empty) rule set rather than "no path rule". The section stays
+  // hidden entirely rather than rendering that sentence.
+  const pushDeniedCount = pushRules?.deny_paths?.length ?? 0;
+  const pushReviewCount = pushRules?.require_review_paths?.length ?? 0;
+  const showPushRules = pushRulesIsSet(pushRules) && (pushDeniedCount > 0 || pushReviewCount > 0);
   return (
     // A sticky box is clamped by its containing block — with
     // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
@@ -563,16 +572,21 @@ export function RunRail({
         )}
 
         {/* #181 — push_rules counts, the same "policy has this section or it
-            doesn't" shape Tool rules above uses. pushRulesIsSet mirrors the
-            Go PushRulesSpec.IsSet() reader exactly, so a stored `{}` reads as
-            no section rather than "0 paths denied · 0 paths held for
-            review". */}
-        {pushRulesIsSet(pushRules) && (
+            doesn't" shape Tool rules above uses. showPushRules mirrors the Go
+            PushRulesSpec.IsSet() reader AND requires at least one actual
+            path rule (review finding 6) — a stored `{}`, or a spec that sets
+            only max_inspect_pack_mib, reads as no section rather than "0
+            paths denied · 0 paths held for review". The unattended note is
+            gated on require_review_paths alone: an unattended run refuses a
+            REVIEW match outright (push_rules.go), but a deny_paths match is
+            refused identically whether the run is attended or not, so the
+            note would be true of a section with no review rule in it. */}
+        {showPushRules && (
           <RailSection title={PUSH.RAIL_TITLE}>
-            <p className="text-xs text-muted-foreground">
-              {PUSH.RAIL_BODY(pushRules?.deny_paths?.length ?? 0, pushRules?.require_review_paths?.length ?? 0)}
-            </p>
-            {unattended && <p className="mt-1 text-xs text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>}
+            <p className="text-xs text-muted-foreground">{PUSH.RAIL_BODY(pushDeniedCount, pushReviewCount)}</p>
+            {unattended && pushReviewCount > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>
+            )}
           </RailSection>
         )}
 
