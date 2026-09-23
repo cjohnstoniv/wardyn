@@ -10,60 +10,42 @@ import * as GovernanceCopy from "./governance-copy";
 import { MEMBER } from "./governance-copy";
 import * as UserDrivesCopy from "./user-drives-copy";
 import { DRIVE_MEMBER, DRIVE_RUN, DRIVES } from "./user-drives-copy";
+import { parseFrozenTables } from "../../test/canon-doc-parser";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 145
-// keys. A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc
-// row or a deleted one all fail here rather than shipping.
+// user-drives-prompt.md §7.2-§7.8 back out of the doc (canon-doc-parser.ts's
+// parseFrozenTables(), T-66) and compares all 145 keys. A swapped hyphen, a
+// dropped ellipsis, a reworded clause, a new doc row or a deleted one all
+// fail here rather than shipping.
 //
-// Two normalisations, both of them documented rules rather than fudges:
-//   - Backticks are stripped from the doc cell. §7's header note makes mono a
-//     DISPLAY concern applied by the consuming component (the
-//     governance-copy.ts precedent); the frozen string itself is plain text.
-//     Unlike governance-prompt.md, this doc's §7.2-§7.8 DOES use backticks
-//     as content (the mount target, env vars, `. _ -`), so unmono() does
-//     real work here — every DRIVES / DRIVE_MEMBER string below is written
-//     with the backtick-wrapped substring spelled as plain text.
-//   - A PARAMETERIZED key is called with its own placeholder text, so
-//     EDITOR_TITLE_EDIT("{name}") must reproduce the doc's `Edit "{name}"`
-//     character for character. The four inline-pluralised keys and the two
-//     numeric size helpers can't be checked that way and get their own tests
-//     below (§5 #9, #10).
+// Backticks are stripped from the doc cell. §7's header note makes mono a
+// DISPLAY concern applied by the consuming component (the governance-copy.ts
+// precedent); the frozen string itself is plain text. Unlike
+// governance-prompt.md, this doc's §7.2-§7.8 DOES use backticks as content
+// (the mount target, env vars, `. _ -`), so that stripping does real work
+// here — every DRIVES / DRIVE_MEMBER string below is written with the
+// backtick-wrapped substring spelled as plain text.
+//
+// A PARAMETERIZED key is called with its own placeholder text, so
+// EDITOR_TITLE_EDIT("{name}") must reproduce the doc's `Edit "{name}"`
+// character for character. The four inline-pluralised keys and the two
+// numeric size helpers can't be checked that way and get their own tests
+// below (§5 #9, #10).
 
 // process.cwd() is the vitest root — ui/ — for every entry point that runs
 // this suite (`pnpm vitest run`, `pnpm test`, make ci). import.meta.url is not
 // a file: URL under the jsdom environment, so it can't resolve this.
 const DOC = resolve(process.cwd(), "../docs/design/user-drives-prompt.md");
 
-const unmono = (s: string) => s.replace(/`/g, "");
-
-/** key -> frozen string, for every row of §7.2-§7.8's tables. */
-function parseFrozenTables(): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      // §7.2-§7.8 only: §7.1 is the reused-canon table (strings that live in
-      // permissions-copy.ts / people-access-copy.ts / governance-copy.ts /
-      // the server) and its second table (server-composed, no Key column),
-      // neither of which are keys this module freezes. There is no §7.9 in
-      // this doc. §7.1's second table is not unguarded, though — it is checked
-      // against the Go source at the bottom of this file, where the truth is
-      // the emitting literal rather than a key in this module.
-      inSection = /^### 7\.[2-8]\b/.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key") continue; // header
-    if (/^:?-+:?$/.test(cells[0])) continue; // separator
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const doc = parseFrozenTables();
+// §7.2-§7.8 only: §7.1 is the reused-canon table (strings that live in
+// permissions-copy.ts / people-access-copy.ts / governance-copy.ts / the
+// server) and its second table (server-composed, no Key column), neither of
+// which are keys this module freezes. There is no §7.9 in this doc. §7.1's
+// second table is not unguarded, though — it is checked against the Go
+// source at the bottom of this file, where the truth is the emitting literal
+// rather than a key in this module.
+const doc = parseFrozenTables(DOC, /^### 7\.[2-8]\b/);
 
 // The four keys whose doc cell carries an "A / B" pluralisation alternation
 // rather than a single renderable string (§5 #9) — checked in their own test.
@@ -458,24 +440,7 @@ const goShape = (lit: string) => lit.replace(GO_VERB, (v) => (v.endsWith("q") ? 
 /** A doc cell as the same shape: `{name}` is the hole the verb fills. */
 const docShape = (text: string) => text.replace(/\{[A-Za-z_]+\}/g, HOLE);
 
-/** key -> frozen string, for the rows of ONE `### 7.N` table. */
-function parseOneSection(heading: RegExp): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      inSection = heading.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key" || /^:?-+:?$/.test(cells[0])) continue;
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const sec77 = parseOneSection(/^### 7\.7\b/);
+const sec77 = parseFrozenTables(DOC, /^### 7\.7\b/);
 const mountGo = readFileSync(resolve(process.cwd(), "../internal/runner/mount.go"), "utf8");
 // The drives-bearing api files as ONE text: the size-cap split (53674b46) moved driveRefusal()
 // into user_drives_me.go, and a pure move must not redden a parity test — so every

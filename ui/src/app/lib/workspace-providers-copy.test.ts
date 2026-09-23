@@ -3,16 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as WorkspaceProvidersCopy from "./workspace-providers-copy";
 import { AGENTS, PROVIDER_MEMBER, PROVIDERS } from "./workspace-providers-copy";
 import { MEMBER } from "./governance-copy";
 import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
+import { parseFrozenTables } from "../../test/canon-doc-parser";
 
 // The mock round's whole value is that it stays CHECKABLE (the drives
-// precedent, user-drives-copy.test.ts's parseFrozenTables()): this suite does
+// precedent, canon-doc-parser.ts's parseFrozenTables(), T-66): this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
 // workspace-providers-prompt.md §7.2-§7.5 + §7.7 back out of the doc and
 // compares all 102 keys. A swapped hyphen, a dropped ellipsis, a reworded
@@ -22,45 +22,20 @@ import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
 // nothing today per the doc's own header note) and is excluded by the doc's
 // stated regex: /^### 7\.[2-57]\b/ matches 7.2, 7.3, 7.4, 7.5, 7.7 — not 7.6.
 //
-// Two normalisations, both documented rules rather than fudges (the drives
-// precedent):
-//   - Backticks are stripped from the doc cell. §7's header note makes mono a
-//     display concern applied by the consuming component; the frozen string
-//     itself is plain text.
-//   - A parameterized key is called with its own placeholder text, so
-//     REMOVE_CONFIRM_TITLE("{kind}") must reproduce the doc's `Remove the {kind}
-//     row?` character for character. The pluralised keys (§5 #9) can't be
-//     checked that way and get their own tests below.
+// A parameterized key is called with its own placeholder text, so
+// REMOVE_CONFIRM_TITLE("{kind}") must reproduce the doc's `Remove the {kind}
+// row?` character for character. The pluralised keys (§5 #9) can't be
+// checked that way and get their own tests below.
 
 // process.cwd() is the vitest root — ui/ — for every entry point that runs
 // this suite (`pnpm vitest run`, `pnpm test`, make ci).
 const DOC = resolve(process.cwd(), "../docs/design/workspace-providers-prompt.md");
 
-const unmono = (s: string) => s.replace(/`/g, "");
-
-/** key -> frozen string, for every row of §7.2-§7.5 + §7.7's tables (§7.6 excluded). */
-function parseFrozenTables(): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      // §7.2-§7.5 + §7.7 only — the doc's own stated regex (§9.3's clone note):
-      // §7.1 is reused canon + the server-composed table (no Key column, and
-      // not this module's to carry); §7.6 is the M2-sitting staging table,
-      // parsed by nothing until each row lands with its own lane.
-      inSection = /^### 7\.[2-57]\b/.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key") continue; // header
-    if (/^:?-+:?$/.test(cells[0])) continue; // separator
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const doc = parseFrozenTables();
+// §7.2-§7.5 + §7.7 only — the doc's own stated regex (§9.3's clone note):
+// §7.1 is reused canon + the server-composed table (no Key column, and not
+// this module's to carry); §7.6 is the M2-sitting staging table, parsed by
+// nothing until each row lands with its own lane.
+const doc = parseFrozenTables(DOC, /^### 7\.[2-57]\b/);
 
 // The keys whose doc cell carries an "A / B" pluralisation alternation rather
 // than a single renderable string (§5 #9) — checked in their own test below.

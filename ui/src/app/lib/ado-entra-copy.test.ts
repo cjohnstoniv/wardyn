@@ -3,15 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as AdoEntraCopy from "./ado-entra-copy";
 import { ADO } from "./ado-entra-copy";
+import { parseFrozenTables } from "../../test/canon-doc-parser";
 
 // The mock round's whole value is that it stays CHECKABLE (the drives/providers
-// precedent, workspace-providers-copy.test.ts's parseFrozenTables()): this
-// suite does not hand-retype a sample of the canon — it PARSES
+// precedent, canon-doc-parser.ts's parseFrozenTables(), T-66): this suite does
+// not hand-retype a sample of the canon — it PARSES
 // docs/design/ado-entra-prompt.md §7.2-§7.8 (AND §10, the capability card's
 // own post-freeze addendum — S10 round 2/3) back out of the doc and compares
 // every key. A swapped hyphen, a dropped ellipsis, a reworded clause, a new
@@ -34,45 +34,20 @@ import { ADO } from "./ado-entra-copy";
 // 2 rows for issue #458 — the not-applicable Settings card and the owner
 // fallback) bring the live count to 241.
 //
-// Two normalisations, both documented rules rather than fudges (the drives
-// precedent):
-//   - BACKTICKS ARE STRIPPED from the doc cell. §7's header note makes mono a
-//     DISPLAY concern applied by the consuming component; the frozen string
-//     itself is plain text.
-//   - A PARAMETERIZED key is called with its own placeholder text, so
-//     REQ_PROTECTED_REF_TITLE("{ref}") must reproduce the doc's `{ref}` is
-//     protected... character for character. The two pluralised keys
-//     (CONSENT_SOME_MISSING, SAVED_NARROWED_RUNS) can't be checked that way
-//     and get their own tests below.
+// A PARAMETERIZED key is called with its own placeholder text, so
+// REQ_PROTECTED_REF_TITLE("{ref}") must reproduce the doc's `{ref}` is
+// protected... character for character. The two pluralised keys
+// (CONSENT_SOME_MISSING, SAVED_NARROWED_RUNS) can't be checked that way
+// and get their own tests below.
 
 // process.cwd() is the vitest root — ui/ — for every entry point that runs
 // this suite (`pnpm vitest run`, `pnpm test`, make ci).
 const DOC = resolve(process.cwd(), "../docs/design/ado-entra-prompt.md");
 
-const unmono = (s: string) => s.replace(/`/g, "");
-
-/** key -> frozen string, for every row of §7.2-§7.8's and §10's tables. */
-function parseFrozenTables(): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      // §7.2-§7.8 — §7.1 is reused canon + the server-composed table (no Key
-      // column, and not this module's to carry) — plus §10's own subsections
-      // (the capability card's post-freeze addendum, S10 round 2/3).
-      inSection = /^### 7\.[2-8]\b/.test(line) || /^### 10\.\d+\b/.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key") continue; // header
-    if (/^:?-+:?$/.test(cells[0])) continue; // separator
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const doc = parseFrozenTables();
+// §7.2-§7.8 — §7.1 is reused canon + the server-composed table (no Key
+// column, and not this module's to carry) — plus §10's own subsections (the
+// capability card's post-freeze addendum, S10 round 2/3).
+const doc = parseFrozenTables(DOC, /^### 7\.[2-8]\b|^### 10\.\d+\b/);
 
 // The keys whose doc cell carries an "A / B" pluralisation alternation rather
 // than a single renderable string — checked in their own test below.
