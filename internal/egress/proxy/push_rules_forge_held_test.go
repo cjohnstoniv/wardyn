@@ -401,8 +401,8 @@ func TestPushRulesTakeTheInspectionSlot(t *testing.T) {
 	if rec := postPush(t, p, string(body)); rec.Code != http.StatusOK {
 		t.Fatalf("status with the slot free = %d, want 200: %s", rec.Code, rec.Body)
 	}
-	if n := scanRetained.inUse(); n != 0 {
-		t.Errorf("%d bytes still charged to the retained-bytes budget after the push completed", n)
+	if !retainedBudgetEmpty() {
+		t.Error("bytes still charged to the retained-bytes budget after the push completed")
 	}
 }
 
