@@ -360,8 +360,10 @@ step. Three shards would add two checks and repeat that setup and build, roughly
 would save the 40 s and give up the per-spec isolation `scripts/run-ui-e2e.sh`
 exists to provide. Since #469 the script runs the specs in three concurrent
 lanes inside the one job, each lane with its own backend and database, so the
-setup, the build and the per-spec reseed all stay: the Playwright step took
-581 s serially in run 35815190137 and 241 s in three lanes in run 35851270053.
+setup, the build and the per-spec reseed all stay. The Playwright step took
+581 s serially (run 35815190137), and 241 s and 322 s in three lanes (runs
+35851270053 and 35851857632). The code was the same both times, and the slower
+run's specs took 35% longer in total, so most of the spread is the runner.
 
 **Per-job budget.** A job's budget is its `timeout-minutes`, at least twice its
 measured maximum with a ten-minute floor. Minutes, successful runs only:
