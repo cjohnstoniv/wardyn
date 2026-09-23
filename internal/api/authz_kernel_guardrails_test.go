@@ -230,24 +230,35 @@ func TestNoAuthzGuardExceptionRot(t *testing.T) {
 
 // ─── G6: the resolver is deterministic and monotone in grants ────────────────
 //
-// TestCapabilityResolutionIsMonotone: adding an ALLOW grant of a value can only
-// move that value's answer DENY -> ALLOW, never the reverse; adding a DENY
-// grant can only move ALLOW -> DENY, never the reverse. A resolver that reads
-// its snapshot in a different order for different inputs, or that lets a wider
+// TestCapabilityResolutionIsMonotone: adding an ALLOW grant can only move a
+// value's answer DENY -> ALLOW, never the reverse; adding a DENY grant can
+// only move ALLOW -> DENY, never the reverse. A resolver that reads its
+// snapshot in a different order for different inputs, or that lets a wider
 // grant narrow an answer, breaks this without needing to know which rule.
 // Randomized rather than exhaustive: TestCapResolverNonescapeTable (K0) already
 // exhaustively covers kind x tier x grant-state x store; this is the property
 // that table's fixed points cannot state. Each iteration draws the kind from
 // capabilityKinds and the switch per kind, so the widening path (image, with
 // step 2's switch-off skip and step 4) runs as well as the narrowing one.
+//
+// The added grant's own subject type and value are drawn at random, the same
+// way randomGrants draws base's rows — never pinned to the queried value and
+// to capSub. A grant pinned that way can only ever land in scan's exact-match
+// branch, so the DENY half is checked only by "an exact-value user DENY
+// denies", and a wildcard, different-value or group grant (the paths that
+// actually need deny-wins/widen-narrow ordering to hold) is never added. Some
+// iterations also mark the caller's own group snapshot stale (via
+// withOIDCGroupsTruncated), so scan's ListGroupDenyGrants path — which
+// monotoneStore implements but a never-stale caller never reaches — runs too.
 func TestCapabilityResolutionIsMonotone(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	groups := []string{"eng"}
 	values := []string{"a.example", "b.example", "*.example", "*"}
 
-	decide := func(grants []types.CapabilityGrant, enf map[string]bool, kind, value string) bool {
+	decide := func(grants []types.CapabilityGrant, enf map[string]bool, kind, value string, stale bool) bool {
 		srv := capServer(&monotoneStore{grants: grants, enf: enf})
 		ctx := withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleMember), groups)
+		ctx = withOIDCGroupsTruncated(ctx, stale)
 		allowed, err := srv.newCapBatch(ctx).decide(ctx, kind, capKinds[kind].direction, value)
 		if err != nil {
 			t.Fatalf("decide: %v", err)
@@ -255,27 +266,39 @@ func TestCapabilityResolutionIsMonotone(t *testing.T) {
 		return allowed
 	}
 
+	randSubject := func() (types.CapabilitySubjectType, string) {
+		if rng.Intn(2) == 0 {
+			return types.CapabilitySubjectGroup, groups[0]
+		}
+		return types.CapabilitySubjectUser, capSub
+	}
+
 	for i := 0; i < 700; i++ {
 		kind := capabilityKinds[rng.Intn(len(capabilityKinds))]
 		value := values[rng.Intn(len(values))]
+		stale := rng.Intn(4) == 0
 		base := randomGrants(rng, kind, groups, values)
 		enf := map[string]bool{}
 		for _, k := range capabilityKinds {
 			enf[k] = rng.Intn(2) == 1
 		}
 
-		before := decide(base, enf, kind, value)
+		before := decide(base, enf, kind, value, stale)
 
-		allowGrant := grant(types.CapabilitySubjectUser, capSub, kind, value, types.CapabilityAllow)
-		afterAllow := decide(append(slices.Clone(base), allowGrant), enf, kind, value)
+		allowSubjType, allowSubject := randSubject()
+		allowGrant := grant(allowSubjType, allowSubject, kind, values[rng.Intn(len(values))], types.CapabilityAllow)
+		afterAllow := decide(append(slices.Clone(base), allowGrant), enf, kind, value, stale)
 		if before && !afterAllow {
-			t.Fatalf("%s: adding an ALLOW grant turned an ALLOW into a DENY for %q (enforced=%v, base=%v)", kind, value, enf[kind], base)
+			t.Fatalf("%s: adding an ALLOW grant (%s %s=%s) turned an ALLOW into a DENY for %q (enforced=%v, stale=%v, base=%v)",
+				kind, allowSubjType, allowSubject, allowGrant.Value, value, enf[kind], stale, base)
 		}
 
-		denyGrant := grant(types.CapabilitySubjectUser, capSub, kind, value, types.CapabilityDeny)
-		afterDeny := decide(append(slices.Clone(base), denyGrant), enf, kind, value)
+		denySubjType, denySubject := randSubject()
+		denyGrant := grant(denySubjType, denySubject, kind, values[rng.Intn(len(values))], types.CapabilityDeny)
+		afterDeny := decide(append(slices.Clone(base), denyGrant), enf, kind, value, stale)
 		if !before && afterDeny {
-			t.Fatalf("%s: adding a DENY grant turned a DENY into an ALLOW for %q (enforced=%v, base=%v)", kind, value, enf[kind], base)
+			t.Fatalf("%s: adding a DENY grant (%s %s=%s) turned a DENY into an ALLOW for %q (enforced=%v, stale=%v, base=%v)",
+				kind, denySubjType, denySubject, denyGrant.Value, value, enf[kind], stale, base)
 		}
 	}
 }

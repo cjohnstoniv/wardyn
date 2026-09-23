@@ -190,9 +190,11 @@ issues AK-1..AK-9 (`#735`-`#741`, two 0.9 issues not yet filed).
 - **Guardrails** (`internal/api/authz_kernel_guardrails_test.go`, `refusal_test.go`,
   `authz_test.go`, `preflight_launch_gate_parity_test.go`) keep the kernel from
   regressing:
-  - `TestNoAdHocAuthz` — no code outside `internal/authz` writes an
-    `authz.denied` row, a registered reason, or a stamped-role comparison by
-    hand.
+  - `TestNoAdHocAuthz` — no code in `internal/api` (outside `refuse`/
+    `recordRefusal`) writes an `authz.denied` row, a registered reason, or a
+    stamped-role comparison by hand. Scoped to `internal/api`'s own top-level
+    non-test files (`parseAPISources`, `refusal_test.go`); other packages and
+    `internal/api`'s subpackages are not scanned.
   - `TestEveryRegisteredReasonIsEmitted` / `TestAuthzDeniedReasonsAreDocumented`
     — the registry, the emit sites and the two docs agree, both ways.
   - `TestAuthzMatrix` (route tier, chi.Walk-enumerated, with runtime
