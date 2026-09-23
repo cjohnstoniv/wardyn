@@ -78,6 +78,10 @@ export function TopBar({
   // this menu is the one place besides the sidebar the console offers that.
   const navigate = useNavigate();
   const guardedClick = useGuardedNavClick(navigate);
+  // M-1b: /settings is deleted — Settings now lives at /admin/settings, Your
+  // account at /account (both still mount the unsplit SettingsScreen until
+  // M-5 splits it).
+  const settingsTarget = meta.role === "member" ? "/account" : "/admin/settings";
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
       <MobileNav
@@ -207,17 +211,18 @@ export function TopBar({
               </Link>
             </DropdownMenuItem>
             {/* Settings is the one home for connections — Host · Model provider ·
-                Providers · Your SSH keys. It replaced /integrations, which now
-                redirects here, and the barrier chip above points at it too.
-                Hidden on a SETTLED-but-unknown identity: /settings is the two-click
-                route to the operator-only Model-provider Connect/Disconnect card
-                and the Providers card into admin /providers, and the shell paints
-                no route at all in that state, so the link would be an invitation
-                to a blank page. Sign out below stays — it is the one control that
-                still works. */}
+                Providers · Your SSH keys. M-1b: /settings and /integrations are
+                both deleted (clean break) — an admin tier lands on
+                /admin/settings, a member on their own /account. Hidden on a
+                SETTLED-but-unknown identity: this is the two-click route to the
+                operator-only Model-provider Connect/Disconnect card and the
+                Providers card into /admin/providers, and the shell paints no
+                route at all in that state, so the link would be an invitation
+                to a blank page. Sign out below stays — it is the one control
+                that still works. */}
             {!(meta.resolved && !meta.identityResolved) && (
               <DropdownMenuItem asChild>
-                <Link to="/settings" onClick={guardedClick("/settings")}>
+                <Link to={settingsTarget} onClick={guardedClick(settingsTarget)}>
                   <Settings className="size-4" /> {NAV.SETTINGS}
                 </Link>
               </DropdownMenuItem>

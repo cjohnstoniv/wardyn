@@ -368,6 +368,7 @@ func TestDevices_IngestRefusesClaimsThatCannotReCheck(t *testing.T) {
 		"array data":            func(r *types.FederatedAuditEvent) { r.Data = json.RawMessage(`[1,2]`) },
 		"scalar data":           func(r *types.FederatedAuditEvent) { r.Data = json.RawMessage(`42`) },
 		"a target over the cap": func(r *types.FederatedAuditEvent) { r.Target = strings.Repeat("t", store.MaxAuditTargetLen+1) },
+		"a claimed device_id":   func(r *types.FederatedAuditEvent) { other := uuid.New(); r.DeviceID = &other },
 	} {
 		t.Run(name, func(t *testing.T) {
 			rows := chainRows(1, 1, "")

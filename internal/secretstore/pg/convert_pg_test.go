@@ -292,7 +292,7 @@ func TestPG_OlderWardyndWritingAfterConversion(t *testing.T) {
 }
 
 // TestPG_UnknownEncVersionIsRefusedEverywhere: a row written in a format this
-// binary predates (a newer wardynd's enc_version 2, seen during a mixed-version
+// binary predates (a newer wardynd's enc_version 3 — 2 is store mode's pointer row, seen during a mixed-version
 // window or after a rollback) fails closed on every path, by name. Two rows make
 // the two wrong fall-throughs observable: one whose columns are a perfectly
 // good v1 envelope (a reader that treated "not 0" as v1 would open it) and one
@@ -306,28 +306,28 @@ func TestPG_UnknownEncVersionIsRefusedEverywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedV0(t, pool, id, "", "age-shaped", "age-shaped-value")
-	if _, err := pool.Exec(ctx, `UPDATE secrets SET enc_version=2 WHERE owned_by='' AND name IN ('v1-shaped', 'age-shaped')`); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE secrets SET enc_version=3 WHERE owned_by='' AND name IN ('v1-shaped', 'age-shaped')`); err != nil {
 		t.Fatal(err)
 	}
 	before := rawRows(t, pool)
-	const want = "has enc_version 2 which this wardynd does not understand; upgrade wardynd"
+	const want = "has enc_version 3 which this wardynd does not understand; upgrade wardynd"
 
 	for _, name := range []string{"v1-shaped", "age-shaped"} {
 		got, err := s.Get(ctx, name)
-		assertRefused(t, "Get of an enc_version 2 row", got, err, "", name, name+"-value")
+		assertRefused(t, "Get of an enc_version 3 row", got, err, "", name, name+"-value")
 		if err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("Get %s: error %q does not say %q", name, err, want)
 		}
 		got, err = s.For("alice").Get(ctx, name)
-		assertRefused(t, "operator-fallback Get of an enc_version 2 row", got, err, "", name, name+"-value")
+		assertRefused(t, "operator-fallback Get of an enc_version 3 row", got, err, "", name, name+"-value")
 	}
 
 	if n, err := s.ConvertV0(ctx, id); err != nil || n != 0 {
-		t.Fatalf("ConvertV0 = (%d, %v); an enc_version 2 row is not a v0 row and must be left alone", n, err)
+		t.Fatalf("ConvertV0 = (%d, %v); an enc_version 3 row is not a v0 row and must be left alone", n, err)
 	}
 	n, err := Rekey(ctx, pool, id, mustIdentity(t))
 	if err == nil || n != 0 || !strings.Contains(err.Error(), want) {
-		t.Fatalf("Rekey over an enc_version 2 row = (%d, %v), want an abort that says %q", n, err, want)
+		t.Fatalf("Rekey over an enc_version 3 row = (%d, %v), want an abort that says %q", n, err, want)
 	}
 	for k, r := range rawRows(t, pool) {
 		was := before[k]

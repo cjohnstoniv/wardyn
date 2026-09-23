@@ -108,7 +108,7 @@ type Proxy struct {
 	patGrants map[string]PATGrant
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
-	adoGrants ADOGrantSource
+	adoGrants adoGrantsByHost
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -253,7 +253,7 @@ type Options struct {
 	// per-repo.
 	PATGrants map[string]PATGrant
 	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
-	ADOGrants ADOGrantSource
+	ADOGrants adoGrantsByHost
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.

@@ -191,9 +191,11 @@ curl -s -H 'Authorization: Bearer demo-admin-token' \
 
 Beyond `run_id`, the audit query accepts server-side predicates:
 `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
-`actor` (exact), `actor_type` (`human|agent|system`), and `outcome`
-(`success|denied|failure`) — they compose, and the CLI mirrors them on
-`wardyn audit`.
+`actor` (exact), `actor_type` (`human|agent|system`), `outcome`
+(`success|denied|failure`), and `origin` (`device|organisation`: the rows an
+enrolled laptop forwarded, each carrying a top-level `device_id`, or the
+organisation's own) — they compose, and the CLI mirrors all but `origin` on
+`wardyn audit`, whose per-run trail never holds a forwarded row.
 
 The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
 trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to

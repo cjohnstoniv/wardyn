@@ -7,6 +7,7 @@ import { test, expect, gotoConsole, mockMemberRole, navTo, navToRoute, sidebarLi
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { HEALTH_POLL_MS } from "../src/app/App";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
@@ -177,15 +178,46 @@ test.describe("navigation + shell", () => {
   // — a member's own three-item nav (Runs/Approvals/Workspaces) stays exactly
   // as small as it was. The route and the account-menu entry are unchanged
   // for a member (Q460-2, "Members see no change" is about the SIDEBAR only).
+  // M-1b: /settings is deleted — a member's route is now /account (an admin's
+  // is /admin/settings, pinned by the M-1b tests below).
   test("#460 — Settings is in the sidebar for an admin, not for a member", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
     await expect(sidebarLink(page, "Settings")).toHaveCount(0);
     // Still reachable by route and from the account menu — only the sidebar
     // entry is gone.
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/account");
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
   });
+
+  // M-1b — /settings is deleted, and the two Settings doors split by role: an
+  // admin tier lands on the Admin view's /admin/settings, a user on their own
+  // /account. Both mount the same screen today, so the h1 alone can't tell
+  // them apart — the URL is the pin, and a user must never meet the refusal.
+  test("M-1b — as admin, the sidebar and account-menu Settings both land on /admin/settings", async ({ page }) => {
+    await gotoConsole(page);
+    await navTo(page, "Settings");
+    await expect(page).toHaveURL(/\/admin\/settings$/);
+    await navTo(page, "Runs");
+    await page.locator("header").getByRole("button").last().click();
+    await page.getByRole("menu").getByRole("menuitem", { name: "Settings" }).click();
+    await expect(page).toHaveURL(/\/admin\/settings$/);
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+  });
+
+  // M-1b — #460 above already pins that a member has no sidebar Settings
+  // entry at all, so this covers the account-menu-only door open to a
+  // member: /account, never the refusal.
+  test("M-1b — as a user, the account-menu Settings lands on /account, never the refusal", async ({ page }) => {
+    await mockMemberRole(page);
+    await gotoConsole(page);
+    await page.locator("header").getByRole("button").last().click();
+    await page.getByRole("menu").getByRole("menuitem", { name: "Settings" }).click();
+    await expect(page).toHaveURL(/\/account$/);
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
+  });
+
 
   // B1 — the sidebar itself is the surface the fail-open bug widened: a
   // settled-but-unknown /me used to render the FULL admin nav (every item in
@@ -502,12 +534,13 @@ test.describe("the unreachable banner sees a store outage (R4/F066)", () => {
   });
 });
 
-// X2-F23: /integrations died with the Settings consolidation (App.tsx
-// redirects it) but nothing walked the redirect itself — same gap /demos had
-// before demos.spec.ts's own one-line pin (X2-F21's sibling).
+// M-1b: /integrations died a second time — the Settings-consolidation
+// redirect X2-F23 pinned is itself deleted now, clean break, no alias
+// (admin-member-modes-design.md §2.3), since its target (/settings) is also
+// gone. A stale link falls to the member catch-all instead.
 test.describe("dead routes redirect", () => {
-  test("/integrations redirects to Settings", async ({ page }) => {
+  test("/integrations falls through to Runs", async ({ page }) => {
     await page.goto("/integrations");
-    await expect(page).toHaveURL(/\/settings$/);
+    await expect(page).toHaveURL(/\/runs$/);
   });
 });

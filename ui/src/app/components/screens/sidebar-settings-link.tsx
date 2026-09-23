@@ -15,16 +15,18 @@ import { cn } from "../ui/utils";
 import { NAV } from "../../lib/unsaved-copy";
 
 export function SidebarSettingsLink({
+  to,
   navLinkClass,
   onClick,
 }: {
+  to: string;
   navLinkClass: (isActive: boolean) => string;
   onClick: (e: MouseEvent) => void;
 }) {
   return (
     <>
       <div className="my-2 h-px bg-sidebar-border" />
-      <NavLink to="/settings" onClick={onClick} className={({ isActive }) => navLinkClass(isActive)}>
+      <NavLink to={to} onClick={onClick} className={({ isActive }) => navLinkClass(isActive)}>
         {({ isActive }) => (
           <>
             {isActive && (
