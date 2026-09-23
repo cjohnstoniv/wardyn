@@ -267,8 +267,13 @@ var routeMatrix = map[string]classifiedRoute{
 	// choices and its IdP. The member tier is served a DIFFERENT, narrower
 	// document — SetupStatus.harnesses' enabled/mechanism/credential_source —
 	// which carries no start URL.
-	"GET /api/v1/agent-providers":      {class: classAdmin},
-	"PUT /api/v1/agent-providers":      {class: classAdmin},
+	"GET /api/v1/agent-providers": {class: classAdmin},
+	"PUT /api/v1/agent-providers": {class: classAdmin},
+	// Model providers (0.8): gateway addresses, the AWS access portal and
+	// account pins. SUPER for the agent roster's reason; the member tier is
+	// served SetupStatus.model_providers instead, which carries none of them.
+	"GET /api/v1/model-providers":      {class: classAdmin},
+	"PUT /api/v1/model-providers":      {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":    {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}": {class: classAdmin},
 	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
@@ -1158,9 +1163,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// the device inventory and revoke are the /tokens pair's twins and land on
 	// the security tier (= 26 SEC). A route silently reclassified in the table
 	// above would still pass every probe — it would just be enforcing the WRONG
-	// tier, exactly the drift the per-route loop cannot see.
-	if sec != 26 || super != 39 {
-		t.Errorf("tier split = %d security / %d admin, want 26 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	// tier, exactly the drift the per-route loop cannot see. 0.8's model
+	// providers add GET/PUT /model-providers, SUPER for the agent roster's
+	// reason (= 41).
+	if sec != 26 || super != 41 {
+		t.Errorf("tier split = %d security / %d admin, want 26 / 41 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 

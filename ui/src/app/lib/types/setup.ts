@@ -331,6 +331,23 @@ export interface SCMAccess {
   kind?: string;
 }
 
+// One model provider as THIS PRINCIPAL sees it (internal/api.SetupModelProvider)
+// — the same shape for every tier. D7: `host` is where their own credential
+// would be sent, the host only; never a path, start URL, pin or header scheme.
+export interface SetupModelProvider {
+  id: string;
+  name?: string;
+  kind: string;
+  // A turned-off provider is published, never hidden: a disabled default is
+  // why this person's runs of that agent are refused.
+  disabled?: boolean;
+  // The agents it serves that this person may launch (never empty).
+  harnesses: string[];
+  // The agents whose roster default it is.
+  default_for?: string[];
+  host: string;
+}
+
 export interface SetupStatus {
   ready: boolean;
   // Server-computed "does SOME run/compose LLM access path exist" (resident
@@ -356,6 +373,9 @@ export interface SetupStatus {
   // declares a lane for claude-code and no session is captured), in which case
   // the console renders today's chip.
   model_access?: SetupModelAccess;
+  // The model providers the caller may use. Absent with no provider block
+  // (today), or when none serves an agent the caller may launch.
+  model_providers?: SetupModelProvider[];
   // The CALLER's own Azure DevOps access state — ModelAccess's sibling.
   // Absent when no Azure DevOps row is configured at all.
   scm_access?: SCMAccess;

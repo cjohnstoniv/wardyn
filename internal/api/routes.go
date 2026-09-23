@@ -99,6 +99,8 @@ func (s *Server) routes() chi.Router {
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
 			//       (agent_providers.go)
+			//   mountModelProviderRoutes            operatorOnly
+			//       (model_providers_api.go)
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
 			operatorOnly := r.With(s.requireOperator)
@@ -499,6 +501,7 @@ func (s *Server) routes() chi.Router {
 			// attached with no blank line, for the ratchet reason just above.
 			s.mountWorkspaceProviderRoutes(operatorOnly)
 			s.mountAgentProviderRoutes(operatorOnly)
+			s.mountModelProviderRoutes(operatorOnly)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /
