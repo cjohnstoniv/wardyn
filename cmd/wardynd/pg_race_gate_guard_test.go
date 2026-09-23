@@ -11,6 +11,21 @@ import (
 	"testing"
 )
 
+// goroutineSpawn matches a `go func(` goroutine launch — the shape every
+// *_pg_test.go concurrency proof in the tree uses.
+var goroutineSpawn = regexp.MustCompile(`\bgo func\(`)
+
+// racedPGPackages returns the ./internal/.../... package globs test-race-pg's
+// recipe passes to `go test`.
+func racedPGPackages(t *testing.T, raceTarget string) []string {
+	t.Helper()
+	pkgs := regexp.MustCompile(`\./internal/\S+?/\.\.\.`).FindAllString(raceTarget, -1)
+	if len(pkgs) == 0 {
+		t.Fatalf("test-race-pg names no ./internal/.../... packages:\n%s", raceTarget)
+	}
+	return pkgs
+}
+
 // TestPGConcurrencyProofsRunUnderRace is the pin for F137.
 //
 // internal/broker/concurrency_pg_test.go's exactly-once proofs
@@ -73,6 +88,48 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	if strings.Count(job, "WARDYN_TEST_PG:") < 2 {
 		t.Errorf("the race step in ci.yml's test-pg job does not set WARDYN_TEST_PG, so every pg-gated "+
 			"test it runs would SKIP and the step would pass vacuously:\n%s", job)
+	}
+
+	// (d) every *_pg_test.go file that spawns a goroutine lives in a package
+	// test-race-pg's recipe actually races. A new goroutine-spawning pg test
+	// added to an un-raced package (I-3: internal/api held two — see the
+	// Makefile comment) would otherwise never run under the detector.
+	pkgs := racedPGPackages(t, raceTarget)
+	var uncovered []string
+	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, "_pg_test.go") {
+			return err
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !goroutineSpawn.Match(src) {
+			return nil
+		}
+		rel, err := filepath.Rel(root, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		pkg := "./" + filepath.ToSlash(rel)
+		raced := false
+		for _, p := range pkgs {
+			if pkg == strings.TrimSuffix(p, "/...") {
+				raced = true
+				break
+			}
+		}
+		if !raced {
+			uncovered = append(uncovered, strings.TrimPrefix(path, root+string(filepath.Separator)))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s for *_pg_test.go: %v", root, err)
+	}
+	if len(uncovered) > 0 {
+		t.Errorf("test-race-pg races %v but these *_pg_test.go files spawn goroutines from an "+
+			"uncovered package:\n%s", pkgs, strings.Join(uncovered, "\n"))
 	}
 }
 

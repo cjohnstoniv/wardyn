@@ -25,12 +25,16 @@ import (
 // always ends.
 
 // fakeApprovalReader answers a scripted sequence of (state, status) pairs,
-// repeating the last one forever.
+// repeating the last one forever. Optionally, notifyAfter closes notifyCh
+// once the poll at that 1-based index has been answered, so a test can wait
+// for a specific poll instead of sleeping a guessed wall-clock duration.
 type fakeApprovalReader struct {
-	mu     sync.Mutex
-	steps  []approvalStep
-	reads  int
-	lastID uuid.UUID
+	mu          sync.Mutex
+	steps       []approvalStep
+	reads       int
+	lastID      uuid.UUID
+	notifyAfter int
+	notifyCh    chan struct{}
 }
 
 type approvalStep struct {
@@ -49,6 +53,9 @@ func (f *fakeApprovalReader) readApproval(_ context.Context, id uuid.UUID) (type
 		i = len(f.steps) - 1
 	}
 	s := f.steps[i]
+	if f.notifyCh != nil && f.reads == f.notifyAfter {
+		close(f.notifyCh)
+	}
 	return s.state, s.status, s.err
 }
 
