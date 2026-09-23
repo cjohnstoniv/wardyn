@@ -95,6 +95,10 @@ ds-bundle/
 /.design-sync/.cache/
 /.design-sync/project.local.json
 
+# golangci-lint cache (make lint), per worktree so a sibling worktree's
+# deleted paths never replay as findings here
+/.golangci-cache/
+
 # Claude Code local config (contributors bring their own)
 .claude/*
 # Skills ship with the repo (Claude Code picks them up per-project).

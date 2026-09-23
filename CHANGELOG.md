@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`make lint` replayed golangci-lint findings from a deleted sibling worktree (#480).** The
+  linter's cache was shared machine-wide, keyed by absolute path, so a stale entry for a worktree
+  that no longer exists could fail a lint run that never touched that file. `make lint` now points
+  `GOLANGCI_LINT_CACHE` at a `.golangci-cache/` directory inside the current worktree (gitignored),
+  so one worktree's cache can never leak into another's.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
