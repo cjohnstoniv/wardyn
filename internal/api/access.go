@@ -194,14 +194,17 @@ func ssoProviderName(issuer string) string {
 //
 // Both are mapping targets (accessTarget): arm 1's user is on the built-in
 // type, so a default role naming a custom type is a change too — unmatched
-// people would move from Standard user to that type.
-func accessRolePosture(a *oidc.Authenticator) (before, after string, changes bool) {
+// people would move from Standard user to that type. after is validated
+// against userTypes (DefaultRoleOutcome) so it never claims a target a real
+// sign-in would refuse with user_type_unknown — the same check
+// accessUnmatchedOutcome already applies for the write-side guards.
+func accessRolePosture(a *oidc.Authenticator, userTypes []types.UserType) (before, after string, changes bool) {
 	before = oidc.RoleAdmin
 	if a.HasOperatorEmails() {
 		before = oidc.RoleUser
 	}
 	after = accessDeniedRole
-	if role, userType, ok := oidc.SplitMappingTarget(a.DefaultRole()); ok {
+	if role, userType, ok := a.DefaultRoleOutcome(userTypes); ok {
 		after = accessTarget(role, userType)
 	}
 	return before, after, before != after
@@ -280,7 +283,7 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		userTypes = []types.UserType{}
 	}
 	chart := s.cfg.OIDC.ChartRoleMap()
-	before, after, changes := accessRolePosture(s.cfg.OIDC)
+	before, after, changes := accessRolePosture(s.cfg.OIDC, userTypes)
 	// A nil slice marshals to JSON null, but the field is typed string[] on the
 	// wire and the console reads its .length — so an install with no operator
 	// emails must still send [], never null.

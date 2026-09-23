@@ -675,7 +675,7 @@ func TestAccessRolePosture_Matrix(t *testing.T) {
 				emails = []string{"ops@corp.example"}
 			}
 			auth := newAccessAuth(t, nil, tc.defaultRole, emails, nil)
-			before, after, changes := accessRolePosture(auth)
+			before, after, changes := accessRolePosture(auth, nil)
 			if before != tc.wantBefore || after != tc.wantAfter || changes != tc.wantChanges {
 				t.Errorf("accessRolePosture = (%q, %q, %v), want (%q, %q, %v)",
 					before, after, changes, tc.wantBefore, tc.wantAfter, tc.wantChanges)

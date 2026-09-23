@@ -402,6 +402,33 @@ func (a *Authenticator) DefaultRole() string {
 	return a.cfg.DefaultRole
 }
 
+// DefaultRoleOutcome reports what an UNMATCHED sign-in would actually derive
+// from Config.DefaultRole, validated against userTypes the same way
+// deriveRole validates a matched default (step 4's pickUserType, admin-tier
+// exemption included) — so a display surface (GET /access) never claims a
+// target that a real sign-in would refuse with DenialUserTypeUnknown. ok is
+// false when DefaultRole is unset/malformed (SplitMappingTarget) or names a
+// type the store does not hold, except on the admin tier, which falls to
+// "standard" instead of refusing, matching deriveRole.
+func (a *Authenticator) DefaultRoleOutcome(userTypes []types.UserType) (role, userType string, ok bool) {
+	role, userType, ok = SplitMappingTarget(a.cfg.DefaultRole)
+	if !ok {
+		return "", "", false
+	}
+	var named []string
+	if userType != "" {
+		named = []string{userType}
+	}
+	picked, denial, _, _ := pickUserType(named, userTypeIndex(userTypes))
+	if denial == "" {
+		return role, picked, true
+	}
+	if role != RoleAdmin {
+		return "", "", false
+	}
+	return role, types.UserTypeStandard, true
+}
+
 // HasOperatorEmails reports whether Config.LegacyAdminEmails
 // (WARDYN_OIDC_OPERATOR_EMAILS) is non-empty — the console's People page
 // needs this to explain why a row's value already resolves to admin
