@@ -3,8 +3,8 @@
 This is the mock round for the 0.8 console-residue batch named by #157: findings from the 0.7.6/0.7.7
 readiness reviews that had no design artefact and whose review packages no longer exist anywhere, so
 the finding text is only recoverable from `CHANGELOG.md`, `ROADMAP.md` and commit bodies. Twelve
-findings were named as residue; six have no surviving description at all and are struck from the
-roadmap rather than guessed at. This document covers the five the changelog and roadmap still
+findings were named as residue; seven have no surviving description at all and are struck from the
+roadmap rather than guessed at (see §7 for the id mapping). This document covers the five the changelog and roadmap still
 describe, plus the unsaved-changes guard, which shipped (#217) ahead of the frozen tables that were
 supposed to precede it.
 
@@ -91,7 +91,7 @@ coexist rather than one subsuming the other.
 "R4-F070 security-tier probes surface" (`CHANGELOG.md`, the R4 deferred-proposed six). No surviving
 text describes R4-F070 beyond that phrase, and none of the nine sites above is a probes surface.
 Mapping it to `SECURITY_ONLY_REASON` is this round's reading of "security-tier … surface", not a
-recovered description; the owner may instead strike R4-F070 with the six.
+recovered description; the owner may instead strike R4-F070 with the seven (see §7).
 
 ## 4. The drives preview's dropped fields (`docs/design/user-drives-prompt.md` §7.3)
 
@@ -134,7 +134,9 @@ question it poses is `workspace-providers-prompt.md` **Q13**, still unanswered t
 On a Wardyn-managed backend (`isManagedBackend`: `docker_volume`, `k8s_pvc`) the directory-name
 segment is concatenated into the object name that `docker volume ls` and `kubectl get pvc` print
 (`types.DriveObjectName`), so only `hash` may name one (`types.ManagedBackendRejectsTemplate` on the
-server). A share backend is the mirror: `hash` cannot name a directory the share already has. The two
+server). `host_path`, a share, is the mirror of that case: `hash` cannot name a directory the share
+already has (`types.ShareBackendRejectsTemplate`). The mock below (variant (a)) is drawn for a Docker
+runner only — the managed-vs-share choice it shows is `docker_volume` vs `host_path`. The two
 candidate editor shapes:
 
 | Variant | Directory-name field on a managed backend | Status |
@@ -142,10 +144,24 @@ candidate editor shapes:
 | (a) disabled with reason | all three options (`HOME_HASH`, `HOME_SUB`, `HOME_EMAIL_LOCAL`) render, each with its hint; every non-`hash` option is disabled (`drive-editor.tsx#homeDisabled`); `HOME_HINT` and `HOME_RULE` render under the field and say why | **shipped**; recommended (the drives round's Q3 rule: disabled-with-reason over absent) |
 | (b) not offered | only `HOME_HASH` renders; `HOME_HINT` and `HOME_RULE` unchanged | the losing variant, drawn for the ruling |
 
+`k8s_pvc_static` is neither of those two: `ShareBackendRejectsTemplate` calls it a Wardyn-named object
+(`DriveObjectNamedByWardyn`) exactly like a managed claim, so it does not fall on the `host_path` side
+of the mirror rule above. The server's actual rule for it (`ManagedBackendRejectsTemplate` +
+`ShareBackendRejectsTemplate` together) is a third shape: `hash` is allowed, and is the default for an
+admin who would rather read the preview endpoint than the claim roster; `sub` is allowed too; only
+`email_local` is refused, because the static driver's identity check has no per-drive label to keep two
+claims from silently sharing one pre-created volume. The editor does not implement this third shape —
+`isManagedBackend` only covers `docker_volume`/`k8s_pvc`, so on `k8s_pvc_static` (offered on a k8s
+runner, `backendsFor`) the editor's `homeDisabled`/`pickBackend` read it as a share: `hash` is disabled
+and moved off, `email_local` is offered. That is the shipped editor blocking the server's recommended,
+default template and offering one the server 400s on. This is a known gap in the shipped editor, not a
+row neither variant can author; it is tracked as a follow-up (#808) rather than fixed in this document.
+
 Picking a backend moves an incompatible selection with it (`drive-editor.tsx#pickBackend`: a managed
-backend selects `hash`, a share backend moves off it), so neither variant can author the row the
-server refuses. The API path, which `wardyn drive apply` and an older row meet, still gets the
-server's 400 under `SAVE_REFUSED_TITLE`. No new string either way.
+backend selects `hash`, a share backend moves off it). On `docker_volume`/`k8s_pvc`/`host_path` this
+means neither variant can author the row the server refuses; on `k8s_pvc_static`, per the gap above, it
+can. The API path, which `wardyn drive apply` and an older row meet, still gets the server's 400 under
+`SAVE_REFUSED_TITLE`. No new string either way.
 
 ### 5.1 Extra to the five: the drives card's unloaded state (`components/screens/setup/user-drives-card.tsx`)
 
@@ -191,7 +207,7 @@ of resetting.
 | Clean | `changedLines.length === 0` | no dialog; nav links and the browser tab's own close/reload behave normally |
 | Dirty, navigating away in-app | a sidebar nav link clicked while dirty | blocking `AlertDialog`: `UNSAVED_GUARD.TITLE` / `.BODY`, `.STAY` (ghost) / `.LEAVE` (destructive) |
 | Dirty, closing or reloading the tab | `window.beforeunload` while dirty | the browser's own native "leave site?" prompt (`e.preventDefault(); e.returnValue = ""`) — no console copy renders here, browser-owned surface |
-| Dirty then saved | a successful `PUT`; its response becomes both `draft` and `original` | `changedLines` recomputes to `0`; the guard un-registers on the next render, no dialog for the save that just happened; `PROVIDERS.SAVED_TOAST` |
+| Dirty then saved | a successful `PUT`; its response becomes both `draft` and `original` | `changedLines` recomputes to `0`; the guard un-registers on the next render, no dialog for the save that just happened; `toast.success(PROVIDERS.SAVED_TOAST)`, or, when the save narrowed what the org admits (`result.sourcesNoLongerAdmitted > 0`), `toast.warning(PROVIDERS.SAVED_TOAST, { description: PROVIDERS.SAVED_NARROWED(n) })` (`providers-screen.tsx`) |
 | Save failed, still dirty | the `PUT` rejects: a 412 raises the saved-elsewhere banner, a 400 renders `PROVIDERS.SAVE_REFUSED_TITLE` over the server's text, anything else toasts `PROVIDERS.SAVE_ERROR` | `original` is left unchanged, `changedLines` stays non-zero; the guard stays armed exactly as it was before the failed save |
 
 Strings (`components/wardyn/copy/shell.ts#UNSAVED_GUARD`):
@@ -205,11 +221,36 @@ Strings (`components/wardyn/copy/shell.ts#UNSAVED_GUARD`):
 
 ## 7. Scope this document does not cover
 
-The six residue findings with no surviving description (run-cockpit side-fetch panes, the attach
-terminal's stalled 101, cockpit tile fill, recording-fetch failure copy, the sign-in gate's
-three-way probe in `App.tsx`, Settings' unread proxy posture) and the drives allocations truncation
-note are struck from the roadmap rather than covered here, per #157's own open question — no
-description of the shipped or intended behavior survives in `CHANGELOG.md` or a recoverable commit
-body to freeze against. The four `user_drive_unavailable` sentences `ui/src/app/lib/api/health.ts`
-names (R4-F052) are already frozen in `user-drives-prompt.md` §7.6 (`NR_UNAVAILABLE` /
-`NR_GOVERNANCE_UNAVAILABLE`, "R1-F139 == R4-F052") and are not re-covered here.
+`ROADMAP.md`'s R3/R4 residue batch (the "console copy/state items" line, plus F049-mock) names twelve
+ids. This is the mapping that `PLAN.md`:425's release-reconciliation step needs to strike the covered
+ones against `ROADMAP.md`, so no id in that line is left unexplained:
+
+| Id | Disposition |
+|---|---|
+| F132-followup | covered — §1, the audit liveness chip |
+| F112-nit | covered — §2, the episode-catalog member-chip count |
+| F070 | covered — §3, the security-tier reason (provenance inferred, see §3) |
+| F093 | covered — §4, the drives preview's dropped fields |
+| F049-mock | covered — §5, the drive editor's home-template rule |
+| F141-panes | struck — no surviving description |
+| F143-control | struck — no surviving description |
+| F142-copy | struck — no surviving description |
+| F004-followup | struck — no surviving description |
+| F027-a | struck — no surviving description |
+| F069-a | struck — no surviving description |
+| F051-a/F092-a | struck — no surviving description |
+
+Seven ids are struck, not six. The base findings each `-followup`/`-panes`/`-control`/`-copy` id
+extends shipped in commit `71738a7d` (R4-F141: a side fetch that fails no longer claims the control
+plane is down; R4-F142: the tile fill rule; R4-F143: a stalled 101 becomes a failed attempt; R4-F004: a
+failed recording fetch is reported as a failure) — that base behavior is not in question. What has no
+surviving description in `CHANGELOG.md` or a recoverable commit body is the *follow-up delta* each of
+the seven struck ids named beyond that base fix (plus the sign-in gate's three-way probe in `App.tsx`,
+Settings' unread proxy posture, and the drives allocations truncation note, none of which map to a
+roadmap id in the batch above), which is why they are struck rather than guessed at here.
+
+This document does not itself edit `ROADMAP.md`: #170, the reconcile issue, is already closed, so the
+strike above is applied at release reconciliation (PLAN.md:425) reading this table, not by this commit.
+The four `user_drive_unavailable` sentences `ui/src/app/lib/api/health.ts` names (R4-F052) are already
+frozen in `user-drives-prompt.md` §7.6 (`NR_UNAVAILABLE` / `NR_GOVERNANCE_UNAVAILABLE`, "R1-F139 ==
+R4-F052") and are not re-covered here.
