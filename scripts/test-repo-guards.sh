@@ -44,9 +44,15 @@ ok()  { echo "ok: $*"; }
 
 # ── 1. nightly notification coverage ─────────────────────────────────────────
 # e2e-live is the ONE deliberate exemption (pre-existing, uncharacterised
-# failures — see nightly.yml's own comment). notify-new-lanes cannot need itself.
+# failures — see nightly.yml's own comment). notify-new-lanes cannot need
+# itself. migration-merge-check is exempt too: it is red from its first run
+# and will stay red for as long as the lead renumbers migrations at merge
+# time (a live dry run found 0069 claimed by several open PRs) — its own red
+# X and step summary are its signal, not a "Still failing" comment on the
+# shared e2e-lane issue, which would mask a real e2e regression as queue
+# hygiene noise.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"
