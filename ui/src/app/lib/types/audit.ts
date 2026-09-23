@@ -127,7 +127,7 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   // recording, scan-result, llm, sso-token, and git's :branch-ns-off suffix).
   if (source.startsWith("brokered:")) return { label: "Brokered", tone: "neutral" };
   if (source === "site-config:internal-host") return { label: "Declared internal host", tone: "info" };
-  if (source.startsWith("egress.decisions.dropped:")) return { label: "Decisions dropped", tone: "neutral" };
+  if (source.startsWith("egress:dropped-decisions-")) return { label: "Decisions dropped", tone: "neutral" };
   return { label: source, tone: "neutral" };
 }
 

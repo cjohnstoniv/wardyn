@@ -187,7 +187,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// upgrade with 404/409, or an authz.denied row, instead of the refusal.
 	if s.attachOriginRefused(r) {
 		// Audited like the REST guard's two arms (http.go), on the same
-		// auth.failed action, reason and actor — a control that refuses
+		// auth.fail action, reason and actor — a control that refuses
 		// silently cannot answer either question an operator has at 3am
 		// (csrf.go), and that argument started applying to this socket the
 		// moment the decision moved out of the library and into our code.
@@ -631,7 +631,7 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 // credential verbatim into a replayable artifact that long outlives the run —
 // and no masking can prevent it (the token is unknown to wardynd until the
 // operator pastes it back, by which point the cast already holds it). Dropping
-// the cast costs no provenance: harness.login.started and session.attach still
+// the cast costs no provenance: harness.login.start and session.attach still
 // record who attached, when, and why.
 func runIsUnrecordable(run types.AgentRun) bool {
 	return run.Task == harnessLoginTask

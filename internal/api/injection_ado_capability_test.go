@@ -160,8 +160,8 @@ func TestADOCapability_RaisesOneCanonicalToolCallRow(t *testing.T) {
 	if len(sc) != 9 || strings.Contains(string(ap.RequestedScope), "pullrequests") || sc["repo"] != "app" || sc["lane"] != "azure_devops" {
 		t.Errorf("scope %s is not canonical (raw path leaked, or extra keys)", ap.RequestedScope)
 	}
-	if rows := f.audit.find("credential.capability.requested"); len(rows) != 1 {
-		t.Errorf("credential.capability.requested rows = %d, want 1 (the dedup is silent)", len(rows))
+	if rows := f.audit.find("credential.capability.request"); len(rows) != 1 {
+		t.Errorf("credential.capability.request rows = %d, want 1 (the dedup is silent)", len(rows))
 	}
 }
 
@@ -470,8 +470,8 @@ func TestInternalApprovalRequest_RefusesALaneKey(t *testing.T) {
 		if w.Code != http.StatusBadRequest || len(h.approvals.requested) != 0 {
 			t.Errorf("%s: status %d, %d rows; want 400 and nothing raised", key, w.Code, len(h.approvals.requested))
 		}
-		if ev := lastAuditEvent(t, h.audit.events, "auth.failed"); !strings.Contains(string(ev.Data), "reserved_scope_key") {
-			t.Errorf("%s: auth.failed row %s does not name the reason", key, ev.Data)
+		if ev := lastAuditEvent(t, h.audit.events, "auth.fail"); !strings.Contains(string(ev.Data), "reserved_scope_key") {
+			t.Errorf("%s: auth.fail row %s does not name the reason", key, ev.Data)
 		}
 	}
 }

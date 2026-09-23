@@ -51,7 +51,7 @@ func sharedClaudeRow() types.SiteConfig {
 //
 // Region and start_url were already bound to launch-time state; the scope is
 // the third field, and it now rides the same carrier (this run's own
-// harness.login.started row).
+// harness.login.start row).
 func TestUploadSSOToken_ScopeIsBoundToLaunchNotUploadTime(t *testing.T) {
 	// mintRunToken mints the identity with this subject; launchHarnessLoginRun
 	// stamps the same value as the launch-time owner.

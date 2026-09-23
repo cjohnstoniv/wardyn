@@ -442,7 +442,7 @@ func TestHandleHarnessLogin_ErrorMapping(t *testing.T) {
 
 // TestHandleHarnessCredentialPaste_HappyPath: a well-formed setup-token is stored
 // under the RESERVED name, the response reports captured:true, and a
-// harness.credential.captured audit event is written.
+// harness.credential.capture audit event is written.
 func TestHandleHarnessCredentialPaste_HappyPath(t *testing.T) {
 	const token = "sk-ant-oat01-happy-path-stored-token"
 	sec := &memSecrets{m: map[string][]byte{}}
@@ -471,8 +471,8 @@ func TestHandleHarnessCredentialPaste_HappyPath(t *testing.T) {
 	if blob.Token != token {
 		t.Errorf("stored token = %q, want %q", blob.Token, token)
 	}
-	if !auditHas(h.audit.events, "harness.credential.captured") {
-		t.Error("no harness.credential.captured audit event")
+	if !auditHas(h.audit.events, "harness.credential.capture") {
+		t.Error("no harness.credential.capture audit event")
 	}
 }
 
@@ -510,7 +510,7 @@ func TestHandleHarnessCredentialPaste_Errors(t *testing.T) {
 }
 
 // TestHandleHarnessDisconnect_HappyPath: DELETE removes the stored blob, reports
-// captured:false, and writes a harness.credential.disconnected audit event.
+// captured:false, and writes a harness.credential.disconnect audit event.
 func TestHandleHarnessDisconnect_HappyPath(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{
 		harnessCredSecretName("anthropic"): []byte(`{"token":"sk-ant-oat01-existing"}`),
@@ -531,8 +531,8 @@ func TestHandleHarnessDisconnect_HappyPath(t *testing.T) {
 	if _, ok := sec.m[harnessCredSecretName("anthropic")]; ok {
 		t.Error("stored blob was not deleted")
 	}
-	if !auditHas(h.audit.events, "harness.credential.disconnected") {
-		t.Error("no harness.credential.disconnected audit event")
+	if !auditHas(h.audit.events, "harness.credential.disconnect") {
+		t.Error("no harness.credential.disconnect audit event")
 	}
 }
 
@@ -786,7 +786,7 @@ func TestHandleHarnessLogin_AWSNeedsStartURLAndRegion(t *testing.T) {
 
 // TestLaunchHarnessLoginRun_SeedsPinEnv: the admin's account/role pin reaches
 // the login sandbox as launch ENV, and is stamped on the run's own
-// harness.login.started row.
+// harness.login.start row.
 //
 // Both halves matter and they are different claims. The ENV is what lets the
 // in-sandbox helper verify the pin against the portal instead of taking
@@ -823,7 +823,7 @@ func TestLaunchHarnessLoginRun_SeedsPinEnv(t *testing.T) {
 
 	stamp := loginStartedStamp(t, audit)
 	if stamp.SSOAccountID != "111111111111" || stamp.SSORoleName != "BedrockRunner" {
-		t.Errorf("harness.login.started stamp = %+v, want the launch-time pin — the upload binds to THIS, not to the live roster", stamp)
+		t.Errorf("harness.login.start stamp = %+v, want the launch-time pin — the upload binds to THIS, not to the live roster", stamp)
 	}
 }
 
@@ -854,16 +854,16 @@ func TestLoginConfigEnv_NoPinNoEnv(t *testing.T) {
 }
 
 // loginStartedStamp decodes the launch-time stamp off this run's own
-// harness.login.started row — the same read handleUploadSSOToken makes.
+// harness.login.start row — the same read handleUploadSSOToken makes.
 func loginStartedStamp(t *testing.T, audit *memAudit) loginRunStamp {
 	t.Helper()
-	rows := audit.find("harness.login.started")
+	rows := audit.find("harness.login.start")
 	if len(rows) != 1 {
-		t.Fatalf("harness.login.started rows = %d, want 1", len(rows))
+		t.Fatalf("harness.login.start rows = %d, want 1", len(rows))
 	}
 	var stamp loginRunStamp
 	if err := json.Unmarshal(rows[0].Data, &stamp); err != nil {
-		t.Fatalf("decode harness.login.started data: %v", err)
+		t.Fatalf("decode harness.login.start data: %v", err)
 	}
 	return stamp
 }

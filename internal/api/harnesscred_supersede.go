@@ -169,7 +169,7 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 	// person. They asked for a new sign-in, not for a kill — `superseded_for`
 	// names whose sandbox it was, `superseded_by_run` the sign-in that replaced
 	// it, so the row answers both "why did my box disappear" and "which one
-	// took over" without a join back through harness.login.started.
+	// took over" without a join back through harness.login.start.
 	extra := map[string]any{
 		"reason":            supersedeReasonNewLogin,
 		"superseded_for":    actor,
@@ -324,7 +324,7 @@ func loginRunPrecedes(a, b types.AgentRun) bool {
 // capture PUT's KILLED guard is the belt either way.
 //
 // Selected by creator + task + agent: `provider` is not a column on a run (it
-// lives only in the harness.login.started audit datum), and the agent is what
+// lives only in the harness.login.start audit datum), and the agent is what
 // separates the AWS SSO login box from the subscription one.
 func (s *Server) liveLoginRunsBy(ctx context.Context, actor, agent string) ([]types.AgentRun, error) {
 	reader, ok := s.cfg.Store.(store.ActiveRunsByCreatorReader)

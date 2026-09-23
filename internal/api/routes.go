@@ -295,7 +295,7 @@ func (s *Server) routes() chi.Router {
 			// to model access at all. A member with no such row still gets 403 —
 			// from authorizeHarnessLogin, which also requires capAgent on the row's
 			// agent. Every connect/disconnect is audited
-			// (harness.credential.captured/disconnected).
+			// (harness.credential.capture/disconnected).
 			s.mountSetupMutationRoutes(r, operatorOnly)
 
 			// Policy management (gated to authenticated humans — a valid SSO

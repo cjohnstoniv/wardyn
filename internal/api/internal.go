@@ -101,7 +101,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// wardyn_egress_denies_total is exposed as "denied by policy", and it
 	// is the only egress counter Wardyn has. A builtin:dial-failed (a flaky
 	// upstream, on a request policy ALLOWED) and the synthetic
-	// egress.decisions.dropped:<n> audit-fidelity summary both arrive here as
+	// egress:dropped-decisions-<n> audit-fidelity summary both arrive here as
 	// egress.Deny; counting them would page operators for policy denials that
 	// never happened and make the true deny rate unreadable off the series. Both
 	// still record their egress.deny AUDIT row unchanged — only the counter is
@@ -421,7 +421,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	default:
 		// Recorded: this refusal is the forgery the case above exists to
 		// stop — a sidecar asking Wardyn to raise a `credential` approval. Same
-		// rate-bound auth.failed row, limiter and suppressed
+		// rate-bound auth.fail row, limiter and suppressed
 		// counter as every other refusal; the KIND is a closed enum of our own
 		// types, never echoed from the body.
 		s.auditAuthFailedAs(r, internalApprovalActor, "unsupported_internal_approval_kind")

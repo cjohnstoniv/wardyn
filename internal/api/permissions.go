@@ -338,9 +338,9 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "upsert capability grant", err)
 		return
 	}
-	action, status := "capability.grant.created", http.StatusCreated
+	action, status := "capability.grant.create", http.StatusCreated
 	if saved.ID != g.ID {
-		action, status = "capability.grant.updated", http.StatusOK
+		action, status = "capability.grant.update", http.StatusOK
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, saved.ID.String(), "success", mustJSON(map[string]any{
@@ -370,7 +370,7 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"capability.grant.deleted", id.String(), "success", nil))
+		"capability.grant.delete", id.String(), "success", nil))
 	w.WriteHeader(http.StatusNoContent)
 }
 

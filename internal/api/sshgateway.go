@@ -453,7 +453,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 // "session" refusal and a "direct-tcpip" refusal drawing on one counter is the
 // property being recorded.
 func (s *Server) sshAuditChannelRejected(ctx context.Context, runID uuid.UUID, principal, channelType string) {
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel_rejected",
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel_reject",
 		runID.String(), "failure", mustJSON(map[string]any{
 			"channel_type": channelType,
 			"reason":       "per-run concurrent channel cap",

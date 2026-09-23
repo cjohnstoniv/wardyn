@@ -22,7 +22,7 @@ import (
 // ssoLoginRunStore is a minimal store.Store returning a fixed run from GetRun
 // plus that run's audit trail from QueryAuditEvents — the two reads the
 // sso-token upload handler makes against trusted server state (the run kind,
-// and the operator's own start URL recorded on harness.login.started).
+// and the operator's own start URL recorded on harness.login.start).
 // siteCfg is the third read (0.7.2): the agent roster says WHOSE namespace a
 // capture lands in, so the handler asks for it on every upload. The zero value
 // is legacy open mode — the operator namespace, i.e. these cases unchanged.
@@ -45,13 +45,13 @@ func (s ssoLoginRunStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]t
 	return s.events, nil
 }
 
-// ssoLoginStartedEvents is the harness.login.started row launchHarnessLoginRun
+// ssoLoginStartedEvents is the harness.login.start row launchHarnessLoginRun
 // writes for runID, carrying the operator's declared access-portal URL. The
 // upload handler binds the uploaded start_url to it (F006).
 func ssoLoginStartedEvents(runID uuid.UUID, startURL string) []types.AuditEvent {
 	return []types.AuditEvent{{
 		ID: uuid.New(), RunID: &runID, ActorType: types.ActorSystem, Actor: "wardynd",
-		Action: "harness.login.started", Target: runID.String(), Outcome: "success",
+		Action: "harness.login.start", Target: runID.String(), Outcome: "success",
 		Data: mustJSON(map[string]any{"provider": awsSSOProvider, "sso_start_url": startURL}),
 	}}
 }
@@ -109,7 +109,7 @@ const validSSOBody = `{
 
 // TestUploadSSOToken_HappyPath: a well-formed SSO token blob is stored under
 // the reserved aws harness secret with server-stamped provenance, and a
-// harness.credential.captured audit event is written.
+// harness.credential.capture audit event is written.
 func TestUploadSSOToken_HappyPath(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
@@ -147,8 +147,8 @@ func TestUploadSSOToken_HappyPath(t *testing.T) {
 	if blob.CapturedAt.IsZero() {
 		t.Error("CapturedAt was not server-stamped")
 	}
-	if !auditHas(h.audit.events, "harness.credential.captured") {
-		t.Error("no harness.credential.captured audit event")
+	if !auditHas(h.audit.events, "harness.credential.capture") {
+		t.Error("no harness.credential.capture audit event")
 	}
 }
 

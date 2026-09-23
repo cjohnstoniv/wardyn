@@ -392,11 +392,11 @@ func parseBootFlags() *bootFlags {
 
 		approvalExpiryInterval: flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (0 disables)"),
 		approvalExpiryAfter:    flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this are transitioned to EXPIRED"),
-		// A maximum GAP between two IDENTICAL consecutive auth.failed rows, not a
+		// A maximum GAP between two IDENTICAL consecutive auth.fail rows, not a
 		// cap on how long a streak may run: the flood this bounds was one row a
-		// minute forever from one retrying sidecar, which the auth.failed rate
+		// minute forever from one retrying sidecar, which the auth.fail rate
 		// limiter (1/sec) never trips. 0 disables it — every refusal is its own row.
-		auditCoalesceWindow: flagDuration("audit-coalesce-window", "WARDYN_AUDIT_COALESCE_WINDOW", 5*time.Minute, "fold IDENTICAL consecutive auth.failed audit rows (same boundary, reason, path and peer) into the first row plus one summary row carrying count/first_seen/last_seen; this is the maximum GAP between two identical rows, and 0 disables the folding"),
+		auditCoalesceWindow: flagDuration("audit-coalesce-window", "WARDYN_AUDIT_COALESCE_WINDOW", 5*time.Minute, "fold IDENTICAL consecutive auth.fail audit rows (same boundary, reason, path and peer) into the first row plus one summary row carrying count/first_seen/last_seen; this is the maximum GAP between two identical rows, and 0 disables the folding"),
 
 		envbuild:     flagBool("envbuild", "WARDYN_ENVBUILD", false, "enable devcontainer image builds for create-run (requires -tags docker)"),
 		envbuildImg:  flagEnv("envbuild-image", "WARDYN_ENVBUILD_IMAGE", "", "envbuilder OCI image override (empty = upstream default)"),

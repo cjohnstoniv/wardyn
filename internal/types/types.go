@@ -482,7 +482,7 @@ const (
 	// this kind and the console renders a door instead of an Approve/Deny pair.
 	// The row still moves to APPROVED — so every existing list, count and
 	// terminal-cascade reader works unchanged — but through ResolveReauth and
-	// its own credential.reauth.resolved audit action, never approval.decide.
+	// its own credential.reauth.resolve audit action, never approval.decide.
 	ApprovalCredentialReauth ApprovalKind = "credential_reauth"
 )
 

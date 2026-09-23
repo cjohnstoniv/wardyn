@@ -276,7 +276,7 @@ func TestLLMScanBatchesMarkedUninspected(t *testing.T) {
 		t.Fatalf("batches in alert mode must forward, status=%d reached=%v", rec.Code, cu.reached)
 	}
 	d := lastDecision(t, buf)
-	if d.Scan == nil || d.Scan.Action != "skipped" || d.Scan.SkipReason != "uninspected_channel" {
+	if d.Scan == nil || d.Scan.Action != "skip" || d.Scan.SkipReason != "uninspected_channel" {
 		t.Fatalf("batches must be honestly marked uninspected, got %+v", d.Scan)
 	}
 }

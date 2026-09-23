@@ -696,7 +696,7 @@ still names the unmapped-drop count for an operator reading a broken
 correlation. The series are omitted entirely when no sensor has ever beaten.
 
 Two counters cover the authentication lane, where a failure otherwise leaves no
-trace at all. `wardyn_auth_failed_suppressed_total` counts `auth.failed` audit
+trace at all. `wardyn_auth_failed_suppressed_total` counts `auth.fail` audit
 rows the rate limiter dropped — the trail is capped at roughly one row per
 second, so past a small burst it stops describing the volume it is bounding and
 **a credential-stuffing run reads quieter than a handful of typos**. Alert on
@@ -704,7 +704,7 @@ this series, not on the audit row count: flat rows with this climbing is the
 attack. Both the public lane and the INTERNAL lane (the sandbox's run token and
 the host sensor's token) feed that one limiter and that one counter, so a
 process inside a sandbox brute-forcing run tokens is visible on this series
-without being able to flood the append-only log; the `auth.failed` row's actor
+without being able to flood the append-only log; the `auth.fail` row's actor
 (`wardyn/adminAuth` vs `wardyn/internalAuth` / `wardyn/internalAuthGroundtruth`
 / `wardyn/internalApproval`) is what tells the two incidents apart. `wardyn_auth_store_errors_total` counts requests an authentication lane
 could not decide because its store read failed and answered `500` — a state with
@@ -1909,7 +1909,7 @@ enforcement map alone, not the grant table) can be sent back as this `PUT`'s
 `If-Match`: a document that changed underneath a stale tab is refused `412`.
 `If-Match` is optional, and the write is audited either way.
 
-Writes are audited as `capability.grant.created` / `.updated` / `.deleted` and
+Writes are audited as `capability.grant.create` / `.updated` / `.deleted` and
 `capability.enforcement.write`. Enforcement lives in its own table rather than in
 SiteConfig because `PUT /site-config` is a full replace: a stale client
 round-tripping an older document could otherwise silently disable an authorization
@@ -3605,10 +3605,10 @@ The pin is enforced at four doors, and each one fails CLOSED:
   ACCOUNT) and prints `wardyn: aws sso credential rejected: …` on the login
   terminal rather than uploading. It never falls back to the first account.
 - **Capture** — the upload is bound to the pin AS IT READ AT LAUNCH (stamped on
-  the run's own `harness.login.started` row, never re-read from the live roster,
+  the run's own `harness.login.start` row, never re-read from the live roster,
   so a roster edit mid-sign-in cannot re-point a capture in flight). A blob that
   disagrees — or, on an UNPINNED launch, that names an account the configured
-  model does not live in — is refused with 400 and a `harness.credential.refused` audit row carrying a
+  model does not live in — is refused with 400 and a `harness.credential.refuse` audit row carrying a
   `reason` from a fixed vocabulary ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
   Refused, never rewritten: the stored blob is baked verbatim into every later
   run's `~/.aws/config`, so rewriting it would record a session nobody saw and
@@ -3703,9 +3703,9 @@ person, never this mechanism, and it signs in and reads its own model access
 exactly like any other principal.
 
 **Blast radius.** A compromised sandbox reaches THAT person's SSO session and
-the role credentials it mints, not the organisation's. The `harness.credential.captured`
+the role credentials it mints, not the organisation's. The `harness.credential.capture`
 and `harness.credential.refresh` audit rows carry `owner` and `credential_source`,
-so "whose credential" is answerable from the trail, and `harness.credential.refused`
+so "whose credential" is answerable from the trail, and `harness.credential.refuse`
 says which captures were turned away and why.
 
 **Revoking a session — what 0.7.2 actually gives you.** Disconnect
@@ -3755,7 +3755,7 @@ Consequences worth knowing:
   losing CAS race is abandoned after three tries), so a concurrency-limited member can rarely still
   meet the cap.
 - **A closed sandbox's upload is refused.** A killed sign-in run's credential upload is refused with
-  `harness.credential.refused` / `reason = run_killed`, even inside the five-minute grace a terminal
+  `harness.credential.refuse` / `reason = run_killed`, even inside the five-minute grace a terminal
   run otherwise has for its own tail uploads. Credential revocation alone is best-effort; this is the
   belt.
 - **The old sandbox's teardown is detached from the launch request.** The state change is still
@@ -3778,7 +3778,7 @@ Consequences worth knowing:
   Closing the last case needs a per-person lock around the write. **Still open at 0.8.**
 - **A sandbox superseded mid-upload almost never wins.** The upload door
   re-reads the run's state immediately before it stores, so a capture that was uploading when the
-  person's next sign-in replaced its sandbox is ordinarily refused (`harness.credential.refused` /
+  person's next sign-in replaced its sandbox is ordinarily refused (`harness.credential.refuse` /
   `reason = run_killed`) instead of overwriting the newer session. The re-read is the last statement
   before the write, not a lock: a supersede landing between those two statements still loses to the
   old capture, and the next sign-in replaces it. Whoever is watching the old
@@ -4137,10 +4137,10 @@ again.
   and to the run's own owner or an admin. A caller who does not own the run gets the same
   `404 approval not found` every other kind gives them, byte for byte, so the refusal cannot be
   used to ask whether a UUID is somebody else's sign-in request.
-- The audit trail carries `credential.reauth.requested` at the raise — with `owner`,
+- The audit trail carries `credential.reauth.request` at the raise — with `owner`,
   `credential_source` and a `reason` from a closed set (`spent` the refresh token is gone at AWS,
   `unavailable` renewal failed transiently with nothing left to serve, `not_found` there is no stored
-  session for that namespace) — and `credential.reauth.resolved` when a sign-in answers it, naming
+  session for that namespace) — and `credential.reauth.resolve` when a sign-in answers it, naming
   `resolved_by` and the `capture_run_id` it landed from.
 - `/metrics` carries `wardyn_credential_reauth_total{outcome=requested|resolved|expired|cancelled|timeout}`
   and `wardyn_credential_reauth_wait_seconds` (sum/count — the average time a request stayed open).
@@ -4148,7 +4148,7 @@ again.
   that answered it, `expired` where the 24 h sweeper ages a row out, `cancelled` where a terminal run
   cancels one, `timeout` where the daemon ingests the sidecar's `credential:reauth-timeout` decision.
   That decision row is written for a spent BUDGET and nothing else: a hold ended by a proxy
-  shutdown, by a killed run (which leaves its own `approval.cancelled` row) or by a request
+  shutdown, by a killed run (which leaves its own `approval.cancel` row) or by a request
   answered with anything but an approval refuses the sandbox with the same modelled 401 but is
   neither counted nor logged as a timeout, so `timeout` always means "the owner had the whole
   window".
@@ -4499,7 +4499,7 @@ minimal-reach posture, so:
   the daemon process and are never written to Postgres, never to the audit log.
   Individual searches are deliberately **not** audited — one row per keystroke
   would make the append-only log a record of every name an admin ever typed.
-  Connector **failures** are audited (`directory.search_failed`), with the
+  Connector **failures** are audited (`directory.search_fail`), with the
   provider, the failing operation and the upstream status — never the query.
 - **Retracting it is one variable.** Unset `WARDYN_DIRECTORY_PROVIDER` and
   restart: the connector is gone, the endpoint answers `503

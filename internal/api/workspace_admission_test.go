@@ -545,7 +545,7 @@ func laneVetoAudit(t *testing.T, srv *Server) []map[string]any {
 	}
 	var out []map[string]any
 	for _, ev := range rec.events {
-		if ev.Action != "run.provider.lane_dropped" {
+		if ev.Action != "run.provider.lane_drop" {
 			continue
 		}
 		var d map[string]any

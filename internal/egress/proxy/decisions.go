@@ -192,13 +192,13 @@ func (s *decisionSink) reportDropped(reported *uint64) {
 // droppedSummaryLog builds the synthetic DecisionLog summarizing dropped
 // decisions. DecisionLog has no dedicated count field (its wire shape is owned
 // elsewhere), so the count rides in RuleSource under the extensible
-// "egress.decisions.dropped:<n>" marker. Decision is Deny: an unrecorded
+// "egress:dropped-decisions-<n>" marker. Decision is Deny: an unrecorded
 // decision is an audit-fidelity gap, surfaced as a fail-closed alert.
 func droppedSummaryLog(n uint64) egress.DecisionLog {
 	return egress.DecisionLog{
 		Request:    egress.Request{Time: time.Now()},
 		Decision:   egress.Deny,
-		RuleSource: fmt.Sprintf("egress.decisions.dropped:%d", n),
+		RuleSource: fmt.Sprintf("egress:dropped-decisions-%d", n),
 	}
 }
 

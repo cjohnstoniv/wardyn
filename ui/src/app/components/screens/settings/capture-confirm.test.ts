@@ -106,7 +106,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   });
 
   it("confirms and stops the moment the audit hint fires and /setup/status agrees", async () => {
-    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.captured" }]);
+    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.capture" }]);
     getSetupStatusMock.mockResolvedValue(
       status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
     );

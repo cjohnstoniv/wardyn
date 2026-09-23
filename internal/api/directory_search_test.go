@@ -261,8 +261,8 @@ func TestDirectorySearch_AuditsFailuresNotSearches(t *testing.T) {
 			t.Fatalf("failure wrote %d audit events, want exactly 1", len(events))
 		}
 		ev := events[0]
-		if ev.Action != "directory.search_failed" || ev.Outcome != "failure" {
-			t.Errorf("event = {action:%q outcome:%q}, want {directory.search_failed failure}", ev.Action, ev.Outcome)
+		if ev.Action != "directory.search_fail" || ev.Outcome != "failure" {
+			t.Errorf("event = {action:%q outcome:%q}, want {directory.search_fail failure}", ev.Action, ev.Outcome)
 		}
 		if ev.Actor != secAdminSub {
 			t.Errorf("actor = %q, want the calling principal %q", ev.Actor, secAdminSub)

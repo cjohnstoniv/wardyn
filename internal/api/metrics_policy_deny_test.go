@@ -19,7 +19,7 @@ import (
 // exposes. Two large classes of Deny are not policy
 // denials at all: builtin:dial-failed (a failed upstream dial on a request
 // policy ALLOWED, emitted from four proxy sites) and the synthetic
-// egress.decisions.dropped:<n> summary (an audit-fidelity alert about lost
+// egress:dropped-decisions-<n> summary (an audit-fidelity alert about lost
 // decision records). An operator alerting on the series was paged for a flaky
 // upstream or a wedged control plane and could not read the true deny rate.
 //
@@ -36,7 +36,7 @@ func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 		"policy",                      // a real policy deny — counts
 		"builtin:private-ip",          // a builtin GUARD deny — still a denial, counts
 		"builtin:dial-failed",         // the upstream dial lost it — must NOT count
-		"egress.decisions.dropped:42", // audit-fidelity summary — must NOT count
+		"egress:dropped-decisions-42", // audit-fidelity summary — must NOT count
 	} {
 		body := fmt.Sprintf(`{"request":{"host":"api.example.com","port":443,"method":"CONNECT"},`+
 			`"decision":"deny","rule_source":%q}`, rs)

@@ -506,3 +506,102 @@ func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 		}
 	}
 }
+
+// auditActionPastTenseAllow is the same kind of honest exception
+// auditActionAllow is for the forward guard: an action that LOOKS like a
+// past-tense violation to the heuristic below but is deliberately not
+// renamed.
+var auditActionPastTenseAllow = map[string]bool{
+	// The single heaviest-cited action in the tree (31 non-test call sites)
+	// and a compatibility surface `docs/OPERATIONS.md` already commits to by
+	// name; its rename is its own reviewed change, not a rider on this
+	// grammar cleanup (#205). See docs/AUDIT-ACTIONS.md's "Renamed in 0.8"
+	// appendix.
+	"authz.denied": true,
+	// Not a verb at all — an adjective describing the substrate's state
+	// ("this k8s driver's NetworkPolicy enforcement is unenforced"), the
+	// same shape as `run.identity.expired` used to be before #205 except
+	// this one names a STATE, never an action taken, so there is no
+	// imperative form to rename it to.
+	"k8s.netpol_unenforced": true,
+}
+
+// pastTenseVerb is a heuristic, not a parser: a dotted action's last segment
+// ending "ed" reads as past tense in every case this vocabulary has produced
+// so far (`created`, `captured`, `dropped`, `requested`, …). A genuine verb
+// that just happens to end "ed" (`embed`, `proceed`) would false-positive
+// here; the fix is auditActionPastTenseAllow, the same escape hatch
+// auditActionAllow gives the forward guard, not a smarter regex no English
+// grammar rule actually agrees on.
+var pastTenseVerb = regexp.MustCompile(`ed$`)
+
+// TestAuditActionsDoc_NoPastTenseActions is issue #205's "past tense banned,
+// and a guard enforces it": every audit action name is `<noun>[.<sub>].<verb>`
+// with an IMPERATIVE final segment (`policy.create`, never
+// `capability.grant.created`) — a new action must not reintroduce the 21
+// past-tense outliers this issue just renamed away.
+//
+// Scoped to the vocabulary tables only (everything before "## Renamed in
+// 0.8"): that appendix's LEFT column is the past-tense form BY DESIGN — it
+// is the historical record of what each action used to be called — and would
+// fail this exact check if it were in scope.
+func TestAuditActionsDoc_NoPastTenseActions(t *testing.T) {
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "AUDIT-ACTIONS.md"))
+	if err != nil {
+		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
+	}
+	body := string(raw)
+	if i := strings.Index(body, "## Renamed in 0.8"); i >= 0 {
+		body = body[:i]
+	} else {
+		t.Fatal(`docs/AUDIT-ACTIONS.md has no "## Renamed in 0.8" heading — this guard's scope boundary moved; ` +
+			"re-anchor it before trusting the result")
+	}
+
+	// Only the ACTION tables carry the grammar this test polices — every one
+	// opens with the literal header row "| Action | ... |". The `rule_source`
+	// sub-tables use the same "| `value` | ... |" row shape auditActionRow
+	// matches, but rule_source is a different vocabulary with its own
+	// grammar (family:kebab, checked elsewhere): its past-tense-shaped values
+	// (`policy:denied`, `scan:blocked`, `builtin:resolve-failed`, the
+	// `*:denied`/`*:upstream-refused` rows) are not audit actions and are
+	// out of scope here. inActionTable tracks which kind of table the
+	// current row belongs to.
+	inActionTable := false
+	checked := 0
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "| Action |"):
+			inActionTable = true
+			continue
+		case strings.HasPrefix(trimmed, "## ") || strings.HasPrefix(trimmed, "### "):
+			inActionTable = false
+			continue
+		}
+		if !inActionTable {
+			continue
+		}
+		m := auditActionRow.FindStringSubmatch(trimmed)
+		if m == nil {
+			continue
+		}
+		action := strings.TrimSuffix(m[1], "*")
+		if auditActionPastTenseAllow[action] {
+			continue
+		}
+		checked++
+		segs := strings.Split(action, ".")
+		last := segs[len(segs)-1]
+		if pastTenseVerb.MatchString(last) {
+			t.Errorf("docs/AUDIT-ACTIONS.md: action %q ends in a past-tense-shaped verb (%q) — audit actions are "+
+				"imperative (policy.create, never policy.created); rename it, or add it to "+
+				"auditActionPastTenseAllow with the reason it is a deliberate exception", action, last)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("checked 0 action rows for past tense — the table shape changed and this guard now checks nothing")
+	}
+	t.Logf("checked %d action rows for past-tense verbs", checked)
+}

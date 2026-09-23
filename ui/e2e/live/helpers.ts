@@ -407,7 +407,7 @@ export async function awaitSelfRunStarted(screen: ReturnType<Page["locator"]>): 
  * the marker being printed. `screen.innerText()` then reads a detached node
  * (or throws), so the poll can watch for its full five minutes while the
  * capture has ALREADY succeeded server-side. That is exactly what happened:
- * `harness.credential.captured` in the audit, `session.detach reason="client
+ * `harness.credential.capture` in the audit, `session.detach reason="client
  * closed"` right after it, and a spec still waiting.
  *
  * So accept either witness, and keep failing fast on the helper's refusal. The

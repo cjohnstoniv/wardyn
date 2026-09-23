@@ -155,7 +155,7 @@ func TestRenewU070_RenewerKeepsOldTokenWhenControlPlaneRefuses(t *testing.T) {
 
 // ─── B5: the renew loop is what flooded the audit trail ──────────────────────
 //
-// The field report: 999 of the last 1000 audit rows were `auth.failed` from this
+// The field report: 999 of the last 1000 audit rows were `auth.fail` from this
 // loop, once a minute, forever, against a run the control plane would never renew
 // again — and every real security event had aged out of the console's 1000-row
 // window mid-investigation into who had admin. The loop retried ANY failure every

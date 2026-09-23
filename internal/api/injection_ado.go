@@ -205,7 +205,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
 	if !slices.ContainsFunc(adoEntraHosts(snapshot.Organisation), func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
-		return fail(http.StatusForbidden, "host-not-organisation", adoResolveHostPinRefusal,
+		return fail(http.StatusForbidden, "host_not_organisation", adoResolveHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
 	}
 	cfg, status, reason, body := s.adoEntraConfigFor(ctx, snapshot)

@@ -855,7 +855,7 @@ func (s *Server) handleSweepSandboxes(w http.ResponseWriter, r *http.Request) {
 	// would make docs/AUDIT-ACTIONS.md false. This row answers a different
 	// question — WHO asked for a sweep, and what did it find — and the
 	// primitive's own failure rows still fire underneath it.
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "sandbox.sweep_requested",
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "sandbox.sweep_request",
 		"", "success", mustJSON(map[string]any{"swept": swept})))
 	writeJSON(w, http.StatusOK, map[string]any{"swept": swept})
 }

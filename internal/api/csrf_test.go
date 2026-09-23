@@ -402,7 +402,7 @@ func TestCSRFGuard_EveryMutatingRouteIsFenced(t *testing.T) {
 }
 
 // TestCSRFGuard_RefusalIsAudited pins the SIEM half in both modes: a refusal
-// emits the EXISTING auth.failed action with reason cross_origin_refused, so
+// emits the EXISTING auth.fail action with reason cross_origin_refused, so
 // "is someone attacking this" and "why did the console stop saving" are
 // answerable from the trail. The guard short-circuits above adminAuth (the
 // chokepoint every other public-API refusal funnels through), so without an
@@ -441,19 +441,19 @@ func TestCSRFGuard_RefusalIsAudited(t *testing.T) {
 	})
 }
 
-// assertCSRFAudited finds the auth.failed row and checks the shape every other
+// assertCSRFAudited finds the auth.fail row and checks the shape every other
 // refusal in this middleware writes: system actor, failure outcome, the request
 // path as Target, a source IP, and the content-free reason.
 func assertCSRFAudited(t *testing.T, events []types.AuditEvent, path string) {
 	t.Helper()
 	var ev *types.AuditEvent
 	for i := range events {
-		if events[i].Action == "auth.failed" {
+		if events[i].Action == "auth.fail" {
 			ev = &events[i]
 		}
 	}
 	if ev == nil {
-		t.Fatalf("no auth.failed audit event recorded for a CSRF refusal; events = %+v", events)
+		t.Fatalf("no auth.fail audit event recorded for a CSRF refusal; events = %+v", events)
 	}
 	if ev.ActorType != types.ActorSystem || ev.Outcome != "failure" {
 		t.Errorf("ActorType/Outcome = %q/%q, want system/failure", ev.ActorType, ev.Outcome)

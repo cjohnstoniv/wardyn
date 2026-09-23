@@ -295,7 +295,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	srv.WaitBackground()
 
 	// BETWEEN the two, deliberately: the server has stopped accepting requests
-	// (so no new auth.failed can open a streak) and the sinks are still open (so
+	// (so no new auth.fail can open a streak) and the sinks are still open (so
 	// the summary row this emits is actually delivered). Same slot the proxy
 	// flushes its private-IP memo in.
 	srv.FlushAuthFailedStreak()

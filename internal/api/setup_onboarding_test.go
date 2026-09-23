@@ -34,8 +34,8 @@ func TestOnboardingComplete_MarksInstallOnce(t *testing.T) {
 		t.Fatalf("completion must persist OnboardingCompletedAt via the store, got %+v", fake.putSeen)
 	}
 	first := *fake.putSeen.OnboardingCompletedAt
-	if len(audit.events) != 1 || audit.events[0].Action != "setup.onboarding.completed" {
-		t.Fatalf("want exactly one setup.onboarding.completed audit event, got %+v", audit.events)
+	if len(audit.events) != 1 || audit.events[0].Action != "setup.onboarding.complete" {
+		t.Fatalf("want exactly one setup.onboarding.complete audit event, got %+v", audit.events)
 	}
 
 	// Idempotent: the FIRST completion is the fact of record. A re-finish

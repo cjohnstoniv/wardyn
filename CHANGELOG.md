@@ -66,6 +66,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Audit action names are imperative and two or three segments, closing 21 past-tense outliers
+  (#205).** `<noun>[.<sub>].<verb>` throughout `docs/AUDIT-ACTIONS.md`'s vocabulary — no more
+  `capability.grant.created` beside `policy.create`. See "Upgrading" below for the full old → new
+  table. The `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`
+  (`family:kebab`, exactly one colon, matching every other `rule_source`). `secret.read`'s
+  `host-not-organisation` refusal reason (the per-person Azure DevOps host pin) is now
+  `host_not_organisation`, matching the other 18 ADO reasons' snake_case. The
+  `wardyn_egress_denies_total` metric's `HELP` text no longer promises a `reason` label the series
+  does not carry — the series itself is unchanged, still one unlabeled counter.
 - **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
   is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
   set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
@@ -179,7 +188,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   settings are not loaded; managed settings still are. This is an interim fix. The agent can still
   write its own user-level `~/.claude/settings.json`; THREAT-MODEL.md §5 states that residual, and
   #333's managed settings close it.
-- **An unauthenticated caller that rotated its source address wrote one `auth.failed` audit row per
+- **An unauthenticated caller that rotated its source address wrote one `auth.fail` audit row per
   refused request.** The 0.7.2 coalescer keyed a streak on the peer IP, so every change of address
   closed the streak and opened a new one: a bad-token drip from ten addresses, one a second, recorded
   120 rows in two minutes, as many as the rate limiter allows (#347). A streak is now keyed on the
@@ -295,7 +304,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `per_user`), and the injection sink resolves `bedrock-api-key` from exactly that record and
   refuses a grant that carries none — it no longer goes through the owner-then-operator fallback
   read, which could hand a run a different key from the one dispatch chose. Any other injection
-  naming the key is dropped at dispatch and audited as `run.injection.dropped`. For the same
+  naming the key is dropped at dispatch and audited as `run.injection.drop`. For the same
   reason a member's inline grant naming `bedrock-api-key` is dropped, and an `env_secret` or an
   `llm_inspection.workspace_secret_names` entry naming it is never resolved (the latter is also
   refused at write): the bearer is proxy-injected only. `runs_bedrock.go` was split by seam first — the probe
@@ -426,7 +435,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and a purge on the laptop is accepted and audited as a chain reset. A device has at most one push
   in flight (a concurrent one is 429), every accepted row's claim re-checks from the stored row, and
   a value Postgres cannot store is a 400 the forwarder stops on rather than a 500 it retries.
-  Failure rows are coalesced like `auth.failed`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
+  Failure rows are coalesced like `auth.fail`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
   (failures) and `device.audit.chain_reset`.
 
 - **`wardyn drive` reads and replaces admin-registered drives from the CLI.** `wardyn drive get`
@@ -893,6 +902,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The synchronous kill cascade inside the sign-in launch POST.** Superseding a person's older
   sign-in tears the old sandbox down inside the new launch request rather than after the response —
   tracked separately from this list. Still open at 0.8.
+
+### Upgrading
+
+- **21 audit action names changed (#205), clean break, no alias period.** Wardyn has no users yet
+  (owner ruling, #205/#203/#206), so a consumer keyed on an old name — a SIEM rule, a saved filter,
+  a dashboard query — starts missing rows the moment this ships; there is no dual-emission window to
+  catch it during. The full old → new table is `docs/AUDIT-ACTIONS.md`'s "Renamed in 0.8" appendix
+  (e.g. `capability.grant.created` → `capability.grant.create`, `auth.failed` → `auth.fail`,
+  `harness.login.started` → `harness.login.start`). `authz.denied` is unchanged — still the one
+  documented exception, held back for its own reviewed change rather than riding this one. The
+  `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`, and
+  `secret.read`'s `host-not-organisation` refusal reason is now `host_not_organisation`; a consumer
+  matching either old spelling needs the same update.
 
 ## [0.7.12] — 2026-09-23
 

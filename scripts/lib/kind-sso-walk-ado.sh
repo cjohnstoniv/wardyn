@@ -211,9 +211,9 @@ grep -q 'vso.code' "${EVIDENCE_DIR}/authorize-admin.url" \
 [[ "$(me_role "${WORK}/member.jar" member)" == "member" ]] || die "the member's session is not role member (see ${EVIDENCE_DIR}/me-member.json)"
 
 step "asserting the capture: one blob, the member's, and none for the admin"
-curl -s -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE_URL}/api/v1/audit?action=scm.ado.signin.captured" \
+curl -s -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE_URL}/api/v1/audit?action=scm.ado.signin.capture" \
   >"${EVIDENCE_DIR}/audit-capture.json"
-jq -e --arg m "${MEMBER_SUB}" '[.. | objects | select(.action? == "scm.ado.signin.captured" and .outcome? == "success") | .actor] == [$m]' \
+jq -e --arg m "${MEMBER_SUB}" '[.. | objects | select(.action? == "scm.ado.signin.capture" and .outcome? == "success") | .actor] == [$m]' \
   "${EVIDENCE_DIR}/audit-capture.json" >/dev/null \
   || die "the capture audit is not exactly one success for the member (see ${EVIDENCE_DIR}/audit-capture.json)"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" exec deployment/postgres -- psql -U wardyn -d wardyn -tAc \

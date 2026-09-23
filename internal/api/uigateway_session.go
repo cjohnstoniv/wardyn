@@ -291,7 +291,7 @@ func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg s
 	// The refusal itself is never bounded; only its audit emit is. A refused
 	// session that keeps retrying (an editor tab polling on a revoked cookie)
 	// would otherwise append one identical ui.auth/denied row per request —
-	// the same token bucket that bounds auth.failed keeps the append-only log
+	// the same token bucket that bounds auth.fail keeps the append-only log
 	// honest here too.
 	if s.authFailedLimiter.allow(s.cfg.Now()) {
 		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.auth", sess.App, "denied",

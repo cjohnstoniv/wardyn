@@ -347,7 +347,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	// or merely found one. RequestApproval's dedup — the pre-insert
 	// scan and the partial unique index's loser alike — answers with the WINNER'S
 	// row, and it answers silently by design; a caller that cannot tell the two
-	// apart audits `credential.reauth.requested` and counts outcome=requested for
+	// apart audits `credential.reauth.request` and counts outcome=requested for
 	// a request somebody else raised. With N concurrent resolvers for one lapse
 	// that is one row per resolver against a hash-chained log, all naming the same
 	// approval id, and a `requested` count that no longer means "requests raised".
@@ -373,7 +373,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	// without this row "whose credential, held how long, resolved by whom" is
 	// unanswerable from the trail.
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
-		"credential.reauth.requested", created.ID.String(), "success",
+		"credential.reauth.request", created.ID.String(), "success",
 		mustJSON(map[string]any{
 			"approval_id": created.ID, "owner": snapshot.OwnerSubject,
 			"credential_source": snapshot.CredentialSource, "provider": awsSSOProvider,
@@ -496,7 +496,7 @@ func (sn awsSSOScopeSnapshot) driftFrom(sc types.SiteConfig, agentID string, sco
 //
 // I2: only rows whose scope owner is this capture's own owner.
 //
-// ORDERING (I7): the caller runs this AFTER its own harness.credential.captured
+// ORDERING (I7): the caller runs this AFTER its own harness.credential.capture
 // emit, never before. The chain is captured -> resolved -> retry, and a resolve
 // that preceded its own capture row would be a credential-bearing retry with no
 // auditable predecessor.
@@ -549,7 +549,7 @@ func reauthResolvableBy(ap types.ApprovalRequest, scope awsSSOScope, loginRun ty
 }
 
 // reauthResolver is the optional store seam that writes the APPROVED state and
-// the credential.reauth.resolved row in ONE transaction — the broker's own mint
+// the credential.reauth.resolve row in ONE transaction — the broker's own mint
 // precedent (state change and its durable record commit together, or neither).
 //
 // Optional, the approvalPageLister/store.Pager seam, so every test double that
@@ -583,7 +583,7 @@ func (s *Server) resolveReauth(ctx context.Context, ap types.ApprovalRequest, re
 		owner = sc.Owner
 	}
 	ev := s.auditEvent(&ap.RunID, types.ActorHuman, resolvedBy,
-		"credential.reauth.resolved", ap.ID.String(), "success",
+		"credential.reauth.resolve", ap.ID.String(), "success",
 		mustJSON(map[string]any{
 			"approval_id": ap.ID, "owner": owner, "resolved_by": resolvedBy,
 			"capture_run_id": captureRunID, "provider": awsSSOProvider,

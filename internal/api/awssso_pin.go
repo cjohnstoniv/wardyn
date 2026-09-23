@@ -103,7 +103,7 @@ func (hl harnessLogin) loginEnv(ssoStartURL, ssoRegion string, pin awsSSOPin, en
 	return env
 }
 
-// The FIXED reason vocabulary on a harness.credential.refused row. A closed set
+// The FIXED reason vocabulary on a harness.credential.refuse row. A closed set
 // on purpose: the alternative is sandbox-chosen text in the audit trail, and an
 // incident review filtering "why were captures refused last Tuesday" needs to
 // GROUP, which free text cannot do.
@@ -332,7 +332,7 @@ func bedrockBlobPinMismatch(sc types.SiteConfig, b bedrockAuth) (stored, pinned 
 //
 // Two independent checks, both fail-closed, both against trusted server state:
 //
-//  1. The launch-time pin, read back off this run's own harness.login.started
+//  1. The launch-time pin, read back off this run's own harness.login.start
 //     row — never off the live roster. A roster edit mid-login must not
 //     re-point a capture already in flight, for the same reason the credential
 //     scope is stamped rather than re-resolved (see loginRunScope). An empty
@@ -374,7 +374,7 @@ func bindCaptureToPin(blob awsSSOBlob, stamp loginRunStamp, model string) (msg, 
 // refusals that happen AFTER loginRunScope has decided one; those rows then
 // carry owner + credential_source exactly like the captured row — the pair that
 // makes a per_user estate's refusal stream groupable by person instead of a
-// join back through each row's run_id to its harness.login.started. The EARLIER
+// join back through each row's run_id to its harness.login.start. The EARLIER
 // refusals pass nil: there is no decided scope yet, and their run's stamp
 // already carries the same pair. A POINTER rather than a variadic because the
 // answer is genuinely zero-or-one and the signature should say so.
@@ -385,7 +385,7 @@ func (s *Server) refuseCapture(w http.ResponseWriter, r *http.Request, claims *i
 		data["credential_source"] = awsSSOCredentialSourceLabel(*scope)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"harness.credential.refused", harnessCredSecretName(awsSSOProvider), "failure",
+		"harness.credential.refuse", harnessCredSecretName(awsSSOProvider), "failure",
 		mustJSON(data)))
 	writeError(w, status, msg)
 }

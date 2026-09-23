@@ -444,7 +444,7 @@ private-endpoint Kubernetes estate.
   transition CANCELS its outstanding approvals (migration `0062`) instead of
   leaving live Approve/Deny buttons on a dead run; the audit trail stops evicting
   itself (a self-inflicted renew loop backs off and gives up, and identical
-  consecutive `auth.failed` rows fold into one summary row carrying a count);
+  consecutive `auth.fail` rows fold into one summary row carrying a count);
   a private-IP denial is answered once per run rather than once per retry; and the
   `cidrs` docs trap is inverted — empty is the right default.
 - **Console and refusal copy ships DRAFT.** Every new `400`/`412`/`422` body and

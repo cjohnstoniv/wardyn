@@ -27,7 +27,7 @@ import (
 // enumerate hostnames), so the fix is accounting, not removal: a blind row we
 // refuse to emit is an unrecorded decision and lands on the SAME counter the
 // sink already keeps for records it could not deliver — the one that feeds the
-// periodic `egress.decisions.dropped:<n>` summary and close()'s "closed with N
+// periodic `egress:dropped-decisions-<n>` summary and close()'s "closed with N
 // dropped records". No new counter, no new audit string.
 func TestBlindCapSuppressionIsAccountedNotSilent(t *testing.T) {
 	const over = 3

@@ -114,7 +114,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
   // is what ends this (the hint only swapped the sentence above).
   it("closes the pane on a confirmed capture though the marker never arrives", async () => {
     const { onDone } = await attachAwsRun();
-    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.captured" }]);
+    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.capture" }]);
     getSetupStatusMock.mockResolvedValue(
       status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
     );
@@ -202,7 +202,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
   // — `completedRef` inside completeCapture must let only the FIRST one act.
   it("a race between the marker and the watch converges on exactly one cleanup and one onDone", async () => {
     const { onDone } = await attachAwsRun();
-    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.captured" }]);
+    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.capture" }]);
     getSetupStatusMock.mockResolvedValue(
       status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
     );

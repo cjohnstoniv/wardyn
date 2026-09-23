@@ -255,7 +255,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"harness.credential.captured", harnessCredSecretName(awsSSOProvider), "success",
+		"harness.credential.capture", harnessCredSecretName(awsSSOProvider), "success",
 		mustJSON(map[string]any{
 			"provider": awsSSOProvider, "source": "helper",
 			// owner + credential_source say WHOSE credential landed: "" / "shared" is
@@ -347,7 +347,7 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	// needs no new trust source: the region is the same
 	// cmp.Or(BedrockAWSSSORegion, BedrockRegion) boot config this sandbox was
 	// launched with, and the start URL is the operator's own request value read
-	// back off THIS run's harness.login.started row.
+	// back off THIS run's harness.login.start row.
 	if blob.Region != cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion) {
 		return "sso token region does not match the AWS SSO region this login run was launched with", refuseReasonRegionMismatch
 	}

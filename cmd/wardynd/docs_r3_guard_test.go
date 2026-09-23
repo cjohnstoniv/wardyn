@@ -597,12 +597,12 @@ func TestTestGapsDocReflectsCoverpkgCoverage(t *testing.T) {
 // that lands as an ordinary egress.deny row.
 func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
 	src := readSrc(t, "internal", "egress", "proxy", "decisions.go")
-	if !strings.Contains(src, `RuleSource: fmt.Sprintf("egress.decisions.dropped:%d", n)`) {
-		t.Fatal("droppedSummaryLog no longer emits the egress.decisions.dropped:<n> marker — re-derive the doc row before trusting this guard")
+	if !strings.Contains(src, `RuleSource: fmt.Sprintf("egress:dropped-decisions-%d", n)`) {
+		t.Fatal("droppedSummaryLog no longer emits the egress:dropped-decisions-<n> marker — re-derive the doc row before trusting this guard")
 	}
 	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
 	mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
-		"egress.decisions.dropped:<n>",
+		"egress:dropped-decisions-<n>",
 		"droppedSummaryLog",
 		"not a policy denial of an actual request",
 	)

@@ -291,7 +291,7 @@ func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
 // GREEN ON THE UNFIXED TREE — a regression pin, not a defect fix. The
 // no-credential preview's 409 sits in handleHarnessLogin, before
 // launchHarnessLoginRun and therefore before the supersede; the existing preview
-// case asserts only "no run row, no harness.login.started" on a fixture with no
+// case asserts only "no run row, no harness.login.start" on a fixture with no
 // supersede seam and no live login run, so moving the 409 below the launch (or
 // hoisting the supersede into the handler — a plausible refactor, since the
 // comment at the supersede call already argues about placement) would kill the
@@ -618,13 +618,13 @@ func TestUploadSSOToken_KilledRunIsRefused(t *testing.T) {
 		}
 		var refused *types.AuditEvent
 		for _, ev := range h.audit.events {
-			if ev.Action == "harness.credential.refused" {
+			if ev.Action == "harness.credential.refuse" {
 				refused = &ev
 				break
 			}
 		}
 		if refused == nil {
-			t.Fatal("no harness.credential.refused row — a refused capture that leaves no trail is the 0.7.3 finding again")
+			t.Fatal("no harness.credential.refuse row — a refused capture that leaves no trail is the 0.7.3 finding again")
 		}
 		var data map[string]any
 		if err := json.Unmarshal(refused.Data, &data); err != nil {
@@ -716,13 +716,13 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 	}
 	var refused *types.AuditEvent
 	for _, ev := range h.audit.events {
-		if ev.Action == "harness.credential.refused" {
+		if ev.Action == "harness.credential.refuse" {
 			refused = &ev
 			break
 		}
 	}
 	if refused == nil {
-		t.Fatal("no harness.credential.refused row for a refused capture")
+		t.Fatal("no harness.credential.refuse row for a refused capture")
 	}
 	data := killData(t, *refused)
 	if data["reason"] != refuseReasonRunKilled {

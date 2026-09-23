@@ -1388,14 +1388,14 @@ func TestSSHGateway_MixedChannelTypesShareOneCap(t *testing.T) {
 
 	// ...and the refusal is visible to the deployment, not just to the client.
 	t.Run("the refusal is audited, naming the channel type", func(t *testing.T) {
-		ev := waitForAudit(t, h.audit, run.ID, "ssh.channel_rejected", "failure")
+		ev := waitForAudit(t, h.audit, run.ID, "ssh.channel_reject", "failure")
 		if ev.Action == "" {
 			t.Fatalf("a channel-cap refusal emitted no audit event: the client sees ResourceShortage and the deployment sees nothing. events=%s",
 				auditDump(h.audit.snapshot(), run.ID))
 		}
 		var got []types.AuditEvent
 		for _, e := range h.audit.snapshot() {
-			if e.Action == "ssh.channel_rejected" {
+			if e.Action == "ssh.channel_reject" {
 				got = append(got, e)
 			}
 		}

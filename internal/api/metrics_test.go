@@ -127,12 +127,12 @@ func TestMetricsSinkDrops(t *testing.T) {
 // ─── the auth lane's silent failures (group B) ───────────────────────────────
 
 // TestAuthFailedSuppressionIsCounted is the whole point of the rate limiter
-// being safe to have. auditAuthFailed caps auth.failed audit rows at ~1/sec
+// being safe to have. auditAuthFailed caps auth.fail audit rows at ~1/sec
 // with a small burst, so past that burst the audit trail STOPS describing the
 // volume it is bounding — a credential-stuffing run and a handful of typos
 // leave the same handful of rows, and the attack reads QUIETER the harder it is
 // pushed. The suppressed emits therefore have to be countable, not merely
-// dropped: a flat auth.failed row count with this series climbing is the
+// dropped: a flat auth.fail row count with this series climbing is the
 // signal, and it is a series so it can be alerted on rather than grepped for.
 //
 // Counterfactual: `return` without the increment in auditAuthFailed and the
@@ -152,12 +152,12 @@ func TestAuthFailedSuppressionIsCounted(t *testing.T) {
 
 	rows := 0
 	for _, ev := range h.audit.events {
-		if ev.Action == "auth.failed" {
+		if ev.Action == "auth.fail" {
 			rows++
 		}
 	}
 	if rows == 0 || rows >= attempts {
-		t.Fatalf("auth.failed rows = %d of %d attempts; the fixture must actually exercise SUPPRESSION "+
+		t.Fatalf("auth.fail rows = %d of %d attempts; the fixture must actually exercise SUPPRESSION "+
 			"(some admitted, most dropped) or this test proves nothing", rows, attempts)
 	}
 

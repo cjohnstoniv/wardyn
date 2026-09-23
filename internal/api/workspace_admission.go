@@ -314,7 +314,7 @@ func (s *Server) legacyHostAdmissionWarnings(ctx context.Context, repos ...strin
 }
 
 // sshHostLevelWarnings is the ADMIT_SSH_HOST_LEVEL sentence — plus its audit row,
-// the run.provider.lane_dropped shape — for every SSH repository on this run that
+// the run.provider.lane_drop shape — for every SSH repository on this run that
 // a PATH-SCOPED row admitted host-level. Never silent: this is the one admission
 // outcome that is WIDER than the policy reads, and run create is the only door
 // with a warnings channel, so the audit half rides along here rather than at
@@ -516,7 +516,7 @@ func (s *Server) laneVetoed(ctx context.Context, runID uuid.UUID,
 		return "", false
 	}
 	decided := rows[0] // every row in the list vetoed; they agree on the kind
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.provider.lane_dropped",
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.provider.lane_drop",
 		string(decided.Kind), "failure", mustJSON(map[string]any{
 			"lane": string(lane), "grant": string(grant), "kind": string(decided.Kind),
 		})))

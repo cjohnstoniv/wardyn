@@ -44,7 +44,7 @@ type reauthStore struct {
 	site      types.SiteConfig
 	grants    []types.CredentialGrant
 	approvals *fakeApprovals
-	// audit is where the TRANSACTION writes credential.reauth.resolved. The
+	// audit is where the TRANSACTION writes credential.reauth.resolve. The
 	// real store inserts it into audit_events inside the same tx, never through
 	// Server.recordAudit, so a fake that dropped it would make the row invisible
 	// to exactly the assertion that matters.
@@ -450,8 +450,8 @@ func TestResolveAWSSSOInjection_DeadSessionRaisesOneRequestAndHolds(t *testing.T
 	if n != 1 {
 		t.Fatalf("pending credential_reauth rows = %d, want exactly 1", n)
 	}
-	if !f.audit.has("credential.reauth.requested", "success") {
-		t.Fatal("no credential.reauth.requested audit row")
+	if !f.audit.has("credential.reauth.request", "success") {
+		t.Fatal("no credential.reauth.request audit row")
 	}
 
 	// A second resolve joins the SAME request.
@@ -508,8 +508,8 @@ func TestResolveAWSSSOInjection_CaptureResolvesAndTheRetrySucceeds(t *testing.T)
 	if got.State != types.ApprovalApproved {
 		t.Fatalf("after the capture the request is %s, want APPROVED", got.State)
 	}
-	if !f.audit.has("credential.reauth.resolved", "success") {
-		t.Error("no credential.reauth.resolved audit row")
+	if !f.audit.has("credential.reauth.resolve", "success") {
+		t.Error("no credential.reauth.resolve audit row")
 	}
 	if f.audit.has("approval.decide", "success") {
 		t.Error("approval.decide was written for a decision nobody made")
@@ -610,7 +610,7 @@ func TestReconcileReauthOnRead_ResolvesAStrandedRequest(t *testing.T) {
 	if got.State != types.ApprovalApproved {
 		t.Fatalf("the poll read %s, want APPROVED — a stranded request must be derivable from the capture's own provenance", got.State)
 	}
-	if !f.audit.has("credential.reauth.resolved", "success") {
+	if !f.audit.has("credential.reauth.resolve", "success") {
 		t.Error("the reconcile resolved the row without its audit row")
 	}
 
@@ -684,12 +684,12 @@ func TestResolveAWSSSOInjection_ConcurrentResolversRaiseOneRequest(t *testing.T)
 	// that no longer means "requests raised".
 	raised := 0
 	for _, ev := range f.audit.events() {
-		if ev.Action == "credential.reauth.requested" {
+		if ev.Action == "credential.reauth.request" {
 			raised++
 		}
 	}
 	if raised != 1 {
-		t.Errorf("credential.reauth.requested rows = %d, want exactly 1 — the losers of the raise must "+
+		t.Errorf("credential.reauth.request rows = %d, want exactly 1 — the losers of the raise must "+
 			"not audit a request somebody else raised", raised)
 	}
 	if got := reauthCount(t, f.srv, "requested"); got != "1" {
@@ -872,7 +872,7 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 		t.Fatalf("resolve: code = %d, want 423; body=%s", w.Code, w.Body.String())
 	}
 	for _, ev := range f.audit.events() {
-		if ev.Action != "credential.reauth.requested" {
+		if ev.Action != "credential.reauth.request" {
 			continue
 		}
 		var d map[string]any
@@ -885,7 +885,7 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("no credential.reauth.requested row")
+	t.Fatal("no credential.reauth.request row")
 }
 
 // ─── legacy open mode: no roster (W6-S F1) ───────────────────────────────────
@@ -991,7 +991,7 @@ func (d *dedupApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalReq
 //
 // It still gets its 423 naming the winner's approval id — the row is real, it is
 // PENDING, and the sidecar's hold joins the same workflow by that id — but
-// `credential.reauth.requested` and outcome=requested belong to whoever raised
+// `credential.reauth.request` and outcome=requested belong to whoever raised
 // it. With N resolvers for one lapse the alternative is N rows on a hash-chained
 // log all naming one approval, and a counter that no longer means "requests
 // raised".
@@ -1027,8 +1027,8 @@ func TestResolveAWSSSOInjection_ARaiseThatLostTheRaceAuditsNothing(t *testing.T)
 			body.ApprovalID, winner.ID)
 	}
 	for _, ev := range f.audit.events() {
-		if ev.Action == "credential.reauth.requested" {
-			t.Errorf("the loser audited credential.reauth.requested for %s, a request it did not raise", ev.Target)
+		if ev.Action == "credential.reauth.request" {
+			t.Errorf("the loser audited credential.reauth.request for %s, a request it did not raise", ev.Target)
 		}
 	}
 	if after := reauthCount(t, f.srv, "requested"); after != before {
