@@ -273,7 +273,7 @@ type Store interface {
 	// screen and the OIDC login-time merge's whole data need.
 	ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error)
 
-	// User types (migration 0069_user_types). CreateUserType and
+	// User types (migration 0071_user_types). CreateUserType and
 	// UpdateUserType return ErrConflict on a taken id or name; DeleteUserType
 	// returns ErrConflict while the type is built in or still named by a
 	// subject row (UserTypeReferences counts those).

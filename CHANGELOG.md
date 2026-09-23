@@ -55,7 +55,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
-- **User types: the table and its API (#607).** Migration `0069_user_types` adds the `user_types`
+- **User types: the table and its API (#607).** Migration `0071_user_types` adds the `user_types`
   table and seeds the built-in `standard` type ("Standard user"), which is editable and can never
   be removed. `GET`/`POST /user-types` and `PUT`/`DELETE /user-types/{id}` (admin or
   `security_admin`) list, define, edit and remove the org's own types; each write records a
