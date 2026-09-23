@@ -696,6 +696,12 @@ type Config struct {
 	ApprovalExpiryAfter time.Duration
 }
 
+// defaultApprovalExpiryAfter is Config.ApprovalExpiryAfter's fallback when
+// unset (New) — mirrors cmd/wardynd's own approval-expiry-after sweeper
+// default (boot_flags.go) so a Config built without going through wardynd's
+// flags (every test harness, notably) agrees with production.
+const defaultApprovalExpiryAfter = 24 * time.Hour
+
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
 // facts only: Selected is ALWAYS the actual running implementation. The
 // recommended-vs-shipped split is prose and lives in docs/PLUGGABILITY.md +

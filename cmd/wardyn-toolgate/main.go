@@ -84,17 +84,6 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	return g.serve(in, out)
 }
 
-// directClient builds the gate's control-plane HTTP client.
-//
-// Proxy: nil, not http.DefaultTransport (B11a-F13). -base defaults to
-// $HTTP_PROXY because the gate's control plane IS the run's own wardyn-proxy —
-// a known on-segment address — and DefaultTransport would send that request
-// BACK through whatever $HTTP_PROXY names. With the default proxy URL those are
-// the same address and nothing shows; when an operator sets
-// `--proxy-url http://<other-host>:3128` the sandbox's HTTP_PROXY names a
-// different host, every permission request was forwarded to it down the egress
-// lane, and every tool call denied. The git helper has set Proxy: nil for this
-// reason since it was written; this client and internal/sidecar's had not.
 // deadlineDefault reads WARDYN_APPROVAL_EXPIRY_AFTER (a Go duration string,
 // e.g. "24h0m0s") and returns it, falling back to defaultDeadline when the
 // var is unset, empty or unparseable — never fail the gate over its own
@@ -111,6 +100,17 @@ func deadlineDefault() time.Duration {
 	return d
 }
 
+// directClient builds the gate's control-plane HTTP client.
+//
+// Proxy: nil, not http.DefaultTransport (B11a-F13). -base defaults to
+// $HTTP_PROXY because the gate's control plane IS the run's own wardyn-proxy —
+// a known on-segment address — and DefaultTransport would send that request
+// BACK through whatever $HTTP_PROXY names. With the default proxy URL those are
+// the same address and nothing shows; when an operator sets
+// `--proxy-url http://<other-host>:3128` the sandbox's HTTP_PROXY names a
+// different host, every permission request was forwarded to it down the egress
+// lane, and every tool call denied. The git helper has set Proxy: nil for this
+// reason since it was written; this client and internal/sidecar's had not.
 func directClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{Proxy: nil},

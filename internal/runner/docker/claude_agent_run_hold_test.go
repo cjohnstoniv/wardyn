@@ -4,6 +4,7 @@
 package docker
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +25,10 @@ func ccRunTask(t *testing.T, extraEnv ...string) []string {
 		}
 	}
 	argvLog := filepath.Join(root, "claude.argv")
-	fake := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$CLAUDE_ARGV_LOG\"\n"
+	// CLAUDE_ENV_LOG, when a test sets it, also records the MCP_TOOL_TIMEOUT
+	// claude was exec'd with ("unset" when agent-run exported none or an empty one).
+	fake := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$CLAUDE_ARGV_LOG\"\n" +
+		"[ -z \"$CLAUDE_ENV_LOG\" ] || printf '%s' \"${MCP_TOOL_TIMEOUT:-unset}\" > \"$CLAUDE_ENV_LOG\"\n"
 	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(fake), 0o700); err != nil { //nolint:gosec // test fixture
 		t.Fatalf("write fake claude: %v", err)
 	}
@@ -85,5 +89,52 @@ func TestClaudeAgentRun_HoldLaneLoadsNoRepoSettings(t *testing.T) {
 	}
 	if !strict {
 		t.Errorf("hold lane lost --strict-mcp-config\nargv: %q", argv)
+	}
+}
+
+// TestAgentRunLib_GoDurationToMs pins the hand-written Go-duration parser the
+// hold lane sizes MCP_TOOL_TIMEOUT with (RL-1): the shapes
+// time.Duration.String() emits convert to whole milliseconds, and anything it
+// cannot read prints nothing and still exits 0 (agent-run runs under set -e).
+func TestAgentRunLib_GoDurationToMs(t *testing.T) {
+	lib := ccAbs(t, ccAgentRunLibPath)
+	for _, tc := range []struct{ in, want string }{
+		{"24h0m0s", "86400000"},
+		{"1h30m0s", "5400000"},
+		{"1m30.5s", "90500"},
+		{"250ms", "250"},
+		{"0s", ""},
+		{"garbage", ""},
+		{"24h0m0sx", ""},
+		{"", ""},
+	} {
+		out, err := exec.Command("bash", "-c", `set -euo pipefail; source "$1"; go_duration_to_ms "$2"`,
+			"go-duration-test", lib, tc.in).CombinedOutput()
+		if err != nil {
+			t.Errorf("go_duration_to_ms %q: exit %v, output %q", tc.in, err, out)
+			continue
+		}
+		if got := strings.TrimSpace(string(out)); got != tc.want {
+			t.Errorf("go_duration_to_ms %q = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestClaudeAgentRun_HoldLaneSizesMCPToolTimeout pins RL-1's claude-side cap:
+// MCP_TOOL_TIMEOUT sits 15m PAST the approval ceiling so wardyn-toolgate's own
+// deadline deny (and its final poll) wins, and is never lowered below claude's
+// 1e8 ms default — a 24h ceiling leaves it unset.
+func TestClaudeAgentRun_HoldLaneSizesMCPToolTimeout(t *testing.T) {
+	for _, tc := range []struct{ ceiling, want string }{
+		{"72h0m0s", fmt.Sprint(72*3600000 + 900000)},
+		{"24h0m0s", "unset"},
+		{"", "unset"},
+	} {
+		envLog := filepath.Join(t.TempDir(), "mcp_tool_timeout")
+		ccRunTask(t, "WARDYN_TOOL_APPROVALS=hold", "WARDYN_APPROVAL_EXPIRY_AFTER="+tc.ceiling,
+			"CLAUDE_ENV_LOG="+envLog, "MCP_TOOL_TIMEOUT=")
+		if got := ccRead(t, envLog); got != tc.want {
+			t.Errorf("ceiling %q: claude saw MCP_TOOL_TIMEOUT=%q, want %q", tc.ceiling, got, tc.want)
+		}
 	}
 }

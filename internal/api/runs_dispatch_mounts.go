@@ -12,19 +12,12 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
-
-// defaultApprovalExpiryAfter is Config.ApprovalExpiryAfter's fallback when
-// unset (New, server.go) — mirrors cmd/wardynd's own approval-expiry-after
-// sweeper default (boot_flags.go) so a Config built without going through
-// wardynd's flags (every test harness, notably) agrees with production.
-const defaultApprovalExpiryAfter = 24 * time.Hour
 
 // buildRunMounts assembles the sandbox bind mounts.
 //

@@ -135,6 +135,33 @@ func TestApplyDispatchModeEnv_ApprovalExpiryAfter(t *testing.T) {
 	})
 }
 
+// TestDispatch_HoldRunCarriesConfiguredApprovalCeiling is the dispatch-level
+// half of RL-1: TestApplyDispatchModeEnv_ApprovalExpiryAfter feeds the ceiling
+// in by hand, so it stays green if dispatchRun stops copying
+// Config.ApprovalExpiryAfter into dispatchParams — and both sandbox consumers
+// fall back silently. This one goes through the real create → dispatch path.
+func TestDispatch_HoldRunCarriesConfiguredApprovalCeiling(t *testing.T) {
+	// An L1 autonomy rung derives the hold (TestGovernance_NonEscape row 20's fixture).
+	p := govProfile("autonomy-walled")
+	p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(types.AutonomyL1)}
+	srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
+	srv.cfg.ApprovalExpiryAfter = 72 * time.Hour
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, "sub-walled", []string{"eng"}, false),
+		`{"agent":"claude-code","task":"t","confinement_class":"CC2"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	fr := srv.cfg.Runner.(*fakeRunner)
+	fr.waitForSandbox(t)
+	env := fr.lastSandboxEnv()
+	if env["WARDYN_TOOL_APPROVALS"] != "hold" {
+		t.Fatalf("fixture no longer yields a hold run: WARDYN_TOOL_APPROVALS = %q", env["WARDYN_TOOL_APPROVALS"])
+	}
+	if got, want := env["WARDYN_APPROVAL_EXPIRY_AFTER"], "72h0m0s"; got != want {
+		t.Errorf("Env[WARDYN_APPROVAL_EXPIRY_AFTER] = %q, want %q (the server's configured ceiling)", got, want)
+	}
+}
+
 // TestCreateRun_ToolApprovals_Validation covers C1's closed-enum + codex-cli
 // rejection at the HTTP layer (runs_create_validate.go) — same shape as
 // TestCreateRun_UnknownTaskModeIs400 (task_mode_test.go). The two 400 cases

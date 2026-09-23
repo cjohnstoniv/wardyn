@@ -841,9 +841,9 @@ selftest_report_repo_and_git() {
 # arrives in, dispatch's mirror of the SAME ceiling the approval-expiry
 # sweeper expires a PENDING approval at) to whole milliseconds on stdout.
 # Unparseable input prints nothing (empty stdout) rather than failing the
-# run — callers fall back to their own default. RL-1: this is how agent-run
-# sizes MCP_TOOL_TIMEOUT (and wardyn-toolgate its own -deadline default) to
-# the real ceiling instead of a hardcoded literal.
+# run — callers fall back to their own default; it always returns 0, so a
+# bare `x=$(go_duration_to_ms ...)` is safe under set -e. RL-1: this is how
+# agent-run sizes MCP_TOOL_TIMEOUT to the real ceiling.
 go_duration_to_ms() {
     local d="$1" total=0 num unit chunk
     [[ -n "$d" ]] || return 0
@@ -860,5 +860,5 @@ go_duration_to_ms() {
         d="${d#"${BASH_REMATCH[0]}"}"
     done
     [[ -z "$d" ]] || return 0  # trailing garbage: refuse to guess, print nothing
-    (( total > 0 )) && echo "$total"
+    if (( total > 0 )); then echo "$total"; fi
 }
