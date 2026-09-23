@@ -106,3 +106,20 @@ func TestMergeGlobal_AStaleReadDoesNotRetireTheRefreshedValues(t *testing.T) {
 		t.Errorf("the sweep after the next refresh dropped %d values, want 3", n)
 	}
 }
+
+// An AddGlobal whose every value is empty or below MinLen used to retire the
+// credential's whole current set — an Entra answer with no refresh_token was
+// enough to evict one still in use. It is a no-op now; EvictGlobal is the one
+// way to let go of every value.
+func TestAddGlobal_NoUsableValueRetiresNothing(t *testing.T) {
+	r := NewRegistry()
+	const held = "the-refresh-token-still-in-use"
+	r.AddGlobal("alice", "ado", []byte(held))
+	r.AddGlobal("alice", "ado", []byte(""), []byte("short"))
+	if n := r.SweepGlobals(time.Now().Add(time.Second)); n != 0 {
+		t.Fatalf("an AddGlobal with no usable value retired %d values, want 0", n)
+	}
+	if got := r.Masker(uuid.Nil).Mask([]byte(held)); bytes.Contains(got, []byte(held)) {
+		t.Error("the held value was swept after an AddGlobal that carried nothing")
+	}
+}

@@ -19,7 +19,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -207,6 +210,37 @@ func TestADORedeem_StoreRefusalIsDefinitive(t *testing.T) {
 	}
 }
 
+// Every re-resolve mints first, and the mint reads the control plane's own
+// database. A database that did not answer fell to the mint's generic 500,
+// which the proxy reads as a refusal and drops the header at once — so the
+// last-good grace the docs promise for "the store (or the database) not
+// answering" never engaged for the database. It is the transient 503 now; a
+// database that answered with an error stays a 500.
+func TestInternalInjection_MintDatabaseOutageIsTransient(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// A real driver error for a database that is not there: nothing listens on port 1.
+	_, down := pgx.Connect(ctx, "postgres://wardyn@127.0.0.1:1/wardyn?sslmode=disable&connect_timeout=2")
+	if down == nil {
+		t.Fatal("connected to a database on port 1")
+	}
+	h, _ := newSecretsHarness(t)
+	token := h.mintRunToken(t, uuid.New())
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{fmt.Errorf("broker: begin tx: %w", down), http.StatusServiceUnavailable},
+		{fmt.Errorf("broker: load grant: %w", &pgconn.PgError{Code: "42P01", Message: "relation does not exist"}), http.StatusInternalServerError},
+	} {
+		h.broker.mintErr = tc.err
+		rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+		if rr.Code != tc.want {
+			t.Errorf("%v: status = %d body=%s, want %d", tc.err, rr.Code, rr.Body.String(), tc.want)
+		}
+	}
+}
+
 // Entra may answer a redemption without a refresh token; the one Wardyn holds
 // stays in use, so its mask copy must stay current rather than be retired and
 // swept while live (F5).
@@ -256,6 +290,68 @@ func TestADORedeem_AnAbsentRefreshTokenStaysMasked(t *testing.T) {
 	f.srv.cfg.MaskRegistry.SweepGlobals(time.Now().Add(time.Hour))
 	if !slices.ContainsFunc(f.srv.cfg.MaskRegistry.Snapshot(uuid.Nil), func(v []byte) bool { return string(v) == held.RefreshToken }) {
 		t.Fatal("the refresh token still in use was retired and swept")
+	}
+}
+
+// lostWriteSecrets is memSecrets whose every Put fails, per owner too: a
+// capture gets all the way to its store write and loses it there.
+type lostWriteSecrets struct{ *memSecrets }
+
+func (p lostWriteSecrets) Put(context.Context, string, []byte) error { return errStoreDown }
+func (p lostWriteSecrets) For(owner string) secretstore.Store {
+	return lostWriteSecrets{p.memSecrets.For(owner).(*memSecrets)}
+}
+
+// A re-capture that fails after the token exchange (an identity it will not
+// bind, a lost store write) leaves the sign-in already stored as the live
+// credential. Its refresh token used to be retired at the exchange and swept
+// an hour later, unmasked while still in use.
+func TestADOCapture_AFailedRecaptureKeepsTheHeldTokenMasked(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		breakIt func(*adoFixture)
+		want    int
+	}{
+		{"identity refused", func(f *adoFixture) { f.fake.SetSubject("someone-else") }, http.StatusForbidden},
+		{"store write lost", func(f *adoFixture) {
+			f.srv.cfg.Secrets = lostWriteSecrets{f.srv.cfg.Secrets.(*memSecrets)}
+		}, http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newADOFixture(t)
+			subject := f.fake.Subject()
+			if w := f.capture(t, subject); w.Code != http.StatusFound {
+				t.Fatalf("capture: status %d body %q", w.Code, w.Body.String())
+			}
+			held, _ := f.stored(t, subject)
+			tc.breakIt(f)
+			if w := f.capture(t, subject); w.Code != tc.want {
+				t.Fatalf("re-capture: status %d body %q, want %d", w.Code, w.Body.String(), tc.want)
+			}
+			f.srv.cfg.MaskRegistry.SweepGlobals(time.Now().Add(time.Hour))
+			if !slices.ContainsFunc(f.srv.cfg.MaskRegistry.Snapshot(uuid.Nil), func(v []byte) bool { return string(v) == held.RefreshToken }) {
+				t.Fatal("the stored refresh token still in use was retired and swept")
+			}
+		})
+	}
+}
+
+// The login-time capture has the same shape: a lost store write keeps the
+// credential already stored, so its mask copy stays current.
+func TestCaptureLoginGrant_ALostStoreWriteKeepsTheHeldTokenMasked(t *testing.T) {
+	f := newADOFixture(t)
+	const subject, held = "a-person", "the-refresh-token-already-stored"
+	granted := strings.Join(append([]string{"openid", entraOfflineAccessScope}, f.cfg.Scopes...), " ")
+	f.srv.CaptureLoginGrant(context.Background(), subject, oidc.LoginGrant{RefreshToken: held, Scope: granted, Expiry: adoTestNow.Add(time.Hour)})
+	f.srv.cfg.Secrets = lostWriteSecrets{f.srv.cfg.Secrets.(*memSecrets)}
+	f.srv.CaptureLoginGrant(context.Background(), subject, oidc.LoginGrant{RefreshToken: "a-refresh-token-never-stored", Scope: granted, Expiry: adoTestNow.Add(time.Hour)})
+
+	f.srv.cfg.MaskRegistry.SweepGlobals(time.Now().Add(time.Hour))
+	snap := f.srv.cfg.MaskRegistry.Snapshot(uuid.Nil)
+	for _, v := range []string{held, "a-refresh-token-never-stored"} {
+		if !slices.ContainsFunc(snap, func(b []byte) bool { return string(b) == v }) {
+			t.Errorf("%q is not masked after the failed capture", v)
+		}
 	}
 }
 

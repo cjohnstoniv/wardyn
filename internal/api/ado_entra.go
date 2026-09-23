@@ -590,8 +590,10 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, adoSignInErrorPath+reason, http.StatusFound)
 		return
 	}
-	// Mask BEFORE anything can log or persist either value.
-	s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(resp.AccessToken), []byte(resp.RefreshToken))
+	// Mask BEFORE anything can log or persist either value. Merge, not replace:
+	// until the store write below succeeds, the sign-in already stored stays the
+	// live one, so its tokens must stay current rather than be retired and swept.
+	s.cfg.MaskRegistry.MergeGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(resp.AccessToken), []byte(resp.RefreshToken))
 
 	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
@@ -634,6 +636,8 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storing the captured Azure DevOps sign-in failed", http.StatusInternalServerError)
 		return
 	}
+	// Stored: this sign-in is now the credential, and the one it replaced is not.
+	s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(resp.AccessToken), []byte(resp.RefreshToken))
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": granted, "source": adoEntraSourceSignIn,

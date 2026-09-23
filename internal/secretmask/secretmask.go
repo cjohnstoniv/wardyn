@@ -139,6 +139,8 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 // before and does not hold now (a refreshed access token, a rotated refresh
 // token) is retired, not dropped, and SweepGlobals drops it later. Pass every
 // value the credential currently holds in one call: a value left out is retired.
+// A call with no usable value (every one empty or below MinLen) changes
+// nothing; EvictGlobal is the one way to retire a credential's whole set.
 func (r *Registry) AddGlobal(owner, name string, values ...[]byte) {
 	r.setGlobal(owner, name, false, values)
 }
@@ -169,12 +171,13 @@ func (r *Registry) setGlobal(owner, name string, merge bool, values [][]byte) {
 			keep = append(keep, bytes.Clone(v))
 		}
 	}
-	r.retireLocked(k, keep)
-	if len(keep) > 0 {
-		r.current[k] = keep
-		// A value that comes back is current again, not waiting to be swept.
-		r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return containsSlice(keep, rv.value) })
+	if len(keep) == 0 {
+		return
 	}
+	r.retireLocked(k, keep)
+	r.current[k] = keep
+	// A value that comes back is current again, not waiting to be swept.
+	r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return containsSlice(keep, rv.value) })
 	r.reflattenLocked()
 }
 

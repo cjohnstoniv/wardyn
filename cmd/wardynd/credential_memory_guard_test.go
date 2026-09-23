@@ -17,11 +17,13 @@ package main
 //     the first statement of its entry point.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -34,12 +36,34 @@ type decryptSite struct {
 	line              int
 }
 
-// classifyDecryptCall names the decrypt primitive call is, or "". inKEK marks a
-// file of package kek itself, whose own Open is called unqualified.
-func classifyDecryptCall(call *ast.CallExpr, inKEK bool) string {
+// fileScope is which decrypt primitives a file can reach. inKEK marks a file of
+// package kek itself, whose own Open is called unqualified; the other three are
+// set by importing the package that defines the method.
+type fileScope struct{ inKEK, kek, aead, external bool }
+
+func scopeOf(f *ast.File) fileScope {
+	sc := fileScope{inKEK: f.Name.Name == "kek"}
+	sc.kek = sc.inKEK
+	for _, im := range f.Imports {
+		switch strings.Trim(im.Path.Value, `"`) {
+		case "crypto/cipher":
+			sc.aead = true
+		case "github.com/cjohnstoniv/wardyn/internal/secretstore/kek":
+			sc.kek = true
+		case "github.com/cjohnstoniv/wardyn/internal/secretstore":
+			sc.external = true
+		}
+	}
+	return sc
+}
+
+// classifyDecryptCall names the decrypt primitive call is, or "". Unwrap, Open
+// and Get are matched by name and arity alone, so each counts only in a file
+// that imports the package defining it.
+func classifyDecryptCall(call *ast.CallExpr, sc fileScope) string {
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
-		if inKEK && fun.Name == "Open" {
+		if sc.inKEK && fun.Name == "Open" {
 			return "kek.Open"
 		}
 	case *ast.SelectorExpr:
@@ -49,11 +73,11 @@ func classifyDecryptCall(call *ast.CallExpr, inKEK bool) string {
 			return "kek.Open"
 		case x != nil && x.Name == "age" && fun.Sel.Name == "Decrypt":
 			return "age.Decrypt"
-		case fun.Sel.Name == "Unwrap" && len(call.Args) == 3:
+		case sc.kek && fun.Sel.Name == "Unwrap" && len(call.Args) == 3:
 			return "KEK.Unwrap" // kek.KEK: Unwrap(ctx, wrapped, bind)
-		case fun.Sel.Name == "Open" && len(call.Args) == 4:
+		case sc.aead && fun.Sel.Name == "Open" && len(call.Args) == 4:
 			return "AEAD.Open" // cipher.AEAD: Open(dst, nonce, ciphertext, aad)
-		case fun.Sel.Name == "Get" && len(call.Args) == 4:
+		case sc.external && fun.Sel.Name == "Get" && len(call.Args) == 4:
 			return "External.Get" // secretstore.External: Get(ctx, owner, name, ref)
 		}
 	}
@@ -85,7 +109,7 @@ func scanDecryptSites(t *testing.T, root string) (sites []decryptSite, scanned i
 			scanned++
 			rel, _ := filepath.Rel(root, path)
 			rel = filepath.ToSlash(rel)
-			inKEK := f.Name.Name == "kek"
+			sc := scopeOf(f)
 			for _, decl := range f.Decls {
 				fd, ok := decl.(*ast.FuncDecl)
 				if !ok || fd.Body == nil {
@@ -97,7 +121,7 @@ func scanDecryptSites(t *testing.T, root string) (sites []decryptSite, scanned i
 				}
 				ast.Inspect(fd.Body, func(n ast.Node) bool {
 					if call, ok := n.(*ast.CallExpr); ok {
-						if kind := classifyDecryptCall(call, inKEK); kind != "" {
+						if kind := classifyDecryptCall(call, sc); kind != "" {
 							sites = append(sites, decryptSite{relFile: rel, fn: name, kind: kind, line: fset.Position(call.Pos()).Line})
 						}
 					}
@@ -162,6 +186,40 @@ func TestDecryptSitesArePinned(t *testing.T) {
 	sort.Strings(stale)
 	for _, key := range stale {
 		t.Errorf("decryptSites pins %s, but no such call exists — drop the stale entry", key)
+	}
+}
+
+// The primitives matched by method name and arity count only in a file that
+// can reach them: an unrelated four-argument Get (a cache, a lookup) in a
+// package that never touches a credential is not a decrypt site.
+func TestDecryptMatcherNeedsTheDefiningImport(t *testing.T) {
+	const src = `package x
+import %s
+func f() { c.Get(ctx, a, b, d); k.Unwrap(ctx, w, b); g.Open(nil, n, ct, aad) }`
+	for _, tc := range []struct {
+		imports string
+		want    []string
+	}{
+		{`"sync"`, nil},
+		{`("crypto/cipher"; "github.com/cjohnstoniv/wardyn/internal/secretstore"; "github.com/cjohnstoniv/wardyn/internal/secretstore/kek")`,
+			[]string{"External.Get", "KEK.Unwrap", "AEAD.Open"}},
+	} {
+		f, err := parser.ParseFile(token.NewFileSet(), "x.go", fmt.Sprintf(src, tc.imports), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		ast.Inspect(f, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if kind := classifyDecryptCall(call, scopeOf(f)); kind != "" {
+					got = append(got, kind)
+				}
+			}
+			return true
+		})
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("imports %s: matched %v, want %v", tc.imports, got, tc.want)
+		}
 	}
 }
 
