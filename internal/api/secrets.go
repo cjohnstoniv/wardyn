@@ -46,6 +46,7 @@ var reservedSecretNames = map[string]bool{
 	"wardyn-session-key":    true,
 	"wardyn-ssh-host-key":   true,
 	"wardyn-ui-session-key": true,
+	"wardyn-internal-ca":    true,
 }
 
 // reservedSecret reports whether name is a platform-internal / managed-credential
