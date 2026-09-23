@@ -313,6 +313,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// credential material and the revoke only subtracts.
 	"GET /api/v1/admin/devices":         {class: classSecurity},
 	"DELETE /api/v1/admin/devices/{id}": {class: classSecurity},
+	// Offboarding (CS-5): erase every credential one person holds. It only
+	// subtracts, and names no value back — the same shape as the revokes above.
+	"DELETE /api/v1/people/{principal}/credentials": {class: classSecurity},
 	// The workspace EGRESS-DECISION lane. Deciding which hosts a workspace's
 	// runs may reach is the same authority as deciding an egress approval, and
 	// promote-egress is literally its bulk form.
@@ -1156,11 +1159,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 38 SUPER. 0.8's hybrid enrolment then added three: minting a device
 	// enrolment token creates a credential, so it is born SUPER (= 39), while
 	// the device inventory and revoke are the /tokens pair's twins and land on
-	// the security tier (= 26 SEC). A route silently reclassified in the table
-	// above would still pass every probe — it would just be enforcing the WRONG
-	// tier, exactly the drift the per-route loop cannot see.
-	if sec != 26 || super != 39 {
-		t.Errorf("tier split = %d security / %d admin, want 26 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	// the security tier (= 26 SEC). CS-5 added the credential erase, which
+	// only subtracts, on the security tier (= 27 SEC). A route silently
+	// reclassified in the table above would still pass every probe — it would
+	// just be enforcing the WRONG tier, exactly the drift the per-route loop
+	// cannot see.
+	if sec != 27 || super != 39 {
+		t.Errorf("tier split = %d security / %d admin, want 27 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the credential erase, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 

@@ -131,6 +131,10 @@ func secretsAPIReserved(name string) bool {
 		name == types.ADOEntraAccessTokenSecret
 }
 
+// secretPutOwnerRefusal answers a PUT naming ?owner=.
+const secretPutOwnerRefusal = "?owner= is not accepted when setting a secret: a credential is set only by the person it belongs to. " +
+	"An admin may remove a person's credentials (DELETE with ?owner=, or DELETE /people/{principal}/credentials), never set them"
+
 type putSecretRequest struct {
 	Value string `json:"value"`
 }
@@ -172,16 +176,24 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) b
 // namespace (migration 0050: "" for an operator, else their own
 // principal — see secretOwnerFromRequest). The value is write-only: no API
 // path ever returns it. Every write is an audit event.
+//
+// ?owner= is refused on PUT, for everyone (credential-storage design K7-A): a
+// credential is set only by its owner, so nobody else can plant one a person's
+// runs would use under their name. DELETE and the name list keep it — an admin
+// may still remove a person's credentials, never set them.
 func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	// ?owner= is honoured here exactly as on DELETE/GET: an admin's cross-write
-	// lands in the NAMED member's namespace. Silently ignoring it would put the
-	// value in the operator namespace — the Get fallback for EVERY member's
-	// runs — which is the one blast radius a per-principal write must not have.
-	owner, ownerKnown, ok := s.secretOwnerParam(w, r)
-	if !ok {
+	if r.URL.Query().Has("owner") {
+		if !s.isOperator(r.Context()) {
+			s.denyMemberOwnerParam(w, r)
+			return
+		}
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"secret.write", name, "denied", mustJSON(map[string]any{"reason": "owner_param"})))
+		writeError(w, http.StatusForbidden, secretPutOwnerRefusal)
 		return
 	}
+	owner := s.secretOwnerFromRequest(r)
 	if !s.writableSecretName(w, name, owner) {
 		return
 	}
@@ -212,13 +224,13 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 			// Rule 18: the value reached the external store but its row did not,
 			// so the store may already serve it behind this failure.
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"secret.write", name, "failure", withSecretOwner(map[string]any{"reason": "row"}, owner, ownerKnown)))
+				"secret.write", name, "failure", withSecretOwner(map[string]any{"reason": "row"}, owner, true)))
 		}
 		writeServerError(w, r, "store secret", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.write", name, "success", secretOwnerAuditData(owner, ownerKnown)))
+		"secret.write", name, "success", secretOwnerAuditData(owner, true)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -341,25 +353,7 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		return s.secretOwnerFromRequest(r), true, true
 	}
 	if !s.isOperator(r.Context()) {
-		writeError(w, http.StatusForbidden, "?owner= is admin-only")
-		// Audited, because this is a member reaching for ANOTHER human's
-		// credential namespace and the row is the only trace it happened.
-		// docs/AUDIT-ACTIONS.md's contract is "every member denial that isn't a
-		// plain foreign-resource 404", and a middleware-gated admin route
-		// already writes exactly this row for the same member — an in-handler
-		// gate that stays silent makes the audit trail depend on WHERE the
-		// refusal happens to live.
-		//
-		// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
-		// in-handler twin: reason from the closed vocabulary, target the path,
-		// method in the data — and the member-mode marker, which
-		// is why all four sites build the datum through the one
-		// authzDeniedDatum (membermode.go) rather than hand-rolling the map.
-		// It names no namespace: the refusal is constant and runs before any
-		// lookup, so neither the response nor the row can say whether the
-		// principal ?owner= asked about exists.
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
+		s.denyMemberOwnerParam(w, r)
 		return "", false, false
 	}
 	resolved, known, refusal := s.resolveSecretOwner(r.Context(), q)
@@ -368,6 +362,30 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		return "", false, false
 	}
 	return resolved, known, true
+}
+
+// denyMemberOwnerParam answers a non-operator naming ?owner=: a constant 403,
+// audited.
+func (s *Server) denyMemberOwnerParam(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusForbidden, "?owner= is admin-only")
+	// Audited, because this is a member reaching for ANOTHER human's
+	// credential namespace and the row is the only trace it happened.
+	// docs/AUDIT-ACTIONS.md's contract is "every member denial that isn't a
+	// plain foreign-resource 404", and a middleware-gated admin route
+	// already writes exactly this row for the same member — an in-handler
+	// gate that stays silent makes the audit trail depend on WHERE the
+	// refusal happens to live.
+	//
+	// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
+	// in-handler twin: reason from the closed vocabulary, target the path,
+	// method in the data — and the member-mode marker, which
+	// is why all four sites build the datum through the one
+	// authzDeniedDatum (membermode.go) rather than hand-rolling the map.
+	// It names no namespace: the refusal is constant and runs before any
+	// lookup, so neither the response nor the row can say whether the
+	// principal ?owner= asked about exists.
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
 }
 
 // secretOwnerUnresolvedMsg is the refusal for an ?owner= email form that pairs
@@ -444,17 +462,16 @@ func (s *Server) knownPrincipals(ctx context.Context) []principalIdentity {
 //     the one admin surface that lacked it.
 //  4. Neither, and it is email-shaped ⇒ REFUSED. An "@" value that pairs to no
 //     principal cannot be a subject this deployment issues, so writing it could
-//     only create a namespace the owner never reads. A bare value is taken verbatim: refusing a subject merely because
-//     this deployment has not seen it yet would break pre-provisioning for a
-//     member who has not signed in.
+//     only name a namespace the owner never uses. A bare value is taken
+//     verbatim: the directory is api tokens and workspace owners only, and a
+//     person who holds neither still has a namespace an admin must be able to
+//     remove credentials from.
 //
 // The second return says whether the value RESOLVED against the directory or was
-// taken verbatim in case 4. Verbatim is a deliberate affordance — pre-provisioning
-// a member who has not signed in — but it is indistinguishable, from the outside,
-// from a typo: both answer 204 with an outcome=success row, and the typo's
-// namespace is one nobody will ever read. So the caller stamps owner_known:false
-// and the log can tell the two apart afterwards. The STATUS is
-// unchanged: refusing here would break the affordance.
+// taken verbatim in case 4. Verbatim is a deliberate affordance, but it is
+// indistinguishable, from the outside, from a typo. So the caller stamps
+// owner_known:false and the log can tell the two apart afterwards. The STATUS
+// is unchanged: refusing here would break the affordance.
 func (s *Server) resolveSecretOwner(ctx context.Context, v string) (owner string, known bool, refusal string) {
 	directory := s.knownPrincipals(ctx)
 	for _, p := range directory {
@@ -527,13 +544,13 @@ func (s *Server) crossOwnerDeleteHitsARow(w http.ResponseWriter, r *http.Request
 // differ), this stamps on EVERY non-"" owner: which namespace a secret write
 // landed in is the whole point of the marker, including a member's own
 // ordinary write.
-// owner_known:false is added when the namespace was taken VERBATIM from an
-// admin's ?owner= because it matched no principal this deployment knows. The
-// write still lands and still answers 204 — pre-provisioning a member who has
-// not signed in is the documented affordance — but that is byte-identical to a
-// typo, whose namespace nobody will ever read. The marker is what lets the log
-// tell the two apart afterwards; it is ABSENT (not `true`) for every resolved
-// owner, so an auditor filters on the key.
+// owner_known:false is added when an admin's DELETE ?owner= namespace was
+// taken VERBATIM because it matched no principal this deployment knows (a PUT
+// no longer takes ?owner=, so a write never carries it). The delete still
+// answers, but a typo's namespace is byte-identical to a real one nobody has
+// seen yet; the marker is what lets the log tell the two apart afterwards. It
+// is ABSENT (not `true`) for every resolved owner, so an auditor filters on
+// the key.
 func secretOwnerAuditData(owner string, known bool) json.RawMessage {
 	if owner == "" {
 		return nil

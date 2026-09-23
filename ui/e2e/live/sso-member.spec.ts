@@ -393,15 +393,13 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
   await expect.poll(async () => (await me(page)).operator, { timeout: 30_000 }).toBe(false);
   expect((await me(page)).member_mode).toBe(true);
 
-  // The flag is enforced SERVER-SIDE: writing a secret into ANOTHER principal's
+  // The flag is enforced SERVER-SIDE: reading ANOTHER principal's secret
   // namespace is an operator act, and this session no longer has that authority.
   //
-  // PUT /api/v1/secrets/{name}?owner=… is the real shape (routes.go) — ?owner=
-  // is a QUERY parameter that secretOwnerParam gates ("?owner= is admin-only",
-  // 403), not a body field, and there is no POST /secrets at all. The earlier
-  // draft of this case sent a POST with `owner` in the body, which this
-  // deployment would have answered 405 — a red that says nothing about the mode.
-  // The value is ≥ secretmask.MinLen so a 400 can never be mistaken for the 403.
+  // GET /api/v1/secrets?owner=… is the probe — ?owner= is a QUERY parameter that
+  // secretOwnerParam gates ("?owner= is admin-only", 403). Not the PUT: since 0.8
+  // a PUT refuses ?owner= for everyone (a credential is set only by its owner),
+  // so it could no longer show the authority coming back.
   //
   // ?owner= NAMES THE ADMIN'S OWN SUBJECT, not an email and not the member's.
   // resolveSecretOwner maps the value onto a namespace and answers 422 ("names
@@ -415,11 +413,9 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
   // naming ?owner= AT ALL, whatever value it carries.
   const probe = async (owner: string) =>
     page.evaluate(async (o: string) => {
-      const r = await fetch(`/api/v1/secrets/member-mode-probe?owner=${encodeURIComponent(o)}`, {
-        method: "PUT",
+      const r = await fetch(`/api/v1/secrets?owner=${encodeURIComponent(o)}`, {
+        method: "GET",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ value: "member-mode-probe-value" }),
       });
       return r.status;
     }, owner);
@@ -442,5 +438,5 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
   expect(
     await probe(adminWho.principal ?? ""),
     "the admin did not get their operator authority back on exit",
-  ).toBe(204);
+  ).toBe(200);
 });

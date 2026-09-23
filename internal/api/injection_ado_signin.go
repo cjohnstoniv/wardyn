@@ -18,9 +18,9 @@ package api
 //
 // At the sidecar's BOOT there is no request to hold: the proxy marks that
 // resolve (phase=boot) and the run fails with a failure hint that names the
-// remedy. The redemption has already recorded the end on the stored sign-in
-// (noteADOEntraSignInEnded), so /me/scm-access and the launch gate say so
-// before the next launch.
+// remedy. The redemption has already deleted a dead sign-in, or recorded a
+// Conditional Access end on it (noteADOEntraSignInEnded), so /me/scm-access and
+// the launch gate say so before the next launch.
 
 import (
 	"context"
@@ -79,6 +79,13 @@ func adoSignInEndedClass(class ADOEntraFailure) bool {
 func (s *Server) answerADOSignInEnded(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
 	sn adoEntraScopeSnapshot, class ADOEntraFailure, fail adoFail,
 ) bool {
+	if class == ADOEntraFailureNotCaptured {
+		// A dead sign-in is deleted as the hold is raised (noteADOEntraSignInEnded),
+		// so the resolves that follow find none: while that request is open they
+		// are still the lapse it holds for. Without one, not connected is refused.
+		return r.URL.Query().Get(adoResolvePhase) != adoResolvePhaseBoot && s.cfg.Approvals != nil &&
+			s.stillHeldForADOSignIn(r.Context(), w, claims, sn)
+	}
 	if !adoSignInEndedClass(class) {
 		return false
 	}
@@ -163,6 +170,24 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 	}
 	writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 	return true
+}
+
+// stillHeldForADOSignIn answers 423 when this run holds an open sign-in
+// request for sn's owner and provider row, and reports whether it did. A read
+// failure answers nothing, so the caller refuses.
+func (s *Server) stillHeldForADOSignIn(ctx context.Context, w http.ResponseWriter, claims *identity.Claims, sn adoEntraScopeSnapshot) bool {
+	rows, err := s.runApprovals(ctx, claims.RunID, "")
+	if err != nil {
+		return false
+	}
+	for _, ap := range rows {
+		sc, ok := adoSignInScope(ap)
+		if ok && ap.State == types.ApprovalPending && sc.Owner == sn.OwnerSubject && sc.ProviderID == sn.ProviderRowID {
+			writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: ap.ID})
+			return true
+		}
+	}
+	return false
 }
 
 // adoSignInScope reports whether ap is an Azure DevOps sign-in request.

@@ -177,9 +177,10 @@ type adoEntraBlob struct {
 	// RenewedAt is when the stored refresh token was last rotated. Absent on a
 	// credential that has never been redeemed.
 	RenewedAt time.Time `json:"renewed_at,omitempty"`
-	// DeadAt is when a renewal last met a refusal no renewal gets past: the
-	// refresh token is gone, or a Conditional Access policy wants the person
-	// present. It lives on the blob, not in a table, so /me/scm-access and the
+	// DeadAt is when a renewal last met a refusal no renewal gets past while
+	// the refresh token lives: a Conditional Access policy wants the person
+	// present. (A dead refresh token is deleted instead, noteADOEntraSignInEnded;
+	// a blob stored before 0.8 may still carry dead_credential.) It lives on the blob, not in a table, so /me/scm-access and the
 	// launch gate can say expired_signin before the next run fails at its
 	// sidecar's boot. A fresh capture writes a blob without it; a renewal that
 	// succeeds later clears it.
@@ -453,12 +454,20 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	return access, nil
 }
 
-// noteADOEntraSignInEnded records, on the stored blob, a renewal refusal only a
-// new sign-in can answer. Best-effort: the caller's own answer does not depend
+// noteADOEntraSignInEnded answers a renewal refusal only a new sign-in can
+// answer. A dead refresh token is deleted (deleteDeadCredential): nothing can
+// renew it. An interaction refusal leaves the token live, so it is recorded on
+// the stored blob instead. Best-effort: the caller's own answer does not depend
 // on it, and a failed write only means the next launch learns it at boot.
-// Called under the redemption lock, so it cannot overwrite a rotation.
+// Called under the redemption lock, on the blob read inside it, so it cannot
+// delete or overwrite a rotation.
 func (s *Server) noteADOEntraSignInEnded(ctx context.Context, owner, rowID string, blob adoEntraBlob, class ADOEntraFailure) {
-	if class != ADOEntraFailureDeadCredential && class != ADOEntraFailureInteractionRequired {
+	switch class {
+	case ADOEntraFailureDeadCredential:
+		s.deleteDeadCredential(ctx, s.cfg.Secrets.For(owner), owner, adoEntraSecretName(rowID), adoEntraProviderPrefix)
+		return
+	case ADOEntraFailureInteractionRequired:
+	default:
 		return
 	}
 	blob.DeadAt, blob.DeadReason = s.cfg.Now().UTC(), class

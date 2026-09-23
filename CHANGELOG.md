@@ -68,6 +68,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **A person's credentials can be erased in one step, and dead sign-ins are deleted (#590).**
+  `DELETE /api/v1/people/{principal}/credentials` (admin or `security_admin`) deletes every
+  credential that person has stored — keys, tokens and captured sign-ins — and answers with the
+  count; in store mode each value is removed from Vault or Key Vault before its row, and the
+  answer says how long Key Vault keeps a soft-deleted value recoverable. It never reports success
+  with a credential left behind, and it cannot touch the operator's own credentials. Audited
+  `credential.erase`. A captured AWS or Azure DevOps sign-in whose refresh token the provider
+  refuses for good (`invalid_grant`) is deleted at once, and a stored AWS sign-in is deleted by a
+  daily sweep once its expiry passes; both are audited `credential.expired_deleted`. A person
+  whose sign-in was deleted this way is shown as not connected and signs in again.
+- **An admin can no longer set a secret in someone else's namespace (#590).** `PUT
+  /api/v1/secrets/{name}?owner=` is refused with `403` for everyone, audited `secret.write`
+  `denied`: a credential is set only by the person it belongs to. `DELETE` and the name list keep
+  `?owner=`, so an admin can still remove a person's credentials. Pre-provisioning a member's key
+  before they sign in is no longer possible; they set it themselves.
 - **Store mode in Azure Key Vault (#645).** `WARDYN_SECRET_STORE=azurekv` writes every stored
   credential to the organisation's Key Vault as a secret and keeps only a pointer row, like
   `vaultkv`; no Azure SDK is involved. wardynd authenticates with AKS workload identity (a

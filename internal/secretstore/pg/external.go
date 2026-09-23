@@ -99,11 +99,11 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 		return fmt.Errorf("pg secretstore: put %s to %s: %w", ref, s.ext.Name(), err)
 	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext)
-		VALUES ($1, $2, $3, $4, ''::bytea, ''::bytea)
+		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
+		VALUES ($1, $2, $3, $4, ''::bytea, ''::bytea, $5)
 		ON CONFLICT (owned_by, name) DO UPDATE
-			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, updated_at=now()`,
-		s.owner, name, extVersion, s.ext.Name()+":"+loc,
+			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, expires_at=$5, updated_at=now()`,
+		s.owner, name, extVersion, s.ext.Name()+":"+loc, expiresAt(ctx),
 	)
 	if err == nil {
 		err = tx.Commit(ctx)

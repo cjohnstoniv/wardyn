@@ -874,6 +874,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
+| `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
@@ -973,8 +974,8 @@ secret names, runner detail) for a member.
 **Workspace ownership (0.6, migration `0048`)** and **Secret ownership (0.7,
 migration `0050`)** are the second and third owned nouns after runs.
 `workspaces.owned_by` / `secrets.owned_by` hold the creating MEMBER's principal;
-`""` — every pre-migration row, and everything an admin writes without `?owner=`
-— means **operator-owned**, i.e. exactly today's behavior.
+`""` — every pre-migration row, and everything an admin writes — means
+**operator-owned**, i.e. exactly today's behavior.
 
 - **Workspace CRUD/scan/build are owner-or-admin, not admin-only**
   (`getWorkspaceAuthorized`/`getWorkspaceReadable`, `internal/api/helpers.go`).
@@ -1054,9 +1055,12 @@ migration `0050`)** are the second and third owned nouns after runs.
   than a pinned address for every host it proxies (all of them, minus
   `upstream_proxy_no_proxy`), so a member-substitutable value there would put a
   member in control of which proxy resolves and dials every one of them.
-- **`?owner=<principal>` is admin-only** on `PUT`/`DELETE`/`GET /secrets` (an
-  admin's cross-write lands in the NAMED member's namespace, never the
-  operator's), refused with a constant 403 for anyone else. The value names a
+- **`?owner=<principal>` is admin-only** on `DELETE`/`GET /secrets`, refused
+  with a constant 403 for anyone else. **A `PUT` refuses it for everyone (0.8,
+  `403`, audited `secret.write` `denied`)**: a credential is set only by the
+  person it belongs to, so an admin can remove a person's credentials but never
+  set one their runs would use under their name, and pre-provisioning a member's
+  key before they sign in is no longer possible. The value names a
   HUMAN and is RESOLVED to the namespace key that person's own writes land in:
   matched case-insensitively against the principals this deployment knows, and
   mapped from the email form through the same (principal, email) pairing
@@ -1069,6 +1073,26 @@ migration `0050`)** are the second and third owned nouns after runs.
   principal is refused 422 rather than silently creating a namespace its owner
   never reads, and a cross-namespace `DELETE` that removed nothing answers 404
   rather than an idempotent 204.
+- **Offboarding a person's credentials is `DELETE /people/{principal}/credentials`**
+  (admin or `security_admin`, 0.8). It deletes every credential in that person's
+  namespace — keys, tokens and captured sign-ins — and answers `{"count": N}`; the
+  principal resolves as `?owner=` does. In store mode each value leaves Vault or
+  Key Vault before its row, and the answer adds `store`, `purged` and, when Key
+  Vault kept soft-deleted copies, `recoverable_days`: the organisation can
+  recover them for that long unless its vault operators purge them. It never
+  answers success with a credential left behind (`500`, audited
+  `credential.erase` `failure` with the count it did delete; run it again), and
+  it never erases the operator namespace. Their runs stop using a deleted
+  credential when the proxy next resolves it. **Wardyn cannot revoke anything
+  upstream**: revoke the person's AWS, Anthropic and Azure DevOps sessions, and any
+  gateway token, where they were issued, and disable them in the identity provider.
+- **Dead sign-ins are not kept.** A captured AWS or Azure DevOps sign-in whose
+  refresh token the provider refuses for good (`invalid_grant`) is deleted at
+  that renewal, and a stored AWS sign-in is deleted by a daily sweep once it can
+  no longer be used or renewed (its row's `expires_at`); both audit
+  `credential.expired_deleted`. The person is then shown as not connected and
+  signs in again. A Conditional Access refusal does not delete anything — the
+  sign-in still works once the person is present.
 - **Cross-user admin access is queryable.** An admin acting on a member-owned
   workspace stays the ADMIN in the audit actor (no impersonation) with
   `workspace_owner` naming the member; `secret.write`/`secret.delete` carry

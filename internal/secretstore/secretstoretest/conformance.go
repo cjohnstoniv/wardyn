@@ -129,6 +129,9 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) secretstore.Store)
 	t.Run("delete_owner_row_leaves_operator_row", func(t *testing.T) {
 		testDeleteOwnerRowLeavesOperatorRow(t, ctx, newStore, uniq)
 	})
+	t.Run("erase_owner_removes_own_rows_only", func(t *testing.T) {
+		testEraseOwnerRemovesOwnRowsOnly(t, ctx, newStore, uniq)
+	})
 }
 
 // newStoreFunc and uniqFunc name the two closures every owner-scoping case
@@ -239,5 +242,39 @@ func testDeleteOwnerRowLeavesOperatorRow(t *testing.T, ctx context.Context, newS
 	gotA, err := op.For(a).Get(ctx, name)
 	if err != nil || string(gotA) != "operator-value" {
 		t.Fatalf("For(a).Get after deleting A's own row = (%q, %v), want the fallback to operator-value", gotA, err)
+	}
+}
+
+// testEraseOwnerRemovesOwnRowsOnly: secretstore.EraseOwner over this store
+// removes every row of one owner and nothing of another owner's or the
+// operator's, and refuses the operator namespace outright.
+func testEraseOwnerRemovesOwnRowsOnly(t *testing.T, ctx context.Context, newStore newStoreFunc, uniq uniqFunc) {
+	op := newStore(t)
+	a, b, name := uniq("owner-a"), uniq("owner-b"), uniq("erase")
+	t.Cleanup(func() { _ = op.Delete(ctx, name); _ = op.For(b).Delete(ctx, name) })
+	for _, w := range []struct{ owner, name string }{{"", name}, {a, name}, {a, name + "-2"}, {b, name}} {
+		if err := op.For(w.owner).Put(ctx, w.name, []byte("v-"+w.owner)); err != nil {
+			t.Fatalf("seed %q/%q: %v", w.owner, w.name, err)
+		}
+	}
+
+	rep, err := secretstore.EraseOwner(ctx, op, a)
+	if err != nil || rep.Count != 2 {
+		t.Fatalf("EraseOwner(a) = (%+v, %v), want 2 erased", rep, err)
+	}
+	if left, _ := op.For(a).List(ctx); len(left) != 0 {
+		t.Fatalf("A still holds %v after the erase", left)
+	}
+	if got, err := op.For(b).Get(ctx, name); err != nil || string(got) != "v-"+b {
+		t.Fatalf("B's row after erasing A = (%q, %v), want it untouched", got, err)
+	}
+	if got, err := op.Get(ctx, name); err != nil || string(got) != "v-" {
+		t.Fatalf("operator row after erasing A = (%q, %v), want it untouched", got, err)
+	}
+	if _, err := secretstore.EraseOwner(ctx, op, ""); !errors.Is(err, secretstore.ErrOperatorNamespace) {
+		t.Fatalf(`EraseOwner("") = %v, want ErrOperatorNamespace`, err)
+	}
+	if got, err := op.Get(ctx, name); err != nil || string(got) != "v-" {
+		t.Fatalf("operator row after a refused operator erase = (%q, %v), want it untouched", got, err)
 	}
 }

@@ -101,6 +101,7 @@ func (s *Server) routes() chi.Router {
 			//       (agent_providers.go)
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
+			//   the credential erase (this body)    securityOps
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the second admin tier: admin OR security_admin, via
 			// requireSecurityOperator / isSecurityOperator (http.go). What the tier
@@ -440,12 +441,15 @@ func (s *Server) routes() chi.Router {
 			// namespace, exactly today's behavior. A member can never reach
 			// another member's row (Store.For(owner) never resolves it) or
 			// the four Bedrock/SigV4 names (still operator-only). Admin
-			// cross-principal reads/deletes go through ?owner=. The LIST
-			// stays viewer-readable — it returns names only, never values.
+			// cross-principal reads/deletes go through ?owner=; a PUT refuses it
+			// (K7-A). The LIST stays viewer-readable — names only, never values.
+			// Erasing a person's credentials is on the security tier: it only
+			// removes reach, and returns no credential material.
 			if s.cfg.Secrets != nil {
 				r.Put("/secrets/{name}", s.handlePutSecret)
 				r.Delete("/secrets/{name}", s.handleDeleteSecret)
 				r.Get("/secrets", s.handleListSecrets)
+				securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
 			}
 
 			// Site config: the operator-wide, admin-authored baseline every run

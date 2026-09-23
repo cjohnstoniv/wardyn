@@ -349,33 +349,32 @@ func TestSecretsAPI_OperatorByteIdenticalPre0050(t *testing.T) {
 	}
 }
 
-// TestPutSecret_AdminOwnerParam_LandsInMemberNamespace: ?owner= on PUT is
-// honoured exactly as on DELETE/GET — an admin's cross-write lands in the
-// NAMED member's namespace and never in the operator's (which is the Get
-// fallback for every member's runs, the one place a per-principal write must
-// not land by accident). Negative control: a member naming ?owner= gets the
-// same constant 403 the sibling endpoints give.
-func TestPutSecret_AdminOwnerParam_LandsInMemberNamespace(t *testing.T) {
-	sec := &memSecrets{m: map[string][]byte{}}
-	h, srv := secretsRBACServer(t, sec)
-	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+// TestPutSecret_OwnerParamIsRefused is K7-A: a credential is set only by the
+// person it belongs to, so a PUT naming ?owner= is refused for an admin too —
+// with or without a value — audited, and writes nothing in ANY namespace (the
+// named one, or the operator's that every member's runs fall back to). A
+// member naming ?owner= keeps the constant 403 the sibling routes give.
+func TestPutSecret_OwnerParamIsRefused(t *testing.T) {
+	for _, q := range []string{"?owner=bob", "?owner=", "?owner=%20"} {
+		t.Run(q, func(t *testing.T) {
+			sec := &memSecrets{m: map[string][]byte{}}
+			h, srv := secretsRBACServer(t, sec)
+			admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+			w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key"+q, admin, `{"value":"sk-ant-bobs-key-value-0000"}`)
+			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "set only by the person it belongs to") {
+				t.Fatalf("admin PUT %s = %d %s, want 403 naming why", q, w.Code, w.Body.String())
+			}
+			if len(sec.m) != 0 || len(sec.owned) != 0 {
+				t.Fatalf("a refused PUT wrote operator=%v owned=%v; it must write nothing", sec.m, sec.owned)
+			}
+			ev := lastAuditEvent(t, h.audit.events, "secret.write")
+			if reason, _ := auditDataField(t, ev, "reason"); ev.Outcome != "denied" || reason != "owner_param" {
+				t.Fatalf("secret.write row = %s %s, want denied with reason owner_param", ev.Outcome, ev.Data)
+			}
+		})
+	}
 
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=bob", admin, `{"value":"sk-ant-bobs-key-value-0000"}`)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("admin PUT ?owner=bob = %d, want 204: %s", w.Code, w.Body.String())
-	}
-	if got, err := sec.For("bob").Get(context.Background(), "anthropic-api-key"); err != nil || string(got) != "sk-ant-bobs-key-value-0000" {
-		t.Fatalf("bob's row = (%q, %v), want the cross-written value", got, err)
-	}
-	if _, err := sec.Get(context.Background(), "anthropic-api-key"); !errors.Is(err, secretstore.ErrNotFound) {
-		t.Fatalf("operator namespace has a row after an admin's ?owner=bob PUT (err=%v); it must not", err)
-	}
-	ev := lastAuditEvent(t, h.audit.events, "secret.write")
-	if owner, ok := auditDataField(t, ev, "secret_owner"); !ok || owner != "bob" {
-		t.Errorf("audit secret_owner = (%q, present=%v), want bob", owner, ok)
-	}
-
-	t.Run("negative control: a member naming ?owner= is refused before any write", func(t *testing.T) {
+	t.Run("a member naming ?owner= is refused before any write", func(t *testing.T) {
 		sec := &memSecrets{m: map[string][]byte{}}
 		_, srv := secretsRBACServer(t, sec)
 		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
@@ -383,8 +382,8 @@ func TestPutSecret_AdminOwnerParam_LandsInMemberNamespace(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("member PUT ?owner=bob = %d, want 403: %s", w.Code, w.Body.String())
 		}
-		if len(sec.m) != 0 {
-			t.Fatalf("a refused PUT wrote %d row(s); it must write none", len(sec.m))
+		if len(sec.m) != 0 || len(sec.owned) != 0 {
+			t.Fatalf("a refused PUT wrote operator=%v owned=%v; it must write none", sec.m, sec.owned)
 		}
 	})
 }
@@ -625,19 +624,15 @@ func (d secretOwnerDirectory) ListWorkspaces(context.Context) ([]types.Workspace
 	return nil, nil
 }
 
-// TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit is the B5-F7 residual.
+// TestDeleteSecret_UnknownBareOwnerIsMarkedInTheAudit is the B5-F7 residual,
+// on the one write verb that still takes ?owner= (a PUT refuses it, K7-A).
 //
 // An admin's `?owner=` value that matches no principal this deployment knows is
-// stored VERBATIM, and deliberately so: pre-provisioning a member who has not
-// signed in yet is the affordance, and refusing a subject merely because nobody
-// has seen it would break it. What made that indistinguishable from a typo is
-// that both answer 204 with an outcome=success row — and the typo's namespace is
-// one the owner's runs will never read, which is the silent no-op F341 is about
-// for the admitted population.
-//
-// So: the STATUS is unchanged (refusing is what the affordance rules out) and
-// the audit row says which of the two happened.
-func TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
+// taken VERBATIM, and deliberately so: the directory is api tokens and
+// workspace owners only, and a person who holds neither still has a namespace.
+// What made that indistinguishable from a typo is that both answer with an
+// outcome=success row. So the audit row says which of the two happened.
+func TestDeleteSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
 	ownerKnownFlag := func(t *testing.T, ev types.AuditEvent) (bool, bool) {
 		t.Helper()
 		var data map[string]any
@@ -650,6 +645,11 @@ func TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
 	}
 
 	sec := &memSecrets{m: map[string][]byte{}}
+	for _, owner := range []string{"nosuchperson", "bob", "alice"} {
+		if err := sec.For(owner).Put(context.Background(), "anthropic-api-key", []byte("sk-ant-seeded-value-000000")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	h, srv := secretsRBACServer(t, sec)
 	h.srv.cfg.Store = secretOwnerDirectory{toks: []types.APIToken{
 		{ID: uuid.New(), Principal: "bob", Email: "bob@corp.example"},
@@ -657,54 +657,37 @@ func TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
 	h.srv.router = h.srv.routes()
 	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
 
-	// (1) THE UNSEEN NAMESPACE. 204, written, and marked.
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=nosuchperson", admin,
-		`{"value":"sk-ant-preprovisioned-000000"}`)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("PUT ?owner=nosuchperson = %d, want 204 — pre-provisioning a member who has not signed in is the "+
-			"documented affordance, so the status must not change: %s", w.Code, w.Body.String())
+	// (1) THE UNSEEN NAMESPACE. Deleted, and marked.
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key?owner=nosuchperson", admin, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE ?owner=nosuchperson = %d, want 204: %s", w.Code, w.Body.String())
 	}
-	ev := lastAuditEvent(t, h.audit.events, "secret.write")
+	ev := lastAuditEvent(t, h.audit.events, "secret.delete")
 	if owner, ok := auditDataField(t, ev, "secret_owner"); !ok || owner != "nosuchperson" {
 		t.Fatalf("audit secret_owner = (%q, present=%v), want nosuchperson", owner, ok)
 	}
 	if known, present := ownerKnownFlag(t, ev); !present || known {
-		t.Errorf("audit owner_known = (%v, present=%v), want false.\n"+
-			"This write landed in a namespace no principal on this deployment is known by. That is either "+
-			"pre-provisioning or a typo, the two are byte-identical on the wire (204, outcome=success), and a "+
-			"typo's namespace is one nobody will ever read — the row is the only place they can be told apart",
-			known, present)
+		t.Errorf("audit owner_known = (%v, present=%v), want false: the namespace matched no principal this "+
+			"deployment knows, and the row is the only place a typo can be told apart", known, present)
 	}
 
 	// (2) A KNOWN PRINCIPAL carries no marker at all — absent, not `true`, so an
 	// auditor filters on the key.
-	w = doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=bob", admin,
-		`{"value":"sk-ant-bobs-key-value-0000"}`)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("PUT ?owner=bob = %d, want 204: %s", w.Code, w.Body.String())
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key?owner=bob", admin, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE ?owner=bob = %d, want 204: %s", w.Code, w.Body.String())
 	}
-	if _, present := ownerKnownFlag(t, lastAuditEvent(t, h.audit.events, "secret.write")); present {
+	if _, present := ownerKnownFlag(t, lastAuditEvent(t, h.audit.events, "secret.delete")); present {
 		t.Error("a resolved ?owner= carries owner_known; it must be absent, or every row has the key and the " +
 			"marker stops being a filter")
 	}
 
-	// (3) A MEMBER'S OWN WRITE is their own namespace by construction — never
+	// (3) A MEMBER'S OWN DELETE is their own namespace by construction — never
 	// marked, whatever the directory happens to hold.
 	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
-	if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key", alice,
-		`{"value":"sk-ant-alice-own-value-000"}`); w.Code != http.StatusNoContent {
-		t.Fatalf("member PUT = %d, want 204: %s", w.Code, w.Body.String())
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key", alice, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("member DELETE = %d, want 204: %s", w.Code, w.Body.String())
 	}
-	if _, present := ownerKnownFlag(t, lastAuditEvent(t, h.audit.events, "secret.write")); present {
-		t.Error("a member's own write carries owner_known; the namespace is the key their own writes stamp")
-	}
-
-	// (4) AND DELETE SAYS THE SAME THING, since it is the same resolution.
-	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key?owner=nosuchperson", admin, ""); w.Code != http.StatusNoContent {
-		t.Fatalf("DELETE ?owner=nosuchperson = %d, want 204: %s", w.Code, w.Body.String())
-	}
-	if known, present := ownerKnownFlag(t, lastAuditEvent(t, h.audit.events, "secret.delete")); !present || known {
-		t.Errorf("secret.delete owner_known = (%v, present=%v), want false", known, present)
+	if _, present := ownerKnownFlag(t, lastAuditEvent(t, h.audit.events, "secret.delete")); present {
+		t.Error("a member's own delete carries owner_known; the namespace is the key their own writes stamp")
 	}
 }
 

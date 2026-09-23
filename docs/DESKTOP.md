@@ -241,8 +241,9 @@ things stay admin-only inside that: the operator's `""` namespace itself, the
 three AWS SigV4 names (`aws-access-key-id`, `aws-secret-access-key`,
 `aws-session-token`), which a non-operator `PUT`/`DELETE`
 refuses with a `403` because dispatch always signs with them out of the operator
-namespace, and `?owner=<principal>` — the cross-namespace write — which answers
-`403 ?owner= is admin-only` to a member. A run resolves its own owner's row and
+namespace, and `?owner=<principal>` — reaching into another namespace — which
+answers `403 ?owner= is admin-only` to a member (and on a `PUT`, `403` to an admin
+too: a credential is set only by the person it belongs to). A run resolves its own owner's row and
 falls back to the operator's, never to another member's.
 
 The fourth Bedrock name is the exception, and it is one name: a member may store

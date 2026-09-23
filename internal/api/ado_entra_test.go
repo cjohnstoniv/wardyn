@@ -700,10 +700,12 @@ func TestADORedeem_ErrorClassification(t *testing.T) {
 			if got := ADOEntraClassify(err); got != tc.want {
 				t.Fatalf("classification = %q; want %q", got, tc.want)
 			}
-			// The credential is left in place on every class: only a fresh
-			// capture replaces it, and a transient refusal must not delete one.
-			if _, found := f.stored(t, subject); !found {
-				t.Error("a refused redemption removed the stored credential")
+			// A dead refresh token is deleted (CS-5: nothing can renew it);
+			// every other class leaves the credential in place, since consent
+			// or a person at a keyboard can still make it work.
+			_, found := f.stored(t, subject)
+			if dead := tc.want == ADOEntraFailureDeadCredential; found == dead {
+				t.Errorf("stored credential present = %v after a %s refusal; want %v", found, tc.want, !dead)
 			}
 		})
 	}
