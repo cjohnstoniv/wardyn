@@ -507,5 +507,9 @@ func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID) (types.AgentR
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		return types.AgentRun{}, "run is not RUNNING; ssh unavailable (state=" + string(run.State) + ")"
 	}
+	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	if runIsKept(run) {
+		return types.AgentRun{}, "run has ended; ssh unavailable"
+	}
 	return run, ""
 }

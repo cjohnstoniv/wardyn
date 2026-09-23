@@ -125,11 +125,16 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	}
 	data := map[string]any{"ends_at": run.EndsAt}
 	if _, canKeep := s.cfg.Runner.(runner.SandboxEnder); canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != "" {
-		s.cancelRunApprovals(ctx, run.ID)
-		s.revokeRunBroker(ctx, run.ID)
 		s.leaseEnded.Store(run.ID, struct{}{})
 		err := s.endSandbox(ctx, run)
 		if err == nil {
+			// Cancel/revoke only once the end has actually succeeded: on failure
+			// this falls through to stopEndedRun, whose finalizeRunTail already
+			// runs the full cascade — calling it here too would revoke the
+			// broker credentials twice (a row per credential) on every substrate
+			// whose SandboxEnder answers ErrEndUnsupported.
+			s.cancelRunApprovals(ctx, run.ID)
+			s.revokeRunBroker(ctx, run.ID)
 			data["kept"] = true
 			data["kept_until"] = now.Add(s.cfg.EndedRunGrace)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ended",

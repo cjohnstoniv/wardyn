@@ -269,6 +269,23 @@ func TestRunLease_TornDownAtTheEndWhenItCannotBeKept(t *testing.T) {
 			t.Errorf("approval cancels = %+v, want one with reason run_ended", calls)
 		}
 	})
+	// A runner that IS a SandboxEnder at the type level (canKeep true) but
+	// whose EndSandbox call itself answers ErrEndUnsupported for this run
+	// (a Kubernetes Orchestrator, always): the kept branch must not revoke
+	// the broker before falling through to stopEndedRun's own full cascade,
+	// or the broker gets revoked twice (a row per credential) on every
+	// substrate that hits this arm.
+	t.Run("SandboxEnder that answers ErrEndUnsupported", func(t *testing.T) {
+		f := newLeaseFixture(t, -time.Minute)
+		f.rn.endErr = runner.ErrEndUnsupported
+		f.sweep(t)
+		if f.st.State() != types.RunStopped || f.rn.stopCount() != 1 {
+			t.Errorf("state %s, StopSandbox %d; want STOPPED, 1", f.st.State(), f.rn.stopCount())
+		}
+		if f.brk.count(f.run.ID) != 1 {
+			t.Errorf("broker revocations = %d, want 1 — the kept branch and the teardown cascade must not both revoke", f.brk.count(f.run.ID))
+		}
+	})
 }
 
 // TestRunLease_ACrashAfterTheClaimStillEndsTheRun: a crash between the claim

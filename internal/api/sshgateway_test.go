@@ -456,6 +456,26 @@ func sshDial(t *testing.T, h *sshTestHarness, username string, clientPriv ed2551
 // key is rejected, a registered key authenticating for a run it does NOT own
 // is rejected (owner-only), and the owner's registered key is accepted —
 // each rejection/acceptance is audited under ssh.auth.
+// TestSSHGateway_FreshRunRefusesAKeptRun: sshFreshRun re-checks the run on
+// every channel open; a run the lease ended is RUNNING with a live sandbox
+// ref but nothing to attach to, so it must be refused the same as the two
+// attach gates (TestAttach_RefusesAKeptRun) rather than accepting a channel
+// that dies on its first ExecStream.
+func TestSSHGateway_FreshRunRefusesAKeptRun(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	endedAt := time.Now()
+	st.putRun(types.AgentRun{
+		ID: runID, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
+		LostAt: &endedAt, LostReason: types.LostEnded,
+	})
+	srv := New(Config{Store: st, Runner: &sshFakeRunner{}})
+
+	if run, msg := srv.sshFreshRun(context.Background(), runID); msg == "" || !strings.Contains(msg, "run has ended") {
+		t.Fatalf("kept run: run=%+v msg=%q, want a \"run has ended\" refusal", run, msg)
+	}
+}
+
 func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 	st := newSSHMemStore()
 	ownRun := uuid.New()
