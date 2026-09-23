@@ -147,7 +147,9 @@ invitation, not an embarrassment.
    an uninspectable push is refused rather than forwarded on the assumption
    it is clean — and it keeps the broker's own "no widening" and "fail
    closed" invariants (`internal/broker/broker.go`) intact by adding a
-   proxy-side gate ahead of the mint rather than changing what is minted.
+   proxy-side gate ahead of forwarding rather than changing what is minted.
+   It decides what reaches the forge, not whether a credential is issued,
+   because the push's own discovery request has already minted it.
    Same structural bound as branch-namespace confinement: unenforceable on an
    `ssh_key` push (no receive-pack parser sits on git's SSH transport), and
    enforced on `git_pat` regardless of `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`

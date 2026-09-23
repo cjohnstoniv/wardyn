@@ -3216,11 +3216,11 @@ The residuals an operator should plan for:
   no broker seam, so `push_rules` cannot be enforced on it; a policy that sets
   `push_rules` while `ssh_key` is the run's only git-capable grant is legal
   but graded a medium-risk item on the Review rail rather than blocked.
-- **`git_pat` is governed only behind its switch.** Content rules themselves
-  bind the `git_pat` lane unconditionally (independent of either
-  branch-namespace switch), but a PAT carries whatever scope the operator
-  issued it with — Wardyn narrows what it can inspect, not what the
-  credential itself is scoped to.
+- **On `git_pat`, only WHERE is behind a switch.** Branch-namespace
+  confinement on the `git_pat` lane is off by default and needs
+  `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`; `push_rules` applies to every
+  `git_pat` push whatever that switch is set to. Neither changes the PAT
+  itself: it keeps whatever scope the operator issued it with.
 - **A first push to a new branch over-reports its changed paths.** Under
   branch-namespace confinement the pushed commit's parent stays on the forge,
   so the broker enumerates the whole new tree rather than diffing it — a
