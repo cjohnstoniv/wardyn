@@ -7,11 +7,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"syscall"
 
 	"golang.org/x/net/http/httpproxy"
 )
@@ -45,12 +47,17 @@ const (
 	// vocabulary, never the raw content (which may carry a credential).
 	daemonProxySecretInvalidRefusal = "refusing to start: the file WARDYN_DAEMON_PROXY_SECRET points at is %s — " +
 		"it must hold exactly one http:// or https:// proxy URL (user:pass@ allowed); fix it or unset the var"
-	// daemonProxySecretModeRefusal is the BOOT REFUSAL when the
-	// WARDYN_DAEMON_PROXY_SECRET file is readable or writable by group or
-	// other — a proxy credential in a shared-mode file defeats the point of
-	// keeping it out of the process environment in the first place.
-	daemonProxySecretModeRefusal = "refusing to start: WARDYN_DAEMON_PROXY_SECRET file %q is mode %04o — " +
-		"must not be readable or writable by group or other (0600 or tighter)"
+	// daemonProxySecretWritableRefusal is the BOOT REFUSAL when the
+	// WARDYN_DAEMON_PROXY_SECRET file is group- or world-writable: anyone in
+	// that set could swap the proxy (and its credential) before the next boot,
+	// and no supported delivery produces it.
+	daemonProxySecretWritableRefusal = "refusing to start: WARDYN_DAEMON_PROXY_SECRET file %q is mode %04o — " +
+		"a group- or world-writable secret file lets someone else replace it; remove the write bits (chmod 640)"
+	// daemonProxySecretReadableRefusal is the BOOT REFUSAL when the file is
+	// other-readable AND owned by wardynd's own non-root uid — the hand-made
+	// host file, where any local user could read the credential.
+	daemonProxySecretReadableRefusal = "refusing to start: WARDYN_DAEMON_PROXY_SECRET file %q is mode %04o and owned by " +
+		"wardynd's own uid %d — any local user can read it; chmod 640 it"
 	// daemonProxyBothSetRefusal is the BOOT REFUSAL when both
 	// WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET name a proxy —
 	// refused rather than picking one, because a silent precedence between
@@ -114,22 +121,32 @@ func installDaemonProxy(tr *http.Transport, rawURL, noProxy string, autoBypass .
 // WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET are set, so this
 // function never has to arbitrate between them.
 //
-// The file's mode is checked (refused if wider than 0600) and its content
-// is read fresh at boot, never cached or re-read later — same "read once at
-// boot, not deferred" posture as WARDYN_TRUSTED_CA_FILE.
+// The file's mode is checked (daemonProxySecretMode) on the OPENED
+// descriptor, so the file checked is the file read, and its content is read
+// fresh at boot, never cached or re-read later — same "read once at boot, not
+// deferred" posture as WARDYN_TRUSTED_CA_FILE.
 func installDaemonProxySecret(tr *http.Transport, secretPath, noProxy string, autoBypass ...string) (effective string, err error) {
 	secretPath = strings.TrimSpace(secretPath)
 	if secretPath == "" {
 		return "", nil
 	}
-	fi, statErr := os.Stat(secretPath)
-	if statErr != nil {
-		return "", fmt.Errorf("WARDYN_DAEMON_PROXY_SECRET: %w", statErr)
+	f, err := os.Open(secretPath)
+	if err != nil {
+		return "", fmt.Errorf("WARDYN_DAEMON_PROXY_SECRET: %w", err)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf(daemonProxySecretModeRefusal, secretPath, fi.Mode().Perm())
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("WARDYN_DAEMON_PROXY_SECRET: %w", err)
 	}
-	raw, rerr := os.ReadFile(secretPath)
+	owner := -1
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		owner = int(st.Uid)
+	}
+	if err := daemonProxySecretMode(secretPath, fi.Mode().Perm(), owner, os.Geteuid()); err != nil {
+		return "", err
+	}
+	raw, rerr := io.ReadAll(f)
 	if rerr != nil {
 		return "", fmt.Errorf("WARDYN_DAEMON_PROXY_SECRET: %w", rerr)
 	}
@@ -145,6 +162,26 @@ func installDaemonProxySecret(tr *http.Transport, secretPath, noProxy string, au
 	// credentialed form WARDYN_DAEMON_PROXY_URL's userinfo refusal exists to
 	// push operators toward.
 	return wireDaemonProxy(tr, u, noProxy, autoBypass...), nil
+}
+
+// daemonProxySecretMode is the WARDYN_DAEMON_PROXY_SECRET mode rule, split
+// out so every delivery shape is testable without chown. owner is the file's
+// uid (-1 when unknown).
+//
+// Group- or world-WRITABLE is always refused. Group-READ is allowed: a
+// Kubernetes Secret or projected volume under the chart's fsGroup is 0440.
+// Other-READABLE is refused only on a file wardynd's own non-root uid owns —
+// the hand-made host file — and allowed where a supported mechanism produces
+// it: a Secrets Store CSI file is root-owned 0644, reachable by a non-root
+// reader only through the other-read bit.
+func daemonProxySecretMode(path string, perm os.FileMode, owner, euid int) error {
+	if perm&0o022 != 0 {
+		return fmt.Errorf(daemonProxySecretWritableRefusal, path, perm)
+	}
+	if perm&0o004 != 0 && euid != 0 && owner == euid {
+		return fmt.Errorf(daemonProxySecretReadableRefusal, path, perm, euid)
+	}
+	return nil
 }
 
 // classifyProxyURLShape parses rawURL and reports whether its SHAPE (scheme,

@@ -470,14 +470,62 @@ func TestInstallDaemonProxySecret_MissingFileRefusesBoot(t *testing.T) {
 }
 
 func TestInstallDaemonProxySecret_WideModeRefusesBoot(t *testing.T) {
-	path := writeProxySecretFile(t, "http://alice:s3cr3t-token@proxy.corp.example:3128\n", 0o644)
+	// t.TempDir's file is owned by the test's own uid, so other-read is the
+	// hand-made-host-file case and refused — unless the test runs as root,
+	// where only the write bits refuse. 0666 covers both.
+	path := writeProxySecretFile(t, "http://alice:s3cr3t-token@proxy.corp.example:3128\n", 0o666)
 	tr := freshTransport()
 	_, err := installDaemonProxySecret(tr, path, "")
 	if err == nil {
-		t.Fatal("installDaemonProxySecret(mode 0644) succeeded, want a refusal")
+		t.Fatal("installDaemonProxySecret(mode 0666) succeeded, want a refusal")
 	}
 	if strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "s3cr3t-token") {
 		t.Fatalf("refusal echoes the raw credential: %q", err.Error())
+	}
+}
+
+// TestInstallDaemonProxySecret_GroupReadableUnderFsGroupAccepted pins the
+// Kubernetes Secret / projected-volume shape: 0440 (group-read added by the
+// kubelet under the chart's fsGroup) must boot.
+func TestInstallDaemonProxySecret_GroupReadableUnderFsGroupAccepted(t *testing.T) {
+	path := writeProxySecretFile(t, "http://alice:s3cr3t-token@proxy.corp.example:3128\n", 0o440)
+	tr := freshTransport()
+	effective, err := installDaemonProxySecret(tr, path, "")
+	if err != nil {
+		t.Fatalf("installDaemonProxySecret(mode 0440) = %v, want accepted", err)
+	}
+	if effective == "" || tr.Proxy == nil {
+		t.Fatalf("installDaemonProxySecret(mode 0440) wired no proxy (effective=%q)", effective)
+	}
+}
+
+// TestDaemonProxySecretMode walks every delivery shape through the mode rule
+// without chown: owner and euid are passed in.
+func TestDaemonProxySecretMode(t *testing.T) {
+	const self, root, other = 65532, 0, 1000
+	for _, tc := range []struct {
+		name        string
+		perm        os.FileMode
+		owner, euid int
+		refused     bool
+	}{
+		{"hand-made 0600", 0o600, self, self, false},
+		{"k8s Secret under fsGroup 0440", 0o440, root, self, false},
+		{"hand-made 0640", 0o640, self, self, false},
+		{"CSI root-owned 0644", 0o644, root, self, false},
+		{"Vault Agent file of another uid 0644", 0o644, other, self, false},
+		{"unknown owner 0644", 0o644, -1, self, false},
+		{"root daemon, own file 0644", 0o644, root, root, false},
+		{"self-owned other-readable 0644", 0o644, self, self, true},
+		{"self-owned other-readable 0604", 0o604, self, self, true},
+		{"group-writable 0660", 0o660, root, self, true},
+		{"world-writable 0602", 0o602, root, self, true},
+		{"world-writable as root 0666", 0o666, root, root, true},
+	} {
+		err := daemonProxySecretMode("/p", tc.perm, tc.owner, tc.euid)
+		if (err != nil) != tc.refused {
+			t.Errorf("%s: daemonProxySecretMode(%04o, owner=%d, euid=%d) = %v, want refused=%v", tc.name, tc.perm, tc.owner, tc.euid, err, tc.refused)
+		}
 	}
 }
 
