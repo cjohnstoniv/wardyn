@@ -152,11 +152,11 @@ the clock and a failure-streak floor both have to agree before the wait calls it
 
 | Verdict | Condition | Sentence |
 |---|---|---|
-| `starting` | Default / a healthy short wait / a read blip under the retrying floor | `LOGIN_SANDBOX_STARTING` — "Starting the sign-in sandbox. A first start may need to pull the image, which can take a few minutes." |
+| `starting` | Default / a healthy short wait / a read blip under the retrying floor | No sentence: the door's steps (`login-pane-copy.ts#SIGNIN_PROGRESS`, #628) say it — "Starting the sign-in sandbox", or "Downloading the sign-in image — first time only" with "Can take a few minutes the first time." while the substrate reports `Pulling`. |
 | `slow` | Reads are healthy, ≥ `RUN_POLL_SLOW_START_MS` (60 s) elapsed, still not up | The run's own `status_detail` sentence if one exists, else `LOGIN_SANDBOX_SLOW_START` — "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. A first start may need to pull the image, which can take a few minutes." |
 | `retrying` | Reads have been failing for ≥ `RUN_POLL_RETRYING_AFTER_MS` (10 s) but under the unreadable floor | `LOGIN_SANDBOX_READ_RETRYING` — "Wardyn can't read the sign-in sandbox right now — still trying. It may be starting normally." |
 | `unreadable` | Reads failing ≥ `RUN_POLL_UNREADABLE_AFTER_MS` (`LAUNCH_DEADLINE_MS`) **and** ≥ `RUN_POLL_MIN_FAILURES` (15) consecutive failures | `LOGIN_SANDBOX_UNREADABLE` — "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again." Ends the wait; phase → `error`. |
-| `stuck` | The substrate reports a terminal reason (`ImagePullBackOff`, `CreateContainerError`, `CreateContainerConfigError`, `CrashLoopBackOff`, …) | `LOGIN_SANDBOX_STUCK_LEAD_IN` ("The sign-in sandbox cannot start — this needs your admin; trying again gets the same answer until they fix it.") followed by the substrate's own sentence. Ends the wait; phase → `error`. |
+| `stuck` | The substrate reports a terminal reason (`ImagePullBackOff`, `CreateContainerError`, `CreateContainerConfigError`, `CrashLoopBackOff`, …) | An image-pull reason (`ImagePullBackOff`, `ErrImagePull`, `InvalidImageName`) is #628's state 7: "Downloading the sign-in image — failed", the run's `status_detail` as is, and Retry. Any other: `LOGIN_SANDBOX_STUCK_LEAD_IN` ("The sign-in sandbox cannot start — this needs your admin; trying again gets the same answer until they fix it.") followed by the substrate's own sentence. Ends the wait; phase → `error`. |
 
 If the run itself goes terminal while `starting` (killed/stopped with no substrate reason):
 `LOGIN_SANDBOX_ENDED` — "The sign-in sandbox stopped before it was ready — nothing was captured. Try

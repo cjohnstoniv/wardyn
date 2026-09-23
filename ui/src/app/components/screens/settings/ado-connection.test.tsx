@@ -185,7 +185,7 @@ describe("AdoConnectionCard — a blocked popup (F9)", () => {
   it("shows the canon sentence and a plain fallback link to the sign-in URL, alongside the button", () => {
     renderCard(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />);
     expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: ADO.CONNECT_ADO });
+    const link = screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
     expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
     expect(link).toHaveAttribute("target", "_blank");
   });
@@ -196,7 +196,7 @@ describe("AdoConnectionCard — a blocked popup (F9)", () => {
     adoConnectMock.mockResolvedValueOnce(true);
     const onChanged = vi.fn();
     renderCard(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={onChanged} />);
-    await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_ADO }));
+    await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN }));
     expect(adoConnectMock).toHaveBeenCalledTimes(1);
     expect(onChanged).toHaveBeenCalledTimes(1);
   });

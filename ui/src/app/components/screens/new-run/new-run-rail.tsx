@@ -26,7 +26,7 @@ import type {
   SCMAccess,
   SetupHarnessTool,
 } from "../../../lib/types";
-import { Button } from "../../ui/button";
+import { Button, buttonVariants } from "../../ui/button";
 import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
@@ -678,10 +678,10 @@ export function RunRail({
                 href={adoDialog.blockedUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-medium text-info hover:underline"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
                 onClick={adoDialog.onFallbackClick}
               >
-                {ADO.CONNECT_CTA}
+                {ADO.CONNECT_POPUP_OPEN}
               </a>
             </p>
           )}

@@ -829,7 +829,7 @@ describe("MemberGettingStarted", () => {
       );
       renderPage();
       expect(await screen.findByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
-      const link = screen.getByRole("link", { name: ADO.CONNECT_ADO });
+      const link = screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
       expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
       await userEvent.click(link);
       expect(adoConnectMock).toHaveBeenCalledTimes(1);

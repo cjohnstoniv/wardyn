@@ -43,7 +43,7 @@
 // heuristic, so this is a strict improvement, never a regression.
 import * as React from "react";
 import { useLocation } from "react-router-dom";
-import { Button } from "../../ui/button";
+import { Button, buttonVariants } from "../../ui/button";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
@@ -129,10 +129,10 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
                   href={blockedUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="font-medium text-info hover:underline"
+                  className={buttonVariants({ variant: "outline", size: "sm" })}
                   onClick={handleFallbackClick}
                 >
-                  {ADO.CONNECT_ADO}
+                  {ADO.CONNECT_POPUP_OPEN}
                 </a>
               </p>
             )}

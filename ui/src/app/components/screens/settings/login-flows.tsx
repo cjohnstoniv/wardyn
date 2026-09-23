@@ -29,6 +29,9 @@ export type CaptureMode = "scrape" | "helper";
 export type LoginFlow = {
   cmd: string;
   title: string;
+  // The provider's short name in the door's progress copy (#628): "Waiting
+  // for AWS", "Open Claude sign-in".
+  providerName: string;
   // U-8: taken as a function of `startURLManaged` because the aws flow's opening
   // clause is false under a managed row (there is no field, and the server
   // ignores a supplied URL). Every other flow ignores the argument.
@@ -60,6 +63,7 @@ export const LOGIN_FLOWS: Record<string, LoginFlow> = {
   anthropic: {
     cmd: "claude setup-token",
     title: "Connect a Claude subscription via container login",
+    providerName: "Claude",
     capture: "scrape",
     doneLabel: "your Claude subscription is connected",
     expects: [
@@ -95,6 +99,7 @@ export const LOGIN_FLOWS: Record<string, LoginFlow> = {
     // login succeeds — the operator never has to run a second command.
     cmd: "aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso",
     title: "Connect an AWS SSO session via container login",
+    providerName: "AWS",
     doneLabel: "your AWS SSO session is connected",
     capture: "helper",
     doneMarker: "wardyn: aws sso credential captured",
