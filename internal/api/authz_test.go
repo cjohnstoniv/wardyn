@@ -335,6 +335,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/permissions/grants":        {class: classSecurity},
 	"DELETE /api/v1/permissions/grants/{id}": {class: classSecurity},
 	"PUT /api/v1/permissions/enforcement":    {class: classSecurity},
+	// "Available to" (#612): the restricted bit is a grant fact, on the same
+	// tier as the grant rows that list who gets the value.
+	"GET /api/v1/permissions/availability/{kind}/*": {class: classSecurity},
+	"PUT /api/v1/permissions/availability/{kind}/*": {class: classSecurity},
 	// Cutting a compromised human's live sessions: the time-critical half of
 	// incident response, and a revocation only ever SUBTRACTS reach.
 	"POST /api/v1/sessions/revoke": {class: classSecurity},
@@ -1165,12 +1169,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// enrolment token creates a credential, so it is born SUPER (= 39), while
 	// the device inventory and revoke are the /tokens pair's twins and land on
 	// the security tier (= 26 SEC). 0.8's user types then added four /user-types
-	// routes on the security tier, a profile's peers (= 30 SEC). A route silently
+	// routes on the security tier, a profile's peers (= 30 SEC), and #612 the
+	// GET/PUT /permissions/availability pair beside the grant rows (= 32 SEC). A route silently
 	// reclassified in the table above would still pass every probe — it would
 	// just be enforcing the WRONG tier, exactly the drift the per-route loop
 	// cannot see.
-	if sec != 30 || super != 39 {
-		t.Errorf("tier split = %d security / %d admin, want 30 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the 4 /user-types routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	if sec != 32 || super != 39 {
+		t.Errorf("tier split = %d security / %d admin, want 32 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the 4 /user-types routes + the 2 /permissions/availability routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 
@@ -1711,6 +1716,14 @@ func (s *authzStore) GetCapabilityEnforcement(context.Context) (map[string]bool,
 }
 func (s *authzStore) PutCapabilityEnforcement(_ context.Context, enabled map[string]bool) (map[string]bool, error) {
 	return enabled, nil
+}
+
+func (s *authzStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
+func (s *authzStore) SetCapabilityRestriction(context.Context, string, string, bool, string) error {
+	return nil
 }
 
 // ─── role mappings (migration 0051, Phase 2 lane A) ───────────────────────

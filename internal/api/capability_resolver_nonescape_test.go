@@ -26,6 +26,13 @@ type resolverTableStore struct {
 	enf               map[string]bool
 	grantsErr, enfErr error
 	reads             []string
+	// restricted is capability_restrictions (kind -> values).
+	restricted map[string]map[string]bool
+}
+
+func (s *resolverTableStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	s.reads = append(s.reads, "restrictions")
+	return s.restricted, nil
 }
 
 func (s *resolverTableStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
@@ -114,14 +121,17 @@ var resolverDoors = []resolverDoor{
 type resolverCase struct {
 	tier     string // oidc role
 	stale    bool   // nil group snapshot: group rows reachable only through ListGroupDenyGrants
-	allow    string // "", "user", "all*", "other"
+	allow    string // "", "user", "type", "all*", "other"
 	deny     string // "", "user", "group"
 	enforced bool
 	noStore  bool
+	// restricted: the value is restricted ("Available to: Only..."). The
+	// store holds the row for every kind; only a restrictable kind reads it.
+	restricted bool
 }
 
 func (c resolverCase) String() string {
-	return fmt.Sprintf("tier=%s stale=%v allow=%q deny=%q enforced=%v noStore=%v", c.tier, c.stale, c.allow, c.deny, c.enforced, c.noStore)
+	return fmt.Sprintf("tier=%s stale=%v allow=%q deny=%q enforced=%v noStore=%v restricted=%v", c.tier, c.stale, c.allow, c.deny, c.enforced, c.noStore, c.restricted)
 }
 
 func resolverValue(kind string) string {
@@ -137,6 +147,8 @@ func (c resolverCase) grants(kind string) []types.CapabilityGrant {
 	switch c.allow {
 	case "user":
 		out = append(out, grant(types.CapabilitySubjectUser, capSub, kind, v, types.CapabilityAllow))
+	case "type":
+		out = append(out, grant(types.CapabilitySubjectUserType, types.UserTypeStandard, kind, v, types.CapabilityAllow))
 	case "all*":
 		out = append(out, grant(types.CapabilitySubjectAll, "", kind, capWildcard, types.CapabilityAllow))
 	case "other":
@@ -169,13 +181,17 @@ func (c resolverCase) want(door resolverDoor, kind string) (allowed, wantErr boo
 	if c.deny != "" { // 2. an overlapping deny
 		return false, false
 	}
-	if widening && !c.enforced { // 4.
+	// 3. A restricted value counts as enforced, and only an allow naming it
+	// lists anyone.
+	restricted := c.restricted && capKinds[kind].restrictable
+	enforced := c.enforced || restricted
+	if widening && !enforced { // 4.
 		return false, false
 	}
-	if c.allow == "user" || c.allow == "all*" { // 5.
+	if c.allow == "user" || c.allow == "type" || (c.allow == "all*" && !restricted) { // 5.
 		return true, false
 	}
-	if !widening && !c.enforced { // 6.
+	if !widening && !enforced { // 6.
 		return true, false
 	}
 	return false, false // 7.
@@ -185,11 +201,13 @@ func resolverCases() []resolverCase {
 	var out []resolverCase
 	for _, tier := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser} {
 		for _, stale := range []bool{false, true} {
-			for _, allow := range []string{"", "user", "all*", "other"} {
+			for _, allow := range []string{"", "user", "type", "all*", "other"} {
 				for _, deny := range []string{"", "user", "group"} {
 					for _, enforced := range []bool{false, true} {
 						for _, noStore := range []bool{false, true} {
-							out = append(out, resolverCase{tier, stale, allow, deny, enforced, noStore})
+							for _, restricted := range []bool{false, true} {
+								out = append(out, resolverCase{tier, stale, allow, deny, enforced, noStore, restricted})
+							}
 						}
 					}
 				}
@@ -208,7 +226,8 @@ func resolverCtx(tier string, stale bool) context.Context {
 }
 
 // TestCapResolverNonescapeTable is the generated nonescape table for the one
-// grant resolver: kind x door x tier x grant state x switch x store, every
+// grant resolver: kind x door x tier x grant state x switch x store x
+// restriction, every
 // point against the seven-step oracle above. Every door reaches capBatch.decide,
 // so a door that disagrees with the oracle anywhere is a second rule order.
 func TestCapResolverNonescapeTable(t *testing.T) {
@@ -219,7 +238,11 @@ func TestCapResolverNonescapeTable(t *testing.T) {
 				for _, c := range cases {
 					srv := &Server{}
 					if !c.noStore {
-						srv = capServer(&resolverTableStore{grants: c.grants(kind), enf: map[string]bool{kind: c.enforced}})
+						st := &resolverTableStore{grants: c.grants(kind), enf: map[string]bool{kind: c.enforced}}
+						if c.restricted {
+							st.restricted = map[string]map[string]bool{kind: {resolverValue(kind): true}}
+						}
+						srv = capServer(st)
 					}
 					got, err := door.ask(srv, resolverCtx(c.tier, c.stale), kind, resolverValue(kind))
 					want, wantErr := c.want(door, kind)
@@ -284,6 +307,37 @@ func TestCapResolverReadsStayLazy(t *testing.T) {
 		}
 		if !slices.Equal(st.reads, []string{"enforcement", "grants"}) {
 			t.Errorf("reads = %v, want [enforcement grants]", st.reads)
+		}
+	})
+
+	t.Run("the restriction is read only when the switch and a named allow leave it open", func(t *testing.T) {
+		named := grant(types.CapabilitySubjectUser, capSub, capAgent, "codex", types.CapabilityAllow)
+		wild := grant(types.CapabilitySubjectAll, "", capAgent, capWildcard, types.CapabilityAllow)
+		for _, tc := range []struct {
+			name   string
+			grants []types.CapabilityGrant
+			enf    map[string]bool
+			want   []string
+		}{
+			{"a named allow settles it", []types.CapabilityGrant{named}, nil, []string{"grants"}},
+			{"a wildcard allow asks", []types.CapabilityGrant{wild}, nil, []string{"grants", "restrictions"}},
+			{"no allow, switch off, asks", nil, nil, []string{"grants", "enforcement", "restrictions"}},
+			{"no allow, switch on, never asks", nil, map[string]bool{capAgent: true}, []string{"grants", "enforcement"}},
+		} {
+			st := &resolverTableStore{grants: tc.grants, enf: tc.enf}
+			if _, err := capServer(st).capSeamAllowed(member, capAgent, "codex"); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(st.reads, tc.want) {
+				t.Errorf("%s: reads = %v, want %v", tc.name, st.reads, tc.want)
+			}
+		}
+		st := &resolverTableStore{}
+		if _, err := capServer(st).capSeamAllowed(member, capEgressHost, "pypi.org"); err != nil {
+			t.Fatal(err)
+		}
+		if st.count("restrictions") != 0 {
+			t.Errorf("egress_host reads = %v; a kind that can't be restricted never reads the restrictions", st.reads)
 		}
 	})
 

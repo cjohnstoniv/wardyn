@@ -48,6 +48,10 @@ func (s *flakyCeilingStore) ListCapabilityGrantsFor(context.Context, []string, [
 func (s *flakyCeilingStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
 }
+
+func (s *flakyCeilingStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
 func (s *flakyCeilingStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	return nil, nil
 }

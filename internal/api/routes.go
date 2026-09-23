@@ -762,6 +762,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Post("/permissions/grants", s.handleUpsertCapabilityGrant)
 	securityOps.Delete("/permissions/grants/{id}", s.handleDeleteCapabilityGrant)
 	securityOps.Put("/permissions/enforcement", s.handlePutCapabilityEnforcement)
+	// The value is the rest of the path: an image ref carries slashes.
+	securityOps.Get("/permissions/availability/{kind}/*", s.handleGetAvailability)
+	securityOps.Put("/permissions/availability/{kind}/*", s.handlePutAvailability)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,

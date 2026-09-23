@@ -280,6 +280,10 @@ type fakeSiteConfigStore struct {
 	putSeen *types.SiteConfig
 }
 
+func (s *fakeSiteConfigStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 func (s *fakeSiteConfigStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	if s.getErr != nil {
 		return types.SiteConfig{}, s.getErr

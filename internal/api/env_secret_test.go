@@ -185,6 +185,10 @@ func (s *envSecretCeilingStore) GetCapabilityEnforcement(context.Context) (map[s
 	return nil, nil
 }
 
+func (s *envSecretCeilingStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // TestEnvSecretPosture_BindsWithoutAGovernanceAssignment is the pin for the
 // admin-only posture at the seam that decides a real run, not at
 // filterMemberGrants' front door.

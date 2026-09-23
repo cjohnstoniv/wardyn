@@ -87,7 +87,7 @@ func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant
 
 // handleGetPermissions returns every capability grant (admin audience — the
 // FULL table, unlike GET /me/capabilities below) plus the enforcement switch
-// map. operatorOnly (routes.go).
+// map. securityOps (routes.go).
 func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 	grants, err := s.cfg.Store.ListCapabilityGrants(r.Context())
 	if err != nil {
@@ -318,7 +318,7 @@ func canonicalGrantValue(capability, value string) (string, error) {
 // existing row's effect in place (store.UpsertCapabilityGrant) rather than
 // leaving two contradictory rows — the response status tells the caller which
 // happened: 201 for a genuinely new row, 200 when an existing one was
-// updated (the console's DUPLICATE copy). operatorOnly (routes.go).
+// updated (the console's DUPLICATE copy). securityOps (routes.go).
 func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Request) {
 	var req grantWriteRequest
 	if !decodeStrict(w, r, &req) {
@@ -363,7 +363,7 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, status, saved)
 }
 
-// handleDeleteCapabilityGrant removes one grant by id. operatorOnly
+// handleDeleteCapabilityGrant removes one grant by id. securityOps
 // (routes.go) — there is no owning principal to scope this to, so a 404 on an
 // unknown id is the whole story (no existence oracle to protect: an admin
 // already sees the full table via GET /permissions).
@@ -390,7 +390,7 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // "turn it off": absent == not enforced everywhere else this state is read.
 // Every key must be one of the four known kinds — validated here rather than
 // left inert, matching the closed-kind write-boundary rule the grant handler
-// above already applies. operatorOnly (routes.go); its own table, never
+// above already applies. securityOps (routes.go); its own table, never
 // SiteConfig, so a stale client round-tripping an older document can never
 // silently disable this (see migration 0042's comment).
 //
@@ -473,7 +473,7 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 	// CreatedBy names the ADMIN who wrote the row (principal or email). A member
 	// needs to know WHAT they hold, never which colleague signed it — and the
 	// field is `omitempty`, so blanking it drops it from the body rather than
-	// shipping an empty string. GET /permissions (operatorOnly) still carries it.
+	// shipping an empty string. GET /permissions (securityOps) still carries it.
 	for i := range grants {
 		grants[i].CreatedBy = ""
 	}

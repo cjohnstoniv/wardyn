@@ -106,6 +106,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **"Available to": one resource can be limited to the people listed for it (#612).** Migration
+  `0073_capability_restrictions` adds a restricted bit per value of the `workspace`, `image`, `agent`,
+  `integration` and `workspace_provider` kinds, set with `PUT /permissions/availability/{kind}/{value}`
+  (`{"restricted": true}` for "Only…", `false` for Everyone) and read with `GET` on the same path,
+  which also lists the allow rows naming the value. Both are admin or `security_admin`, and each
+  write records a `capability.availability.write` audit row. A restricted value counts as enforced
+  whatever its kind's switch says, and only an allow row naming that value lets a caller in: a `*`
+  allow no longer does, a deny still wins, and security admins are bound like anyone else. On an
+  image, the restriction also switches that one image on for the people listed while `image` stays
+  off for every other one. Turning "Only…" on with no allow row naming the value is refused (`400`).
+  The launch fields, the six git-provider doors and the per-person model sign-in refuse a restricted
+  value; an inline policy's workspace repo is dropped with a warning, as an ungranted one already is.
 - **The user view looks through a chosen user type (#615).** `POST /me/view` with
   `{"view": "user", "user_type": "<id>"}` puts an admin in the user view as that type: its grants,
   governance profile, drives and run limits bind exactly as for a person of that type, and the tier

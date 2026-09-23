@@ -320,3 +320,35 @@ func TestPG_ListGroupDenyGrants_PredicateMatchesAGoSideScan(t *testing.T) {
 		t.Errorf("an unknown kind returned %d rows, want 0 — the refusal must stay SCOPED or it denies every pre-0.7 token", len(empty))
 	}
 }
+
+// TestPG_CapabilityRestrictions_SetIsIdempotentBothWays: "Available to"'s
+// restricted bit (migration 0073). Restricting twice keeps one row, lifting
+// removes it, and lifting a value never restricted is not an error.
+func TestPG_CapabilityRestrictions_SetIsIdempotentBothWays(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	kind := "test_restrict_" + uuid.NewString()
+	const img = "ghcr.io/acme/agent:1.4.2"
+
+	for i := 0; i < 2; i++ {
+		if err := st.SetCapabilityRestriction(ctx, kind, img, true, "admin@example.com"); err != nil {
+			t.Fatalf("restrict #%d: %v", i+1, err)
+		}
+	}
+	got, err := st.ListCapabilityRestrictions(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got[kind]) != 1 || !got[kind][img] {
+		t.Fatalf("restrictions[%s] = %v, want exactly {%s}", kind, got[kind], img)
+	}
+	for i := 0; i < 2; i++ {
+		if err := st.SetCapabilityRestriction(ctx, kind, img, false, ""); err != nil {
+			t.Fatalf("lift #%d: %v", i+1, err)
+		}
+	}
+	if got, err = st.ListCapabilityRestrictions(ctx); err != nil || got == nil || len(got[kind]) != 0 {
+		t.Fatalf("after lift = %v, %v; want a non-nil map with nothing for %s", got, err, kind)
+	}
+}

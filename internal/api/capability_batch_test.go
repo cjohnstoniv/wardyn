@@ -87,6 +87,10 @@ func (c *countingCapStore) GetCapabilityEnforcement(context.Context) (map[string
 	c.enfCalls.Add(1)
 	return c.enf, nil
 }
+
+func (c *countingCapStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
 func (c *countingCapStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	return c.workspaces, nil
 }

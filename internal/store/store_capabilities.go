@@ -193,6 +193,48 @@ func (s PG) PutCapabilityEnforcement(ctx context.Context, enabled map[string]boo
 	return s.GetCapabilityEnforcement(ctx)
 }
 
+// ListCapabilityRestrictions returns every restricted value, kind -> set. The
+// table holds one row per restricted admin-configured resource, so one read
+// per resolution answers every value it asks about. Never nil.
+func (s PG) ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT capability, value FROM capability_restrictions`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list capability restrictions: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]bool{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, fmt.Errorf("store: scan capability restriction: %w", err)
+		}
+		if out[k] == nil {
+			out[k] = map[string]bool{}
+		}
+		out[k][v] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list capability restrictions: %w", err)
+	}
+	return out, nil
+}
+
+// SetCapabilityRestriction restricts one value (inserts its row, keeping the
+// first writer's provenance) or lifts the restriction (deletes it).
+func (s PG) SetCapabilityRestriction(ctx context.Context, capability, value string, restricted bool, by string) error {
+	q := `DELETE FROM capability_restrictions WHERE capability = $1 AND value = $2`
+	args := []any{capability, value}
+	if restricted {
+		q = `INSERT INTO capability_restrictions (capability, value, created_by) VALUES ($1, $2, $3)
+			ON CONFLICT (capability, value) DO NOTHING`
+		args = append(args, by)
+	}
+	if _, err := s.Pool.Exec(ctx, q, args...); err != nil {
+		return fmt.Errorf("store: set capability restriction: %w", err)
+	}
+	return nil
+}
+
 func scanCapabilityGrant(row pgx.Row) (types.CapabilityGrant, error) {
 	var g types.CapabilityGrant
 	err := row.Scan(&g.ID, &g.SubjectType, &g.Subject, &g.Capability, &g.Value,

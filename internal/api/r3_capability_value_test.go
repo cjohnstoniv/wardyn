@@ -173,6 +173,10 @@ func (s *inertGrantStore) GetCapabilityEnforcement(context.Context) (map[string]
 	return map[string]bool{capWorkspace: true}, nil
 }
 
+func (s *inertGrantStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // TestListPermissionsMarksRowsThatCanNeverMatch is F142's second residual: the
 // value rule is a WRITE-boundary rule, and capability_grants shipped in v0.6.0.
 //

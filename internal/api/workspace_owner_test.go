@@ -60,6 +60,13 @@ func (s *ownerStore) ListCapabilityGrantsFor(ctx context.Context, users, groups 
 	return s.caps.ListCapabilityGrantsFor(ctx, users, groups, userType)
 }
 
+func (s *ownerStore) ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error) {
+	if s.caps == nil {
+		return s.authzStore.ListCapabilityRestrictions(ctx)
+	}
+	return s.caps.ListCapabilityRestrictions(ctx)
+}
+
 func (s *ownerStore) ListGroupDenyGrants(ctx context.Context, capability string) ([]types.CapabilityGrant, error) {
 	if s.caps == nil {
 		return s.authzStore.ListGroupDenyGrants(ctx, capability)

@@ -132,6 +132,10 @@ func (noGovernanceStore) GetCapabilityEnforcement(context.Context) (map[string]b
 	return map[string]bool{}, nil
 }
 
+func (noGovernanceStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // ListGroupDenyGrants answers no group-deny rows — capUnresolvableGroupDeny's
 // narrow read for a caller whose group snapshot is stale/unanswerable; an
 // empty deployment has no rows to miss (#338).
@@ -214,6 +218,9 @@ type capStore struct {
 	// userTypes are the custom types GetUserType finds beside the seeded
 	// built-in one; a stamped type absent from both is a deleted type.
 	userTypes []types.UserType
+
+	// restricted is capability_restrictions: kind -> restricted values.
+	restricted map[string]map[string]bool
 }
 
 func (s *capStore) ResolveUserDrive(context.Context, []string, []string, string) (
@@ -326,6 +333,34 @@ func (s *capStore) GetCapabilityEnforcement(context.Context) (map[string]bool, e
 		return map[string]bool{}, nil
 	}
 	return s.enf, nil
+}
+
+func (s *capStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.restricted == nil {
+		return map[string]map[string]bool{}, nil
+	}
+	return s.restricted, nil
+}
+
+func (s *capStore) SetCapabilityRestriction(_ context.Context, kind, value string, restricted bool, _ string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.restricted == nil {
+		s.restricted = map[string]map[string]bool{}
+	}
+	if s.restricted[kind] == nil {
+		s.restricted[kind] = map[string]bool{}
+	}
+	if restricted {
+		s.restricted[kind][value] = true
+	} else {
+		delete(s.restricted[kind], value)
+	}
+	return nil
 }
 
 // ─── fixtures ─────────────────────────────────────────────────────────────────

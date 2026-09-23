@@ -1899,7 +1899,7 @@ where the operator ceiling sets `allow_all_egress` the allowlist is not the gate
 at all, so `egress_host` narrowing does nothing there — the operator's own
 posture, not a switch that failed.
 
-**Managing them** (the four `/permissions` rows are `securityOps` — admin or
+**Managing them** (the six `/permissions` rows are `securityOps` — admin or
 `security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
 is member-safe):
 
@@ -1909,6 +1909,8 @@ is member-safe):
 | `POST /permissions/grants` | upsert one grant on its natural key (`201` new, `200` updated) |
 | `DELETE /permissions/grants/{id}` | remove one grant |
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
+| `GET /permissions/availability/{kind}/{value}` | one resource's "Available to": `restricted`, and `allowed_by`, the allow rows naming it |
+| `PUT /permissions/availability/{kind}/{value}` | `{"restricted": true}` turns on "Only…" for one resource, `false` turns it back to Everyone |
 | `GET /access` | the merged role-mapping table (chart + console rows, with collision/shadow provenance) plus the same before/after/changes posture the write guards below evaluate |
 | `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
 | `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
@@ -1923,8 +1925,23 @@ enforcement map alone, not the grant table) can be sent back as this `PUT`'s
 `If-Match`: a document that changed underneath a stale tab is refused `412`.
 `If-Match` is optional, and the write is audited either way.
 
-Writes are audited as `capability.grant.created` / `.updated` / `.deleted` and
-`capability.enforcement.write`. Enforcement lives in its own table rather than in
+**"Available to" (0.8).** `workspace`, `image`, `agent`, `integration` and
+`workspace_provider` values can each be restricted one at a time (migration
+`0073_capability_restrictions`). A restricted value counts as enforced whatever
+its kind's switch says, and only a caller holding an allow row that names the
+value itself gets it: a `*` allow lists nobody, and a deny still wins. So the
+"Only…" list is the allow rows for that value, written through
+`POST /permissions/grants` for a person, a group or a user type. Security admins
+are bound like anyone; only the admin tier is exempt. On `image`, the one
+widening kind, the restriction also switches that one image on for the people
+listed while the kind stays off for every other image. Turning "Only…" on with
+no allow row naming the value is refused `400`, since the resource would then be
+available to nobody. `egress_host` and `secret` values can't be restricted
+(`400`). The value is the rest of the path, so an image ref's slashes need no
+escaping.
+
+Writes are audited as `capability.grant.created` / `.updated` / `.deleted`,
+`capability.enforcement.write` and `capability.availability.write`. Enforcement lives in its own table rather than in
 SiteConfig because `PUT /site-config` is a full replace: a stale client
 round-tripping an older document could otherwise silently disable an authorization
 control. There is **no cache** — resolution is two indexed reads per check, so a
