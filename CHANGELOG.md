@@ -10,6 +10,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Console fixes from the early 0.8 review (#510).** The cockpit terminal's reconnecting hint
+  claimed keystrokes typed during a reconnect were held; there is no input buffer, so they are
+  silently dropped — the hint now says so, and the disconnected message interpolates the live
+  reconnect budget instead of a hardcoded "4". `usePoll`'s coalesced refocus follow-up could still
+  fire after the hook had unmounted, running the caller's fetch chain (and every `setState` inside
+  it) against a dead screen; the cleanup now marks the hook disposed and the follow-up checks it.
+  Every Getting Started episode card issued its own `/healthz` fetch for the demo-video mirror
+  address — 24 requests on one mount — for a value that is the same for the whole page load; it is
+  now read once in the shell and handed down through context. The network-confinement banner's
+  action sent a member to `/setup?step=environment`, a page a member cannot reach; the action is
+  now operator-only, and the strip stays informational for a member. The autonomy wire types
+  (`AutonomyRubric`/`AutonomyPosture`/`AutonomyResolution`) now have a Go↔TS parity test. Two
+  copy nits: the Environment step's "stronger tiers" note and the Recordings screen's loaded-count
+  notes now pluralise correctly for exactly one item. An e2e fixture re-typed the admin-token
+  localStorage key by hand instead of importing it.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

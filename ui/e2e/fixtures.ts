@@ -20,7 +20,12 @@ import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 // localStorage["wardyn_admin_token"] and probes /api/v1/runs on mount to decide
 // auth; injecting it before first navigation boots the app already signed in.
 export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
-const TOKEN_KEY = "wardyn_admin_token";
+// #510-F11 — exported so no OTHER e2e file has to re-type this literal (it
+// mirrors lib/api/core.ts's own private TOKEN_KEY; a rename there that this
+// file's own hand-typed copy missed used to make the two-tabs case in
+// attach-stub.ts sign in nowhere, failing with an unrelated-looking auth error
+// instead of a clear mismatch).
+export const TOKEN_KEY = "wardyn_admin_token";
 
 // `test` boots the app pre-authenticated so each spec lands directly in the
 // console. Auth-flow specs that exercise sign-in/sign-out should import the raw

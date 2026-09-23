@@ -27,7 +27,7 @@ import { AlertTriangle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import type { ConfinementPosture } from "./operator-context";
-import { useConfinementPosture } from "./operator-context";
+import { useConfinementPosture, useOperator } from "./operator-context";
 import {
   POSTURE_ACKNOWLEDGED_BANNER,
   POSTURE_UNENFORCED_BANNER,
@@ -71,6 +71,7 @@ const BANNER_BY_POSTURE: Partial<
 // that was already there.
 export function ConfinementPostureBanner() {
   const posture = useConfinementPosture();
+  const operator = useOperator();
   const navigate = useNavigate();
   const spec = BANNER_BY_POSTURE[posture];
   if (!spec) return null;
@@ -88,13 +89,20 @@ export function ConfinementPostureBanner() {
         <p className="font-medium text-foreground">{spec.title}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">{spec.body}</p>
       </div>
-      <button
-        type="button"
-        onClick={() => navigate("/setup?step=environment")}
-        className="shrink-0 font-medium underline underline-offset-2"
-      >
-        {spec.action}
-      </button>
+      {/* #510-F7 — the action lands on /setup?step=environment, which
+          App.tsx's SetupRoute renders as MemberGettingStarted for a
+          non-operator (the `step` query is ignored there): a member had a
+          button whose only destination was a page with no environment step.
+          Informational-only for a member; the operator keeps the action. */}
+      {operator && (
+        <button
+          type="button"
+          onClick={() => navigate("/setup?step=environment")}
+          className="shrink-0 font-medium underline underline-offset-2"
+        >
+          {spec.action}
+        </button>
+      )}
     </div>
   );
 }

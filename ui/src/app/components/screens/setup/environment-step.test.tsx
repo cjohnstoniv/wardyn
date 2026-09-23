@@ -192,7 +192,19 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     renderStep(); // default fixture: CC1+CC2 installed, kvm true
     expect(
       screen.getByText(
-        "Recommended is the strongest barrier installed on this host. Vault are stronger and each needs a one-time setup step.",
+        "Recommended is the strongest barrier installed on this host. Vault is stronger and each needs a one-time setup step.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // #510-F9 — two stronger tiers left to name pluralises correctly ("are"),
+  // unlike the single-tier R2 case above ("is").
+  it("(R2b) pluralises the note when TWO stronger tiers remain", () => {
+    const status = baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"] } });
+    renderStep({ status });
+    expect(
+      screen.getByText(
+        "Recommended is the strongest barrier installed on this host. Wall and Vault are stronger and each needs a one-time setup step.",
       ),
     ).toBeInTheDocument();
   });

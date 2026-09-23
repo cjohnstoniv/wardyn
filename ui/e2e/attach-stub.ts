@@ -24,7 +24,7 @@
 // other widgets on the page make) still comes from the real backend, so this
 // stays scoped to this one spec file and touches no other spec's fixture.
 import type { BrowserContext, Page, WebSocketRoute } from "@playwright/test";
-import { ADMIN_TOKEN } from "./fixtures";
+import { ADMIN_TOKEN, TOKEN_KEY } from "./fixtures";
 import type { AttachHolder } from "../src/app/lib/types/runs";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -106,7 +106,7 @@ export async function stubAttachSocket(
  *  page in this BrowserContext once the FIRST page has written the admin
  *  token, but a tab opened before that write (or as the very first page of a
  *  fresh context) needs its own copy — same key `fixtures.ts`'s own `test`
- *  fixture writes, mirrored here since that key is not exported. */
+ *  fixture writes, imported rather than re-typed (#510-F11). */
 export async function newAuthedPage(context: BrowserContext): Promise<Page> {
   const page = await context.newPage();
   await page.addInitScript(
@@ -117,7 +117,7 @@ export async function newAuthedPage(context: BrowserContext): Promise<Page> {
         /* private mode — ignore */
       }
     },
-    ["wardyn_admin_token", ADMIN_TOKEN],
+    [TOKEN_KEY, ADMIN_TOKEN],
   );
   return page;
 }

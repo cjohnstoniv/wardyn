@@ -134,6 +134,12 @@ export interface ShellMeta {
    *  confirm" (a k8s daemon that omitted the verdict) apart. */
   runner: string;
   networkPolicy: string;
+  /** #510-F6 — /healthz's `demo_video_base_url`, read once here rather than
+   *  once per episode card (use-demo-video-base-url.ts's old per-hook fetch
+   *  issued 24 requests on one Getting Started mount). undefined means "no
+   *  mirror configured"; lib/demo-videos.ts's episodeUrl falls back to its
+   *  own hardcoded GitHub base either way. */
+  demoVideoBaseUrl: string | undefined;
 }
 
 /** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
@@ -164,6 +170,7 @@ function useMeta(): [ShellMeta, () => void] {
     memberPreviewAvailable: false,
     runner: "",
     networkPolicy: "",
+    demoVideoBaseUrl: undefined,
   });
   React.useEffect(() => {
     let alive = true;
@@ -198,6 +205,8 @@ function useMeta(): [ShellMeta, () => void] {
           memberPreviewAvailable: me?.member_preview_available ?? false,
           runner: h.runner ?? "",
           networkPolicy: h.network_policy ?? "",
+          // "" (unset) reads the same as absent: both mean "no mirror".
+          demoVideoBaseUrl: h.demo_video_base_url || undefined,
         });
       })
       .catch(() => {
@@ -560,6 +569,7 @@ export function AppShell({
       userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
       userDriveUnavailable={meta.userDriveUnavailable}
       confinementPosture={confinementPosture}
+      demoVideoBaseUrl={meta.demoVideoBaseUrl}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
         <FocusContext.Provider value={focusValue}>

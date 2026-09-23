@@ -334,7 +334,7 @@ describe("RecordingScreen — paging (#159)", () => {
     renderScreen();
 
     await screen.findByText("fix the leak");
-    expect(screen.getByText("1 recordings loaded so far — there are more on the server.")).toBeInTheDocument();
+    expect(screen.getByText("1 recording loaded so far — there are more on the server.")).toBeInTheDocument();
     const loadMore = screen.getByRole("button", { name: "Load 100 more" });
     expect(loadMore).toHaveClass("text-info");
     expect(screen.queryByText(/of 1,000|100 of/i)).not.toBeInTheDocument();
@@ -345,7 +345,7 @@ describe("RecordingScreen — paging (#159)", () => {
     renderScreen();
 
     await screen.findByText("fix the leak");
-    expect(screen.getByText("All 1 recordings are loaded.")).toBeInTheDocument();
+    expect(screen.getByText("All 1 recording is loaded.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /load .* more/i })).not.toBeInTheDocument();
   });
 

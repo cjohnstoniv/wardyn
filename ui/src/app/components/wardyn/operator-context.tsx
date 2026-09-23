@@ -144,6 +144,7 @@ export function OperatorProvider({
   userDriveDeniedByProfile = "",
   userDriveUnavailable = "",
   confinementPosture = "",
+  demoVideoBaseUrl = undefined,
   children,
 }: {
   operator: boolean;
@@ -167,6 +168,10 @@ export function OperatorProvider({
    *  posture reported), so every existing caller keeps today's silent
    *  behaviour. */
   confinementPosture?: ConfinementPosture;
+  /** #510-F6 — see DemoVideoBaseUrlContext below. Optional, defaulting
+   *  undefined ("no mirror configured"), so every existing caller keeps
+   *  today's GitHub-default behaviour. */
+  demoVideoBaseUrl?: string | undefined;
   children: React.ReactNode;
 }) {
   // Memoised: the two /me fields are a fresh object literal on every shell
@@ -188,7 +193,9 @@ export function OperatorProvider({
           <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>
             <UserDriveContext.Provider value={drive}>
               <ConfinementPostureContext.Provider value={confinementPosture}>
-                {children}
+                <DemoVideoBaseUrlContext.Provider value={demoVideoBaseUrl}>
+                  {children}
+                </DemoVideoBaseUrlContext.Provider>
               </ConfinementPostureContext.Provider>
             </UserDriveContext.Provider>
           </MemberLocalDirRootContext.Provider>
@@ -348,4 +355,24 @@ export const ConfinementPostureContext = React.createContext<ConfinementPosture>
 // re-renders a consumer that already has it.
 export function useConfinementPosture(): ConfinementPosture {
   return React.useContext(ConfinementPostureContext);
+}
+
+// #510-F6 — /healthz's `demo_video_base_url`, the operator-run mirror the
+// Getting Started demo episodes stream from on an air-gapped deployment.
+// Read ONCE here (app-shell's useMeta, on the shell's existing /healthz load)
+// and handed down through context: the previous shape gave every episode
+// card its own effect and its own health().health() call — 24 requests on
+// one Getting Started mount (EPISODES has 23 entries) for a value that is the
+// SAME for the whole page load, plus a race where `configured` flipped mid-load
+// per card instead of once.
+//
+// undefined (not "") is the default and the "no mirror" case both — see
+// lib/api/health.ts's demo_video_base_url doc comment. episodeUrl's own
+// default parameter (lib/demo-videos.ts) is what actually falls back to the
+// hardcoded GitHub base; this context only needs to report a value when one
+// overrides it.
+const DemoVideoBaseUrlContext = React.createContext<string | undefined>(undefined);
+
+export function useDemoVideoBaseUrl(): string | undefined {
+  return React.useContext(DemoVideoBaseUrlContext);
 }

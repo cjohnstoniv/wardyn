@@ -140,7 +140,7 @@ test.describe("Attach terminal — reconnect budget (#216)", () => {
     // above never pushed it out of view.
     await expect(page.getByText(`[closed] ${runId}`)).toHaveCount(0);
     await expect(page.getByText(TERMINAL.CLOSED_TITLE)).toBeVisible();
-    await expect(page.getByText(TERMINAL.CLOSED_BODY)).toBeVisible();
+    await expect(page.getByText(TERMINAL.CLOSED_BODY(4))).toBeVisible();
     const reconnectButton = page.getByRole("button", { name: TERMINAL.RECONNECT });
     await expect(reconnectButton).toBeVisible();
 
