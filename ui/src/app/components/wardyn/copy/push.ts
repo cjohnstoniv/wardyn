@@ -40,16 +40,14 @@ export const PUSH = {
     "the whole push reaches the branch, including files not listed here. Approving does not narrow it to the paths under review.",
   HELD_NOTE:
     "The push is waiting at the proxy for a short time. Approving lets it through now, or the next time the run pushes.",
-  // Approved interim string (packet 7b, 2026-09-22): the proxy's own hold is
-  // BOUNDED (push_rules.hold_seconds, at most 600s — isHeld's own doc,
+  // Frozen (packet 7b, Q7b-1, 2026-09-22): the proxy's own hold is BOUNDED
+  // (push_rules.hold_seconds, at most 600s — isHeld's own doc,
   // lib/types/approvals.ts), and past that window the connection has already
   // timed out and refused — approving now only clears the way for the NEXT
   // push of the same commits (holdPush's own doc: a retry rejoins this same
-  // row). This interim copy omits the time the server can't send yet.
-  // HELD_NOTE above must not keep claiming "lets it through now" once that's
-  // no longer true.
-  HELD_OPEN:
-    "The push has stopped waiting, but the request stays open. Approving lets the run's next push of these same commits through — the run has to push again.",
+  // row). HELD_NOTE above must not keep claiming "lets it through now" once
+  // that's no longer true.
+  HELD_EXPIRED: "No longer waiting — approving lets the next push of these same commits through.",
   APPROVE_NOTE: "Approving lets this push through. The next push asks again.",
   TIMEOUT_BODY: "Nobody answered in time, so the push was refused and the run was told. It can push again.",
   // Never a held request — a push_rules.deny_paths match is refused

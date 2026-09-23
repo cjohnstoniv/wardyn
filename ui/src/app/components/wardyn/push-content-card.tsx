@@ -68,7 +68,7 @@ export function PushContentCard({
 
   // Review finding 2 — the proxy's own hold is BOUNDED (isHeld's own
   // push_content doc, lib/types/approvals.ts): HELD_NOTE ("lets it through
-  // now") is only true while it is, so the card has to flip to HELD_OPEN
+  // now") is only true while it is, so the card has to flip to HELD_EXPIRED
   // on its own once the window passes, the same live-timer shape
   // ado-capability-card.tsx's stillHeld/REQ_HELD_EXPIRED takes — a poll tick
   // eventually catches it too, but a member sitting on this card between
@@ -159,7 +159,7 @@ export function PushContentCard({
       {!runEnded && (
         <>
           <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">
-            {held ? PUSH.HELD_NOTE : PUSH.HELD_OPEN}
+            {held ? PUSH.HELD_NOTE : PUSH.HELD_EXPIRED}
           </p>
           {securityOperator && <p className="mt-1 max-w-[72ch] text-xs text-muted-foreground">{PUSH.APPROVE_NOTE}</p>}
         </>

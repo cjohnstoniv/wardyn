@@ -28,6 +28,17 @@ describe("PUSH copy (#181)", () => {
   it("never drifts from copy/approvals.ts's hand-copied kind label", () => {
     expect(APPROVAL_KIND_LABEL.push).toBe(PUSH.KIND_LABEL);
   });
+
+  // SD-7: the shipped HELD_OPEN sentence diverged from the mock the owner
+  // actually froze (packet 7b, Q7b-1) — a different key name (HELD_EXPIRED)
+  // and a shorter sentence. Hardcoded against the mock's own bytes
+  // (wardyn-archive/mock-08/packet-7b.html), not derived from the module
+  // under test, so a future edit to push.ts can't silently drag this along.
+  it("HELD_EXPIRED matches the frozen mock sentence exactly (packet 7b, Q7b-1)", () => {
+    expect(PUSH.HELD_EXPIRED).toBe(
+      "No longer waiting — approving lets the next push of these same commits through.",
+    );
+  });
 });
 
 // The canon doc's PUSH rows (frozen and DRAFT), parsed back and compared row
