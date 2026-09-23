@@ -200,6 +200,12 @@ console. Leave off `?run_id=` and you get an empty `200`: a collection
 endpoint's answer when it has nothing scoped to show you, not an error. The
 action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
+If your laptop is one your organisation enrolled into a remote control plane,
+this same audit trail is also forwarded upward into the organisation's own
+table — this is automatic, admin-configured, and nothing you do here changes
+it. It does not change where you read your own runs' audit: it is still this
+page and this endpoint.
+
 ## Your model key
 
 Store your own key under the provider-convention name from Getting Started ▸

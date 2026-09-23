@@ -10,6 +10,17 @@ claim about today's tree is anchored to the file and line it came from, at
 `feat/v0.7.2`; every claim about tomorrow is marked as a decision, an option or an
 open question, and none of it is code.
 
+**Owner ruling, 2026-09-23: the full rollout below moves to 0.9.** 0.8 ships only the
+first rung of §2.2's ladder — desktop enrolment to a remote control plane and the one
+audit stream (issues #102, #103, #106) — never per-run placement (§6), the disk link
+(§7), or a laptop's runs deciding anywhere but locally. Rungs 4 and 5 and the
+placement issues #107–#117 (except #115), T-27 (#687) and #475 are 0.9.0 work; see
+[ROADMAP.md](../../ROADMAP.md)'s milestone table. What DID ship, and is no longer
+this brief's proposal but its build: `docs/DESKTOP.md`'s "Enrolling into an org
+control plane", `docs/OPERATIONS.md`'s "Managed laptops", and
+[THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) residuals #48–#50, all written
+against the shipped code rather than this design's projection of it.
+
 The shape of the ask, in one sentence: **the org runs the control plane on its
 cluster, MDM installs Wardyn on the laptop, and the same person under the same
 org-managed policy flexes a sandbox between local and remote hardware** — a quick
