@@ -30,6 +30,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tests. Frozen strings: docs/design/signin-first-contact-canon.md.
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
+- **The Runs board declared a still-live `tool_call`/`credential_reauth` hold dead after a
+  60-minute client-side ceiling, while `wardyn-toolgate` keeps the agent parked on it for up to
+  `WARDYN_APPROVAL_EXPIRY_AFTER` (24h default).** An operator back from lunch saw the group chip
+  say "1 was held", the card swap Review for Open, and the cockpit drop "sandbox held" — for a run
+  whose agent was still frozen waiting for exactly that decision (#509). A PENDING row is now live
+  until the server's own state says otherwise; a hold the server has expired or cancelled simply
+  stops showing as held.
 - Azure DevOps projects and repositories whose names carry spaces or other permitted characters
   (`Payments Platform`, `Card Auth (v2).Service`) now import, launch, clone, fetch and push:
   every door stores one spelling of the address, and approvals name the repository the same
@@ -55,6 +62,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The console shows a held push, its files, and who may decide it (#181).** A brokered
+  git push that matches `push_rules.require_review_paths` is a new approval kind
+  (`push_content`) with its own card — repository, branch, who it acts as, and up to ten
+  files under review, with the full list in the run's audit trail. Admins/security-admins
+  decide it directly (no scope menu); everyone else sees the same card and no controls. The
+  New Run rail gets a "Push rules" section ("N paths denied · M paths held for review") when
+  a policy sets them, and a note when the run is unattended. A `push_rules.deny_paths` refusal
+  is never a held request — it's named distinctly in the audit trail instead.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

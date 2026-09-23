@@ -10,6 +10,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { REAUTH_ROW, REAUTH_TITLE } from "../wardyn/model-access-copy";
+import { PUSH } from "../wardyn/copy/push";
 
 // HIGH fix (error handling): approve/deny were unguarded awaits. A rejected
 // deny() must NOT leave the dialog's confirm button spinning forever, must
@@ -31,6 +32,7 @@ vi.mock("sonner", () => ({
 let mockPendingKind: ApprovalRequest["kind"] = "credential";
 let mockPendingEmpty = false;
 let mockCancelledRow = false;
+let mockExpiredPushRow = false;
 // F5-F4: every listApprovals call rejects while true — simulates a transient
 // fetchAll() failure (Promise.all over the 5 states) without having to race
 // individual calls within one Promise.all.
@@ -60,7 +62,19 @@ vi.mock("../../lib/api/approvals", () => {
               requested_scope:
                 mockPendingKind === "credential_reauth"
                   ? { mechanism: "bedrock_sso", credential_source: "per_user", owner: "you@corp" }
-                  : { host: "api.example.com" },
+                  : mockPendingKind === "push_content"
+                    ? {
+                        repo: "github.com/acme/widgets",
+                        branch: "refs/heads/feature/x",
+                        acts_as: "github_token:11111111-1111-1111-1111-111111111111",
+                        paths: ["a.txt", "b.txt"],
+                        paths_total: 2,
+                        commits: ["deadbeef".repeat(5)],
+                        paths_digest: "a".repeat(64),
+                        acts_as_kind: "github_app",
+                        acts_as_label: "dana@acme.example",
+                      }
+                    : { host: "api.example.com" },
               state: "PENDING",
               requested_at: new Date().toISOString(),
             } satisfies ApprovalRequest,
@@ -80,6 +94,30 @@ vi.mock("../../lib/api/approvals", () => {
               requested_at: new Date().toISOString(),
               decided_at: new Date().toISOString(),
               decided_by: "system",
+            } satisfies ApprovalRequest,
+          ]);
+        }
+        // #181: a held push that timed out — the decided list's own
+        // push_content/EXPIRED special case (PUSH.TIMEOUT_BODY).
+        if (state === "EXPIRED" && mockExpiredPushRow) {
+          return Promise.resolve([
+            {
+              id: "apr_3",
+              run_id: "run_1",
+              kind: "push_content",
+              requested_scope: {
+                repo: "github.com/acme/widgets",
+                branch: "refs/heads/feature/x",
+                acts_as: "github_token:11111111-1111-1111-1111-111111111111",
+                paths: ["a.txt"],
+                paths_total: 1,
+                commits: ["deadbeef".repeat(5)],
+                paths_digest: "a".repeat(64),
+                acts_as_kind: "github_app",
+                acts_as_label: "dana@acme.example",
+              },
+              state: "EXPIRED",
+              requested_at: new Date().toISOString(),
             } satisfies ApprovalRequest,
           ]);
         }
@@ -131,6 +169,7 @@ import { APPROVAL, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../wardyn/
 beforeEach(() => {
   mockRunState = "RUNNING";
   mockCancelledRow = false;
+  mockExpiredPushRow = false;
   mockFailAllLists = false;
   mockListDeferred = null;
 });
@@ -677,5 +716,56 @@ describe("ApprovalsScreen — an egress approval says it is host-wide (P0.3)", (
     );
     await screen.findByRole("button", { name: /^approve$/i });
     expect(screen.queryByText(APPROVAL.HOST_WIDE_NOTE)).toBeNull();
+  });
+});
+
+// #181 — the held-push card on the standalone /approvals queue.
+describe("ApprovalsScreen — a held push (#181)", () => {
+  beforeEach(() => {
+    mockPendingKind = "push_content";
+    denyMock.mockReset();
+    approveMock.mockReset();
+  });
+
+  it("renders the push card (kind chip 'Push', repository, branch, acts-as-label) and Approve round-trips with no scope", async () => {
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const card = await screen.findByTestId("push-content-card");
+    expect(within(card).getByText(PUSH.CARD_TITLE)).toBeInTheDocument();
+    expect(within(card).getByText("github.com/acme/widgets")).toBeInTheDocument();
+    expect(within(card).getByText("dana@acme.example")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /^Approve$/ }));
+    await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+    // No ReasonDialog, no decision_scope — a literal 2-argument call.
+    expect(approveMock).toHaveBeenCalledWith("apr_1", "approved");
+  });
+
+  it("a member sees the full card but no Approve/Deny — admin-only, no ownership carve-out", async () => {
+    render(
+      <OperatorProvider operator={false} securityOperator={false}>
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>
+      </OperatorProvider>,
+    );
+    const card = await screen.findByTestId("push-content-card");
+    expect(within(card).queryByRole("button", { name: /^Approve$/ })).not.toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: /^Deny$/ })).not.toBeInTheDocument();
+    expect(within(card).getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    // Still sees everything — "decides nothing" is not "sees nothing".
+    expect(within(card).getByText("github.com/acme/widgets")).toBeInTheDocument();
+  });
+
+  it("a timed-out push in the Decided tab reads PUSH.TIMEOUT_BODY", async () => {
+    mockExpiredPushRow = true;
+    render(
+      <MemoryRouter initialEntries={["/approvals?tab=decided"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(PUSH.TIMEOUT_BODY)).toBeInTheDocument();
   });
 });

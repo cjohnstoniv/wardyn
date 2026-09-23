@@ -456,26 +456,43 @@ describe("RunDetailScreen — the held approval renders inside the terminal pane
     expect(await screen.findByText(/sandbox held/i)).toBeInTheDocument();
   });
 
-  // #160 — isHeld's 60-minute stale-hold ceiling on tool_call/credential_reauth
-  // (lib/types/approvals.ts) is shared by TWO call sites: the runs board
+  // #509 — isHeld's two unconditional arms (tool_call, credential_reauth)
+  // (lib/types/approvals.ts) are shared by TWO call sites: the runs board
   // (board-groups.test.ts, runs/title-group.test.tsx) and this command bar,
   // via run-detail.tsx's `sandboxHeld={pending.some(isHeld)}`. Pinned here so
-  // the cockpit degrades the same way once a tool_call has gone stale.
-  it("a stale tool_call no longer states 'sandbox held' in the command bar", async () => {
+  // the cockpit keeps stating the hold at any age — the server parks the
+  // agent on a PENDING row for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h
+  // default), and the console must not call it dead sooner.
+  it("a PENDING tool_call 25 hours old still states 'sandbox held' in the command bar", async () => {
     listApprovalsMock.mockResolvedValue([
       {
         id: "a1",
         run_id: "run-1",
         kind: "tool_call",
         state: "PENDING",
-        requested_at: new Date(Date.now() - 90 * 60_000).toISOString(),
+        requested_at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(),
         requested_scope: { tool: "Bash", cmd: "rm -rf build" },
       },
     ]);
     renderRun({ ...RUN, state: "WAITING_FOR_CONFIRMATION" });
-    // Still a pending approval — "1 waiting" — just no longer the "sandbox
-    // held" claim a live tool_call hold makes.
-    expect(await screen.findByText("1 waiting")).toBeInTheDocument();
+    expect(await screen.findByText(/sandbox held/i)).toBeInTheDocument();
+  });
+
+  // Once the server has actually moved the row to EXPIRED, it is no longer
+  // PENDING — the cockpit correctly stops claiming the sandbox is held.
+  it("an EXPIRED tool_call no longer states 'sandbox held' in the command bar", async () => {
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: "run-1",
+        kind: "tool_call",
+        state: "EXPIRED",
+        requested_at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(),
+        requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+      },
+    ]);
+    renderRun({ ...RUN, state: "WAITING_FOR_CONFIRMATION" });
+    await screen.findByTestId("run-summary-header");
     expect(screen.queryByText(/sandbox held/i)).not.toBeInTheDocument();
   });
 });
