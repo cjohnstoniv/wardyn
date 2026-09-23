@@ -696,6 +696,25 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
   });
+
+  // #725/T-65 — a Codex launch refused for its OWN model_credential reason
+  // must not open "Sign in to AWS": that sign-in repairs the claude-code
+  // row alone, and this deployment's per_user claude-code row (perUserRow,
+  // above) is a DIFFERENT agent than the one that was actually refused.
+  test("a codex launch's model_credential refusal opens no AWS sign-in, on a deployment with a per_user claude-code row", async ({
+    page,
+  }) => {
+    await perUserRow(page);
+    await refuseLaunch(page, { error: refusal, reason: "model_credential" });
+    await openNewRun(page);
+    await page.getByLabel("Title").fill("e2e codex refusal");
+    await page.getByRole("combobox", { name: "Agent" }).click();
+    await page.getByRole("option", { name: "Codex CLI" }).click();
+    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(page.getByText(refusal)).toBeVisible();
+    await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
+  });
 });
 
 // #93/#96 — the New Run rail's Autonomy section. The seeded backend's bearer

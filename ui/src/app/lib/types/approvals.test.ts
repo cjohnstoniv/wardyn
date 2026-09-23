@@ -4,7 +4,15 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { canDecideApproval, decisionArgs, isHeld, isStaleHold, type ApprovalKind, type ApprovalRequest } from "./approvals";
+import {
+  ADO_HOLD_WINDOW_MS,
+  canDecideApproval,
+  decisionArgs,
+  isHeld,
+  isStaleHold,
+  type ApprovalKind,
+  type ApprovalRequest,
+} from "./approvals";
 
 const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
   id: "a1",
@@ -119,5 +127,47 @@ describe("isHeld / isStaleHold — the 60-minute ceiling on tool_call/credential
     const held = approval({ kind: "egress_domain", requested_scope: { host: "h", mode: "wait_for_review" }, requested_at: past30s });
     expect(isHeld(held)).toBe(false); // still the pre-existing 30s behaviour
     expect(isStaleHold(held)).toBe(false); // not this arm at all — falls to passiveHold upstream
+  });
+});
+
+// #725/F1 — an Azure DevOps capability escalation IS a tool_call row
+// (isAdoCapabilityRequest: grant_id set, requested_scope.lane
+// "azure_devops"), but the proxy releases its hold after ADO_HOLD_WINDOW_MS
+// (4 minutes), not the generic 60-minute ceiling above. Before this arm,
+// isHeld kept reporting "held" for up to an hour while the ADO card itself
+// (ado-capability-card.tsx's own stillHeld, the same 4-minute window) had
+// already flipped to "no longer waiting" — the board and the card disagreed.
+const adoApproval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest =>
+  approval({
+    kind: "tool_call",
+    grant_id: "grant-1",
+    requested_scope: { lane: "azure_devops", provider_id: "p1", org: "o1", grant_id: "grant-1", capability: "pr", repo: "r1", tool: "t", cmd: "c" },
+    ...over,
+  });
+
+describe("isHeld — an Azure DevOps capability escalation's own 4-minute window (#725/F1)", () => {
+  it("a fresh ADO tool_call is held", () => {
+    expect(isHeld(adoApproval())).toBe(true);
+  });
+
+  it("an ADO tool_call row at 5 minutes is no longer held, well inside the generic 60-minute ceiling", () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(isHeld(adoApproval({ requested_at: fiveMinutesAgo }))).toBe(false);
+    // Not yet the generic stale-hold ceiling either — isStaleHold uses the
+    // unconditional 60-minute window, unchanged by this fix (board-groups.ts
+    // reads it as a passive pending, not a stale one, at this age).
+    expect(isStaleHold(adoApproval({ requested_at: fiveMinutesAgo }))).toBe(false);
+  });
+
+  it("right at ADO_HOLD_WINDOW_MS, isHeld matches the exported constant, not a hand-copied number", () => {
+    const justUnder = new Date(Date.now() - (ADO_HOLD_WINDOW_MS - 1000)).toISOString();
+    const justOver = new Date(Date.now() - (ADO_HOLD_WINDOW_MS + 1000)).toISOString();
+    expect(isHeld(adoApproval({ requested_at: justUnder }))).toBe(true);
+    expect(isHeld(adoApproval({ requested_at: justOver }))).toBe(false);
+  });
+
+  it("a plain tool_call with no grant_id/azure_devops scope keeps the 60-minute ceiling at 5 minutes", () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(isHeld(approval({ kind: "tool_call", requested_at: fiveMinutesAgo }))).toBe(true);
   });
 });

@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **An Azure DevOps capability escalation kept reading "sandbox held" for up to an hour after its
+  own card said the opposite.** The proxy releases that specific hold after 4 minutes (the same
+  window the capability card's own countdown already used); the Runs board and run cockpit read a
+  generic 60-minute ceiling instead, so the board chip, the cockpit header and the strip icon
+  disagreed with the card sitting right beside them. Both now read one shared window (#725).
+- **A Codex (or any non-Claude-Code) launch refused for its own model-credential reason could open
+  "Sign in to AWS"** on a deployment that also has a working Bedrock SSO Claude Code row — a
+  sign-in that repairs nothing for the agent that was actually refused. The door now opens only
+  for a refused Claude Code launch (#725).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

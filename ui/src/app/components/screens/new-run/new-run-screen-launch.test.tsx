@@ -53,7 +53,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
   };
 });
 // The REAL rail with its props recorded — this file pins only what the screen hands it.
-const railProps: Array<{ launch: { credentialRefused: boolean } }> = [];
+const railProps: Array<{ launch: { credentialRefused: boolean; onOpenRun: (() => void) | null } }> = [];
 vi.mock("./new-run-rail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./new-run-rail")>();
   return {
@@ -443,6 +443,26 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
     await user.click(launch);
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
     expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+});
+
+// #725/F4 — a network failure (the fetch itself never reached the server —
+// no HttpError, no body, no status) must never be read as "the run was
+// created but its sandbox did not start": on main, every refusal answers
+// BEFORE the run row is written (internal/api/runs_create_launch.go), so a
+// reason-less failure is precisely the case where no run may exist. The
+// rail must show the raw error and offer no "open the run" affordance.
+describe("NewRunScreen — a network failure never claims a run was created (F4)", () => {
+  it("createRun rejecting with TypeError('Failed to fetch') shows the raw error, opens nothing, and navigates nowhere", async () => {
+    createRunMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+
+    expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
+    expect(railProps[railProps.length - 1].launch.onOpenRun).toBeNull();
+    expect(railProps[railProps.length - 1].launch.credentialRefused).toBe(false);
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 });
 

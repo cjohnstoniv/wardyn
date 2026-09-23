@@ -129,6 +129,12 @@ const HOLD_TIMEOUT_MS = 30_000;
 // forgiving a truly abandoned one. 60 minutes, per the issue's own call.
 const STALE_HOLD_CEILING_MS = 60 * 60 * 1000;
 
+// The proxy's own ceiling for an Azure DevOps capability escalation
+// (internal/egress/proxy/credhold.go's maxCapabilityHoldTimeout) — exported
+// so ado-capability-card.tsx's stillHeld() and isHeld() above read ONE
+// number instead of two independently-maintained 240_000s that could drift.
+export const ADO_HOLD_WINDOW_MS = 240_000;
+
 // True once `requestedAt` is old enough to cross `ceilingMs` — and only once:
 // an unparseable timestamp fails TOWARD showing the hold (not stale), the same
 // direction isHeld's own unparseable case below takes.
@@ -231,6 +237,14 @@ export function canDecideAdoCapability(securityOperator: boolean, isRunOwner: bo
 }
 
 export function isHeld(a: ApprovalRequest): boolean {
+  // An Azure DevOps capability escalation is a tool_call row, but the proxy
+  // releases ITS hold after ADO_HOLD_WINDOW_MS (credhold.go's
+  // maxCapabilityHoldTimeout), not the generic 60-minute stale-hold ceiling
+  // below — the ado-capability-card.tsx (HOLD_WINDOW_MS, the same constant)
+  // already flips its own text to "no longer waiting" at that point. Without
+  // this arm the board and the cockpit header kept saying "sandbox held" for
+  // up to an hour after the card itself said the opposite (#725/F1).
+  if (isAdoCapabilityRequest(a)) return !isStale(a.requested_at, ADO_HOLD_WINDOW_MS);
   if (a.kind === "tool_call") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
   // A credential_reauth row is raised BECAUSE the proxy is holding a request.
   // It carries no first_use mode of its own — the mode vocabulary belongs to
