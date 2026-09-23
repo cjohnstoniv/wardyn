@@ -35,9 +35,41 @@ vi.mock("../../../lib/api/secrets", () => ({
 }));
 
 const listRunsMock = vi.fn();
+const createRunMock = vi.fn();
+const getRunMock = vi.fn();
+const killRunMock = vi.fn();
+const getGrantsMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
-  runs: { listRuns: (...a: unknown[]) => listRunsMock(...a) },
+  runs: {
+    listRuns: (...a: unknown[]) => listRunsMock(...a),
+    createRun: (...a: unknown[]) => createRunMock(...a),
+    getRun: (...a: unknown[]) => getRunMock(...a),
+    killRun: (...a: unknown[]) => killRunMock(...a),
+    getGrants: (...a: unknown[]) => getGrantsMock(...a),
+  },
 }));
+
+// DemoDetail (setup/demos-step.tsx, React.lazy'd below this page's demo
+// sections) drags in the same runner graph demos-step.test.tsx stubs —
+// xterm, live approvals, audit and the profile sheet are irrelevant to
+// whether the RIGHT demo row pre-opens, so they stay inert markers here too.
+vi.mock("../../attach-terminal", () => ({
+  AttachTerminal: ({ runId }: { runId: string }) => <div data-testid="attach-terminal">{runId}</div>,
+}));
+vi.mock("../../wardyn/live-approvals", () => ({
+  LiveApprovals: ({ runId }: { runId: string }) => <div data-testid="live-approvals">{runId}</div>,
+}));
+const listAuditMock = vi.fn();
+vi.mock("../../../lib/api/audit", () => ({
+  audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
+  egressFromAudit: () => [],
+  demoAuditRows: () => [],
+}));
+vi.mock("../profile-review", () => ({
+  ProfileReview: ({ runId }: { runId: string | null }) =>
+    runId ? <div data-testid="profile-review">{runId}</div> : null,
+}));
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 const listKeysMock = vi.fn();
 vi.mock("../../../lib/api/ssh-keys", () => ({
@@ -116,9 +148,9 @@ const sharedBedrockHarness: SetupHarnessTool[] = [
 // The page reads its drive off the shell's ONE GET /me (operator-context's
 // UserDriveContext), not a fetch of its own — so a case states its /me body
 // here, exactly as app-shell hands it down.
-function renderPage(me: Me = baseMe()) {
+function renderPage(me: Me = baseMe(), initialEntries: string[] = ["/"]) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <OperatorProvider
         operator={false}
         securityOperator={false}
@@ -859,5 +891,82 @@ describe("MemberGettingStarted", () => {
       await screen.findByRole("heading", { name: T.SETUP_SUMMARY_TITLE });
       expect(screen.queryByRole("button", { name: ADO.CONNECT_ADO })).not.toBeInTheDocument();
     });
+  });
+});
+
+// M-6 (D5) — the two demo sections member-getting-started.tsx adds, gated by
+// walkableDemos (setup/steps.ts) the same way the funnel's PHASES walk used
+// to. #850's redaction (internal/api/setup.go's redactSetupStatusForMember)
+// zeroes secrets.present and providers for a non-operator, so these cases
+// exercise the exact shape a real SSO user's browser receives, not the
+// admin-token D1 fixture the demos.spec/secrets-demos.spec e2e run as.
+describe("MemberGettingStarted — demos (M-6 D5)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    listSecretsMineMock.mockReset().mockResolvedValue({ names: [], mine: [] });
+    listRunsMock.mockReset().mockResolvedValue([]);
+    listKeysMock.mockReset().mockResolvedValue([]);
+    listWorkspacesMock.mockReset().mockResolvedValue([]);
+    getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
+    getRunMock.mockReset().mockResolvedValue(undefined);
+    listAuditMock.mockReset().mockResolvedValue([]);
+  });
+
+  // The literal redacted payload a non-operator's browser receives.
+  const redacted = status({ checks: [], providers: [], secrets: { present: [], github_app: false } });
+
+  it("offers only the demos walkableDemos(status) allows under the redacted payload", async () => {
+    getSetupStatusMock.mockResolvedValue(redacted);
+    renderPage();
+    expect(await screen.findByText(T.DEMOS_EGRESS_TITLE)).toBeInTheDocument();
+    // Keyless egress demos: always walkable.
+    expect(screen.getByText("The sealed box")).toBeInTheDocument();
+    expect(screen.getByText("Record a policy")).toBeInTheDocument();
+    // needsModel, unmet under the redacted payload (llmReady false).
+    expect(screen.queryByText("The agent in the box")).not.toBeInTheDocument();
+    expect(screen.getByText(T.DEMOS_SECRETS_TITLE)).toBeInTheDocument();
+    // Keyless secrets demos: always walkable, including the GitHub-App-gated
+    // and refusal-only ones (demoMet ignores needsGitHubApp/refusalCompletes).
+    expect(screen.getByText("Write-only, even for you")).toBeInTheDocument();
+    expect(screen.getByText("A token the sandbox never even sees")).toBeInTheDocument();
+    expect(screen.getByText("No identity, no credential")).toBeInTheDocument();
+    // needsSecret, unmet — none of the five is in secrets.present.
+    expect(screen.queryByText("The key that never enters the box")).not.toBeInTheDocument();
+    expect(screen.queryByText("Authorized, not issued")).not.toBeInTheDocument();
+    expect(screen.queryByText("A bearer token for a real API")).not.toBeInTheDocument();
+    expect(screen.queryByText("A PAT that only ever exists in a pipe")).not.toBeInTheDocument();
+    expect(screen.queryByText("The one that touches disk — briefly")).not.toBeInTheDocument();
+  });
+
+  it("offers the model- and secret-gated demos once the preconditions they need are met", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      status({
+        providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }],
+        secrets: {
+          present: ["wardyn-demo-key", "wardyn-demo-api-token", "wardyn-demo-pat", "wardyn-demo-ssh-key"],
+          github_app: false,
+        },
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("The agent in the box")).toBeInTheDocument();
+    expect(screen.getByText("The key that never enters the box")).toBeInTheDocument();
+    expect(screen.getByText("Authorized, not issued")).toBeInTheDocument();
+    expect(screen.getByText("A bearer token for a real API")).toBeInTheDocument();
+    expect(screen.getByText("A PAT that only ever exists in a pipe")).toBeInTheDocument();
+    expect(screen.getByText("The one that touches disk — briefly")).toBeInTheDocument();
+  });
+
+  it("?step=<id> pre-opens that row's demo card", async () => {
+    getSetupStatusMock.mockResolvedValue(redacted);
+    renderPage(baseMe(), ["/?step=sealed-box"]);
+    expect(await screen.findByTestId("demo-card-sealed-box")).toBeInTheDocument();
+  });
+
+  it("?step=<id> for a demo this page doesn't offer opens nothing, and errors nothing", async () => {
+    getSetupStatusMock.mockResolvedValue(redacted);
+    renderPage(baseMe(), ["/?step=agent-in-the-box"]);
+    await screen.findByText(T.DEMOS_EGRESS_TITLE);
+    expect(screen.queryByTestId("demo-card-agent-in-the-box")).not.toBeInTheDocument();
   });
 });

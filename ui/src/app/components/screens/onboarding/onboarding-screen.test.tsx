@@ -182,15 +182,31 @@ describe("GettingStarted (the view decides the page, not role — M-6)", () => {
   // admin fell THROUGH to the deployer funnel — built from a SetupStatus the
   // server redacts for them (redactSetupStatusForMember zeroes
   // Checks/Providers/Secrets, internal/api/setup.go), driving mutations that
-  // are super-admin-only. Kept as a view-keyed pin: /admin/setup is
-  // unreachable for a security admin's OWN session today (ViewGate refuses a
-  // user-only principal there), but a role check here was never the thing
-  // actually stopping them — the view was and is.
+  // are super-admin-only.
   it("/setup shows the User Getting Started for a security admin too, not the deployer funnel", async () => {
     // The literal redacted payload the server hands a non-operator.
     getSetupStatusMock.mockResolvedValue(status({ checks: [], providers: [], secrets: { present: [], github_app: false } }));
     render(
       <MemoryRouter initialEntries={["/setup"]}>
+        <RoleProvider role="security_admin">
+          <GettingStarted onDone={() => {}} />
+        </RoleProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Getting started")).toBeInTheDocument();
+    expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
+  });
+
+  // A security admin IS reachable at /admin/setup (their landing page on an
+  // install that isn't onboarded, or a typed URL — the Admin nav gives them
+  // no Setup link): viewAccess (console-view.tsx) maps both "admin" and
+  // "security_admin" to "session-admin", which passes ViewGate's /admin/*
+  // check. The role check here is what actually keeps them off the deployer
+  // funnel in that case.
+  it("/admin/setup shows the User Getting Started for a security admin, not the deployer funnel", async () => {
+    getSetupStatusMock.mockResolvedValue(status({ checks: [], providers: [], secrets: { present: [], github_app: false } }));
+    render(
+      <MemoryRouter initialEntries={["/admin/setup"]}>
         <RoleProvider role="security_admin">
           <GettingStarted onDone={() => {}} />
         </RoleProvider>

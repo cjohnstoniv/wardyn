@@ -52,6 +52,19 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect(page).toHaveURL(/\/account$/);
   });
 
+  // M-6 (D5): the demos the admin funnel used to walk now live here. This
+  // pins the section exists and offers a keyless demo for a mocked member
+  // role — the walkable/gated set itself (needsModel/needsSecret) is unit
+  // coverage in member-getting-started.test.tsx, not re-proven per backend
+  // state here.
+  test("the Egress demos section renders and offers a keyless demo", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+
+    await expect(page.getByText(MEMBER_GETTING_STARTED.DEMOS_EGRESS_TITLE)).toBeVisible();
+    await expect(page.getByText("The sealed box")).toBeVisible();
+  });
+
   test("the episode rail leads with the member's own path, then core (Shape C)", async ({
     page,
   }) => {
@@ -358,8 +371,12 @@ test.describe("admin session at /setup and /admin/setup (unmocked — D1: the UR
 // three-valued, so a SECURITY ADMIN fell through to the deployer funnel — built
 // from a SetupStatus the server redacts for every non-operator
 // (redactSetupStatusForMember zeroes Checks/Providers/Secrets,
-// internal/api/setup.go), over mutations that are super-admin-only. It reads
-// `role !== "admin"` now, the way setupGateActive already did.
+// internal/api/setup.go), over mutations that are super-admin-only.
+// GettingStarted now checks `role !== "admin"` alongside the view (M-6's
+// `view !== "admin"`), so a security admin is refused the funnel whether
+// they land on plain /setup or reach /admin/setup directly — the latter
+// passes ViewGate because viewAccess maps a security admin to the same
+// "session-admin" tier as an admin.
 //
 // Browser-only: this is a ROUTE decision made from /me, so only a real
 // navigation with a security-admin /me proves it.

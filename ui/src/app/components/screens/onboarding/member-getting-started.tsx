@@ -66,7 +66,8 @@ import { YourModelKey, modelKeyProvider } from "./your-model-key";
 import { modelKeyState, ownKeyApplies } from "./model-key-state";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 import { DEMOS, type Demo } from "../demos/demo-catalog";
-import { walkableDemos } from "../setup/steps";
+import { ceilingNarrows, walkableDemos } from "../setup/steps";
+import { useViewAccess } from "../../wardyn/console-view";
 
 // M-6 (D5, admin-member-modes-design.md §4.8): a demo is a sandbox run, a
 // user act, so it renders here now — reusing the funnel's own DemoDetail
@@ -104,6 +105,13 @@ function modelAccessChip(
 
 export function MemberGettingStarted() {
   const [searchParams] = useSearchParams();
+  // M-6 (D5): "url" is D1, the single-operator install — the same admin
+  // token runs both views, so there is no ceiling for a demo run of theirs
+  // to fall under and every demo stays fully interactive. Every other access
+  // tier is a real member (or an SSO admin viewing the member page) whose
+  // OWN runs are bound by boundMemberSpec — ceilingNarrows below decides
+  // per-demo which ones that would actually rewrite.
+  const ceilingApplies = useViewAccess() !== "url";
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [retryTick, setRetryTick] = React.useState(0);
   // The member's own AWS sign-in pane (C4.3) — opens IN PLACE under the card,
@@ -638,6 +646,7 @@ export function MemberGettingStarted() {
                 barrierReady={!!strongest}
                 githubAppReady={status ? !!status.secrets.github_app : true}
                 defaultOpen={d.id === deepLinkedDemoId}
+                ceilingWatchOnly={ceilingApplies && ceilingNarrows(d)}
               />
             ))}
           </div>
@@ -654,6 +663,7 @@ export function MemberGettingStarted() {
                 barrierReady={!!strongest}
                 githubAppReady={status ? !!status.secrets.github_app : true}
                 defaultOpen={d.id === deepLinkedDemoId}
+                ceilingWatchOnly={ceilingApplies && ceilingNarrows(d)}
               />
             ))}
           </div>
@@ -687,27 +697,41 @@ export function MemberGettingStarted() {
 // M-6 (D5) — one demo row: title + Open/Close, the same "opens IN PLACE
 // below the row" shape EpisodeRow (episode-card.tsx) already uses for
 // episodes on this same page. `barrierReady`/`githubAppReady` mirror what
-// setup-screen.tsx used to pass DemoDetail; `onJump` is a no-op here — the
-// funnel's "finish the Environment step first" hand-off names a step this
-// page doesn't have (the barrier is an admin fact, never a member's to set),
-// so with no barrier this row can only say so, not send anyone anywhere.
-// `onDemoLaunched` is likewise a no-op: useDemoRuns (demo-runner.tsx) already
-// writes the durable per-browser "launched" signal on its own; nothing on
-// this page currently reads it back into a done marker.
+// setup-screen.tsx used to pass DemoDetail. `onJump` is left OFF DemoDetail
+// (not a no-op) — the funnel's "finish the Environment step first" hand-off
+// names a step this page doesn't have (the barrier is an admin fact, never a
+// member's to set), and DemoDetail renders that hint as plain text with no
+// onJump rather than a button that would go nowhere. `onDemoLaunched` is
+// likewise a no-op: useDemoRuns (demo-runner.tsx) already writes the durable
+// per-browser "launched" signal on its own; nothing on this page currently
+// reads it back into a done marker.
 function DemoRow({
   demo,
   barrierReady,
   githubAppReady,
   defaultOpen = false,
+  ceilingWatchOnly = false,
 }: {
   demo: Demo;
   barrierReady: boolean;
   githubAppReady: boolean;
   defaultOpen?: boolean;
+  ceilingWatchOnly?: boolean;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
+  // A ?step=<id> deep link opens a row below the page's three setup cards —
+  // off-screen without this, since the pre-open renders with no scroll of
+  // its own.
+  const rowRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (defaultOpen) rowRef.current?.scrollIntoView({ block: "start" });
+    // Deliberately once, on mount only — `open` toggling later (the member
+    // closing/reopening the row by hand) must not re-scroll them away from
+    // wherever they are.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
-    <div className="border-b border-border py-3 last:border-b-0">
+    <div ref={rowRef} className="border-b border-border py-3 last:border-b-0">
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-sm text-foreground">{demo.title}</span>
         {open ? (
@@ -727,8 +751,8 @@ function DemoRow({
               demo={demo}
               barrierReady={barrierReady}
               githubAppReady={githubAppReady}
-              onJump={() => {}}
               onDemoLaunched={() => {}}
+              ceilingWatchOnly={ceilingWatchOnly}
             />
           </React.Suspense>
         </div>

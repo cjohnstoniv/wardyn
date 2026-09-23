@@ -446,9 +446,11 @@ export function RunsScreen() {
            the funnel blank is keyed on isOperator (internal/api/setup.go), which
            is SUPER-admin only — so a security admin's status arrives redacted
            too, and through the two-valued form this tier read every withheld
-           field as a fact. Same three-valued shape as setupGateActive and
-           GettingStarted, and for the same stated reason. The count line above
-           stays `=== "member"`: handleListRuns scopes by creator on
+           field as a fact. Same bare three-valued role read as setupGateActive,
+           for the same stated reason — GettingStarted's own guard also folds
+           in the view (a security admin at /admin/setup must still be denied
+           the funnel even though the view there reads "admin"). The count line
+           above stays `=== "member"`: handleListRuns scopes by creator on
            isSecurityOperator, so a security admin really does see every run. */
         <RunsMemberEmpty />
       ) : trueEmpty ? (

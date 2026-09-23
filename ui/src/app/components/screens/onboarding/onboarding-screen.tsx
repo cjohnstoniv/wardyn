@@ -25,6 +25,7 @@ import { EpisodeList } from "./episode-card";
 import { MemberGettingStarted } from "./member-getting-started";
 import { deriveReadiness } from "../../../lib/readiness";
 import { SetupScreen } from "../setup/setup-screen";
+import { useRole } from "../../wardyn/operator-context";
 
 // "Have they seen the welcome" flag — localStorage, private-mode tolerant.
 // Distinct from wardyn-setup-dismissed so the welcome and the setup funnel track
@@ -40,17 +41,18 @@ export function markOnboardingSeen(): void {
 // The "Getting started" flow: the welcome hero first (until seen), then the setup
 // funnel. No double stepper — the welcome has no stepper; the funnel has one.
 //
-// M-6 (admin-member-modes-design.md §4.8/§6): which page renders is the
-// VIEW (the URL — /admin/setup vs /setup), not the caller's role. Before M-6
-// this read `role`, which was right only by coincidence: ViewGate
-// (console-view.tsx) already refuses a user-only principal at /admin/setup
-// and interstitials an SSO admin's session-admin tab into User view before it
-// ever reaches plain /setup, so by the time this component renders, the VIEW
-// already answers "which Getting Started" honestly — including the one case
-// role never could: a single-operator install (D1, `access === "url"`),
-// where the same admin sees the operator funnel at /admin/setup and the
+// M-6 (admin-member-modes-design.md §4.8/§6): which page renders follows the
+// VIEW (the URL — /admin/setup vs /setup) first — a single-operator install
+// (D1, `access === "url"`) sees the operator funnel at /admin/setup and the
 // User Getting Started at /setup, because there the URL is the only thing
-// that ever decided the mode at all.
+// that ever decided the mode at all, which `role` alone could never answer.
+//
+// The role check stays alongside it: `viewAccess` (console-view.tsx) maps
+// BOTH "admin" and "security_admin" to "session-admin", and a session-admin
+// passes ViewGate's /admin/* check — so a security admin who reaches
+// /admin/setup (its landing page, or a typed URL; the Admin nav gives them
+// no Setup link) would otherwise get the deployer funnel, built from a
+// SetupStatus redacted for anyone not the operator.
 //
 // B4 HIGH-4 / Phase 5: this also still answers a direct /setup navigation (an
 // old bookmark, a shared link) honestly — MemberGettingStarted, never the
@@ -65,6 +67,7 @@ export function GettingStarted({
   status?: SetupStatus | null;
 }) {
   const view = useConsoleMode();
+  const role = useRole();
   // The hero is a fact about the install (status.onboarding_complete), not
   // the browser: a per-browser flag is origin-scoped, so the same console
   // reached at 127.0.0.1 and at localhost would disagree about whether the
@@ -84,7 +87,7 @@ export function GettingStarted({
   React.useEffect(() => {
     markGateFired();
   }, []);
-  if (view !== "admin") {
+  if (view !== "admin" || role !== "admin") {
     // No onDone: this is a page a user returns to, not a funnel step with
     // an exit action — the old MemberSetupNotice's "Go to Runs" button (and
     // the onDone it called) leaves with it.
