@@ -937,6 +937,17 @@ carries a path. Dot-segment and percent-encoded paths do NOT reach this
 question at all: `https://github.com/acme/../evil/repo.git` and
 `…/acme%2Fevil/…` are refused outright at every admission door and at both
 write doors, because git and the server would read such a path differently.
+The one escape that is admitted is an Azure DevOps project or repository name,
+which may carry spaces and most punctuation: every door stores such an address
+in one spelling — `https://dev.azure.com/acme/Payments Platform/_git/Card Auth
+(v2).Service` is stored as `…/Payments%20Platform/_git/Card%20Auth%20(v2).Service`
+— and an escape that decodes to a separator, a dot segment or a control
+character is still refused. An `azure_devops` row may likewise be scoped to such
+a project (`https://tfs.corp.example/Payments Platform`); names compare as
+written, case included. Such a row cannot name a project whose name holds
+``& ' $ ; | < > " ` `` (site-config values refuse them); scope the row to the
+organisation instead. An Azure DevOps Server host takes these names only when
+an `azure_devops` provider row names it.
 
 **On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
 `/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the
