@@ -23,7 +23,6 @@ import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
 import {
-  CHIP_QUEUED,
   isTerminalStatusReason,
   PENDING_NO_DETAIL,
   statusDetailChip,
@@ -135,16 +134,13 @@ export function SummaryHeader({
   // falls through to the ordinary STARTING/PENDING derivation, which
   // supersedes it.
   const pendingQueued = run.state === "PENDING" && !run.status_detail?.trim();
-  // SF-25: the chip below is the SHORT register, same as every STARTING/PENDING
-  // reason (statusDetailChip) — PENDING_NO_DETAIL is the header chip's `title`
-  // tooltip's sentence, never the chip's own truncatable text (max-w-[160px]
-  // truncates the 42-character sentence to a fragment, the same failure this
-  // chip's own doc comment already warns statusDetailChip exists to avoid).
-  // The sentence also rides a visible line below the bar (the `pendingQueued`
-  // block near the end of this component) — the title tooltip alone cannot
-  // be read on a touch device.
+  // SF-25: PENDING's own first tick gets no header chip at all — the mock
+  // (packet-4.html state 3) has only the reused Pending badge (RunStateBadge,
+  // above) plus PENDING_NO_DETAIL as a visible line below the bar (the
+  // `pendingQueued` block near the end of this component); a same-page
+  // "Queued" info chip would say the badge's own fact a second time.
   const statusChip = pendingQueued
-    ? CHIP_QUEUED
+    ? ""
     : run.state === "STARTING" || run.state === "PENDING"
       ? statusDetailChip(run.status_detail, run.status_reason)
       : "";
@@ -287,7 +283,7 @@ export function SummaryHeader({
         <Chip
           tone={isTerminalStatusReason(run.status_reason) ? "warning" : "info"}
           className="min-w-0 max-w-[160px] shrink"
-          title={pendingQueued ? PENDING_NO_DETAIL : statusDetailSentence(run.status_detail, run.status_reason)}
+          title={statusDetailSentence(run.status_detail, run.status_reason)}
         >
           <span className="block min-w-0 truncate">{statusChip}</span>
         </Chip>
@@ -438,10 +434,10 @@ export function SummaryHeader({
         />
       </div>
     </div>
-    {/* SF-25: PENDING_NO_DETAIL rode only the chip's `title` above, which a
-        touch device can never open — the mock (packet-4.html state 3) shows
-        this sentence as a visible line under the header, not a tooltip.
-        Byte-exact to PENDING_NO_DETAIL; the chip's own word stays "Queued". */}
+    {/* SF-25: the mock (packet-4.html state 3) has no header chip for this
+        case at all — only the reused Pending badge above and this sentence,
+        byte-exact to PENDING_NO_DETAIL, as a visible line a touch device can
+        actually read (there is no tooltip to open). */}
     {pendingQueued && (
       <p data-testid="run-summary-secondary" className="border-b border-border bg-card px-4 py-1.5 text-body text-muted-foreground">
         {PENDING_NO_DETAIL}

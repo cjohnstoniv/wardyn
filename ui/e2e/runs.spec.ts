@@ -13,7 +13,6 @@ import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import { STATES } from "../src/app/components/wardyn/states";
 import {
   CHIP_IMAGE_PULL_FAILED,
-  CHIP_QUEUED,
   CHIP_SETTING_UP,
   CHIP_WAITING_FOR_MACHINE,
   PENDING_NO_DETAIL,
@@ -598,27 +597,16 @@ test.describe("Run header — PENDING's own queued sentence (#125)", () => {
 
     const header = page.getByTestId("run-summary-header");
     await expect(header.getByText("Pending", { exact: true })).toBeVisible();
-    // SF-25: the chip's own visible text is the SHORT register — the full
-    // 42-character PENDING_NO_DETAIL sentence rides the chip's title, where
-    // width is free, never the max-w-[160px] chip body itself (which
-    // truncated it to "Queued — Wardyn is ge…", the review defect this pins).
-    const queuedChip = header.getByText(CHIP_QUEUED, { exact: true });
-    await expect(queuedChip).toBeVisible();
-    await expect(header.getByTitle(PENDING_NO_DETAIL)).toBeVisible();
-    // SF-25: a title tooltip alone cannot be read on a touch device — the
-    // mock (packet-4.html state 3) shows the sentence as a visible line
-    // under the header, byte-exact, not only on the chip's title.
+    // SF-25: the mock (packet-4.html state 3) has only the reused Pending
+    // badge plus this sentence as a visible line — no separate "Queued" info
+    // chip, which would say the badge's own fact a second time.
     await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toBeVisible();
-    expect(
-      await queuedChip.evaluate((e) => e.scrollWidth <= e.clientWidth),
-      "the chip's own text must never overflow — that is the whole point of the short register",
-    ).toBe(true);
+    await expect(header.getByText("Queued", { exact: true })).toHaveCount(0);
 
     // The next poll tick (DETAIL_POLL_MS) picks up a real stage line, which
     // supersedes the queued sentence.
     stage = { status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" };
     await expect(header.getByText(CHIP_WAITING_FOR_MACHINE)).toBeVisible({ timeout: 8_000 });
-    await expect(header.getByText(CHIP_QUEUED, { exact: true })).toHaveCount(0);
     await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toHaveCount(0);
   });
 });

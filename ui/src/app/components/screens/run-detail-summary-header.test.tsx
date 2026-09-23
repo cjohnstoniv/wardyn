@@ -22,7 +22,6 @@ import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
 import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import {
-  CHIP_QUEUED,
   CHIP_SETTING_UP,
   CHIP_WAITING_FOR_MACHINE,
   PENDING_NO_DETAIL,
@@ -470,17 +469,17 @@ describe("SummaryHeader — PENDING's own queued sentence (#125)", () => {
     ...extra,
   });
 
-  it("shows the queued sentence for a PENDING run with no status_detail yet", () => {
+  // SF-25: the mock (packet-4.html state 3) has only the reused Pending
+  // badge plus the visible sentence — no separate "Queued" info chip, which
+  // would say the badge's own fact a second time.
+  it("shows only the Pending badge, no separate info chip, for a PENDING run with no status_detail yet", () => {
     renderHeader(
       <OperatorProvider operator={true}>
         <SummaryHeader run={pending({ status_detail: "" })} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
-    // SF-25: the chip's own visible text is the SHORT register (it truncates
-    // at max-w-[160px], where the 42-character sentence read as a fragment);
-    // the full sentence still rides the chip's title, where width is free.
-    expect(screen.getByText(CHIP_QUEUED)).toBeInTheDocument();
-    expect(screen.getByText(CHIP_QUEUED).closest("[title]")).toHaveAttribute("title", PENDING_NO_DETAIL);
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.queryByText("Queued")).toBeNull();
   });
 
   // SF-25: a tooltip alone cannot be read on a touch device — the mock
