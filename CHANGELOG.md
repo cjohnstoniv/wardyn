@@ -176,6 +176,34 @@ and does not yet follow semantic versioning (interfaces are not stable).
   reaches its owner's own runs. `ssh_key.add` carries `capped: true` for such a key. Keys
   registered outside the user view behave exactly as before, and `POST /me/tokens` still refuses
   in the mode. See `docs/SSH.md#bounds`.
+- **Store mode in Azure Key Vault (#645).** `WARDYN_SECRET_STORE=azurekv` writes every stored
+  credential to the organisation's Key Vault as a secret and keeps only a pointer row, like
+  `vaultkv`; no Azure SDK is involved. wardynd authenticates with AKS workload identity (a
+  projected token exchanged for an Entra token, re-read at every exchange) or a VM's managed
+  identity, never a client secret, and refuses to start without a token. A secret's name is
+  derived from a hash of its row's owner and name, one name per credential; a read refuses a row
+  that points to any other name or vault, then a value whose tags name another row. A replace is a
+  new version and disables the versions listed before it (Key Vault cannot delete old versions), so
+  two writes landing together never disable each other's, and store-mode writes to one credential
+  wait for each other across replicas; once the vault holds `WARDYN_AZURE_KV_MAX_VERSIONS` (100)
+  versions of a name, the next write starts a fresh name and deletes the old one.
+  A removal soft-deletes the secret and then purges it when the vault allows; when purge
+  protection or the role withholds it, the removal still succeeds and `secret.delete` records
+  `purged: false` and the vault's `recoverable_days`. A name still held by a deleted secret is
+  purged and reused, or skipped for a new one; Wardyn never recovers a deleted secret. `-reconcile`
+  lists values left soft-deleted, and `-migrate-secrets -to=local` counts them (`soft_deleted`). A
+  429, a 5xx or any token endpoint failure (a refusal included, since Entra answers
+  `invalid_client` for a projected token caught mid-refresh) is transient; a 401 fetches a new
+  token at most every 30 s; a 403, a disabled or missing secret, or a binding mismatch is
+  definitive. A store-mode write, lock wait included, is bounded at six times
+  `WARDYN_SECRET_STORE_TIMEOUT`. A list's `nextLink`
+  is followed only on the same vault, so the bearer token never leaves it. The chart's
+  `secretStore.azure.*` values label the pod and annotate the service account for workload
+  identity; `-migrate-secrets -to=azurekv|local` and `-reconcile` work as for Vault. In the shared
+  store seam, a Put that fails to write its row no longer deletes the value the row already
+  points to, and is audited (`secret.write` failure, reason `row`), for Wardyn's own writes (a
+  captured or refreshed sign-in, a pasted harness credential) as for the API's. Tested against a fake Key
+  Vault; not yet run against a live one.
 - **Store mode: credentials can live in your organisation's Vault, and Wardyn holds no key
   (#644).** `WARDYN_SECRET_STORE=vaultkv` writes every stored credential to a Vault KV v2 engine
   (OpenBao is a supported endpoint) and keeps only a pointer row in Postgres (`enc_version` 2, no
@@ -210,6 +238,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   key always; the OIDC session, UI-sandbox session and SSH host keys when those features are on). The age key plus a read of the database
   therefore yields all of them. Splitting those keys is planned for 0.8.
 
+- **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
+  view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
+  The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `member`,
+  and it never gains the admin override: the sign-in re-stamp leaves its role alone, a CHECK
+  refuses a capped row that reads `admin`, and the SSH gateway refuses the override for it
+  (`ssh.auth` reason "capped key (registered in the user view): no admin override"). It still
+  reaches its owner's own runs. `ssh_key.add` carries `capped: true` for such a key. Keys
+  registered outside the user view behave exactly as before, and `POST /me/tokens` still refuses
+  in the mode. See `docs/SSH.md#bounds`.
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's

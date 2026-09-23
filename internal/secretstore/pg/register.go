@@ -19,7 +19,7 @@ func init() {
 		}
 		// A configured external store is read-only here: pointer rows written
 		// in store mode stay readable, and every write seals locally (§2.2).
-		s.ext = d.External
+		s.ext, s.extTimeout = d.External, d.ExternalTimeout
 		return s, nil
 	})
 }
@@ -34,7 +34,7 @@ func RegisterExternal(name string) {
 		if d.External == nil || d.External.Name() != name {
 			return nil, fmt.Errorf("secret store %q is selected but not configured (see docs/ENV.md, %q)", name, name)
 		}
-		s := &Store{pool: d.Pool, ext: d.External, writeExt: true}
+		s := &Store{pool: d.Pool, ext: d.External, writeExt: true, extTimeout: d.ExternalTimeout}
 		if d.AgeIdentity != nil {
 			k, err := localKEK(d.AgeIdentity)
 			if err != nil {

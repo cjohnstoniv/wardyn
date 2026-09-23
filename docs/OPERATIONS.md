@@ -4948,7 +4948,7 @@ while a daemon serves; idempotent and resumable.
 #    WARDYN_AGE_KEY set, and restart: new writes go to Vault, old rows still read.
 # 2. Move the rest:
 wardynd -migrate-secrets -to=vaultkv
-#    INFO wardynd: stored secrets migrated to=vaultkv moved=7
+#    INFO wardynd: stored secrets migrated to=vaultkv moved=7 soft_deleted=0
 # 3. Unset WARDYN_AGE_KEY and restart. Boot refuses, naming the command above,
 #    while any local row remains.
 ```
@@ -4969,6 +4969,119 @@ produces one; neither leaks a value to anyone.
 versions); what survives is your Vault storage's own snapshots and backups,
 under your retention. **Backup** in store mode is the Postgres dump plus your
 Vault's own backup: the dump alone holds pointers, not values.
+
+## Store mode: credentials in Azure Key Vault
+
+With `WARDYN_SECRET_STORE=azurekv`, every stored credential's value lives in
+your organisation's Azure Key Vault as a secret, and Wardyn keeps only a
+pointer row in Postgres (`enc_version` 2, `kek_id`
+`azurekv:<vault-host>/<secret name>#<n>`, no ciphertext). Everything the Vault
+section above says about pointer rows, the boot keys, `-migrate-secrets` (here
+`-to=azurekv|local`), `-reconcile`, and transient versus definitive failures
+applies unchanged. No Azure SDK is involved: the Entra token exchange and the
+Key Vault calls are plain HTTPS. One external store is configured at a time;
+to move from Vault to Key Vault, migrate to local first.
+
+**Use a vault dedicated to Wardyn** (Microsoft's "a vault per application"
+advice), and give wardynd's identity **Key Vault Secrets Officer** on it and
+nothing else. Every read is a `SecretGet` in the vault's `AuditEvent` log, with
+wardynd's identity and the secret's URI. Secrets Officer also grants backup,
+restore and recover, which Wardyn never calls; the least-privilege alternative
+is a custom role with exactly these `dataActions`:
+
+```
+Microsoft.KeyVault/vaults/secrets/getSecret/action
+Microsoft.KeyVault/vaults/secrets/setSecret/action
+Microsoft.KeyVault/vaults/secrets/readMetadata/action
+Microsoft.KeyVault/vaults/secrets/update/action
+Microsoft.KeyVault/vaults/secrets/delete
+Microsoft.KeyVault/vaults/secrets/purge/action
+```
+
+Leave out `purge/action` to withhold purge (see "Removing a credential" below).
+
+**Names, versions and the owner check.** Key Vault names cannot hold `/`, `@`,
+`.` or `_`, so a secret's name is derived from its row, one per owner and name:
+
+```
+<prefix>-<platform|operator|people>-<32 hex of SHA-256(owner, name)>-g<generation>
+```
+
+`<prefix>` is `WARDYN_AZURE_KV_PREFIX` (the chart sets the release namespace).
+Each value is the base64 of the bytes (content type
+`application/octet-stream;base64`, at most 18 KiB) with tags `wardyn-owner`,
+`wardyn-name`, `wardyn-kind` and `wardyn-format`. A read derives the name from
+the row's owner and name and refuses a row that points to any other name or
+vault, then refuses a value whose tags name another row. A replace is a new
+**version** of the same name, and every earlier version is **disabled**: Key
+Vault cannot delete old versions. A write lists the versions before it writes
+and disables only those, so it never disables a newer one, and writes to one
+credential wait for each other across replicas. Once the name holds
+`WARDYN_AZURE_KV_MAX_VERSIONS` versions (default 100, well under the 500 at
+which Key Vault's backup of a secret fails; the vault's own count decides, not
+the pointer row), the next write starts a new generation, a fresh name, and
+the old generation is deleted. A read that loaded the row just before such a
+write committed can find the old name already deleted: it is refused once, with
+no grace, and the next read follows the row to the new name. Each write is one transaction in the vault's
+secret-create limit (300 per 10 seconds, shared with key and certificate
+imports), plus a version listing and one update per version it disables.
+
+**Authentication.** There is no client secret, by design.
+
+- *Workload identity* on AKS (`WARDYN_AZURE_AUTH=workload-identity`, the
+  default). With `secretStore.azure.*` set, the chart labels the pod
+  `azure.workload.identity/use: "true"` and annotates the service account with
+  `azure.workload.identity/client-id`; the webhook projects a token and sets
+  `AZURE_FEDERATED_TOKEN_FILE`, which wardynd re-reads at every exchange.
+  Add a federated credential for the chart's service account:
+
+  ```sh
+  az identity federated-credential create --name wardyn \
+      --identity-name <identity> --resource-group <group> \
+      --issuer "$(az aks show -n <cluster> -g <group> --query oidcIssuerProfile.issuerUrl -o tsv)" \
+      --subject system:serviceaccount:<namespace>:<the chart's service account> \
+      --audience api://AzureADTokenExchange
+  az role assignment create --role "Key Vault Secrets Officer" \
+      --assignee <the identity's client id> --scope <the vault's resource id>
+  ```
+- *Managed identity* on a VM (`WARDYN_AZURE_AUTH=managed-identity`): the
+  instance metadata service, never through a proxy. `WARDYN_AZURE_CLIENT_ID`
+  selects a user-assigned identity.
+
+wardynd gets a token at boot and **refuses to start if it cannot**, then keeps
+it until five minutes before it expires. TLS uses `WARDYN_TRUSTED_CA_FILE`,
+else the system roots, in a TLS config of its own; `http://` is refused except
+to a loopback host. The default NetworkPolicy denies wardynd's egress: allow
+the vault and `login.microsoftonline.com` in `networkPolicy.egress.extra`.
+
+**When Key Vault is unavailable.** A 429, a 5xx, a timeout or any token
+endpoint failure is transient (each call retried three times first, honouring
+`Retry-After`). A token endpoint refusal is transient too: Entra answers
+`invalid_client` for passing conditions (`AADSTS700024`, a projected token
+outside its valid time while the kubelet refreshes it), so it rides the
+15-minute grace. A 401 fetches a new token at most once every 30 s; a 403, a
+secret that is gone or disabled, or a binding that does not match is
+definitive. Revoking wardynd's role at the vault bites at once; removing its
+federated credential bites when its cached token expires (within the hour) and
+the vault then refuses the call. A write, the wait for the credential's lock
+included, gives up after six times `WARDYN_SECRET_STORE_TIMEOUT` (30 s by
+default), so an outage never holds a database connection longer.
+
+**Removing a credential, and the erasure horizon.** Removal is a soft delete
+of the secret (every version), then, with `WARDYN_AZURE_KV_PURGE=auto` (the
+default), a purge. Withholding purge is your choice: purge protection on the
+vault, or a custom role without the purge permission. Then the purge is
+refused, the secret stays soft-deleted, and the `secret.delete` audit row says
+`purged: false` with `recoverable_days`, the vault's retention (7 to 90 days,
+fixed when the vault was created). `WARDYN_AZURE_KV_PURGE=never` never purges.
+Until then your organisation can recover the value; ask the vault's operators
+to purge it sooner. `wardynd -reconcile` lists each soft-deleted value no
+row points to, with the days until the vault purges it (a listing, not a
+failure), and `-migrate-secrets -to=local` counts the old copies it left
+soft-deleted (`soft_deleted` in its log line and `secret.migrate` row). Wardyn
+never recovers a deleted secret: a credential removed and added again within
+the retention reuses the name after a purge, or takes a new generation. After the purge, what survives is your vault's own
+backups. **Backup** in store mode is the Postgres dump plus the vault's.
 
 ## Upgrades
 

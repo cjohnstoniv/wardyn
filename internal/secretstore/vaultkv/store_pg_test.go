@@ -291,8 +291,8 @@ func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
 		}
 	}
 
-	if n, err := lps.Migrate(ctx, Name, count); err != nil || n != 3 || reads != 3 {
-		t.Fatalf("Migrate to vaultkv = (%d, %v), %d reads; want 3 moved, 3 reads", n, err, reads)
+	if res, err := lps.Migrate(ctx, Name, count); err != nil || res.Moved != 3 || reads != 3 {
+		t.Fatalf("Migrate to vaultkv = (%d, %v), %d reads; want 3 moved, 3 reads", res.Moved, err, reads)
 	}
 	check(2)
 	var leftover int
@@ -300,12 +300,12 @@ func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
 	if leftover != 0 {
 		t.Fatalf("%d rows still hold a local copy after moving to Vault", leftover)
 	}
-	if n, err := lps.Migrate(ctx, Name, count); err != nil || n != 0 {
-		t.Fatalf("re-run = (%d, %v), want (0, nil)", n, err)
+	if res, err := lps.Migrate(ctx, Name, count); err != nil || res.Moved != 0 {
+		t.Fatalf("re-run = (%d, %v), want (0, nil)", res.Moved, err)
 	}
 
-	if n, err := lps.Migrate(ctx, secretstorepg.MigrateLocal, count); err != nil || n != 3 {
-		t.Fatalf("Migrate to local = (%d, %v), want 3", n, err)
+	if res, err := lps.Migrate(ctx, secretstorepg.MigrateLocal, count); err != nil || res.Moved != 3 {
+		t.Fatalf("Migrate to local = (%d, %v), want 3", res.Moved, err)
 	}
 	check(1)
 	f.mu.Lock()
@@ -314,8 +314,8 @@ func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
 	if left != 0 {
 		t.Fatalf("Vault still holds %d values after moving back", left)
 	}
-	if n, err := lps.Migrate(ctx, secretstorepg.MigrateLocal, count); err != nil || n != 0 {
-		t.Fatalf("re-run = (%d, %v), want (0, nil)", n, err)
+	if res, err := lps.Migrate(ctx, secretstorepg.MigrateLocal, count); err != nil || res.Moved != 0 {
+		t.Fatalf("re-run = (%d, %v), want (0, nil)", res.Moved, err)
 	}
 }
 
@@ -357,9 +357,9 @@ func TestMigrate_AbortsOnAMountVaultDoesNotServe(t *testing.T) {
 		t.Fatal(err)
 	}
 	ext.mount = "typo"
-	n, err := local.(*secretstorepg.Store).Migrate(ctx, Name, func(string, string) {})
-	if err == nil || n != 0 {
-		t.Fatalf("Migrate to an unserved mount = (%d, %v); want an abort with 0 moved", n, err)
+	res, err := local.(*secretstorepg.Store).Migrate(ctx, Name, func(string, string) {})
+	if err == nil || res.Moved != 0 {
+		t.Fatalf("Migrate to an unserved mount = (%d, %v); want an abort with 0 moved", res.Moved, err)
 	}
 	var ver int16
 	var ct []byte

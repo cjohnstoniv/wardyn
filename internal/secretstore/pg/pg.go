@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"time"
 
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5"
@@ -63,6 +64,8 @@ type Store struct {
 	// there (store mode) or seals locally.
 	ext      secretstore.External
 	writeExt bool
+	// extTimeout bounds each call to ext (Deps.ExternalTimeout).
+	extTimeout time.Duration
 	// owner is the secretstore.Store.For namespace this view is scoped to.
 	// "" (the zero value, and New's own result) is the operator namespace —
 	// every Store built before For existed keeps its exact behavior.
@@ -95,6 +98,15 @@ func (s *Store) Name() string {
 		return s.ext.Name()
 	}
 	return "pg"
+}
+
+// ExternalName names the configured external store ("vaultkv", "azurekv"),
+// or "" when there is none.
+func (s *Store) ExternalName() string {
+	if s.ext == nil {
+		return ""
+	}
+	return s.ext.Name()
 }
 
 // StoresExternally describes the external store every write goes to ("Vault
