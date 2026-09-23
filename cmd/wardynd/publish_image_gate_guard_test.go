@@ -112,31 +112,40 @@ func TestCIGreenForSHA_RedSHASkips(t *testing.T) {
 	const sha = "0123456789abcdef0123456789abcdef01234567"
 	const repo = "owner/wardyn"
 	run := func(id, event, status, conclusion, headRepo string) string {
-		return `{"id":` + id + `,"head_sha":"` + sha + `","event":"` + event + `","status":"` + status +
+		return `{"id":` + id + `,"head_sha":"` + sha + `","head_branch":"main","event":"` + event + `","status":"` + status +
 			`","conclusion":` + conclusion + `,"head_repository":{"full_name":"` + headRepo + `"}}`
+	}
+	onRelease := func(r string) string {
+		return strings.Replace(r, `"head_branch":"main"`, `"head_branch":"release/0.7"`, 1)
 	}
 	runs := func(rs ...string) string { return `{"workflow_runs":[` + strings.Join(rs, ",") + `]}` }
 	green := run("1", "push", "completed", `"success"`, repo)
+	// A release fast-forwards the same commit onto main and release/0.7.
+	releasePending := onRelease(run("2", "push", "in_progress", `null`, repo))
 
 	cases := []struct {
 		name   string
 		sha    string
+		branch string
 		out    string
 		ghFail bool
 		want   int
 	}{
-		{"green push run", sha, runs(green), false, 0},
-		{"red push run", sha, runs(run("1", "push", "completed", `"failure"`, repo)), false, 1},
-		{"green run beside a red run", sha, runs(green, run("2", "push", "completed", `"failure"`, repo)), false, 1},
-		{"cancelled run", sha, runs(run("1", "push", "completed", `"cancelled"`, repo)), false, 1},
-		{"run still in progress", sha, runs(run("1", "push", "in_progress", `null`, repo)), false, 1},
-		{"no run at all", sha, runs(), false, 1},
-		{"only a pull request run", sha, runs(run("1", "pull_request", "completed", `"success"`, repo)), false, 1},
-		{"only a fork's run", sha, runs(run("1", "push", "completed", `"success"`, "fork/wardyn")), false, 1},
-		{"run for another commit", sha, strings.Replace(runs(green), sha, strings.Repeat("f", 40), 1), false, 1},
-		{"gh fails", sha, "", true, 2},
-		{"unreadable response", sha, `{"message":"Bad credentials"}`, false, 2},
-		{"not a sha", "main", runs(green), false, 2},
+		{"green push run", sha, "main", runs(green), false, 0},
+		{"red push run", sha, "main", runs(run("1", "push", "completed", `"failure"`, repo)), false, 1},
+		{"green run beside a red run", sha, "main", runs(green, run("2", "push", "completed", `"failure"`, repo)), false, 1},
+		{"cancelled run", sha, "main", runs(run("1", "push", "completed", `"cancelled"`, repo)), false, 1},
+		{"run still in progress", sha, "main", runs(run("1", "push", "in_progress", `null`, repo)), false, 1},
+		{"no run at all", sha, "main", runs(), false, 1},
+		{"only a pull request run", sha, "main", runs(run("1", "pull_request", "completed", `"success"`, repo)), false, 1},
+		{"only a fork's run", sha, "main", runs(run("1", "push", "completed", `"success"`, "fork/wardyn")), false, 1},
+		{"run for another commit", sha, "main", strings.Replace(runs(green), sha, strings.Repeat("f", 40), 1), false, 1},
+		{"green on main beside a pending release branch run", sha, "main", runs(green, releasePending), false, 0},
+		{"green only on the release branch", sha, "main", runs(onRelease(green)), false, 1},
+		{"no branch counts every branch's runs", sha, "", runs(green, releasePending), false, 1},
+		{"gh fails", sha, "main", "", true, 2},
+		{"unreadable response", sha, "main", `{"message":"Bad credentials"}`, false, 2},
+		{"not a sha", "main", "main", runs(green), false, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -152,7 +161,7 @@ func TestCIGreenForSHA_RedSHASkips(t *testing.T) {
 			if err := os.WriteFile(outFile, []byte(tc.out), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command("bash", script, tc.sha)
+			cmd := exec.Command("bash", script, tc.sha, tc.branch)
 			cmd.Env = append(os.Environ(),
 				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"GITHUB_REPOSITORY="+repo,

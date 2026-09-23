@@ -13,7 +13,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **`wardynd:latest` is published only from a commit CI passed on.** `publish-image.yml` ran on
   every push to `main` in parallel with CI, so a red commit still became `:latest` — the tag
   desktop installs pull. It now runs after CI completes and publishes only when every CI push run
-  on the commit succeeded (`scripts/ci-green-for-sha.sh`); a manual dispatch on a red commit
+  on the commit, on that branch, succeeded (`scripts/ci-green-for-sha.sh`), so a release branch
+  still running on the same commit does not hold `main` back; a manual dispatch on a red commit
   skips. `:latest` now lags `main` by one CI run (#664).
 
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades

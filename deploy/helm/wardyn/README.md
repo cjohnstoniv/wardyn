@@ -4,7 +4,7 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 
 > **Published automatically — but only for a released version.** CI
 > ([.github/workflows/publish-image.yml](../../../.github/workflows/publish-image.yml))
-> builds and pushes `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
+> builds and pushes `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main`
 > (`:latest`, `:sha-<commit>`); every `vX.Y.Z` release tag is
 > [release.yml](../../../.github/workflows/release.yml)'s job (the bare
 > semver — matching this chart's default `image.tag`, i.e. `Chart.yaml`'s own

@@ -415,8 +415,8 @@ echo "test-desktop-profile: secret.env trust-boundary invariants PASS"
 # ── F113/F184: the enrolment image is disclosed where it is decided ─────────
 #
 # install.sh's default WARDYN_INSTALL_IMAGE is the CONTINUOUS :latest tag
-# publish-image.yml pushes on every merge and never cosign-signs, and it runs
-# AS ROOT to mint the device's age identity. The envelope pins
+# publish-image.yml pushes after CI passes on main and never cosign-signs, and
+# it runs AS ROOT to mint the device's age identity. The envelope pins
 # WARDYN_WARDYND_IMAGE by digest, so a reader of DESKTOP.md would reasonably
 # assume the whole lane is pinned. scripts/check-image-pins.sh pins the console
 # warning; this pins the doc.

@@ -12,9 +12,9 @@ name: Publish wardynd image
 # itself, in parallel with CI, so a red commit still became :latest — and
 # :latest is what deploy/desktop/install.sh and wardyn-desktop.sh pull. Now the
 # `gate` job asks scripts/ci-green-for-sha.sh whether every CI push run on the
-# commit passed, and `publish-image` runs only on a yes. That holds for a manual
-# dispatch too: a dispatch on a red commit skips. :latest therefore lags main by
-# one CI run. A vX.Y.Z release TAG push no
+# commit, on that branch, passed, and `publish-image` runs only on a yes. That
+# holds for a manual dispatch too: a dispatch on a red commit skips. :latest
+# therefore lags main by one CI run. A vX.Y.Z release TAG push no
 # longer triggers this file — that is now .github/workflows/release.yml's job
 # (cosign-signed, all five images this release ships, not wardynd alone). The
 # two used to both fire on the same tag push, racing to publish the identical
@@ -87,9 +87,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # Only the triggering branch's runs: a release fast-forwards the same
+          # commit onto release/X.Y, whose run may still be going. Empty on a
+          # dispatch against a tag ref, which counts every branch's runs.
+          BRANCH: ${{ github.event.workflow_run.head_branch || (github.ref_type == 'branch' && github.ref_name) || '' }}
         run: |
           rc=0
-          scripts/ci-green-for-sha.sh "$SHA" || rc=$?
+          scripts/ci-green-for-sha.sh "$SHA" "$BRANCH" || rc=$?
           case "$rc" in
             0) green=true ;;
             1) green=false; echo "::notice::CI is not green on $SHA; not publishing" ;;
