@@ -303,7 +303,7 @@ func TestResolveUserDrive(t *testing.T) {
 			t.Errorf("error = %v, want the store failure wrapped", err)
 		}
 		w := httptest.NewRecorder()
-		writeDriveError(w, err)
+		writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("writeDriveError(store failure) = %d, want 500", w.Code)
 		}
@@ -365,7 +365,7 @@ func TestResolveUserDrive(t *testing.T) {
 					t.Errorf("error = %v, want a store failure rather than the stale-snapshot refusal", err)
 				}
 				w := httptest.NewRecorder()
-				writeDriveError(w, err)
+				writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 				if w.Code != http.StatusInternalServerError {
 					t.Errorf("writeDriveError(group-tier read failure) = %d, want 500", w.Code)
 				}
@@ -434,7 +434,7 @@ func TestResolveUserDrive(t *testing.T) {
 			t.Fatalf("err = %v, want errGroupsSnapshotStale", err)
 		}
 		w := httptest.NewRecorder()
-		writeDriveError(w, err)
+		writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("writeDriveError(stale) = %d, want 403", w.Code)
 		}
@@ -615,7 +615,7 @@ func TestResolveUserDrive(t *testing.T) {
 			t.Fatalf("err = %v, want errDriveUnmountable", err)
 		}
 		w := httptest.NewRecorder()
-		writeDriveError(w, err)
+		writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusUnprocessableEntity {
 			t.Errorf("writeDriveError(unmountable) = %d, want 422 — the caller is authorized, there is simply nothing to mount", w.Code)
 		}
@@ -640,7 +640,7 @@ func TestResolveUserDrive(t *testing.T) {
 			t.Errorf("err = %v, want the frozen REFUSED_BACKEND shape", err)
 		}
 		w := httptest.NewRecorder()
-		writeDriveError(w, err)
+		writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusUnprocessableEntity {
 			t.Errorf("writeDriveError = %d, want 422", w.Code)
 		}

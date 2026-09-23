@@ -592,7 +592,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 			// internal identifier for a condition a member cannot clear without
 			// being told how. Same 403 as before; a plain store failure still
 			// 500s under this seam's own prefix.
-			writeCeilingErrorPrefixed(w, "list secrets: ", err)
+			writeCeilingErrorPrefixed(w, r, "list secrets: ", err)
 			return
 		}
 	}
