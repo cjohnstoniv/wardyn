@@ -664,11 +664,17 @@ var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended 
 // decisions while the agent is paused; a caller wanting the proxy left alone
 // gets that for free by calling this with only the agent's ref.
 //
-// A substrate that cannot pause without losing state (Kubernetes has no
-// primitive; runsc/Kata pause is UNVERIFIED per Capabilities.Freeze) does not
-// implement this, and a router in front of one returns ErrFreezeUnsupported;
-// the caller then leaves the run running rather than silently no-op a pause
-// nobody can prove happened.
+// A substrate with no pause primitive at all (Kubernetes: stopping a pod is
+// the only lever) does not implement this, and a router in front of one
+// returns ErrFreezeUnsupported; the caller then leaves the run running
+// rather than silently no-op a pause nobody can prove happened.
+//
+// Implementing this interface is NOT itself proof the pause is safe for
+// every runtime the substrate carries: runsc/Kata run inside the Docker
+// substrate, which does implement Freezer, but their pause is UNVERIFIED
+// (Capabilities.Freeze[class] is false for them). The caller MUST check
+// Capabilities.Freeze for the sandbox's confinement class before calling —
+// the interface assertion alone does not gate this.
 type Freezer interface {
 	FreezeSandbox(ctx context.Context, ref string) error
 	ThawSandbox(ctx context.Context, ref string) error

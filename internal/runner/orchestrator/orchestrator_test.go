@@ -514,8 +514,8 @@ func (f *freezingSubstrate) ThawSandbox(_ context.Context, ref string) error {
 // the ref when it implements runner.Freezer, and the route survives (a later
 // kill still finds it). Two substrates and no RefStore, so there is no
 // sole-substrate fallback: a Freeze that dropped the route would fail the
-// kill. A substrate that does not implement Freezer (Kubernetes, or an
-// unverified OCI runtime's substrate) answers ErrFreezeUnsupported.
+// kill. A substrate that does not implement Freezer (Kubernetes) answers
+// ErrFreezeUnsupported.
 func TestOrchestrator_FreezeSandbox(t *testing.T) {
 	ctx := context.Background()
 	vmm := &fakeSubstrate{name: "smolvm", classes: []types.ConfinementClass{types.CC3}, refPrefix: "vm-"}
