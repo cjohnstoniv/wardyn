@@ -17,6 +17,8 @@ package proxy
 //     fetch need read. The receive-pack ADVERTISEMENT is a read too: Azure
 //     DevOps serves it to a read-only credential (measured), so a push is
 //     decided on the pack POST, from the ref updates it carries.
+//   - THE CONTENT RULES (push_rules.go), first for a push: deny, hold for
+//     review, or refuse on an unattended run, before any capability is asked.
 //   - THE CREDENTIAL is the person's bearer, resolved through the same
 //     injector entry the REST lane's MITM uses for this host.
 //
@@ -27,6 +29,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -79,6 +82,23 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			return
 		}
 		push, body = pp, io.MultiReader(bytes.NewReader(head), r.Body)
+		// CONTENT rules, the same step the other two lanes run and on the same
+		// trigger, and BEFORE the capability check below: nobody is asked to
+		// approve policy_bypass for a push the rules refuse, and a push held
+		// for review is decided before any capability hold. A probe that moves
+		// no ref carries nothing to inspect and stays the read it is. What
+		// the pack does not carry cannot be compared with Azure DevOps' trees
+		// (push_forge.go reads GitHub only), so it keeps the strict reading.
+		if len(push.refs) > 0 {
+			inspected, release, ok := p.applyPushRules(w, r, body, slog.String("host", host),
+				func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
+				nil, p.adoPushTarget(host, rest))
+			defer release()
+			if !ok {
+				return
+			}
+			body = inspected
+		}
 		// A command section that moves no ref is git's auth probe ahead of a
 		// large pack (remote-curl's probe_rpc): it writes nothing, so it is a
 		// read and never raises, or spends, an approval meant for the push.
@@ -116,13 +136,27 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	}
 	registerHeaderCredential(hdr.value)
 
+	// A lane that enforces content rules asks for a pack it can read: the
+	// same no-thin rewrite, on the same trigger, the other two lanes make
+	// (push_advert.go). Without it a shallow clone's push is thin and every
+	// one of them is refused as uninspectable.
+	noThin := p.noThinAdvert(r, verb)
 	resp, ok := p.forwardBrokeredGit(w, r, host, rest, body, ruleSourceADOGit, ruleSourceADOGitDenied,
-		func(out *http.Request) { out.Header.Set(hdr.name, hdr.value) })
+		func(out *http.Request) {
+			if noThin {
+				out.Header.Set("Accept-Encoding", "identity")
+			}
+			out.Header.Set(hdr.name, hdr.value)
+		})
 	if !ok {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if !p.refuseADOGitUpstream(w, r, host, rest, push, resp) {
+	switch {
+	case p.refuseADOGitUpstream(w, r, host, rest, push, resp):
+	case noThin:
+		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
+	default:
 		relay(w, resp)
 	}
 }
