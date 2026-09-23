@@ -2605,6 +2605,32 @@ residuals particular to holding:
   Azure DevOps' trees cannot be read (the forge comparison reads GitHub only),
   so what the pack does not carry keeps the strict reading on this lane, as on
   any non-GitHub forge.
+- **The Azure DevOps REST door is governed too, and fails closed.** The same
+  per-person credential writes content through REST: Git Pushes - Create
+  carries files inline. Until this was closed a REST push adding
+  `.github/workflows/exfil.yml` under `deny_paths: [".github/**"]` answered
+  `201`, and its protected-ref escalation was one the run's owner may decide.
+  With push rules set the REST gate (`Proxy.governADOContent`, before the
+  capability check) reads a push body path by path through
+  `adoscope.ParsePush` — the same matcher, deny before review, the same
+  `push_content` hold and unattended refusal — and refuses every other route
+  `adoscope.ClassifyContent` finds putting content on a branch without naming
+  it (import, server-side commit/merge/cherry-pick/revert, fork sync, annotated
+  tag, a ref pointed at a commit, a pull-request completion or auto-complete, a
+  wiki page, a TFVC check-in), and any push body it cannot read whole. What
+  remains: a REST push's content is judged by the paths it names, and a folder
+  path is matched as though anything could lie beneath it; the list of
+  content-writing routes is closed, so a route Azure DevOps adds later is
+  outside it until someone adds it — writes the capability catalogue does not
+  recognise are already refused as unclassified.
+- **The GitHub App and `git_pat` lanes have no REST door.** Their brokered
+  credentials never reach the sandbox, their broker routes admit only the three
+  smart-HTTP endpoints (`validGitRest`), `api.github.com` is denied to a
+  brokered run's egress (`confineGitBrokerEgress`), and the broker's own GitHub
+  API calls are `GET`s (`forgeRepo.get`). A `github_token` grant with no
+  repository declared is not brokered at all — the helper hands its token to
+  the sandbox, and neither the git nor the REST door is governed on it, the
+  same standing ceiling as `ssh_key`.
 
 ### Hold-lane settings sources: user scope is still agent-writable
 

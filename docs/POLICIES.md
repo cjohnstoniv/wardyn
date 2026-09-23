@@ -62,7 +62,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes — since 0.7.2, one field governs BOTH brokers: the GitHub-App lane and the `git_pat` lane — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
-| `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
+| `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -822,6 +822,20 @@ rules are set, because a lane that enforces rules must ask for a pack it can
 read — the agent images clone shallow, and without it the rules would refuse
 nearly every legitimate push.
 
+**Every door, not only git's.** A lane's credential can reach a repository by
+more than `git push`, so the rules govern each door that credential opens:
+
+| Lane | Git door | REST doors that write repository content |
+|---|---|---|
+| GitHub App (`github_token`) | `/wardyn/gh/` | **None reachable.** The broker route admits only the three smart-HTTP endpoints, the installation token never leaves the proxy, `api.github.com` is denied to a brokered run's egress, and the broker's own GitHub API calls are reads (`GET`). |
+| `git_pat` | `/wardyn/git/<host>/` | **None reachable.** The route admits only the three smart-HTTP endpoints and the PAT never leaves the proxy. (With the broker switched `off`, or on the `ssh_key` lane, the credential is in the sandbox and no rule applies — the Review-rail warning below.) |
+| Azure DevOps Entra | `/wardyn/git/<host>/` | The REST gate on `dev.azure.com` / `<org>.visualstudio.com`. **Git Pushes - Create** (`POST …/_apis/git/repositories/{repo}/pushes`) is read path by path — every `commits[].changes[].item.path`, and `sourceServerItem` for a rename — and denied, held or passed exactly like a git push. Every other route that puts content on a branch without naming its paths is **refused** (`brokered:git:push-uninspectable`) while the run has push rules: an import request; a server-side commit, merge, cherry-pick, revert or suggestion; a fork sync; an annotated tag; Update Refs pointing a ref at a commit; a pull request completed or set to auto-complete; a wiki page (a wiki is a git repository); a TFVC check-in. A REST push body the gate cannot read whole — a repeated key, a change with no path, a path with an empty, `.` or `..` segment or a backslash, one over the 256 KiB the gate peeks — is refused the same way. Push the change with git instead. |
+
+The REST door is judged before the capability check, as the git door is. A
+REST push names no commit until Azure DevOps makes one, so a held REST push's
+approval carries in `commits` the SHA-256 of the request body instead: an
+approval covers exactly the bytes that were asked about.
+
 **What the rules see, and what they do not.** Read this before authoring a
 pattern.
 
@@ -960,7 +974,8 @@ match always wins: a path both lists match is refused and nothing is asked.
   for a host the run's per-person Azure DevOps grant covers), where the rules
   run before the capability check — nobody is asked for `code_write` or
   `policy_bypass` on a push the rules refuse. There the card's `acts_as_kind`
-  is `ado_entra` and its label is the person whose sign-in the push uses.
+  is `ado_entra` and its label is the person whose sign-in the push uses. The
+  lane's REST door holds the same way — see **Every door, not only git's**.
 
 `deny_new_executables` and `max_file_size_mib` are a later change. Whoever adds
 a size rule must **decide** what an unmeasurable file means rather than compare
