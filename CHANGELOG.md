@@ -170,19 +170,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   guards over the result, and names every PR that breaks them. It also flags
   any open PR stacked on a branch that is no longer open (merged or closed) and
   so should have been retargeted to `main`.
-- **Boot secrets from files: a `<VAR>_FILE` twin for every secret-carrying `wardynd` setting
-  (#596).** `WARDYN_PG_DSN`, `WARDYN_PG_MIGRATE_DSN`, `WARDYN_ADMIN_TOKEN`, `WARDYN_AGE_KEY`,
-  `WARDYN_OIDC_CLIENT_SECRET`, `WARDYN_DIRECTORY_CLIENT_SECRET`, `WARDYN_AUDIT_SINKS` and
-  `WARDYN_ORG_ENROLMENT_TOKEN` each accept a `_FILE` path. `wardynd` reads the file once at boot,
-  so a Vault Agent injector, the Secrets Store CSI driver or a projected Secret volume can deliver
-  the value without it entering the process environment. Setting a variable both ways refuses boot,
-  and the chart refuses to render it. Boot is also refused on an unreadable or empty file, a group-
-  or world-writable one, or one wardynd's own non-root uid owns that others can read. The error
-  names the variable and the path, never the content. One trailing newline is trimmed. The chart's new `secretFiles.enabled`
-  (off by default) mounts the Secrets it already wires as files and renders no `secretKeyRef` env.
-  A `WARDYN_*_FILE` in `env`/`extraEnv` counts as wired in every render check, and
-  `extraVolumes`/`extraVolumeMounts` carry a CSI volume. Examples are in `docs/OPERATIONS.md`,
-  "Secrets from files (Vault Agent / CSI)".
 - **Admins can tell a refused person what to do next (#484).** The People step has a new
   "When someone can't sign in" card: a short plain-text message (up to 1,000 characters) and an
   optional `http(s)` link, saved as the site-config fields `sign_in_help_text` and
@@ -310,23 +297,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `device.enrolment_token.revoke` — admin or `security_admin`, and on the CLI as `wardyn device
   enrol-token-list` / `enrol-token-revoke <id>`. A leaked token no longer stays redeemable for its
   full 72 hours.
-- **Secret-carrying boot settings no longer have to live in environment variables (#596).** Cloud
-  posture scanners flag a pod with a secret in its env, and a "secrets delivered at runtime"
-  control rules it out. The `_FILE` twins and the chart's `secretFiles.enabled` close both.
-  `threatmodel/THREAT-MODEL.md` residual #49 now records a related risk: `WARDYN_AGE_KEY` guards
-  every stored credential **and** up to four boot keys in the same store (the identity signing
-  key always; the OIDC session, UI-sandbox session and SSH host keys when those features are on). The age key plus a read of the database
-  therefore yields all of them. Splitting those keys is planned for 0.8.
 
-- **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
-  view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
-  The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `member`,
-  and it never gains the admin override: the sign-in re-stamp leaves its role alone, a CHECK
-  refuses a capped row that reads `admin`, and the SSH gateway refuses the override for it
-  (`ssh.auth` reason "capped key (registered in the user view): no admin override"). It still
-  reaches its owner's own runs. `ssh_key.add` carries `capped: true` for such a key. Keys
-  registered outside the user view behave exactly as before, and `POST /me/tokens` still refuses
-  in the mode. See `docs/SSH.md#bounds`.
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
