@@ -273,6 +273,17 @@ type Store interface {
 	// screen and the OIDC login-time merge's whole data need.
 	ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error)
 
+	// User types (migration 0069_user_types). CreateUserType and
+	// UpdateUserType return ErrConflict on a taken id or name; DeleteUserType
+	// returns ErrConflict while the type is built in or still named by a
+	// subject row (UserTypeReferences counts those).
+	ListUserTypes(ctx context.Context) ([]types.UserType, error)
+	GetUserType(ctx context.Context, id string) (types.UserType, error)
+	CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
+	UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
+	UserTypeReferences(ctx context.Context, id string) (int, error)
+	DeleteUserType(ctx context.Context, id string) error
+
 	// Governance profiles and their subject assignments (migration 0052,
 	// governance.go): the assignable ceiling that replaces Config.DefaultPolicy
 	// for a principal an admin has named. ARE part of Store, for the third time
