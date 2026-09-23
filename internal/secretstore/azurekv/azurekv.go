@@ -12,11 +12,12 @@
 //
 //	stem = <prefix>-<kind>-<hex(SHA-256(enc(owner, name)))[:32]>   derived from the row
 //	name = <stem>-g<gen>        gen: base36 of the unix second the generation began
-//	ref  = <vault-host>/<name>#<n>     n: versions written into this generation
+//	ref  = <vault-host>/<name>#<n>     n: versions the name held after the write
 //
 // Key Vault cannot delete a previous version, so every Put disables the
-// versions before it, and after WARDYN_AZURE_KV_MAX_VERSIONS versions the next
-// Put starts a new generation (a fresh name) and the old one is deleted. The
+// versions before it, and once the name holds WARDYN_AZURE_KV_MAX_VERSIONS
+// versions (the vault's own count; the row's n is only a record) the next Put
+// starts a new generation (a fresh name) and the old one is deleted. The
 // binding that replaces local mode's associated data is the pair vaultkv uses:
 // the stem is DERIVED from the row and a row naming any other is refused; then
 // the value's tags must name the same owner and name.
@@ -225,6 +226,9 @@ type bundle struct {
 	ContentType string            `json:"contentType,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
 	Attributes  attributes        `json:"attributes"`
+	// ScheduledPurgeDate (unix seconds) is when the vault purges a deleted
+	// secret; only the deleted-secrets list carries it.
+	ScheduledPurgeDate int64 `json:"scheduledPurgeDate,omitempty"`
 }
 
 func (b bundle) enabled() bool { return b.Attributes.Enabled == nil || *b.Attributes.Enabled }
@@ -237,27 +241,37 @@ func (s *Store) newGen(old int64) int64 {
 	return max(s.now().Unix(), old+1)
 }
 
-// Put implements secretstore.External. It writes a new version into the
-// row's current generation, or into a new generation when there is none, the
-// generation is full, or createOnly asks for a name nothing holds yet; then it
-// disables every other version of that name. A name held by a DELETED secret
-// (a credential removed and re-added within the vault's retention) is purged
-// and reused when allowed, else skipped for a new generation; Wardyn never
-// recovers a deleted secret.
+// Put implements secretstore.External. It lists the row's current generation,
+// writes a new version into it, then disables the versions that listing held.
+// The listing comes BEFORE the write, so every version it holds is older than
+// the new one: a Put never disables a version a concurrent Put wrote after it,
+// which could leave a row with no enabled version (a definitive refusal). It
+// also catches a version an earlier, failed Put left enabled. The vault's
+// count decides the rollover: a new generation is taken when there is none,
+// the name holds WARDYN_AZURE_KV_MAX_VERSIONS versions, or createOnly asks for
+// a name nothing holds yet. A name held by a DELETED secret (a credential
+// removed and re-added within the vault's retention) is purged and reused when
+// allowed, else skipped for a new generation; Wardyn never recovers a deleted
+// secret.
 func (s *Store) Put(ctx context.Context, owner, name, prev string, value []byte, createOnly bool) (string, error) {
 	if len(value) > maxValue {
 		return "", fmt.Errorf("refused: the value is %d bytes; Key Vault holds at most %d", len(value), maxValue)
 	}
 	var gen int64
-	n := 0
+	var older []bundle // the versions the new one supersedes, listed before it
 	if prev != "" {
 		// A prev that is not this row's own is not reused, and not touched.
-		if _, g, k, err := s.parse(owner, name, prev); err == nil {
-			gen, n = g, k
+		if _, g, _, err := s.parse(owner, name, prev); err == nil {
+			gen = g
+			if !createOnly {
+				if older, err = s.versions(ctx, s.secretName(owner, name, g)); err != nil {
+					return "", err
+				}
+			}
 		}
 	}
-	if gen == 0 || n >= s.maxVersions || createOnly {
-		gen, n = s.newGen(gen), 0
+	if gen == 0 || len(older) >= s.maxVersions || createOnly {
+		gen, older = s.newGen(gen), nil
 	}
 	body := map[string]any{
 		"value":       base64.StdEncoding.EncodeToString(value),
@@ -271,30 +285,29 @@ func (s *Store) Put(ctx context.Context, owner, name, prev string, value []byte,
 				return "", err
 			}
 		}
-		var b bundle
-		_, err := s.c.call(ctx, http.MethodPut, "secrets/"+sn, body, &b)
+		_, err := s.c.call(ctx, http.MethodPut, "secrets/"+sn, body, nil)
 		if statusOf(err) == http.StatusConflict && attempt < 3 {
 			// Purge the deleted secret and reuse the name, or move on.
 			if attempt > 0 || !s.purge || s.purgeDeleted(ctx, sn, true) != nil {
 				gen = s.newGen(gen)
 			}
-			n = 0
+			older = nil
 			continue
 		}
 		if err != nil {
 			return "", err
 		}
-		if err := s.disableOthers(ctx, sn, b.version()); err != nil {
+		if err := s.disable(ctx, sn, older); err != nil {
 			return "", fmt.Errorf("the new value is written to %s, but an earlier version is still enabled (the next save retries): %w", sn, err)
 		}
-		return s.ref(sn, n+1), nil
+		return s.ref(sn, len(older)+1), nil
 	}
 }
 
 // refuseExisting refuses a name that already holds a version: the migrator's
 // guard against writing into a value it did not put there.
 func (s *Store) refuseExisting(ctx context.Context, secretName string) error {
-	var page versionsPage
+	var page listPage
 	status, err := s.c.call(ctx, http.MethodGet, "secrets/"+secretName+"/versions?maxresults=1", nil, &page)
 	if err != nil {
 		return err
@@ -305,7 +318,7 @@ func (s *Store) refuseExisting(ctx context.Context, secretName string) error {
 	return nil
 }
 
-type versionsPage struct {
+type listPage struct {
 	Value    []bundle `json:"value"`
 	NextLink string   `json:"nextLink"`
 }
@@ -315,7 +328,7 @@ func (s *Store) versions(ctx context.Context, secretName string) ([]bundle, erro
 	var all []bundle
 	next := "secrets/" + secretName + "/versions?maxresults=25"
 	for next != "" {
-		var page versionsPage
+		var page listPage
 		status, err := s.c.call(ctx, http.MethodGet, next, nil, &page)
 		if err != nil {
 			return nil, err
@@ -329,17 +342,12 @@ func (s *Store) versions(ctx context.Context, secretName string) ([]bundle, erro
 	return all, nil
 }
 
-// disableOthers disables every enabled version of secretName except keep, so
-// only the value a Get should read stays readable. It also catches a version
-// an earlier, failed Put left enabled.
-func (s *Store) disableOthers(ctx context.Context, secretName, keep string) error {
-	all, err := s.versions(ctx, secretName)
-	if err != nil {
-		return err
-	}
+// disable disables each version in older that is still enabled, so only the
+// value a Get reads stays readable.
+func (s *Store) disable(ctx context.Context, secretName string, older []bundle) error {
 	off := false
-	for _, v := range all {
-		if v.version() == keep || !v.enabled() {
+	for _, v := range older {
+		if !v.enabled() {
 			continue
 		}
 		body := map[string]any{"attributes": attributes{Enabled: &off}}
@@ -455,16 +463,26 @@ func (s *Store) purgeDeleted(ctx context.Context, secretName string, pending boo
 	}
 }
 
-type listPage struct {
-	Value    []bundle `json:"value"`
-	NextLink string   `json:"nextLink"`
+// Walk implements secretstore.External by listing the vault's secrets, then
+// its deleted secrets (metadata only, never a value), and keeping this
+// install's: the prefix, and Wardyn's tags. A deleted one is reported
+// soft-deleted, with the days left before the vault purges it: a value whose
+// purge failed or was withheld stays recoverable by the organisation, and
+// -reconcile says so.
+func (s *Store) Walk(ctx context.Context) ([]secretstore.ExternalEntry, error) {
+	live, err := s.walk(ctx, "secrets?maxresults=25", false)
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := s.walk(ctx, "deletedsecrets?maxresults=25", true)
+	if err != nil {
+		return nil, err
+	}
+	return append(live, deleted...), nil
 }
 
-// Walk implements secretstore.External by listing the vault (SecretList, no
-// values) and keeping this install's secrets: the prefix, and Wardyn's tags.
-func (s *Store) Walk(ctx context.Context) ([]secretstore.ExternalEntry, error) {
+func (s *Store) walk(ctx context.Context, next string, deleted bool) ([]secretstore.ExternalEntry, error) {
 	var out []secretstore.ExternalEntry
-	next := "secrets?maxresults=25"
 	for next != "" {
 		var page listPage
 		status, err := s.c.call(ctx, http.MethodGet, next, nil, &page)
@@ -476,7 +494,11 @@ func (s *Store) Walk(ctx context.Context) ([]secretstore.ExternalEntry, error) {
 			if !strings.HasPrefix(strings.ToLower(sn), s.prefix+"-") || b.Tags[tagFormat] != "v2" {
 				continue
 			}
-			out = append(out, secretstore.ExternalEntry{Owner: b.Tags[tagOwner], Name: b.Tags[tagName], Ref: s.c.host + "/" + strings.ToLower(sn)})
+			e := secretstore.ExternalEntry{Owner: b.Tags[tagOwner], Name: b.Tags[tagName], Ref: s.c.host + "/" + strings.ToLower(sn), SoftDeleted: deleted}
+			if left := time.Unix(b.ScheduledPurgeDate, 0).Sub(s.now()); deleted && b.ScheduledPurgeDate > 0 && left > 0 {
+				e.RecoverableDays = int((left + 24*time.Hour - 1) / (24 * time.Hour))
+			}
+			out = append(out, e)
 		}
 		next = page.NextLink
 	}

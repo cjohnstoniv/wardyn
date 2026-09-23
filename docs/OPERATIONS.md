@@ -4674,7 +4674,7 @@ while a daemon serves; idempotent and resumable.
 #    WARDYN_AGE_KEY set, and restart: new writes go to Vault, old rows still read.
 # 2. Move the rest:
 wardynd -migrate-secrets -to=vaultkv
-#    INFO wardynd: stored secrets migrated to=vaultkv moved=7
+#    INFO wardynd: stored secrets migrated to=vaultkv moved=7 soft_deleted=0
 # 3. Unset WARDYN_AGE_KEY and restart. Boot refuses, naming the command above,
 #    while any local row remains.
 ```
@@ -4727,10 +4727,13 @@ Each value is the base64 of the bytes (content type
 the row's owner and name and refuses a row that points to any other name or
 vault, then refuses a value whose tags name another row. A replace is a new
 **version** of the same name, and every earlier version is **disabled**: Key
-Vault cannot delete old versions. After `WARDYN_AZURE_KV_MAX_VERSIONS` versions
-(default 100, well under the 500 at which Key Vault's backup of a secret
-fails), the next write starts a new generation, a fresh name, and the old
-generation is deleted. Each write is one transaction in the vault's
+Vault cannot delete old versions. A write lists the versions before it writes
+and disables only those, so it never disables a newer one, and writes to one
+credential wait for each other across replicas. Once the name holds
+`WARDYN_AZURE_KV_MAX_VERSIONS` versions (default 100, well under the 500 at
+which Key Vault's backup of a secret fails; the vault's own count decides, not
+the pointer row), the next write starts a new generation, a fresh name, and
+the old generation is deleted. Each write is one transaction in the vault's
 secret-create limit (300 per 10 seconds, shared with key and certificate
 imports), plus a version listing and one update per version it disables.
 
@@ -4766,7 +4769,11 @@ the vault and `login.microsoftonline.com` in `networkPolicy.egress.extra`.
 endpoint that does not answer is transient (each call retried three times
 first, honouring `Retry-After`); a 401 fetches a new token at most once every
 30 s; a 403, a secret that is gone or disabled, or a binding that does not
-match is definitive.
+match is definitive, and so is a token endpoint that refuses wardynd's
+identity (`invalid_client`, `invalid_grant`, `unauthorized_client` or
+`invalid_scope`: a deleted identity, or a removed or mismatched federated
+credential). Revoking wardynd's role at the vault bites at once; removing its
+federated credential bites when it next fetches a token, within the hour.
 
 **Removing a credential, and the erasure horizon.** Removal is a soft delete
 of the secret (every version), then, with `WARDYN_AZURE_KV_PURGE=auto` (the
@@ -4776,9 +4783,12 @@ refused, the secret stays soft-deleted, and the `secret.delete` audit row says
 `purged: false` with `recoverable_days`, the vault's retention (7 to 90 days,
 fixed when the vault was created). `WARDYN_AZURE_KV_PURGE=never` never purges.
 Until then your organisation can recover the value; ask the vault's operators
-to purge it sooner. Wardyn never recovers a deleted secret: a credential
-removed and added again within the retention reuses the name after a purge,
-or takes a new generation. After the purge, what survives is your vault's own
+to purge it sooner. `wardynd -reconcile` lists each soft-deleted value no
+row points to, with the days until the vault purges it (a listing, not a
+failure), and `-migrate-secrets -to=local` counts the old copies it left
+soft-deleted (`soft_deleted` in its log line and `secret.migrate` row). Wardyn
+never recovers a deleted secret: a credential removed and added again within
+the retention reuses the name after a purge, or takes a new generation. After the purge, what survives is your vault's own
 backups. **Backup** in store mode is the Postgres dump plus the vault's.
 
 ## Upgrades

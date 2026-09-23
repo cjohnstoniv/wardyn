@@ -746,3 +746,34 @@ func TestDeleteSecret_AuditSaysWhatTheStoreKept(t *testing.T) {
 		t.Fatal("an operator delete carries secret_owner")
 	}
 }
+
+// rowFailingSecrets is memSecrets whose Put fails as store mode does when the
+// value reached the external store but its row was not written.
+type rowFailingSecrets struct{ *memSecrets }
+
+func (r rowFailingSecrets) For(owner string) secretstore.Store {
+	return rowFailingSecrets{r.memSecrets.For(owner).(*memSecrets)}
+}
+
+func (rowFailingSecrets) Put(context.Context, string, []byte) error {
+	return fmt.Errorf("pg secretstore: put: the new value is live in azurekv, but updating the row failed: %w: %w",
+		secretstore.ErrRowNotWritten, errors.New("row refused"))
+}
+
+// Rule 18: a failure between the store write and the row write is audited, as
+// a secret.write failure with reason "row", and never carries the value.
+func TestPutSecret_RowFailureIsAudited(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	srv.cfg.Secrets = rowFailingSecrets{sec}
+	srv.router = srv.routes()
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+	const value = "npm-row-failure-value-000000"
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/npm-token", admin, `{"value":"`+value+`"}`); w.Code != http.StatusInternalServerError {
+		t.Fatalf("PUT = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	ev := lastAuditEvent(t, h.audit.events, "secret.write")
+	if ev.Outcome != "failure" || ev.Target != "npm-token" || string(ev.Data) != `{"reason":"row"}` {
+		t.Fatalf("secret.write = (%s, %s, %s); want a failure on npm-token with reason row", ev.Outcome, ev.Target, ev.Data)
+	}
+}

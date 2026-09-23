@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -207,6 +208,12 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, []byte(body.Value)); err != nil {
+		if errors.Is(err, secretstore.ErrRowNotWritten) {
+			// Rule 18: the value reached the external store but its row did not,
+			// so the store may already serve it behind this failure.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"secret.write", name, "failure", withSecretOwner(map[string]any{"reason": "row"}, owner, ownerKnown)))
+		}
 		writeServerError(w, r, "store secret", err)
 		return
 	}
@@ -285,6 +292,11 @@ func secretDeleteAuditData(owner string, known bool, rep secretstore.DeleteRepor
 	if rep.RecoverableDays > 0 {
 		data["recoverable_days"] = rep.RecoverableDays
 	}
+	return withSecretOwner(data, owner, known)
+}
+
+// withSecretOwner adds secretOwnerAuditData's fields to data.
+func withSecretOwner(data map[string]any, owner string, known bool) json.RawMessage {
 	if owner != "" {
 		data["secret_owner"] = owner
 		if !known {

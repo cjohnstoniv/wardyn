@@ -75,19 +75,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   identity, never a client secret, and refuses to start without a token. A secret's name is
   derived from a hash of its row's owner and name, one name per credential; a read refuses a row
   that points to any other name or vault, then a value whose tags name another row. A replace is a
-  new version and disables every earlier one (Key Vault cannot delete old versions); after
-  `WARDYN_AZURE_KV_MAX_VERSIONS` (100) the next write starts a fresh name and deletes the old one.
+  new version and disables the versions listed before it (Key Vault cannot delete old versions), so
+  two writes landing together never disable each other's, and store-mode writes to one credential
+  wait for each other across replicas; once the vault holds `WARDYN_AZURE_KV_MAX_VERSIONS` (100)
+  versions of a name, the next write starts a fresh name and deletes the old one.
   A removal soft-deletes the secret and then purges it when the vault allows; when purge
   protection or the role withholds it, the removal still succeeds and `secret.delete` records
   `purged: false` and the vault's `recoverable_days`. A name still held by a deleted secret is
-  purged and reused, or skipped for a new one; Wardyn never recovers a deleted secret. A 429, a
-  5xx or an unreachable token endpoint is transient; a 401 fetches a new token at most every 30 s;
-  a 403, a disabled or missing secret, or a binding mismatch is definitive. A list's `nextLink`
+  purged and reused, or skipped for a new one; Wardyn never recovers a deleted secret. `-reconcile`
+  lists values left soft-deleted, and `-migrate-secrets -to=local` counts them (`soft_deleted`). A
+  429, a 5xx or an unreachable token endpoint is transient; a 401 fetches a new token at most every
+  30 s; a 403, a disabled or missing secret, a binding mismatch, or a token endpoint that refuses
+  wardynd's identity (`invalid_client`, `invalid_grant`, `unauthorized_client`, `invalid_scope`)
+  is definitive. A list's `nextLink`
   is followed only on the same vault, so the bearer token never leaves it. The chart's
   `secretStore.azure.*` values label the pod and annotate the service account for workload
   identity; `-migrate-secrets -to=azurekv|local` and `-reconcile` work as for Vault. In the shared
   store seam, a Put that fails to write its row no longer deletes the value the row already
-  points to. Tested against a fake Key Vault; not yet run against a live one.
+  points to, and is audited (`secret.write` failure, reason `row`). Tested against a fake Key
+  Vault; not yet run against a live one.
 - **Store mode: credentials can live in your organisation's Vault, and Wardyn holds no key
   (#644).** `WARDYN_SECRET_STORE=vaultkv` writes every stored credential to a Vault KV v2 engine
   (OpenBao is a supported endpoint) and keeps only a pointer row in Postgres (`enc_version` 2, no

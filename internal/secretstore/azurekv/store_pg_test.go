@@ -10,11 +10,14 @@ package azurekv
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/google/uuid"
@@ -158,6 +161,67 @@ func TestStoreMode_RolloverRemovesTheOldGeneration(t *testing.T) {
 	}
 }
 
+// Two Puts for one row from two replicas are serialised on the row's lock:
+// the second reaches Key Vault only after the first has written its row, so
+// their writes and disables never interleave.
+func TestStoreMode_PutsForOneRowAreSerialised(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeKV(t)
+	ext := newFakeStore(t, f)
+	a, b := storeMode(t, pool, ext, nil), storeMode(t, pool, ext, nil)
+	ctx := t.Context()
+	if err := a.Put(ctx, "k", []byte("v0")); err != nil {
+		t.Fatal(err)
+	}
+	held, release := make(chan struct{}), make(chan struct{})
+	var puts atomic.Int32
+	f.mu.Lock()
+	f.after = func(r *http.Request) {
+		if r.Method == http.MethodPut && puts.Add(1) == 1 {
+			close(held) // A's version is written; A has not seen the answer
+			<-release
+		}
+	}
+	f.mu.Unlock()
+	errs := make(chan error, 2)
+	go func() { errs <- a.Put(ctx, "k", []byte("a")) }()
+	<-held
+	calls := f.count("")
+	go func() { errs <- b.Put(ctx, "k", []byte("b")) }()
+	// B is waiting on the row's lock, not writing.
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var waiting int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND objsubid=2 AND classid::int8=$1 AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database())`, int64(db.SecretRowLockClass)).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatalf("B never waited on the row lock (%d vault calls made while A was held)", f.count("")-calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := f.count("") - calls; n != 0 {
+		t.Fatalf("B made %d vault calls while A held the row", n)
+	}
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v, err := b.Get(ctx, "k"); err != nil || string(v) != "b" {
+		t.Fatalf("Get = (%q, %v); want the later Put's value", v, err)
+	}
+	sn, _, _, _ := ext.parse("", "k", strings.TrimPrefix(kekID(t, pool, "", "k"), "azurekv:"))
+	if enabled, total := f.liveVersions(sn); enabled != 1 || total != 3 {
+		t.Fatalf("versions: %d enabled of %d; want 1 of 3", enabled, total)
+	}
+}
+
 // Rule 18 with versions: a row that cannot be written removes a NEW name's
 // value, but never the name the row already points to (that would delete the
 // credential the row still reads).
@@ -174,14 +238,14 @@ func TestStoreMode_RowFailureNeverDeletesTheRowsOwnName(t *testing.T) {
 		CREATE TRIGGER refuse_boom BEFORE INSERT OR UPDATE ON secrets FOR EACH ROW WHEN (NEW.name LIKE 'boom%') EXECUTE FUNCTION refuse_boom();`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(ctx, "boom", []byte("second")); err == nil || strings.Contains(err.Error(), "removed again") {
-		t.Fatalf("Put on an existing row with the row refused = %v; want an error that removed nothing", err)
+	if err := s.Put(ctx, "boom", []byte("second")); !errors.Is(err, secretstore.ErrRowNotWritten) || !strings.Contains(err.Error(), "is live") || strings.Contains(err.Error(), "removed again") {
+		t.Fatalf("Put on an existing row with the row refused = %v; want ErrRowNotWritten saying the value is live, removing nothing", err)
 	}
 	if v, err := s.Get(ctx, "boom"); err != nil || string(v) != "second" {
 		t.Fatalf("Get after the failed row update = (%q, %v); want the value the name now holds", v, err)
 	}
-	if err := s.Put(ctx, "boom-new", []byte("v")); err == nil || !strings.Contains(err.Error(), "removed again") {
-		t.Fatalf("Put of a new row with the row refused = %v; want the value removed again", err)
+	if err := s.Put(ctx, "boom-new", []byte("v")); !errors.Is(err, secretstore.ErrRowNotWritten) || !strings.Contains(err.Error(), "removed again") {
+		t.Fatalf("Put of a new row with the row refused = %v; want ErrRowNotWritten, the value removed again", err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -291,15 +355,15 @@ func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
 			t.Fatalf("%d rows are not at enc_version %d", n, wantVersion)
 		}
 	}
-	if n, err := lps.Migrate(ctx, Name, count); err != nil || n != 3 || reads != 3 {
-		t.Fatalf("Migrate to azurekv = (%d, %v), %d reads; want 3 moved, 3 reads", n, err, reads)
+	if res, err := lps.Migrate(ctx, Name, count); err != nil || res.Moved != 3 || reads != 3 {
+		t.Fatalf("Migrate to azurekv = (%d, %v), %d reads; want 3 moved, 3 reads", res.Moved, err, reads)
 	}
 	check(2)
-	if n, err := lps.Migrate(ctx, Name, count); err != nil || n != 0 {
-		t.Fatalf("re-run = (%d, %v), want (0, nil)", n, err)
+	if res, err := lps.Migrate(ctx, Name, count); err != nil || res.Moved != 0 {
+		t.Fatalf("re-run = (%d, %v), want (0, nil)", res.Moved, err)
 	}
-	if n, err := lps.Migrate(ctx, secretstorepg.MigrateLocal, count); err != nil || n != 3 {
-		t.Fatalf("Migrate to local = (%d, %v), want 3", n, err)
+	if res, err := lps.Migrate(ctx, secretstorepg.MigrateLocal, count); err != nil || res.Moved != 3 || res.SoftDeleted != 0 {
+		t.Fatalf("Migrate to local = (%+v, %v), want 3 moved, none left soft-deleted", res, err)
 	}
 	check(1)
 	f.mu.Lock()
@@ -307,6 +371,43 @@ func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
 	f.mu.Unlock()
 	if live+soft != 0 {
 		t.Fatalf("Key Vault still holds %d live and %d deleted secrets after moving back", live, soft)
+	}
+}
+
+// On a vault that withholds purge, a migration back to local leaves each old
+// copy soft-deleted: the result counts them, and -reconcile lists them.
+func TestMigrate_ToLocalWithPurgeWithheldReportsWhatItLeft(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeKV(t)
+	f.purgeForbidden = true
+	ext := newFakeStore(t, f)
+	id, _ := age.GenerateX25519Identity()
+	ctx := t.Context()
+	local, err := secretstore.New("pg", secretstore.Deps{Pool: pool, AgeIdentity: id, External: ext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"a", "b"} {
+		if err := local.Put(ctx, n, []byte("v-"+n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lps := local.(*secretstorepg.Store)
+	if res, err := lps.Migrate(ctx, Name, func(string, string) {}); err != nil || res.Moved != 2 {
+		t.Fatalf("Migrate to azurekv = (%+v, %v)", res, err)
+	}
+	res, err := lps.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {})
+	if err != nil || res.Moved != 2 || res.SoftDeleted != 2 {
+		t.Fatalf("Migrate to local = (%+v, %v); want 2 moved, 2 left soft-deleted", res, err)
+	}
+	rep, err := lps.Reconcile(ctx)
+	if err != nil || len(rep.Dangling)+len(rep.Orphans) != 0 || len(rep.SoftDeleted) != 2 {
+		t.Fatalf("Reconcile = (%+v, %v); want the two soft-deleted copies, no drift", rep, err)
+	}
+	for _, e := range rep.SoftDeleted {
+		if e.RecoverableDays != 90 {
+			t.Fatalf("soft-deleted %+v; want 90 recoverable days", e)
+		}
 	}
 }
 

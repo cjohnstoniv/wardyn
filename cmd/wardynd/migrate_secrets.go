@@ -86,17 +86,25 @@ func migrateMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recorde
 	default:
 		return fmt.Errorf("refusing to migrate: -to must be %q, %q or %q, not %q", vaultkv.Name, azurekv.Name, secretstorepg.MigrateLocal, to)
 	}
-	n, err := ps.Migrate(ctx, to, func(owner, name string) {
+	res, err := ps.Migrate(ctx, to, func(owner, name string) {
 		// One secret.read per value read on the way (design §2.3a.9).
 		emitMaintenanceAudit(ctx, rec, "secret.read", name, map[string]any{"purpose": "migrate", "owner": owner, "to": to})
 	})
-	if n > 0 || err == nil {
-		emitMaintenanceAudit(ctx, rec, "secret.migrate", to, map[string]any{"from": from, "to": to, "count": n})
+	if res.Moved > 0 || err == nil {
+		data := map[string]any{"from": from, "to": to, "count": res.Moved}
+		if res.SoftDeleted > 0 {
+			data["soft_deleted"] = res.SoftDeleted
+		}
+		emitMaintenanceAudit(ctx, rec, "secret.migrate", to, data)
+	}
+	if res.SoftDeleted > 0 {
+		slog.Warn("wardynd: old copies were deleted but not purged; the organisation can recover them until the vault's retention ends (`wardynd -reconcile` lists them)",
+			slog.String("store", from), slog.Int("soft_deleted", res.SoftDeleted))
 	}
 	if err != nil {
 		return err
 	}
-	slog.Info("wardynd: stored secrets migrated", slog.String("to", to), slog.Int("moved", n))
+	slog.Info("wardynd: stored secrets migrated", slog.String("to", to), slog.Int("moved", res.Moved), slog.Int("soft_deleted", res.SoftDeleted))
 	return nil
 }
 
@@ -111,6 +119,13 @@ func reconcileMode(ctx context.Context, ps *secretstorepg.Store) error {
 	}
 	for _, o := range rep.Orphans {
 		fmt.Fprintf(os.Stdout, "value without a pointer: %s (owner %q, name %q)\n", o.Ref, o.Owner, o.Name)
+	}
+	for _, d := range rep.SoftDeleted {
+		left := "until the vault purges it"
+		if d.RecoverableDays > 0 {
+			left = fmt.Sprintf("for %d more days", d.RecoverableDays)
+		}
+		fmt.Fprintf(os.Stdout, "soft-deleted, recoverable by your organisation %s: %s (owner %q, name %q)\n", left, d.Ref, d.Owner, d.Name)
 	}
 	if len(rep.Dangling)+len(rep.Orphans) > 0 {
 		return fmt.Errorf("reconcile: %d pointers without a value, %d values without a pointer; nothing was changed", len(rep.Dangling), len(rep.Orphans))

@@ -47,6 +47,11 @@ var ErrNotFound = errors.New("secretstore: secret not found")
 // store bites at once (design §2.3a.4, K8).
 var ErrUnavailable = errors.New("secretstore: secret store unavailable")
 
+// ErrRowNotWritten marks a store-mode Put whose value reached the external
+// store while its row was not written (design rule 18). The caller audits it:
+// depending on where the value landed, the store may already serve it.
+var ErrRowNotWritten = errors.New("secretstore: the value reached the external store, but its row was not written")
+
 type Store interface {
 	Name() string
 	Put(ctx context.Context, name string, value []byte) error
@@ -170,4 +175,8 @@ func ReportDelete(ctx context.Context, r DeleteReport) {
 // ExternalEntry is one value found in an external store by Walk.
 type ExternalEntry struct {
 	Owner, Name, Ref string
+	// SoftDeleted marks a value the store has deleted but can still recover
+	// (Key Vault's soft delete), for RecoverableDays more days (0: unknown).
+	SoftDeleted     bool
+	RecoverableDays int
 }

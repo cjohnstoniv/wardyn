@@ -28,9 +28,10 @@ import (
 // lists with absolute nextLink paging, soft delete (with an asynchronous
 // "being deleted" window), the deleted-name 409 on set, purge with a 403
 // variant, names that are case-insensitive and [0-9a-zA-Z-]{1,127}, the
-// api-version query, bearer tokens, forced status codes, and the Entra v2
-// token endpoint (federated client assertion) and IMDS. A call to recover
-// fails the test: Wardyn never recovers a deleted secret.
+// api-version query, bearer tokens, forced status codes, the deleted-secrets
+// list, and the Entra v2 token endpoint (federated client assertion) and
+// IMDS. A call to recover fails the test: Wardyn never recovers a deleted
+// secret.
 type fakeKV struct {
 	t   *testing.T
 	srv *httptest.Server
@@ -56,10 +57,23 @@ type fakeKV struct {
 	pageSize        int
 	nextLinkHost    string // non-empty: nextLinks point here instead
 	nextToken, tick int
+
+	tokenForce []tokenAnswer // answers to the next token exchanges, one each
+	// after, when set, runs once a vault call has been answered and before
+	// the answer reaches wardynd: a test holds a caller there to replay an
+	// interleaving.
+	after func(r *http.Request)
 }
 
 type kvSecret struct {
-	versions []*kvVersion // creation order
+	versions  []*kvVersion // creation order
+	deletedAt int64        // unix seconds, once soft-deleted
+}
+
+// tokenAnswer is a forced token-endpoint answer: a status and OAuth error code.
+type tokenAnswer struct {
+	status int
+	code   string
 }
 
 type kvVersion struct {
@@ -79,7 +93,15 @@ func newFakeKV(t *testing.T) *fakeKV {
 		retention: 90, tokens: map[string]bool{}, assertions: map[string]bool{"projected-sa-1": true},
 		tenant: "tenant-1", client: "client-1", expiresIn: 3600, pageSize: 25,
 	}
-	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.serve(w, r)
+		f.mu.Lock()
+		after := f.after
+		f.mu.Unlock()
+		if after != nil {
+			after(r) // the answer is still buffered: wardynd has not seen it
+		}
+	}))
 	t.Cleanup(f.srv.Close)
 	return f
 }
@@ -149,6 +171,8 @@ func (f *fakeKV) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case len(seg) == 1 && seg[0] == "secrets" && r.Method == http.MethodGet:
 		f.list(w, r)
+	case len(seg) == 1 && seg[0] == "deletedsecrets" && r.Method == http.MethodGet:
+		f.listDeleted(w, r)
 	case len(seg) >= 2 && seg[0] == "secrets":
 		name := strings.ToLower(seg[1])
 		if !kvNameRE.MatchString(seg[1]) {
@@ -173,6 +197,12 @@ func (f *fakeKV) exchange(w http.ResponseWriter, r *http.Request) {
 	}
 	f.exchanges++
 	f.lastAssertion = r.PostForm.Get("client_assertion")
+	if len(f.tokenForce) > 0 {
+		a := f.tokenForce[0]
+		f.tokenForce = f.tokenForce[1:]
+		kvReply(w, a.status, map[string]any{"error": a.code, "error_description": "forced"})
+		return
+	}
 	if r.PostForm.Get("grant_type") != "client_credentials" ||
 		r.PostForm.Get("client_assertion_type") != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" ||
 		r.PostForm.Get("scope") != "https://vault.azure.net/.default" || r.PostForm.Get("client_id") != f.client {
@@ -286,6 +316,7 @@ func (f *fakeKV) secret(w http.ResponseWriter, r *http.Request, name string, res
 			return
 		}
 		delete(f.secrets, name)
+		s.deletedAt = time.Now().Unix()
 		f.deleted[name] = s
 		if f.deleteLag > 0 {
 			f.deleting[name] = f.deleteLag
@@ -373,6 +404,26 @@ func (f *fakeKV) list(w http.ResponseWriter, r *http.Request) {
 	for _, n := range names {
 		s := f.secrets[n]
 		items = append(items, f.item(n, s.versions[len(s.versions)-1], false))
+	}
+	f.page(w, r, items)
+}
+
+// listDeleted answers GET /deletedsecrets: one item per soft-deleted secret
+// (its id under /secrets/, its tags, when the vault purges it), no value.
+func (f *fakeKV) listDeleted(w http.ResponseWriter, r *http.Request) {
+	names := make([]string, 0, len(f.deleted))
+	for n := range f.deleted {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	items := make([]map[string]any, 0, len(names))
+	for _, n := range names {
+		s := f.deleted[n]
+		m := f.item(n, s.versions[len(s.versions)-1], false)
+		m["recoveryId"] = f.id("deletedsecrets", n)
+		m["deletedDate"] = s.deletedAt
+		m["scheduledPurgeDate"] = s.deletedAt + int64(f.retention)*86400
+		items = append(items, m)
 	}
 	f.page(w, r, items)
 }

@@ -121,14 +121,45 @@ func statusOf(err error) int {
 	return -1
 }
 
-// tokenError is a failure to get an Entra token. At runtime it is transient
-// (design §2.3a.3): the identity is still configured, the token endpoint just
-// did not answer usefully. At boot it fails the start.
+// tokenError is a failure to get an Entra token. At boot it fails the start.
+// At runtime it is transient (design §2.3a.3) unless the endpoint refused the
+// identity itself (oauthError.revoked): a deleted or revoked federated
+// credential is definitive at once, as a revoked vault role is (rule 21).
 type tokenError struct{ err error }
 
 func (e *tokenError) Error() string { return "entra token: " + e.err.Error() }
 func (e *tokenError) Unwrap() []error {
+	var oe *oauthError
+	if errors.As(e.err, &oe) && oe.revoked() {
+		return []error{e.err}
+	}
 	return []error{secretstore.ErrUnavailable, e.err}
+}
+
+// oauthError is a token endpoint's non-2xx answer: its status and OAuth error
+// code, and the first line of its description (never the request).
+type oauthError struct {
+	status     int
+	code, desc string
+}
+
+func (e *oauthError) Error() string {
+	if e.code == "" {
+		return fmt.Sprintf("token endpoint %d", e.status)
+	}
+	return fmt.Sprintf("token endpoint %d: %s: %s", e.status, e.code, e.desc)
+}
+
+// revoked reports a refusal of the identity or its grant (RFC 6749 §5.2, as
+// Entra answers a deleted app, a removed federated credential or a subject
+// that no longer matches), which no retry fixes. A 429, a 5xx and every other
+// code stay transient.
+func (e *oauthError) revoked() bool {
+	switch e.code {
+	case "invalid_client", "invalid_grant", "unauthorized_client", "invalid_scope":
+		return e.status == http.StatusBadRequest || e.status == http.StatusUnauthorized
+	}
+	return false
 }
 
 // httpsURL parses setting's value and refuses plain http:// to anything but
@@ -370,10 +401,7 @@ func (c *client) tokenCall(ctx context.Context, hc *http.Client, build func(cont
 	}
 	_ = json.Unmarshal(raw, out)
 	if status/100 != 2 {
-		if out.Error != "" {
-			return fmt.Errorf("token endpoint %d: %s: %s", status, out.Error, firstLine(out.Description))
-		}
-		return fmt.Errorf("token endpoint %d", status)
+		return &oauthError{status: status, code: out.Error, desc: firstLine(out.Description)}
 	}
 	return nil
 }

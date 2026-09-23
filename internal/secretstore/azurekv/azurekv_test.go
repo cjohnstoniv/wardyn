@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,16 +155,6 @@ func TestClassification(t *testing.T) {
 			t.Errorf("forced %v: Get = %v; transient want %v", c.force, err, c.transient)
 		}
 	}
-	// A token endpoint that stops answering is transient at runtime.
-	s.c.mu.Lock()
-	s.c.refreshAt = time.Time{}
-	s.c.mu.Unlock()
-	f.mu.Lock()
-	f.assertions = map[string]bool{}
-	f.mu.Unlock()
-	if _, err := s.Get(t.Context(), "", "k", ref); !errors.Is(err, secretstore.ErrUnavailable) {
-		t.Fatalf("Get with the token endpoint refusing = %v; want transient", err)
-	}
 	// A network failure is transient.
 	f.srv.Close()
 	s.c.mu.Lock()
@@ -172,6 +163,44 @@ func TestClassification(t *testing.T) {
 	s.c.mu.Unlock()
 	if _, err := s.Get(t.Context(), "", "k", ref); !errors.Is(err, secretstore.ErrUnavailable) {
 		t.Fatalf("Get with the vault down = %v; want transient", err)
+	}
+}
+
+// At runtime a token endpoint that fails is transient, but one that refuses
+// the identity itself (a deleted or revoked federated credential) is
+// definitive at once, as a revoked vault role is (rule 21).
+func TestTokenEndpoint_RevokedIdentityIsDefinitive(t *testing.T) {
+	f := newFakeKV(t)
+	s := newFakeStore(t, f)
+	ref, err := s.Put(t.Context(), "", "k", "", []byte("v"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy := func(status int, code string) []tokenAnswer { // every attempt, retries included
+		return []tokenAnswer{{status, code}, {status, code}, {status, code}, {status, code}}
+	}
+	for _, c := range []struct {
+		answers   []tokenAnswer
+		transient bool
+	}{
+		{[]tokenAnswer{{401, "invalid_client"}}, false},
+		{[]tokenAnswer{{400, "invalid_grant"}}, false},
+		{[]tokenAnswer{{400, "unauthorized_client"}}, false},
+		{[]tokenAnswer{{400, "invalid_scope"}}, false},
+		{busy(503, "temporarily_unavailable"), true},
+		{busy(429, ""), true},
+		{busy(500, "invalid_client"), true},
+	} {
+		s.c.mu.Lock()
+		s.c.refreshAt = time.Time{} // the next call exchanges
+		s.c.mu.Unlock()
+		f.mu.Lock()
+		f.tokenForce = c.answers
+		f.mu.Unlock()
+		_, err := s.Get(t.Context(), "", "k", ref)
+		if err == nil || errors.Is(err, secretstore.ErrUnavailable) != c.transient {
+			t.Errorf("token endpoint %v: Get = %v; transient want %v", c.answers[0], err, c.transient)
+		}
 	}
 }
 
@@ -317,6 +346,71 @@ func TestPut_DisablesEveryPreviousVersion(t *testing.T) {
 	}
 	if v, err := s.Get(ctx, "alice", "pat", ref); err != nil || string(v) != "five" {
 		t.Fatalf("Get = (%q, %v)", v, err)
+	}
+}
+
+// Two Puts for one row interleaved: A writes, B writes and disables, then A
+// disables. A must never disable B's newer version: that left no version
+// enabled, and the row a definitive refusal until the next save.
+func TestPut_ConcurrentWritersNeverDisableANewerVersion(t *testing.T) {
+	f := newFakeKV(t)
+	s := newFakeStore(t, f)
+	ctx := t.Context()
+	ref, err := s.Put(ctx, "alice", "pat", "", []byte("v0"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, release := make(chan struct{}), make(chan struct{})
+	var puts atomic.Int32
+	f.mu.Lock()
+	f.after = func(r *http.Request) {
+		if r.Method == http.MethodPut && puts.Add(1) == 1 {
+			close(held) // A's version is written; A has not seen the answer
+			<-release
+		}
+	}
+	f.mu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Put(ctx, "alice", "pat", ref, []byte("a"), false)
+		done <- err
+	}()
+	<-held
+	if _, err := s.Put(ctx, "alice", "pat", ref, []byte("b"), false); err != nil {
+		t.Fatalf("B's Put = %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("A's Put = %v", err)
+	}
+	sn, _, _, _ := s.parse("alice", "pat", ref)
+	if enabled, total := f.liveVersions(sn); enabled != 1 || total != 3 {
+		t.Fatalf("after the interleaving: %d enabled of %d; want 1 of 3", enabled, total)
+	}
+	if v, err := s.Get(ctx, "alice", "pat", ref); err != nil || string(v) != "b" {
+		t.Fatalf("Get = (%q, %v); want the newest value", v, err)
+	}
+}
+
+// The vault's own version count decides the rollover, not the row's "#<n>": a
+// database writer that keeps resetting n cannot keep a generation growing
+// toward Key Vault's 500-version backup limit.
+func TestPut_TheVaultsCountDecidesTheRollover(t *testing.T) {
+	f := newFakeKV(t)
+	s := newFakeStore(t, f, func(c *Config) { c.MaxVersions = 2 })
+	ctx := t.Context()
+	r1, _ := s.Put(ctx, "", "k", "", []byte("a"), false)
+	r2, err := s.Put(ctx, "", "k", r1, []byte("b"), false)
+	if err != nil || !strings.HasSuffix(r2, "#2") {
+		t.Fatalf("second Put = (%q, %v)", r2, err)
+	}
+	reset := secretstore.RefObject(r2) + "#1"
+	r3, err := s.Put(ctx, "", "k", reset, []byte("c"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secretstore.RefObject(r3) == secretstore.RefObject(r2) || !strings.HasSuffix(r3, "#1") {
+		t.Fatalf("Put after the row's count was reset = %q; want a new generation, the vault holding 2", r3)
 	}
 }
 
@@ -479,6 +573,27 @@ func TestWalk_ListsThisInstallAndStaysOnTheVault(t *testing.T) {
 	if len(got) != 3 || !found[[2]string{"bob", "pat"}] || !found[[2]string{"", "wardyn-session-key"}] {
 		t.Fatalf("Walk = %+v; want this install's three", got)
 	}
+	// A value deleted but not purged is still reported, as soft-deleted.
+	f.mu.Lock()
+	f.purgeForbidden = true
+	f.mu.Unlock()
+	ref, _ := s.Put(ctx, "bob", "old", "", []byte("v"), false)
+	if err := s.Delete(ctx, "bob", "old", ref); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Walk(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var soft []secretstore.ExternalEntry
+	for _, e := range got {
+		if e.SoftDeleted {
+			soft = append(soft, e)
+		}
+	}
+	if len(got) != 4 || len(soft) != 1 || soft[0].Owner != "bob" || soft[0].Name != "old" || soft[0].RecoverableDays != 90 {
+		t.Fatalf("Walk after a delete the vault did not purge = %+v; want bob's old one soft-deleted, 90 days left", got)
+	}
 
 	thief := newFakeKV(t)
 	f.mu.Lock()
@@ -515,5 +630,22 @@ func TestCheck_ReadsMetadataOnly(t *testing.T) {
 	f.mu.Unlock()
 	if err := s.Check(ctx, "", "k", ref); err == nil {
 		t.Fatal("Check accepted a disabled latest version")
+	}
+	// A vault operator re-enables an OLDER version: Get still reads the newest
+	// (disabled, a 403), so Check must still refuse.
+	f.mu.Lock()
+	sec.versions[0].enabled = true
+	f.mu.Unlock()
+	if err := s.Check(ctx, "", "k", ref); err == nil {
+		t.Fatal("Check accepted an older enabled version while the newest is disabled")
+	}
+	// Key Vault's created is in whole seconds: two versions of one second are
+	// a tie, and it goes to the enabled one (the newest, after a Put).
+	f.mu.Lock()
+	sec.versions[0].enabled, sec.versions[1].enabled = false, true
+	sec.versions[0].created = sec.versions[1].created
+	f.mu.Unlock()
+	if err := s.Check(ctx, "", "k", ref); err != nil {
+		t.Fatalf("Check with two same-second versions, the later enabled = %v", err)
 	}
 }
