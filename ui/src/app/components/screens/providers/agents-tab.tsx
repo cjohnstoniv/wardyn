@@ -32,7 +32,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { readableDiff } from "../../../lib/readable-diff";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { useRegisterUnsaved } from "../../../lib/unsaved-registry";
-import { useWriteDropped } from "../../../lib/reauth";
+import { useWriteDropped } from "../../../lib/use-write-dropped";
 import { REAUTH_DIALOG } from "../../../lib/reauth-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import {
@@ -573,7 +573,7 @@ export function AgentsTab({
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [saving, setSaving] = React.useState(false);
   // #483: a save of this screen's was refused when the session ended.
-  const [writeDropped, clearWriteDropped] = useWriteDropped();
+  const [writeDropped, clearWriteDropped] = useWriteDropped("agent-providers");
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [savedElsewhere, setSavedElsewhere] = React.useState(false);
 

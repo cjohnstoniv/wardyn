@@ -17,9 +17,30 @@ const TOKEN_KEY = "wardyn_admin_token";
 // Auth token + 401 handling
 // #483: a 401 on a console that WAS signed in keeps the page mounted and opens
 // a sign-in dialog over it (App.tsx), so the handler needs no path to return
-// to — only whether the refused request was a WRITE, because a save that hit
-// the expiry is never re-sent and the screen that made it has to say so.
-let _unauthorized: ((write: boolean) => void) | null = null;
+// to — only whether the refused request was a WRITE, and whose Save it was: a
+// save that hit the expiry is never re-sent, and the screen that made it has
+// to say so.
+export interface Refused {
+  write: boolean;
+  /** The owning screen's id, when the request was that screen's Save (WfetchInit.save). */
+  save?: string;
+}
+let _unauthorized: ((refused: Refused) => void) | null = null;
+
+// #483: while the console is signed out mid-page — the dialog or the
+// read-only bar — no write leaves this tab. Whoever holds a session by then
+// (another tab can have signed in as someone else) must never receive one
+// person's draft; the write is refused here, unsent, and reported as a 401 so
+// the dialog asks again. Reads still go out: only the dialog's own principal
+// check can end the hold (App.tsx sets it from the reauth phase).
+let _signedOutHold = false;
+export function setSignedOutHold(on: boolean): void {
+  _signedOutHold = on;
+}
+
+/** RequestInit plus `save`: the owning screen's id when this request is that
+ *  screen's Save, so a refused one is named beside that Save and nowhere else. */
+export type WfetchInit = RequestInit & { save?: string };
 
 // The full sign-in screen's notice for a session that ended (an amber
 // warning, not the error box). wfetch cannot tell an expired SSO session from
@@ -53,7 +74,7 @@ export function setToken(token: string | null, remember = false): void {
   }
 }
 
-export function onUnauthorized(fn: (write: boolean) => void): void {
+export function onUnauthorized(fn: (refused: Refused) => void): void {
   _unauthorized = fn;
 }
 
@@ -158,9 +179,15 @@ async function drainBody(res: Response): Promise<void> {
 
 export async function wfetch(
   path: string,
-  init: RequestInit = {},
+  { save, ...init }: WfetchInit = {},
   timeoutMs: number = WFETCH_TIMEOUT_MS,
 ): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const refused: Refused = { write: method !== "GET" && method !== "HEAD", save };
+  if (refused.write && _signedOutHold) {
+    _unauthorized?.(refused);
+    throw new HttpError(401, "Unauthorized");
+  }
   const headers = new Headers(init.headers);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -211,8 +238,7 @@ export async function wfetch(
     // The 401 body is thrown over, never handed to a caller — drain it here or
     // the rejected request stays open on its connection (see drainBody).
     await drainBody(res);
-    const method = (init.method ?? "GET").toUpperCase();
-    _unauthorized?.(method !== "GET" && method !== "HEAD");
+    _unauthorized?.(refused);
     throw new HttpError(401, "Unauthorized");
   }
   return res;

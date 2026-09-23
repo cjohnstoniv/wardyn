@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getToken, onUnauthorized, setToken, wfetch } from "./core";
+import { getToken, onUnauthorized, setSignedOutHold, setToken, wfetch } from "./core";
 
 // F6-F8 — a REAL 401 means the bearer token wfetch just sent was rejected (an
 // expired/revoked admin token, or a stale one from another session). Today's
@@ -67,18 +67,42 @@ describe("wfetch — a real 401 clears the stored admin token", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  // #483: the handler learns whether the refused request was a WRITE — a save
-  // that hit the expiry is never re-sent, so the screen that made it has to
-  // say so once the person is signed in again. A read is not a write.
-  it("#483: the handler is told whether the refused request was a write", async () => {
+  // #483: the handler learns whether the refused request was a WRITE, and —
+  // only for a request marked as a screen's Save — whose. A save that hit the
+  // expiry is never re-sent, so that screen, and no other, has to say so.
+  it("#483: the handler is told whether the refused request was a write, and whose Save", async () => {
     const handler = vi.fn();
     onUnauthorized(handler);
     fetchMock.mockResolvedValue(new Response("", { status: 401 }));
     await expect(wfetch("/runs")).rejects.toBeTruthy();
-    expect(handler).toHaveBeenLastCalledWith(false);
+    expect(handler).toHaveBeenLastCalledWith({ write: false, save: undefined });
     fetchMock.mockResolvedValue(new Response("", { status: 401 }));
-    await expect(wfetch("/workspace-providers", { method: "PUT", body: "{}" })).rejects.toBeTruthy();
-    expect(handler).toHaveBeenLastCalledWith(true);
+    await expect(wfetch("/policies/grade", { method: "POST", body: "{}" })).rejects.toBeTruthy();
+    expect(handler).toHaveBeenLastCalledWith({ write: true, save: undefined });
+    fetchMock.mockResolvedValue(new Response("", { status: 401 }));
+    await expect(wfetch("/workspace-providers", { method: "PUT", body: "{}", save: "providers" })).rejects.toBeTruthy();
+    expect(handler).toHaveBeenLastCalledWith({ write: true, save: "providers" });
+  });
+
+  // #483: signed out mid-page, no write leaves the tab — whoever holds a
+  // session by then (another tab can have signed in as someone else) must
+  // never receive the page's draft. Reads still go out.
+  it("#483: the signed-out hold refuses every write unsent, and lets reads through", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    setSignedOutHold(true);
+    try {
+      await expect(wfetch("/workspace-providers", { method: "PUT", body: "{}", save: "providers" })).rejects.toMatchObject({
+        status: 401,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(handler).toHaveBeenLastCalledWith({ write: true, save: "providers" });
+      fetchMock.mockResolvedValue(new Response("[]", { status: 200 }));
+      await expect(wfetch("/runs")).resolves.toBeTruthy();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      setSignedOutHold(false);
+    }
   });
 
   // Live repro (found via e2e auth.spec.ts, not this file): App.tsx's mount

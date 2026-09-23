@@ -26,10 +26,10 @@ vi.mock("./components/screens/runs", async () => {
   const core = await import("./lib/api/core");
   const { usePoll } = await import("./lib/use-poll");
   const { useRegisterUnsaved } = await import("./lib/unsaved-registry");
-  const { useWriteDropped } = await import("./lib/reauth");
+  const { useWriteDropped } = await import("./lib/use-write-dropped");
   const copy = await import("./lib/reauth-copy");
   function Dropped() {
-    const [dropped] = useWriteDropped();
+    const [dropped] = useWriteDropped("note");
     return dropped ? <p>{copy.REAUTH_DIALOG.WRITE_DROPPED}</p> : null;
   }
   function RunsScreen() {
@@ -41,8 +41,15 @@ vi.mock("./components/screens/runs", async () => {
       <div>
         <p>at {pathname}</p>
         <input aria-label="Note" value={text} onChange={(e) => setText(e.target.value)} />
-        <button type="button" onClick={() => void core.wfetch("/stub-save", { method: "PUT", body: "{}" }).catch(() => {})}>
+        <button
+          type="button"
+          onClick={() => void core.wfetch("/stub-save", { method: "PUT", body: "{}", save: "note" }).catch(() => {})}
+        >
           Save note
+        </button>
+        {/* A write that is not a Save (a background grade, say). */}
+        <button type="button" onClick={() => void core.wfetch("/stub-grade", { method: "POST", body: "{}" }).catch(() => {})}>
+          Grade note
         </button>
         {mockState.claim && <Dropped />}
       </div>
@@ -219,7 +226,7 @@ describe("App — a session that ends mid-page (#483)", () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
-  it("Not now: a read-only bar with Copy and Sign in; a later 401 keeps the bar, not the dialog", async () => {
+  it("Not now: a read-only bar with Copy and Sign in; a later read's 401 keeps the bar, not the dialog", async () => {
     await lapseMidPage();
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Not now" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -232,6 +239,70 @@ describe("App — a session that ends mid-page (#483)", () => {
     expect(screen.getByText(REAUTH_BAR.BODY)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: REAUTH_BAR.CTA }));
     await screen.findByRole("dialog");
+  });
+
+  it("under the bar a Save sends nothing and asks again", async () => {
+    await lapseMidPage();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const before = count("PUT /api/v1/stub-save");
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    await screen.findByRole("dialog");
+    expect(count("PUT /api/v1/stub-save")).toBe(before);
+  });
+
+  it("another tab signed in as someone else: the bar's Save submits nothing, and signing in reloads", async () => {
+    await lapseMidPage();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // The shared cookie / remembered token now answers as B.
+    Object.assign(daemon, { dead: false, me: { ...ME, principal: "someone-else" } });
+    const puts = count("PUT /api/v1/stub-save");
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    await screen.findByRole("dialog");
+    expect(count("PUT /api/v1/stub-save")).toBe(puts);
+    // A read that answers 200 as B does not resume the page either.
+    await act(async () => {
+      await wfetch("/runs");
+    });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await signInWithToken();
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(count("PUT /api/v1/stub-save")).toBe(puts);
+  });
+
+  it("a refused write that was not a Save never claims one was dropped", async () => {
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await user.type(await screen.findByLabelText("Note"), "hello");
+    daemon.dead = true;
+    await user.click(screen.getByRole("button", { name: "Grade note" }));
+    await screen.findByRole("dialog");
+    const warning = vi.spyOn(toast, "warning").mockImplementation(() => "id");
+    await signInWithToken();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByText(REAUTH_DIALOG.WRITE_DROPPED)).toBeNull();
+    expect(warning).not.toHaveBeenCalled();
+  });
+
+  it("a dropped save is forgotten when its screen goes away — no other screen shows it", async () => {
+    const warning = vi.spyOn(toast, "warning").mockImplementation(() => "id");
+    await lapseMidPage();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(screen.getByRole("link", { name: /^Approvals/ }));
+    await waitFor(() => expect(screen.queryByLabelText("Note")).toBeNull());
+    await user.click(screen.getByRole("button", { name: REAUTH_BAR.CTA }));
+    await screen.findByRole("dialog");
+    await signInWithToken();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(screen.getByRole("link", { name: /^Runs/ }));
+    await screen.findByLabelText("Note");
+    expect(screen.queryByText(REAUTH_DIALOG.WRITE_DROPPED)).toBeNull();
+    expect(warning).not.toHaveBeenCalled();
   });
 
   it("an outage while signing in is not a sign-out", async () => {

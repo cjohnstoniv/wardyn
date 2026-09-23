@@ -14,7 +14,7 @@ import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { getToken, onUnauthorized, probeAuth, SESSION_ENDED_REASON, setToken } from "./lib/api/core";
+import { getToken, onUnauthorized, probeAuth, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
 // From setup-gate, NOT setup-screen: the screen re-exports this, but importing it
@@ -401,12 +401,18 @@ export default function App() {
   // Any HTTP 401. H1: it also fires for the cold mount probe (no session ever
   // established this tab), which is the gate's business, not the dialog's.
   React.useEffect(() => {
-    onUnauthorized((write) => {
+    onUnauthorized((refused) => {
       if (signingOutRef.current) return;
-      if (authRef.current === "authed") lapse(write);
-      else setAuth("unauthed");
+      if (authRef.current !== "authed") return setAuth("unauthed");
+      // Held from this request on, not from the next render: no write may
+      // slip out between the 401 and the dialog (core.ts setSignedOutHold).
+      setSignedOutHold(true);
+      lapse(refused);
     });
   }, [lapse]);
+  // …and released only when the lapse ends: the same person resumed, or the
+  // console was signed out and reset.
+  React.useEffect(() => setSignedOutHold(lapsed), [lapsed]);
   React.useEffect(() => {
     if (reloadTo !== null) window.location.assign(reloadTo);
   }, [reloadTo]);
@@ -597,6 +603,9 @@ export default function App() {
                 // logout's own 401 (a session already dead) and any read still
                 // in flight must open neither the dialog nor the gate's notice.
                 signingOutRef.current = true;
+                // The logout is the one write the signed-out hold lets through:
+                // it ends a session, it submits nothing of the page.
+                setSignedOutHold(false);
                 if (!(await health.logout())) {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,

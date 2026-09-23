@@ -35,7 +35,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { readableDiff } from "../../../lib/readable-diff";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { useRegisterUnsaved } from "../../../lib/unsaved-registry";
-import { useWriteDropped } from "../../../lib/reauth";
+import { useWriteDropped } from "../../../lib/use-write-dropped";
 import { REAUTH_DIALOG } from "../../../lib/reauth-copy";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
@@ -70,7 +70,7 @@ export function ProvidersScreen() {
   const [tab, setTab] = React.useState<Tab>("git");
   const [saving, setSaving] = React.useState(false);
   // #483: a save of this screen's was refused when the session ended.
-  const [writeDropped, clearWriteDropped] = useWriteDropped();
+  const [writeDropped, clearWriteDropped] = useWriteDropped("providers");
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [savedElsewhere, setSavedElsewhere] = React.useState(false);
   // Stays on the page as an amber note until the NEXT save (Q8, drawn as (b))

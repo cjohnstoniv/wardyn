@@ -134,7 +134,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       reauth.clearWriteDropped();
     }
     onResumed(me);
-    reauth.resume();
+    reauth.setPhase("none");
   };
 
   const startPoll = (giveUp: () => boolean, onGiveUp: () => void, onLive?: () => void) => {
@@ -204,13 +204,13 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     stopPoll();
     setStatus("idle");
     setTokenValue("");
-    reauth.notNow();
+    reauth.setPhase("bar");
   };
 
   const goToRuns = () => {
     if (narrowed) onResumed(narrowed);
     reauth.clearWriteDropped();
-    reauth.resume();
+    reauth.setPhase("none");
     navigate("/runs", { replace: true });
   };
 
@@ -239,7 +239,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
           <span>{REAUTH_BAR.BODY}</span>
           <div className="ml-auto flex gap-2">
             {copyButton}
-            <Button type="button" size="sm" onClick={reauth.open}>
+            <Button type="button" size="sm" onClick={() => reauth.setPhase("dialog")}>
               {REAUTH_BAR.CTA}
             </Button>
           </div>

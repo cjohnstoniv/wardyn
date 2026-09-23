@@ -55,6 +55,9 @@ export const TOKEN_LABEL = "Admin token";
 export const TOKEN_REJECTED = "That admin token was rejected. Check the value and try again.";
 export const SSO_SIGN_IN = "Sign in with SSO";
 
+// The signed-out warning and the error box: one shape, two tones.
+const NOTE_BOX = "flex items-start gap-2 rounded-md border px-3 py-2 text-xs";
+
 // The OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
 // redirects a user-actionable login denial to "/?auth_error=<code>" instead
 // of dead-ending the browser on a bare http.Error text page — but a redirect
@@ -286,7 +289,7 @@ export function SignIn({
           {reason && (
             <div
               role="status"
-              className="mb-4 flex items-start gap-2 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning"
+              className={`mb-4 ${NOTE_BOX} border-warning/30 bg-warning-subtle text-warning`}
             >
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               <span>{reason}</span>
@@ -356,7 +359,7 @@ export function SignIn({
           {error && (
             <div
               role="alert"
-              className="mt-3 flex items-start gap-2 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger"
+              className={`mt-3 ${NOTE_BOX} border-danger/30 bg-danger-subtle text-danger`}
             >
               <AlertCircle className="mt-0.5 size-4 shrink-0" />
               <span>{error}</span>
