@@ -5,7 +5,7 @@ package pg
 
 import "github.com/cjohnstoniv/wardyn/internal/secretstore"
 
-// Self-register the age-encrypted Postgres store as the default secret-store
+// Self-register the envelope-encrypted Postgres store as the default secret-store
 // seam impl, so a blank import (cmd/wardynd) makes "pg" selectable.
 func init() {
 	secretstore.Register("pg", func(d secretstore.Deps) (secretstore.Store, error) {
