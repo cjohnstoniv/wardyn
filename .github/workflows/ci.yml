@@ -82,11 +82,21 @@ jobs:
       # Covers every Go suite this job produced: unit/, docker/ (the -tags docker
       # suite, via cover-check) and union/ (the coverage floor's merged profile).
       - name: Upload Go test reports
+        id: upload_go_test_reports
         if: always()
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: go-test-reports
           path: test/reports/go/**
+      - name: Say so if go-test-reports did not upload
+        if: always() && steps.upload_go_test_reports.outcome == 'failure'
+        run: echo "::warning title=Reports missing::go-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
 
   # ── docs: mermaid diagram gate ────────────────────────────────────────────
   # Validate every fenced mermaid diagram in the public docs (syntax + label-
@@ -186,11 +196,21 @@ jobs:
       - name: Build UI bundle
         run: make ui
       - name: Upload UI test reports
+        id: upload_ui_test_reports
         if: always()
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ui-test-reports
           path: test/reports/ui/**
+      - name: Say so if ui-test-reports did not upload
+        if: always() && steps.upload_ui_test_reports.outcome == 'failure'
+        run: echo "::warning title=Reports missing::ui-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
 
   # ── web UI: Playwright e2e against a seeded none-runner backend ────────────
   # Real wardynd + Postgres + the `none` runner serving the built UI, seeded with
@@ -231,13 +251,23 @@ jobs:
       - name: Run Playwright UI e2e (fresh seed per spec)
         run: make test-e2e-ui
       - name: Upload Playwright report
+        id: upload_playwright_report
         if: always()
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: playwright-report
           path: |
             ui/playwright-report/**
             ui/test-results/**
+      - name: Say so if playwright-report did not upload
+        if: always() && steps.upload_playwright_report.outcome == 'failure'
+        run: echo "::warning title=Reports missing::playwright-report did not upload; this job's result stands on its tests, but the reports are not attached to this run."
 
   # ── deploy: Helm chart lint + render ──────────────────────────────────────
   # The Helm chart is one of the two blessed deploy paths; lint + template-render
@@ -612,11 +642,21 @@ jobs:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
         run: make test-race-pg
       - name: Upload PG test reports
+        id: upload_pg_test_reports
         if: always()
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pg-test-reports
           path: test/reports/go/pg/**
+      - name: Say so if pg-test-reports did not upload
+        if: always() && steps.upload_pg_test_reports.outcome == 'failure'
+        run: echo "::warning title=Reports missing::pg-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
 
   # ── supply-chain: trivy image scan (OS + language packages) ───────────────
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
@@ -713,13 +753,19 @@ jobs:
   #     ACTUAL shipped builds (-tags docker: runner/docker + envbuild; -tags
   #     k8s: the k8s confinement substrate) are covered, not just the tagless
   #     subset that a default build sees.
-  #   gitleaks — scans the FULL git history (hence fetch-depth: 0, which the
-  #     other gates simply ignore). `make gitleaks` runs the gitleaks CLI, NOT
-  #     gitleaks-action: the action's default scan range is only the triggering
-  #     push/PR diff even with fetch-depth: 0, which silently made the "full
-  #     history" claim false. Do not swap back without fixing its scan range.
+  #   gitleaks — scans this branch's own FULL git history (hence fetch-depth: 0,
+  #     which the other gates simply ignore). `make gitleaks` runs the gitleaks
+  #     CLI, NOT gitleaks-action: the action's default scan range is only the
+  #     triggering push/PR diff even with fetch-depth: 0, which silently made
+  #     the "full history" claim false. Do not swap back without fixing its
+  #     scan range. `--log-opts="HEAD --full-history"` (Makefile:gitleaks) keeps
+  #     the scan to commits reachable from THIS branch — gitleaks' unscoped
+  #     default also walks every other fetched branch, so one branch's finding
+  #     used to red every unrelated PR and main alike (#372/G6).
   #     Accepted test/dev-fixture secrets are allowlisted by commit fingerprint
-  #     in .gitleaksignore (gitleaks' native mechanism), not by path/regex.
+  #     in .gitleaksignore (gitleaks' native mechanism); a fixture whose value
+  #     changes every commit (and so churns a fresh fingerprint each time) is
+  #     path-scoped in .gitleaks.toml's [allowlist] instead — see that file.
   #   licenses — asciinema is a subprocess tool, not a Go dep, so it is not
   #     checked here.
   # THIRD-PARTY-NOTICES.md + licenses/texts/ must match what regeneration produces.

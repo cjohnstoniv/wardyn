@@ -75,6 +75,62 @@ async function mockRecordingMeta(
   });
 }
 
+// #459 — a deployment that has turned recording off states so in visible
+// text, not only a `title` tooltip: the true-empty state's own title/body,
+// and a disabled search field with its own helper line once there's a
+// (historical) library to search over.
+test.describe("Recordings — disabled-recording reasons are visible text (#459)", () => {
+  async function mockRecordingDisabled(page: Page): Promise<void> {
+    await page.route("**/healthz", async (route: Route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.components = { ...json.components, recording: { selected: "none", source: "disabled" } };
+      await route.fulfill({ response, json });
+    });
+  }
+
+  // Zero runs at all (never producible by this harness's 9 real fixtures, so
+  // the list is replaced outright) — the OTHER empty state, "None of your
+  // runs have a recording yet", keeps its own e2e pin above untouched.
+  test("the true-empty state (no runs at all) names 'No recordings yet' visibly, as a proper title + body", async ({
+    page,
+  }) => {
+    await page.route(RUNS_LIST_GLOB, async (route: Route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+    });
+    // Not openRecordings(): its own "Recordings" heading assertion is a
+    // substring match that this state's OWN heading, "No recordings yet",
+    // also satisfies — ambiguous by design once both exist on screen.
+    await gotoConsole(page);
+    await navToRoute(page, "/recordings");
+
+    await expect(page.getByRole("heading", { name: "No recordings yet", exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Recordings appear once a run's terminal session is captured."),
+    ).toBeVisible();
+  });
+
+  test("with a historical library, the search field is disabled and states why beneath it", async ({ page }) => {
+    await mockRecordingDisabled(page);
+    await mockRecordingMeta(page, {
+      "e2e fixture 0": { bytes: 1, durationSec: 1 },
+      "e2e fixture 1": { bytes: 1, durationSec: 1 },
+      "e2e fixture 2": { bytes: 1, durationSec: 1 },
+      "e2e fixture 4": { bytes: 1, durationSec: 1 },
+      "e2e fixture 7": { bytes: 1, durationSec: 1 },
+    });
+    await openRecordings(page);
+
+    const search = page.getByPlaceholder(/Search tasks, repos, run IDs/);
+    await expect(search).toBeVisible();
+    await expect(search).toBeDisabled();
+    await expect(
+      page.getByText("Session recording is disabled on this deployment — there is nothing to search."),
+    ).toBeVisible();
+  });
+});
+
 test.describe("Recordings library", () => {
   test("renders the header, the run-list-alone description and a refresh action", async ({ page }) => {
     await openRecordings(page);

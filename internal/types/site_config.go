@@ -159,6 +159,16 @@ type SiteConfig struct {
 	// key carries the stored value forward, an explicit {} clears it — which is
 	// what makes the agent roster MDM-deliverable to a laptop.
 	AgentProviders *AgentProviders `json:"agent_providers,omitempty"`
+	// SignInHelpText and SignInHelpURL are the admin's own "what to do next",
+	// shown on the sign-in page under the four refusals a person cannot clear
+	// alone (no role, a disallowed email domain, too many groups, a missing
+	// email claim). PUBLIC by design: the anonymous /healthz publishes both,
+	// so they must name a request process, never internal systems. The text is
+	// plain text (at most 1,000 characters, no control characters); the URL is
+	// http(s) only. An absent key carries the stored value forward on PUT
+	// /site-config, like the provider blocks above.
+	SignInHelpText string `json:"sign_in_help_text,omitempty"`
+	SignInHelpURL  string `json:"sign_in_help_url,omitempty"`
 	// EffectiveScmHosts is READ-ONLY and SERVER-OWNED: the one spelling of
 	// "which git hosts does this deployment actually admit" — ScmHosts MINUS
 	// every host a present provider row claims, UNION the hosts of every ENABLED

@@ -35,6 +35,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Network: upstream proxy and egress redirects](#network-upstream-proxy-and-egress-redirects)
 - [Toolchain-fidelity environment](#toolchain-fidelity-environment)
 - [Recommended builds on compose](#recommended-builds-on-compose)
+- [Secrets from files (Vault Agent / CSI)](#secrets-from-files-vault-agent--csi)
 - [Rotating the age key](#rotating-the-age-key)
 - [Upgrades](#upgrades)
 - [Kubernetes: day-2](#kubernetes-day-2)
@@ -2125,6 +2126,36 @@ widening). Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
 
+### When everyone is an admin, and what a refused person is told
+
+**The everyone-is-an-admin warning.** With SSO configured, a person nobody has
+mapped derives `admin` only when there is **neither** a role map (the chart's
+`WARDYN_OIDC_ROLE_MAP` or a People-step row) **nor** an admin list (the operator
+allowlist, `WARDYN_OIDC_OPERATOR_EMAILS`). That one state — and only that one —
+grades the setup checklist's "Who is an admin" row `warn`, holds the console in
+the People step, and shows every admin a banner above every page until a mapping
+or an admin list exists. An admin list alone is enough: an unmatched person then
+derives `member`. Members see neither.
+
+**Request-access help (`sign_in_help_text`, `sign_in_help_url`).** Two optional
+SiteConfig fields, edited on the People step ("When someone can't sign in") or
+through `PUT /site-config`. The sign-in page shows them under Wardyn's own
+sentence — never instead of it — on the four refusals a person cannot clear
+alone: no role, an email domain that isn't allowed, too many groups to list, and
+a missing `email_verified` claim. Timeouts and configuration errors get nothing.
+**Both are public by design:** the anonymous `/healthz` publishes them, because
+the reader has, by definition, not signed in — so name your request process, not
+your internal systems. The text is plain text (at most 1,000 characters; no
+line breaks, control characters, line/paragraph separators or invisible format
+characters such as bidi overrides and zero-width spaces; quotes are fine) and is
+rendered as text, never markup. The link must be an `http://` or `https://`
+address with a real host name — no spaces, no `user:pass@`, none of those
+hidden characters, a query string is fine — and always reads "Request access".
+Every write records both values in the clear on `site_config.write`. A write outside those bounds is refused with a 400 naming the
+field, and a stored value that no longer passes is dropped from `/healthz`
+rather than published. Like the provider blocks, a body that does not name a
+field carries the stored value forward; name it as `""` to clear it.
+
 ### Every denial that isn't a 404
 
 (This section is the source of record for `authz.denied`'s `reason` values;
@@ -2162,7 +2193,7 @@ admin walking the member path, not an incident.
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
-| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyMemberGovernance`), since it runs at sandbox boot unattended the way exec does. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
@@ -4545,6 +4576,151 @@ An agent CLI is present there only if the repo's own devcontainer installs it; a
 agent run on an image without one fails at the CLI, visibly, rather than being
 silently patched.
 
+## Secrets from files (Vault Agent / CSI)
+
+Every secret-carrying `wardynd` boot setting has a `<VAR>_FILE` twin that holds
+a **path** instead of the value: `WARDYN_PG_DSN_FILE`,
+`WARDYN_PG_MIGRATE_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_AGE_KEY_FILE`,
+`WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`,
+`WARDYN_AUDIT_SINKS_FILE` and `WARDYN_ORG_ENROLMENT_TOKEN_FILE`
+([ENV.md](ENV.md)). Use them when a control requires
+secrets delivered at runtime (Vault Agent injector, Secrets Store CSI driver,
+projected volumes), or when a posture scanner flags secret env vars.
+
+How `wardynd` reads them (`resolveSecretFiles`, `cmd/wardynd/secret_file.go`):
+
+- **Once, at boot.** A rotated file takes effect on the next restart, the same
+  as a changed env var.
+- **Both forms set refuses boot**, naming both variables. There is no
+  precedence.
+- **An unreadable, empty, group- or world-writable file refuses boot**, naming
+  the variable and the path. The content is never logged or echoed. The mode
+  is checked on the opened file, so the file checked is the file read.
+- **One trailing newline is trimmed** (`\n` or `\r\n`). Anything else in the
+  file is part of the value.
+- **Other-readable is refused only on a file wardynd's own non-root uid
+  owns.** That is the hand-made host file, and `chmod 640` fixes it (under
+  Vault Agent, set `agent-inject-perms-<name>`). Other-readable files that a
+  supported mechanism produces are allowed: a kubelet Secret volume
+  (root-owned `0440` under `fsGroup`), a Secrets Store CSI file (root-owned
+  `0644`, readable by a non-root process only through the other-read bit) and
+  Vault Agent's default (`0644`, owned by the agent's uid). This is why the
+  rule differs from `WARDYN_DAEMON_PROXY_SECRET`'s 0600 rule. Scope the mount
+  to the wardynd container.
+
+On Kubernetes, `secretFiles.enabled=true` delivers the chart's own Secrets this
+way with no other change (chart README, "Boot secrets as files"). Both examples
+below replace the Kubernetes Secret entirely. They use generic names: Vault at
+`https://vault.example:8200`, a Vault role `wardyn` bound to the chart's
+ServiceAccount, and a KV v2 secret at `secret/data/wardyn/boot` with keys
+`pg_dsn`, `admin_token` and `age_key`. Both leave `postgres.dsn.secretRef.name`
+empty (it has a non-empty default), so the DSN comes only from the file.
+
+**Vault Agent injector.** The injector writes each secret to `/vault/secrets/`.
+`agent-pre-populate-only` runs the agent as an init container only, which is
+enough because wardynd reads once at boot.
+
+```yaml
+podAnnotations:
+  vault.hashicorp.com/agent-inject: "true"
+  vault.hashicorp.com/agent-pre-populate-only: "true"
+  vault.hashicorp.com/service: "https://vault.example:8200"
+  vault.hashicorp.com/role: "wardyn"
+  vault.hashicorp.com/agent-inject-secret-pg-dsn: "secret/data/wardyn/boot"
+  vault.hashicorp.com/agent-inject-template-pg-dsn: |
+    {{- with secret "secret/data/wardyn/boot" }}{{ .Data.data.pg_dsn }}{{ end }}
+  vault.hashicorp.com/agent-inject-perms-pg-dsn: "0440"
+  vault.hashicorp.com/agent-inject-secret-admin-token: "secret/data/wardyn/boot"
+  vault.hashicorp.com/agent-inject-template-admin-token: |
+    {{- with secret "secret/data/wardyn/boot" }}{{ .Data.data.admin_token }}{{ end }}
+  vault.hashicorp.com/agent-inject-perms-admin-token: "0440"
+  vault.hashicorp.com/agent-inject-secret-age-key: "secret/data/wardyn/boot"
+  vault.hashicorp.com/agent-inject-template-age-key: |
+    {{- with secret "secret/data/wardyn/boot" }}{{ .Data.data.age_key }}{{ end }}
+  vault.hashicorp.com/agent-inject-perms-age-key: "0440"
+postgres:
+  dsn:
+    secretRef:
+      name: ""
+env:
+  WARDYN_PG_DSN_FILE: /vault/secrets/pg-dsn
+  WARDYN_ADMIN_TOKEN_FILE: /vault/secrets/admin-token
+  WARDYN_AGE_KEY_FILE: /vault/secrets/age-key
+networkPolicy:
+  egress:
+    extra:
+      # The agent runs inside the wardynd pod, so the pod's egress policy
+      # applies to it. Narrow this to your Vault address.
+      - ports: [{port: 8200, protocol: TCP}]
+```
+
+The injector's Kubernetes auth needs a ServiceAccount token in the pod, and
+the chart turns automount off. Either set `serviceAccount.automount=true`, or
+mount a projected token through `extraVolumes` and name that volume in
+`vault.hashicorp.com/agent-service-account-token-volume-name`.
+
+**Secrets Store CSI driver** (Vault provider shown; other providers take the same
+chart values). The driver mounts the files from the node, so the pod's
+NetworkPolicy and ServiceAccount automount do not apply.
+
+```yaml
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: wardyn-boot
+spec:
+  provider: vault
+  parameters:
+    vaultAddress: "https://vault.example:8200"
+    roleName: "wardyn"
+    objects: |
+      - objectName: "pg-dsn"
+        secretPath: "secret/data/wardyn/boot"
+        secretKey: "pg_dsn"
+      - objectName: "admin-token"
+        secretPath: "secret/data/wardyn/boot"
+        secretKey: "admin_token"
+      - objectName: "age-key"
+        secretPath: "secret/data/wardyn/boot"
+        secretKey: "age_key"
+```
+
+```yaml
+extraVolumes:
+  - name: boot-secrets-csi
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: wardyn-boot
+extraVolumeMounts:
+  - name: boot-secrets-csi
+    mountPath: /mnt/secrets-store
+    readOnly: true
+postgres:
+  dsn:
+    secretRef:
+      name: ""
+env:
+  WARDYN_PG_DSN_FILE: /mnt/secrets-store/pg-dsn
+  WARDYN_ADMIN_TOKEN_FILE: /mnt/secrets-store/admin-token
+  WARDYN_AGE_KEY_FILE: /mnt/secrets-store/age-key
+```
+
+The chart counts an `env`/`extraEnv` `_FILE` entry as that secret being wired.
+The auth and age-key render checks pass. Naming it beside the chart's own
+source (`auth.adminToken.*`, `postgres.dsn.*`, `secrets.ageKey*`) is refused
+at render, as it would be at boot, and so is naming both `WARDYN_X` and
+`WARDYN_X_FILE`. The file path itself is not a secret, which
+is why it can sit in `env`.
+
+**Compose.** `deploy/compose/docker-compose.yaml` still passes the plain
+variables, and `WARDYN_ADMIN_TOKEN` falls back to the demo token when it is
+empty. A `_FILE` beside a non-empty plain variable refuses boot. Before you use a
+`_FILE` twin, set the plain variable to `""` under `environment:` in a compose
+override file. Blanking it in `.env` does not work, because the `:-` default
+fills an empty value.
+
 ## Rotating the age key
 
 Each stored secret is an envelope (`internal/secretstore/pg`, since 0.7.12): the
@@ -4617,6 +4793,16 @@ WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
 #    Compose: rewrite the .env line. Helm: update the Secret's age-key entry.
 docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 ```
+
+**With `WARDYN_AGE_KEY_FILE` on Kubernetes**, the key file is a read-only
+Secret, CSI or Vault Agent mount, and the rotation cannot replace it in place.
+Rotate against a writable copy instead. Scale wardynd to 0, then in a one-off
+pod (or on a host with the DSN) copy the mounted key to a scratch file you own
+(`umask 077; cp /etc/wardyn/secrets/age-key /tmp/age.key`). Run
+`WARDYN_AGE_KEY_FILE=/tmp/age.key wardynd -rotate-age-key /tmp/age.key`. Then
+write the new key into the Secret, or into the Vault/CSI source it comes from,
+before you scale back up. Until the source holds the new key, every restart
+reads the retired one and fails closed.
 
 Verify the same way the restore runbook does — a row count proves nothing about
 decryptability, so launch a run against a workspace that depends on a stored
