@@ -541,6 +541,18 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 // secrets.ageKeyFromSecret over the postgres.dsn.secretRef Secret's `age-key`
 // entry, and secrets.ageKeySecretRef.name for a separate Secret), and the
 // console's own remedy has to name them.
+// In store mode there is no local key to be durable: the age-key row gives
+// way to store_external, which names the store (design §3).
+func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
+	chk := secretStoreCheck("Vault at vault.example:8200", true)
+	if chk.ID != "store_external" || chk.Status != "ok" || !strings.Contains(chk.Detail, "Vault at vault.example:8200") {
+		t.Fatalf("store mode row = %+v", chk)
+	}
+	if got := secretStoreCheck("", false); got.ID != "age_key" || got.Status != "warn" {
+		t.Fatalf("local mode row = %+v, want the age-key warning unchanged", got)
+	}
+}
+
 func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	if fix := ageKeyCheck(true).Fix; fix != "" {
 		t.Errorf("durable arm carries a Fix (%q) — an ok row has nothing to fix", fix)
@@ -711,7 +723,7 @@ var setupCheckBlockingStatus = map[string]string{
 // Blocking decision recorded here must fail the build, not default quietly
 // to non-blocking.
 var setupCheckNeverBlocks = map[string]bool{
-	"env_builder": true, "k8s_egress_containment": true, "age_key": true,
+	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true,
 	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
@@ -781,6 +793,7 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
+	assertSetupCheckBlocking(t, secretStoreCheck("Vault at vault.example:8200", true))
 
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{}, nil))
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{UpstreamProxySecretRef: "x"}, map[string]bool{}))

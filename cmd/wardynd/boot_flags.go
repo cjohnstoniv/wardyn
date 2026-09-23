@@ -270,6 +270,13 @@ type bootFlags struct {
 	// turns them on; a stray WARDYN_ROTATE_AGE_KEY left in a compose .env would
 	// rotate the store on EVERY boot. See rotateAgeKeyMode (rekey.go).
 	rotateAgeKey *string
+	// migrateSecrets, migrateTo and reconcile are the store-mode maintenance
+	// modes (migrate_secrets.go); like rotateAgeKey they have NO env pair.
+	migrateSecrets *bool
+	migrateTo      *string
+	reconcile      *bool
+	// vault configures the Vault KV v2 external store (secret_store.go).
+	vault vaultFlags
 
 	// allowMultiInstance is the runtime twin of the Helm chart's
 	// allowMultiReplica: it waives the single-instance boot lock
@@ -467,6 +474,12 @@ func parseBootFlags() *bootFlags {
 		rotateAgeKey: flag.String("rotate-age-key", "", "MAINTENANCE MODE, daemon must be STOPPED: mint a new age identity, rewrap every stored secret's data key from WARDYN_AGE_KEY's key to it in ONE transaction, "+
 			"replace the key file at `path` (previous kept as <path>.bak), then exit. Serves nothing. "+
 			"That file must already hold the CURRENT identity as a bare AGE-SECRET-KEY-... line (# comments allowed) — it is NOT an env file. See docs/OPERATIONS.md"),
+
+		// flag.Bool/flag.String, NOT the env helpers: no env pair by design.
+		migrateSecrets: flag.Bool("migrate-secrets", false, "MAINTENANCE MODE, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit. Idempotent and resumable. See docs/OPERATIONS.md"),
+		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv" or "local"`),
+		reconcile:      flag.Bool("reconcile", false, "MAINTENANCE MODE: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit (non-zero on any). Deletes nothing"),
+		vault:          registerVaultFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address (e.g. ":8081"); empty (the default) disables the gateway entirely — no listener, no new surface. MUST differ from -listen: relayed pages are the sandbox's own code, and the separate origin is what keeps them away from the console's session`),

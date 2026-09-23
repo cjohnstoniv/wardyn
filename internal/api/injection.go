@@ -4,10 +4,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -289,6 +291,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		// Fail closed; the proxy refuses to start without its injections.
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure", nil))
+		if errors.Is(err, secretstore.ErrUnavailable) {
+			// Transient: the organisation's store did not answer. A distinct
+			// status, so it is never mistaken for a credential that is gone.
+			writeError(w, http.StatusServiceUnavailable,
+				"Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment.")
+			return
+		}
 		writeError(w, http.StatusFailedDependency,
 			"secret "+minted.Injection.SecretName+" is not in the store (set it with `wardyn secret set`)")
 		return

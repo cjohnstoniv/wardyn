@@ -56,7 +56,7 @@ func TestOpen_RefusesEveryMismatch(t *testing.T) {
 	v0 := good("alice", "k")
 	v0.version = 0
 	newer := good("alice", "k")
-	newer.version = 2
+	newer.version = 3
 	otherKEK := good("alice", "k")
 	otherKEK.kekID = "transit:secret/wardyn"
 
@@ -68,7 +68,7 @@ func TestOpen_RefusesEveryMismatch(t *testing.T) {
 		"moved to the operator":                       {moved(good("alice", "k"), "", "k"), "refused"},
 		"moved to another name":                       {moved(good("alice", "k"), "alice", "k2"), "refused"},
 		"forged under a foreign key but labeled ours": {forgedWrap, "refused"},
-		"a newer enc_version":                         {newer, "has enc_version 2 which this wardynd does not understand; upgrade wardynd"},
+		"a newer enc_version":                         {newer, "has enc_version 3 which this wardynd does not understand; upgrade wardynd"},
 		"a v0 row":                                    {v0, "an older wardynd is still writing"},
 		"an unconfigured KEK":                         {otherKEK, `"transit:secret/wardyn"`},
 		"value swapped, wrap intact":                  {func() envelope { e := good("alice", "k"); e.ct = good("alice", "k").ct; return e }(), "integrity"},

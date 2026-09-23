@@ -4,8 +4,10 @@
 // Package secretstore defines the at-rest secret storage contract.
 //
 // Providers:
-//   - pg: age-encrypted Postgres column (default).
-//   - openbao: OpenBao KV + leases (v1.0).
+//   - pg: envelope-encrypted Postgres rows (default).
+//   - vaultkv: store mode — the value lives in the organisation's Vault KV v2
+//     (OpenBao is a supported endpoint) and the Postgres row is a pointer to it
+//     (package vaultkv; credential-storage design §2.3a).
 //
 // Secrets are late-bound: they are resolved at use time by the broker or
 // injected proxy-side, so as a RULE no value lands in a sandbox's environment
@@ -34,6 +36,14 @@ import (
 // error. Every Store implementation must honor it (the conformance suite checks).
 var ErrNotFound = errors.New("secretstore: secret not found")
 
+// ErrUnavailable marks a TRANSIENT failure of an external store (sealed,
+// throttled, 5xx, network, timeout): the value may well be there, the store
+// just could not answer. Every other Get error is DEFINITIVE — the row, the
+// value, the binding or the access is gone, and retrying will not bring it
+// back. A 401/403 is definitive by design, so revoking Wardyn's access at the
+// store bites at once (design §2.3a.4, K8).
+var ErrUnavailable = errors.New("secretstore: secret store unavailable")
+
 type Store interface {
 	Name() string
 	Put(ctx context.Context, name string, value []byte) error
@@ -61,4 +71,38 @@ type Store interface {
 	// alternate (OpenBao, KMS) implements the same fallback/isolation
 	// contract, held to it by the shared conformance suite.
 	For(owner string) Store
+}
+
+// External is a store-mode backend (design §2.3a): the value lives in the
+// organisation's secret manager, and the Postgres row is a pointer to it
+// (enc_version 2, kek_id "<Name()>:<ref>"). The pg store owns the row, the
+// owner fallback and the ordering (external first on Put and Delete); an
+// External only moves bytes to and from the store and checks the binding.
+type External interface {
+	// Name is the registered store name and the kek_id prefix ("vaultkv").
+	Name() string
+	// Describe names the store for an operator ("Vault at vault.example:8200").
+	Describe() string
+	// Put writes value for the row (owner, name) and returns the ref the row
+	// records. prev is the row's current ref ("" if none). createOnly refuses
+	// to overwrite a value that is already there (the migrator's guard against
+	// racing a concurrent Put).
+	Put(ctx context.Context, owner, name, prev string, value []byte, createOnly bool) (ref string, err error)
+	// Get reads the value a pointer row names. It refuses a ref that is not the
+	// one derived from (owner, name), and a value whose store-side owner/name
+	// differs from the row. A value that is absent is a definitive refusal,
+	// never ErrNotFound: the row exists, so the credential was lost.
+	Get(ctx context.Context, owner, name, ref string) ([]byte, error)
+	// Check reports whether the value behind ref exists and is bound to
+	// (owner, name), without reading it (-reconcile).
+	Check(ctx context.Context, owner, name, ref string) error
+	// Delete removes every version of the value behind ref. Idempotent.
+	Delete(ctx context.Context, owner, name, ref string) error
+	// Walk lists every value this install holds in the store (-reconcile).
+	Walk(ctx context.Context) ([]ExternalEntry, error)
+}
+
+// ExternalEntry is one value found in an external store by Walk.
+type ExternalEntry struct {
+	Owner, Name, Ref string
 }

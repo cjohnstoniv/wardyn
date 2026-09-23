@@ -200,3 +200,15 @@ affinity:
               operator: In
               values:
                 - amd64
+
+# Store mode, on the token-file side (`make helm-lint` renders the Kubernetes-
+# auth side on its own): the inline age key above stays wired, which is the
+# migration window (docs/OPERATIONS.md "Store mode").
+secretStore:
+  backend: vaultkv
+  vault:
+    addr: https://vault.example:8200
+    namespace: team-a
+    auth: token-file
+    tokenFile: /vault/secrets/token
+    kvPrefix: wardyn-ci
