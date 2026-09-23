@@ -2517,7 +2517,19 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   allow — four compressed 31 MiB blobs are a 34 KB request — and the proxy
   sidecar has a hard 256 MiB cap. Inspection takes the same process-wide slot
   and retained-bytes budget as LLM request scanning, and a push that cannot get
-  them in time is refused, never forwarded unread.
+  them in time is refused, never forwarded unread. The slot is one wide
+  (`internal/egress/proxy`'s `maxConcurrentScans`), so inspections run one at a
+  time. One inspection is bounded beyond its body at about 200 MiB, as
+  `internal/gitpack`'s package comment breaks down: `maxInflatedBytes` (128 MiB)
+  of inflated objects, per-object bookkeeping held under 160 bytes an object by
+  `maxObjects` (200,000; about 30 MiB), and a change set of at most
+  `maxChanges` entries. Before #250 the object ceiling was 1,048,576, and a
+  legal 16.8 MB pack of that many near-empty blobs was inspected while holding
+  656 MiB; it is now refused as uninspectable. The residual is that the
+  ceilings are not sized jointly to the sidecar: a 64 MiB body (the most
+  `max_inspect_pack_mib` admits) inflating to every ceiling at once, beside a
+  full 64 MiB retained-bytes budget, would pass 256 MiB, and the inflation
+  ceiling is the term to lower if that shape matters.
 - **The key lane is not covered at all.** An `ssh_key` grant is an opaque
   tunnel with no broker seam, so a policy that sets `push_rules` while
   `ssh_key` is the run's only git-capable grant is graded a medium-risk warning

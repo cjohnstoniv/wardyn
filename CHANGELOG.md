@@ -28,6 +28,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
+  near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
+  object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
+  256 MiB cap (#250). The object ceiling is now 200,000, far above a real push, so that pack is
+  refused as uninspectable; objects are allocated at their exact size, and a blob's content is
+  released once the pack is parsed. A max-legal pack of that shape now keeps 22 MiB. Inspections
+  already ran one at a time behind the proxy's inspection slot; a test now pins it.
 - **A repository's own `.claude/settings.json` could approve tool calls on a `tool_approvals=hold`
   run before Wardyn's approval gate was asked.** Claude Code resolves `permissions.allow` rules
   before it consults `--permission-prompt-tool`, so a matching rule in the workspace (which the

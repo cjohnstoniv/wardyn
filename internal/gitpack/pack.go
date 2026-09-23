@@ -54,6 +54,17 @@
 // bytes than the ceilings below allow) or that git would read differently from
 // this package (a commit carrying a header git's own parser stops before), and
 // a plain error for a malformed or hostile one.
+//
+// # What one inspection costs
+//
+// The ceilings below bound one inspection's heap, beyond the body the caller
+// buffered: inflated objects up to maxInflatedBytes (128 MiB), with every
+// blob's content released when the parse ends, so a Result keeps only trees,
+// commits and tags; bookkeeping of at most 160 bytes an object (115 measured),
+// about 30 MiB at maxObjects; and a change set of at most maxChanges entries,
+// measured at 36 MiB with the tree that names them. About 200 MiB in all, most
+// of it the inflation ceiling. How many inspections run at once is the
+// caller's to cap; the egress proxy runs one at a time (its scanSlots).
 package gitpack
 
 import (
@@ -84,7 +95,11 @@ const (
 	// maxObjects bounds the object count the pack header claims. It caps both a
 	// lying header's allocation and the per-object bookkeeping — an offset, an
 	// object id and the object itself — that parsing keeps for the whole pack.
-	maxObjects = 1 << 20
+	// Real pushes sit far below it: a single-commit push of a large monorepo's
+	// whole tree is under 100,000 objects, and 200,000 objects inside the 64 MiB
+	// body ceiling average 335 compressed bytes each, so what the ceiling refuses
+	// is a pack of near-empty objects shaped to cost bookkeeping (#250).
+	maxObjects = 200_000
 	// maxObjectBytes bounds one inflated object, and with it one delta result.
 	maxObjectBytes = 32 << 20
 	// maxInflatedBytes bounds every inflated object together. A 64 MiB pack of
@@ -370,9 +385,12 @@ func objectFormat(caps string) (hashFormat, error) {
 	return sha1Format, nil
 }
 
-// object is one resolved pack object: its type and its inflated bytes.
+// object is one resolved pack object: its type, its inflated size, and its
+// inflated bytes — which a blob gives up once the pack is parsed, because after
+// that only its size is ever read (dropBlobContent).
 type object struct {
 	typ  objectType
+	size int64
 	data []byte
 }
 
@@ -396,7 +414,7 @@ func (i *index) put(typ objectType, data []byte) string {
 	_, _ = h.Write(data)
 	oid := hex.EncodeToString(h.Sum(nil))
 	if _, dup := i.byOID[oid]; !dup {
-		i.byOID[oid] = object{typ: typ, data: data}
+		i.byOID[oid] = object{typ: typ, size: int64(len(data)), data: data}
 	}
 	return oid
 }
@@ -405,9 +423,22 @@ func (i *index) put(typ objectType, data []byte) string {
 // it. See Change.Size.
 func (i *index) blobSize(oid string) int64 {
 	if o, ok := i.byOID[oid]; ok && o.typ == objBlob {
-		return int64(len(o.data))
+		return o.size
 	}
 	return -1
+}
+
+// dropBlobContent releases every blob's bytes once no delta can need them as a
+// base. A Result outlives the parse — the caller holds it across its forge
+// reads — and without this it kept up to maxInflatedBytes of file content live
+// that nothing reads again.
+func (i *index) dropBlobContent() {
+	for oid, o := range i.byOID {
+		if o.typ == objBlob {
+			o.data = nil
+			i.byOID[oid] = o
+		}
+	}
 }
 
 // packReader walks a packfile. The reader is a *bytes.Reader so that inflating
@@ -419,10 +450,10 @@ type packReader struct {
 	idx      *index
 	zr       io.ReadCloser
 	inflated int64
-	// starts is every offset an object header began at, so an offset delta can
-	// only name a base the pack actually laid out there.
-	starts map[int64]bool
-	// atOffset maps a resolved object's start offset to its object id.
+	// atOffset holds every offset an object header began at, so an offset delta
+	// can only name a base the pack actually laid out there, and maps it to the
+	// object's id once resolved — "" until then. One map rather than two: it is
+	// per-object bookkeeping, which maxObjects multiplies.
 	atOffset map[int64]string
 	// pending are deltas whose base is not resolved yet, and the two indexes
 	// that wake them: a ref delta may name a base that appears LATER in the pack,
@@ -469,8 +500,8 @@ func parsePack(pack []byte, format hashFormat) (*index, error) {
 	}
 	p := &packReader{
 		br: bytes.NewReader(body), idx: newIndex(format),
-		starts: map[int64]bool{}, atOffset: map[int64]string{},
-		waitOID: map[string][]int{}, waitOff: map[int64][]int{},
+		atOffset: map[int64]string{},
+		waitOID:  map[string][]int{}, waitOff: map[int64][]int{},
 	}
 	if _, err := p.br.Seek(12, io.SeekStart); err != nil {
 		return nil, err
@@ -489,6 +520,7 @@ func parsePack(pack []byte, format hashFormat) (*index, error) {
 	if err := p.unresolved(); err != nil {
 		return nil, err
 	}
+	p.idx.dropBlobContent()
 	return p.idx, nil
 }
 
@@ -496,7 +528,7 @@ func parsePack(pack []byte, format hashFormat) (*index, error) {
 // either files it or queues it behind the base it deltas against.
 func (p *packReader) object() error {
 	off := p.pos()
-	p.starts[off] = true
+	p.atOffset[off] = ""
 	typ, size, err := p.header()
 	if err != nil {
 		return err
@@ -514,7 +546,7 @@ func (p *packReader) object() error {
 			return err
 		}
 		base := off - back
-		if back <= 0 || base < 12 || !p.starts[base] {
+		if _, begun := p.atOffset[base]; back <= 0 || base < 12 || !begun {
 			return fmt.Errorf("gitpack: the delta at %d names a base at %d, where no object begins", off, base)
 		}
 		data, err := p.inflate(off, size)
@@ -522,7 +554,7 @@ func (p *packReader) object() error {
 			return err
 		}
 		p.park(pendingDelta{off: off, baseOff: base, delta: data})
-		if oid, ok := p.atOffset[base]; ok {
+		if oid := p.atOffset[base]; oid != "" {
 			return p.settle(base, oid)
 		}
 		return nil
@@ -559,8 +591,8 @@ func (p *packReader) park(d pendingDelta) {
 // baseOID names the object a delta needs, once that object is resolved.
 func (p *packReader) baseOID(d pendingDelta) (string, bool) {
 	if d.baseOff >= 0 {
-		oid, ok := p.atOffset[d.baseOff]
-		return oid, ok
+		oid := p.atOffset[d.baseOff]
+		return oid, oid != ""
 	}
 	_, ok := p.idx.byOID[d.baseOID]
 	return d.baseOID, ok
@@ -703,15 +735,25 @@ func (p *packReader) inflate(off, declared int64) ([]byte, error) {
 	} else if err := p.zr.(zlib.Resetter).Reset(p.br, nil); err != nil {
 		return nil, fmt.Errorf("gitpack: the object at %d does not open a zlib stream: %w", off, err)
 	}
-	// declared+1 so that an over-long stream is caught rather than truncated into
-	// something that looks right.
-	data, err := io.ReadAll(io.LimitReader(p.zr, declared+1))
-	if err != nil {
+	// Exactly declared bytes, allocated once: io.ReadAll's minimum buffer is
+	// 512 bytes, and a pack of near-empty objects kept one per object (#250).
+	// charge has already booked declared against maxInflatedBytes.
+	data := make([]byte, declared)
+	if n, err := io.ReadFull(p.zr, data); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("gitpack: the object at %d declared %d bytes and inflated to %d", off, declared, n)
+		}
 		return nil, fmt.Errorf("gitpack: inflating the object at %d: %w", off, err)
 	}
-	if int64(len(data)) != declared {
-		return nil, fmt.Errorf("gitpack: the object at %d declared %d bytes and inflated to %d",
-			off, declared, len(data))
+	// The stream must END here: a byte more means the next object's header is not
+	// where the pack said it is, and reading to EOF is what checks the stream's
+	// own checksum.
+	var extra [1]byte
+	switch n, err := io.ReadFull(p.zr, extra[:]); {
+	case n > 0:
+		return nil, fmt.Errorf("gitpack: the object at %d inflates past the %d bytes it declared", off, declared)
+	case !errors.Is(err, io.EOF):
+		return nil, fmt.Errorf("gitpack: inflating the object at %d: %w", off, err)
 	}
 	return data, nil
 }
