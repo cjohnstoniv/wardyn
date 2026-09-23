@@ -1282,9 +1282,9 @@ func TestSSHGateway_HandshakeTimeoutFires(t *testing.T) {
 	}
 }
 
-// TestSSHHandshakeTimeout_ProductionValueUnchanged guards the production
-// default: a test that shrinks sshHandshakeTimeout must restore it via
-// t.Cleanup, never leave it lowered for a package that ships it.
+// TestSSHHandshakeTimeout_ProductionValueUnchanged pins the production
+// default of sshHandshakeTimeout. It does not check that a shrinking test restored it —
+// that test's own t.Cleanup does.
 func TestSSHHandshakeTimeout_ProductionValueUnchanged(t *testing.T) {
 	if got := sshHandshakeTimeout(); got != 15*time.Second {
 		t.Fatalf("sshHandshakeTimeout() = %v, want the production 15s default", got)

@@ -321,9 +321,9 @@ func makeSyslogEvent(action string) types.AuditEvent {
 	}
 }
 
-// TestSyslogWriteTimeout_ProductionValueUnchanged guards the production
-// default: a test that shrinks syslogWriteTimeout must restore it via
-// t.Cleanup, never leave it lowered for a package that ships it.
+// TestSyslogWriteTimeout_ProductionValueUnchanged pins the production
+// default of syslogWriteTimeout. It does not check that a shrinking test restored it —
+// that test's own t.Cleanup does.
 func TestSyslogWriteTimeout_ProductionValueUnchanged(t *testing.T) {
 	if got := syslogWriteTimeout(); got != 2*time.Second {
 		t.Fatalf("syslogWriteTimeout() = %v, want the production 2s default", got)

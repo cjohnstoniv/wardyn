@@ -176,7 +176,7 @@ func shortBudget(t *testing.T, v string) {
 // the real 10s — pair it with shortBudget(t, v) where v is below d, so the
 // clamp still lands on the (now-shrunk) floor exactly as it does in
 // production. See TestMinCredentialReauthTimeout_ProductionFloorUnchanged for
-// the guard that every other test leaves the real floor alone.
+// the guard that pins the real floor's production default.
 func shrinkReauthFloor(t *testing.T, d time.Duration) {
 	t.Helper()
 	prev := minCredentialReauthTimeout
@@ -184,10 +184,9 @@ func shrinkReauthFloor(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { minCredentialReauthTimeout = prev })
 }
 
-// TestMinCredentialReauthTimeout_ProductionFloorUnchanged guards the
-// production default: a test that shrinks minCredentialReauthTimeout must
-// restore it via t.Cleanup, never leave it lowered for a package that ships
-// it.
+// TestMinCredentialReauthTimeout_ProductionFloorUnchanged pins the production
+// default of minCredentialReauthTimeout. It does not check that a shrinking
+// test restored it — shrinkReauthFloor's t.Cleanup does that.
 func TestMinCredentialReauthTimeout_ProductionFloorUnchanged(t *testing.T) {
 	if minCredentialReauthTimeout != 10*time.Second {
 		t.Fatalf("minCredentialReauthTimeout = %v, want the production 10s floor", minCredentialReauthTimeout)
@@ -789,8 +788,8 @@ func TestResolveCtx_LeaderDisconnectLeavesTheWorkflowAndItsDeadlineAlone(t *test
 // between one recorded expiry and one per retry for ten minutes.
 func TestResolveCtx_LateArrivalAfterTimeoutGetsTheStickyResult(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shrinkReauthFloor(t, 50*time.Millisecond)
-	shortBudget(t, "1ms") // clamped UP to the (shrunk) floor; the first call below waits it out
+	shrinkReauthFloor(t, 500*time.Millisecond)
+	shortBudget(t, "1ms")             // clamped UP to the (shrunk) floor; the first call below waits it out
 	is := newInjectionServer(t, 1000) // 423 forever
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := holdInjector(t, is, reader)
@@ -812,7 +811,7 @@ func TestResolveCtx_LateArrivalAfterTimeoutGetsTheStickyResult(t *testing.T) {
 	if !errors.Is(second, errReauthTimedOutAgain) {
 		t.Error("the late arrival was handed a REPORTABLE expiry — it would write a second credential:reauth-timeout row for one hold")
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
+	if elapsed := time.Since(start); elapsed > minCredentialReauthTimeout/2 {
 		t.Errorf("the late arrival waited %v — it opened a second hold instead of taking the sticky result", elapsed)
 	}
 	inj.reauth.mu.Lock()

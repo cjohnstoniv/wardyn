@@ -163,6 +163,23 @@ func TestRedirectProbeScript_Probe2DoesNotFailOnHTTPErrors(t *testing.T) {
 	}
 }
 
+// TestRedirectProbeScript_ProductionValueUnchanged pins the probe's curl
+// budgets: unset, WARDYN_PROBE_CONNECT_TIMEOUT/WARDYN_PROBE_MAX_TIME must still
+// default to the production 5s/15s, and both curl legs must use them.
+func TestRedirectProbeScript_ProductionValueUnchanged(t *testing.T) {
+	for _, want := range []string{
+		`ct=${WARDYN_PROBE_CONNECT_TIMEOUT:-5}` + "\n",
+		`mt=${WARDYN_PROBE_MAX_TIME:-15}` + "\n",
+	} {
+		if !strings.Contains(redirectProbeScript, want) {
+			t.Errorf("redirectProbeScript lost the production default %q", strings.TrimSpace(want))
+		}
+	}
+	if n := strings.Count(redirectProbeScript, `--connect-timeout "$ct" --max-time "$mt"`); n != 2 {
+		t.Errorf("curl legs using the $ct/$mt budgets = %d, want 2 (probe 1 and probe 2)", n)
+	}
+}
+
 // TestRedirectProbe2_AcceptAndHoldIsBypass drives the SHIPPED script against a
 // public "From" that accepts the TCP connection and then says nothing — a
 // tarpit, an accept-and-hold load balancer, or simply a host slower than the

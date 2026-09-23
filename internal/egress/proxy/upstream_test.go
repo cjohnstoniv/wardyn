@@ -550,9 +550,9 @@ func TestUpstreamCONNECTStallFailsFast(t *testing.T) {
 	}
 }
 
-// TestUpstreamConnectTimeout_ProductionValueUnchanged guards the production
-// default: tests that shrink upstreamConnectTimeout must restore it via
-// t.Cleanup, never leave it lowered for a package that ships it.
+// TestUpstreamConnectTimeout_ProductionValueUnchanged pins the production
+// default of upstreamConnectTimeout. It does not check that a shrinking test restored it —
+// that test's own t.Cleanup does.
 func TestUpstreamConnectTimeout_ProductionValueUnchanged(t *testing.T) {
 	if upstreamConnectTimeout != 15*time.Second {
 		t.Fatalf("upstreamConnectTimeout = %v, want the production 15s default", upstreamConnectTimeout)

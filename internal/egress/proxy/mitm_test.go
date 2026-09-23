@@ -580,9 +580,7 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 	// the whole budget, so this trades the real 10s production floor for a
 	// test-scale one (restored after — see
 	// TestMinCredentialReauthTimeout_ProductionFloorUnchanged).
-	prevFloor := minCredentialReauthTimeout
-	minCredentialReauthTimeout = 50 * time.Millisecond
-	defer func() { minCredentialReauthTimeout = prevFloor }()
+	shrinkReauthFloor(t, 50*time.Millisecond)
 
 	// THE DECISION ROW IS NARROWER THAN THE 401 (security NIT-B). Every case
 	// below ends without a credential and every one of them earns the modelled
