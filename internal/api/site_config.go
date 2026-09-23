@@ -338,7 +338,11 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	// admitting a row needs the boot agent-image map, which is server state this
 	// deliberately pure function has no access to. Both doors run it, so the
 	// "one validator, two doors" property is the same.
-	return validateWorkspaceProviders(cfg.WorkspaceProviders, false)
+	if err := validateWorkspaceProviders(cfg.WorkspaceProviders, false); err != nil {
+		return err
+	}
+	// model_providers needs no server state, so its one validator runs here.
+	return validateModelProviders(cfg.ModelProviders)
 }
 
 // validateInternalHosts enforces SiteConfig.InternalHosts's write-time
@@ -573,7 +577,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // have decided which side of this line it sits on.
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
-	"sign_in_help_text", "sign_in_help_url",
+	"model_providers", "sign_in_help_text", "sign_in_help_url",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -614,6 +618,14 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	// legacy open mode, which is the OPPOSITE of what the admin wrote down.
 	if !present["agent_providers"] {
 		cfg.AgentProviders = existing.AgentProviders
+	}
+	// model_providers on the same terms. A body that names the block gets its
+	// server-owned UIDs from the stored one instead; a carried-forward block
+	// already holds them, and is the store's own value, so it is not touched.
+	if !present["model_providers"] {
+		cfg.ModelProviders = existing.ModelProviders
+	} else {
+		assignModelProviderUIDs(cfg.ModelProviders, existing.ModelProviders)
 	}
 	// The sign-in help pair, for the same MDM reason: a boot-time re-apply of a
 	// file written before these keys existed must not erase the admin's text.
@@ -705,6 +717,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// lowercase-host/no-trailing-slash form.
 	cfg.WorkspaceProviders = normalizeWorkspaceProviders(cfg.WorkspaceProviders)
 	cfg.AgentProviders = normalizeAgentProviders(cfg.AgentProviders)
+	cfg.ModelProviders = normalizeModelProviders(cfg.ModelProviders)
 	// ScmHosts / EgressRedirects[].{From,To} / UpstreamProxyURL on the
 	// same terms — see normalizeSiteConfigTopology's doc.
 	normalizeSiteConfigTopology(&cfg)
@@ -820,6 +833,11 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
+	}
+	// Only once a provider block exists, so a deployment without one writes the
+	// row it always wrote.
+	if saved.ModelProviders != nil {
+		datum["model_providers"] = enabledModelProviderCount(saved)
 	}
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {
