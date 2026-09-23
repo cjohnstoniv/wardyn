@@ -13,7 +13,7 @@ import { describe, it, expect, vi, afterEach, type Mock } from "vitest";
 import { act, render, screen, cleanup, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import App, { FirstRunLanding, roleCanReach } from "./App";
+import App, { FirstRunLanding, RequireSetup, roleCanReach } from "./App";
 import { RoleProvider, type Role } from "./components/wardyn/operator-context";
 import { baseStatus } from "./lib/test-fixtures";
 import type { SetupStatus } from "./lib/types";
@@ -25,6 +25,16 @@ import type { SetupStatus } from "./lib/types";
 vi.mock("./components/screens/runs", () => ({
   RunsScreen: () => <div>runs screen stub</div>,
 }));
+
+// #806 — RequireSetup's own chunk-warming effect (below). `vi.hoisted` because
+// `vi.mock` factories run before this file's own top-level statements, so a
+// plain outer `vi.fn()` would not exist yet when the factory below closes
+// over it.
+const { onboardingModuleLoaded } = vi.hoisted(() => ({ onboardingModuleLoaded: vi.fn() }));
+vi.mock("./components/screens/onboarding/onboarding-screen", () => {
+  onboardingModuleLoaded();
+  return { GettingStarted: () => <div>setup funnel stub</div> };
+});
 
 function renderLanding(role: Role, roleResolved: boolean, status: SetupStatus | null) {
   return render(
@@ -57,6 +67,41 @@ describe("FirstRunLanding — waits for both status and role", () => {
   it("admin is unaffected — the admin has_runs rule still applies once resolved", () => {
     renderLanding("admin", true, baseStatus({ has_runs: true }));
     expect(screen.getByText("runs screen")).toBeInTheDocument();
+  });
+});
+
+// #806: setup-gate.spec.ts:97 flaked because a redirect through RequireSetup
+// only started the funnel's lazy-chunk fetch once <Navigate/> had already
+// fired and SetupRoute had mounted — serialized AFTER the status/role round
+// trip, unlike FirstRunLanding's and SetupRoute's own copies of this same
+// warming effect. This pins that RequireSetup starts the fetch itself, on
+// mount, independent of whether the gate has opened yet.
+describe("RequireSetup — warms the funnel chunk on mount, before the gate opens (#806)", () => {
+  afterEach(() => {
+    onboardingModuleLoaded.mockClear();
+    cleanup();
+  });
+
+  it("starts the onboarding-screen import immediately, even while role/status are still unresolved", async () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <RoleProvider role="admin" roleResolved={false}>
+          <Routes>
+            <Route element={<RequireSetup status={null} />}>
+              <Route path="/" element={<div>runs screen</div>} />
+            </Route>
+            <Route path="/setup" element={<div>setup screen</div>} />
+          </Routes>
+        </RoleProvider>
+      </MemoryRouter>,
+    );
+    // The gate is still closed — neither branch has rendered.
+    expect(screen.queryByText("runs screen")).toBeNull();
+    expect(screen.queryByText("setup screen")).toBeNull();
+    // But the funnel's chunk fetch already started, proven by the mocked
+    // module's own factory having run — a later redirect to /setup does not
+    // pay for the fetch AFTER the gate opens.
+    await waitFor(() => expect(onboardingModuleLoaded).toHaveBeenCalled());
   });
 });
 
