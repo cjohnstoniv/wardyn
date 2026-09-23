@@ -309,7 +309,7 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 # for the exact set.
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required; needs wardyn/wardyn-proxy:local + wardyn/agent-claude-code:local)..."
-	WARDYN_TEST_DOCKER=1 ./scripts/test-report.sh conformance-docker -tags docker -timeout 20m ./test/conformance/...
+	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-docker -tags docker -timeout 20m ./test/conformance/...
 
 # 30m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
 # (7m) waiting for the kubelet ONCE PER FILL TARGET, and 0.7.5 gave it two (/tmp and the
@@ -327,7 +327,7 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 # must-pass here too.
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
 	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
-	WARDYN_TEST_K8S=1 ./scripts/test-report.sh conformance-k8s -tags k8s -timeout 30m ./test/conformance/...
+	WARDYN_TEST_K8S=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh conformance-k8s -tags k8s -timeout 30m ./test/conformance/...
 
 # H1 (review round 2): the conformance agent image MUST carry wardyn-rec —
 # k8s's SessionRecording is unconditionally true (exec.go's recordCmd has no
@@ -390,6 +390,7 @@ test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs D
 	WARDYN_TEST_DOCKER=1 \
 	WARDYN_TEST_CACHE_REPO=localhost:5000/wardyn-envbuild-test \
 	WARDYN_TEST_TOOLS_DIR="$$tools_dir" \
+	WARDYN_TEST_REPORT_COVER=0 \
 	./scripts/test-report.sh envbuild -tags docker -run 'TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI' -timeout 40m ./internal/envbuild/
 
 # Live full-stack security e2e (L0 egress, metadata block, kill cascade,

@@ -383,6 +383,12 @@ jobs:
           WARDYN_TEST_K8S_AGENT_IMAGE: wardyn/conformance-agent:kind-test
         run: make test-conformance-k8s
         # No continue-on-error: a real conformance failure must block the build.
+      - name: Upload conformance-k8s test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-k8s-test-reports
+          path: test/reports/go/conformance-k8s/**
 
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
@@ -533,6 +539,12 @@ jobs:
           WARDYN_TEST_DOCKER: "1"
         run: make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
+      - name: Upload conformance-docker test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-docker-test-reports
+          path: test/reports/go/conformance-docker/**
 
   # ── real-daemon envbuild integration ───────────────────────────────
   # Exercises the envbuilder push -> finalize-FROM-pushed -> pull cycle against
@@ -560,6 +572,12 @@ jobs:
         run: make test-envbuild-integration
         # No continue-on-error: a real regression in the push/finalize/pull
         # cycle must block the build.
+      - name: Upload envbuild test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: envbuild-test-reports
+          path: test/reports/go/envbuild/**
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +

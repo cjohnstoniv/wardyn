@@ -15,6 +15,7 @@
 #   scripts/test-report.sh docker -tags docker ./internal/runner/...
 #
 # Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
+# WARDYN_TEST_REPORT_COVER=0 drops the coverage flags (and the three coverage files).
 # Exit code mirrors the test run (non-zero if any test failed).
 set -uo pipefail
 
@@ -32,8 +33,15 @@ echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
 # from any package in the module, not just calls from within the same
 # package as the covered code (module-wide instrumentation regardless of
 # which PKGS are under test). Capture the JSON stream to a file.
-go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" \
-  > "$OUT/test-output.json"
+# The live-substrate suites (conformance, envbuild) turn coverage off: nobody
+# reads their profile, and instrumenting the whole module is compile time spent
+# inside the CI job's own timeout.
+if [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ]; then
+  rm -f "$OUT/cover.out" "$OUT/coverage.html" "$OUT/coverage-func.txt"
+else
+  PKGS=(-covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}")
+fi
+go test -json "${PKGS[@]}" > "$OUT/test-output.json"
 GO_EXIT=$?
 
 # Coverage artifacts (best-effort; cover.out may be absent if build failed).
@@ -91,14 +99,20 @@ fi
 # above. WARDYN_TEST_DOCKER/WARDYN_TEST_K8S gate whether the real driver ran
 # at all — a lane without them declared has no substrate, same as the pg
 # floor's default-off shape.
+# Exact names, not a pattern: EVERY one must pass (checked below), so dropping
+# or renaming one case reddens the job even while the others still match.
+REQUIRE_ALL=""
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-  REQUIRE_PASS='^TestConformanceDocker/(L0StructuralEgress|CreateStatusStop|ExecStream|ManagedFiles)$|^TestBootEgress_NoFirstUseApproval$'
+  REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestBootEgress_NoFirstUseApproval'
 fi
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
-  REQUIRE_PASS='^TestConformanceK8s/(AgentCannotReachAPIServer|CreateStatusStop|WaitExitCode)$'
+  REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode'
 fi
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-  REQUIRE_PASS='^(TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI)$'
+  REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'
+fi
+if [ -n "$REQUIRE_ALL" ]; then
+  REQUIRE_PASS="^(${REQUIRE_ALL// /|})\$"
 fi
 if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
   # go test -json emits one event per line; a top-level test's outcome is the
@@ -120,6 +134,10 @@ if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
   PASSED="$(names pass)"
   SKIPPED="$(names skip)"
   FAILED="$(names fail)"
+  MISSING=""
+  for n in $REQUIRE_ALL; do
+    grep -qxF "$n" <<<"$PASSED" || MISSING="$MISSING $n"
+  done
   if [ -z "$PASSED$SKIPPED$FAILED" ]; then
     echo ">> SKIP FLOOR: no test matching /$REQUIRE_PASS/ ran in suite '$SUITE'." >&2
     echo ">> Those probes are the falsifiable proof of the append-only invariant; a set that matches nothing" >&2
@@ -140,6 +158,10 @@ if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
       echo ">> exist to prove a real curl round-trip and cannot do that skipped. A minimal dev container" >&2
       echo ">> without curl can override this floor with WARDYN_TEST_REPORT_REQUIRE_PASS=<regex-or-empty>." >&2
     fi
+    GO_EXIT=1
+  elif [ -n "$MISSING" ]; then
+    echo ">> SKIP FLOOR: these must-pass cases did not pass (failed, or never ran: renamed, removed or -run filtered):" >&2
+    printf '>>   %s\n' $MISSING >&2
     GO_EXIT=1
   else
     echo ">> skip floor: $(echo "$PASSED" | wc -l | tr -d ' ') probe(s) matching /$REQUIRE_PASS/ passed"
