@@ -11,19 +11,54 @@ import (
 	"testing"
 )
 
-// goroutineSpawn matches a `go func(` goroutine launch — the shape every
-// *_pg_test.go concurrency proof in the tree uses.
-var goroutineSpawn = regexp.MustCompile(`\bgo func\(`)
+// goroutineSpawn matches a goroutine launch statement — `go func(...)` or
+// `go launch(i)` — at the start of a line.
+var goroutineSpawn = regexp.MustCompile(`(?m)^\s+go [A-Za-z_(]`)
 
-// racedPGPackages returns the ./internal/.../... package globs test-race-pg's
-// recipe passes to `go test`.
-func racedPGPackages(t *testing.T, raceTarget string) []string {
+// pgTestFunc matches the opening line of a top-level TestPG_ function; gofmt
+// puts its closing brace alone at column 0.
+var pgTestFunc = regexp.MustCompile(`(?m)^func (TestPG_\w*)\(`)
+
+// raceLine is one `go test` line of test-race-pg's recipe.
+type raceLine struct {
+	run  *regexp.Regexp // the -run filter; nil means every test
+	pkgs []string       // package globs, e.g. ./internal/store/...
+}
+
+// raceLines parses every `go test` line of test-race-pg's recipe.
+func raceLines(t *testing.T, raceTarget string) []raceLine {
 	t.Helper()
-	pkgs := regexp.MustCompile(`\./internal/\S+?/\.\.\.`).FindAllString(raceTarget, -1)
-	if len(pkgs) == 0 {
-		t.Fatalf("test-race-pg names no ./internal/.../... packages:\n%s", raceTarget)
+	runFlag := regexp.MustCompile(`-run[= ]'?([^'\s]+)'?`)
+	var out []raceLine
+	for _, ln := range strings.Split(raceTarget, "\n") {
+		if !strings.HasPrefix(ln, "\t") || !strings.Contains(ln, "go test") {
+			continue
+		}
+		var rl raceLine
+		if m := runFlag.FindStringSubmatch(ln); m != nil {
+			rl.run = regexp.MustCompile(m[1])
+		}
+		for _, f := range strings.Fields(ln) {
+			if strings.HasPrefix(f, "./") {
+				rl.pkgs = append(rl.pkgs, f)
+			}
+		}
+		out = append(out, rl)
 	}
-	return pkgs
+	if len(out) == 0 {
+		t.Fatalf("test-race-pg has no `go test` line:\n%s", raceTarget)
+	}
+	return out
+}
+
+// covers reports whether a package glob covers dir (both ./-relative):
+// ./x/... covers ./x and every package under it; a plain path only itself.
+func covers(glob, dir string) bool {
+	prefix, recursive := strings.CutSuffix(glob, "/...")
+	if !recursive {
+		return dir == glob
+	}
+	return prefix == "." || dir == prefix || strings.HasPrefix(dir, prefix+"/")
 }
 
 // TestPGConcurrencyProofsRunUnderRace is the pin for F137.
@@ -90,46 +125,66 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 			"test it runs would SKIP and the step would pass vacuously:\n%s", job)
 	}
 
-	// (d) every *_pg_test.go file that spawns a goroutine lives in a package
-	// test-race-pg's recipe actually races. A new goroutine-spawning pg test
-	// added to an un-raced package (I-3: internal/api held two — see the
-	// Makefile comment) would otherwise never run under the detector.
-	pkgs := racedPGPackages(t, raceTarget)
-	var uncovered []string
+	// (d) every TestPG_ function that spawns a goroutine is actually raced: some
+	// recipe line both covers its package and matches its name with -run. A
+	// goroutine-spawning pg test in an un-raced package (I-3: internal/api held
+	// two), or one a narrowed -run filters out, would otherwise never run under
+	// the detector.
+	lines := raceLines(t, raceTarget)
+	var unraced []string
 	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, "_pg_test.go") {
+		if err != nil {
 			return err
+		}
+		if info.IsDir() {
+			if name := info.Name(); name == "node_modules" || (strings.HasPrefix(name, ".") && path != root) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
 		}
 		src, err := os.ReadFile(path)
 		if err != nil {
 			return err
-		}
-		if !goroutineSpawn.Match(src) {
-			return nil
 		}
 		rel, err := filepath.Rel(root, filepath.Dir(path))
 		if err != nil {
 			return err
 		}
 		pkg := "./" + filepath.ToSlash(rel)
-		raced := false
-		for _, p := range pkgs {
-			if pkg == strings.TrimSuffix(p, "/...") {
-				raced = true
-				break
+		code := string(src)
+		for _, m := range pgTestFunc.FindAllStringSubmatchIndex(code, -1) {
+			name := code[m[2]:m[3]]
+			body := code[m[0]:]
+			if end := strings.Index(body, "\n}\n"); end >= 0 {
+				body = body[:end]
 			}
-		}
-		if !raced {
-			uncovered = append(uncovered, strings.TrimPrefix(path, root+string(filepath.Separator)))
+			if !goroutineSpawn.MatchString(body) {
+				continue
+			}
+			raced := false
+			for _, rl := range lines {
+				for _, g := range rl.pkgs {
+					if covers(g, pkg) && (rl.run == nil || rl.run.MatchString(name)) {
+						raced = true
+					}
+				}
+			}
+			if !raced {
+				unraced = append(unraced, pkg+"."+name)
+			}
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk %s for *_pg_test.go: %v", root, err)
+		t.Fatalf("walk %s for TestPG_ functions: %v", root, err)
 	}
-	if len(uncovered) > 0 {
-		t.Errorf("test-race-pg races %v but these *_pg_test.go files spawn goroutines from an "+
-			"uncovered package:\n%s", pkgs, strings.Join(uncovered, "\n"))
+	if len(unraced) > 0 {
+		t.Errorf("these TestPG_ functions spawn goroutines but no test-race-pg line races them "+
+			"(package not covered, or name filtered out by -run):\n%s\nrecipe:\n%s",
+			strings.Join(unraced, "\n"), raceTarget)
 	}
 }
 

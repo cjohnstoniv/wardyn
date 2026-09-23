@@ -179,19 +179,21 @@ test-race: ## Race-detector sweep over ALL tag sets (tagless + -tags docker + -t
 # that they spawn goroutines racing on a credential mint — were never executed
 # under the race detector by ANY gate (F137).
 #
-# Scoped to TestPG_ tests whose name says they race (Concurrent/Supersede)
-# rather than the whole pg suite: -race over every pg package would multiply
-# the job's runtime for tests that are sequential by construction. -p 1 for
-# test-report-pg's reason — one shared database.
+# Scoped to TestPG_ in the two packages that race on the shared database rather
+# than the whole pg suite: -race over every pg package would multiply the job's
+# runtime for tests that are sequential by construction. -p 1 for test-report-pg's
+# reason — one shared database.
 #
-# ./internal/api/... covers harnesscred_supersede_pg_test.go's
-# TestPG_LoginSupersedeSerializesConcurrentSignIns /
-# …DoesNotStarveConcurrentSignIns and devices_ingest_pg_test.go's
-# TestPG_DeviceIngest_OneDevicesConcurrentPushesDoNotStarveOrgAuditWriters —
-# goroutine-spawning pg tests that were never covered by this target (I-3).
+# ./internal/api/... gets its own narrower line: its pg suite is large and
+# mostly sequential, so -run picks only the goroutine-spawning proofs
+# (harnesscred_supersede_pg_test.go's TestPG_LoginSupersede… and
+# devices_ingest_pg_test.go's TestPG_DeviceIngest_…ConcurrentPushes…), which
+# were never raced by any gate (I-3). The F137 guard checks every
+# goroutine-spawning TestPG_ function matches some line's package AND -run.
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)' ./internal/broker/... ./internal/store/... ./internal/api/...
+	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/broker/... ./internal/store/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)' ./internal/api/...
 
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
