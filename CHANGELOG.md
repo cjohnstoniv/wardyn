@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The sign-in door's "Downloading the image" step now lights on Kubernetes (#807).** The kubelet
+  reports an image pull as `ContainerCreating`, so a cold pull on a cluster showed the first step
+  for its whole length. The runner now reads the starting pod's Events (at most once a second,
+  only while the container is being created) and reports a pull in the Docker runner's words. The
+  chart's namespaced Role gains one verb, `events: list`. **If you write the Role yourself
+  (`k8s.rbac.create=false`), add `events: list` on upgrade** — without it the read fails closed and
+  pulls keep reading as "Setting up the container". Nothing an Event says is shown: it only chooses
+  between two sentences Wardyn wrote.
+
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

@@ -12,7 +12,16 @@ canary,driver}.go. In particular:
   - ephemeral-storage: NO new verbs. A run's disk cap is a FIELD on the pod this
     substrate already creates (naming.go's resourceRequirements), and the
     kubelet's eviction verdict comes back through pods: get (lifecycle.go's
-    statusFromPod) — never the Events API, so no "events" verb belongs here.
+    statusFromPod), not through the Events API.
+  - events: list ONLY, namespaced (#807). The kubelet reports an image pull as
+    ContainerCreating; only the pod's Events say "Pulling", and that is what
+    lights the sign-in door's download step (pull_events.go). list, not get or
+    watch: the read is one field-selected list per second while a container is
+    being created. Nothing an Event says is shown to anyone — it only picks
+    between two sentences Wardyn wrote — and a Role without this verb (an
+    operator-written one under k8s.rbac.create=false) makes the read fail
+    closed: pulls read as ContainerCreating, as before. Never in the
+    ClusterRole: that would be every namespace's Events.
   - pods/exec: BOTH create and get. session.go's newExecutor builds a
     FallbackExecutor that tries the websocket transport FIRST (SPDY only on
     upgrade failure) — and the websocket leg issues an HTTP GET against the
@@ -148,6 +157,9 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["create", "list", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
 {{- if $userDrives.enabled }}
   # User drives (drives.go's ensureDrivePVC), each verb justified:
   #   get    — a drive's claim is looked up BY NAME before anything else, and a
