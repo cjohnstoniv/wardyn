@@ -195,3 +195,34 @@ func TestADORESTPushRulesLeaveNonContentWritesAlone(t *testing.T) {
 		t.Errorf("a non-content write met the push rules: %s", log)
 	}
 }
+
+// TestADORESTPushRulesSeeTheEffectiveMethod: a push body sent as POST with an
+// X-HTTP-Method-Override the service honours is still a write to pushes, and
+// with push rules set it is refused — before this, PUT and PATCH classified as
+// no content write and the push was forwarded (201, allow). A pull request
+// created already set to auto-complete is refused the same way: its merge is
+// content the request does not show.
+func TestADORESTPushRulesSeeTheEffectiveMethod(t *testing.T) {
+	caps := adoscope.GrantableCapabilities()
+	for _, override := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run("push overridden to "+override, func(t *testing.T) {
+			h, _ := newADORESTRules(t, contentRulesSpec(".github/**"), types.ApprovalApproved, caps...)
+			rec := h.do(t, http.MethodPost, restPushTarget, restPush(h.branch(), "/.github/workflows/exfil.yml"),
+				map[string]string{"X-HTTP-Method-Override": override})
+			if rec.Code != http.StatusForbidden || len(h.fake.Requests()) != 0 {
+				t.Fatalf("status = %d body %s, upstream %d; want a 403 and nothing forwarded", rec.Code, rec.Body.String(), len(h.fake.Requests()))
+			}
+			if log := h.log(); !strings.Contains(log, `"`+ruleSourceGitPackBlind+`"`) {
+				t.Errorf("decision log %s does not name %s", log, ruleSourceGitPackBlind)
+			}
+		})
+	}
+	t.Run("pull request created with auto-complete", func(t *testing.T) {
+		h, _ := newADORESTRules(t, contentRulesSpec(".github/**"), types.ApprovalApproved, caps...)
+		rec := h.do(t, http.MethodPost, "/acme/proj/_apis/git/repositories/app/pullrequests?api-version=7.1",
+			`{"sourceRefName":"`+h.branch()+`","targetRefName":"refs/heads/main","title":"x","autoCompleteSetBy":{"id":"x"}}`, nil)
+		if rec.Code != http.StatusForbidden || len(h.fake.Requests()) != 0 || !strings.Contains(h.log(), ruleSourceGitPackBlind) {
+			t.Fatalf("status = %d body %s; want a 403 %s and nothing forwarded", rec.Code, rec.Body.String(), ruleSourceGitPackBlind)
+		}
+	})
+}

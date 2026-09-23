@@ -237,8 +237,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a REST push names no commit yet), an unattended run refuses. A body it cannot read whole, and
   every other REST route that puts content on a branch without naming its paths — import requests,
   server-side commits, merges, cherry-picks, reverts and suggestions, fork syncs, annotated tags, a
-  ref pointed at a commit, a pull request completed or set to auto-complete, wiki pages, TFVC
-  check-ins — is refused (`brokered:git:push-uninspectable`). A run with no `push_rules` is
+  ref pointed at a commit, a pull request completed or set to auto-complete (created that way or
+  updated to it), wiki pages, TFVC check-ins — is refused (`brokered:git:push-uninspectable`), on
+  its effective method, so an `X-HTTP-Method-Override` cannot turn a push into a non-write. A run with no `push_rules` is
   unchanged. The GitHub App and `git_pat` lanes were checked for the same class and have no REST
   door: their credentials stay in the proxy, their routes admit only git's smart-HTTP endpoints,
   and `api.github.com` is denied to a brokered run.
