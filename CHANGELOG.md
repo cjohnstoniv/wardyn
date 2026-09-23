@@ -38,7 +38,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
-- **One capability-grant resolver (#735), no behaviour change.** `capBatch` now answers every
+- **One capability-grant resolver (#735): no decision change; an enforcement-read failure no longer fails a value the grant rows already settled.** `capBatch` now answers every
   capability question: `capAllowed`, `capGranted`, `capSeamAllowed` and `capScan` are one-value doors
   onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
   snapshot through a context memo. A build with no store now refuses a widening kind at every door.

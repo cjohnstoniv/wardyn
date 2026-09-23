@@ -10,6 +10,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -288,6 +290,9 @@ func TestCapResolverReadsStayLazy(t *testing.T) {
 		st := &resolverTableStore{enf: map[string]bool{capImage: true}}
 		srv := capServer(st)
 		ctx := withCapBatch(resolverCtx(oidc.RoleMember, true))
+		if withCapBatch(ctx).Value(capBatchKey{}) != ctx.Value(capBatchKey{}) {
+			t.Fatal("withCapBatch(withCapBatch(ctx)) installed a second memo; a nested resolution must share the outer one")
+		}
 		for _, ask := range []func() (bool, error){
 			func() (bool, error) { return srv.capGranted(ctx, capImage, "a") },
 			func() (bool, error) { return srv.capSeamAllowed(ctx, capWorkspace, "w") },
@@ -323,8 +328,53 @@ func TestCapKindTableIsTheClosedSet(t *testing.T) {
 		if k.hostSet != (kind == capEgressHost) {
 			t.Errorf("kind %q hostSet = %v; egress_host is the only host-set kind", kind, k.hostSet)
 		}
+		if k.restrictable != (kind != capEgressHost && kind != capSecret) {
+			t.Errorf("kind %q restrictable = %v; every offered resource is, egress_host and secret are not", kind, k.restrictable)
+		}
 		if k.gatesAdminPins {
 			t.Errorf("kind %q gates admin pins; no shipped kind does", kind)
 		}
+	}
+}
+
+// denyReadCountStore counts the two per-resolution reads over capStore, which
+// answers every other read denyMemberRequest makes (the governance ceiling).
+type denyReadCountStore struct {
+	*capStore
+	grantsReads, enfReads int
+}
+
+func (s *denyReadCountStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+	s.grantsReads++
+	return s.capStore.ListCapabilityGrantsFor(ctx, users, groups)
+}
+
+func (s *denyReadCountStore) GetCapabilityEnforcement(ctx context.Context) (map[string]bool, error) {
+	s.enfReads++
+	return s.capStore.GetCapabilityEnforcement(ctx)
+}
+
+// TestDenyMemberRequest_OneSnapshotForEveryField: a member request naming an
+// image, a workspace, an agent and an integration is decided on ONE capability
+// snapshot — denyMemberRequest installs the ctx memo. Without it each field
+// re-reads grants (4) and the switch (3).
+func TestDenyMemberRequest_OneSnapshotForEveryField(t *testing.T) {
+	const ref = "ghcr.io/acme/agent:1.4.2"
+	ws := uuid.New()
+	st := &denyReadCountStore{capStore: &capStore{
+		grants: []types.CapabilityGrant{
+			grant(types.CapabilitySubjectUser, capSub, capImage, ref, types.CapabilityAllow),
+			grant(types.CapabilitySubjectAll, "", capWorkspace, capWildcard, types.CapabilityAllow),
+		},
+		enf: map[string]bool{capImage: true},
+	}}
+	h := newHarness(t)
+	h.srv.cfg.Store = st
+	req := createRunRequest{Image: ref, WorkspaceID: &ws, Agent: "claude-code", IntegrationID: "anthropic"}
+	if denied, code := denyRequest(t, h.srv, req); denied {
+		t.Fatalf("denied (status %d); every field is granted or unenforced", code)
+	}
+	if st.grantsReads != 1 || st.enfReads != 1 {
+		t.Errorf("grants reads = %d, enforcement reads = %d; want 1 and 1 (one snapshot per resolution)", st.grantsReads, st.enfReads)
 	}
 }
