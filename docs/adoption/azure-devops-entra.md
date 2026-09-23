@@ -266,6 +266,42 @@ Two consequences, stated plainly:
 Tools that accept only Basic authentication with a personal access token work unchanged: the sandbox
 holds an inert placeholder, and the proxy replaces the credential on the way out.
 
+## On a managed laptop
+
+A managed laptop runs its own daemon in member mode ([m′](../DESKTOP.md#the-member-mode-profile-topology-m))
+and forwards its audit rows to the organisation it is enrolled with. On such a laptop, the person's
+Azure DevOps access lives **on the laptop**, and the organisation never holds a copy.
+
+- **How it is captured.** The same way as on any other deployment. When the row names the laptop's own
+  sign-in application in the sign-in tenant, the laptop's console sign-in captures the refresh token.
+  Otherwise the dedicated sign-in captures it, at the laptop's own address. Register that callback on
+  the app registration next to the organisation's: the origin of the laptop's
+  `WARDYN_OIDC_REDIRECT_URL` (already registered for console sign-in) with the path
+  `/api/v1/scm/azure-devops/callback`.
+- **Where it lives.** In the laptop's age-encrypted secret store, under the person's own subject, like
+  every other per-person credential on that daemon. Only the laptop's own runs use it, and nothing
+  forwards it. The person is root on the laptop and can read it out. The token is their own delegated
+  access, no wider than signing in to Azure DevOps directly would give them. Once it is out, though,
+  the capability ceiling no longer applies: the ceiling bounds runs, not the person holding the token
+  (threat model residual #48).
+- **The MDM-applied row.** A per-person `entra` row in the MDM-delivered `/etc/wardyn/site-config.json`
+  applies through `PUT /site-config` on every boot, as it always has. A laptop capture adds no refusal,
+  so a stored document has nothing new to be grandfathered past.
+- **What the organisation sees.** The laptop forwards three families of rows unchanged:
+  `scm.ado.signin.captured`, `credential.capability.requested`, and the `egress.allow`/`egress.deny`
+  rows whose `data.rule_source` begins with `brokered:ado`. On each one, `data.device_origin` names the
+  device. The organisation's own audit filters find them:
+  `?action=scm.ado.signin.captured&actor=<subject>`, `?action=credential.capability.requested`, and
+  `?action_prefix=egress.` narrowed by `data.rule_source`. To find one person under the same subject on
+  both sides with `?actor=`, **use one app registration for the laptops and the organisation**. Entra's
+  `sub` claim is unique per application, so a person who signs in to two registrations has two
+  subjects.
+- **A run the laptop submits to the organisation** (remote placement, planned for 0.8.1) runs against
+  the organisation's credential store, not the laptop's. It must be submitted as the person. At create,
+  the organisation checks that person's own organisation connection and answers `git_credential` if
+  there is none. A device credential alone is refused at the same gate, because it carries no person:
+  admitting it would only defer the failure to dispatch, where no credential is stored under anyone.
+
 ## Azure DevOps Server is out of scope
 
 This lane is for Azure DevOps Services (`dev.azure.com` / `*.visualstudio.com`) only. A self-hosted

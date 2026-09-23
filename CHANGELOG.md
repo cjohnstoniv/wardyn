@@ -10,6 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A run a device submits on a per-person Azure DevOps row is refused at create.** A device
+  context carries no person. The launch gate used to read that as the admin token, admit the run,
+  and let it fail at dispatch with no credential stored under anyone. It now answers
+  `git_credential`, and also refuses when the site configuration cannot be read. The admin token
+  and every human caller get the same answers as before (#475).
+- **Per-person Azure DevOps on a managed laptop is documented.** The laptop captures and holds its
+  person's own sign-in. The organisation receives the Azure DevOps sign-in, capability and
+  `brokered:ado*` rows through audit federation, now covered by a filter test. An SSO-only
+  organisation with member-mode laptops is the supported mix (`docs/adoption/azure-devops-entra.md`,
+  `docs/DESKTOP.md`, #475).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

@@ -1876,6 +1876,19 @@ hiding them would repeat the failure mode we are designed to avoid.
     (`requested`/`defaulted`): it is the one place that distinguishes "the caller
     asked for CC1" from "CC1 is what today's runner had to offer," which an
     `enforced` value of CC1 alone cannot say on its own.
+48. **On a hybrid laptop, a person's Azure DevOps refresh token lives on a
+    machine that person administers.** The laptop's own sign-in captures it into
+    the laptop's age-encrypted store (`docs/adoption/azure-devops-entra.md`, "On a
+    managed laptop"), and the developer is root there (Actors, m′), so they can
+    read it out. It is their own delegated access, no wider than signing in to
+    Azure DevOps directly, but once out of the store the row's capability ceiling
+    no longer bounds it: the ceiling is enforced on a run's requests, not on a
+    person holding the token. The organisation holds no copy, and the rows that
+    evidence its use (`scm.ado.signin.captured`, `credential.capability.requested`,
+    `brokered:ado*` egress rows) reach the organisation only as the laptop's
+    self-reported, chained claims. The opposite direction fails closed: a run a
+    device credential submits with no person on a per-person row is refused at
+    create (`gitCredentialRefusalForLauncher`), never admitted to fail at dispatch.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

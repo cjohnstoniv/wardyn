@@ -364,6 +364,11 @@ const (
 	gitCredentialConsentRefusal = "git_credential: your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
 )
 
+// gitCredentialNoPersonRefusal answers a DEVICE caller (a hybrid laptop's
+// wdd_ credential) whose run would need a per-person Azure DevOps credential.
+// Not UI canon: no console renders it, since a device has no console session.
+const gitCredentialNoPersonRefusal = "git_credential: this run needs a person's own Azure DevOps connection, and a device submitted it with no person — submit it as the person"
+
 // errGitCredentialRefused is gitCredentialRefusalForLauncher's sentinel —
 // errRepoNotAdmitted's shape (workspace_admission.go), for the launchers
 // that hold no ResponseWriter (review follow-up N4: record.go's
@@ -391,16 +396,30 @@ func (e *gitCredentialRefusalError) Unwrap() error { return errGitCredentialRefu
 // subject == "" (no OIDC human — an admin-token or local-mode caller) never
 // refuses: no sign-in it could complete, the same rule the HTTP-facing
 // gitCredentialRefusal follows for the identical reason.
+//
+// A DEVICE caller with no human is the exception, and it fails closed. A
+// device context carries no OIDC human, so without this arm it would read as
+// the admin token (isOperator refuses a device first for the same reason),
+// skip this gate, and fail at dispatch with no credential stored under any
+// person. A run a laptop submits to the organisation must carry the person.
 func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject string, repos ...string) error {
 	repos = presentRepos(repos)
-	if len(repos) == 0 || s.cfg.Store == nil || subject == "" {
+	_, isDevice := deviceFromContext(ctx)
+	noPerson := isDevice && subject == ""
+	if len(repos) == 0 || s.cfg.Store == nil || (subject == "" && !noPerson) {
 		return nil
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil && noPerson {
+		return &gitCredentialRefusalError{Sentence: gitCredentialNoPersonRefusal}
+	}
 	if err != nil || !providersConfigured(sc) {
 		return nil // a read failure or legacy open mode: the caller's own admission check already answered, or there are no rows to grade
 	}
 	for _, row := range s.perUserADORowsAdmitting(ctx, sc, repos) {
+		if noPerson {
+			return &gitCredentialRefusalError{Org: adoOrgDisplay(row), Sentence: gitCredentialNoPersonRefusal}
+		}
 		cfg, ok := s.adoEntraRowConfig(ctx, row.ID)
 		if !ok {
 			continue // defensive only — perUserADORowsAdmitting already proved this

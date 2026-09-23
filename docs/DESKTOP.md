@@ -291,6 +291,23 @@ this one. Residuals #25–#27 in
 [the threat model](../threatmodel/THREAT-MODEL.md) state the member-mount and
 admin-access limits verbatim.
 
+### An SSO-only organisation with member-mode laptops
+
+`WARDYN_SSO_ONLY` refuses to boot alongside `WARDYN_MEMBER_MODE`
+(`validateSSOOnlyPosture`), because m′ needs the MDM-held admin token as a
+process credential and sso-only forbids any admin token. **A laptop in m′ is
+therefore never SSO-only, and that is the supported mix:** the organisation's
+control plane runs `WARDYN_SSO_ONLY=true`, and each laptop runs m′ without it.
+
+This does not weaken the organisation's claim. The laptop's admin token
+authenticates to that laptop's own daemon and nowhere else. The laptop reaches
+the organisation only with its device credential, and the organisation accepts
+that credential on the device routes (enrol, audit ingest, heartbeat) and
+nowhere else: never as a console session, an operator, or a run's submitter.
+A run the laptop submits to the organisation must carry the person's own
+organisation session. For per-person Azure DevOps on a laptop, see
+[On a managed laptop](adoption/azure-devops-entra.md#on-a-managed-laptop).
+
 ## The MDM file table
 
 | File | Owner | Mode | Contents | Why |
