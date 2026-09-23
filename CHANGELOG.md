@@ -16,7 +16,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sign-in-help fields if they'd changed in another tab since this step last loaded. It now sends
   the last GET's ETag, same as the sign-in-help card, and a stale write is refused (412) rather
   than accepted: the step reloads the current document (and a fresh ETag) and tells the operator
-  their change wasn't saved, without touching what they were still typing.
+  their change wasn't saved, without touching what they were still typing (a redirect being
+  added or edited stays in its form until a save lands).
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

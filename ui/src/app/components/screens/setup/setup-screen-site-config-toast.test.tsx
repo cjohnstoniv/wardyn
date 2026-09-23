@@ -27,6 +27,7 @@ vi.mock("sonner", () => ({
 }));
 
 const getSetupStatusMock = vi.fn();
+const etagMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a), completeOnboarding: vi.fn() },
 }));
@@ -42,8 +43,9 @@ vi.mock("../../../lib/api/health", () => ({
     health: () => Promise.resolve({ confinement_classes: ["CC1", "CC2"] }),
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
     // #492: setup-screen.tsx's reloadSiteConfig now reads the ETag-carrying
-    // snapshot — routed through the SAME mock these tests already drive.
-    getSiteConfigSnapshot: async (...a: unknown[]) => ({ siteConfig: await getSiteConfigMock(...a), etag: null }),
+    // snapshot — routed through the SAME mock these tests already drive, with
+    // the ETag from its own mock so a test can prove which one a PUT sent.
+    getSiteConfigSnapshot: async (...a: unknown[]) => ({ siteConfig: await getSiteConfigMock(...a), etag: etagMock() }),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
     testProxy: (...a: unknown[]) => testProxyMock(...a),
     testRedirect: vi.fn(),
@@ -93,6 +95,7 @@ beforeEach(() => {
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus({ host_proxy: DETECTION }));
   listSecretsMock.mockReset().mockResolvedValue([]);
   getSiteConfigMock.mockReset().mockResolvedValue({});
+  etagMock.mockReset().mockReturnValue(null);
   putSiteConfigMock.mockReset();
   testProxyMock.mockReset().mockResolvedValue({ state: "no_runner", detail: "nothing to launch a probe with" });
   listWorkspacesMock.mockReset().mockResolvedValue([]);
@@ -147,6 +150,9 @@ describe("SetupScreen — the Corporate-network save toast (F6-F6)", () => {
 
 describe("SetupScreen — the Corporate-network save path's If-Match (#492)", () => {
   it("on a 412, reloads the site config (fresh ETag for a retry) and tells the operator, instead of silently accepting a stale write", async () => {
+    // The two mount reads (orchestrator + step) see "v1"; the reload the 412
+    // forces sees "v2" — the document another tab saved.
+    etagMock.mockReturnValueOnce('"v1"').mockReturnValueOnce('"v1"').mockReturnValue('"v2"');
     putSiteConfigMock.mockRejectedValueOnce(
       new HttpError(412, "If-Match does not match the current site config — GET /site-config again and retry"),
     );
@@ -154,10 +160,10 @@ describe("SetupScreen — the Corporate-network save path's If-Match (#492)", ()
     await saveDetectedProxy(user);
 
     await waitFor(() => expect(putSiteConfigMock).toHaveBeenCalled());
-    // The bug itself: this save now sends the mount read's ETag as a SECOND
-    // argument (If-Match) — before this fix, putSiteConfig was called with
-    // the document alone, and a stale write went through unrefused.
-    expect(putSiteConfigMock).toHaveBeenCalledWith(expect.anything(), null);
+    // The bug itself: this save sends the mount read's ETag as If-Match —
+    // before this fix, putSiteConfig was called with the document alone, and
+    // a stale write went through unrefused.
+    expect(putSiteConfigMock).toHaveBeenLastCalledWith(expect.anything(), '"v1"');
     // The orchestrator's own mount read (1), CorpNetworkStep's own mount read
     // via useSiteConfigStep (2), plus the reload the 412 path forces (3) — a
     // fresh document, and a fresh ETag, so a retry has something to succeed
@@ -169,5 +175,17 @@ describe("SetupScreen — the Corporate-network save path's If-Match (#492)", ()
     // Never the F6-F6 advisory toasts — a 412 never reaches the code that
     // reads putSiteConfig's result.
     expect(toastWarning).not.toHaveBeenCalled();
+
+    // The retry carries the reload's fresh ETag, not the stale one.
+    putSiteConfigMock.mockResolvedValueOnce({
+      siteConfig: {},
+      danglingSecretRefs: [],
+      onboardingCompletedAtIgnored: false,
+      appliesFrom: "next_dispatch",
+      sourcesNoLongerAdmitted: null,
+    });
+    await user.click(screen.getByRole("button", { name: /use detected proxy/i }));
+    await waitFor(() => expect(putSiteConfigMock).toHaveBeenCalledTimes(2));
+    expect(putSiteConfigMock).toHaveBeenLastCalledWith(expect.anything(), '"v2"');
   });
 });
