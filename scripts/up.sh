@@ -876,7 +876,7 @@ cmd_up() {
   # open so first light is as fast as possible; you read Getting-started while these
   # finish. Skip them for a pure UI look with WARDYN_UP_SKIP_RUN_IMAGES=1.
   if [ "${WARDYN_UP_SKIP_RUN_IMAGES:-0}" = "1" ]; then
-    log "WARDYN_UP_SKIP_RUN_IMAGES=1 — skipping the run images, including the Claude sign-in image (agent-claude-code): Claude subscriptions stay refused (E4) until you build it — make agent-images-core && docker compose -f \"${COMPOSE_FILE}\" --profile build-only build proxy-image"
+    log "WARDYN_UP_SKIP_RUN_IMAGES=1 — skipping the run images, including the Claude sign-in image (agent-claude-code): adding a Claude subscription is refused and claude-code runs fail until you build it — make agent-images-core && docker compose -f \"${COMPOSE_FILE}\" --profile build-only build proxy-image"
   else
     log "Finishing the run components so your first run is ready (sandbox proxy + agent images)…"
     # What the pull-first block above ALREADY put at these :local tags must not be
@@ -915,7 +915,7 @@ cmd_up() {
         [ "${_svc}" = "agent-claude-code" ] && _claude_img_failed=1
       fi
     done
-    [ "${_claude_img_failed}" = 1 ] && die "agent-claude-code (the Claude sign-in image) failed to build — checked prerequisite for Claude subscriptions (#524/MP-14); Claude subscriptions stay refused (E4) until you rerun: docker compose -f ${COMPOSE_FILE} --profile build-only build agent-claude-code"
+    [ "${_claude_img_failed}" = 1 ] && die "The stack is UP; agent-claude-code (the Claude sign-in image) failed to build — adding a Claude subscription is refused and claude-code runs fail until you rebuild it: docker compose -f ${COMPOSE_FILE} --profile build-only build agent-claude-code"
     if [ "${_agent_img_warn}" = 1 ]; then
       warn "one or more agent images did not build (see above). The stack is UP; fix the image and rerun its build before launching that agent."
     else
