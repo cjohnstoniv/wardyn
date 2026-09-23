@@ -104,6 +104,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
   `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
   handler written in this indirect style no longer passes CI clean.
+- **A run that will hold a person's Azure DevOps Entra bearer no longer grades its secrets
+  `none` (#503, closing #474).** The autonomy rubric graded a run from its eligible grants
+  alone, but dispatch authors the per-person Azure DevOps grant later, for `dev.azure.com`.
+  So a run that would hold that bearer graded `secrets=none` at create, on Review and at
+  launch, and could land above its profile's secrets cap. The rubric now
+  resolves the Azure DevOps lane at create, the same way dispatch does, and grades the
+  credential with it. The `bound_by` sentence names the credential when it is why the secrets
+  axis graded `powerful`. Dispatch then authors from that frozen resolution and refuses a lane
+  the grade did not include: an admin who edits the provider row during a long image build
+  can no longer hand a run graded `none` an Azure DevOps credential.
 
 ### Fixed
 
@@ -233,6 +243,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and before the secret store exists, so a secret-store reference cannot be
   resolved here. The file's mode must be `0600` or tighter, and boot refuses if
   both vars are set rather than picking one silently. See `docs/ENV.md`.
+  This resolves 0.7.6's known gap that `WARDYN_DAEMON_PROXY_URL` had no credentialed-proxy
+  form.
 
 - **A brokered push that touches a denied path, cannot be inspected, or is too large is refused.**
   `push_rules` is enforcement now, not storage. When a run's policy carries content rules, both
@@ -499,8 +511,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-
-
 - **On Kubernetes, a run's Go and npm caches now count against `disk_mib`.** A third `emptyDir`
   (`wardyn-cache` at `/home/agent/.cache`) joins the existing `/tmp` and workdir scratch volumes
   (`ephemeralScratchVolumes`), and dispatch's toolchain env now points `GOTMPDIR`, `GOMODCACHE` and
@@ -543,6 +553,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the error with method and path and answer the caller with the action alone; a source-walking guard
   test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
   which are already caller-facing by design, are unchanged.
+
 - **A read-only terminal observer is now promoted in place when the writer leaves, instead of
   having to reconnect.** The registry keeps one writer and the observers queued behind it in
   arrival order; an ordinary release promotes the oldest of them on the socket it already has,
@@ -984,11 +995,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
-- Azure DevOps projects and repositories whose names carry spaces or other permitted characters
-  (`Payments Platform`, `Card Auth (v2).Service`) now import, launch, clone, fetch and push:
-  every door stores one spelling of the address, and approvals name the repository the same
-  way on the REST and git paths. When two repositories in one run would clone into the same
-  directory, the run's response now says which one was not cloned (#485).
 
 ### Changed
 
@@ -1580,6 +1586,8 @@ tighten an existing input check and one turns a relayed oversized upload into a 
   that key today and the Go sentence it mirrors already differed from it, but the table is canon: the
   doc's own **Q11** (recommend (a) — the sentence takes a `{remedy}`) has to be ruled in M2 before the
   frozen row can take the third argument.
+- `WARDYN_DAEMON_PROXY_URL` has no credentialed-proxy form (a `WARDYN_DAEMON_PROXY_SECRET` secret-ref
+  knob mirroring `UpstreamProxySecretRef` is a follow-up, not built in 0.7.6).
 - The spent-token mark stays in-memory and unpersisted (the existing single-instance posture); a daemon
   restart re-grades a spent-but-not-yet-refresh-window credential `live` until the next dispatch marks
   it spent again. Persisting it is a follow-up, not built in 0.7.6.
