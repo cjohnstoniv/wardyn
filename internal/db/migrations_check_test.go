@@ -521,23 +521,32 @@ func closedEnumChecks() []closedEnumCheck {
 	}
 }
 
-// cappedRoleCheckRe captures the role literal out of ssh_public_keys' capped
-// CHECK (`NOT capped OR role = '<literal>'`, 0070 then 0074). The clause is
-// `NOT <bool column> OR <column> = '<literal>'`, a shape closedEnumChecks
-// cannot express (it models `col IN (...)` and bare `col = 'literal'`, not a
-// second column ANDed/ORed in — see columnCheckValues and checkGlueRe), so
-// this constraint is pinned with its own narrow parser rather than folded
-// into that case table.
-var cappedRoleCheckRe = regexp.MustCompile(`(?is)NOT\s+capped\s+OR\s+role\s*=\s*'([^']*)'`)
+// cappedRoleCheckRe is the WHOLE shape of ssh_public_keys' capped CHECK
+// (`NOT capped OR role = '<literal>'`, 0070 then 0074), anchored, capturing
+// the role literal. The clause is `NOT <bool column> OR <column> =
+// '<literal>'`, a shape closedEnumChecks cannot express (it models `col IN
+// (...)` and bare `col = 'literal'`, not a second column ORed in — see
+// columnCheckValues and checkGlueRe), so this constraint is pinned with its
+// own narrow parser rather than folded into that case table.
+var cappedRoleCheckRe = regexp.MustCompile(`(?is)^\s*NOT\s+capped\s+OR\s+role\s*=\s*'([^']*)'\s*$`)
+
+var (
+	mentionsCappedRe = regexp.MustCompile(`(?i)\bcapped\b`)
+	addConstraintRe  = regexp.MustCompile(`(?is)ADD\s+CONSTRAINT\s+(\w+)`)
+	dropConstraintRe = regexp.MustCompile(`(?is)DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?(\w+)`)
+)
 
 // effectiveCappedSSHRole returns the role literal ssh_public_keys' capped
 // CHECK admits, after ALL migrations are applied in lexical order — the LAST
 // migration that (re)defines the constraint wins, the same rule
-// effectiveCheckValues and effectiveAgentRunStates use.
+// effectiveCheckValues and effectiveAgentRunStates use. It fails closed the
+// way columnCheckValues does: any ssh_public_keys CHECK that mentions capped
+// but is not exactly that shape stops the test, and dropping the cap without
+// re-adding it leaves no literal to return.
 func effectiveCappedSSHRole(t *testing.T) (string, bool) {
 	t.Helper()
 	targetsRe := targetsTableRe("ssh_public_keys")
-	var literal string
+	var literal, constraint string
 	found := false
 	for _, name := range readMigrationNames(t) {
 		data := readMigration(t, name)
@@ -545,12 +554,26 @@ func effectiveCappedSSHRole(t *testing.T) (string, bool) {
 			if !targetsRe.MatchString(stmt) {
 				continue
 			}
+			for _, m := range dropConstraintRe.FindAllStringSubmatch(sqlLineCommentRe.ReplaceAllString(stmt, " "), -1) {
+				if found && m[1] == constraint {
+					found = false
+				}
+			}
 			for _, expr := range checkExprs(stmt) {
-				m := cappedRoleCheckRe.FindStringSubmatch(expr)
-				if m == nil {
+				if !mentionsCappedRe.MatchString(expr) {
 					continue
 				}
+				m := cappedRoleCheckRe.FindStringSubmatch(expr)
+				if m == nil {
+					t.Fatalf("%s: ssh_public_keys CHECK %q mentions capped but is not `NOT capped OR role = '<literal>'`. "+
+						"Model the new shape here - a guard that skips a cap it cannot read reports a broken cap as pinned",
+						name, strings.TrimSpace(expr))
+				}
 				literal, found = m[1], true // last writer (lexically-latest migration) wins
+				constraint = ""
+				if a := addConstraintRe.FindStringSubmatch(stmt); a != nil {
+					constraint = a[1]
+				}
 			}
 		}
 	}
