@@ -353,7 +353,7 @@ func (s *Store) Check(ctx context.Context, owner, name, ref string) error {
 		return err
 	}
 	if !found || !m.live() {
-		return fmt.Errorf("Vault no longer holds this credential at %s", ref)
+		return fmt.Errorf("refused: Vault no longer holds this credential at %s", ref)
 	}
 	return bound(m.CustomMetadata, owner, name)
 }
