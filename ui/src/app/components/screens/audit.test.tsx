@@ -112,6 +112,26 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(link).toHaveAttribute("href", "/runs/run_111");
   });
 
+  // #876 — a run opened FROM /admin/audit stays in the Admin view: the drill
+  // banner's "Open run" link used to be hard-coded to the User-view path, so
+  // clicking it left the Admin view (and refused an admin-only SSO token
+  // outright). Mounted at /admin/audit it must go through runPath to
+  // /admin/runs/:id; the User-view mount above is the negative control.
+  it("/admin/audit: the drill banner's Open run goes to /admin/runs/:id (#876)", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    render(
+      <MemoryRouter initialEntries={["/admin/audit"]}>
+        <AuditScreen />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
+
+    fireEvent.click(await screen.findByRole("button", { name: /111/ }));
+
+    const link = await screen.findByRole("link", { name: /open run/i });
+    expect(link).toHaveAttribute("href", "/admin/runs/run_111");
+  });
+
   // ui-auditRec-3: getRun resolving undefined is a real 404 (see
   // runs.getRun in lib/api/runs.ts) — the ONLY case that means "gone". The
   // drill banner must keep saying so, and must NOT offer a Retry for it (a

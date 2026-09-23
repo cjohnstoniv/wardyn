@@ -40,6 +40,7 @@ import {
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState } from "../wardyn/states";
+import { runPath, useConsoleMode } from "../wardyn/console-view";
 import { RECORDING_DISABLED_DESC, RECORDING_DISABLED_TITLE } from "../wardyn/copy";
 import {
   RECORDINGS_ALL_LOADED,
@@ -412,6 +413,7 @@ export function RecordingScreen() {
 }
 
 function RecordingCard({ run, onPlay }: { run: AgentRun; onPlay: () => void }) {
+  const view = useConsoleMode();
   const durationSec = run.recording_duration_sec;
   const bytes = run.recording_bytes ?? 0;
   return (
@@ -476,7 +478,7 @@ function RecordingCard({ run, onPlay }: { run: AgentRun; onPlay: () => void }) {
           {relativeTime(run.created_at)}
         </span>
         <Link
-          to={`/runs/${encodeURIComponent(run.id)}`}
+          to={runPath(view, run.id)}
           className="ml-auto text-xs font-medium text-primary hover:underline"
         >
           Open run →
