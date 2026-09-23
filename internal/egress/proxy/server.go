@@ -109,7 +109,21 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// function, so a transport built on only one branch would carry the same risk.
 	// Everything else about DefaultTransport (timeouts, HTTP/2, keep-alives)
 	// is kept, and the CA pool rides along when there is one.
-	if client != nil && client.Transport == nil {
+	//
+	// Defaulted BEFORE the pin check (never left nil past this point): three of
+	// the four callers below (newDecisionSink, buildInjector, newApprovalClient)
+	// have their own "client == nil" fallback, but each builds a bare
+	// &http.Client{} with NO Transport override — riding http.DefaultTransport
+	// unpinned, same as the very risk this comment describes. The fourth,
+	// runTokenRenewer, has no fallback at all: it calls client.Do on whatever it
+	// was handed, so a nil client reaching it past this point is a startup
+	// goroutine panic (nil pointer dereference), not merely an unpinned
+	// transport. A nil client reaching NewServer must get the SAME pinned,
+	// proxyless, corp-CA-trusting client a caller-supplied one does.
+	if client == nil {
+		client = &http.Client{}
+	}
+	if client.Transport == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = nil
 		if tlsCfg != nil {
