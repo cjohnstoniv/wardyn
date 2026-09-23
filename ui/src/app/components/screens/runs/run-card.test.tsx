@@ -267,7 +267,8 @@ describe("RunCard — a stale hold degrades the card's own claim (#160)", () => 
 });
 
 // 0.7.3 F7 — the Runs-list door onto the same clone the run header offers.
-describe("RunCard — kebab clone door (0.7.3 F7)", () => {
+describe("RunCard — kebab clone door", () => {
+  // ticket: 0.7.3 F7
   async function openMenu() {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(screen.getByRole("button", { name: "Run actions" }));

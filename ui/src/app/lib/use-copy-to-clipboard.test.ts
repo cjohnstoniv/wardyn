@@ -48,7 +48,8 @@ describe("useCopyToClipboard", () => {
   // outcome — a member on LAN HTTP (an insecure context: no
   // navigator.clipboard) clicked Copy and nothing ever told them it didn't
   // work. copyAsync already returns the outcome; copy() must surface it.
-  it("F6-F13: copy() surfaces a failure toast when navigator.clipboard is unavailable", async () => {
+  it("copy() surfaces a failure toast when navigator.clipboard is unavailable", async () => {
+    // ticket: F6-F13
     Object.assign(navigator, { clipboard: undefined });
     const { result } = renderHook(() => useCopyToClipboard(1000));
 

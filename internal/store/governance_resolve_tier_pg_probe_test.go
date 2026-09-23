@@ -22,7 +22,7 @@
 //	cd <repo root> && \
 //	cp local/review-0.7/deep/F2-sso-to-ceiling/governance_resolve_tier_pg_probe_test.go internal/store/ && \
 //	WARDYN_TEST_PG='postgres://<user>:<pass>@127.0.0.1:55432/<db>?sslmode=disable' \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/store/ -run 'TestF2_' -count=1 -p 4 -v ; \
+//	nice -n 10 GOMAXPROCS=8 go test ./internal/store/ -run 'TestPG_ResolveGovernanceProfile_Tier' -count=1 -p 4 -v ; \
 //	rm -f internal/store/governance_resolve_tier_pg_probe_test.go
 package store_test
 
@@ -37,7 +37,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func TestF2_ResolveGovernanceProfile_TierIsTheMatchedRow(t *testing.T) {
+func TestPG_ResolveGovernanceProfile_TierIsTheMatchedRow(t *testing.T) {
+	// ticket: F2
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)

@@ -11,7 +11,7 @@
 // RUN (from the repo root, after copying this file to the destination above):
 //
 //	nice -n 10 GOMAXPROCS=8 go test -race -count=1 -p 4 ./internal/api \
-//	    -run 'TestF5_' -v
+//	    -run 'TestTakeover_' -v
 //
 // No Postgres is needed: every store here is the package's in-memory authzStore.
 // (If the coordinator wants the PG-backed sibling suites in the same run,
@@ -30,12 +30,12 @@
 //
 // Expected verdicts on fa910735 (see F5-ssh-attach-takeover-race.md §4):
 //
-//	TestF5_WebPump_FrameOnTheWireBeforeEvictionIsDropped     GREEN  (pins attachPump's per-frame canWrite gate)
+//	TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction          GREEN  (pins attachPump's per-frame canWrite gate)
 //	(H1 has no probe — unsatisfiable as stated; see the note above)
-//	TestF5_SSHPump_KeystrokesAfterEvictionDropped            GREEN  (pins sshShellPump's canWrite gate)
-//	TestF5_SSHPump_ResizeAfterEvictionDropped                RED    (H2: sshShellPump's resize goroutine gates on holder==nil, not canWrite)
-//	TestF5_SSHDisplace_BlockedStderrDoesNotStrandEvictedPump RED    (H3: bridgeSSHShell's displace() writes stderr BEFORE cancel, unbounded)
-//	TestF5_Takeover_SecurityAdminCannotEvictForeignHolder    RED    (H4 policy: ownsRunOrAdmin's isSecurityOperator arm reaches the takeover)
+//	TestTakeover_SSHPumpDropsKeystrokesAfterEviction               GREEN  (pins sshShellPump's canWrite gate)
+//	TestTakeover_SSHPumpDropsResizeAfterEviction                   RED    (H2: sshShellPump's resize goroutine gates on holder==nil, not canWrite)
+//	TestTakeover_SSHDisplaceBlockedStderrDoesNotStrandEvictedPump  RED    (H3: bridgeSSHShell's displace() writes stderr BEFORE cancel, unbounded)
+//	TestTakeover_SecurityAdminCannotEvictForeignHolder             RED    (H4 policy: ownsRunOrAdmin's isSecurityOperator arm reaches the takeover)
 package api
 
 import (
@@ -236,7 +236,7 @@ func wsPing(t *testing.T, c *websocket.Conn) {
 
 // ─── web lane ──────────────────────────────────────────────────────────────
 
-// TestF5_WebPump_FrameOnTheWireBeforeEvictionIsDropped: a keystroke frame the
+// TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction: a keystroke frame the
 // displaced client DISPATCHED before the take-over was decided — already on the
 // wire, not yet consumed because the pump is parked inside Session.Write of the
 // previous frame — must be DROPPED once the eviction lands, not delivered when
@@ -245,7 +245,8 @@ func wsPing(t *testing.T, c *websocket.Conn) {
 // does) to model the worst case where displace()'s close handshake is stuck
 // against an unresponsive peer: the ONLY thing standing between the frame and
 // the tmux session is attachPump's per-frame canWrite() gate.
-func TestF5_WebPump_FrameOnTheWireBeforeEvictionIsDropped(t *testing.T) {
+func TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction(t *testing.T) {
+	// ticket: F5
 	srv, gr, _, run := f5Server(t)
 	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
@@ -320,11 +321,12 @@ func startSSHShell(t *testing.T, srv *Server, run types.AgentRun, ch ssh.Channel
 	return done
 }
 
-// TestF5_SSHPump_KeystrokesAfterEvictionDropped: the SSH twin of the web probe.
+// TestTakeover_SSHPumpDropsKeystrokesAfterEviction: the SSH twin of the web probe.
 // The fake channel is an io.Pipe, so clientSend returns only once the pump has
 // READ the bytes, and the NEXT clientSend returns only once the pump has looped
 // back to Read — i.e. finished deciding what to do with the previous chunk.
-func TestF5_SSHPump_KeystrokesAfterEvictionDropped(t *testing.T) {
+func TestTakeover_SSHPumpDropsKeystrokesAfterEviction(t *testing.T) {
+	// ticket: F5
 	srv, gr, _, run := f5Server(t)
 	ch := newFakeSSHChannel()
 	resizeCh := make(chan sshWindowChangeMsg, 1)
@@ -357,13 +359,14 @@ func TestF5_SSHPump_KeystrokesAfterEvictionDropped(t *testing.T) {
 	}
 }
 
-// TestF5_SSHPump_ResizeAfterEvictionDropped (expected RED on fa910735 = H2):
+// TestTakeover_SSHPumpDropsResizeAfterEviction (expected RED on fa910735 = H2):
 // sshShellPump's resize goroutine gates on `holder == nil`
 // (in sshgateway_channels.go), NOT holder.canWrite(), so an EVICTED ssh
 // holder keeps resizing the shared tmux window under the new holder until its
 // channel actually dies. The web lane gates the same frame on canWrite()
 // (attachPump in attach.go); this is the asymmetry.
-func TestF5_SSHPump_ResizeAfterEvictionDropped(t *testing.T) {
+func TestTakeover_SSHPumpDropsResizeAfterEviction(t *testing.T) {
+	// ticket: F5 H2
 	srv, gr, _, run := f5Server(t)
 	ch := newFakeSSHChannel()
 	resizeCh := make(chan sshWindowChangeMsg, 1)
@@ -399,7 +402,7 @@ func TestF5_SSHPump_ResizeAfterEvictionDropped(t *testing.T) {
 	}
 }
 
-// TestF5_SSHDisplace_BlockedStderrDoesNotStrandEvictedPump (expected RED on
+// TestTakeover_SSHDisplaceBlockedStderrDoesNotStrandEvictedPump (expected RED on
 // fa910735 = H3): the SSH displace() prints the reason on the channel's stderr
 // and only THEN cancels the pump (bridgeSSHShell in sshgateway_channels.go),
 // on a goroutine with no deadline. A displaced client whose channel window is
@@ -409,7 +412,8 @@ func TestF5_SSHPump_ResizeAfterEvictionDropped(t *testing.T) {
 // of the run's four channel slots until the TCP connection dies. Write
 // authority IS revoked (evicted=true) — this probe is about the stranded
 // session, not a second writer.
-func TestF5_SSHDisplace_BlockedStderrDoesNotStrandEvictedPump(t *testing.T) {
+func TestTakeover_SSHDisplaceBlockedStderrDoesNotStrandEvictedPump(t *testing.T) {
+	// ticket: F5 H3
 	srv, gr, audit, run := f5Server(t)
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
@@ -444,7 +448,7 @@ func TestF5_SSHDisplace_BlockedStderrDoesNotStrandEvictedPump(t *testing.T) {
 
 // ─── takeover authorization ────────────────────────────────────────────────
 
-// TestF5_Takeover_SecurityAdminCannotEvictForeignHolder (POLICY probe, expected
+// TestTakeover_SecurityAdminCannotEvictForeignHolder (POLICY probe, expected
 // RED on fa910735 = H4): handleAttachTakeover gates on getRunAuthorized ->
 // ownsRunOrAdmin (helpers.go), whose 0.7 arm is isSecurityOperator — so a
 // security_admin, who can neither mint an attach ticket for a foreign run
@@ -453,7 +457,8 @@ func TestF5_SSHDisplace_BlockedStderrDoesNotStrandEvictedPump(t *testing.T) {
 // says the security tier never reaches INTO a run; ending another human's
 // terminal is a kick, not a read. The owner decides whether this is intended;
 // the probe pins the current answer either way.
-func TestF5_Takeover_SecurityAdminCannotEvictForeignHolder(t *testing.T) {
+func TestTakeover_SecurityAdminCannotEvictForeignHolder(t *testing.T) {
+	// ticket: F5 H4
 	srv, gr, audit, run := f5Server(t)
 	sec := ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
 

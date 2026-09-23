@@ -334,7 +334,8 @@ describe("'Not now' is per viewer, per browsing context", () => {
   });
 });
 
-describe("before /me answers, the strip says nothing (S2)", () => {
+describe("before /me answers, the strip says nothing", () => {
+  // ticket: S2
   // useOperator()'s default is fail-OPEN, so a MEMBER under a dead shared row
   // would otherwise read the ADMIN's sentence with a button the server refuses
   // — and usePrincipal() is "" in the same window, so a "Not now" there would

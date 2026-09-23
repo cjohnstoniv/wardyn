@@ -20,10 +20,10 @@
 // which is what they were written to prove; both fixes have landed and the
 // assertions are unchanged, so a red here is a REGRESSION, not a finding:
 //
-//	TestPG_ProbeF11_RewrittenRowReportsExactSeq        pins the tamper claim
-//	TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq   pins the splice claim
-//	TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean was H1 (unchained post-genesis rows verified clean); auditChainWalk rule 3
-//	TestPG_ProbeF11_UnlockedWriterDoesNotForkChain     was H5 (a lock-skipping writer forked the chain); migration 0056 + 0057
+//	TestPG_AuditChain_RewrittenRowReportsExactSeq         pins the tamper claim
+//	TestPG_AuditChain_SplicedOutRowReportsSuccessorSeq    pins the splice claim
+//	TestPG_AuditChain_UnchainedRowAfterGenesisIsNotClean  was H1 (unchained post-genesis rows verified clean); auditChainWalk rule 3
+//	TestPG_AuditChain_UnlockedWriterDoesNotForkChain      was H5 (a lock-skipping writer forked the chain); migration 0056 + 0057
 package store_test
 
 import (
@@ -105,13 +105,14 @@ func sweep(t *testing.T, pool *pgxpool.Pool) store.AuditChainStatus {
 	return st
 }
 
-// TestPG_ProbeF11_RewrittenRowReportsExactSeq edits the two fields the existing
+// TestPG_AuditChain_RewrittenRowReportsExactSeq edits the two fields the existing
 // tamper test does not touch — the jsonb payload and the timestamp — and
 // demands the sweep name the edited row's seq. It first proves the negative:
 // a jsonb-EQUIVALENT rewrite (same value, different key order/whitespace) is
 // not an edit, because the hash covers the stored jsonb, not the caller's
 // bytes (0047's "data -> embedded as jsonb").
-func TestPG_ProbeF11_RewrittenRowReportsExactSeq(t *testing.T) {
+func TestPG_AuditChain_RewrittenRowReportsExactSeq(t *testing.T) {
+	// ticket: F11
 	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool)
@@ -191,13 +192,14 @@ func TestPG_ProbeF11_RewrittenRowReportsExactSeq(t *testing.T) {
 	})
 }
 
-// TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq deletes a MIDDLE row with
+// TestPG_AuditChain_SplicedOutRowReportsSuccessorSeq deletes a MIDDLE row with
 // the triggers off and demands rule 2 (auditchain.go step): the break is named
 // at the SUCCESSOR's seq with the deleted/reordered reason, and it is a finding
 // rather than an error. The row is parked in a temp table and put back
 // byte-for-byte (OVERRIDING SYSTEM VALUE, triggers off so 0047 does not
 // re-chain it) so the shared table is whole again afterwards.
-func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
+func TestPG_AuditChain_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
+	// ticket: F11
 	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool)
@@ -278,7 +280,7 @@ func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 	}
 }
 
-// TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean — hypothesis H1.
+// TestPG_AuditChain_UnchainedRowAfterGenesisIsNotClean — hypothesis H1.
 //
 // A DB admin who disables/drops the 0047 trigger (or inserts in replica mode)
 // appends a row with NULL prev_hash/row_hash AFTER the chain's genesis. The
@@ -289,7 +291,8 @@ func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 // rows are a PREFIX; a NULL-hash row with seq > first_seq is a finding — does
 // did not hold on the RC; rule 3 in auditChainWalk delivers it now, so this is
 // a GREEN regression pin.
-func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
+func TestPG_AuditChain_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
+	// ticket: F11
 	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool)
@@ -324,7 +327,7 @@ func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 	}
 }
 
-// TestPG_ProbeF11_UnlockedWriterDoesNotForkChain — hypothesis H5.
+// TestPG_AuditChain_UnlockedWriterDoesNotForkChain — hypothesis H5.
 //
 // Any writer that is not one of the two in-tree ones (store.InsertAuditEvent,
 // the broker's insertAuditEventTx) — psql, scripts/e2e-backend.sh's seed
@@ -347,7 +350,8 @@ func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 // that actually serializes: the locked writer waits for a transaction that only
 // commits after it returns. Measured, not assumed: with the lock in the trigger
 // that shape hangs in store.InsertAuditEvent until the go test timeout kills it.
-func TestPG_ProbeF11_UnlockedWriterDoesNotForkChain(t *testing.T) {
+func TestPG_AuditChain_UnlockedWriterDoesNotForkChain(t *testing.T) {
+	// ticket: F11
 	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool) // only for the cleanup delete

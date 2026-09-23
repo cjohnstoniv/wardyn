@@ -82,7 +82,8 @@ describe("buildSpec is workspace-optional (ephemeral runs)", () => {
 // launched spec was safe. Now that validateStep is gone (see wizard-types.ts's
 // RETIRED note), assert the property itself — on gitPatConfigured, the ONE
 // predicate buildSpec gates both the grant and the egress union on.
-describe("half-configured git_pat neither grants nor widens (D5/claim4)", () => {
+describe("half-configured git_pat neither grants nor widens", () => {
+  // ticket: D5 claim4
   const half = [
     { name: "a host but no stored secret", gitPatHost: "dev.azure.com", gitPatSecretName: "" },
     { name: "a secret but no host", gitPatHost: "", gitPatSecretName: "ado-pat" },

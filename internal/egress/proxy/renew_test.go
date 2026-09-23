@@ -163,10 +163,11 @@ func TestRenewerKeepsOldTokenWhenControlPlaneRefuses(t *testing.T) {
 // window mid-investigation into who had admin. The loop retried ANY failure every
 // 60s with no give-up, and said so out loud in its own comment.
 
-// TestRenewB5_PermanentRefusalStopsAtOnce: a post-auth 403 is
+// TestRenewer_PermanentRefusalStopsAtOnce: a post-auth 403 is
 // handleInternalTokenRenew's OWN answer — the run is gone or terminal — so the
 // loop asks exactly once and exits. One request, not one a minute forever.
-func TestRenewB5_PermanentRefusalStopsAtOnce(t *testing.T) {
+func TestRenewer_PermanentRefusalStopsAtOnce(t *testing.T) {
+	// ticket: B5
 	for _, status := range []int{http.StatusForbidden} {
 		cp := &renewCP{ttl: time.Hour, renewErr: status}
 		srv := httptest.NewServer(cp.handler())
@@ -197,14 +198,15 @@ func TestRenewB5_PermanentRefusalStopsAtOnce(t *testing.T) {
 	}
 }
 
-// TestRenewB5_UnauthorizedBacksOffThenGivesUp is the case a first draft would
+// TestRenewer_UnauthorizedBacksOffThenGivesUp is the case a first draft would
 // have got wrong in the dangerous direction. A 401 is NOT proof of revocation:
 // the embedded provider treats ANY RevocationStore error as revoked, so a
 // Postgres blip answers 401 exactly like a real revocation, and giving up on the
 // first one would brick every healthy long run's /internal/* calls the moment a
 // read flickered. So the loop keeps trying with GROWING gaps — and stops once the
 // last token it actually held would have expired anyway.
-func TestRenewB5_UnauthorizedBacksOffThenGivesUp(t *testing.T) {
+func TestRenewer_UnauthorizedBacksOffThenGivesUp(t *testing.T) {
+	// ticket: B5
 	cp := &renewCP{ttl: time.Hour, renewErr: http.StatusUnauthorized}
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()
@@ -243,10 +245,11 @@ func TestRenewB5_UnauthorizedBacksOffThenGivesUp(t *testing.T) {
 	}
 }
 
-// TestRenewB5_TransientFailuresAlsoBackOff: a 5xx is the blip case, and it gets
+// TestRenewer_TransientFailuresAlsoBackOff: a 5xx is the blip case, and it gets
 // the same growing gaps — the point of the backoff is the AUDIT VOLUME at the
 // other end, which does not care which failure class caused it.
-func TestRenewB5_TransientFailuresAlsoBackOff(t *testing.T) {
+func TestRenewer_TransientFailuresAlsoBackOff(t *testing.T) {
+	// ticket: B5
 	cp := &renewCP{ttl: time.Hour, renewErr: http.StatusServiceUnavailable}
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()
@@ -273,10 +276,11 @@ func TestRenewB5_TransientFailuresAlsoBackOff(t *testing.T) {
 	}
 }
 
-// TestRenewB5_ASuccessfulRenewResetsTheGiveUpHorizon: the horizon is measured
+// TestRenewer_SuccessfulRenewResetsTheGiveUpHorizon: the horizon is measured
 // from the last token the loop actually HELD, not from startup — otherwise a run
 // longer than one token lifetime would give up while perfectly healthy.
-func TestRenewB5_ASuccessfulRenewResetsTheGiveUpHorizon(t *testing.T) {
+func TestRenewer_SuccessfulRenewResetsTheGiveUpHorizon(t *testing.T) {
+	// ticket: B5
 	cp := &renewCP{ttl: 80 * time.Millisecond} // half-life 40ms => renews promptly
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()

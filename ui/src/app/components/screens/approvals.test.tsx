@@ -514,7 +514,8 @@ describe("ApprovalsScreen ?tab=", () => {
 // went wrong" while the badge claims "1 pending". The tick heals status back
 // to "ready", paused only while the FOREGROUND load is in flight (audit.tsx
 // precedent) so a poll tick during the error state can still recover it.
-describe("ApprovalsScreen — F5-F4: a poll tick heals a stuck error state", () => {
+describe("ApprovalsScreen — a poll tick heals a stuck error state", () => {
+  // ticket: F5-F4
   beforeEach(() => {
     mockPendingKind = "credential";
   });
@@ -562,7 +563,8 @@ describe("ApprovalsScreen — F5-F4: a poll tick heals a stuck error state", () 
   });
 });
 
-describe("ApprovalsScreen — F5-F11: deciding refreshes silently, no skeleton flash", () => {
+describe("ApprovalsScreen — deciding refreshes silently, no skeleton flash", () => {
+  // ticket: F5-F11
   beforeEach(() => {
     mockPendingKind = "credential";
   });
@@ -607,7 +609,8 @@ describe("ApprovalsScreen — F5-F11: deciding refreshes silently, no skeleton f
 // dead control on a governance surface reads as "this is still yours to
 // answer". 0.7.2 cancels them server-side (types.ApprovalCancelled) and the
 // screen stops asking.
-describe("ApprovalsScreen — the run has ended (B4)", () => {
+describe("ApprovalsScreen — the run has ended", () => {
+  // ticket: B4
   it("offers no decision on a KILLED run, and says what happened instead", async () => {
     mockRunState = "KILLED";
     render(
@@ -657,7 +660,8 @@ describe("ApprovalsScreen — the run has ended (B4)", () => {
 // that quietly while "Reach api.example.com" read, to a human, like the one
 // connection in front of them. 0.7.2 says it out loud; the port-scoped
 // semantic is a 0.8 change at three places at once.
-describe("ApprovalsScreen — an egress approval says it is host-wide (P0.3)", () => {
+describe("ApprovalsScreen — an egress approval says it is host-wide", () => {
+  // ticket: P0.3
   it("states the host-wide scope on an egress_domain card", async () => {
     mockPendingKind = "egress_domain";
     render(

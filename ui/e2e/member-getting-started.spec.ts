@@ -353,7 +353,8 @@ test.describe("admin session at /setup (unmocked — negative control)", () => {
 //
 // Browser-only: this is a ROUTE decision made from /me, so only a real
 // navigation with a security-admin /me proves it.
-test.describe("security admin at /setup (mocked /me role) — R4/F034", () => {
+test.describe("security admin at /setup (mocked /me role)", () => {
+  // ticket: R4/F034
   test.beforeEach(async ({ page }) => {
     await mockSecurityAdminRole(page);
   });

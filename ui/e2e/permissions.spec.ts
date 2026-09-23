@@ -254,7 +254,8 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
 // (canonicalGrantValue refuses or rewrites it on the way in), so this
 // route-intercepts GET /permissions — the same idiom the block above uses —
 // rather than writing one for real.
-test.describe("permissions — an inert grant renders neutral, never live (F4-F5)", () => {
+test.describe("permissions — an inert grant renders neutral, never live", () => {
+  // ticket: F4-F5
   test("a grant flagged inert renders the neutral Inert chip, never Allow/Deny", async ({ page }) => {
     await page.route("**/api/v1/permissions", (route) =>
       route.fulfill({
@@ -335,7 +336,8 @@ test.describe("Permissions — a member by URL is told the tier, not an outage",
 // itself authorizes security_operator — that's authz_test.go's classSecurity
 // rows for POST /permissions/grants, DELETE /permissions/grants/{id}, and PUT
 // /permissions/enforcement.
-test.describe("Permissions — a security admin actually uses the write surface, not just sees the link (X2-F13)", () => {
+test.describe("Permissions — a security admin actually uses the write surface, not just sees the link", () => {
+  // ticket: X2-F13
   test.describe.configure({ mode: "serial" });
   const SEC_WHO = "carol@corp.example";
   const SEC_HOST = "*.security-admin-e2e.example";

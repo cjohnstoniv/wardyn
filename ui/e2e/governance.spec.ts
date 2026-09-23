@@ -750,7 +750,8 @@ test.describe("governance — the walls, asserted where this harness can reach t
 // member's next run with a 422. Real profile, real row: only the rendered table
 // proves the cell, and only a stored max_concurrent_runs proves it round-trips
 // the wire.
-test.describe("governance — a quota-only profile is not 'None' (R4/F032)", () => {
+test.describe("governance — a quota-only profile is not 'None'", () => {
+  // ticket: R4/F032
   test("names the cap in the Limits column, and leaves an unlimited profile reading None", async ({
     page,
   }) => {
@@ -789,7 +790,8 @@ test.describe("governance — a quota-only profile is not 'None' (R4/F032)", () 
 // /providers' Storage tab as the ceiling an admin sets and on /drives at
 // write-time instead), so the round-trip through the EDITOR — real fields,
 // real save, real reload — is the only e2e proof either exists on the wire.
-test.describe("governance — the two storage ceilings round-trip through the editor (0.7.2)", () => {
+test.describe("governance — the two storage ceilings round-trip through the editor", () => {
+  // ticket: 0.7.2
   test("both LimitNumberRows write real integers, and 0 means unlimited on both", async ({ page }) => {
     const name = `storage-ceilings-${randomUUID().slice(0, 8)}`;
     await gotoConsole(page);

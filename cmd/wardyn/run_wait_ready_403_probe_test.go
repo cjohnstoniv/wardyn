@@ -67,7 +67,8 @@ func countingReadyServer(t *testing.T, runID uuid.UUID, filesStatus int, filesBo
 	}
 }
 
-func TestProbeF4_WaitReady_403DoesNotSpin(t *testing.T) {
+func TestWaitReady_403DoesNotSpin(t *testing.T) {
+	// ticket: F4
 	for _, tc := range []struct {
 		name   string
 		status int
@@ -128,12 +129,13 @@ func TestProbeF4_WaitReady_403DoesNotSpin(t *testing.T) {
 	}
 }
 
-// TestProbeF4_WaitReady_409StillWaits is the control: the ONE 4xx that is
+// TestWaitReady_409StillWaits is the control: the ONE 4xx that is
 // legitimately transient (409 = no sandbox yet, the empty-SandboxRef arm of
 // handleRunFiles in internal/api/run_files.go) must keep polling. Without this
 // control a "fix" that fails fast on EVERY 4xx would pass the test above while
 // breaking the command's whole purpose.
-func TestProbeF4_WaitReady_409StillWaits(t *testing.T) {
+func TestWaitReady_409StillWaits(t *testing.T) {
+	// ticket: F4
 	prev := waitPollInterval
 	waitPollInterval = time.Millisecond
 	t.Cleanup(func() { waitPollInterval = prev })
@@ -153,7 +155,7 @@ func TestProbeF4_WaitReady_409StillWaits(t *testing.T) {
 }
 
 // TestWaitReady_TransientFilesStatusesAreRetried is the mirror of
-// TestProbeF4_WaitReady_403DoesNotSpin: the statuses that mean "ask again
+// TestWaitReady_403DoesNotSpin: the statuses that mean "ask again
 // later" must NOT be classed permanent. 429 is the one wardynd itself sends
 // (internal/api/audit.go's concurrent-verification arm, and any ingress rate
 // limiter in front of it); 408 and 425 are the other two an ingress emits for a

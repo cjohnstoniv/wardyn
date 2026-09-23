@@ -26,7 +26,7 @@
 //
 //	cd <repo root> && \
 //	cp local/review-0.7/deep/F2-sso-to-ceiling/groups_overage_probe_test.go internal/auth/oidc/ && \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/auth/oidc/ -run 'TestF2_GroupsOverage' -count=1 -p 4 -v ; \
+//	nice -n 10 GOMAXPROCS=8 go test ./internal/auth/oidc/ -run 'TestGroupsOverage' -count=1 -p 4 -v ; \
 //	rm -f internal/auth/oidc/groups_overage_probe_test.go
 package oidc_test
 
@@ -72,7 +72,8 @@ func f2BuildOverageIDToken(t *testing.T, e *idpEnv, sub, email string) string {
 	return tok
 }
 
-func TestF2_GroupsOverageMarkerStampsTruncated(t *testing.T) {
+func TestGroupsOverageMarkerStampsTruncated(t *testing.T) {
+	// ticket: F2
 	env := newIdPEnv(t)
 	// A member-role map so the login is admitted with RoleMember (an admin
 	// would short-circuit the ceiling anyway and prove nothing).

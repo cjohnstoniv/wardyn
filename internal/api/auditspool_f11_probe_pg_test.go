@@ -28,7 +28,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
-func TestPG_ProbeF11_SpoolReplayCannotForgeChain(t *testing.T) {
+func TestPG_AuditSpool_ReplayCannotForgeChain(t *testing.T) {
+	// ticket: F11
 	testfloor.Mark(t, "pg")
 	dsn := os.Getenv("WARDYN_TEST_PG")
 	if dsn == "" {

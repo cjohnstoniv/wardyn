@@ -493,7 +493,8 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
 // to force horizontal scroll on the WHOLE page the moment it opened, not just
 // clip the popover. ui/popover.tsx's primitive-level
 // max-w-[calc(100vw-2rem)] (this lane) is what keeps it inside the viewport.
-test.describe("egress-redirect endpoint picker at 390px (F3-F8/F7-F7)", () => {
+test.describe("egress-redirect endpoint picker at 390px", () => {
+  // ticket: F3-F8/F7-F7
   test("390px: opening the From picker does not force horizontal scroll", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await skipHero(page);

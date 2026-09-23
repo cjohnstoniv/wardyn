@@ -10,8 +10,11 @@
 // (e.g. "^TestPG_ProbeF11_"), which coupled the test's NAME to the gate: a
 // rename that did not also touch the script defeated the floor with no
 // error anywhere. Mark ties the declaration to the test BODY instead, so
-// renaming the function is safe and scripts/test-report.sh finds the same
-// probes by scanning `go test -json` output for the Marker string.
+// renaming the function is safe. scripts/test-report.sh finds the probes in
+// the source (every `testfloor.Mark(t, "<suite>")` line, named by the Test
+// func it sits in) and requires each one to pass AND to have logged the
+// Marker string in `go test -json` output, so a probe that skips or returns
+// before its Mark line turns the report red instead of dropping out.
 package testfloor
 
 import "testing"
@@ -21,9 +24,9 @@ import "testing"
 const Marker = "WARDYN_FLOOR_PROBE"
 
 // Mark declares t as one of suite's floor probes. Call it as the first line
-// of a top-level test func (not a subtest: test-report.sh's skip floor only
-// inspects top-level pass/skip/fail, matching how it already read go test
-// -json before this package existed).
+// of a top-level test func, written exactly `testfloor.Mark(t, "<suite>")` —
+// not from a helper and not in a subtest: test-report.sh reads that line from
+// the source and only inspects top-level pass/skip/fail.
 //
 // suite must match the scripts/test-report.sh <suite> argument that is
 // meant to enforce this probe (e.g. "unit", "pg", "docker", "k8s"). Files

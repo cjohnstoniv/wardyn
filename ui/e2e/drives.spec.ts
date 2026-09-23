@@ -1120,7 +1120,8 @@ test.describe("drives — the admin's authoring walk (needs a runner that can mo
 //   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
 //   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/drives.spec.ts
-test.describe("allocations: a bounded page says so (R4/F092)", () => {
+test.describe("allocations: a bounded page says so", () => {
+  // ticket: R4/F092
   const TRUNCATED = /Showing the first 1000 \(truncated\)/;
 
   const DRIVE = {
@@ -1211,7 +1212,8 @@ test.describe("allocations: a bounded page says so (R4/F092)", () => {
 // internal/api/user_drives_run_test.go, both grep-confirmed), which is where
 // it has to live until this harness can mint a real OIDC session (a bigger
 // e2e-infra change, out of this lane's scope).
-test.describe("drives — the launch-refusal resolver needs a real OIDC subject this harness has none of (D9, R4-F106-followup)", () => {
+test.describe("drives — the launch-refusal resolver needs a real OIDC subject this harness has none of", () => {
+  // ticket: D9 R4-F106 (follow-up)
   test("a real PAUSED allocation for 'admin-token' still answers REFUSED_NO_GRANT — pinning the ceiling above, not a gap", async ({
     page,
   }) => {
@@ -1361,7 +1363,8 @@ test.describe("drives — the org-switch banner (storage.user_drive.disabled)", 
 // created_by and pass the gate vacuously; the point of this test is a caller
 // who is BOTH not an operator AND not the run's creator).
 // ---------------------------------------------------------------------------
-test.describe("run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and nothing else (R4-F129)", () => {
+test.describe("run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and nothing else", () => {
+  // ticket: R4-F129
   async function mockOtherPrincipal(page: Page, principal: string): Promise<void> {
     await page.route("**/api/v1/me", async (route) => {
       const response = await route.fetch();

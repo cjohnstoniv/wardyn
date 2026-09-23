@@ -10,13 +10,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- 45 Go test names that carried an internal work-item id (`TestF075_…`, `TestR3B…`,
-  `TestRenewU070_…`) now describe the behaviour under test instead; the id moved into a
-  `// ticket: …` comment in the test body, still searchable. `scripts/test-report.sh`'s skip
-  floor — the check that catches a suite silently self-skipping its falsifiable probes and
-  reporting green anyway — now keys on a `testfloor.Mark(t, suite)` call in the test body
-  rather than a name regex, so a rename can no longer empty it quietly, and it now covers the
-  docker and k8s suites (fake-backed core cases) as well as Postgres, not just Postgres (#208).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
@@ -45,6 +38,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Test names say what they test, and the skip floor covers every Go suite (#208).** 111 Go
+  tests and 227 vitest/Playwright titles that carried an internal work-item id (`TestF075_…`,
+  `TestPG_ProbeF11_…`, `TestB4F2_…`, `"F3-F11: …"`, `"… (X2-F13)"`) now describe the behaviour
+  under test; the id moved into a `// ticket: …` comment in the test body, still searchable.
+  `TestADOEntraStorePG_*` is now `TestPG_ADOEntraStore_*`, so `-run 'TestPG_'` selects it, and
+  `internal/adoscope/review2_test.go` is folded into `evasion_test.go` / `classify_test.go`.
+  `scripts/test-report.sh`'s skip floor, which fails a suite that silently skips its falsifiable
+  probes, now keys on a `testfloor.Mark(t, "<suite>")` call in the test body instead of a
+  name regex, so a rename can no longer empty it. It reads the expected probes from the source,
+  so a probe that skips or returns before its Mark line turns the report red rather than dropping
+  out. The floor, which covered the pg and unit suites, now covers docker and k8s as well.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and

@@ -36,7 +36,8 @@ function renderSignIn() {
 // doors exist — no token field, no SSO control, just an honest "checking"
 // row. After three unanswered reads it says the checking is still going.
 describe("SignIn — checking state before any answer (#457)", () => {
-  it("Q457-1: shows only the checking row — no token field, no SSO control, no claim either way", async () => {
+  it("shows only the checking row — no token field, no SSO control, no claim either way", async () => {
+    // ticket: Q457-1
     healthMock.mockResolvedValue({}); // never answers
     renderSignIn();
     expect(await screen.findByText(SIGNIN.CHECKING)).toBeInTheDocument();
@@ -46,7 +47,8 @@ describe("SignIn — checking state before any answer (#457)", () => {
     expect(screen.queryByRole("button", { name: /sign in with sso/i })).not.toBeInTheDocument();
   });
 
-  it("Q457-2: adds the still-checking line only after three unanswered reads, not before", async () => {
+  it("adds the still-checking line only after three unanswered reads, not before", async () => {
+    // ticket: Q457-2
     vi.useFakeTimers();
     try {
       healthMock.mockReset();
@@ -332,7 +334,8 @@ describe("SignIn — submitToken tells a rejected token apart from a reachabilit
 // the code the user sees a plain sign-in form with zero explanation, no
 // better than the dead end it replaced. SignIn must render the mapped
 // message inline.
-describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-S1-5)", () => {
+describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline", () => {
+  // ticket: W31-S1-5
   afterEach(() => {
     window.history.replaceState({}, "", "/");
   });
@@ -438,7 +441,8 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
 // X3-F7: App.tsx's onUnauthorized handler now hands SignIn a `reason` for a
 // mid-session expiry — rendered in the SAME alert slot submitToken's own
 // failures use, so the gate stops reading as a silent, unexplained teleport.
-describe("SignIn — a mid-session expiry's reason (X3-F7)", () => {
+describe("SignIn — a mid-session expiry's reason", () => {
+  // ticket: X3-F7
   it("renders the reason prop in the alert slot on mount", async () => {
     window.history.pushState({}, "", "/");
     healthMock.mockResolvedValue({});

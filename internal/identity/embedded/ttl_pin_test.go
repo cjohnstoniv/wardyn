@@ -68,7 +68,7 @@ func TestTokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
 	}
 }
 
-// TestB5_ExpiredVerifyCarriesTheRunID is the control-plane half of B5's quieting
+// TestExpiredVerifyCarriesTheRunID is the control-plane half of B5's quieting
 // rule: the sidecar backs off and stops hammering a refused renew, so the case
 // underneath — a HEALTHY run whose renews were refused through a control-plane
 // outage and which now holds a dead identity for the rest of its life — must be
@@ -82,7 +82,8 @@ func TestTokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
 //     let a prober write rows against a run id it chose;
 //   - the error is still an error. Verify returns nil claims with it, and every
 //     caller keeps failing closed.
-func TestB5_ExpiredVerifyCarriesTheRunID(t *testing.T) {
+func TestExpiredVerifyCarriesTheRunID(t *testing.T) {
+	// ticket: B5
 	ctx := context.Background()
 	base := time.Now()
 	p, err := New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), &recordingRecorder{})

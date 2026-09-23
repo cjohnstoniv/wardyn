@@ -505,7 +505,8 @@ test("create form surfaces the reserved user-drive target refusal (HTTP 400)", a
 // /permissions (SECURITY_ONLY_REASON, permissions.spec.ts), the security tier
 // earns this screen NO extra reach. Read-only: neither test creates a row, so
 // the file's empty-table invariant (header comment) holds either way.
-test.describe("Policies — member and security-admin reads (X2-F12)", () => {
+test.describe("Policies — member and security-admin reads", () => {
+  // ticket: X2-F12
   test("a member reads the list, and every write is parked with the admin-only reason", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);

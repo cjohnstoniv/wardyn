@@ -109,12 +109,13 @@ func probeHasPolicyType(np *networkingv1.NetworkPolicy, pt networkingv1.PolicyTy
 	return false
 }
 
-// TestProbe_F9_AgentNetPolEgressPeerIsExactlyTheProxy is the structural
+// TestAgentNetPolEgressPeerIsExactlyTheProxy is the structural
 // invariant: the agent netpol's egress peer set is ONLY this run's proxy pod
 // selector on TCP/3128 — no DNS peer, no 0.0.0.0/0, no namespaceSelector, no
 // second rule — and the selector really selects the agent pod even when
 // spec.Labels tries to override the reserved keys.
-func TestProbe_F9_AgentNetPolEgressPeerIsExactlyTheProxy(t *testing.T) {
+func TestAgentNetPolEgressPeerIsExactlyTheProxy(t *testing.T) {
+	// ticket: F9
 	testfloor.Mark(t, "k8s")
 	_, cs, spec, sb := probeCreate(t, func(s *runner.SandboxSpec) {
 		// Adversarial extras: attempt to un-select the agent from its own policy.
@@ -197,11 +198,12 @@ func TestProbe_F9_AgentNetPolEgressPeerIsExactlyTheProxy(t *testing.T) {
 	}
 }
 
-// TestProbe_F9_ProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata pins
+// TestProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata pins
 // the proxy side: ingress from exactly this run's agent selector (nothing
 // else can use the credential-injecting proxy at the packet layer), and every
 // egress peer is an ipBlock that excludes the cloud-metadata address.
-func TestProbe_F9_ProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata(t *testing.T) {
+func TestProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata(t *testing.T) {
+	// ticket: F9
 	testfloor.Mark(t, "k8s")
 	_, cs, spec, sb := probeCreate(t, nil)
 	wantAgent := wardynLabels(spec.RunID, componentAgent, nil)
@@ -262,11 +264,12 @@ func TestProbe_F9_ProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata(t *test
 	}
 }
 
-// TestProbe_F9_ProxySecretsLiveOnlyInTheSecret pins the secret boundary: the
+// TestProxySecretsLiveOnlyInTheSecret pins the secret boundary: the
 // run token and the MITM CA private key reach the per-run Secret, the proxy
 // pod consumes it via secretKeyRef (never an inline Value), and no inline env
 // on either pod carries those values.
-func TestProbe_F9_ProxySecretsLiveOnlyInTheSecret(t *testing.T) {
+func TestProxySecretsLiveOnlyInTheSecret(t *testing.T) {
+	// ticket: F9
 	testfloor.Mark(t, "k8s")
 	const token = "probe-run-token-7f3a9c"
 	const caKey = "-----BEGIN EC PRIVATE KEY-----\nPROBE-MITM-KEY-0xdeadbeef\n-----END EC PRIVATE KEY-----"
@@ -328,7 +331,7 @@ func TestProbe_F9_ProxySecretsLiveOnlyInTheSecret(t *testing.T) {
 	}
 }
 
-// TestProbe_F9_H1_AgentEnvSecretsAreAPIReadable is property 3's agent half: a
+// TestAgentEnvSecretsReachTheAgentOnlyByReference is property 3's agent half: a
 // value dispatch resolved for an env_secret grant (resolveEnvSecretGrants, with
 // a REAL stored secret) must not land as an inline, API-readable Value on the
 // agent pod spec.
@@ -341,7 +344,8 @@ func TestProbe_F9_ProxySecretsLiveOnlyInTheSecret(t *testing.T) {
 // It is STRICTER than a pure absence check: the variable must also still REACH
 // the agent, by reference. A driver that silently dropped it would satisfy the
 // no-inline-value loop while breaking every env_secret grant on this substrate.
-func TestProbe_F9_H1_AgentEnvSecretsAreAPIReadable(t *testing.T) {
+func TestAgentEnvSecretsReachTheAgentOnlyByReference(t *testing.T) {
+	// ticket: F9 H1
 	testfloor.Mark(t, "k8s")
 	const secretVal = "ghp_probe_env_secret_value_1234567890"
 	_, cs, spec, sb := probeCreate(t, func(s *runner.SandboxSpec) {

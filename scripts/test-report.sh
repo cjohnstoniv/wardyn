@@ -54,19 +54,17 @@ fi
 # NAMED, not "no skips anywhere": a suite legitimately skips what its lane
 # cannot provide (no Docker, no cluster). The floor covers the tests whose
 # whole purpose is to be falsifiable proof, declared by calling
-# testfloor.Mark(t) as the first line of the test func — NOT matched by test
-# NAME. A name regex here used to couple the floor to a string that had
-# nothing to do with the invariant: renaming the test silently emptied the
-# set unless the rename and this script moved together. The marker lives in
-# the test body, so a rename is safe and the floor still finds the same
-# probes.
+# testfloor.Mark(t, "<suite>") as the first line of the test func — NOT matched
+# by test NAME. A name regex here used to couple the floor to a string that had
+# nothing to do with the invariant: renaming the test silently emptied the set
+# unless the rename and this script moved together. The marker lives in the
+# test body, so a rename is safe and the floor still finds the same probes.
 #
-# Every suite (unit, pg, docker, k8s) carries its own probes, discovered
-# fresh from this run's own JSON — nothing here is suite-specific. The one
-# exception: the pg suite's floor applies only when the lane actually
-# declared a database (WARDYN_TEST_PG set); with it unset there is no
-# substrate, and skipping what the environment genuinely cannot provide is
-# the one sanctioned skip.
+# Every suite (unit, pg, docker, k8s) carries its own probes. The one
+# exception: the pg suite's floor applies only when the lane actually declared
+# a database (WARDYN_TEST_PG set); with it unset there is no substrate, and
+# skipping what the environment genuinely cannot provide is the one sanctioned
+# skip.
 DECLARE_FLOOR=1
 if [ "$SUITE" = "pg" ] && [ -z "${WARDYN_TEST_PG:-}" ]; then
   DECLARE_FLOOR=0
@@ -81,42 +79,77 @@ if [ "$DECLARE_FLOOR" = "1" ] && [ -s "$OUT/test-output.json" ]; then
   # missing precondition (WARDYN_TEST_PG unset) would otherwise trip suites it
   # was never meant to gate.
   FLOOR_MARKER="WARDYN_FLOOR_PROBE:$SUITE"
-  # go test -json emits one event per line; a top-level test's outcome is the
-  # event whose Test is the bare name (subtests carry a "/", and
-  # testfloor.Mark is only ever called from a top-level test func). Extracted
-  # with grep/sed so this needs no jq on the runner.
-  marked_names() {
-    grep -F "$FLOOR_MARKER" "$OUT/test-output.json" \
-      | grep -o '"Test":"[^"/]*"' | sed 's/^"Test":"//; s/"$//' | sort -u
+  MODULE="$(sed -n 's/^module //p' "$ROOT/go.mod")"
+  # Every probe is keyed "<import path> <top-level test>": test names are only
+  # unique within a package. go test -json emits one event per line, and a
+  # top-level test's event is the one whose Test is the bare name (subtests
+  # carry a "/"). Extracted with grep/sed/awk so this needs no jq on the runner.
+  #
+  # The EXPECTED set is read from the SOURCE, not only from what this run
+  # logged: every `testfloor.Mark(t, "<suite>")` line in a *_test.go file of a
+  # package this run tested, named by the top-level func it sits in. A probe
+  # that skips or returns before its Mark line never logs the marker, so a set
+  # built from the run's output alone would just lose it, with no error.
+  source_probes() {
+    grep -o '"Package":"[^"]*"' "$OUT/test-output.json" | sed 's/^"Package":"//; s/"$//' | sort -u \
+      | while IFS= read -r pkg; do
+          set -- "$ROOT${pkg#"$MODULE"}"/*_test.go
+          [ -f "$1" ] || continue
+          awk -v pkg="$pkg" -v call="testfloor.Mark(t, \"$SUITE\")" '
+            FNR == 1 { name = "" }
+            /^func / { name = $2; sub(/\(.*/, "", name) }
+            { line = $0; sub(/^[ \t]+/, "", line) }
+            index(line, call) == 1 && name ~ /^Test/ { print pkg " " name }' "$@"
+        done
   }
-  names() {
+  # The probes that logged the marker in this run.
+  marked() {
+    grep -F "$FLOOR_MARKER\\n" "$OUT/test-output.json" \
+      | sed -n 's/.*"Package":"\([^"]*\)","Test":"\([^"/]*\)".*/\1 \2/p' | sort -u
+  }
+  # The top-level tests whose outcome was $1 (pass, skip or fail).
+  outcome() {
     grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",\"Test\":\"[^\"/]*\"" "$OUT/test-output.json" \
-      | sed 's/.*"Test":"//; s/"$//' | sort -u
+      | sed 's/.*"Package":"\([^"]*\)","Test":"\([^"]*\)"$/\1 \2/' | sort -u
   }
-  MARKED="$(marked_names)"
-  if [ -z "$MARKED" ]; then
-    echo ">> SKIP FLOOR: no test in suite '$SUITE' called testfloor.Mark(t)." >&2
+  MARKED="$(marked)"
+  EXPECTED="$( { source_probes; echo "$MARKED"; } | grep . | sort -u)"
+  PROVEN="$(comm -12 <(outcome pass) <(echo "$MARKED"))"
+  MISSING="$(comm -23 <(echo "$EXPECTED") <(echo "$PROVEN"))"
+  if [ -z "$EXPECTED" ]; then
+    echo ">> SKIP FLOOR: no package suite '$SUITE' tested calls testfloor.Mark(t, \"$SUITE\")." >&2
     echo ">> Those probes are the falsifiable proof a real invariant holds; a suite with none marked" >&2
     echo ">> is a floor that got silently emptied, not a suite with nothing to check." >&2
     GO_EXIT=1
-  else
-    SKIPPED="$(comm -12 <(names skip) <(echo "$MARKED"))"
-    if [ -n "$SKIPPED" ]; then
-      echo ">> SKIP FLOOR: these probes SKIPPED:" >&2
-      echo "$SKIPPED" | sed 's/^/>>   /' >&2
-      if [ "$SUITE" = "pg" ]; then
-        echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Give the lane a CREATE ROLE-capable" >&2
-        echo ">> role over a URL-form DSN, or set WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2
-      else
-        echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. These probes need no real" >&2
-        echo ">> daemon/cluster/curl — they are the fake-backed core cases every lane can run. A skip means" >&2
-        echo ">> the environment broke, not that it is missing. WARDYN_TEST_REPORT_SKIP_FLOOR=1 overrides." >&2
+  elif [ -n "$MISSING" ]; then
+    SKIPS="$(outcome skip)"
+    FAILS="$(outcome fail)"
+    PASSES="$(outcome pass)"
+    echo ">> SKIP FLOOR: these probes did not pass through testfloor.Mark(t, \"$SUITE\"):" >&2
+    while IFS= read -r probe; do
+      if echo "$SKIPS" | grep -qxF "$probe"; then why="SKIPPED"
+      elif echo "$FAILS" | grep -qxF "$probe"; then why="FAILED"
+      elif echo "$PASSES" | grep -qxF "$probe"; then why="passed without reaching its Mark line"
+      else why="did not run"
       fi
-      GO_EXIT=1
-    else
-      PASSED="$(comm -12 <(names pass) <(echo "$MARKED"))"
-      echo ">> skip floor: $(echo "$MARKED" | wc -l | tr -d ' ') probe(s) marked, $(echo "$PASSED" | grep -c .) passed"
-    fi
+      echo ">>   $probe — $why" >&2
+    done <<<"$MISSING"
+    echo ">> A probe that skips, or returns before its Mark line, reports \`ok\` and exit 0 while proving nothing." >&2
+    case "$SUITE" in
+      pg)
+        echo ">> Give the lane a CREATE ROLE-capable role over a URL-form DSN, or set" >&2
+        echo ">> WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2 ;;
+      unit)
+        echo ">> Put curl on PATH — these probes exist to prove a real curl round-trip and cannot do that" >&2
+        echo ">> skipped. A minimal dev container without curl can set WARDYN_TEST_REPORT_SKIP_FLOOR=1." >&2 ;;
+      *)
+        echo ">> These probes need no real daemon or cluster — they are the fake-backed core cases every" >&2
+        echo ">> lane can run, so a skip means the environment broke, not that it is missing." >&2
+        echo ">> WARDYN_TEST_REPORT_SKIP_FLOOR=1 overrides." >&2 ;;
+    esac
+    GO_EXIT=1
+  else
+    echo ">> skip floor: $(echo "$EXPECTED" | wc -l | tr -d ' ') probe(s) marked, all passed"
   fi
 fi
 

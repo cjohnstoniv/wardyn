@@ -743,7 +743,8 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
 // The chord is Ctrl+] and not the filed proposal's Ctrl+Shift+Esc — Windows
 // intercepts that at OS level (Task Manager) before the browser sees it, so
 // on the platform most likely to need it the exit would silently not exist.
-describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", () => {
+describe("AttachTerminal — the keyboard trap has an advertised exit", () => {
+  // ticket: F144
   beforeEach(() => {
     keyHandler = null;
     FakeWebSocket.instances = [];
@@ -807,7 +808,8 @@ describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", (
 // click on the container's padding, or the dead space below the last row,
 // lands nowhere — which reads as needing a very specific click location, or
 // a second click that happens to land on the screen.
-describe("AttachTerminal — D3 focus", () => {
+describe("AttachTerminal — focus", () => {
+  // ticket: D3
   beforeEach(() => {
     focusCalls.n = 0;
     stubTerminalEnv();

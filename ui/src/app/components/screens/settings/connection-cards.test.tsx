@@ -120,7 +120,8 @@ describe("ModelProviderCard", () => {
 
   // F4-F13 (Appendix A V8): the group had no roving tabindex or arrow keys —
   // every radio was its own Tab stop, and Left/Right did nothing.
-  describe("the lane group has roving tabindex and arrow keys (F4-F13)", () => {
+  describe("the lane group has roving tabindex and arrow keys", () => {
+    // ticket: F4-F13
     it("only the checked radio is a Tab stop; the rest are -1", () => {
       model();
       const radios = screen.getAllByRole("radio");
@@ -249,7 +250,8 @@ describe("ModelProviderCard", () => {
 // server (harnesscred.go:761) THROWS THE TYPED VALUE AWAY because the row's
 // own sso_start_url overrides it. Fix = pass the prop on the same condition
 // the Agents tab already uses.
-describe("ModelProviderCard — F2: the sign-in door under a per_user row", () => {
+describe("ModelProviderCard — the sign-in door under a per_user row", () => {
+  // ticket: F2
   it("passes startURLManaged so the dead start-URL prompt never renders", async () => {
     model(perUserStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
@@ -326,7 +328,8 @@ describe("ModelProviderCard — F2: the sign-in door under a per_user row", () =
 // R9 (fix-first review pass): under per_user, resolveBedrockAuth skips the
 // bearer arm outright (Appendix A finding 3) — a stored key still deletes
 // fine, but the card must say it is never READ while the row is per_user.
-describe("ModelProviderCard — R9: the bearer key is unused under per_user", () => {
+describe("ModelProviderCard — the bearer key is unused under per_user", () => {
+  // ticket: R9
   it("renders S.BEDROCK_BEARER_UNUSED_PER_USER under a per_user row", async () => {
     model(perUserStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
@@ -497,7 +500,8 @@ describe("ModelProviderCard — PR #352 review: the bearer field explains itself
 // model_access — so an admin's browser badged "Connected" from a shared
 // admin-token read that can never itself hold an AWS session, and (the sharp
 // edge this pins) a member whose OWN sign-in has lapsed still saw green.
-describe("ModelProviderCard — F5: the badge follows the caller's own model_access", () => {
+describe("ModelProviderCard — the badge follows the caller's own model_access", () => {
+  // ticket: F5
   const bedrockConfigured = { bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: true } };
 
   it("live: Connected", () => {
@@ -616,7 +620,8 @@ describe("ModelProviderCard — the login dialog's geometry", () => {
 // exactly those two and nothing else. The honest signal is the row's
 // `bedrockLane`, which activeBedrockLane() leaves undefined until a
 // credential lane is actually active.
-describe("ModelProviderCard — U2-01: Connected needs an active credential lane, not region+model", () => {
+describe("ModelProviderCard — Connected needs an active credential lane, not region+model", () => {
+  // ticket: U2-01
   const bedrockLane = () => within(screen.getByRole("radio", { name: /AWS Bedrock/ }));
 
   it("region + model with NO credential of any kind: NOT Connected", () => {
@@ -639,12 +644,14 @@ describe("ModelProviderCard — U2-01: Connected needs an active credential lane
     expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
   });
 
-  it("a member's redacted status ({ready} only — region/model/lanes withheld): Connected (RIDER B7-F6)", () => {
+  it("a member's redacted status ({ready} only — region/model/lanes withheld): Connected", () => {
+    // ticket: B7-F6 (rider)
     model(baseStatus({ bedrock: { ready: true, creds_present: false } }));
     expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
   });
 
-  it("ready:false with region+model and no lane stays NOT Connected (the U2-01 control, spelled out)", () => {
+  it("ready:false with region+model and no lane stays NOT Connected (the negative control, spelled out)", () => {
+    // ticket: U2-01
     model(baseStatus({ bedrock: { ready: false, region: "us-east-1", model: "anthropic.claude", creds_present: false } }));
     expect(bedrockLane().queryByText("Connected")).not.toBeInTheDocument();
   });
@@ -667,7 +674,8 @@ describe("ModelProviderCard — U2-01: Connected needs an active credential lane
 // (harnessLoginMechanismPrincipalRefusal). agents-tab.tsx:253 already drops
 // its whole model-access block for this state; the card keeps the sentence
 // (the badge needs a reason) but drops the imperative and the door.
-describe("ModelProviderCard — U2-03: not_applicable keeps no door it cannot open", () => {
+describe("ModelProviderCard — not_applicable keeps no door it cannot open", () => {
+  // ticket: U2-03
   const notApplicable = { bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: true }, model_access: { state: "not_applicable" } };
 
   it("renders the mechanism sentence with no imperative", async () => {
@@ -695,7 +703,8 @@ describe("ModelProviderCard — U2-03: not_applicable keeps no door it cannot op
 // so the parent never refreshes and the card keeps reading not-connected
 // until a manual reload. Cancel makes no claim about the capture either way;
 // it just costs one GET.
-describe("ModelProviderCard — U2-09: dismissing the login dialog re-reads status", () => {
+describe("ModelProviderCard — dismissing the login dialog re-reads status", () => {
+  // ticket: U2-09
   async function openLogin(onChanged: () => void) {
     render(<ModelProviderCard status={baseStatus()} siteConfig={null} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: /^sign in$/i }));

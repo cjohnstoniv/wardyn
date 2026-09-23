@@ -30,13 +30,14 @@ import (
 
 // ─── B4-F1: the failed build's raw builder error is the operator's ──────────
 
-// TestB4F1_FailedBuildDetailIsTieredLikeTheLog pins that the ONE non-static
+// TestWorkspaceBuild_FailedDetailIsTieredLikeTheLog pins that the ONE non-static
 // Detail resolveBuildView can answer — the builder's own error text, which
 // quotes the operator's authored base-image coordinate verbatim in its FROM /
 // pull line — is projected by the reader's tier exactly as Log already is. The
 // other three Details are fixed prose about the host's configuration and stay
 // for every tier (TestBuildKeepsWhatTheMemberNeeds pins that they do).
-func TestB4F1_FailedBuildDetailIsTieredLikeTheLog(t *testing.T) {
+func TestWorkspaceBuild_FailedDetailIsTieredLikeTheLog(t *testing.T) {
+	// ticket: B4-F1
 	const authored = "registry.corp.internal/base:1"
 	srv := &Server{}
 	ws := types.Workspace{ID: uuid.New()}
@@ -150,7 +151,7 @@ func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[strin
 	return "", errors.New("step 3/7 : RUN go build — exit code 2")
 }
 
-// TestB4F2_TheTrackerIsSubordinateToTheRow is the invalidation regression: the
+// TestWorkspaceBuild_TrackerIsSubordinateToTheRow is the invalidation regression: the
 // in-memory buildState is this daemon's MEMORY of a build, while the workspace
 // row is what a run actually resolves. The tracker answered "done" from
 // st.Image before anything consulted the row, so an image invalidated
@@ -158,7 +159,8 @@ func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[strin
 // the profile hash) still read `done` with a ref no run would ever resolve —
 // and POST /build short-circuited on that same view, so the workspace could
 // never be rebuilt until wardynd restarted.
-func TestB4F2_TheTrackerIsSubordinateToTheRow(t *testing.T) {
+func TestWorkspaceBuild_TrackerIsSubordinateToTheRow(t *testing.T) {
+	// ticket: B4-F2
 	h := newHarness(t)
 	profile := workspacescan.WorkspaceProfile{
 		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
@@ -227,13 +229,14 @@ func TestB4F2_TheTrackerIsSubordinateToTheRow(t *testing.T) {
 
 // ─── B4-F3: a respelling of the same source wiped every reviewed field ─────
 
-// TestB4F3_ARespellingOfTheSameSourceKeepsEveryReviewedField is the data-loss
+// TestWorkspaceSource_RespellingKeepsEveryReviewedField is the data-loss
 // regression: sourcesChanged compared the request's RAW source against the
 // store's CANONICAL one, so re-PUTting the identical composition with a
 // trailing slash or a differently-cased repo slug read as a content change and
 // threw away ApprovedEgress, Requirements, RecordResults and the built image —
 // with a 200 and nothing anywhere saying it had happened.
-func TestB4F3_ARespellingOfTheSameSourceKeepsEveryReviewedField(t *testing.T) {
+func TestWorkspaceSource_RespellingKeepsEveryReviewedField(t *testing.T) {
+	// ticket: B4-F3
 	for _, tc := range []struct {
 		name          string
 		stored        types.WorkspaceSource
@@ -278,12 +281,13 @@ func TestB4F3_ARespellingOfTheSameSourceKeepsEveryReviewedField(t *testing.T) {
 
 // ─── B4-F4: an uncapped source list ────────────────────────────────────────
 
-// TestB4F4_SourceCountIsCapped pins the missing sibling of
+// TestWorkspaceSource_CountIsCapped pins the missing sibling of
 // maxWorkspaceRequirements/maxApprovedEgress: every source in the body costs an
 // UpsertSource plus a hash-chained source.write audit append, and the route is
 // member-reachable, so an uncapped list is a serialised write chain a member
 // can start with one request.
-func TestB4F4_SourceCountIsCapped(t *testing.T) {
+func TestWorkspaceSource_CountIsCapped(t *testing.T) {
+	// ticket: B4-F4
 	body := func(n int) string {
 		srcs := make([]string, n)
 		for i := range srcs {
@@ -309,14 +313,15 @@ func TestB4F4_SourceCountIsCapped(t *testing.T) {
 
 // ─── B4-F6 + B4-F9: observed egress offered candidates that can never work ──
 
-// TestB4F6_ObservedEgressWithholdsWhatApprovingCannotHelp pins the two classes
+// TestWorkspaceObservedEgress_WithholdsWhatApprovingCannotHelp pins the two classes
 // of candidate a promotion can never make work: a host the git broker or the
 // control plane already routes specially (handleSetApprovedEgress 400s the
 // WHOLE list on one of those, so a single dead candidate made the panel's
 // promote button fail for every host beside it), and a host the operator has
 // explicitly DENIED (deny beats allow at the proxy, so promoting it answers 200
 // and stays blocked forever).
-func TestB4F6_ObservedEgressWithholdsWhatApprovingCannotHelp(t *testing.T) {
+func TestWorkspaceObservedEgress_WithholdsWhatApprovingCannotHelp(t *testing.T) {
+	// ticket: B4-F6
 	h := newHarness(t)
 	wsID, runID := uuid.New(), uuid.New()
 	fake := &observedEgressStore{
@@ -367,9 +372,10 @@ func (s *b4PagerStore) ListRunsPage(_ context.Context, p store.Page) ([]types.Ag
 	return s.runs, nil
 }
 
-// TestB4F9_ObservedEgressReadsABoundedPage pins the bound on a member-reachable
+// TestWorkspaceObservedEgress_ReadsABoundedPage pins the bound on a member-reachable
 // route that used to read the WHOLE runs table before windowing it in Go.
-func TestB4F9_ObservedEgressReadsABoundedPage(t *testing.T) {
+func TestWorkspaceObservedEgress_ReadsABoundedPage(t *testing.T) {
+	// ticket: B4-F9
 	h := newHarness(t)
 	wsID := uuid.New()
 	runs := make([]types.AgentRun, maxObservedRuns*3)
@@ -429,12 +435,13 @@ func (s *b4DeleteStore) DeleteWorkspace(context.Context, uuid.UUID) error {
 	return nil
 }
 
-// TestB4F7_DeleteRefusesWhileARunHoldsTheWorkspace: agent_runs.workspace_id has
+// TestWorkspaceDelete_RefusesWhileARunHoldsTheWorkspace: agent_runs.workspace_id has
 // no foreign key (migration 0009), so DELETE happily removed a workspace whose
 // record/scan session was still live — stranding an AllowAllEgress sandbox and
 // making reconcileRecordRun 404 before recordmode.Capture ever ran, which loses
 // the recording silently. The in-use 409 is handleDeleteSource's own shape.
-func TestB4F7_DeleteRefusesWhileARunHoldsTheWorkspace(t *testing.T) {
+func TestWorkspaceDelete_RefusesWhileARunHoldsTheWorkspace(t *testing.T) {
+	// ticket: B4-F7
 	h := newHarness(t)
 	id, runID := uuid.New(), uuid.New()
 	live := &b4DeleteStore{
@@ -476,11 +483,12 @@ func TestB4F7_DeleteRefusesWhileARunHoldsTheWorkspace(t *testing.T) {
 
 // ─── B4-F8: the repo ref was validated at neither door ─────────────────────
 
-// TestB4F8_RefIsValidatedAtBothDoors: buildRepoRecords (runs_scm.go) DROPS a
+// TestWorkspaceRef_IsValidatedAtBothDoors: buildRepoRecords (runs_scm.go) DROPS a
 // repo whose ref is not repoFieldSafe by a bare return — the agent then starts
 // in a workspace missing that clone, with no warning on the run and nothing in
 // the audit trail. Both authoring doors must refuse the ref instead.
-func TestB4F8_RefIsValidatedAtBothDoors(t *testing.T) {
+func TestWorkspaceRef_IsValidatedAtBothDoors(t *testing.T) {
+	// ticket: B4-F8
 	bad := []string{"refs/heads/feat x", "main\nrm -rf /", "main\tx"}
 	good := []string{"refs/heads/feat/x", "0123456789abcdef0123456789abcdef01234567", "v1.2.3", ""}
 
@@ -526,7 +534,7 @@ func TestB4F8_RefIsValidatedAtBothDoors(t *testing.T) {
 
 // ─── F-1: the custom-base lane had no row-backed answer at all ─────────────
 
-// TestB4F2_CustomBaseImageReadsDoneFromTheRow closes the hole the row-decides
+// TestWorkspaceBuild_CustomBaseImageReadsDoneFromTheRow closes the hole the row-decides
 // rule opened: resolveBuildView's "nothing_to_build" early return deliberately
 // EXCLUDES kind "custom", so a custom base image is the one explicit-image
 // composition that reaches the build tracker and the row — and the row's key
@@ -535,7 +543,8 @@ func TestB4F8_RefIsValidatedAtBothDoors(t *testing.T) {
 // workspace that built perfectly read `none`: no image, no detail, and a Build
 // click that re-ran the whole resolve (and emitted another run.build row) every
 // single time.
-func TestB4F2_CustomBaseImageReadsDoneFromTheRow(t *testing.T) {
+func TestWorkspaceBuild_CustomBaseImageReadsDoneFromTheRow(t *testing.T) {
+	// ticket: B4-F2
 	h := newHarness(t)
 	const base = "ghcr.io/acme/base:1"
 	st := &resolveImageStoreFake{}
@@ -570,12 +579,13 @@ func TestB4F2_CustomBaseImageReadsDoneFromTheRow(t *testing.T) {
 
 // ─── F-2: drop must not release a live single-flight slot ──────────────────
 
-// TestB4F2_DropNeverReleasesALiveBuildSlot: the invalidators drop the tracker
+// TestWorkspaceBuild_DropNeverReleasesALiveBuildSlot: the invalidators drop the tracker
 // entry, and an edit DURING a build would otherwise hand the single-flight slot
 // back while the first build's goroutine is still inside the image builder — so
 // the next Build click starts a SECOND envbuilder run for one workspace, both
 // of them finishing into the same tracker and the same cache columns.
-func TestB4F2_DropNeverReleasesALiveBuildSlot(t *testing.T) {
+func TestWorkspaceBuild_DropNeverReleasesALiveBuildSlot(t *testing.T) {
+	// ticket: B4-F2
 	h := newHarness(t)
 	profile := workspacescan.WorkspaceProfile{
 		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
@@ -638,13 +648,14 @@ func TestB4F2_DropNeverReleasesALiveBuildSlot(t *testing.T) {
 
 // ─── F-3: a failed build outlived the composition it failed against ────────
 
-// TestB4F2_ARescanRetiresThePreviousBuildFailure: the tracker's `failed` arm is
+// TestWorkspaceBuild_RescanRetiresThePreviousBuildFailure: the tracker's `failed` arm is
 // consulted BEFORE the row, so a build failure survived every invalidation the
 // row half learned about — after a rescan moved the profile, GET /build still
 // reported the previous composition's error until someone clicked Build again
 // or wardynd restarted. The tracker now remembers WHICH composition it was
 // building, and answers only about that one.
-func TestB4F2_ARescanRetiresThePreviousBuildFailure(t *testing.T) {
+func TestWorkspaceBuild_RescanRetiresThePreviousBuildFailure(t *testing.T) {
+	// ticket: B4-F2
 	h := newHarness(t)
 	profile := workspacescan.WorkspaceProfile{
 		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,

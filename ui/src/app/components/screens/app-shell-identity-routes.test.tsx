@@ -106,7 +106,8 @@ function accountTrigger() {
   return buttons[buttons.length - 1];
 }
 
-describe("AppShell — a settled-but-unknown identity gets no route (V1-D3)", () => {
+describe("AppShell — a settled-but-unknown identity gets no route", () => {
+  // ticket: V1-D3
   afterEach(() => vi.unstubAllGlobals());
 
   for (const path of ADMIN_ROUTES) {
@@ -282,7 +283,8 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     expect(screen.queryByTestId("probe")).toBeNull();
   });
 
-  it("paints no route at all when /me never answers — the fail-open tier reaches nothing (V1-D3)", async () => {
+  it("paints no route at all when /me never answers — the fail-open tier reaches nothing", async () => {
+    // ticket: V1-D3
     // This pins the tier a failed /me leaves behind: useMeta seeds
     // operator/securityOperator/role with `?? true` / `?? "admin"`, and the
     // direction is load-bearing ("Never harden this default to false either") —

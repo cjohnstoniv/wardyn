@@ -496,7 +496,8 @@ function tsInterfaceKeys(src: string, name: string): string[] {
   return keys;
 }
 
-describe("source parity — GET /me's Go body vs the TS Me mirror (F010)", () => {
+describe("source parity — GET /me's Go body vs the TS Me mirror", () => {
+  // ticket: F010
   const root = repoRoot();
   const meGo = readFileSync(join(root, "internal/api/me.go"), "utf8");
   // Every non-test internal/api/user_drives*.go as one text: meUserDrive moved to

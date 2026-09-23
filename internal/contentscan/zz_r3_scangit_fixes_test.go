@@ -189,7 +189,7 @@ func TestFindingsCapDoesNotSuppressBlocking(t *testing.T) {
 	}
 }
 
-// TestB6_FindingsCapTruncationArmExaminesEachFindingOnce pins B6: B5's
+// TestFindingsCapTruncationArmExaminesEachFindingOnce pins B6: B5's
 // keep-back arm re-slices `res.Findings[:maxFindings]` and re-walks the
 // retained tail on EVERY subsequent span once the cap first fires (the
 // retained tail sits between maxFindings and 2*maxFindings, so
@@ -204,7 +204,8 @@ func TestFindingsCapDoesNotSuppressBlocking(t *testing.T) {
 // one of the ~1500 spans after the cap trips — followed by one SevHigh
 // AKIA... access-key-id finding, under ModeBlock with DetectPII +
 // DetectSecretPatterns and default block_min_severity.
-func TestB6_FindingsCapTruncationArmExaminesEachFindingOnce(t *testing.T) {
+func TestFindingsCapTruncationArmExaminesEachFindingOnce(t *testing.T) {
+	// ticket: B6
 	eng, err := NewEngine(types.LLMInspectionSpec{
 		Mode: "block", DetectPII: true, DetectSecretPatterns: true,
 	}, nil)

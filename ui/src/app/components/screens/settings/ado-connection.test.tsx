@@ -29,7 +29,8 @@ function renderCard(ui: React.ReactElement, initialEntries: string[] = ["/settin
   return render(<MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>);
 }
 
-describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)", () => {
+describe("AdoConnectionCard — the connected panel's Settings home (#386)", () => {
+  // ticket: Q9
   beforeEach(() => {
     adoConnectMock.mockReset();
     adoBlockedUrl = null;
@@ -119,7 +120,8 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
     // PR #501 review F3 — a `.focus()` that follows a click (the consent
     // door's own click, on the page this card navigates FROM) can lose the
     // browser's focus-visible heuristic; force it instead of hoping.
-    it("F3: focus is forced visible (focusVisible: true), not left to the browser's own heuristic", () => {
+    it("focus is forced visible (focusVisible: true), not left to the browser's own heuristic", () => {
+      // ticket: F3
       const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
       try {
         renderCard(
@@ -138,7 +140,8 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
     // focus back here even though the reader had since focused something
     // else and the URL never changed. It must depend on navigation
     // (location.key) + row presence (a boolean), not on data identity.
-    it("F2: an equal-but-new status from a Settings reload does not steal focus back from elsewhere on the page", () => {
+    it("an equal-but-new status from a Settings reload does not steal focus back from elsewhere on the page", () => {
+      // ticket: F2
       function Harness({ s }: { s: SetupStatus }) {
         return (
           <div>
@@ -176,7 +179,8 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
 });
 
 // Review finding F9 — a blocked popup.
-describe("AdoConnectionCard — a blocked popup (F9)", () => {
+describe("AdoConnectionCard — a blocked popup", () => {
+  // ticket: F9
   beforeEach(() => {
     adoConnectMock.mockReset();
     adoBlockedUrl = "/api/v1/scm/azure-devops/signin";
@@ -192,7 +196,8 @@ describe("AdoConnectionCard — a blocked popup (F9)", () => {
 
   // Review follow-up N1: clicking the fallback link starts the SAME poll
   // (connectFallback), so the card reloads status on a real connection.
-  it("N1: clicking the fallback link starts the poll and reloads status once connected", async () => {
+  it("clicking the fallback link starts the poll and reloads status once connected", async () => {
+    // ticket: N1
     adoConnectMock.mockResolvedValueOnce(true);
     const onChanged = vi.fn();
     renderCard(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={onChanged} />);

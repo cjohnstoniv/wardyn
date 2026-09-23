@@ -12,13 +12,13 @@
 //
 // RUN (no PG needed — every fixture here is the in-memory authzStore):
 //   cd <repo root> && cp local/review-0.7/deep/F1-approval-to-mint-to-egress/approvals_f1_probe_test.go internal/api/ \
-//     && nice -n 10 GOMAXPROCS=8 WARDYN_TEST_PG= go test ./internal/api/ -run 'TestF1_' -count=1 -v ; rm internal/api/approvals_f1_probe_test.go
+//     && nice -n 10 GOMAXPROCS=8 WARDYN_TEST_PG= go test ./internal/api/ -run 'TestApproval(Always|Decide|Reconcile)_' -count=1 -v ; rm internal/api/approvals_f1_probe_test.go
 //
 // EXPECTED on fa910735 (feat/v0.7-profiles):
-//   TestF1_AlwaysTargetsPrimaryWorkspaceOnly     GREEN  (pins the invariant; goes RED if `always` ever leaks to W')
-//   TestF1_DecideAuthzMatrix                      GREEN  (pins who-may-decide-for-whose-run; RED on any authz drift)
-//   TestF1_ReconcileDoesNotReverseNewerDecision   RED    (hypothesis H2 in the trace doc — reconcile is state-major, not time-major)
-//   TestF1_ReconcileDoesNotResurrectRemovedHost   RED    (hypothesis H3 — a PUT removal is undone at the next boot)
+//   TestApprovalAlways_TargetsPrimaryWorkspaceOnly     GREEN  (pins the invariant; goes RED if `always` ever leaks to W')
+//   TestApprovalDecide_AuthzMatrix                     GREEN  (pins who-may-decide-for-whose-run; RED on any authz drift)
+//   TestApprovalReconcile_DoesNotReverseNewerDecision  RED    (hypothesis H2 in the trace doc — reconcile is state-major, not time-major)
+//   TestApprovalReconcile_DoesNotResurrectRemovedHost  RED    (hypothesis H3 — a PUT removal is undone at the next boot)
 // The two RED probes are deliberate: they FAIL while the defect exists and turn
 // GREEN once it is fixed. Do not "fix" the probe to pass.
 
@@ -112,7 +112,7 @@ func f1SeedApproval(f *scopeFixture, runID uuid.UUID, kind types.ApprovalKind) u
 	return id
 }
 
-// TestF1_AlwaysTargetsPrimaryWorkspaceOnly pins the boundary the trace doc
+// TestApprovalAlways_TargetsPrimaryWorkspaceOnly pins the boundary the trace doc
 // names: an `always`-scoped decision on an approval raised by a run whose
 // PRIMARY workspace is W lands on W and ONLY W. A second workspace W' — whether
 // unrelated, the run's non-primary reference, or the run's TRUSTED WorkspaceID —
@@ -123,7 +123,8 @@ func f1SeedApproval(f *scopeFixture, runID uuid.UUID, kind types.ApprovalKind) u
 // tie-break (both in approvals.go) are the code under test; handleCreateRun
 // (runs.go) is where WorkspaceIDs is stamped and unionWorkspaceEgress
 // (workspace_egress.go) is where a future run reads it back.
-func TestF1_AlwaysTargetsPrimaryWorkspaceOnly(t *testing.T) {
+func TestApprovalAlways_TargetsPrimaryWorkspaceOnly(t *testing.T) {
+	// ticket: F1
 	type shape struct {
 		name string
 		// link builds the run's linkage from (W, W').
@@ -302,10 +303,11 @@ func f1Want(c f1Caller, kind types.ApprovalKind, ownRun bool, scope types.Approv
 	}
 }
 
-// TestF1_DecideAuthzMatrix walks caller x kind x ownership x scope and asserts
+// TestApprovalDecide_AuthzMatrix walks caller x kind x ownership x scope and asserts
 // the status f1Want predicts. Every cell builds a FRESH fixture, so a decided
 // row can never shadow a 404 with a 409 (the L3 hazard authz_test.go names).
-func TestF1_DecideAuthzMatrix(t *testing.T) {
+func TestApprovalDecide_AuthzMatrix(t *testing.T) {
+	// ticket: F1
 	callers := []f1Caller{
 		{"admin", "sub-admin-f1m"},
 		{"security_admin", "sub-secadmin-f1m"},
@@ -392,7 +394,7 @@ func f1SeedDecidedAlways(f *scopeFixture, state types.ApprovalState, decidedAt t
 	return id
 }
 
-// TestF1_ReconcileDoesNotReverseNewerDecision — EXPECTED RED on fa910735 (H2).
+// TestApprovalReconcile_DoesNotReverseNewerDecision — EXPECTED RED on fa910735 (H2).
 //
 // Sequence an operator can produce in two clicks: deny·always H (t1), then,
 // having changed their mind, approve·always H (t2 > t1). The live write-backs
@@ -401,7 +403,8 @@ func f1SeedDecidedAlways(f *scopeFixture, state types.ApprovalState, decidedAt t
 // states in the fixed order [APPROVED, DENIED] — never by decided_at — so the
 // OLDER deny is applied LAST and silently reverses the operator's newest
 // decision on every restart, with no audit event.
-func TestF1_ReconcileDoesNotReverseNewerDecision(t *testing.T) {
+func TestApprovalReconcile_DoesNotReverseNewerDecision(t *testing.T) {
+	// ticket: F1 H2
 	f := newScopeFixture(t)
 	ws := f1SeedWorkspace(f, "ws-reconcile", f.memberID)
 	f1LinkRun(f, f.runID, []uuid.UUID{ws}, nil)
@@ -426,7 +429,7 @@ func TestF1_ReconcileDoesNotReverseNewerDecision(t *testing.T) {
 	}
 }
 
-// TestF1_ReconcileDoesNotResurrectRemovedHost — EXPECTED RED on fa910735 (H3).
+// TestApprovalReconcile_DoesNotResurrectRemovedHost — EXPECTED RED on fa910735 (H3).
 //
 // resolveAlwaysTarget (approvals.go) promises an `always` is "reversible via the
 // denied-egress/approved-egress PUTs". An operator who approve·always'd H and
@@ -436,7 +439,8 @@ func TestF1_ReconcileDoesNotReverseNewerDecision(t *testing.T) {
 // re-applies it (in ReconcileWorkspaceEgressDecisions). That is a durable,
 // fail-OPEN widening of a workspace the operator explicitly narrowed, and
 // nothing audits it.
-func TestF1_ReconcileDoesNotResurrectRemovedHost(t *testing.T) {
+func TestApprovalReconcile_DoesNotResurrectRemovedHost(t *testing.T) {
+	// ticket: F1 H3
 	f := newScopeFixture(t)
 	ws := f1SeedWorkspace(f, "ws-undo", f.memberID)
 	f1LinkRun(f, f.runID, []uuid.UUID{ws}, nil)

@@ -20,7 +20,8 @@ import { ThemeProvider } from "../wardyn/theme-provider";
 // sub survives as a secondary mono line in the menu, because that is the
 // string OPERATIONS.md tells an admin to paste. The principal the console
 // compares against (PrincipalContext) must stay the sub — pinned last.
-describe("AppShell — the account chip shows who you are (0.7.1)", () => {
+describe("AppShell — the account chip shows who you are", () => {
+  // ticket: 0.7.1
   afterEach(() => vi.unstubAllGlobals());
 
   function renderShellWithMe(me: Record<string, unknown>, child?: React.ReactNode) {
