@@ -17,11 +17,19 @@ import { Button } from "../../ui/button";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { EPISODES_COPY as T } from "../../wardyn/copy";
 import { EPISODES, episodeUrl, episodesFor, releasePageUrl, type Episode } from "../../../lib/demo-videos";
+import { useDemoVideoBaseUrl } from "../../../lib/hooks/use-demo-video-base-url";
 
 export function EpisodeRow({ episode, chip }: { episode: Episode; chip?: string }) {
   const [open, setOpen] = React.useState(false);
   const [errored, setErrored] = React.useState(false);
-  const url = episodeUrl(episode);
+  // undefined (no /healthz answer yet, or no mirror configured) falls through
+  // to episodeUrl's own default parameter — the hardcoded GitHub base.
+  const demoVideoBaseUrl = useDemoVideoBaseUrl();
+  const url = episodeUrl(episode, demoVideoBaseUrl);
+  // Picks the GitHub-default copy twin vs. the operator-configured twin
+  // (canon docs/design/demo-video-source-canon.md) — never the host/URL
+  // itself (Q145-2).
+  const configured = demoVideoBaseUrl !== undefined;
 
   return (
     <div className="flex flex-col gap-2 border-b border-border py-3 last:border-b-0">
@@ -60,17 +68,23 @@ export function EpisodeRow({ episode, chip }: { episode: Episode; chip?: string 
             className="w-full rounded-lg"
             onError={() => setErrored(true)}
           />
-          <p className="text-xs text-muted-foreground">{T.STREAM_NOTE}</p>
+          <p className="text-xs text-muted-foreground">{configured ? T.STREAM_NOTE_CONFIGURED : T.STREAM_NOTE}</p>
         </>
       )}
       {open && errored && episode.tag !== null && (
         <div className="text-sm text-muted-foreground">
-          {T.LOAD_ERROR}{" "}
-          <Button variant="link" size="sm" className="h-auto p-0" asChild>
-            <a href={releasePageUrl(episode.tag)} target="_blank" rel="noopener noreferrer">
-              {T.OPEN_RELEASE_PAGE}
-            </a>
-          </Button>
+          {configured ? (
+            T.LOAD_ERROR_CONFIGURED
+          ) : (
+            <>
+              {T.LOAD_ERROR}{" "}
+              <Button variant="link" size="sm" className="h-auto p-0" asChild>
+                <a href={releasePageUrl(episode.tag)} target="_blank" rel="noopener noreferrer">
+                  {T.OPEN_RELEASE_PAGE}
+                </a>
+              </Button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -119,6 +133,9 @@ export function catalogSummary(episodes: Episode[]): { recorded: number; minutes
 // chip so an admin knows which episodes are for their members, not them.
 export function EpisodeList({ mode }: { mode: "single" | "multi" }) {
   const { recorded, minutes } = catalogSummary(EPISODES);
+  // Same configured/default twin choice as EpisodeRow above, for the catalog
+  // summary line (SUMMARY vs SUMMARY_CONFIGURED).
+  const configured = useDemoVideoBaseUrl() !== undefined;
   const byPath = (p: Episode["path"]) => EPISODES.filter((e) => e.path === p);
   const other = byPath(mode === "single" ? "multi" : "single");
   const groups: { key: string; label: string; rows: Episode[]; memberChips?: boolean }[] = [
@@ -131,7 +148,9 @@ export function EpisodeList({ mode }: { mode: "single" | "multi" }) {
   return (
     <div className="mt-10">
       <h2 className="text-lg font-semibold text-foreground">{T.ALL_EPISODES_TITLE}</h2>
-      <p className="mt-1 text-sm text-muted-foreground">{T.SUMMARY(recorded, minutes)}</p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {configured ? T.SUMMARY_CONFIGURED(recorded, minutes) : T.SUMMARY(recorded, minutes)}
+      </p>
       <div className="mt-4 space-y-6">
         {groups.map((g) => (
           <div key={g.key}>

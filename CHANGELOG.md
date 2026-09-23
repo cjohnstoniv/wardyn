@@ -178,6 +178,62 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A brokered push that touches a denied path, cannot be inspected, or is too large is refused.**
+  `push_rules` is enforcement now, not storage. When a run's policy carries content rules, both
+  brokered git lanes buffer the receive-pack request up to the run's inspection ceiling, read which
+  paths the push would introduce, and answer one of three refusals — `403` for a path matching
+  `deny_paths`, `413` for a request past `max_inspect_pack_mib` (32 MiB when unset), `415` for a
+  push that cannot be read from its own bytes — or forward the buffered bytes unchanged. A refused
+  push is never forwarded; it does not stop a credential being issued, because git's
+  `GET info/refs?service=git-receive-pack` discovery precedes every push and mints it. An oversize
+  push is refused rather than held: holding would ask a person to approve a push nobody inspected.
+  **What the pack leaves out is compared with the commit the push builds on:** a pack omits every
+  tree the forge already stores wherever the new tree puts it, so a directory moved, staged by an
+  earlier push, or restored from an older revision onto a denied path looked exactly like one left
+  alone — and was skipped. Such a directory, and a symlink or submodule, is now matched when a deny
+  pattern could match anything beneath it, and compared with the same path in the commit the push
+  builds on, read from GitHub's REST API with the run's own credential (trees only, never file
+  contents): the same mode and object id passes, anything else refuses. So
+  `.github/workflows/**` on a repository that already has workflows refuses a push that changes,
+  adds, moves or restores one, and passes an edit to `src/`. A parent counts only when GitHub
+  places it in the current history of the default branch or of a branch the push updates, because
+  GitHub serves a fork network's objects through every repository in it; history a clone re-sends
+  after the default branch moved on is taken out the same way. A forge other than GitHub, or a read
+  that fails, is truncated, or runs past 64 requests or 20 seconds, keeps the refusal and says why.
+  Building on an older commit of the default branch keeps what that commit held at a denied path;
+  `docs/POLICIES.md` states it. A `deny_paths` entry with an empty, `.` or `..`
+  segment is refused at write time, a trailing `/` reads as `/**`, and inspection shares the proxy
+  sidecar's one inspection slot and retained-bytes budget with LLM request scanning, so concurrent
+  small pushes cannot inflate past its 256 MiB cap. Content rules are entered independently of branch-namespace confinement
+  on both lanes, so `git_push_any_branch: true` narrows where a push may land without switching off
+  what it may contain, and the `no-thin` advertisement now goes out on the token lane too, on the
+  same trigger, so a lane that enforces the rules also asks for a pack it can read. Offending paths
+  go to the sidecar's structured log and, at most ten of them, to the refusal response (git renders
+  a receive-pack `403` without its body, so the paths are read from the run's decision stream and
+  that log); they never ride the decision log's free-text fields, which stay reserved for
+  dial-shaped refusals. The
+  matcher bounds its own work — `deny_paths` carries no count cap, so a list too long to evaluate
+  against a push refuses it rather than being ground through.
+
+- **The broker advertises `no-thin`, so a push it must inspect arrives self-contained.** When a run's
+  policy sets `push_rules`, the brokered receive-pack reference advertisement relayed back to the
+  sandbox gains the `no-thin` capability. The agent images clone with `--depth 1`, so a real push's
+  root tree is normally a delta against a base object that stayed on the forge: the pack is *thin*,
+  and nothing in the request can resolve what it deltified against. `gitprotocol-capabilities` says a
+  client must not send a thin pack when the server advertises `no-thin`, so the client packs those
+  bases in and the content rules can read what they are being asked about instead of refusing every
+  legitimate push. An advertisement that is not exactly the expected shape is relayed byte for byte
+  and the push is left thin — corrupting one would break every push through the broker, while an
+  un-rewritten one is merely refused later, on its own terms. Only the push advertisement is
+  rewritten; fetch is untouched, and so is the POST that carries the pack.
+
+- **`push_rules` policy field: content rules for a brokered git push.** `RunPolicySpec` carries a new
+  `*PushRulesSpec` — `deny_paths` and `max_inspect_pack_mib` — alongside `git_push_any_branch`:
+  where that field says WHERE a run's push may land, this one says WHAT it may touch. `nil` (every
+  policy authored before this field existed) is byte-identical to today's behaviour. This change
+  stores and validates the field only; no matcher reads `deny_paths` yet — a policy that sets
+  `push_rules` while the run's only git-capable grant is `ssh_key` (which the broker cannot inspect)
+  grades a medium-risk warning on the Review rail rather than a write-time refusal.
 - **Settings is reachable from the sidebar, and a save conflict keeps your work.** Settings now sits
   last in the sidebar, under a divider, beside the nine existing sections — it also keeps its
   long-standing account-menu entry, so nobody's muscle memory breaks. The Providers screen and its
@@ -338,6 +394,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **The Getting Started demo episodes can now be served from an air-gapped mirror.** `WARDYN_DEMO_VIDEO_BASE_URL`
+  re-points where the console downloads them from — `https://` only, no userinfo, query or fragment,
+  validated at boot the same way an internal model gateway base URL is. Unset (the default) is
+  byte-identical to today: the two hardcoded GitHub hosts. The console reads the configured base off
+  `/healthz` and the CSP's `media-src` is built from it (through the same host-sanitizing filter the
+  per-request `connect-src` uses) rather than being a fixed constant. An episode with no recorded tag
+  still resolves to no URL either way. A blocked/redirecting mirror now reads as the deployment's
+  media policy blocking the episode, not as a missing file.
+
 - **The configured Anthropic gateway (`WARDYN_ANTHROPIC_BASE_URL`) now also carries subscription
   and Wardyn-managed runs, not just the api-key lane.** Dispatch points those two lanes'
   `ANTHROPIC_BASE_URL` at the gateway when one is configured; the in-image `agent-run` launcher no
@@ -377,6 +442,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   either.
 
 ### Fixed
+
+
 
 - **On Kubernetes, a run's Go and npm caches now count against `disk_mib`.** A third `emptyDir`
   (`wardyn-cache` at `/home/agent/.cache`) joins the existing `/tmp` and workdir scratch volumes
@@ -420,7 +487,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the error with method and path and answer the caller with the action alone; a source-walking guard
   test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
   which are already caller-facing by design, are unchanged.
-
 - **A read-only terminal observer is now promoted in place when the writer leaves, instead of
   having to reconnect.** The registry keeps one writer and the observers queued behind it in
   arrival order; an ordinary release promotes the oldest of them on the socket it already has,

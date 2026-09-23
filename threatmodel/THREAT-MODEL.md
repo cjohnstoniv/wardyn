@@ -2426,6 +2426,110 @@ residual because it means the gate's absence is not, by itself, evidence the ins
 is fine: an operator who wants that assurance still reads the checklist, not just
 whether the funnel opened.
 
+### Push content rules read the pack, and the forge for what it leaves out
+
+A run whose policy sets `push_rules` has its brokered git pushes inspected
+before they are forwarded: the broker buffers the receive-pack request, reads
+which paths the push would introduce, and refuses one that carries a denied
+path, that is larger than the run's inspection ceiling, or that cannot be read
+from its own bytes. Both brokered lanes enforce it, on the same trigger, and
+independently of branch-namespace confinement — a `git_push_any_branch`
+opt-out says where a push may land and does not switch off what it may
+contain. It governs what reaches the forge, not whether a credential is
+issued: git's `GET info/refs?service=git-receive-pack` precedes every push and
+mints (or reuses) the lane's credential, so an approval-gated single-use grant
+is spent there even when the push that follows is refused.
+
+What the pack can and cannot show, and why every gap is closed toward refusal:
+
+- **A pack does not say where a tree it leaves out used to stand.** It carries
+  only the objects the forge lacks, wherever the new tree puts them, and under
+  branch-namespace confinement the pushed commit's parent stays on the forge,
+  so the pack holds no pre-image to diff against. A directory the forge already
+  stores therefore looks the same whether the push left it alone, moved it
+  there (`git mv docs/ci infra` with `pack.useSparse=false`), staged it under an
+  allowed name in an earlier push of the same run and renamed it onto a denied
+  one, or restored it — or the whole root tree — from an older revision. Until
+  this was closed, the inspector skipped such a directory, so each of those
+  placed arbitrary content at a denied path unread; all three were reproduced
+  with a stock git client. Now a directory the pack does not carry is reported
+  as one opaque entry (`internal/gitpack`'s `Change.Opaque`), matched when a
+  deny pattern could match beneath it (`internal/egress/proxy/push_rules.go`'s
+  `matchesBeneath`), and compared with the same path in the commit the push
+  builds on, read from GitHub's REST API with the run's own credential
+  (`internal/egress/proxy/push_forge.go`): trees only, one level per request,
+  never file contents. The same mode and object id there — a content address —
+  means the push left it unchanged, and it passes; anything else refuses. A
+  moved, staged-and-renamed or restored directory is not what the commit the
+  push builds on held at that path, so all three reproductions stay refused.
+- **The forge holding an object is not the repository vouching for it.** A
+  commit may name any object id as its parent, and GitHub serves every fork's
+  objects through each repository in the network, so a commit pushed only to a
+  fork could otherwise vouch for its own content at a denied path. A parent
+  counts only when GitHub's compare API reports it inside the current history
+  of the default branch or of a branch the push updates; the forge resolves
+  those names, so nothing the pack asserts is taken on trust. A merge passes an
+  entry that matches any counted parent: demanding all would refuse merging the
+  default branch in after it changed a denied path, and closes nothing a
+  single-parent commit on the same base could not already do.
+- **History a push re-sends is taken out the same way.** A clone whose base is
+  no longer a tip the forge advertises re-sends its history, and the first
+  commit of that history reads as though the push added every file the
+  repository has. The carried commits GitHub places in that same current
+  history are taken out (`internal/gitpack`'s `Result.Settle`) and the push is
+  judged against them; a commit once found new is never taken as held.
+- **Building on an older commit of the default branch keeps what that commit
+  held at a denied path.** This is the stated residual of comparing with the
+  commit a push builds on: a run that checks out an older commit of the default
+  branch, or never pulls after a workflow changed there, can push a branch
+  whose workflows are the older ones. The rule is that a push does not change a
+  denied path relative to the commit it builds on, not that every branch
+  carries the newest version of it. That includes a workflow the default branch
+  has since changed or fixed, and GitHub runs an `on: push` workflow from the
+  pushed commit's own copy.
+- **When the comparison cannot be made, the strict reading stands.** A forge
+  other than GitHub, a push that builds on no counted commit, a read that fails,
+  answers other than `200` or comes back truncated, and a comparison needing
+  more than 64 reads or 20 seconds all refuse the push, and the refusal names
+  the reason. The reads happen only for a push the pack alone would refuse,
+  while it holds the sidecar's inspection slot.
+- **A symlink or submodule is opaque the same way.** It is a leaf in the pushed
+  tree, but a checkout resolves paths beneath it to content no tree entry
+  names — `infra -> stage` makes `stage/prod/main.tf` readable as
+  `infra/prod/main.tf`, and a submodule's contents come from another
+  repository. One at or above a path a deny pattern could match refuses the
+  push. Every mode git does not check out as a regular file counts.
+- **Removals are invisible.** These rules judge what a push introduces. A push
+  that deletes a denied path is not a rule match.
+- **Root-level files are always reported.** The root tree is always in the
+  pack, so every file at the repository root is named whether or not the push
+  touched it. One the pack does not carry is compared with the commit the push
+  builds on like any other entry, so a pattern naming a root-level file refuses
+  only a push that changes it — including a blob the forge already stores,
+  re-introduced at that path by a rename, which is not what the base held there.
+- **A pattern that would match nothing is refused, not stored.** An entry with
+  an empty, `.` or `..` segment is refused at write time, a trailing `/` reads
+  as `/**`, and an entry that reaches the broker unvalidated refuses every push
+  rather than being ignored (`types.DenyPathSegments` is the one reading both
+  sides use).
+- **Inspection is memory-bounded as well as size-bounded.** A push is a small
+  body the agent chooses that inflates to what `internal/gitpack`'s ceilings
+  allow — four compressed 31 MiB blobs are a 34 KB request — and the proxy
+  sidecar has a hard 256 MiB cap. Inspection takes the same process-wide slot
+  and retained-bytes budget as LLM request scanning, and a push that cannot get
+  them in time is refused, never forwarded unread.
+- **The key lane is not covered at all.** An `ssh_key` grant is an opaque
+  tunnel with no broker seam, so a policy that sets `push_rules` while
+  `ssh_key` is the run's only git-capable grant is graded a medium-risk warning
+  (`internal/composer/risk.go`) rather than enforced. A name-based deny does
+  not bind an IP literal, the same standing caveat branch-namespace confinement
+  carries.
+- **What is unreadable is refused, not waved through.** A thin pack, a body in
+  a content-coding, a malformed pack, a pack past one of `internal/gitpack`'s
+  ceilings, and a `deny_paths` list too long to evaluate in bounded time all
+  answer the same refusal. An unevaluated rule never reads as a pass; the cost
+  is that a client which ignores the `no-thin` the broker advertises cannot
+  push at all while rules are set.
 ### Hold-lane settings sources: user scope is still agent-writable
 
 Claude Code resolves `permissions.allow` rules before it asks the
