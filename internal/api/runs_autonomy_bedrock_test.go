@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -183,11 +184,17 @@ func TestAutonomyGradesTheBedrockModelCredentialAtBothDoors(t *testing.T) {
 			c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), bedrockAutonomyBody)
 
 			if tc.wantRefused {
-				if w.Code != http.StatusUnprocessableEntity {
-					t.Errorf("preflight = %d, want 422: %s", w.Code, w.Body.String())
-				}
-				if c.Code != http.StatusUnprocessableEntity {
-					t.Errorf("create = %d, want 422: %s", c.Code, c.Body.String())
+				// The per_user model-credential refusal, not merely a 422: any
+				// other 422 would pass a status check without awsSSOScopeFor's
+				// owner scoping ever being exercised.
+				for door, rec := range map[string]*httptest.ResponseRecorder{"preflight": w, "create": c} {
+					var refusal errorBody
+					_ = json.Unmarshal(rec.Body.Bytes(), &refusal)
+					if rec.Code != http.StatusUnprocessableEntity || refusal.Reason != llmRefusalAuditReason ||
+						!strings.Contains(refusal.Error, llmMechanismRemedyPerUser) {
+						t.Errorf("%s = %d %s, want 422 reason %q naming the member's own AWS sign-in",
+							door, rec.Code, rec.Body.String(), llmRefusalAuditReason)
+					}
 				}
 				return
 			}
@@ -233,6 +240,30 @@ func TestAutonomyGradesTheBedrockModelCredentialAtBothDoors(t *testing.T) {
 					named, tc.wantSecrets == types.AutonomySecretsPowerful, created.Warnings)
 			}
 		})
+	}
+}
+
+// TestAutonomyBedrockRosterReadFailureRefusesAtBothDoors (#518): a failed
+// roster read in enforceCreateLLMMechanism refuses with a 500 and leaves no run
+// row. Admitting on it graded the run as though no roster bound it, and the run
+// then failed only at dispatch, with a drift detail untrue for a store blip.
+// Only that function's read fails; every other read on the request succeeds.
+func TestAutonomyBedrockRosterReadFailureRefusesAtBothDoors(t *testing.T) {
+	p := govProfile("bedrock-roster-read")
+	p.Limits = types.GovernanceLimits{AutonomyRubric: secretsOnlyRubric(types.AutonomyL1)}
+	for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		srv, st, _ := bedrockAutonomyFixture(t, p, true, bedrockLaneSSO, true)
+		st.failSiteConfigReadFrom = "enforceCreateLLMMechanism"
+		w := doSSO(t, srv, http.MethodPost, path, govSession(t, "sub-bedrock", []string{"eng"}, false), bedrockAutonomyBody)
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("%s = %d, want 500 — the roster could not be read: %s", path, w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		runs := len(st.runs)
+		st.mu.Unlock()
+		if runs != 0 {
+			t.Errorf("%s left %d run row(s) behind", path, runs)
+		}
 	}
 }
 
