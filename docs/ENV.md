@@ -530,7 +530,7 @@ repository.
 | `WARDYN_LIVE_ADO_SPACED_REPO` | string | `Card Auth (v2).Service` | Repository in that project, for LL2's second run |
 | `WARDYN_LIVE_AWS_SSO_START_URL` | URL | (none) | IAM Identity Center start URL (LL4) |
 | `WARDYN_LIVE_AWS_SSO_REGION` | string | (none) | IAM Identity Center region (LL3, LL4) |
-| `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in is a skip |
+| `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in fails the suite once `WARDYN_LIVE_BEDROCK=1` |
 | `WARDYN_LIVE_BEDROCK_ACCOUNT_ID` | string | (none) | The capped member account. LL3 refuses unless STS places its credentials in exactly this account |
 | `WARDYN_LIVE_BEDROCK_ROLE_NAME` | string | (none) | Identity Center permission set whose role credentials LL3 uses |
 | `WARDYN_LIVE_BEDROCK_REGION` | string | (none) | Bedrock and STS region |

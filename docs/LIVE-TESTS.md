@@ -9,7 +9,8 @@ only.
   `-tags live`. The browser suites have their own Playwright config, which no
   other config or script picks up.
 - Every suite skips unless its own gate variable is `1`. The skip message
-  names the variables it needs and never prints a value.
+  names the variables it needs and never prints a value. Once the gate is
+  `1`, the Go suites (LL2, LL3) fail, not skip, on a missing variable.
 - Only code is committed. There are no recorded responses, fixtures, tenant
   names, organisation names, account ids or addresses in the repository.
 
@@ -140,7 +141,7 @@ test identity's permission set on the capped member account.
    sign-in goes through Entra.
 2. Point `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` at the cache file that login wrote
    under `~/.aws/sso/cache/`. It is the one whose `startUrl` is your start
-   URL. When it expires, LL3 skips and tells you to sign in again.
+   URL. When it expires, LL3 fails and tells you to sign in again.
 
 ## Running
 
