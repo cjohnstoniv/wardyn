@@ -36,6 +36,52 @@ go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "
   > "$OUT/test-output.json"
 GO_EXIT=$?
 
+# ── name the failure ─────────────────────────────────────────────────────────
+# G11: a red `build`/`test-pg` job used to say only `make: *** [Makefile:195:
+# test-report] Error 1` — the failing test names and any compiler output were
+# visible only in the uploaded JSON artifact (gh run download -n
+# go-test-reports). Surface both directly in the job log on a red run.
+if [ "$GO_EXIT" -ne 0 ] && [ -s "$OUT/test-output.json" ] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$OUT/test-output.json" >&2 <<'PYEOF'
+import json
+import sys
+
+fails = set()
+build_output = {}  # ImportPath -> [Output, ...], buffered until we see build-fail
+build_fails = {}   # ImportPath -> [Output, ...]
+
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue  # a non-JSON line (e.g. `go test` itself failed to start)
+        action = ev.get("Action")
+        if action == "build-output":
+            build_output.setdefault(ev.get("ImportPath", ""), []).append(ev.get("Output", ""))
+        elif action == "build-fail":
+            ip = ev.get("ImportPath", "")
+            build_fails[ip] = build_output.get(ip, [])
+        elif action == "fail" and ev.get("Test"):
+            fails.add((ev.get("Package", ""), ev["Test"]))
+
+if fails:
+    print(">> failing tests:")
+    for pkg, test in sorted(fails):
+        print(f">>   {pkg} {test}")
+
+if build_fails:
+    print(">> failed to build:")
+    for ip, lines in sorted(build_fails.items()):
+        print(f">>   {ip}")
+        for out in lines:
+            sys.stdout.write(">>     " + out if out.endswith("\n") else ">>     " + out + "\n")
+PYEOF
+fi
+
 # Coverage artifacts (best-effort; cover.out may be absent if build failed).
 if [ -s "$OUT/cover.out" ]; then
   go tool cover -func="$OUT/cover.out" > "$OUT/coverage-func.txt" 2>/dev/null
