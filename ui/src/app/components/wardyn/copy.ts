@@ -159,7 +159,7 @@ export { YOUR_MODEL_KEY } from "./copy/model-key";
 export { MEMBER_GETTING_STARTED, RUNS_MEMBER_EMPTY, RUNS_WAIT } from "./copy/getting-started";
 export { EPISODES_COPY, FIRST_RUN_DEMOS_SUBTITLE } from "./copy/episodes";
 export { PEOPLE_STEP, SITE } from "./copy/setup-steps";
-export { SHELL } from "./copy/shell";
+export { SHELL, UNSAVED_GUARD } from "./copy/shell";
 export { RUN } from "./copy/run-clone";
 
 // Moved to copy/terminal.ts (the target path for the later barrel split of

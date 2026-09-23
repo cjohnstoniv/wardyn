@@ -29,7 +29,7 @@ func (s *Server) routes() chi.Router {
 	// reintroduce X-Forwarded-For parsing ONLY behind an explicit allowlist of
 	// trusted proxy addresses.
 	r.Use(middleware.Recoverer)
-	r.Use(securityHeaders)
+	r.Use(s.securityHeaders)
 
 	r.Get("/healthz", s.handleHealthz)
 	// Readiness: proves Postgres is reachable, not just that the process is up
@@ -674,10 +674,11 @@ func (s *Server) routes() chi.Router {
 		// host eBPF sensor's token is audit-write-only and is rejected by the
 		// mint/approval endpoints. This is the SECOND of the three audit streams
 		// (Postgres self-report + PTY replay are the others).
-		r.Group(func(r chi.Router) {
-			r.Use(s.internalAuthGroundtruth)
-			r.Post("/internal/groundtruth", s.handleGroundtruthEvents)
-		})
+		r.With(s.internalAuthGroundtruth).Post("/internal/groundtruth", s.handleGroundtruthEvents)
+
+		// Hybrid enrolment: anonymous enrol, the wdd_ device routes and the admin
+		// device routes, each in its own group — see mountDeviceRoutes.
+		s.mountDeviceRoutes(r)
 	})
 
 	s.mountUI(r)

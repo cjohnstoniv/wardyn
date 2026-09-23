@@ -9,43 +9,88 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 )
 
-// llmGatewayPublicHosts pairs each supported vendor's WARDYN_*_BASE_URL knob
-// with the public host it re-points, in validation order.
+// llmGatewayPublicHosts pairs each supported vendor's WARDYN_*_BASE_URL /
+// _GATEWAY_HEADER / _GATEWAY_FORMAT knobs with the public host they re-point,
+// in validation order.
 var llmGatewayPublicHosts = []struct {
-	env, envVar, publicHost string
+	env, envVar, headerEnvVar, formatEnvVar, publicHost string
 }{
-	{"anthropic", "WARDYN_ANTHROPIC_BASE_URL", "api.anthropic.com"},
-	{"openai", "WARDYN_OPENAI_BASE_URL", "api.openai.com"},
+	{"anthropic", "WARDYN_ANTHROPIC_BASE_URL", "WARDYN_ANTHROPIC_GATEWAY_HEADER", "WARDYN_ANTHROPIC_GATEWAY_FORMAT", "api.anthropic.com"},
+	{"openai", "WARDYN_OPENAI_BASE_URL", "WARDYN_OPENAI_GATEWAY_HEADER", "WARDYN_OPENAI_GATEWAY_FORMAT", "api.openai.com"},
 }
 
-// ValidateLLMGateways validates the two operator-set internal-model-gateway
-// knobs (boot posture, control-plane-authored — the sandbox cannot set these)
-// and returns api.Config.LLMGateways: public vendor host -> the gateway's
-// normalized base URL. Both empty => nil map, byte-identical to today. Fail
-// closed on any rule violation (the WARDYN_SUBSCRIPTION_INJECT/agentImagesJSON
-// precedent) — an operator-typed posture that doesn't parse must refuse boot,
-// not silently fall back to the public host.
-func ValidateLLMGateways(anthropicRaw, openaiRaw string) (map[string]string, error) {
-	raws := map[string]string{"api.anthropic.com": anthropicRaw, "api.openai.com": openaiRaw}
-	out := make(map[string]string, 2)
+// LLMGatewayAuth is a provider's operator-set injection header name and value
+// format override for api.Config.LLMGatewayAuth (WARDYN_<VENDOR>_GATEWAY_HEADER
+// / _GATEWAY_FORMAT, validated by ValidateLLMGateways). Header and Format are
+// independent: either may be set alone, and an empty field means
+// llmProviderFor keeps the harness catalog's compile-time vendor convention
+// for that piece — byte-identical to today unless the operator explicitly set
+// one.
+type LLMGatewayAuth struct {
+	Header string
+	Format string
+}
+
+// LLMGatewayRaw is the raw operator-typed value of one provider's three
+// gateway knobs, exactly as read off the boot flags, before validation.
+type LLMGatewayRaw struct {
+	BaseURL string
+	Header  string
+	Format  string
+}
+
+// ValidateLLMGateways validates the operator-set internal-model-gateway knobs
+// for both providers (boot posture, control-plane-authored — the sandbox
+// cannot set these) and returns api.Config.LLMGateways (public vendor host ->
+// the gateway's normalized base URL) and api.Config.LLMGatewayAuth (public
+// vendor host -> header/format override, present only for a provider that set
+// at least one of the two). Everything unset => (nil, nil, nil),
+// byte-identical to today. Fail closed on any rule violation (the
+// WARDYN_SUBSCRIPTION_INJECT/agentImagesJSON precedent) — an operator-typed
+// posture that doesn't parse must refuse boot, not silently fall back to the
+// public host or the vendor convention: a malformed value surfacing later at
+// dial time as a confusing upstream error is exactly what this guards
+// against.
+func ValidateLLMGateways(anthropic, openai LLMGatewayRaw) (map[string]string, map[string]LLMGatewayAuth, error) {
+	raws := map[string]LLMGatewayRaw{"api.anthropic.com": anthropic, "api.openai.com": openai}
+	gateways := make(map[string]string, 2)
+	auth := make(map[string]LLMGatewayAuth, 2)
 	for _, e := range llmGatewayPublicHosts {
-		raw := strings.TrimSpace(raws[e.publicHost])
-		if raw == "" {
+		r := raws[e.publicHost]
+		base := strings.TrimSpace(r.BaseURL)
+		if base != "" {
+			norm, err := validateOneLLMGateway(e.publicHost, base, false)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s: %w", e.envVar, err)
+			}
+			gateways[e.publicHost] = norm
+		}
+		header := strings.TrimSpace(r.Header)
+		format := strings.TrimSpace(r.Format)
+		if header == "" && format == "" {
 			continue
 		}
-		norm, err := validateOneLLMGateway(e.publicHost, raw, false)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", e.envVar, err)
+		if header != "" && !egress.ValidHeaderName(header) {
+			return nil, nil, fmt.Errorf("%s: %q is not a valid HTTP header token", e.headerEnvVar, header)
 		}
-		out[e.publicHost] = norm
+		if format != "" {
+			if err := validInjectionFormat(format); err != nil {
+				return nil, nil, fmt.Errorf("%s: %w", e.formatEnvVar, err)
+			}
+		}
+		auth[e.publicHost] = LLMGatewayAuth{Header: header, Format: format}
 	}
-	if len(out) == 0 {
-		return nil, nil
+	if len(gateways) == 0 {
+		gateways = nil
 	}
-	return out, nil
+	if len(auth) == 0 {
+		auth = nil
+	}
+	return gateways, auth, nil
 }
 
 // ValidateBedrockBaseURL validates WARDYN_BEDROCK_BASE_URL — the Bedrock
@@ -167,6 +212,32 @@ func validateOneLLMGateway(publicHost, raw string, allowPlainHTTP bool) (string,
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/")
 	return u.String(), nil
+}
+
+// ValidateDemoVideoBaseURL validates WARDYN_DEMO_VIDEO_BASE_URL — the base URL
+// an air-gapped deployment re-points the Getting Started demo episodes at,
+// since github.com is unreachable there — and returns its normalized form for
+// api.Config.DemoVideoBaseURL. Empty => ("", nil), byte-identical to today
+// (episodeUrl's hardcoded github.com download URL, and the CSP's two
+// hardcoded GitHub hosts).
+//
+// It delegates to validateOneLLMGateway rather than growing a second rule
+// set, with publicHost "" (rule 5, "must not equal the public provider host",
+// has nothing to compare against for this knob — an empty publicHost can
+// never equal a host rule 3 has already required to be non-empty, so the rule
+// is a harmless no-op here) and allowPlainHTTP false (no test hatch for this
+// knob): https:// only, no userinfo, non-empty host, no query, no fragment —
+// the same fail-closed-at-boot posture as the model gateways.
+func ValidateDemoVideoBaseURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	norm, err := validateOneLLMGateway("", raw, false)
+	if err != nil {
+		return "", fmt.Errorf("WARDYN_DEMO_VIDEO_BASE_URL: %w", err)
+	}
+	return norm, nil
 }
 
 // gatewayHost extracts the bare host (no scheme, port, or path) from an

@@ -29,6 +29,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -829,6 +830,116 @@ func TestH2Fallback_PATBrokerLane(t *testing.T) {
 	if c.h2.Load() != 1 || c.h1.Load() != 0 {
 		t.Fatalf("forge served h1=%d h2=%d, want the clone over HTTP/2", c.h1.Load(), c.h2.Load())
 	}
+}
+
+// newGitBrokerH2Proxy is a GitHub App lane proxy whose mint is an ordinary
+// control plane and whose forge is forgeAddr; forgeDials counts the dials that
+// reached the forge.
+func newGitBrokerH2Proxy(t *testing.T, forgeAddr string, forgeDials *atomic.Int32) (*Proxy, *bytes.Buffer) {
+	t.Helper()
+	mint := newGitBrokerUpstream(t, "gh-inst-token")
+	split := splitDial(upstreamAddr(mint.srv), forgeAddr)
+	buf := &bytes.Buffer{}
+	return newProxy(Options{
+		RunID:    uuid.New(),
+		Policy:   CompilePolicy(types.RunPolicySpec{}),
+		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 16)},
+		Resolver: publicResolver{},
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if _, port, _ := net.SplitHostPort(addr); port == "443" {
+				forgeDials.Add(1)
+			}
+			return split(ctx, network, addr)
+		},
+		ControlPlaneURL: "https://wardynd.test:8080",
+		RunToken:        newTokenSource("RUNTOK"),
+		TLSClientConfig: testInsecureTLSConfig,
+		GitGrants:       map[string]uuid.UUID{"octocat/hello-world": uuid.New()},
+	}), buf
+}
+
+// TestH2Fallback_GitBrokerLane is TestH2Fallback_PATBrokerLane's GitHub App
+// sibling: a forge that speaks HTTP/2 without negotiating it answers the clone
+// over HTTP/2, and the request leaves one allow row.
+func TestH2Fallback_GitBrokerLane(t *testing.T) {
+	var c h2Counts
+	var dials atomic.Int32
+	p, buf := newGitBrokerH2Proxy(t, startTLSPeer(t, noALPNConfig(t), serveH2Unasked(&c)), &dials)
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet,
+		"/wardyn/gh/octocat/hello-world.git/info/refs?service=git-upload-pack", nil))
+
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
+		t.Fatalf("status = %d body %q, want 200 ok from the forge", rec.Code, rec.Body.String())
+	}
+	if c.h2.Load() != 1 || c.h1.Load() != 0 {
+		t.Fatalf("forge served h1=%d h2=%d, want the clone over HTTP/2", c.h1.Load(), c.h2.Load())
+	}
+	if got := decisionRows(t, buf); !slices.Equal(got, []string{"allow " + ruleSourceGit}) {
+		t.Fatalf("rows = %q, want one allow", got)
+	}
+}
+
+// TestH2Fallback_PushBodyResentOnlyWhenUnread drives a receive-pack POST — the
+// command section the broker buffered, re-prepended to the streaming pack
+// (confinePush's MultiReader, no GetBody) — through the HTTP/2 fallback.
+// resendable may reuse that body only while nothing has read it:
+//
+//   - a forge caught by the post-handshake sniff failed the dial before any
+//     write, so the push is resent over HTTP/2 and arrives byte-identical;
+//   - a forge that answers HTTP/2 only after reading the request has consumed
+//     the body, so the push is refused with 400 and never replayed.
+func TestH2Fallback_PushBodyResentOnlyWhenUnread(t *testing.T) {
+	t.Setenv(envEnforceBranchNS, "on")
+	pushBody := func(p *Proxy) string {
+		ref := "refs/heads/wardyn/" + p.runID.String() + "/feature"
+		return pkt(someOID+" "+otherOID+" "+ref+firstCaps) + "0000" +
+			"PACK\x00\x02\x00\x00\x00\x01\xff\xfe\x00 binary"
+	}
+	const path = "/wardyn/gh/octocat/hello-world.git/git-receive-pack"
+
+	t.Run("unread: resent intact", func(t *testing.T) {
+		var c h2Counts
+		var dials atomic.Int32
+		p, buf := newGitBrokerH2Proxy(t, startTLSPeer(t, noALPNConfig(t), serveH2Unasked(&c)), &dials)
+		body := pushBody(p)
+
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, path, io.NopCloser(strings.NewReader(body))))
+
+		// h2Counts echoes the body it received.
+		if rec.Code != http.StatusOK || rec.Body.String() != body {
+			t.Fatalf("status = %d body %q, want 200 with the push echoed byte-for-byte (%q)", rec.Code, rec.Body.String(), body)
+		}
+		if c.h2.Load() != 1 || c.h1.Load() != 0 {
+			t.Fatalf("forge served h1=%d h2=%d, want the push once, over HTTP/2", c.h1.Load(), c.h2.Load())
+		}
+		if got := decisionRows(t, buf); !slices.Equal(got, []string{"allow " + ruleSourceGit}) {
+			t.Fatalf("rows = %q, want one allow", got)
+		}
+	})
+
+	t.Run("read: refused, not replayed", func(t *testing.T) {
+		var dials atomic.Int32
+		p, buf := newGitBrokerH2Proxy(t, startH2MismatchPeer(t), &dials)
+
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, path, io.NopCloser(strings.NewReader(pushBody(p)))))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body %q)", rec.Code, rec.Body.String())
+		}
+		if got := denyBody(rec); !strings.Contains(got, "cannot be replayed") {
+			t.Errorf("body = %q, want the reason the resend was skipped", got)
+		}
+		if got := dials.Load(); got != 1 {
+			t.Errorf("forge dials = %d, want 1: a consumed push body is never sent again", got)
+		}
+		if got := decisionRows(t, buf); !slices.Equal(got, []string{"deny " + ruleSourceUpstreamProtocolMismatch}) {
+			t.Fatalf("rows = %q, want the mismatch deny alone", got)
+		}
+	})
 }
 
 // TestH2Fallback_NoProxyBypass is acceptance (g): a host on

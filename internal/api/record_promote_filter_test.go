@@ -98,7 +98,7 @@ func TestPromoteRecordEgress_RequestHostIsAlsoSelf(t *testing.T) {
 	r.Header.Set("Authorization", "Bearer "+adminToken)
 	r.Host = arrivedOn + ":8443" // the port must not defeat the match
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("promote: code = %d, want 200; body = %s", w.Code, w.Body.String())

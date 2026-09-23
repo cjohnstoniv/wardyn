@@ -4,6 +4,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -22,15 +24,18 @@ import (
 // would have the proxy try to serve it over a route it does not speak. They are
 // validated together here because they answer one question, not because they
 // share a mechanism.
-func validateModelEndpoints(f *bootFlags) (map[string]string, string, string, error) {
-	llmGateways, err := api.ValidateLLMGateways(*f.anthropicBaseURL, *f.openaiBaseURL)
+func validateModelEndpoints(f *bootFlags) (map[string]string, map[string]api.LLMGatewayAuth, string, string, error) {
+	llmGateways, llmGatewayAuth, err := api.ValidateLLMGateways(
+		api.LLMGatewayRaw{BaseURL: *f.anthropicBaseURL, Header: *f.anthropicGatewayHeader, Format: *f.anthropicGatewayFormat},
+		api.LLMGatewayRaw{BaseURL: *f.openaiBaseURL, Header: *f.openaiGatewayHeader, Format: *f.openaiGatewayFormat},
+	)
 	if err != nil {
-		return nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	// *f.bedrockRegion is already resolved (parseBootFlags folds in AWS_REGION).
 	bedrockBaseURL, err := api.ValidateBedrockBaseURL(*f.bedrockBaseURL, *f.bedrockRegion, *f.allowTestEndpoints)
 	if err != nil {
-		return nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	// The OTHER relaxation WARDYN_ALLOW_TEST_ENDPOINTS unlocks, made audible.
 	// The AWS SSO override WARNs on every boot that carries it; this one
@@ -50,7 +55,7 @@ func validateModelEndpoints(f *bootFlags) (map[string]string, string, string, er
 	// refuses boot without WARDYN_ALLOW_TEST_ENDPOINTS.
 	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
 	if err != nil {
-		return nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	// A WARNING, never a refusal: the model is passed to the agent verbatim and
 	// Wardyn deliberately does not police its shape. But the AWS SSO account
@@ -62,5 +67,21 @@ func validateModelEndpoints(f *bootFlags) (map[string]string, string, string, er
 			slog.String("bedrock_model", *f.bedrockModel),
 		)
 	}
-	return llmGateways, bedrockBaseURL, awsSSOEndpointOverride, nil
+	return llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, nil
+}
+
+// parseAgentImages decodes WARDYN_AGENT_IMAGES (a JSON object mapping agent
+// name to OCI image ref) and logs what it took. Empty is not an error: it
+// means "use the ghcr convention for every agent". A malformed value fails
+// closed at boot rather than silently falling back to the convention.
+func parseAgentImages(raw string) (map[string]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var images map[string]string
+	if err := json.Unmarshal([]byte(raw), &images); err != nil {
+		return nil, fmt.Errorf("parse WARDYN_AGENT_IMAGES: %w", err)
+	}
+	slog.Info("wardynd: agent image overrides", slog.Any("images", images))
+	return images, nil
 }

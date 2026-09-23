@@ -13,7 +13,6 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -119,12 +118,11 @@ func run() error {
 
 	// Parse the agent images map at boot so a malformed value fails closed
 	// immediately rather than silently using the convention for all agents.
-	var agentImages map[string]string
-	if *f.agentImagesJSON != "" {
-		if err := json.Unmarshal([]byte(*f.agentImagesJSON), &agentImages); err != nil {
-			return fmt.Errorf("parse WARDYN_AGENT_IMAGES: %w", err)
-		}
-		slog.Info("wardynd: agent image overrides", slog.Any("images", agentImages))
+	// Extracted into parseAgentImages (boot_gateway.go) for the same reason
+	// the endpoint knobs above are: run()'s cyclomatic budget is full.
+	agentImages, err := parseAgentImages(*f.agentImagesJSON)
+	if err != nil {
+		return err
 	}
 
 	// LOCAL HOST MODE posture (fail closed on a routable no-auth bind); see
@@ -298,11 +296,22 @@ func run() error {
 	// policy's allowed_domains does not list a configured gateway's host — the
 	// operator must add it, or every run under that policy 404s on its first
 	// model call once ensureLLMGrant/reconcileLLMAccess point at the gateway.
-	llmGateways, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
+	llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
 	if err != nil {
 		return err
 	}
 	warnMissingGatewayHosts(defaultPolicy, llmGateways)
+
+	// WARDYN_DEMO_VIDEO_BASE_URL: same fail-closed-at-boot posture as the
+	// model gateways above, but answers a different question (where the
+	// Getting Started demo episodes stream from, not where a model call
+	// goes) — so it is validated on its own rather than folded into
+	// validateModelEndpoints, whose own test fixture is about model
+	// endpoints only.
+	demoVideoBaseURL, err := api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL)
+	if err != nil {
+		return err
+	}
 
 	if *f.adminToken == "" && !lm.enabled {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
@@ -390,6 +399,8 @@ func run() error {
 		DefaultPolicy:             defaultPolicy,
 		TrustedCAPEM:              trustedCAPEM,
 		LLMGateways:               llmGateways,
+		DemoVideoBaseURL:          demoVideoBaseURL,
+		LLMGatewayAuth:            llmGatewayAuth,
 		RunnerTarget:              runnerTarget,
 		UIDir:                     *f.uiDir,
 		ControlPlaneURL:           *f.controlURL,

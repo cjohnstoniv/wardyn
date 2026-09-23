@@ -11,9 +11,10 @@ import {
   mockMemberRole,
   mockSecurityAdminRole,
   navToRoute,
+  sidebarLink,
 } from "./fixtures";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
-import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
 // U-15: the starting sentence is a constant in a CSS-free module now — this
 // spec used to re-type its opening clause, so a reworded wait could move on
@@ -244,10 +245,15 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
   });
 
   // R-2 (blind review, LOW): F4-F3 keeps the draft MOUNTED on a 412 — the
-  // banner sits ABOVE the tabs rather than replacing them, with ONE control
-  // ("Discard mine and reload", never "Save over theirs"). No spec pinned
-  // this in a real browser before this pass.
-  test("a 412 keeps the edited textarea on screen, with exactly one banner control", async ({ page }) => {
+  // banner sits ABOVE the tabs rather than replacing them. #217: the banner's
+  // two controls are Copy my changes (first) and Discard mine and reload
+  // (second, now ghost) — never a "Save over theirs" arm.
+  test("a 412 keeps the edited textarea on screen; Copy my changes, then Discard", async ({ page, context }) => {
+    // Chromium refuses navigator.clipboard.writeText without this — the
+    // console's own useCopyToClipboard (lib/use-copy-to-clipboard.ts)
+    // degrades to a failure toast otherwise, which is real browser behavior
+    // this spec isn't testing.
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await gotoProviders(page);
     const row = page.getByTestId("provider-row-github");
     await expect(row).toBeVisible();
@@ -264,14 +270,23 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
 
     await expect(page.getByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeVisible();
+    await expect(page.getByText(PROVIDERS.SAVED_ELSEWHERE_BODY)).toBeVisible();
     // The draft is still mounted and readable — the edited line survives.
     await expect(row.locator("textarea")).toHaveValue("https://github.com/acme\nhttps://git.corp.example/team");
-    // ONE control on the banner: Discard mine and reload. No "Save over
-    // theirs" — the corrected verdict refuses a second re-PUT arm.
-    await expect(page.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeVisible();
     await expect(page.getByText(/save over theirs/i)).toHaveCount(0);
     // Save providers is STILL on screen — the draft is still there to save.
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeVisible();
+
+    // #217 — the changed field, as readable text (never the whole draft as
+    // JSON): the banner shows it before Copy is even pressed, then Copy
+    // confirms with a toast once it is.
+    await expect(page.getByText(/base_urls.*acme.*→.*acme.*corp\.example/s)).toBeVisible();
+    await page.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY }).click();
+    await expect(page.getByText(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST)).toBeVisible();
+
+    // Discard mine and reload is still there, now beside Copy, not the only
+    // exit.
+    await expect(page.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeVisible();
 
     // Clean up the route intercept and the in-memory draft edit before the
     // next serial test reads the real, unmodified stored document.
@@ -280,6 +295,69 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     const reloaded = page.getByTestId("provider-row-github");
     await expect(reloaded).toBeVisible();
     await expect(reloaded.locator("textarea")).toHaveValue("https://github.com/acme");
+  });
+
+  // #217 — the guard is armed the moment the draft differs from what loaded,
+  // and it is a BLOCKING confirm, not a banner: a sidebar click away from a
+  // dirty Providers draft must stop and ask before it navigates.
+  test("editing a field arms the unsaved-navigation guard; Keep editing stays, Discard changes leaves", async ({ page }) => {
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-github");
+    await expect(row).toBeVisible();
+    await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
+    // The dirty marker beside Save — the same fact the guard is armed on.
+    await expect(page.getByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toBeVisible();
+
+    await sidebarLink(page, "Settings").click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(UNSAVED_GUARD.TITLE)).toBeVisible();
+    await expect(dialog.getByText(UNSAVED_GUARD.BODY)).toBeVisible();
+    // The navigation did NOT happen — still on /providers.
+    await expect(page).toHaveURL(/\/providers$/);
+
+    // Keep editing: the dialog closes, the edit and the route both survive.
+    await dialog.getByRole("button", { name: UNSAVED_GUARD.STAY }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page).toHaveURL(/\/providers$/);
+    await expect(row.locator("textarea")).toHaveValue("https://github.com/acme\nhttps://git.corp.example/team");
+
+    // The same click, answered the other way, actually leaves.
+    await sidebarLink(page, "Settings").click();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await page.getByRole("button", { name: UNSAVED_GUARD.LEAVE }).click();
+    await expect(page).toHaveURL(/\/settings$/);
+
+    // The unmounted draft never reached the server — the next test's read of
+    // the stored document must see the ORIGINAL row, not this edit.
+    await page.reload();
+    await navToRoute(page, "/providers");
+    const reloaded = page.getByTestId("provider-row-github");
+    await expect(reloaded).toBeVisible();
+    await expect(reloaded.locator("textarea")).toHaveValue("https://github.com/acme");
+  });
+
+  // #217 — a disabled control states its reason BESIDE it, never only in a
+  // title tooltip. GET/PUT /workspace-providers are admin-only server-side
+  // (requireOperator), so a real security admin's read would 403 before this
+  // control ever paints — this spec's own documented ceiling (BROWSER VS API,
+  // top of file) is what makes the state reachable at all: the harness's
+  // bearer stays real admin, so the GET genuinely succeeds while the spliced
+  // client role reads !operator, exactly the race a stale /me can produce.
+  test("a security-admin session sees Save disabled WITH its reason beside it", async ({ page }) => {
+    await mockSecurityAdminRole(page);
+    // NOT gotoProviders(): the Settings card itself is operator-gated
+    // (ProvidersCard returns null for !operator — the sibling describe
+    // block's own test above), so that entry point is gone for this role.
+    // The GET still succeeds for real (the harness's bearer stays admin),
+    // so the route itself renders.
+    await gotoConsole(page);
+    await navToRoute(page, "/providers");
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+    const saveBtn = page.getByRole("button", { name: PROVIDERS.SAVE_CTA });
+    await expect(saveBtn).toBeVisible();
+    await expect(saveBtn).toBeDisabled();
+    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
   });
 
   test("the funnel step badge and Settings card both read the real enabled-provider count", async ({ page }) => {

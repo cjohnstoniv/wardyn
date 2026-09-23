@@ -33,6 +33,15 @@ type (
 	// AddSSHKey.
 	SSHPublicKey = types.SSHPublicKey
 
+	// Device is one enrolled laptop in the organisation's inventory (no
+	// credential material). Returned by ListDevices.
+	Device = types.Device
+
+	// DeviceEnrolmentToken is a minted single-use enrolment token; Token holds
+	// the plaintext on the mint response only. Returned by
+	// MintDeviceEnrolmentToken.
+	DeviceEnrolmentToken = types.DeviceEnrolmentToken
+
 	// RunPolicy is a declarative policy attached to runs. Returned by the
 	// policy methods (ListPolicies, GetPolicy, CreatePolicy, UpdatePolicy).
 	RunPolicy = types.RunPolicy
@@ -54,6 +63,11 @@ type (
 	// WorkspaceMount is an operator/policy-controlled host bind mount carried
 	// in RunPolicySpec.WorkspaceMounts.
 	WorkspaceMount = types.WorkspaceMount
+
+	// PushRulesSpec declares content rules for a run's brokered git pushes,
+	// carried in RunPolicySpec.PushRules. Phase one only: deny_paths and
+	// max_inspect_pack_mib are stored and validated; nothing reads them yet.
+	PushRulesSpec = types.PushRulesSpec
 
 	// ApprovalRequest is a human-in-the-loop approval gate. Returned by
 	// ListApprovals, Approve, and Deny.

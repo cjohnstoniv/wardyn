@@ -265,7 +265,9 @@ func TestMetricsScrapeIsAllOrNothing(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, scrapePanicStore{}))
 
-	w := do(t, srv, http.MethodGet, "/metrics", adminToken, "")
+	// The panic below is this test's fixture, so this one call site inverts
+	// panicFails' check (#338) instead of carrying it.
+	w := doVia(t, panicIsTheFixture, srv, http.MethodGet, "/metrics", adminToken, "")
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("a scrape that panicked half-way = %d, want 500. A 200 here is the defect: Prometheus records "+
 			"the truncated body as the whole truth and `up` stays 1, so nothing anywhere reports the failure",

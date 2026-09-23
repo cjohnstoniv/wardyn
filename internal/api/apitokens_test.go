@@ -116,6 +116,14 @@ func (s *tokenMemStore) ListAPITokens(context.Context) ([]types.APIToken, error)
 	return out, nil
 }
 
+// PutSiteConfig answers whatever it is given: TestAPIToken_CannotReachAdminRouteUnlessAdminPrincipal
+// drives an admin token PUT /api/v1/site-config (proving the route is gated by
+// requireOperator like any other, not something token-specific), which reaches
+// this write for real — the nil embedded store.Store panicked here (#338).
+func (s *tokenMemStore) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	return cfg, nil
+}
+
 func (s *tokenMemStore) RevokeAPIToken(_ context.Context, id uuid.UUID, principal string, now time.Time) (types.APIToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

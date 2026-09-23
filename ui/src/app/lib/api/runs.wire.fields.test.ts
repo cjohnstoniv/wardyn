@@ -359,6 +359,8 @@ describe("source parity — five more flat structs (F6-F14)", () => {
   const siteTs = readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8");
   const policyTs = readFileSync(join(root, "ui/src/app/lib/types/policy.ts"), "utf8");
   const auditTs = readFileSync(join(root, "ui/src/app/lib/types/audit.ts"), "utf8");
+  const scmaccessGo = readFileSync(join(root, "internal/api/scmaccess.go"), "utf8");
+  const setupTs = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
 
   it("documents (does not fail on) Go Workspace tags the TS mirror omits", () => {
     const goTags = goJSONTags(workspaceGo, "Workspace");
@@ -410,5 +412,15 @@ describe("source parity — five more flat structs (F6-F14)", () => {
     // …and nothing on the TS side claims a field Go never writes.
     const unknown = [...tsKeys].filter((k) => !goTags.includes(k));
     expect(unknown, "TS reads these off the audit payload but Go never writes them").toEqual([]);
+  });
+
+  // review finding F4: TS SCMAccess still carried `row_id`, which Go dropped
+  // in 84cd08e1 ("NO ROW ID", scmaccess.go's own doc comment), and lacked
+  // Go's `kind`. Full parity, base struct — either direction of drift fails.
+  it("every Go SCMAccess tag is mirrored on the TS interface, and nothing extra (F4: row_id dropped, kind added)", () => {
+    const goTags = goJSONTags(scmaccessGo, "SCMAccess");
+    expect(goTags.length).toBeGreaterThanOrEqual(4);
+    const tsKeys = tsInterfaceKeys(setupTs, "SCMAccess");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 });
