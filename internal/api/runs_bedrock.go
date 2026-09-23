@@ -818,9 +818,11 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			// the caller): this captured credential is reused across every run that
 			// picks this mode, not minted fresh per run, so a per-run Add would miss
 			// every run after the first. Mirrors handleHarnessCredentialPaste
-			// (harnesscred.go). AddGlobal no-ops on the empty strings when a field
-			// wasn't captured (Registry.MinLen).
-			s.cfg.MaskRegistry.AddGlobal(sso.rowOwner(), harnessCredSecretName(awsSSOProvider),
+			// (harnesscred.go). It ignores the empty strings when a field wasn't
+			// captured (Registry.MinLen). Merge, not AddGlobal: this blob may predate
+			// a refresh that ran concurrently outside our read, and replacing the
+			// credential's set with it would retire the refresh's live tokens.
+			s.cfg.MaskRegistry.MergeGlobal(sso.rowOwner(), harnessCredSecretName(awsSSOProvider),
 				[]byte(blob.AccessToken), []byte(blob.RefreshToken), []byte(blob.ClientSecret))
 			// The POST-refresh blob's own pair: a refresh=true pass is the one allowed
 			// to redeem the rotating refresh token, and the identity the gate

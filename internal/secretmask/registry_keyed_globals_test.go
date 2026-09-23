@@ -78,3 +78,31 @@ func TestAddGlobal_AValueThatComesBackIsNotSwept(t *testing.T) {
 		t.Error("a re-captured value was swept as retired")
 	}
 }
+
+// A dispatch that read the credential before a concurrent refresh registers
+// the stale pair after the refresh did. MergeGlobal must not retire the
+// refresh's values; the next refresh (AddGlobal) retires the stale ones.
+func TestMergeGlobal_AStaleReadDoesNotRetireTheRefreshedValues(t *testing.T) {
+	r := NewRegistry()
+	const owner, name = "alice", "wardyn-harness-aws-oauth"
+	oldAccess, oldRefresh := "access-token-before-refresh", "refresh-token-before-refresh"
+	newAccess, newRefresh := "access-token-after-refresh", "refresh-token-after-refresh"
+	r.AddGlobal(owner, name, []byte(oldAccess), []byte(oldRefresh))
+	r.AddGlobal(owner, name, []byte(newAccess), []byte(newRefresh)) // the refresh
+	r.MergeGlobal(owner, name, []byte(oldAccess), []byte(oldRefresh))
+
+	if n := r.SweepGlobals(time.Now().Add(time.Second)); n != 0 {
+		t.Fatalf("the sweep dropped %d values, want 0: every value is in use by some run", n)
+	}
+	masked := func(v string) bool { return !bytes.Contains(r.Masker(uuid.Nil).Mask([]byte(v)), []byte(v)) }
+	for _, v := range []string{oldAccess, oldRefresh, newAccess, newRefresh} {
+		if !masked(v) {
+			t.Errorf("%q is not masked after the stale registration", v)
+		}
+	}
+
+	r.AddGlobal(owner, name, []byte("access-token-third"), []byte(newRefresh))
+	if n := r.SweepGlobals(time.Now().Add(time.Second)); n != 3 {
+		t.Errorf("the sweep after the next refresh dropped %d values, want 3", n)
+	}
+}

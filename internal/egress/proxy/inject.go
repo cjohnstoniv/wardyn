@@ -117,8 +117,23 @@ type injEntry struct {
 	rule      egress.InjectionRule
 	expiresAt int64 // unix ms
 	// retryAt is set while the last-good header is served after a transient
-	// failure (lastGood); until then the entry counts as fresh. Guarded by reMu.
+	// failure (lastGood), or after a re-resolve whose answer was already stale
+	// (install); until then the entry counts as fresh. Guarded by reMu.
 	retryAt time.Time
+}
+
+// install writes a re-resolved credential onto e. An answer already inside
+// injectRefreshMargin by this proxy's clock (the control plane's clock runs
+// more than the margin behind it, or the credential is that short-lived) would
+// make every request a re-resolve, each a mint and a secret.read row, so it is
+// paced like an outage. The caller holds reMu.
+func (e *injEntry) install(resolved types.ResolvedInjection, now time.Time) {
+	e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
+	e.expiresAt = resolved.ExpiresAt
+	e.retryAt = time.Time{}
+	if e.expiresAt != 0 && !now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
+		e.retryAt = now.Add(lastGoodRetry)
+	}
 }
 
 // lastGood reports whether e may keep serving its header after a re-resolve
@@ -277,9 +292,7 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 
 		resolved, err := resolveInjection(ctx, i.base, i.token.Get(), e.grantID, i.client)
 		if err == nil {
-			e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
-			e.expiresAt = resolved.ExpiresAt
-			e.retryAt = time.Time{}
+			e.install(resolved, time.Now())
 			h := e.header
 			e.reMu.Unlock()
 			registerHeaderCredential(resolved.Value)
@@ -360,9 +373,7 @@ func (e *injEntry) dropIfFinished(wf *reauthWorkflow) {
 // only for the write.
 func (i *injector) installHeader(e *injEntry, wf *reauthWorkflow, resolved types.ResolvedInjection) injectedHeader {
 	e.reMu.Lock()
-	e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
-	e.expiresAt = resolved.ExpiresAt
-	e.retryAt = time.Time{}
+	e.install(resolved, time.Now())
 	if e.reauth == wf {
 		e.reauth = nil // the hold is over and its credential is installed
 	}

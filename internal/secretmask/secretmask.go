@@ -140,18 +140,35 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 // token) is retired, not dropped, and SweepGlobals drops it later. Pass every
 // value the credential currently holds in one call: a value left out is retired.
 func (r *Registry) AddGlobal(owner, name string, values ...[]byte) {
+	r.setGlobal(owner, name, false, values)
+}
+
+// MergeGlobal is AddGlobal that retires nothing: values join the credential's
+// current ones. It is for a caller that may hold a stale read of the
+// credential (a dispatch that read the row outside the refresh's lock), which
+// must never retire the values a concurrent refresh just made current. The
+// paths that know the credential's full new set (capture, refresh) use
+// AddGlobal.
+func (r *Registry) MergeGlobal(owner, name string, values ...[]byte) {
+	r.setGlobal(owner, name, true, values)
+}
+
+func (r *Registry) setGlobal(owner, name string, merge bool, values [][]byte) {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := globalKey{owner, name}
 	var keep [][]byte
+	if merge {
+		keep = slices.Clone(r.current[k])
+	}
 	for _, v := range values {
 		if len(v) >= MinLen && !containsSlice(keep, v) {
 			keep = append(keep, bytes.Clone(v))
 		}
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	k := globalKey{owner, name}
 	r.retireLocked(k, keep)
 	if len(keep) > 0 {
 		r.current[k] = keep

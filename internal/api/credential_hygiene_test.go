@@ -9,7 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -201,6 +204,58 @@ func TestADORedeem_StoreRefusalIsDefinitive(t *testing.T) {
 	}
 	if status, _ := adoResolveFailureAnswer(ADOEntraFailureStoreRefused); status == http.StatusServiceUnavailable {
 		t.Error("a store refusal is answered 503, which the proxy rides out as transient")
+	}
+}
+
+// Entra may answer a redemption without a refresh token; the one Wardyn holds
+// stays in use, so its mask copy must stay current rather than be retired and
+// swept while live (F5).
+func TestADORedeem_AnAbsentRefreshTokenStaysMasked(t *testing.T) {
+	f := newADOFixture(t)
+	subject := f.fake.Subject()
+	if w := f.capture(t, subject); w.Code != http.StatusFound {
+		t.Fatalf("capture: status %d body %q", w.Code, w.Body.String())
+	}
+	held, _ := f.stored(t, subject)
+
+	// A proxy in front of the tenant that strips refresh_token from a redemption's answer.
+	upstream := f.cfg.AuthorityOverride
+	spy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		req, err := http.NewRequest(r.Method, upstream+r.URL.Path, bytes.NewReader(body))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		req.Header = r.Header.Clone()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var out map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		delete(out, "refresh_token")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	defer spy.Close()
+	f.cfg.AuthorityOverride = spy.URL
+
+	if _, err := f.srv.RedeemADOEntraAccess(context.Background(), f.cfg, subject, f.cfg.Scopes); err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+	if after, _ := f.stored(t, subject); after.RefreshToken != held.RefreshToken {
+		t.Fatal("an absent refresh token replaced the held one")
+	}
+	f.srv.cfg.MaskRegistry.SweepGlobals(time.Now().Add(time.Hour))
+	if !slices.ContainsFunc(f.srv.cfg.MaskRegistry.Snapshot(uuid.Nil), func(v []byte) bool { return string(v) == held.RefreshToken }) {
+		t.Fatal("the refresh token still in use was retired and swept")
 	}
 }
 

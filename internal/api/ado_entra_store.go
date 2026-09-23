@@ -428,8 +428,14 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 
 	// Mask BEFORE anything can log or persist the new values, and globally for
 	// the same reason the AWS capture masks globally: one credential is reused
-	// across every run that selects this lane.
-	s.cfg.MaskRegistry.AddGlobal(owner, adoEntraSecretName(cfg.RowID), []byte(resp.AccessToken), []byte(resp.RefreshToken))
+	// across every run that selects this lane. Register the refresh token the
+	// blob will hold: one the response left out is still in use, and leaving it
+	// out of this call would retire it (and sweep it an hour later) while live.
+	keep := blob.RefreshToken
+	if resp.RefreshToken != "" {
+		keep = resp.RefreshToken
+	}
+	s.cfg.MaskRegistry.AddGlobal(owner, adoEntraSecretName(cfg.RowID), []byte(resp.AccessToken), []byte(keep))
 
 	granted := adoEntraSplitScope(resp.Scope)
 	if len(granted) == 0 {

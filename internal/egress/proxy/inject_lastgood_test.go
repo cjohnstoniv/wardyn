@@ -126,3 +126,32 @@ func TestInjector_RecoversAfterTheOutage(t *testing.T) {
 		t.Fatalf("after the outage = %q err=%v, want the fresh value", h.value, err)
 	}
 }
+
+// A control-plane clock more than injectRefreshMargin behind the proxy's makes
+// every fresh answer look stale on arrival. It used to be re-resolved on every
+// request (a mint and a secret.read row each); it is paced like an outage.
+func TestInjector_AnAnswerStaleOnArrivalIsPaced(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{
+			Host: "api.test", Header: "x-api-key", Value: "sk-skewed-clock-value", JTI: uuid.NewString(),
+			ExpiresAt: time.Now().Add(10*time.Minute - 9*time.Minute).UnixMilli(), // ten-minute TTL, nine minutes of skew
+		})
+	}))
+	t.Cleanup(srv.Close)
+	pol := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"api.test"}})
+	rules := []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "api.test", Header: "x-api-key"}, GrantID: uuid.New()}}
+	inj, err := buildInjector(context.Background(), srv.URL, newTokenSource("tok"), pol, rules, srv.Client())
+	if err != nil {
+		t.Fatalf("buildInjector: %v", err)
+	}
+	for range 3 {
+		if h, _, err := inj.resolve("api.test"); err != nil || h.value != "sk-skewed-clock-value" {
+			t.Fatalf("resolve = %q err=%v", h.value, err)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("control-plane calls = %d, want 2 (boot + one re-resolve, then paced)", got)
+	}
+}

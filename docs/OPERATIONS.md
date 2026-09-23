@@ -745,6 +745,15 @@ eBPF ground-truth state); `/metrics` is the trend surface. Audit sinks
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) are the event stream for SIEMs — metrics
 carry no per-run detail.
 
+### No core dumps, no attaching
+
+wardynd and wardyn-proxy hold credentials in memory, so each sets `RLIMIT_CORE`
+to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0) as its first act. A
+crash writes no core file and a `core_pattern` handler receives nothing, and a
+process of the same user can no longer `strace -p` or attach delve or gdb to it,
+or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`. This is intentional and
+not configurable.
+
 ## Multi-user: who can change what
 
 The API authenticates with **either** an OIDC session (human SSO) **or** the
