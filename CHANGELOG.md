@@ -10,6 +10,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Sign-in first contact: honest loading state, no jargon (#457).** Before the console has ever
+  heard back from `/healthz`, the sign-in screen used to guess — rendering a token field and a
+  disabled "Sign in with SSO" stub that might be wrong for a moment. It now shows only "Checking
+  sign-in options…" (adding "Still checking — Wardyn hasn't answered yet." after three unanswered
+  reads) until a real answer names which doors exist. The disabled SSO stub and its
+  `WARDYN_OIDC_*` title are gone entirely — the button renders only when SSO is actually
+  configured. Every refusal sentence (`NO_ROLE`, `CLAIMS_OVERAGE`, `EMAIL_VERIFIED_ABSENT`,
+  `EMAIL_DOMAIN`, `ROLE_CHECK_UNAVAILABLE`, `OIDC_CONFIG`, `AUTH_FAILED`, and the shared
+  `ErrorState` default) dropped every env var name and "operator" in favor of "your Wardyn
+  admin" — a reader here, sometimes not even signed in, cannot reach a chart value. The
+  SSO-role-source caveat ("comes from your SSO role assignment") is removed entirely, with its
+  tests. Frozen strings: docs/design/signin-first-contact-canon.md.
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
 
