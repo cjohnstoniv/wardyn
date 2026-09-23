@@ -67,10 +67,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   dispatch arm yet carries none. The `run.create` failure row dispatch writes for a model-provider
   refusal gains the same `kind`, the legacy `mechanism` field written as that kind, and on a
   credential refusal the same `reason`, so the console's audit reader grades that ending as a
-  credential one (it reads `mechanism` only on such a row, until MP-24 moves it off that key). Both
-  the create door and dispatch now refuse a model run the same way, with the same sentence, when
-  the site config itself cannot be read, rather than one of them admitting the run or leaking
-  driver text in a 500.
+  credential one (it reads `mechanism` only on such a row, until MP-24 moves it off that key). When
+  the site config itself cannot be read, the create door's bare 500 (`get site config`) becomes
+  dispatch's 503 and sentence, so both doors now refuse the same way.
 
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0069_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to
