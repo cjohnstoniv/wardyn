@@ -19,7 +19,7 @@ write time. A guard test fails if a field here drifts from the struct.
 The console has three places a policy gets written, and all three resolve to
 this same JSON through this same validator — there is no separate UI schema.
 
-- **The [`/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
+- **The [`/admin/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
   reusable policy (`POST`/`PUT /policies`).
 - **The run screen's Custom policy.** An `inline_policy` on the create-run
   request, member-authored — this editor carries no operator gate.

@@ -170,7 +170,7 @@ test.describe("member console — a redacted body is not a deployment fact", () 
     await mockMemberRole(page);
     await mockMemberSetupStatus(page);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/account");
 
     await expect(page.getByRole("heading", { name: "Host", level: 3 })).toBeVisible();
     // The barrier picker is the member's own choice and stays live — the card
