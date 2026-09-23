@@ -539,7 +539,7 @@ test.describe("the restored path is checked against the re-authenticated role (M
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    await page.goto("/drives");
+    await page.goto("/admin/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
     await page.route("**/api/v1/**", (route) =>
@@ -572,7 +572,7 @@ test.describe("the restored path is checked against the re-authenticated role (M
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    await page.goto("/drives");
+    await page.goto("/admin/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
     await page.route("**/api/v1/**", (route) =>
@@ -631,10 +631,10 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
     await expect(banner).toHaveCount(0);
   });
   // VL-26 (V1 lens D): the gate is the ROUTE SHELL, not the nav. A person who
-  // types /settings (or any admin route) while /me is refused gets the same
-  // banner and no screen — before the fix the nav was hidden but the route
-  // still painted operator controls off the fail-open context default.
-  test("a 500 on /me shows the banner on /settings and /governance — no screen paints for an unknown identity", async ({ page }) => {
+  // types /admin/settings (or any admin route) while /me is refused gets the
+  // same banner and no screen — before the fix the nav was hidden but the
+  // route still painted operator controls off the fail-open context default.
+  test("a 500 on /me shows the banner on /admin/settings and /admin/governance — no screen paints for an unknown identity", async ({ page }) => {
     let meFailing = true;
     await page.route("**/api/v1/me", (route) => {
       if (!meFailing) return route.fallback();
@@ -642,7 +642,7 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
     });
     await bootWithStoredToken(page, GOOD_TOKEN);
 
-    for (const path of ["/settings", "/governance"]) {
+    for (const path of ["/admin/settings", "/admin/governance"]) {
       await page.goto(path);
       await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Settings" })).toHaveCount(0);

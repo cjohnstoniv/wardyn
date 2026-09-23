@@ -488,12 +488,13 @@ test.describe("the unreachable banner sees a store outage (R4/F066)", () => {
   });
 });
 
-// X2-F23: /integrations died with the Settings consolidation (App.tsx
-// redirects it) but nothing walked the redirect itself — same gap /demos had
-// before demos.spec.ts's own one-line pin (X2-F21's sibling).
+// M-1b: /integrations died a second time — the Settings-consolidation
+// redirect X2-F23 pinned is itself deleted now, clean break, no alias
+// (admin-member-modes-design.md §2.3), since its target (/settings) is also
+// gone. A stale link falls to the member catch-all instead.
 test.describe("dead routes redirect", () => {
-  test("/integrations redirects to Settings", async ({ page }) => {
+  test("/integrations falls through to Runs", async ({ page }) => {
     await page.goto("/integrations");
-    await expect(page).toHaveURL(/\/settings$/);
+    await expect(page).toHaveURL(/\/runs$/);
   });
 });

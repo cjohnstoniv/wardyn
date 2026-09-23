@@ -659,16 +659,17 @@ describe("RunDetailScreen — Audit tab names a rule-decided tool call", () => {
 
 // W25-W25.2-3: /audit is run-scoped for a member (empty 200 without ?run_id=),
 // so the Audit tab's "open full Audit" link must carry the run — a bare /audit
-// drops a member on a feed that can never fill.
+// drops a member on a feed that can never fill. M-1b: the full-page Audit
+// screen is admin-only now, at /admin/audit.
 describe("RunDetailScreen — open full Audit link", () => {
-  it("carries the run id into /audit", async () => {
+  it("carries the run id into /admin/audit", async () => {
     renderRun(RUN);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /audit/i }));
 
     expect(await screen.findByRole("link", { name: /open full audit/i })).toHaveAttribute(
       "href",
-      "/audit?run_id=run-1",
+      "/admin/audit?run_id=run-1",
     );
   });
 });

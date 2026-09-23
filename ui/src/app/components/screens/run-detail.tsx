@@ -831,9 +831,12 @@ function AuditTab({
         {/* W25-W25.2-3: carry the run. A bare /audit is permanently EMPTY for a
             member — the server scopes non-admins to ?run_id= of a run they own
             (internal/api/audit.go handleQueryAudit) — so an unqualified link
-            would drop them on a feed that can never fill. */}
+            would drop them on a feed that can never fill. M-1b: the full-page
+            Audit screen is admin-only now (/admin/audit); a member's own row
+            is already inline above, and this deep link's target hits the
+            refusal page for them like any other /admin/* surface. */}
         <Link
-          to={`/audit?run_id=${runId}`}
+          to={`/admin/audit?run_id=${runId}`}
           className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
         >
           open full Audit <ArrowRight className="size-3" />
@@ -974,7 +977,7 @@ function RecordingTab({
           <TerminalPlayer recording={recording} />
           <div className="mt-2 text-xs text-muted-foreground">
             Recorded when the run's runner supports session capture ·{" "}
-            <Link to="/recordings" className="text-primary hover:underline">
+            <Link to="/admin/recordings" className="text-primary hover:underline">
               Recordings library
             </Link>
           </div>
