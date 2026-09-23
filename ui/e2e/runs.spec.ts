@@ -1219,6 +1219,41 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
       sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
     }
   });
+
+  // SD-6 — an Azure DevOps capability escalation is a tool_call the proxy
+  // parks for at most 240s (credhold.go's maxCapabilityHoldTimeout). Five
+  // minutes on, the row is still PENDING but nothing is held: the card counts
+  // it as waiting and never says "sandbox held". Spliced, because grant_id
+  // references a real credential grant the seeded backend does not have.
+  test("an Azure DevOps escalation 5 minutes old reads waiting, never 'sandbox held'", async ({ page }) => {
+    const solo = await createGroupRun(page, "e2e ado past hold", "ado past hold run");
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${solo}'`);
+    const row = {
+      id: randomUUID(),
+      run_id: solo,
+      kind: "tool_call",
+      grant_id: randomUUID(),
+      requested_scope: { lane: "azure_devops", grant_id: "g1", capability: "pr_create", tool: "ado", cmd: "pr create" },
+      state: "PENDING",
+      requested_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    };
+    await page.route("**/api/v1/approvals*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const state = new URL(route.request().url()).searchParams.get("state");
+      await route.fulfill({ json: state === "PENDING" || !state ? [row] : [] });
+    });
+
+    try {
+      await openRuns(page);
+      const card = page.getByTestId("run-card").filter({ hasText: "e2e ado past hold" });
+      await expect(card).toBeVisible();
+      await expect(card.getByText(RUN_COCKPIT.waiting(1), { exact: true })).toBeVisible();
+      await expect(card.getByText(RUN_COCKPIT.waitingHeld(1))).toHaveCount(0);
+    } finally {
+      await page.unroute("**/api/v1/approvals*").catch(() => {});
+      sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
+    }
+  });
 });
 
 // ── 0.7.6 Finding 3 — "the failure names a destination instead of being one" ──

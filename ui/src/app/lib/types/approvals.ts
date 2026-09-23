@@ -135,6 +135,12 @@ const HOLD_TIMEOUT_MS = 30_000;
 // two constants that could drift apart.
 export const PUSH_HOLD_CEILING_MS = 600_000;
 
+// internal/egress/proxy/credhold.go's maxCapabilityHoldTimeout — how long the
+// proxy parks an Azure DevOps capability escalation before it gives up. Past
+// it the row is still PENDING and decidable, but nothing is held. Exported so
+// ado-capability-card.tsx's "No longer waiting" reads off the same number.
+export const ADO_HOLD_WINDOW_MS = 240_000;
+
 // A held request is one the sandbox is still parked on. THREE shapes reach
 // that state, and only one of them carries a mode:
 //
@@ -267,6 +273,14 @@ export function canDecideAdoCapability(securityOperator: boolean, isRunOwner: bo
 export function isHeld(a: ApprovalRequest, pushHoldSeconds?: number): boolean {
   // #509 — PENDING alone is live for both of these, at any age: see the
   // tool_call bullet above for why no client ceiling belongs here.
+  // An Azure DevOps capability escalation is the exception: the proxy parks
+  // it for at most ADO_HOLD_WINDOW_MS, so past that it is a passive pending.
+  if (isAdoCapabilityRequest(a)) {
+    if (a.state !== "PENDING") return false;
+    const requestedAt = Date.parse(a.requested_at);
+    if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
+    return Date.now() - requestedAt < ADO_HOLD_WINDOW_MS;
+  }
   if (a.kind === "tool_call") return a.state === "PENDING";
   // A credential_reauth row is raised BECAUSE the proxy is holding a request.
   // It carries no first_use mode of its own — the mode vocabulary belongs to

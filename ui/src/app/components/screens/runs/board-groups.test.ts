@@ -147,6 +147,20 @@ describe("approvalSignals — held vs passive", () => {
     const s = approvalSignals([approval({ kind: "tool_call", state: "EXPIRED" })]);
     expect(s.get("run-1")).toBeUndefined();
   });
+
+  // SD-6 — an Azure DevOps escalation 5 minutes old is past the proxy's 240s
+  // capability hold: it still counts as waiting, never "sandbox held".
+  it("an Azure DevOps escalation past its 240s hold is waiting, not held", () => {
+    const s = approvalSignals([
+      approval({
+        kind: "tool_call",
+        grant_id: "g1",
+        requested_scope: { lane: "azure_devops", grant_id: "g1", tool: "t", cmd: "c" },
+        requested_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, passiveHold: true });
+  });
 });
 
 // #160 — the group header's second chip row is built from this pure count,

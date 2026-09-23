@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  ADO_HOLD_WINDOW_MS,
   canDecideApproval,
   decisionArgs,
   isHeld,
@@ -130,6 +131,38 @@ describe("isHeld — a hold stays live until the server's own state says otherwi
     const past30s = new Date(Date.now() - 60_000).toISOString();
     const held = approval({ kind: "egress_domain", requested_scope: { host: "h", mode: "wait_for_review" }, requested_at: past30s });
     expect(isHeld(held)).toBe(false); // still the pre-existing 30s behaviour
+  });
+});
+
+// SD-6 — an Azure DevOps capability escalation is a tool_call the proxy parks
+// for at most ADO_HOLD_WINDOW_MS (credhold.go's maxCapabilityHoldTimeout);
+// past it the row stays PENDING but nothing is held, matching its own card.
+describe("isHeld — an Azure DevOps capability escalation is a bounded hold", () => {
+  const ado = (over: Partial<ApprovalRequest> = {}) =>
+    approval({
+      kind: "tool_call",
+      grant_id: "g1",
+      requested_scope: { lane: "azure_devops", provider_id: "p1", org: "o", grant_id: "g1", capability: "pr_create", repo: "r", tool: "t", cmd: "c" },
+      ...over,
+    });
+
+  it("a fresh PENDING ADO escalation is held", () => {
+    expect(isHeld(ado())).toBe(true);
+  });
+
+  it("a PENDING ADO escalation 5 minutes old is past the 240s window: not held", () => {
+    expect(ADO_HOLD_WINDOW_MS).toBe(240_000);
+    expect(isHeld(ado({ requested_at: new Date(Date.now() - 5 * 60_000).toISOString() }))).toBe(false);
+  });
+
+  it("a plain tool_call of the same age stays held", () => {
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(isHeld(approval({ kind: "tool_call", requested_at: old }))).toBe(true);
+  });
+
+  it("a decided ADO escalation is not held; an unparseable requested_at fails toward the hold", () => {
+    expect(isHeld(ado({ state: "APPROVED" }))).toBe(false);
+    expect(isHeld(ado({ requested_at: "not-a-date" }))).toBe(true);
   });
 });
 
