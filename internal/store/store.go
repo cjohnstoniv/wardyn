@@ -804,6 +804,7 @@ func scanAuditEvent(row pgx.Row) (types.AuditEvent, error) {
 	if len(dataRaw) > 0 {
 		ev.Data = json.RawMessage(dataRaw)
 	}
+	ev.DeviceID = FederatedDeviceID(ev)
 	return ev, nil
 }
 
