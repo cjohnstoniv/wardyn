@@ -468,11 +468,7 @@ func TestEnvDoc_E2EShellVarsAreDocumented(t *testing.T) {
 
 func readEnvDoc(t *testing.T, root string) string {
 	t.Helper()
-	doc, err := os.ReadFile(filepath.Join(root, "docs", "ENV.md"))
-	if err != nil {
-		t.Fatalf("read docs/ENV.md: %v", err)
-	}
-	return string(doc)
+	return readRepo(t, filepath.Join(root, "docs", "ENV.md"))
 }
 
 // TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs — B12b-F3+F8: a knob
