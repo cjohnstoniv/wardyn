@@ -734,6 +734,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sign-in tears the old sandbox down inside the new launch request rather than after the response —
   tracked separately from this list. Still open at 0.8.
 
+## [0.7.11] — 2026-09-22
+
+### Fixed
+
+- Azure DevOps projects and repositories whose names carry spaces or other permitted characters
+  (`Payments Platform`, `Card Auth (v2).Service`) now import, launch, clone, fetch and push:
+  every door stores one spelling of the address, and approvals name the repository the same
+  way on the REST and git paths. When two repositories in one run would clone into the same
+  directory, the run's response now says which one was not cloned (#485).
+
 ## [0.7.10] — 2026-09-22
 
 ### Added
