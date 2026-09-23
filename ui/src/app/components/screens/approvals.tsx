@@ -48,6 +48,8 @@ import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
 import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
+import { switchView, useConsoleMode } from "../wardyn/console-view";
+import { OPEN_IN_USER_VIEW } from "../wardyn/copy/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import {
@@ -595,7 +597,15 @@ function PendingCard({
   // audience is unknown.
   const door = useModelAccessDoor();
   const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal });
-  const banner = deriveBanner(item.kind, scope, reauth);
+  // M-7 (admin-member-modes-design.md §4.6, §6): the admin queue carries no
+  // personal reauth door either, even on the admin's own row — same rule as
+  // the cockpit's ReauthRow, with a switch link back to it there instead. The
+  // shared lane (an admin-mode control until MP-4b) is unaffected.
+  const view = useConsoleMode();
+  const reauthCanAct = view === "admin" && !reauth.shared ? false : reauth.canAct;
+  const reauthOwnRow =
+    view === "admin" && !reauth.shared && !!door.principal && reauth.owner === door.principal;
+  const banner = deriveBanner(item.kind, scope, reauthCanAct === reauth.canAct ? reauth : { ...reauth, canAct: reauthCanAct });
   // Deciding an egress_domain approval on an owned run is a MEMBER act (B3,
   // decide() in approvals.go); credential and tool_call stay admin-only
   // regardless of ownership — see canDecideApproval's doc for why. This list
@@ -750,7 +760,17 @@ function PendingCard({
              disabled: a disabled Approve reads as "an admin can do this", and
              no tier can — the server answers 409 to either verb. The one
              control opens the same dialog every other sign-in surface opens. */
-          reauth.canAct ? <ReauthAction /> : null
+          reauthCanAct ? (
+            <ReauthAction />
+          ) : reauthOwnRow ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => switchView("user", `/runs/${encodeURIComponent(item.run_id)}`)}
+            >
+              {OPEN_IN_USER_VIEW}
+            </Button>
+          ) : null
         ) : (
           <>
             <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>

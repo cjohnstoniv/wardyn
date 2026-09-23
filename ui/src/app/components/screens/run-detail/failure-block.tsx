@@ -128,12 +128,19 @@ export function RunFailureBlock({
   run,
   audit,
   onGoAudit,
+  adminView = false,
 }: {
   run: AgentRun;
   /** The trail the run page already fetched. */
   audit: AuditEvent[];
   /** Switch to the Audit tab. */
   onGoAudit: () => void;
+  /** M-7 (admin-member-modes-design.md §4.6): the admin monitor carries no
+   *  credential door, even on the admin's own run — this block's failure
+   *  sentence stays, but its sign-in button never renders there. Defaults
+   *  false for the block's other mount (the user cockpit, the only one
+   *  today). */
+  adminView?: boolean;
 }) {
   const ending = runEndingFromAudit(run.state, audit);
   const door = useModelAccessDoor();
@@ -156,6 +163,7 @@ export function RunFailureBlock({
   //    /me unresolved or a deployment with no OIDC — never matched against an
   //    equally empty created_by.
   const showDoor =
+    !adminView &&
     credential &&
     ending.mechanism === "bedrock_sso" &&
     door.bedrockSSO &&

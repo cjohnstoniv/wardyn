@@ -63,10 +63,12 @@ const run: AgentRun = {
   runner_target: "docker",
 };
 
-function renderScreen(role?: Role) {
+function renderScreen(role?: Role, path = "/runs") {
   const tree = <RunsScreen />;
   return render(
-    <MemoryRouter>{role ? <RoleProvider role={role}>{tree}</RoleProvider> : tree}</MemoryRouter>,
+    <MemoryRouter initialEntries={[path]}>
+      {role ? <RoleProvider role={role}>{tree}</RoleProvider> : tree}
+    </MemoryRouter>,
   );
 }
 
@@ -280,19 +282,30 @@ describe("RunsScreen — Start-a-run route state redirects to the New run page",
   });
 });
 
-// B3 (prompt-v2 point 2): the list is already server-scoped to the member's
-// own runs (handleListRuns's creator-pager branch) — this only pins the copy
-// says so plainly, and that admin copy is unchanged.
-describe("RunsScreen — member vs admin count line", () => {
-  it("a member sees \"Your runs · N\"", async () => {
+// M-7 (admin-member-modes-design.md §6): the description is keyed on the
+// VIEW, not the role — the list is already server-scoped to the member's own
+// runs (handleListRuns's creator-pager branch) either way, so this only pins
+// the copy that says so plainly.
+describe("RunsScreen — user vs admin view count line", () => {
+  it("a member (always the user view) sees \"Your runs · N\"", async () => {
     renderScreen("member");
     expect(await screen.findByText("Your runs · 1")).toBeInTheDocument();
   });
 
-  it("an admin (and the fail-open default) keeps the unscoped description", async () => {
-    renderScreen("admin");
+  it("an admin on /admin/runs keeps the unscoped description", async () => {
+    renderScreen("admin", "/admin/runs");
     expect(await screen.findByText(/Every run, live/)).toBeInTheDocument();
     expect(screen.queryByText(/Your runs ·/)).not.toBeInTheDocument();
+  });
+
+  // The defect this pins: an admin reading /runs (the user view) must see the
+  // SAME "Your runs" a member sees — the old role-keyed copy showed the
+  // admin's unscoped description here too, which is wrong once the view can
+  // differ from the role.
+  it("an admin on /runs (the user view) ALSO sees \"Your runs · N\"", async () => {
+    renderScreen("admin", "/runs");
+    expect(await screen.findByText("Your runs · 1")).toBeInTheDocument();
+    expect(screen.queryByText(/Every run, live/)).not.toBeInTheDocument();
   });
 });
 

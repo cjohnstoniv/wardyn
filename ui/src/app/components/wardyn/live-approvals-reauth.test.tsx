@@ -15,6 +15,7 @@ import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
 import { SECURITY_ONLY_REASON } from "./copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { OPEN_IN_USER_VIEW } from "./copy/console-view";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -47,11 +48,11 @@ function reauthRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
 // principal is alice's — the "owner" cell each of these cases was written for.
 // A case that means a different viewer passes one: the door is the VIEWER's
 // own sign-in, and only the row's owner can resolve it.
-function mount(operator: boolean, principal = "alice@corp") {
+function mount(operator: boolean, principal = "alice@corp", adminView = false) {
   return render(
     <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
       <ModelAccessProvider status={null} onRefresh={() => {}}>
-        <LiveApprovals runId="r1" />
+        <LiveApprovals runId="r1" adminView={adminView} />
       </ModelAccessProvider>
     </OperatorProvider>,
   );
@@ -205,5 +206,48 @@ describe("LiveApprovals — the mid-run AWS sign-in row", () => {
     await screen.findByText(REAUTH_ROW.label);
     await new Promise((r) => setTimeout(r, 50));
     expect(toastSuccess).not.toHaveBeenCalled();
+  });
+});
+
+// M-7 (admin-member-modes-design.md §4.6, §6) — the admin monitor carries no
+// personal door, even on the admin's OWN row: it reads exactly like a
+// non-owner reading a member's row (the door gone, the not-yours sentence),
+// plus a switch link back to it. The shared lane is untouched.
+describe("LiveApprovals — the reauth row in the admin view (M-7)", () => {
+  beforeEach(() => {
+    listApprovalsMock.mockReset().mockResolvedValue([]);
+  });
+
+  it("gives the admin's own row the not-yours sentence and no door", async () => {
+    listApprovalsMock.mockResolvedValue([reauthRow({ requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "admin@corp" } })]);
+    mount(true, "admin@corp", true);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).queryByRole("button", { name: REAUTH_ROW.ariaLabel })).not.toBeInTheDocument();
+    expect(within(panel).getByText(REAUTH_ROW.notYoursHint("admin@corp"))).toBeInTheDocument();
+  });
+
+  it("…and offers the switch link back to it, only on that own row", async () => {
+    listApprovalsMock.mockResolvedValue([reauthRow({ requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "admin@corp" } })]);
+    mount(true, "admin@corp", true);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeInTheDocument();
+  });
+
+  it("gives a member's row no switch link — it is not the admin's own", async () => {
+    listApprovalsMock.mockResolvedValue([reauthRow()]); // owner alice@corp
+    mount(true, "admin@corp", true);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
+    expect(within(panel).getByText(REAUTH_ROW.notYoursHint("alice@corp"))).toBeInTheDocument();
+  });
+
+  it("leaves the shared lane's door alone — it stays an admin-mode control", async () => {
+    listApprovalsMock.mockResolvedValue([
+      reauthRow({ requested_scope: { mechanism: "bedrock_sso", credential_source: "shared", owner: "" } }),
+    ]);
+    mount(true, "admin@corp", true);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
   });
 });

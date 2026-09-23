@@ -32,6 +32,7 @@ import {
 } from "../../ui/dropdown-menu";
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primitives";
 import { usePrincipal } from "../../wardyn/operator-context";
+import { useConsoleMode } from "../../wardyn/console-view";
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import { RUN, RUNS_WAIT } from "../../wardyn/copy";
@@ -119,6 +120,9 @@ export function RunCard({
   // whose AWS sign-in a held run is waiting on. usePrincipal()'s default is ""
   // — "not mine" — which is the fail-closed direction for this comparison.
   const principal = usePrincipal();
+  // M-7: the admin board shows every run's owner (admin-member-modes-design.md
+  // §6) — the user board never does, since every card there is already yours.
+  const view = useConsoleMode();
   const attention = runAttention(run, signals);
   const terminal = isTerminalRunState(run.state);
   const done = terminal;
@@ -232,6 +236,11 @@ export function RunCard({
         >
           {repo.text}
         </span>
+        {view === "admin" && (
+          <span className="max-w-[10rem] truncate font-mono" title={run.created_by}>
+            {run.created_by}
+          </span>
+        )}
         <ConfinementChip value={run.confinement_class} />
         <RunStateBadge state={run.state} variant="label" />
         {/* 0.7.6 finding 6: the same reason the table row carries, so a person

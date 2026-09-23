@@ -291,6 +291,7 @@ function renderCredentialBlock({
   operator = false,
   onRefresh = vi.fn(),
   withStrip = false,
+  adminView = false,
 }: {
   access?: SetupModelAccess;
   row?: SetupHarnessTool;
@@ -299,6 +300,7 @@ function renderCredentialBlock({
   operator?: boolean;
   onRefresh?: () => void;
   withStrip?: boolean;
+  adminView?: boolean;
 } = {}) {
   render(
     <MemoryRouter initialEntries={["/runs/3b7f10c4"]}>
@@ -316,6 +318,7 @@ function renderCredentialBlock({
             run={{ ...run("FAILED"), failure_hint: REFUSAL }}
             audit={trail}
             onGoAudit={vi.fn()}
+            adminView={adminView}
           />
         </OperatorProvider>
       </ModelAccessProvider>
@@ -335,6 +338,15 @@ describe("the credential ending's door — only where a sign-in repairs THIS run
     expect(screen.getByText(MODEL_ACCESS_RUN_DOOR.NOTE)).toBeInTheDocument();
     // No invented "What to do" — the server's sentence IS the reason.
     expect(screen.queryByText("What to do")).not.toBeInTheDocument();
+  });
+
+  // M-7 (admin-member-modes-design.md §4.6, §6) — the admin monitor carries
+  // no credential door, even on the admin's own failed run (principal ===
+  // created_by === "alice" here, same as the default sign-in case above).
+  it("the admin view gets no button, even on the admin's own run", () => {
+    renderCredentialBlock({ adminView: true });
+    expect(doorButton()).not.toBeInTheDocument();
+    expect(screen.queryByText(MODEL_ACCESS_RUN_DOOR.NOTE)).not.toBeInTheDocument();
   });
 
   it("refreshes the door once on mount — the context can be five minutes stale", () => {

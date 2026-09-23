@@ -81,6 +81,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   identity and Sign out. "View as member" and its amber band are retired in favour of the
   switch; the no-credential preview is now **Preview as a new user** on the Permissions header,
   and its band's way out reads **Exit preview**.
+- **Admin run monitoring (#638).** `/admin/runs` shows every run's owner and the same "Every
+  run, live…" description regardless of the admin's own role; `/runs` (the User view) now always
+  reads "Your runs · N", even for an admin who switched down. The `/admin/runs/:id` monitor
+  drops the relaunch button, the Connect-via-SSH tile and every personal credential door — even
+  on the admin's own run, which gets the not-yours sentence and an **Open in user view** link
+  instead, on both the run cockpit's own sign-in row and the `/admin/approvals` queue card. The
+  shared-credential sign-in stays reachable from the admin view. Kill and hold decisions, and the
+  super-admin-only break-glass take-over, are unchanged.
 - **Console view routing: the Admin view lives under `/admin/*` (#632).** Every admin screen is
   also mounted at `/admin/…`, and `/account` opens today's Settings. A user who opens an
   Admin-view page gets a refusal page instead of the screen; an SSO admin in the User view is
