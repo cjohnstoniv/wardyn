@@ -95,7 +95,8 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// on the ENFORCED class's substrate, which only this function holds. No
 	// agent process on an exec run to say it about.
 	if ok && req.TaskMode != "exec" {
-		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level, enforced); msg != "" {
+		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level,
+			!req.Interactive && req.ToolApprovals == "hold", enforced); msg != "" {
 			warnings = append(warnings, msg)
 		}
 	}

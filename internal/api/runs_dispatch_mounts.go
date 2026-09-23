@@ -400,7 +400,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// InteractiveStart above is gated on `interactive`: an interactive run's
 	// supervised-seed posture is SeedAutoTools's job, so this can't ride one no
 	// matter what the request said.
-	if !p.Interactive && p.ToolApprovals == "hold" {
+	if p.holdLane() {
 		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
 	}
 	// The RESOLVED autonomy level, read off the run row the launch gate froze

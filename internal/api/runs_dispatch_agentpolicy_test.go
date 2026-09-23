@@ -61,6 +61,8 @@ type agentPolicyDatum struct {
 	Bytes     int    `json:"bytes"`
 	Delivered bool   `json:"delivered"`
 	Reason    string `json:"reason"`
+	// ToolApprovals is "hold" when the hold lane, not the level, chose the file.
+	ToolApprovals string `json:"tool_approvals"`
 }
 
 // agentPolicyDispatch dispatches one run at the given agent + level through
@@ -81,11 +83,19 @@ func agentPolicyDispatch(t *testing.T, fr *fakeRunner, agent string, level types
 // where the agent's Exec is what creates its container.
 func agentPolicyDispatchTask(t *testing.T, fr *fakeRunner, agent string, level types.AutonomyLevel, task string) (runner.SandboxSpec, *agentPolicyDatum, *dispatchTestStore) {
 	t.Helper()
+	return agentPolicyDispatchParams(t, fr, agent, level, task, dispatchParams{})
+}
+
+// agentPolicyDispatchParams is agentPolicyDispatchTask with the posture fields
+// of dispatchParams (Interactive, ToolApprovals) taken from p.
+func agentPolicyDispatchParams(t *testing.T, fr *fakeRunner, agent string, level types.AutonomyLevel, task string, p dispatchParams) (runner.SandboxSpec, *agentPolicyDatum, *dispatchTestStore) {
+	t.Helper()
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Agent, run.AutonomyLevel = agent, level
 	run.Task = task
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
+		Interactive: p.Interactive, ToolApprovals: p.ToolApprovals,
 	})
 	ev := findAudit(audit.snapshot(), run.ID, "run.agent_policy", "success")
 	if ev == nil {
@@ -282,4 +292,62 @@ func TestAgentPolicyDispatchExecLessRowWaitsForTheAgent(t *testing.T) {
 			t.Errorf("run state %s hint %q, want FAILED carrying the driver's refusal", st.state, st.failureHint)
 		}
 	})
+}
+
+// TestAgentPolicyDispatchHoldRunGetsTheGatedFile is #358 through the real
+// dispatch: a tool_approvals=hold run with no rubric-bound level (or an L2/L3
+// one) used to get no managed file, so a repository `permissions.allow` rule
+// ran tools before wardyn-toolgate was asked. Every hold run now carries the
+// L1 document, whose allowManagedPermissionRulesOnly makes the CLI ignore
+// repository and user rules, next to the env that selects the hold lane.
+func TestAgentPolicyDispatchHoldRunGetsTheGatedFile(t *testing.T) {
+	golden, err := os.ReadFile("../agentpolicy/testdata/L1-managed-settings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, level := range []types.AutonomyLevel{"", types.AutonomyL2, types.AutonomyL3} {
+		t.Run("level "+string(level), func(t *testing.T) {
+			spec, data, _ := agentPolicyDispatchParams(t, &fakeRunner{}, "claude-code", level, "", dispatchParams{ToolApprovals: "hold"})
+			if spec.Env["WARDYN_TOOL_APPROVALS"] != "hold" {
+				t.Fatalf("Env[WARDYN_TOOL_APPROVALS] = %q, want hold: this test is about the hold lane", spec.Env["WARDYN_TOOL_APPROVALS"])
+			}
+			if len(spec.ManagedFiles) != 1 || !bytes.Equal(spec.ManagedFiles[0].Content, golden) {
+				t.Fatalf("spec.ManagedFiles = %+v, want the one L1 document: a hold run with no managed layer lets a repository allow rule answer before the gate", spec.ManagedFiles)
+			}
+			if spec.ManagedFiles[0].Path != agentpolicy.ClaudeCodeManagedSettingsPath {
+				t.Errorf("managed file path = %q, want %q", spec.ManagedFiles[0].Path, agentpolicy.ClaudeCodeManagedSettingsPath)
+			}
+			if data == nil || !data.Delivered || data.ToolApprovals != "hold" || data.Level != string(level) {
+				t.Errorf("row = %+v, want delivered, tool_approvals=hold, level %q", data, level)
+			}
+		})
+	}
+	// Not the hold lane: an interactive run never carries the hold env, so a
+	// ToolApprovals value on it changes nothing, and an auto run no rubric
+	// bound stays byte for byte as before.
+	for name, p := range map[string]dispatchParams{
+		"interactive":  {Interactive: true, ToolApprovals: "hold"},
+		"auto unbound": {ToolApprovals: "auto"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec, data, _ := agentPolicyDispatchParams(t, &fakeRunner{}, "claude-code", "", "", p)
+			if len(spec.ManagedFiles) != 0 || data != nil {
+				t.Errorf("spec.ManagedFiles = %d, row = %+v, want neither off the hold lane", len(spec.ManagedFiles), data)
+			}
+		})
+	}
+}
+
+// TestAgentPolicyDispatchHoldRunUnknownCapabilitiesFailsClosed: a hold run is
+// now one that needs its file, so an unreadable capability fails it with a
+// hint that names the hold, not a blank level.
+func TestAgentPolicyDispatchHoldRunUnknownCapabilitiesFailsClosed(t *testing.T) {
+	fr := &fakeRunner{capsErr: errors.New("docker info: connection refused")}
+	_, _, st := agentPolicyDispatchParams(t, fr, "claude-code", "", "", dispatchParams{ToolApprovals: "hold"})
+	if fr.createCalls != 0 || st.state != types.RunFailed {
+		t.Fatalf("CreateSandbox calls = %d, state = %s, want 0 and FAILED", fr.createCalls, st.state)
+	}
+	if !strings.Contains(st.failureHint, "(tool approvals on hold)") {
+		t.Errorf("failure hint = %q, want it to name the hold as the file's basis", st.failureHint)
+	}
 }

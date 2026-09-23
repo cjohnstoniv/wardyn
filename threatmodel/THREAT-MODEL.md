@@ -2603,7 +2603,7 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   answer the same refusal. An unevaluated rule never reads as a pass; the cost
   is that a client which ignores the `no-thin` the broker advertises cannot
   push at all while rules are set.
-### Hold-lane settings sources: user scope is still agent-writable
+### Hold-lane settings sources and managed permission rules
 
 Claude Code resolves `permissions.allow` rules before it asks the
 `--permission-prompt-tool`, so on a `tool_approvals=hold` run a matching rule runs
@@ -2615,13 +2615,17 @@ selectable source and still load.
 
 **What the flag does NOT cover:** user scope, `~/.claude/settings.json` inside
 the sandbox, is still loaded, and the agent runs as the uid that owns it. An agent
-that writes its own `permissions.allow` rule there is un-gated for every later
-`claude` process that reads it, such as a child `claude` it starts, exactly as a
-repository rule was. The flag narrows
-the route to a file the agent must write itself, rather than one a cloned
-repository can ship. What closes it is #333's root-owned managed settings with
-`allowManagedPermissionRulesOnly: true`, which applies only to runs with a resolved
-autonomy level. The flag is on the hold lane only: the autonomous lane already runs
+that writes its own `permissions.allow` rule there would be un-gated for every
+later `claude` process that reads it, such as a child `claude` it starts. What
+closes that is the root-owned managed settings file with
+`allowManagedPermissionRulesOnly: true` (and `allowManagedHooksOnly: true`),
+which drops repository and user rules and hooks alike. wardynd delivers it to
+every hold run, whatever autonomy level the run resolved to, including a run no
+rubric bound (`internal/agentpolicy`, the L1 document). The one gap left is a
+runner that does not deliver managed files: the run still launches under the flag
+alone, and its `run.agent_policy` audit row records `delivered: false` with the
+reason. Both shipped runners (Docker, Kubernetes) deliver it; a krun sandbox
+receives it but the row records it as unverified. The flag is on the hold lane only: the autonomous lane already runs
 every tool (`--dangerously-skip-permissions`), and the interactive lanes have no
 Wardyn gate in the path. The approver there is the human in the pane. codex-cli has
 no hold lane, so there is no gate for a repository config to pre-empt.
