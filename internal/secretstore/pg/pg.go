@@ -15,6 +15,7 @@
 package pg
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -34,6 +35,10 @@ var _ secretstore.Store = (*Store)(nil)
 // encVersion is the row format every write produces. 0 is the legacy age
 // payload, which only the boot conversion (ConvertV0) reads.
 const encVersion = 1
+
+// ageHeader opens every age payload, and so every row a pre-envelope wardynd
+// writes.
+var ageHeader = []byte("age-encryption.org/v1\n")
 
 // secretAADLabel is the domain label of AAD_secret, the value's binding.
 const secretAADLabel = "wardyn/secret/v1"
@@ -181,6 +186,12 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 		return nil, fmt.Errorf("pg secretstore: %s has envelope version %d, which this wardynd does not read", ref, e.version)
 	case e.kekID != s.kek.ID():
 		return nil, fmt.Errorf("pg secretstore: %s is sealed under key %q, but this wardynd is configured with %q", ref, e.kekID, s.kek.ID())
+	}
+	// An older wardynd's replace is `SET ciphertext=` alone: it leaves this
+	// row's v1 columns in place around an age payload. Conversion never revisits
+	// a v1 row, so say what happened instead of calling it tampering.
+	if bytes.HasPrefix(e.ct, ageHeader) {
+		return nil, fmt.Errorf("pg secretstore: %s was overwritten in place by an older wardynd (it holds an age payload under v1 columns) — an older wardynd is still writing to this database; stop every older replica, then set this secret again", ref)
 	}
 	dek, err := s.kek.Unwrap(ctx, e.wrapped, kek.Bind(e.ownedBy, e.name))
 	if err != nil {

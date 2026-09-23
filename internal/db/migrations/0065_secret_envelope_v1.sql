@@ -10,9 +10,12 @@
 --
 --   enc_version  1 = envelope v1. The DEFAULT stays 0 (legacy age) on purpose:
 --                every existing row becomes v0 here, wardynd converts them all
---                at boot (secretstore/pg ConvertV0), and a row an OLDER wardynd
---                inserts afterwards lands as v0, which a v1 read refuses by
---                name ("an older wardynd is still writing") instead of misreading.
+--                at boot (secretstore/pg ConvertV0). Afterwards a NEW name an
+--                OLDER wardynd inserts lands as v0: a v1 read refuses it by
+--                name ("an older wardynd is still writing") and the next boot
+--                converts it. A name the older wardynd REPLACES is overwritten
+--                in place (its upsert sets ciphertext alone, keeping the v1
+--                columns), is refused by name, and must be set again.
 --   kek_id       which KEK wrapped the DEK ("local:<recipient fp>" today); a
 --                read refuses a kek_id it is not configured with. '' on v0.
 --   wrapped_dek  KEK.Wrap(DEK, owner/name). Empty on v0.
