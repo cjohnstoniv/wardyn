@@ -14,14 +14,12 @@ package api
 // this binary does not define, or a panic (500) an attacker can trigger by
 // simply holding an old cookie past an upgrade.
 //
-// codecCookie hand-rolls the wardyn_session payload rather than going through
-// ssoSessionOfType so V and the "ut" key can be set independently of what a
-// live encodeSession would ever write.
+// The payloads below are hand-rolled JSON rather than an oidc.Session so V and
+// the "ut" key can be set independently of what a live encodeSession would
+// ever write; they are signed by signedSessionCookie, the same signer
+// ssoSession uses.
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"fmt"
 	"net/http"
 	"testing"
@@ -29,20 +27,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
-
-// codecCookie signs raw JSON payload with the empty HMAC key ssoSessionOfType
-// uses (a zero-value *oidc.Authenticator, wired by rbacServer) so it drives
-// the real decodeSession/Middleware branch end to end.
-func codecCookie(t *testing.T, payload string) *http.Cookie {
-	t.Helper()
-	mac := hmac.New(sha256.New, nil)
-	mac.Write([]byte(payload))
-	return &http.Cookie{
-		Name: "wardyn_session",
-		Value: base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." +
-			base64.RawURLEncoding.EncodeToString(mac.Sum(nil)),
-	}
-}
 
 // TestSessionCodecBoundary_NeverAuthenticatesNeverServerErrors is the HTTP-level
 // pin for P2-4: every shape of "not a current session" reaches GET /api/v1/me
@@ -80,7 +64,7 @@ func TestSessionCodecBoundary_NeverAuthenticatesNeverServerErrors(t *testing.T) 
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			w := doSSO(t, srv, http.MethodGet, "/api/v1/me", codecCookie(t, c.payload), "")
+			w := doSSO(t, srv, http.MethodGet, "/api/v1/me", signedSessionCookie([]byte(c.payload)), "")
 			if w.Code >= 500 {
 				t.Fatalf("GET /me with %s = %d (a 5xx): %s", c.name, w.Code, w.Body.String())
 			}
@@ -92,13 +76,25 @@ func TestSessionCodecBoundary_NeverAuthenticatesNeverServerErrors(t *testing.T) 
 }
 
 // TestSessionCodecBoundary_CurrentCookieStillAuthenticates is the positive
-// control for the table above: a real codec-v2 cookie with a user type DOES
-// authenticate, so the 401s above are the version/type guard firing, not a
-// broken harness.
+// control for the table above: a codec-v2 cookie with a user type DOES
+// authenticate, both as ssoSession writes it and as a hand-rolled payload in
+// the table's own shape, so the 401s above are the version/type guard firing,
+// not a broken signer or a mistyped payload key.
 func TestSessionCodecBoundary_CurrentCookieStillAuthenticates(t *testing.T) {
 	srv := rbacServer(t)
-	w := doSSO(t, srv, http.MethodGet, "/api/v1/me", ssoSession(t, "sub-ok", "ok@corp.example", oidc.RoleUser), "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /me with a current session = %d, want 200: %s", w.Code, w.Body.String())
+	exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	cookies := map[string]*http.Cookie{
+		"ssoSession": ssoSession(t, "sub-ok", "ok@corp.example", oidc.RoleUser),
+		"hand-rolled codec v2 payload with ut": signedSessionCookie([]byte(fmt.Sprintf(
+			`{"v":%d,"sub":"sub-ok","email":"ok@corp.example","role":%q,"ut":"standard","expiry":%q}`,
+			oidc.SessionCodecVersion, oidc.RoleUser, exp))),
+	}
+	for name, cookie := range cookies {
+		t.Run(name, func(t *testing.T) {
+			w := doSSO(t, srv, http.MethodGet, "/api/v1/me", cookie, "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET /me with a current session = %d, want 200: %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
