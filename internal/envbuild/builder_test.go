@@ -159,7 +159,7 @@ func TestNewPushRef_EmptyCacheRepoReturnsEmpty(t *testing.T) {
 
 // TestBuild_ConcurrentBuildsUsePerBuildPushRef pins a confinement bypass
 // (HIGH): two builds sharing a Builder — and therefore its one CacheRepo —
-// must never resolve the SAME registry ref for envbuilder's push and
+// must never resolve the same registry ref for envbuilder's push and
 // finalize's pull-back. If pushedBaseRef() were a pure function of
 // b.CacheRepo alone, identical on every call regardless of which build made
 // it, a workspace-B push landing between workspace A's envbuilder-push and
@@ -168,7 +168,7 @@ func TestNewPushRef_EmptyCacheRepoReturnsEmpty(t *testing.T) {
 // fresh", so there is no re-validation step to catch it).
 //
 // This test needs no real goroutines: a CacheRepo-only ref is identical on
-// every call regardless of timing, so two SEQUENTIAL builds expose it
+// every call regardless of timing, so two sequential builds expose it
 // deterministically — both builds' push/pull refs would compare equal. Each
 // build gets its own random-tagged ref.
 func TestBuild_ConcurrentBuildsUsePerBuildPushRef(t *testing.T) {
@@ -541,8 +541,8 @@ func TestBuildFromDevcontainerFiles_DeliversTarContext(t *testing.T) {
 	}
 }
 
-// The host-root rule: registry PUSH is the only delivery path, so a build
-// without a CacheRepo must FAIL CLOSED (there is no docker.sock fallback).
+// The host-root rule: registry push is the only delivery path, so a build
+// without a CacheRepo must fail closed (there is no docker.sock fallback).
 func TestBuild_FailsClosedWithoutCacheRepo(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	b := newWithClient(f, "envbuilder:test", "") // no CacheRepo
@@ -884,7 +884,7 @@ func TestValidateToolsDir_ConsumesEveryRequiredTool(t *testing.T) {
 	}
 }
 
-// TestBuildFinalizeContext_WiresGitCredentialHelper: the BYOI wrap must WIRE the
+// TestBuildFinalizeContext_WiresGitCredentialHelper: the BYOI wrap must wire the
 // wardyn-git-helper binary it copies onto PATH as git's credential helper, not
 // just copy it. Unwired, git never calls it, and any run whose policy declares a
 // `github_token` eligible grant fails `agent-run --selftest` with "a git grant is

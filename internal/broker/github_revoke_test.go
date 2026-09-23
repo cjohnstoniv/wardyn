@@ -181,17 +181,17 @@ func TestGitHubMinter_MintReturnsInsideClientBudget(t *testing.T) {
 	}
 }
 
-// The client Timeout bounds ONE round trip, and a cold installByOrg makes TWO
+// The client Timeout bounds one round trip, and a cold installByOrg makes two
 // (GetRepositoryInstallation, then CreateInstallationToken) — so per-hop
 // timeouts alone would let a slow first hop followed by a blackholed second
 // hold the grant row's FOR UPDATE lock and a pooled connection for ~2x the
-// budget. The mint derives ONE ctx deadline for the whole call, so the
+// budget. The mint derives one ctx deadline for the whole call, so the
 // in-transaction ceiling is 1x.
 //
 // The server here is the shape that separates the two: hop 1 answers just under
 // the budget, hop 2 never answers. Per-hop-only = ~1.8x; one ceiling = ~1x.
 //
-// A raw hop-hit COUNT cannot discriminate the two shapes — hop 2's HTTP
+// A raw hop-hit count cannot discriminate the two shapes — hop 2's HTTP
 // request reaches this fake either way (hop1Hits/hop2Hits are 1/1 under both,
 // since hop 1 succeeding at all means some of its own per-hop budget is still
 // left for hop 2 to dial). The counters stay as an anti-vacuity floor —

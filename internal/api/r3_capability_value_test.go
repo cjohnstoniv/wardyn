@@ -117,7 +117,7 @@ func TestCapabilityWorkspaceValueIsCanonicalized(t *testing.T) {
 	// uppercase in every stored secret name and integrationRefRE does the same
 	// for an integration id, so storing "Acme-Prod-DB" verbatim for capSecret
 	// would give a value that can never match the row it names — the workspace
-	// arm's inert DENY, on another kind. Folding can only ever make the grant
+	// arm's inert deny, on another kind. Folding can only ever make the grant
 	// match the row its author meant.
 	t.Run("secret and integration fold onto the grammar their rows use", func(t *testing.T) {
 		for kind, want := range map[string]string{capSecret: "acme-prod-db", capIntegration: "corp-artifactory"} {
@@ -173,11 +173,11 @@ func (s *inertGrantStore) GetCapabilityEnforcement(context.Context) (map[string]
 }
 
 // TestListPermissionsMarksRowsThatCanNeverMatch: the value rule is a
-// WRITE-boundary rule, and capability_grants can hold rows written before it
+// write-boundary rule, and capability_grants can hold rows written before it
 // existed.
 //
 // A non-canonical row written before the rule survives the upgrade unchanged
-// and would keep rendering on the Permissions screen as an active DENY that
+// and would keep rendering on the Permissions screen as an active deny that
 // never fires — with no signal anywhere. The upgrade must not silently rewrite
 // them (a normalizing migration would make an inert ALLOW start granting,
 // unreviewed, at boot) and must not drop them, so it says so where the operator

@@ -56,7 +56,7 @@ func TestSeedSourceRequirements_EveryRowValidates(t *testing.T) {
 }
 
 // TestSeedSourceRequirements_SuggestedEgressNeverSeeded is the end-to-end half
-// of the guarantee that "an AI-suggested host is NOT auto-unioned into a run's
+// of the guarantee that "an AI-suggested host is not auto-unioned into a run's
 // allowlist without operator approval". workspacescan.AdviseProfile (ai.go)
 // lands an AI-suggested host in SuggestedEgress, never EgressDomains (see
 // ai_test.go); this test locks in the OTHER half of that guarantee — that
@@ -90,7 +90,7 @@ func (s *localDirScanStore) SetSourceScanResultUnfenced(_ context.Context, _ uui
 }
 
 // TestScanLocalDirSource_ConsultsAIAdvisor: WARDYN_SCAN_AI_ADVISOR applies to
-// a local_dir source's host-side scan too, not ONLY to the sandboxed
+// a local_dir source's host-side scan too, not only to the sandboxed
 // repo-scan upload lane (uploadSourceScanResult) — the flag's own help text
 // makes no repo-only distinction, so the local_dir scan must consult
 // s.cfg.ScanAIAdvisor rather than calling workspacescan.Scan bare. A real

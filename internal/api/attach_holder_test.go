@@ -383,7 +383,7 @@ func TestAttachHolderRegistry_RoundTrip(t *testing.T) {
 }
 
 // TestAttachHolder_EvictionRevokesWriteAuthorityImmediately: a displaced holder
-// must lose WRITE AUTHORITY at eviction, not whenever its socket finishes
+// must lose write authority at eviction, not whenever its socket finishes
 // dying.
 //
 // The pumps gate writes on the *attachHolder they captured at attach time, and
@@ -391,7 +391,7 @@ func TestAttachHolderRegistry_RoundTrip(t *testing.T) {
 // a cancelled context sends no close frame). coder/websocket's Close does a
 // full handshake whose second half blocks on the read mutex the displaced pump
 // holds, so if eviction only removed the map entry, then between "take-over
-// returned 200" and "the old socket actually died" the OLD client could still
+// returned 200" and "the old socket actually died" the old client could still
 // write into the same tmux session as the new one. Two writers is precisely the
 // state this file exists to prevent.
 //
@@ -975,7 +975,7 @@ func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 // bounded Write is never attempted; with no client frame, c.Read has no
 // deadline of its own. The slot would be bounded only by whatever the OS/proxy
 // eventually notices about the dead TCP connection — in the worst case (a
-// genuine network black hole, no FIN, no RST), never — and every OTHER
+// genuine network black hole, no FIN, no RST), never — and every other
 // attacher (a second browser tab, `wardyn attach`, the SSH gateway) would read
 // that run as permanently "held" until the daemon restarts.
 //
@@ -1029,15 +1029,15 @@ func (r *blockingDetachAudit) Record(ctx context.Context, ev types.AuditEvent) e
 }
 
 // TestAttachWS_RemountReleasesHolderBeforeAuditTail: focus mode (canvas.tsx)
-// remounts the terminal — the OLD attach socket closes in cleanup and the NEW
-// one opens in the same effect flush, well before the OLD handler's
+// remounts the terminal — the old attach socket closes in cleanup and the new
+// one opens in the same effect flush, well before the old handler's
 // finishRecording + session.detach audit have any chance to run (they are
 // disk/DB I/O with no bound). releaseHolder runs before that tail; deferred
 // until after it, the new handshake's registerAttachHolder call would land
-// inside that window and be admitted READ-ONLY against its own vanishing self,
+// inside that window and be admitted read-only against its own vanishing self,
 // leaving the user unable to click back in.
 //
-// This also PINS the accepted audit-order trade-off the handler's own comment
+// This also pins the accepted audit-order trade-off the handler's own comment
 // documents: releasing the slot promptly means a successor's session.attach
 // can be recorded BEFORE the departing session's session.detach lands — the
 // opposite of handleAttachTakeover's "audit first, displace second" rule,
@@ -1059,7 +1059,7 @@ func TestAttachWS_RemountReleasesHolderBeforeAuditTail(t *testing.T) {
 	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
-	// the departing session: the OLD terminal instance
+	// the departing session: the old terminal instance
 	c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "")
 	mode1 := readAttachMode(t, c1)
 	if mode1.ReadOnly {

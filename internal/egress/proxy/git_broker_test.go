@@ -660,7 +660,7 @@ func TestGitBrokerMintedTokenIsMaskRegistered(t *testing.T) {
 // unauthenticated, so without this guard a single
 // `curl -XPOST .../wardyn/v1/credentials/mint -d '{"grant_id":"'$WARDYN_GITHUB_GRANT_ID'"}'`
 // would hand the sandbox a live ghs_ installation token — and, because an
-// approval-gated grant is single-use, ALSO burn the broker's one mint out from
+// approval-gated grant is single-use, also burn the broker's one mint out from
 // under the run's own clone/push.
 //
 // The four cases below are the whole contract: refuse the brokered grant, refuse
@@ -772,9 +772,9 @@ func newGitBrokerApprovalUpstream(t *testing.T, token string, approvalID uuid.UU
 	return u
 }
 
-// TestGitBrokerPollsPendingApproval: the FIRST clone against an
+// TestGitBrokerPollsPendingApproval: the first clone against an
 // approval-gated github_token grant meets the control plane's 409 before a
-// human could possibly have approved it, so the broker must poll the SAME
+// human could possibly have approved it, so the broker must poll the same
 // approval server-side and re-mint once it clears, succeeding the original
 // request — not 502 outright (no wait, no retry), which would fail the
 // documented quickstart's first clone every time.

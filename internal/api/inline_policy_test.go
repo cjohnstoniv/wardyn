@@ -22,10 +22,10 @@ import (
 )
 
 // The no-Pool newHarness leaves Config.Store nil, so a create-run request that
-// gets PAST all validation would dereference it inside store.CreateRun — a
+// gets past all validation would dereference it inside store.CreateRun — a
 // recovered nil-pointer panic the chi Recoverer turns into an unremarkable
 // 500, indistinguishable from a real bug on the same status code. So the tests
-// below that need to PROVE a request got past validation (rather than just
+// below that need to prove a request got past validation (rather than just
 // check a 4xx never happened) set Store to createRunUnconfiguredStore instead
 // of leaving it nil:
 //   - a request REJECTED by validation returns its 4xx (400/422) and never
@@ -33,7 +33,7 @@ import (
 //   - a request ACCEPTED past the validation boundary reaches CreateRun, which
 //     answers errCreateRunNoStoreConfigured, and handleCreateRun's ordinary
 //     writeServerError path turns that into a 500 — a controlled response
-//     instead of a crash, and a request that reaches any OTHER store method
+//     instead of a crash, and a request that reaches any other store method
 //     still panics loudly rather than quietly matching this double's intent.
 //
 // Status 500 is still the "accepted past validation" sentinel in this harness.
@@ -273,11 +273,11 @@ func TestFilterMemberGrants(t *testing.T) {
 }
 
 // TestFilterMemberGrants_SSHKeyKnownHostsPairing: an ssh_key grant's
-// known_hosts_secret_ref must match the ceiling's OWN known_hosts_secret_ref for
+// known_hosts_secret_ref must match the ceiling's own known_hosts_secret_ref for
 // that exact (host, key_secret_ref) pairing — a member must not be able to reuse
-// an operator-approved key pairing while attaching a DIFFERENT
+// an operator-approved key pairing while attaching a different
 // known_hosts_secret_ref of their own choosing. If storedSecretGrantPairing
-// ignored known_hosts_secret_ref, a mismatched/added ref here would be KEPT,
+// ignored known_hosts_secret_ref, a mismatched/added ref here would be kept,
 // letting mintSSHKey (broker.go) return an arbitrary stored secret's value as
 // Minted.KnownHosts and escape this gate.
 func TestFilterMemberGrants_SSHKeyKnownHostsPairing(t *testing.T) {
@@ -594,7 +594,7 @@ func TestPolicy_RejectsBedrockResidentSecretAtSinks(t *testing.T) {
 	}
 }
 
-// The stored/default policy branch runs the SAME validateInlineSecretRefs
+// The stored/default policy branch runs the same validateInlineSecretRefs
 // check as the inline branch — a stored or default policy naming a missing
 // secret 422s at create, naming the secret, instead of only failing later at
 // first proxy injection.
@@ -698,13 +698,13 @@ func TestCreateRun_StoredPolicyNoSecretStoreRejected(t *testing.T) {
 
 // TestStoredSecretGrantPairing_UnknownKindIsRefused pins the closed switch. If
 // storedSecretGrantPairing's default arm returned covered=false —
-// indistinguishable from "github_token names no stored secret" — BOTH member
+// indistinguishable from "github_token names no stored secret" — both member
 // gates would wave an unrecognized kind straight through: filterMemberGrants
 // would keep it unclamped by the operator's eligible-grant pairing, and
 // narrowMemberInlinePolicy would keep it unchecked against capSecret, so any
 // grant kind added to types.GrantKind and wired to a stored secret would be
 // member-authorable until somebody remembered to extend the switch. It must be
-// REFUSED (covered=true WITH an error), which filterMemberGrants renders as a
+// refused (covered=true with an error), which filterMemberGrants renders as a
 // 422 and narrowMemberInlinePolicy as a drop.
 func TestStoredSecretGrantPairing_UnknownKindIsRefused(t *testing.T) {
 	unknown := types.GrantSpec{

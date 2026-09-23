@@ -9,10 +9,10 @@ import (
 	"testing"
 )
 
-// TestFlagEnv_SecretNeverPrintedInUsage: if FlagEnv seeded the flag's DEFAULT
+// TestFlagEnv_SecretNeverPrintedInUsage: if FlagEnv seeded the flag's default
 // from the env var, flag.String would capture that as Flag.DefValue, and
 // PrintDefaults renders a non-empty string default as `(default "…")` —
-// printed for -help AND for EVERY parse error, since flag.CommandLine is
+// printed for -help and for every parse error, since flag.CommandLine is
 // ExitOnError. One typo'd flag in a compose command, a systemd unit or a Helm
 // args list would then write WARDYN_ADMIN_TOKEN, WARDYN_AGE_KEY (the secret
 // store's master identity), WARDYN_OIDC_CLIENT_SECRET or

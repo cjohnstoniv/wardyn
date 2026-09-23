@@ -24,7 +24,7 @@ func govLimitsBody(limits string) string {
 // (validateStorageProviders → providers400Negative, plus a default-above-max
 // arm); the profile's three numbers decoded straight into the stored row.
 //
-// Nothing downstream MIS-ENFORCES a negative — composer.CapDiskMiB needs a
+// Nothing downstream mis-enforces a negative — composer.CapDiskMiB needs a
 // positive ceiling, driveSizeCeiling.bound treats <= 0 as unlimited, and
 // denyMemberRunQuota returns on limit <= 0 — which is why this is a write-boundary
 // fix and not a runtime one: a stored -5 renders in the profile editor as a cap

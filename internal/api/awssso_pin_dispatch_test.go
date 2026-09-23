@@ -280,7 +280,7 @@ func TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin(t *testing
 	if awsRow.Status != "warn" {
 		t.Errorf("harness_credential_aws status = %q, want warn", awsRow.Status)
 	}
-	// And it must SAY the true thing. `expired_signin` was already a warn row
+	// And it must say the true thing. `expired_signin` was already a warn row
 	// before this lane, so status alone asserts nothing this fix added: without
 	// the PinMismatch arm the row reads "Your captured AWS SSO session expired
 	// at <ts> and cannot be renewed" about a session putPinnedSSOBlob made live
@@ -303,7 +303,7 @@ func TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin(t *testing
 		t.Error("harness_credential_aws must never be Blocking — it is graded through the CALLER's own session, not the install")
 	}
 
-	// The ADMIN'S own status is untouched: their capture agrees with the pin, so
+	// The admin's own status is untouched: their capture agrees with the pin, so
 	// the grading is the one it always was.
 	if _, _, adminMA := srv.setupHarnessCreds(ctx, sc, awsSSOScope{perUser: true, owner: "admin-sub"}); adminMA.State != modelAccessLive {
 		t.Errorf("the admin's own model_access.state = %q, want %q — an agreeing capture must grade exactly as before",
@@ -463,7 +463,7 @@ func TestDispatch_RefreshedBlobIsTheOneCompared(t *testing.T) {
 	}
 }
 
-// the recovery the refusals above depend on (EXISTING behaviour, pinned)
+// the recovery the refusals above depend on (existing behaviour, pinned)
 
 // twoLoginRunStore serves TWO aws-sso login runs, each with its own launch
 // stamp — the shape the member's recovery actually has: the contradicting

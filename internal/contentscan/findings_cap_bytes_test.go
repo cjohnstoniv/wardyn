@@ -104,10 +104,10 @@ func isValidUTF8(s string) bool {
 }
 
 // TestAlertModeKeepsTheHighSeverityFindingBehindCheapNoise pins severity
-// priority in EVERY mode.
+// priority in every mode.
 //
 // A keep-back gated on `e.mode == ModeBlock && …` would drop findings in
-// alert mode — whose ONLY product is the alert — strictly by arrival order,
+// alert mode — whose only product is the alert — strictly by arrival order,
 // so an agent that fans out cheap low-severity noise ahead of its real secret
 // evicts the high-severity finding from the row a human reads (findings=500
 // dropped=401 with high-or-critical-present=false, on a body an uncapped scan

@@ -7,7 +7,7 @@
 // capUnresolvableGroupDeny answers "could a group DENY row I cannot see cover
 // this value" for every caller whose group snapshot is unanswerable — which,
 // because a NULL groups_truncated column reads as truncated by design, is every
-// API token minted before 0.7, on every request. Reading the WHOLE
+// API token minted before 0.7, on every request. Reading the whole
 // capability_grants table once per value checked would scale the cost of an
 // authorization check with the size of the grant table (68 ms at 20k rows
 // against 0.35 ms for the indexed sibling), and a token holder could force that

@@ -3,7 +3,7 @@
 
 package client_test
 
-// client_more_test.go covers what client_test.go does not: the ERROR half of the
+// client_more_test.go covers what client_test.go does not: the error half of the
 // 2 KiB body limit, context-cancellation propagation, typed-error decode
 // (well-formed and malformed bodies), and the policy/grant methods. It reuses
 // the shared helpers
@@ -29,7 +29,7 @@ import (
 )
 
 // --------------------------------------------------------------------------
-// Body limit — ERROR side (HIGH)
+// Body limit — error side (HIGH)
 // --------------------------------------------------------------------------
 
 // TestErrorBody_CappedAt2KiB is the companion to
@@ -479,12 +479,12 @@ func TestGetRecording_StreamsCastWithAuth(t *testing.T) {
 	}
 }
 
-// An interactive run can carry MULTIPLE recordings, one per attach session,
+// An interactive run can carry multiple recordings, one per attach session,
 // each stored under the composite key "<run-id>~<session>" (castKey,
 // mirroring internal/recording.CastKey), and the server serves that shape —
 // so GetRecording must not hardcode the cast key to the bare run id, or
 // nothing on the CLI/SDK side could reach any recording but the run's own.
-// The optional session argument composes the SAME key the server expects.
+// The optional session argument composes the same key the server expects.
 func TestGetRecording_SessionArgUsesCompositeKey(t *testing.T) {
 	id := uuid.New()
 	var gotPath string

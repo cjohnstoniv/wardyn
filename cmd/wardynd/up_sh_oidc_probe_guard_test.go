@@ -11,7 +11,7 @@ import (
 )
 
 // TestUpShLocalModeProbeSkipsUnderOIDC: scripts/up.sh's post-boot "local-mode
-// no-auth gate" smoke hits the gated /api/v1/me endpoint with NO auth token. That
+// no-auth gate" smoke hits the gated /api/v1/me endpoint with no auth token. That
 // only means something in LOCAL_MODE — under SSO (WARDYN_OIDC_ISSUER set, per the
 // OIDC-clobber guard earlier in the same function) /api/v1/me correctly requires a
 // real session and 401s regardless of WARDYN_LOCAL_TRUST_FORWARDER, per
@@ -127,13 +127,13 @@ func TestUpShOIDCProbeMatcher_RejectsAnInvertedGuard(t *testing.T) {
 
 // TestUpShProbeCarriesLoopbackHostAndBearer: scripts/up.sh's post-boot probes
 // run a throwaway curl container on the compose network, so the request reaches
-// wardynd from a NON-loopback peer (a container on the bridge — the same shape
+// wardynd from a non-loopback peer (a container on the bridge — the same shape
 // as the docker gateway a real host UI/CLI request arrives as). Sent bare, that
 // request is rejected in every compose posture: in local mode the DNS-rebinding
 // Host guard 403s the Docker-DNS authority "wardynd:8080" (isLoopbackHost,
 // internal/api/http.go), and with local mode off the humanOrAdminAuth group
 // 401s an unauthenticated call. A bare probe would fire the "local-mode no-auth
-// gate REJECTED a non-loopback peer" warning on EVERY `make setup`, could never
+// gate REJECTED a non-loopback peer" warning on every `make setup`, could never
 // return 200 or detect the forwarder fault it exists to detect, and would leave
 // the post-boot LLM-ready policy re-pick behind /api/v1/setup/status
 // unreachable.

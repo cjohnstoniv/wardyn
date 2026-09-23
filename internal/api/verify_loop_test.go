@@ -175,10 +175,10 @@ func TestConfinedEgressDomains_HonorsFoldedRequiredRows(t *testing.T) {
 }
 
 // TestConfinedEgressDomains_HonorsOperatorSetProvenanceGate pins the provenance
-// gate on the replay path: the gate (RequireOperatorSetEgress, default TRUE)
-// applies to the confined REPLAY's AllowedDomains as well as the run-create
-// call site, so a scan_seeded `egress:` requirement — a host the WORKSPACE
-// SCANNER derived from UNTRUSTED repo content, never an operator's act —
+// gate on the replay path: the gate (RequireOperatorSetEgress, default true)
+// applies to the confined replay's AllowedDomains as well as the run-create
+// call site, so a scan_seeded `egress:` requirement — a host the workspace
+// scanner derived from untrusted repo content, never an operator's act —
 // refused at launch is not unioned into the session an operator runs precisely
 // to prove least privilege. Both paths route through egressProvenanceAllowed.
 func TestConfinedEgressDomains_HonorsOperatorSetProvenanceGate(t *testing.T) {

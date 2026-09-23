@@ -4,7 +4,7 @@
 package oidc_test
 
 // The four invariants that keep "view as member" from becoming a privilege
-// primitive. Driven through the REAL cookie round trip — encode,
+// primitive. Driven through the real cookie round trip — encode,
 // SetMemberMode, Middleware — rather than against the struct, because the whole
 // design rests on what survives a re-encode: the clamp is applied at
 // contextWithPrincipal and the stamped Role is never rewritten, so a test that

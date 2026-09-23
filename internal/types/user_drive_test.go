@@ -102,7 +102,7 @@ func TestDriveHomeName(t *testing.T) {
 		// resolve for a claim that was not an address. email_local above is the
 		// corporate-home case it looked like it served.
 		{name: "an unknown template is refused, never guessed", tmpl: HomeTemplate("email"), subject: "alice", wantErr: true},
-		// A leading DOT is the dotfile class the member-mount rules refuse by
+		// A leading dot is the dotfile class the member-mount rules refuse by
 		// segment; ".." is the traversal, excluded by the same clause.
 		{name: "a leading dot is refused", tmpl: HomeTemplateSub, subject: ".ssh", wantErr: true},
 		{name: "a traversal is refused", tmpl: HomeTemplateSub, subject: "..", wantErr: true},
@@ -143,7 +143,7 @@ func TestDriveHomeName(t *testing.T) {
 // subdomain, a Docker home is a volume-name component, and they are NOT the
 // same alphabet.
 //
-// The motivating CASE is the first row. An Entra `sub` is base64url and
+// The motivating case is the first row. An Entra `sub` is base64url and
 // routinely carries `_`, which is legal in a Docker volume name and illegal in
 // a DNS-1123 name. Before the split, a `k8s_pvc` + `sub` drive validated at the
 // write boundary, was stored, and then failed at BIND time — on somebody's run,
@@ -323,14 +323,14 @@ func TestDriveObjectNameIDScheme(t *testing.T) {
 	})
 }
 
-// TestDriveObjectNameSeparatesTwoDrivesOnOneHome pins that a name WARDYN MINTS
+// TestDriveObjectNameSeparatesTwoDrivesOnOneHome pins that a name Wardyn mints
 // identifies the drive as well as the person.
 //
 // It reads as though the home alone were enough, because a `hash` home folds
 // the drive id and one member's two drives are already two homes. A
 // home_override does not fold it: the admin writes "Bob's directory is bsmith"
 // on the GRANT, and user_drive_grants is UNIQUE on (subject_type, subject), so
-// re-pointing that one grant IS how a member moves between drives. Without the
+// re-pointing that one grant is how a member moves between drives. Without the
 // slug both sides of the re-point would name one volume — Bob mounting the old
 // drive's contents under the new drive's name, size and writable posture — and
 // an offboarding command naming `wardyn-drive-bsmith` could not say which
@@ -525,7 +525,7 @@ func TestValidateUserDrive(t *testing.T) {
 				d.Backend, d.StorageClass, d.SizeMiB = DriveBackendK8sPVC, "fast", 10240
 			}),
 			target: "k8s"},
-		// The one backend where SIZE is not A display value. A k8s_pvc drive's
+		// The one backend where size is not a display value. A k8s_pvc drive's
 		// size becomes resources.requests.storage, and a claim requesting zero
 		// bytes is rejected by the apiserver — so the value every other backend
 		// reads as "no allocation shown" is, here, a row whose every member's run
@@ -554,7 +554,7 @@ func TestValidateUserDrive(t *testing.T) {
 				d.Backend, d.HomeTemplate, d.HostRoot = DriveBackendHostPath, HomeTemplateSub, "/srv/homes"
 			}),
 			target: "docker"},
-		// The mirror OF "a share cannot be hashed", and the security half of the
+		// The mirror of "a share cannot be hashed", and the security half of the
 		// pair. A MANAGED object is named by the HOME alone, so two people whose
 		// addresses share the part before the "@" — the ordinary merged-tenant
 		// shape — would be allocated ONE volume or PVC, with write access to each
@@ -682,11 +682,11 @@ func TestManagedBackendTakesOnlyTheHashTemplate(t *testing.T) {
 	// directories exist already under names Wardyn did not choose, so a claim
 	// template is the ONLY thing that can name one.
 	//
-	// k8s_pvc_static does NOT get this exemption, despite the managed/share
-	// split: Wardyn MINTS a static claim's name (DriveObjectNamedByWardyn), so
+	// k8s_pvc_static does not get this exemption, despite the managed/share
+	// split: Wardyn mints a static claim's name (DriveObjectNamedByWardyn), so
 	// the collision half of the rule above applies to it verbatim —
 	// `email_local` folds two addresses onto one claim and the driver's static
-	// arm has no per-drive labels to separate them. Only the EXPOSURE half is
+	// arm has no per-drive labels to separate them. Only the exposure half is
 	// relaxed, because an admin has to recognise the claims they pre-provision.
 	t.Run("host_path still takes both claim templates", func(t *testing.T) {
 		for _, tmpl := range []HomeTemplate{HomeTemplateSub, HomeTemplateEmailLocal} {
@@ -717,7 +717,7 @@ func TestManagedBackendTakesOnlyTheHashTemplate(t *testing.T) {
 		}
 	})
 
-	// WHY the refusal exists, stated as the collision it makes unauthorable.
+	// Why the refusal exists, stated as the collision it makes unauthorable.
 	// Built by hand rather than through ValidateUserDrive, because
 	// ValidateUserDrive refuses this row.
 	t.Run("the collision the refusal prevents", func(t *testing.T) {

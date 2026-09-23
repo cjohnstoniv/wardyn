@@ -34,7 +34,7 @@ func seedReauthRun(t *testing.T, st store.PG) uuid.UUID {
 	return runID
 }
 
-// The round TRIP. The enum-parity guards compare a migration's CHECK against
+// The round trip. The enum-parity guards compare a migration's CHECK against
 // the Go set by PARSING; this one writes the value and reads it back, which is
 // the only thing that proves the constraint the database is actually enforcing
 // admits it.

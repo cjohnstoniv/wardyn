@@ -250,7 +250,7 @@ func (scrapePanicStore) Ping(context.Context) error {
 }
 
 // TestMetricsScrapeIsAllOrNothing pins that a panic on the scrape path cannot
-// hide: a panic PAST the counter block must not leave a committed 200 whose body
+// hide: a panic past the counter block must not leave a committed 200 whose body
 // stops mid-file, recovered into a 500 that can no longer be written. `go test`
 // would still exit 0, every other /metrics assertion would still match (they
 // read series the truncated prefix still carries), and the only trace would be a

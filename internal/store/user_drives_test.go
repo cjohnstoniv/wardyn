@@ -163,7 +163,7 @@ func TestPG_UserDrive_DuplicateNameConflicts(t *testing.T) {
 //
 // driveRehomeGuard (internal/api) reads the allocations and then writes; a grant
 // created in between would be re-homed silently by an unconditional write. The
-// precondition rides the WRITING statement, so the window is gone whatever happens
+// precondition rides the writing statement, so the window is gone whatever happens
 // between the read and the write — which is what this
 // asserts: with a grant present, a write carrying refuseIfAllocated changes
 // nothing and answers ErrDriveAllocated; the same write without it still applies,
@@ -623,7 +623,7 @@ func TestPG_ResolveUserDrive_TieHasATotalOrder(t *testing.T) {
 // plan's contract: the same order as the whole list, a window that honours limit
 // and offset, and a limit of 0 meaning unbounded (Page's own rule).
 //
-// Why it is bounded at all. user_drive_grants holds one row per SUBJECT and
+// Why it is bounded at all. user_drive_grants holds one row per subject and
 // capabilitySubjects yields two per person, so this table's size is the
 // deployment's headcount — and its ORDER BY has no index. Unbounded on this
 // deployment's own PostgreSQL at 50,000 allocations that is `external merge
@@ -966,7 +966,7 @@ func TestPG_ResolveUserDrive(t *testing.T) {
 		}
 	})
 
-	// The CALL shape driveWithUnusableGroups makes: user subjects only, groups
+	// The call shape driveWithUnusableGroups makes: user subjects only, groups
 	// nil, on a deployment that HAS group-tier rows. The store answers the
 	// everyone row and reports the tier honestly — it does not, and must not,
 	// pretend the caller matched nothing, because "no groups were supplied" and

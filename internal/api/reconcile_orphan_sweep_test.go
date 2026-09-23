@@ -17,7 +17,7 @@ import (
 )
 
 // A terminal run's SandboxRef only survives finalizeRunTail non-empty when
-// its StopSandbox call FAILED — and ReconcileOnBoot's
+// its StopSandbox call failed — and ReconcileOnBoot's
 // `isTerminalRunState(run.State) { continue }` guard means the main loop
 // never looks at that run again. The abandoned container (and its proxy
 // sidecar, which resolved injected credential VALUES into memory at startup)
@@ -129,8 +129,8 @@ func TestReconcileOnBoot_SweepsOrphanedTerminalSandbox(t *testing.T) {
 }
 
 // TestReconcileOnBoot_OrphanSweepRetriesRevoke: a terminal run's SandboxRef
-// survives only when its ORIGINAL finalizeRunTail teardown failed, but
-// finalizeRunTail runs revokeRunCascade BEFORE that teardown — so the run
+// survives only when its original finalizeRunTail teardown failed, but
+// finalizeRunTail runs revokeRunCascade before that teardown — so the run
 // reaching this boot pass may carry an un-revoked identity/broker credential
 // independent of whether the retried teardown itself succeeds. An orphan
 // sweep that retried only StopSandbox would leave that credential

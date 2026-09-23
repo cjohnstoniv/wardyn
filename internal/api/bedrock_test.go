@@ -164,7 +164,7 @@ func TestResolveBedrockAuth_BearerPreferred(t *testing.T) {
 }
 
 // TestResolveBedrockAuth_SkipsNonModelRun pins least privilege: a verify or
-// scan run makes NO model call, so even a
+// scan run makes no model call, so even a
 // fully-configured Bedrock server must NOT hand it the resident AWS creds —
 // modelRun=false yields ready=false so the creds never land in a sandbox that
 // won't sign a Bedrock request. Same fixture as the golden path, modelRun flips.

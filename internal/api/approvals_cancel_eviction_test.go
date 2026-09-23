@@ -20,13 +20,13 @@ import (
 // The eviction seam, end to end.
 //
 // The pieces are pinned elsewhere: the runner package proves a k8s pod evicted
-// out from under a run reads TERMINAL (internal/runner/k8s/terminal_pod_test.go,
+// out from under a run reads terminal (internal/runner/k8s/terminal_pod_test.go,
 // lifecycle_test.go), and this package proves a terminal transition cancels an
 // EGRESS_DOMAIN approval (approvals_cancel_terminal_test.go) and that
-// cancelRunApprovals counts a credential_reauth row when it is CALLED
+// cancelRunApprovals counts a credential_reauth row when it is called
 // (credential_reauth_metrics_test.go). This drives a runner-reported eviction
 // through the completion watcher into finalizeRunTail and asks what happens to a
-// HELD credential_reauth row — the row a person is being asked to sign in for,
+// held credential_reauth row — the row a person is being asked to sign in for,
 // on a screen that would otherwise keep asking after the sandbox it would serve
 // is gone.
 

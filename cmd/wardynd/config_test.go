@@ -423,12 +423,12 @@ func TestResolveLocalModeRefusesPublishedDemoToken(t *testing.T) {
 }
 
 // TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC: humanOrAdminAuth
-// branches on LocalMode FIRST and bypasses OIDC entirely without ever
+// branches on LocalMode first and bypasses OIDC entirely without ever
 // consulting it, so an explicit -local-mode alongside a configured
 // -oidc-issuer would silently disable the whole configured SSO/RBAC
 // deployment — every request the fixed local:operator, full admin. It is
 // refused unless allowLocalModeWithOIDC (WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC)
-// explicitly overrides it; the AUTO-enable heuristic (no explicit flag, no
+// explicitly overrides it; the auto-enable heuristic (no explicit flag, no
 // admin token, loopback bind) is untouched — it already excludes a configured
 // issuer on its own.
 func TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC(t *testing.T) {

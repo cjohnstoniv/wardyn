@@ -23,7 +23,7 @@ import (
 // TestDecisionSinkEmitCloseRace: emit() must never send on a closed channel. If
 // emit() checked closed, released the lock, then sent, a concurrent close()
 // could close the channel between the check and the send and panic. The
-// non-blocking send runs UNDER s.mu, mutually exclusive with close()'s
+// non-blocking send runs under s.mu, mutually exclusive with close()'s
 // close(ch). Run under `go test -race`; a racy emit panics, crashing the test
 // binary.
 func TestDecisionSinkEmitCloseRace(t *testing.T) {

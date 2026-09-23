@@ -43,9 +43,9 @@ import (
 // shape a re-added leak is overwhelmingly likely to take: nobody accidentally
 // routes a hardcoded 500 through three layers of indirection.
 //
-// ONE-HOP EXTENSION. A direct writeError(w, 5xx, "..."+err.Error()) call site
+// One-hop extension. A direct writeError(w, 5xx, "..."+err.Error()) call site
 // is not the only shape the leak takes: a handler can build the (status,
-// message) pair and hand it to a HELPER that calls writeError itself, and the
+// message) pair and hand it to a helper that calls writeError itself, and the
 // helper's own call site is where the message has already collapsed into one
 // opaque string argument. serverErrorForwarders below names the helpers this
 // guard follows one
@@ -80,7 +80,7 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// sentinel staying in the 501 body so the console/operator can tell this
 	// case apart from the no-runner-configured guard beside it.
 	"run_resources.go:201": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
-	// Every other such site is FIXED, not allowlisted — a new entry here
+	// Every other such site is fixed, not allowlisted — a new entry here
 	// needs the same kind of justification (a named fixed sentinel or a
 	// design record, plus a pinning test) as these two, not just a passing
 	// build.

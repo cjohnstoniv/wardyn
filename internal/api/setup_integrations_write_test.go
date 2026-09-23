@@ -226,7 +226,7 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 	}
 }
 
-// Generic kinds are REFUSED: a kind Wardyn has no code for (artifactory,
+// Generic kinds are refused: a kind Wardyn has no code for (artifactory,
 // postgres) cannot be written with its own egress + proxy-header delivery.
 // Connections are the four Settings cards, over closed kinds only.
 //
@@ -422,7 +422,7 @@ func TestHandleDeleteIntegration_UnknownIDIs404(t *testing.T) {
 // TestPutIntegration_ColonIDRoundTrips keeps the colon-id invariant alive. A
 // colon-qualified id ("anthropic_subscription:managed") must survive a PUT: the
 // URL carries the percent-encoded colon a real browser fetch() sends
-// (encodeURIComponent), so this exercises integrationIDParam's unescape AND
+// (encodeURIComponent), so this exercises integrationIDParam's unescape and
 // validateIntegrationWrite's id gate, which must not 400 on it.
 func TestPutIntegration_ColonIDRoundTrips(t *testing.T) {
 	srv, fake, _ := integrationWriteHarness(t, nil)

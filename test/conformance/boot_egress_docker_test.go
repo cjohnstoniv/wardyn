@@ -79,15 +79,15 @@ const bootEgressProxyImage = "wardyn/wardyn-proxy:local"
 // wardyn-proxy carrying a model-host-only allowlist with
 // first_use_approval=deny_with_review, attaches the way the console does, and
 // walks the run the way a human does: the workspace-trust prompt (the one
-// screen a human is meant to answer, and NOT the theme picker or "Security
+// screen a human is meant to answer, and not the theme picker or "Security
 // notes"), then the single Enter that prompt's default invites, then the REPL —
 // asserting throughout that no first-use approval was raised and no host
-// denied. A third arm runs the AUTONOMOUS `claude -p` shape, which meets no
+// denied. A third arm runs the autonomous `claude -p` shape, which meets no
 // dialog at all.
 //
 // The hosts at stake are downloads.claude.ai and github.com: the CLI
-// auto-installing the OFFICIAL PLUGIN MARKETPLACE on first REPL start (GCS
-// fetch, git fallback), NOT the updater — on this image's npm install the
+// auto-installing the official plugin marketplace on first REPL start (GCS
+// fetch, git fallback), not the updater — on this image's npm install the
 // update check dials registry.npmjs.org, which the default policy already
 // allows. Without the onboarding seed the boot parks on that pair, and the
 // first screen is the theme picker.
@@ -199,7 +199,7 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 		t.Logf("%s is not the claude-code image; screen assertions skipped (the host measurement still applies)", image)
 	}
 
-	// PHASE 2 — PAST the dialog. The hosts that matter are fetched once the REPL
+	// Phase 2 — past the dialog. The hosts that matter are fetched once the REPL
 	// is actually up, so a run that stops at a pre-REPL prompt can report "zero
 	// approvals" while the product is about to dial two.
 	//

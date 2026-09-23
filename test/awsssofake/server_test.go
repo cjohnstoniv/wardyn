@@ -148,7 +148,7 @@ func createToken(t *testing.T, s *Server, clientID, clientSecret, deviceCode str
 }
 
 // TestListAccountRoles_ScopedToRequestedAccount is a protocol pin: the real
-// portal's ListAccountRoles answers for the account_id it was ASKED about,
+// portal's ListAccountRoles answers for the account_id it was asked about,
 // and returns an error for one the session is not entitled to. A fake that
 // ignored the parameter and answered with its single fixture's role whatever
 // was asked would let a helper that pins an account "verify" its pin against

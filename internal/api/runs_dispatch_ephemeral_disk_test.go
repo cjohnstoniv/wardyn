@@ -119,7 +119,7 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 		ceiling: governanceCeiling{Limits: types.GovernanceLimits{MaxEphemeralDiskMiB: 2048}},
 		want:    4096,
 	}, {
-		// Provenance stops at this SITE. composer.Clamp's capField already fills a
+		// Provenance stops at this site. composer.Clamp's capField already fills a
 		// zero request UP TO a profile SPEC's resources.disk_mib at create, so a
 		// non-zero size can reach dispatch without the member typing it — and it is
 		// still REQUESTED, not filled: an admin wrote that number on a policy, which

@@ -311,7 +311,7 @@ func TestValidNoProxyEntry(t *testing.T) {
 }
 
 // TestRedirectLiteralIP_TrustedForItsRunOnly is gap 3: an egress redirect's
-// literal-IP To is reachable on EVERY vet path for the run whose allowlist
+// literal-IP To is reachable on every vet path for the run whose allowlist
 // the redirect substitution actually wrote it into (egressTarget is the path
 // serveMITMRequest and both brokers re-vet through, so it must not re-deny
 // what evaluate() has already trusted), and is refused for an unrelated run.
@@ -352,10 +352,10 @@ func TestRedirectLiteralIP_TrustedForItsRunOnly(t *testing.T) {
 		t.Fatal("a denied literal must stay denied")
 	}
 
-	// The entry substituteArtifactEgress actually writes is PORT-QUALIFIED
+	// The entry substituteArtifactEgress actually writes is port-qualified
 	// (net.JoinHostPort of the To's host and redirectPort), matching the
 	// mitmHosts the same redirect authors. A second port of that address is
-	// therefore refused — a BARE entry would make every port of it reachable.
+	// therefore refused — a bare entry would make every port of it reachable.
 	portScoped := mk(types.RunPolicySpec{AllowedDomains: []string{"100.64.5.7:8443"}})
 	if _, _, err := portScoped.egressTarget("100.64.5.7", 8443); err != nil {
 		t.Fatalf("the port the redirect named must be reachable: %v", err)

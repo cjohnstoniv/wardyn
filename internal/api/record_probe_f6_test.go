@@ -174,10 +174,10 @@ func TestF6Probe_TruncatedCaptureIsNeverClean(t *testing.T) {
 
 // Gap family: what promote must refuse to make durable.
 
-// TestF6Gap_TruncatedOpenCapturePromotesNothing: a truncated OPEN recording's
+// TestF6Gap_TruncatedOpenCapturePromotesNothing: a truncated open recording's
 // (incomplete) allowed set must not be promoted wholesale —
 // handlePromoteRecordEgress reads the truncation caveat, and a truncated
-// observation set promotes NO host.
+// observation set promotes no host.
 func TestF6Gap_TruncatedOpenCapturePromotesNothing(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{{Host: "api.stripe.com", AllowCount: 1}}}
@@ -194,7 +194,7 @@ func TestF6Gap_TruncatedOpenCapturePromotesNothing(t *testing.T) {
 }
 
 // TestF6Gap_ConfinedVerifyEntryIsNotPromotable: the promote route must not
-// accept the "verify:<key>" entry of a CONFINED replay — an allow released
+// accept the "verify:<key>" entry of a confined replay — an allow released
 // there by a live first-use approval (rule_source approval:<id> →
 // ApprovalCount>0) would otherwise become durable, even though
 // learnVerifyEgress deliberately refuses to durably learn a once/until-scoped
@@ -219,7 +219,7 @@ func TestF6Gap_ConfinedVerifyEntryIsNotPromotable(t *testing.T) {
 }
 
 // TestF6Gap_WildcardCeilingPlumbingIsSkipped: promoteSkipHosts must honour the
-// ceiling's wildcard entries, not match them VERBATIM — a "*.anthropic.com"
+// ceiling's wildcard entries, not match them verbatim — a "*.anthropic.com"
 // ceiling (the canonical spelling llmcred.go documents) skips api.anthropic.com,
 // and the "*.githubusercontent.com" broker entry skips raw.githubusercontent.com.
 func TestF6Gap_WildcardCeilingPlumbingIsSkipped(t *testing.T) {
@@ -293,7 +293,7 @@ func TestF6Gap_EmptyControlPlaneURLStillExcludesSelf(t *testing.T) {
 
 // TestF6Gap_PublicIPLiteralIsNotPromotable: record.go's comment says an IP
 // literal fails the approve-lane shape, but hostrules.ValidApprovedHost's
-// regex accepts dotted digits, so a PUBLIC IP literal reached under allow-all
+// regex accepts dotted digits, so a public IP literal reached under allow-all
 // must be refused explicitly (private/metadata literals are deny-only by the
 // builtin guard and so are excluded by AllowCount, not by shape).
 func TestF6Gap_PublicIPLiteralIsNotPromotable(t *testing.T) {

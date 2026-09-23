@@ -321,8 +321,8 @@ func TestFirstUseApprovedThenAllowed(t *testing.T) {
 	}
 }
 
-// TestFirstUseApprovedAttributesRuleSourceToApproval: an approval-RELEASED
-// request's ALLOW decision must attribute to the releasing approval —
+// TestFirstUseApprovedAttributesRuleSourceToApproval: an approval-released
+// request's allow decision must attribute to the releasing approval —
 // rule_source "approval:<id>", ApprovalID set — not "policy:allowed" with no
 // approval_id, which is indistinguishable from a standing policy allow and
 // breaks the audit join from "this egress happened" back to "who approved

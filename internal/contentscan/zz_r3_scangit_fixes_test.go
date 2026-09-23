@@ -186,12 +186,12 @@ func TestF075_FindingsCapDoesNotSuppressBlocking(t *testing.T) {
 
 // TestB6_FindingsCapTruncationArmExaminesEachFindingOnce: once the cap first
 // fires, a keep-back arm that re-slices `res.Findings[:maxFindings]` and
-// re-walks the retained tail on EVERY subsequent span (the retained tail sits
+// re-walks the retained tail on every subsequent span (the retained tail sits
 // between maxFindings and 2*maxFindings, so `len(res.Findings) >
 // e.maxFindings` stays true on every later span) costs O(span_count x
 // maxFindings), with span_count unbounded by the scan_budget (which counts
-// scanned TEXT, not span count). The visible symptom is
-// Result.FindingsDropped re-counting the SAME already-vetted findings once
+// scanned text, not span count). The visible symptom is
+// Result.FindingsDropped re-counting the same already-vetted findings once
 // per remaining span instead of counting each dropped finding exactly once.
 // This places 2000 SevLow email (PII) findings — every one block-relevant
 // under the default block_min_severity=low, so the keep-back exemption

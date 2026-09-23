@@ -3,13 +3,13 @@
 
 package db
 
-// PIN for the other exit through which a migration run that does not reach its
+// Pin for the other exit through which a migration run that does not reach its
 // tail could strip an operator's ENABLE ALWAYS hardening off
 // audit_events_chain.
 //
 // The loop-error arm is covered by
-// TestPG_MigrateKeepsAnAlwaysTriggerAcrossAFAILEDMigration. This is the SIBLING
-// EXIT: a restore deferred ONTO THE CALLER'S CONTEXT. wardynd gives
+// TestPG_MigrateKeepsAnAlwaysTriggerAcrossAFAILEDMigration. This is the sibling
+// exit: a restore deferred onto the caller's context. wardynd gives
 // connect-and-migrate a deadline, and migrateOn logs every file's elapsed time
 // precisely so a slow one is visible before that deadline turns it fatal — so a
 // context that expires between two migrations is a designed-for exit, not an

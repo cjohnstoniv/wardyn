@@ -13,7 +13,7 @@ import (
 )
 
 // RELEASING.md's tag gate names the ci.yml jobs a maintainer must see green
-// before pushing a tag, and that list can drift in BOTH directions:
+// before pushing a tag, and that list can drift in both directions:
 //
 //   - a named job that does not exist (a deleted `sbom-stub`, say) leaves a
 //     maintainer following the list literally waiting on a job that can

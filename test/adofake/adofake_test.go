@@ -294,10 +294,10 @@ func TestPatLifecycle(t *testing.T) {
 }
 
 // TestGitAdvertiseRefusesAmbiguousService: a read-only token must never reach
-// a receive-pack advertisement. net/http's Query().Get reads the FIRST value
-// of a repeated query parameter while git http-backend reads the LAST, so
+// a receive-pack advertisement. net/http's Query().Get reads the first value
+// of a repeated query parameter while git http-backend reads the last, so
 // "?service=git-upload-pack&service=git-receive-pack" could be scope-checked
-// as a read and then served a REAL receive-pack advertisement. Both orderings
+// as a read and then served a real receive-pack advertisement. Both orderings
 // must refuse, so the refusal is not order-dependent.
 func TestGitAdvertiseRefusesAmbiguousService(t *testing.T) {
 	s := New()

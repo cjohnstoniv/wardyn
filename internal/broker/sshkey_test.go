@@ -141,7 +141,7 @@ func TestMintSSHKey_FailsClosed(t *testing.T) {
 }
 
 // TestMintSSHKey_RegistersMask asserts the mint() path registers the private
-// key VALUE in the mask registry (so it is redacted from PTY/asciicast streams
+// key value in the mask registry (so it is redacted from PTY/asciicast streams
 // — the residual-key-exposure mitigation for the resident-key exception), and
 // registers the known_hosts material too, so no mint output skips mask
 // registration.

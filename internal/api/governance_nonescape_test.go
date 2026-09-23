@@ -500,7 +500,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		}
 	})
 
-	// row 16, BOTH legs
+	// row 16, both legs
 	//
 	// The group tier can EVAPORATE. sessionGroups truncates the snapshot at the
 	// cookie byte cap, so the group whose assignment walls a member can simply
@@ -563,7 +563,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		}
 	})
 
-	// rows 19-21, the AUTONOMY doors (0.8 #97)
+	// rows 19-21, the autonomy doors (0.8 #97)
 	//
 	// A rubric bounds what a run may do UNATTENDED, so its escapes are neither
 	// egress nor grants and none of them appears in the envelope the rows above

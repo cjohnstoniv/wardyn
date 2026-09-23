@@ -12,14 +12,14 @@ import (
 // TestDriveStaleSnapshotRefusalIsAudited pins that both deciding sites record
 // the refusal.
 //
-// groups_snapshot_stale has TWO deciding sites, not one: the governance
+// groups_snapshot_stale has two deciding sites, not one: the governance
 // resolver's, and the drive resolver's mirror-image branch
 // (driveWithUnusableGroups), which raises the identical member-reachable 403
 // and must record it too. docs/OPERATIONS.md's "Every denial that isn't a
 // 404" section names both.
 //
-// The shape that makes it total is a deployment with group-tier DRIVE grants
-// and NO group-tier governance assignment: the ceiling resolves fine, so the
+// The shape that makes it total is a deployment with group-tier drive grants
+// and no group-tier governance assignment: the ceiling resolves fine, so the
 // governance site never fires, and without the drive site's own row the
 // drives door refuses with an entirely empty denial stream.
 func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
@@ -106,10 +106,10 @@ func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
 // TestMePollsAreNotDenials is the other half: the row must mean a refusal
 // happened, not that a console is open.
 //
-// GET /me reaches BOTH groups_snapshot_stale deciding sites — the drive
+// GET /me reaches both groups_snapshot_stale deciding sites — the drive
 // resolver for user_drive, the governance resolver for
 // user_drive_denied_by_profile — so without this rule a member with an
-// unanswerable group snapshot would write denial rows on a TIMER (two per
+// unanswerable group snapshot would write denial rows on a timer (two per
 // poll), for a request that refuses nobody.
 //
 // This is the audit-row form of the rule resolveMeUserDrive already applies to
@@ -137,7 +137,7 @@ func TestMePollsAreNotDenials(t *testing.T) {
 			"for a run", n, driveDenialReasons(t, rec))
 	}
 
-	// And the enforcement PATH is untouched, on the same server, the same store
+	// And the enforcement path is untouched, on the same server, the same store
 	// and the same member — which is what makes the suppression a SCOPING rather
 	// than a hole. The launch really is refused, so it really is recorded.
 	//

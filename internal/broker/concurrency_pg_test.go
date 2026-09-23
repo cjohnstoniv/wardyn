@@ -540,10 +540,10 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestPG_ExpiredApproval_ReRaisesPending runs the REAL SQL (the fake-DB twin
+// TestPG_ExpiredApproval_ReRaisesPending runs the real SQL (the fake-DB twin
 // in broker_test.go exercises the fake's own branch, not the query). The
-// sweeper (approval.ExpireStale) EXPIREs a stale PENDING credential approval;
-// the next mint must raise a FRESH PENDING row a human can still decide — not
+// sweeper (approval.ExpireStale) expires a stale PENDING credential approval;
+// the next mint must raise a fresh PENDING row a human can still decide — not
 // re-find the swept row forever and map it to ErrApprovalDenied, wedging the
 // run with nothing in the approval queue. A WHERE clause without `state <>
 // 'EXPIRED'` fails here.

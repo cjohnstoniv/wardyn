@@ -216,7 +216,7 @@ func TestWait_ReturnsExitCode(t *testing.T) {
 // TestWait_FailsClosedOnHardWaitingReason: an ephemeral exec container stuck
 // Waiting on a Reason that will never resolve on its own
 // (terminalWaitingReasons, canary.go) must return runner.ErrExecNeverStarted
-// PROMPTLY, not poll forever waiting for a Terminated status that will never
+// promptly, not poll forever waiting for a Terminated status that will never
 // arrive — that would make a k8s connectivity probe hang for its full wait
 // budget whatever the network did, because run.exec has already recorded
 // success (the apiserver accepted the ephemeral container add) with no way to

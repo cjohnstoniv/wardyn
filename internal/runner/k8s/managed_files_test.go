@@ -130,7 +130,7 @@ func TestCreateSandbox_DeliversManagedFiles(t *testing.T) {
 		t.Errorf("the volume never projects %v", wantModes)
 	}
 
-	// and the mount reaches the container the AGENT runs in
+	// and the mount reaches the container the agent runs in
 	if _, err := d.Exec(context.Background(), sb.Ref, []string{"agent-run"}); err != nil {
 		t.Fatalf("Exec: %v", err)
 	}

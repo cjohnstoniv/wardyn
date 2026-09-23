@@ -1227,7 +1227,7 @@ func TestRunRecordingCmd_DefaultsToBareRunID(t *testing.T) {
 	}
 }
 
-// --session fetches an interactive run's OTHER recordings — an
+// --session fetches an interactive run's other recordings — an
 // attach session's cast is stored server-side under the composite key
 // "<run-id>~<session>" (recording.CastKey), which the server has always
 // served, but nothing on the CLI/SDK side could ever request one before this.
@@ -1451,7 +1451,7 @@ func TestURL_FlagOverridesEnv(t *testing.T) {
 
 // With no WARDYN_ADMIN_TOKEN and no --token, do() proceeds WITHOUT an
 // Authorization header rather than erroring client-side — a loopback wardynd in
-// Local host MODE accepts unauthenticated requests; an auth-gated server returns
+// Local host mode accepts unauthenticated requests; an auth-gated server returns
 // a clear 401 instead.
 func TestToken_MissingProceedsUnauthenticated(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AgentRun{})
@@ -2122,7 +2122,7 @@ func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
 	}
 }
 
-// TestNoArgsLeavesRejectAnExtraArg extends the tree walk to LEAF commands
+// TestNoArgsLeavesRejectAnExtraArg extends the tree walk to leaf commands
 // (Runnable, no subcommands of their own) that declare `Args: cobra.NoArgs`
 // — e.g. `setup wall`/`setup vault`, where an undeclared validator would
 // silently accept and ignore a stray positional. Unlike

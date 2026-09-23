@@ -42,10 +42,10 @@ func TestValidateSiteConfig(t *testing.T) {
 		{"upstream proxy plain URL malformed", types.SiteConfig{UpstreamProxyURL: "not a url"}, false},
 		{
 			// https:// passes validSiteURL (it accepts both http/https for its
-			// OTHER callers), but resolveUpstreamProxyURL drops it at dispatch
+			// other callers), but resolveUpstreamProxyURL drops it at dispatch
 			// (the sidecar's plaintext-CONNECT hop cannot carry https), so saving
 			// it would display a live chain no run uses. It must be rejected at
-			// the SAME gate dispatch applies.
+			// the same gate dispatch applies.
 			"upstream proxy plain URL https is REJECTED (dispatch cannot use it — W13-S1-4)",
 			types.SiteConfig{UpstreamProxyURL: "https://proxy.corp:8443"}, false,
 		},
@@ -531,7 +531,7 @@ func TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects(t *t
 
 // TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem: an unknown
 // ecosystem key resolves to ecosystemPublicURL[eco] == "", which the fold
-// must not emit as an EgressRedirect with From="" — validateSiteConfig's NEXT
+// must not emit as an EgressRedirect with From="" — validateSiteConfig's next
 // pass would then 400 it as `egress_redirects[0]: invalid from ""`, never
 // naming the actual offending artifact_overrides key, and never reaching the
 // "unknown ecosystem" message that exists for exactly this case two guards
@@ -791,7 +791,7 @@ func TestValidateSiteConfig_RedirectEndpointPort(t *testing.T) {
 // TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm:
 // ScmHosts/EgressRedirects[].{From,To}/UpstreamProxyURL are stored in canonical
 // case and whitespace, not as typed — validSiteHost/HostOf only trim+lower a
-// THROWAWAY copy to check it, so findEgressRedirect's read-time EqualFold would
+// throwaway copy to check it, so findEgressRedirect's read-time EqualFold would
 // mask the effect for that one lookup while the document itself, and everything
 // that echoes it (GET, `wardyn site-config get`, the audit datum), stayed
 // uncanonicalized. Interior whitespace is a 400, not a silent collapse — see
@@ -850,15 +850,15 @@ func TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm(t *testing.T) {
 
 // TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets: the datum
 // must carry more than upstream_proxy_configured (a bool) — with only that,
-// two PUTs naming two DIFFERENT proxy URLs produce the IDENTICAL audit row,
-// so a review can tell THAT the proxy changed but never TO WHAT, nor what
+// two PUTs naming two different proxy URLs produce the identical audit row,
+// so a review can tell that the proxy changed but never to what, nor what
 // the org's egress redirects or internal-host allowlist actually route (an
 // MDM-applied narrowing/opening would be unreviewable from the log alone,
 // the same gap workspace_provider.write's base_urls closes for git
 // providers). The topology is recorded in the clear — precedent:
 // workspace_provider.write's own base_urls doc, "topology, not a
-// credential" — while every actual secret VALUE stays out of the row: only
-// ref NAMES (upstream_proxy_secret_ref) ever appear.
+// credential" — while every actual secret value stays out of the row: only
+// ref names (upstream_proxy_secret_ref) ever appear.
 func TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets(t *testing.T) {
 	const secretValue = "corp-proxy-basic-auth-password-must-never-leak"
 	fake := &fakeSiteConfigStore{}

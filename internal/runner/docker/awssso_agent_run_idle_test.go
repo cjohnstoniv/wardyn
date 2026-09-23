@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// The AWS sign-in sandbox runs the chained login command ITSELF: with only a
+// The AWS sign-in sandbox runs the chained login command itself: with only a
 // bare prompt, an operator who opened that run from the Runs list would type
 // the obvious half (`aws sso login`), see "Successfully logged into Start
 // URL", and capture nothing — the token stays in ~/.aws/sso/cache and dies
@@ -709,7 +709,7 @@ func TestSigninPane_PrepNeverFinishedSaysSo(t *testing.T) {
 }
 
 // TestSigninPane_FailedLineIsProseNotAFormat — the FAILED line is a canon string
-// under review, so it must not be handed to printf as a FORMAT. Two ways that
+// under review, so it must not be handed to printf as a format. Two ways that
 // breaks on an edit nobody would call risky: a literal `%` ("100% of the time")
 // makes printf emit garbage or an "invalid number" error, and dropping the `%s`
 // makes the command vanish silently — leaving "or run:" with nothing after it.

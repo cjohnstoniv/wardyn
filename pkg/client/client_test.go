@@ -758,7 +758,7 @@ func TestCreateRun_NoInlinePolicyOmitted(t *testing.T) {
 // --------------------------------------------------------------------------
 
 // TestSuccessBody_LargerThan2KiB_DecodesFully: the 2 KiB LimitReader must
-// apply ONLY to error (non-2xx) bodies. Capping ALL bodies and
+// apply only to error (non-2xx) bodies. Capping all bodies and
 // json.Unmarshal'ing that capped buffer on the 2xx path would fail every
 // success response larger than 2 KiB; success bodies must decode in full.
 func TestSuccessBody_LargerThan2KiB_DecodesFully(t *testing.T) {

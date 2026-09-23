@@ -5,9 +5,9 @@ package db
 
 // The closed-enum parity guard, asked of Postgres itself.
 //
-// TestClosedEnumChecksMatchConstants reads the MIGRATION TEXT and models it: it
+// TestClosedEnumChecksMatchConstants reads the migration text and models it: it
 // reads the whole expression, including a disjunct outside the IN-list, and
-// REFUSES a clause it cannot model, which is the right discipline — but it is
+// refuses a clause it cannot model, which is the right discipline — but it is
 // still a model. `pg_get_constraintdef` is not: it is the constraint the server
 // will actually enforce, after every migration in the tree has run, normalised
 // by Postgres rather than by a regexp of ours.

@@ -235,7 +235,7 @@ func TestPG_CapabilityGrants_SubjectTypeCheck(t *testing.T) {
 }
 
 // TestPG_ListGroupDenyGrants_PredicateMatchesAGoSideScan pins the SQL
-// predicate on the unresolvable-group-deny FAIL-CLOSED path. The api-side
+// predicate on the unresolvable-group-deny fail-closed path. The api-side
 // equivalence test drives a Go double, so it cannot see this query at all —
 // and a narrowing mistake would live here.
 //

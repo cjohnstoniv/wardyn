@@ -96,7 +96,7 @@ func TestSources_CRUDAndLifecycle(t *testing.T) {
 	// Attach: a workspace whose local_dir source names the SAME canonical
 	// locator dedupes onto this exact source row (canonicalSourceIdentity) —
 	// how a source becomes "in use" through the public API. An ephemeral
-	// scratch dir rides ALONGSIDE it: force-detaching the ONLY
+	// scratch dir rides alongside it: force-detaching the only
 	// attachment a workspace has is exactly what STORE-1 refuses
 	// (workspacesOrphanedBySource, internal/store/store_sources.go) — this
 	// mirrors TestPG_DeleteSourceInUse's ws-c, so this fixture exercises the

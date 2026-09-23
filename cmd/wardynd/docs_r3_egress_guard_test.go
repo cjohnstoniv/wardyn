@@ -90,7 +90,7 @@ func TestApprovalScopeIsDocumentedAsPortWide(t *testing.T) {
 // does — and to the two residuals it deliberately keeps.
 //
 // That branch runs p.vetHost before handing off, so the
-// private/loopback/metadata guard holds for more than the LITERAL spelling
+// private/loopback/metadata guard holds for more than the literal spelling
 // under an operator upstream: a name the agent controls that resolves to
 // 169.254.169.254 is denied, not handed to the corp proxy to resolve and dial.
 // It resolves for the guard and denies a blocked answer, forwarding only a name
@@ -101,7 +101,7 @@ func TestApprovalScopeIsDocumentedAsPortWide(t *testing.T) {
 // checked against THIS proxy's resolution while the corp proxy performs its own.
 // A name that answers differently to the two resolvers (short-TTL rebinding, or
 // a split-horizon zone only the corp proxy can see) is bound at check time only.
-// The mustNotSay arms below are the other half: the "the guard is SKIPPED
+// The mustNotSay arms below are the other half: the "the guard is skipped
 // under an upstream" claim is false, and five passages are known to carry its
 // shape — the fifth being egress_target.go's
 // own file header — so the guard pins its absence in the documents AND in the

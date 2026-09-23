@@ -58,7 +58,7 @@ func TestApprovalStaleApprovedRevalidatesFailClosed(t *testing.T) {
 }
 
 // TestApprovalConcurrentFirstUseRaisesOnce: concurrent first requests to an
-// unknown host must raise EXACTLY ONE approval. If both goroutines snapshot
+// unknown host must raise exactly one approval. If both goroutines snapshot
 // apNone under the lock, release it, and both call raise(), that is two
 // duplicate approvals. The slow raise handler widens the window so a
 // double-raise would be reliably observed.
@@ -185,7 +185,7 @@ func TestResolveWaitHold(t *testing.T) {
 	})
 
 	t.Run("concurrent first-touch does not skip the hold", func(t *testing.T) {
-		// Concurrent first-touch connections to the SAME new
+		// Concurrent first-touch connections to the same new
 		// host. Only ONE goroutine's Resolve wins the raise race and blocks
 		// on the (slow, widened-window) raise() network call; every OTHER
 		// goroutine must observe apPending with the RAISER'S host claimed but

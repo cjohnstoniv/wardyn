@@ -200,7 +200,7 @@ func TestFinalizeBase_FailsWhenToolsDirMissing(t *testing.T) {
 // for a caller that detaches from request cancellation
 // (context.WithoutCancel, e.g. launchRecordRun). Called with
 // context.Background() (no deadline) and a small BuildTimeout, FinalizeBase
-// must still apply ITS OWN bound: the underlying docker call must observe a
+// must still apply its own bound: the underlying docker call must observe a
 // ctx with a deadline.
 func TestFinalizeBase_AppliesOwnDeadline(t *testing.T) {
 	f := newFakeEnvbuilderDocker()

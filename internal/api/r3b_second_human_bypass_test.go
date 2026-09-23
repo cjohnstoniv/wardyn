@@ -119,13 +119,13 @@ func TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
 		}
 	})
 
-	// The concern that nothing was decided, so no row may CLAIM a decision, is
+	// The concern that nothing was decided, so no row may claim a decision, is
 	// kept verbatim below. But the bypass itself happens — the gate is passed,
 	// at the gate, before Decide is ever called — and docs/ENV.md promises the
 	// operator that each admin-token bypass writes approval.second_human.bypass.
 	// An emit that fired only on success would make the count of break-glass
 	// uses depend on whether the store answered, so a caller who never completes
-	// a decision would leave nothing behind at all. The OUTCOME is what tells
+	// a decision would leave nothing behind at all. The outcome is what tells
 	// the two apart, which is why the emit stays below Decide rather than in the
 	// gate.
 	for _, tc := range []struct {

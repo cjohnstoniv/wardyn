@@ -197,7 +197,7 @@ func TestHandlerDocsMatchTheRegisteredTier(t *testing.T) {
 	}
 }
 
-// R-02: the by-kind label is a CLOSED set
+// R-02: the by-kind label is a closed set
 
 // metricsHeartbeatStore is stubHeartbeatStore plus the Ping /metrics makes for
 // wardyn_store_up (the /healthz tests never reach it).

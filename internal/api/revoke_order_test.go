@@ -37,9 +37,9 @@ func revoked(list []uuid.UUID, id uuid.UUID) bool {
 	return false
 }
 
-// TestKillRun_LosesCASDoesNotRevoke: the kill cascade runs its terminal CAS BEFORE
-// revoking identity + broker credentials, so a kill that LOSES the CAS to a
-// concurrent dispatch forward-transition 409s WITHOUT revoking. Revoking first would
+// TestKillRun_LosesCASDoesNotRevoke: the kill cascade runs its terminal CAS before
+// revoking identity + broker credentials, so a kill that loses the CAS to a
+// concurrent dispatch forward-transition 409s without revoking. Revoking first would
 // strip the credentials of a run that stays live — a zombie behind a silent 409.
 func TestKillRun_LosesCASDoesNotRevoke(t *testing.T) {
 	h := newHarness(t)

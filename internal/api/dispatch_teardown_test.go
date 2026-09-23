@@ -283,7 +283,7 @@ func (r *waitTransientRunner) AgentStatus(_ context.Context, _, execID string) (
 }
 
 // TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff pins the
-// PRIMARY watcher — the one that runs for 100% of normal
+// primary watcher — the one that runs for 100% of normal
 // dispatches, unlike reconcileWatch which only runs after a daemon restart. A
 // Wait error that is NOT the daemon shutting down is a probe failure, not "the
 // run finished": this is the run's only watcher (one per dispatch, never

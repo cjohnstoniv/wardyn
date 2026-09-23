@@ -113,7 +113,7 @@ func TestTrustedCADialsPassingCorpCA(t *testing.T) {
 	corpSrv.StartTLS()
 	defer corpSrv.Close()
 
-	// A separate CA for the AGENT-facing leg — this is the proxy's own MITM CA
+	// A separate CA for the agent-facing leg — this is the proxy's own MITM CA
 	// (WARDYN_MITM_CA_PEM the sandbox trusts), unrelated to the corp CA under
 	// test; every MITM test in this package mints one the same way.
 	mitmCertPEM, mitmKeyPEM := genTestCA(t)
@@ -286,7 +286,7 @@ func TestNewServer_ControlPlaneClientTrustsCorpCA(t *testing.T) {
 // TestNewServer_CorpCAConfigNotMutatedByHTTP2 guards the path by which an
 // HTTP/2 answer could reach the egress lane. The corp pool is built once and
 // handed to several transports. The sidecar's control-plane client keeps
-// net/http's HTTP/2 support, and enabling it PREPENDS "h2" to the transport's
+// net/http's HTTP/2 support, and enabling it prepends "h2" to the transport's
 // own TLSClientConfig.NextProtos on first use. If the config were shared
 // rather than copied, that edit would reach the proxy's forward transport,
 // which would then offer h2 to every TLS peer with no way to speak it. So:

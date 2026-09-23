@@ -324,11 +324,11 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 	})
 
 	// The two governance reads ceilingWithUnusableGroups makes fail
-	// INDEPENDENTLY, and each needs its own case with its own fixture field:
+	// independently, and each needs its own case with its own fixture field:
 	// with one shared field the second can never be reached — the resolver
 	// errors and returns before the gate is ever asked, so the case named
 	// for the gate re-tests the resolver, and deleting the gate's error
-	// check leaves the ENTIRE package green.
+	// check leaves the entire package green.
 	t.Run("ResolveGovernanceProfile failing is an error, not a pass", func(t *testing.T) {
 		boom := errors.New("pg: connection refused")
 		st := &capStore{govErr: boom}
@@ -336,7 +336,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 			t.Fatalf("err = %v, want the store failure — a failed resolve must never read as `no assignment matched`", err)
 		}
 
-		// And it must not be masked as A refusal. Deleting
+		// And it must not be masked as a refusal. Deleting
 		// ceilingWithUnusableGroups' own resolve-error check does NOT fail-open
 		// — ceilingFromProfile re-checks the same error downstream, which is
 		// why the arm above passes without it — but with a group-tier row
@@ -355,7 +355,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 	})
 
 	t.Run("HasGroupTierAssignments failing is an error, not a pass", func(t *testing.T) {
-		// The GATE itself, reached at last: an unreadable "does a group row
+		// The gate itself, reached at last: an unreadable "does a group row
 		// exist" is not evidence that none does. The fixture is the ordinary
 		// production shape this branch exists for — the resolver answers
 		// ErrNotFound (nobody has a user-tier assignment) while the gate's own
@@ -433,7 +433,7 @@ func TestEffectiveCeilingReintersectsGrants(t *testing.T) {
 	if len(got.Spec.EligibleGrants) != 0 {
 		t.Errorf("eligible_grants = %+v, want empty — the deployment no longer provisions this pairing", got.Spec.EligibleGrants)
 	}
-	// Dropped with A warning, not refused: a redeploy is somebody else's act
+	// Dropped with a warning, not refused: a redeploy is somebody else's act
 	// arriving between a member's two runs, and failing their run for it turns
 	// one env edit into an outage.
 	if !containsAll(strings.Join(got.Warnings, "\n"), "has-a-grant", "api_key") {

@@ -345,7 +345,7 @@ func TestEnvBool_UnsetAndValid(t *testing.T) {
 }
 
 // A typo must not map to the default branch and silently disable a security
-// toggle (WARDYN_SUBSCRIPTION_INJECT=of would stay ON).
+// toggle (WARDYN_SUBSCRIPTION_INJECT=of would stay on).
 func TestEnvBool_InvalidIsLoud(t *testing.T) {
 	for _, val := range []string{"treu", "banana", "2", "yes please", "-1"} {
 		t.Run(val, func(t *testing.T) {

@@ -23,7 +23,7 @@ import (
 // clone-grant FK ordering (verify/record)
 
 // fkGrantStore is the fake this test needs: unlike the other api fakes (whose
-// CreateGrant has NO referential integrity, so an always-failing grant INSERT
+// CreateGrant has no referential integrity, so an always-failing grant INSERT
 // passes the whole unit suite), it enforces exactly what Postgres enforces —
 // credential_grants.run_id REFERENCES agent_runs(id), immediate — by
 // rejecting a grant whose run row does not exist yet.
@@ -153,7 +153,7 @@ func TestLaunchRecordRun_CloneGrantCreatedAfterRunRow(t *testing.T) {
 	}
 }
 
-// TestLaunchRecordRun_RequiredSecretRowRidesAlong: a workspace's REQUIRED
+// TestLaunchRecordRun_RequiredSecretRowRidesAlong: a workspace's required
 // secret: contract row must ride a record/verify session the same way it rides
 // a real run — the Verify carry card (step-requirements.tsx) promises "N
 // required secrets ride proxy-side", so launchRecordRun must not hand-roll
@@ -235,7 +235,7 @@ func TestLaunchRecordRun_RequiredSecretIsAudited(t *testing.T) {
 
 // TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey pins a grant that can
 // actually mint. The scan/record clone grant's `repos` scope and the broker
-// allowlist it is reached through are both keyed from the CLONE URL — one
+// allowlist it is reached through are both keyed from the clone URL — one
 // answer to "which repo is this token for". The real minter refuses an empty
 // list outright (GitHub installation tokens are per-installation; the owner
 // comes from the first repo), so a grant carrying `"repos": []` would 502
@@ -243,7 +243,7 @@ func TestLaunchRecordRun_RequiredSecretIsAudited(t *testing.T) {
 // App is configured. FakeGitHubMinter reproduces that precondition
 // (internal/broker.TestMintForGrant_EmptyRepoScopeFails).
 //
-// The invariant: the grant's scope.repos and the broker map key are THE SAME
+// The invariant: the grant's scope.repos and the broker map key are the same
 // repo, derived from the same function.
 func TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey(t *testing.T) {
 	h := newHarness(t)
@@ -319,7 +319,7 @@ func TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch(t *testing.T) {
 // WARDYN_EPHEMERAL_DIRS -> mkdir -p inside the sandbox), so wireWorkspaceSource
 // is the only gate standing between a legacy row's target and the sandbox.
 //
-// A bad target is REFUSED, not dropped, and the guard sits above the type
+// A bad target is refused, not dropped, and the guard sits above the type
 // switch so it covers repo and local_dir too — for those a drop is not an
 // option: seedRequestWorkspace, the create path's sibling over the same stored
 // rows, 422s the identical workspace, and a late drop in buildRepoRecords would

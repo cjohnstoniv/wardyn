@@ -248,11 +248,11 @@ func TestMITMBlockRefusesOverTunnel(t *testing.T) {
 }
 
 // TestMITMCorpHost_DialsConfiguredPort: a corp artifact MITM host is matched
-// by HOSTNAME (mitmHosts), so serveMITMRequest must dial the port the sandbox
+// by hostname (mitmHosts), so serveMITMRequest must dial the port the sandbox
 // actually CONNECTed to, not a hardcoded 443. An operator's mirror living on
 // a non-443 port (npmrc/pip.conf/etc. pointing at "mirror.corp:5000") gets
 // its tunnel TLS-terminated (hostname matched) and its registry token
-// injected, so a 443 dial would FORWARD it to port 443 of that same host,
+// injected, so a 443 dial would forward it to port 443 of that same host,
 // presenting the token to whatever answers there instead of the configured
 // mirror. The real CONNECT port is threaded through
 // mitmConnect/serveMITMRequest.
@@ -392,7 +392,7 @@ func TestMITMCorpHost_PortMismatchFallsThroughOpaque(t *testing.T) {
 // unconditionally treats as scanNone (not prompt-bearing) — so inspectLLM
 // alone would stream an artifact-MITM body through completely unscanned, even
 // with inspect_forward_egress on (the flag that extends inspection to the
-// PLAIN, non-MITM forward path). A secret leaking through a "corp registry"
+// plain, non-MITM forward path). A secret leaking through a "corp registry"
 // MITM tunnel must be caught exactly like one leaking through a plain HTTP
 // connector.
 func TestMITMCorpHost_ForwardEgressScanCoversBody(t *testing.T) {
@@ -489,12 +489,12 @@ func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
 
 // TestMITMCorpHost_DecisionCarriesRealPort is the audit half of
 // TestMITMCorpHost_DialsConfiguredPort: that test pins that the real CONNECT
-// port reaches the DIAL; this pins that it also reaches the DECISION LOG. The
+// port reaches the dial; this pins that it also reaches the decision log. The
 // two are separate plumbing — mitmConnect threads port into serveMITMRequest,
-// which hands it to BOTH egressTarget and emitLLMDecision — so a change that
+// which hands it to both egressTarget and emitLLMDecision — so a change that
 // reverted only the decision arm would leave the audit trail saying the
 // operator's registry token went to mirror.corp:443 while the wire says
-// :5000. On a host-matched MITM lane the port is the ONLY field
+// :5000. On a host-matched MITM lane the port is the only field
 // distinguishing the configured mirror from anything else answering on that
 // hostname, so a row naming the wrong one is worse than no row.
 func TestMITMCorpHost_DecisionCarriesRealPort(t *testing.T) {
@@ -669,7 +669,7 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 	}
 }
 
-// A client that HUNG UP is written nothing — no 401, no deny row (security
+// A client that hung up is written nothing — no 401, no deny row (security
 // SHOULD-1). The first shape ended the workflow with an expiry whenever its
 // first caller's ctx died, so a disconnect was recorded as "nobody signed in
 // before the hold expired" for a hold that still had minutes left, and every

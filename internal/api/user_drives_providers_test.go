@@ -180,7 +180,7 @@ func TestSeedRequestDriveRefusesWhenDrivesAreDisabled(t *testing.T) {
 // member cannot be shown 10 GiB on the card, previewed at 10 GiB by their admin,
 // and given 2 GiB by the run.
 //
-// Both ceilings are in PLAY and the smaller one wins: the deployment allows
+// Both ceilings are in play and the smaller one wins: the deployment allows
 // 4 GiB, this principal's profile allows 2 GiB, and the allocation is 10 GiB.
 func TestDriveSizeIsClampedTheSameAtEveryDoor(t *testing.T) {
 	const deploymentMiB, profileMiB = 4096, 2048
@@ -340,7 +340,7 @@ func TestDrivesDisabledBeatsTheProfileDoorAtEverySurface(t *testing.T) {
 }
 
 // TestDriveRehomeRaceIsRefusedAtTheWrite closes the window a read-then-write gate
-// leaves: the gate reads the allocations, finds none, and the write lands AFTER
+// leaves: the gate reads the allocations, finds none, and the write lands after
 // somebody is allocated the drive — re-homing them silently.
 //
 // grantsAppear makes that happen deterministically, inside the write itself. The

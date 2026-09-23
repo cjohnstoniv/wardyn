@@ -21,7 +21,7 @@ import (
 // without syslogd). It lives here, beside its only two callers, not in
 // syslog.go where it would ship inside wardynd.
 //
-// ONE arm, not one per GOOS: the linux and darwin dials of the local socket
+// One arm, not one per GOOS: the linux and darwin dials of the local socket
 // are byte-identical, and every other platform has none to find.
 func syslogAvailable() bool {
 	switch runtime.GOOS {
@@ -232,7 +232,7 @@ type wedgedWriter struct{ release chan struct{} }
 func (w *wedgedWriter) Info(string) error { <-w.release; return nil }
 func (w *wedgedWriter) Close() error      { return nil }
 
-// TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon: the LOCAL-socket
+// TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon: the local-socket
 // path (Network=="") must not block Emit when the syslog daemon wedges. Emit
 // is reached synchronously from request handlers via Fanout.Emit, so a blocked
 // local write stalls the API request path (and the kill cascade) even after

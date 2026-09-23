@@ -191,7 +191,7 @@ func TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03(t *testing.T) {
 		t.Fatalf("ParseRoleMap(%q): %v", composeDefault, err)
 	}
 
-	// (a) An allowlist-only deployment: bob@corp.com is a MEMBER with a
+	// (a) An allowlist-only deployment: bob@corp.com is a member with a
 	// working login via arm 1's legacy-allowlist branch (alice is admin,
 	// everyone else who signs in is a member). Under the compose default, bob
 	// matches neither the chart map nor the allowlist, and no DefaultRole is

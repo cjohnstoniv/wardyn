@@ -280,8 +280,8 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 	// would get an immediate io.EOF and end the session on ITS OWN, letting
 	// this test pass even with the ctx-cancel wiring ripped out entirely (a
 	// mutation probe that deletes the wiring stays green on a plain os.Stdin).
-	// Swapping in a pipe whose write end THIS TEST holds open blocks that half
-	// indefinitely, so the cancel below is the ONLY thing that can end the
+	// Swapping in a pipe whose write end this test holds open blocks that half
+	// indefinitely, so the cancel below is the only thing that can end the
 	// session.
 	// Half 2 (attach.go's "Half 2" goroutine, os.Stdin.Read) is a KNOWN,
 	// pre-existing leak: os.Stdin.Read is a plain blocking syscall, not
@@ -504,7 +504,7 @@ func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
 	}
 }
 
-// A SECOND TERM must still kill the process. The
+// A second TERM must still kill the process. The
 // signal disposition NotifyContext installs stays redirected until
 // stopSignals() runs, deferred all the way to runAttach's own return — so if
 // the session is wedged somewhere that does NOT observe ctx (os.Stdout.Write
@@ -512,7 +512,7 @@ func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
 // cancels ctx but can't unstick the write, and every SUBSEQUENT TERM is
 // caught by the same still-registered channel and silently discarded,
 // leaving the session unkillable by any number of them. runAttach reverts
-// the disposition itself the moment ctx is Done, so THIS test's second TERM
+// the disposition itself the moment ctx is Done, so this test's second TERM
 // falls through to the normal, process-killing default.
 //
 // The wedge is real, not simulated: the server floods far more than a
@@ -637,7 +637,7 @@ func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
 // `wardyn attach` mints a single-use attach ticket with whatever token is
 // configured (POST /runs/{id}/attach-ticket, owner-or-admin) and dials
 // with it, instead of dialing the WS route directly with a bearer that
-// route's fallback lane requires be an ADMIN'S. These four pin that
+// route's fallback lane requires be an admin's. These four pin that
 // contract: a member's own
 // token mints and dials; a foreign run gets the ticket lane's 404 (no
 // existence oracle); an admin token still works; the ticket is freshly
@@ -838,7 +838,7 @@ func TestRunAttach_FallsBackToBareDialWhenMintUnavailable(t *testing.T) {
 
 // --------------------------------------------------------------------------
 // The attach-mode frame (internal/api/attach_holder.go's attachModeMsg) is
-// a TEXT frame Half 1 must surface, not skip — otherwise someone attached
+// a text frame Half 1 must surface, not skip — otherwise someone attached
 // read-only types, nothing happens, and nothing explains why. These four
 // pin that and the one contract it must never break: stdout stays
 // byte-identical PTY output, nothing else, in every case below.

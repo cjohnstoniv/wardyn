@@ -151,9 +151,9 @@ const plainMITMHost = "wardyn-awsssofake.wardyn.svc.cluster.local"
 // The TLS shape is only what a MITM is "supposed" to see; assuming it alone
 // leaves the SDK's plaintext client unserved.
 
-// The client LEG, MEASURED. The test above drives the tunnel the way a TLS
-// client does. The agent's SDK does NOT: with a proxy configured it reaches an
-// `http://` endpoint by CONNECT and then sends PLAINTEXT inside the tunnel —
+// The client leg, measured. The test above drives the tunnel the way a TLS
+// client does. The agent's SDK does not: with a proxy configured it reaches an
+// `http://` endpoint by CONNECT and then sends plaintext inside the tunnel —
 // first byte 0x47, `G`, never 0x16 (reproduced offline against the real
 // wardyn/agent-claude-code:local). A mitmConnect that handshakes at that client
 // fails and drops the connection, so the request is never seen, never injected
@@ -454,7 +454,7 @@ func TestMITMInjection_IsPinnedToTheDispatchedRoleCredentialsCall(t *testing.T) 
 	}
 }
 
-// The plain lane honours the pin TOO (docs REVIEW-3 coverage note).
+// The plain lane honours the pin too (docs REVIEW-3 coverage note).
 //
 // injector.apply is the cleartext path — an ordinary absolute-URI request that
 // never enters a tunnel — and it reaches the very same portal host. A pin

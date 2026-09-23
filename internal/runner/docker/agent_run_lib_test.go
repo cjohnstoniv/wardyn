@@ -70,7 +70,7 @@ func TestAgentRunLib_MakeToolchainDirsNoopWhenUnset(t *testing.T) {
 }
 
 // TestAgentRunLib_MaybeExecTaskModePreservesPATH: maybe_exec_task_mode must
-// not `exec /bin/sh -lc "$1"` — the `-l` makes it a LOGIN shell, which sources
+// not `exec /bin/sh -lc "$1"` — the `-l` makes it a login shell, which sources
 // /etc/profile and reassembles PATH from scratch, destroying every
 // BYOI/devcontainer image's own Dockerfile ENV PATH toolchain before the task
 // command ever runs. Plain `-c` (no login) must leave an inherited PATH
@@ -101,7 +101,7 @@ func TestAgentRunLib_MaybeExecTaskModePreservesPATH(t *testing.T) {
 // config --system credential.helper` (only the prebuilt claude-code/codex-cli
 // images bake that RUN line in) would pass --selftest cleanly even though a
 // granted run's git brokering would silently never fire. It fails closed
-// (nonzero return) exactly when a git grant is present AND no helper is
+// (nonzero return) exactly when a git grant is present and no helper is
 // wired.
 func TestAgentRunLib_SelftestReportRepoAndGitFailsClosedWithoutHelper(t *testing.T) {
 	libPath, err := filepath.Abs(agentRunLibPath)

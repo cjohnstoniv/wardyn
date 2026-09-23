@@ -67,7 +67,7 @@ func newTestEvent(action string) types.AuditEvent {
 }
 
 // TestNewAuditSpool_CreatesMissingParentDir: the flag default
-// (cmd/wardynd/boot_flags.go) is the RELATIVE "./data/audit-spool.jsonl", and the
+// (cmd/wardynd/boot_flags.go) is the relative "./data/audit-spool.jsonl", and the
 // chart's own defaults point it at a directory nothing has created yet (an
 // emptyDir or a fresh PVC), so NewAuditSpool must create the parent directory
 // rather than fail to open the path.
@@ -159,12 +159,12 @@ func TestAuditSpoolDrainBounded(t *testing.T) {
 	}
 	// The BACKLOG is what shrinks per pass, and Lines() is the number operators
 	// and /metrics read. Asserting the on-disk line count instead would pin a
-	// MECHANISM (a whole-file rewrite every pass) rather than the contract —
+	// mechanism (a whole-file rewrite every pass) rather than the contract —
 	// and that mechanism makes clearing a backlog of N cost O(N^2) in fsynced
 	// writes. Drain retires a pass by advancing a byte offset and reclaims the
 	// space when the reclaim pays for itself, so the file can legitimately
 	// still hold the replayed prefix here. What must stay true is asserted
-	// instead: the backlog falls every pass, the file never GROWS during a
+	// instead: the backlog falls every pass, the file never grows during a
 	// drain, and both reach 0 when the spool is empty.
 	if n := sp.Lines(); n != 3 {
 		t.Fatalf("after first drain: backlog %d, want 3", n)
@@ -404,7 +404,7 @@ func (r *blockingRecorder) Record(ctx context.Context, ev types.AuditEvent) erro
 // caller's own if it is shorter — which is the path this test drives, so the
 // suite does not wait out the real 15s).
 //
-// And not A strike: a store that never ANSWERED has proved nothing about the
+// And not a strike: a store that never answered has proved nothing about the
 // line it was given, so a timeout must not count toward quarantine. The fixture
 // makes that discriminating — the blocked line has a perfectly good line behind
 // it, so if a timeout earned strikes, the third pass would promote the blocked

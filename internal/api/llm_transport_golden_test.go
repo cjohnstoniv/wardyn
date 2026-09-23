@@ -322,7 +322,7 @@ func llmGoldenCases() []llmGoldenCase {
 			}},
 		},
 
-		// (j'): a HARNESS LOGIN run (run.Task = harnessLoginTask —
+		// (j'): a harness login run (run.Task = harnessLoginTask —
 		// `claude setup-token` in the attach shell, no credential yet) with
 		// Bedrock fully configured must get NOTHING Bedrock-shaped: bedrock_ready
 		// and inject_bedrock_bearer both false, no ~/.aws mount, no bearer MITM.

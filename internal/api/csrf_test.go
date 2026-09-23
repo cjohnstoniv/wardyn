@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// CSRF: the same-origin guard on a COOKIE-authenticated mutating request
+// CSRF: the same-origin guard on a cookie-authenticated mutating request
 //
 // Two guards, one rule, pinned together. LocalMode has refused a cross-origin
 // mutating request since FIX #8's sibling (http.go's local arm) but nothing
@@ -203,7 +203,7 @@ func TestCSRFGuard(t *testing.T) {
 			wantOIDCRefused:  true,
 		},
 		{
-			// RULE 3's OWN WORDS: the CLI/API fallthrough is "no Origin AND no
+			// Rule 3's own words: the CLI/API fallthrough is "no Origin AND no
 			// Sec-Fetch-Site". A browser that omits Origin on a same-site
 			// top-level form POST — the sibling host on a shared parent domain,
 			// again — must not land in it just because only "cross-site" is

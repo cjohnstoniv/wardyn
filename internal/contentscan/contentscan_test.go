@@ -831,7 +831,7 @@ func TestExtractOpenAIChat_ContentShapes(t *testing.T) {
 		},
 		{
 			// The row the superset claim most easily misses: a typed block
-			// carrying a STRAY text sibling. A type-blind walker reads it; a
+			// carrying a stray text sibling. A type-blind walker reads it; a
 			// walkBlock that only yields .text under `case "text"` drops it.
 			// Both the text and the tool_use input must land.
 			name: "a tool_use part's stray text field is scanned alongside its input",

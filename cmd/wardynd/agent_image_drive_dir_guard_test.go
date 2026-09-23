@@ -41,7 +41,7 @@ type dockerStage struct {
 // deploy/images ends up with /home/agent/drive present and owned by agent —
 // directly, or by inheriting from a sibling image that does.
 //
-// Why this is A guard and not A comment. A managed (`docker_volume`) drive is
+// Why this is a guard and not a comment. A managed (`docker_volume`) drive is
 // mounted over this path, and Docker's copy-up gives the fresh volume the
 // uid/gid of the image directory it lands on. An image that never creates the
 // directory gets one conjured by the daemon at mount time — owned by ROOT — so
@@ -322,7 +322,7 @@ func driveMkdirSegmentIndex(instr string) int {
 // directory — the half that matters, because a drive directory the image creates
 // but leaves owned by root is exactly as unwritable as one it never created.
 //
-// A complete WORD, never a substring: `strings.Contains(mk, "chown -R
+// A complete word, never a substring: `strings.Contains(mk, "chown -R
 // agent:agent /home/agent")` was satisfied by `chown -R agent:agent
 // /home/agent/work`, which is the drift this file was written for in the first
 // place — the work directory chowned, the drive directory left to root.
@@ -442,14 +442,14 @@ func TestDriveDirGuard_RefusesLookalikes(t *testing.T) {
 		want  bool
 	}{
 		{"the real thing", "RUN mkdir -p /home/agent/drive && chown -R agent:agent /home/agent", true},
-		// The original HOLE: a chown of a CHILD of the home satisfies the
+		// The original hole: a chown of a child of the home satisfies the
 		// substring `chown -R agent:agent /home/agent` and leaves the drive
 		// directory owned by root.
 		{"a child of the home", "RUN mkdir -p /home/agent/drive && chown -R agent:agent /home/agent/work", false},
 		{"not recursive", "RUN mkdir -p /home/agent/drive && chown agent:agent /home/agent", false},
 		{"the wrong owner", "RUN mkdir -p /home/agent/drive && chown -R root:root /home/agent", false},
 		{"a mention, not a chown", `RUN mkdir -p /home/agent/drive && echo "chown -R agent:agent /home/agent"`, false},
-		// The order HOLE: `&&` is sequential, so a recursive chown that runs
+		// The order hole: `&&` is sequential, so a recursive chown that runs
 		// BEFORE the mkdir owns nothing the mkdir goes on to create. Both
 		// segments are present in one instruction, which is all the membership
 		// test ever asked — and the image ships a ROOT-owned /home/agent/drive.

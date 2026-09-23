@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The proxy-side mask registers per RENDERING, not per credential.
+// The proxy-side mask registers per rendering, not per credential.
 //
 // procRegistry is what stands between a proxy-held credential and every
 // sandbox-facing error body (Proxy.httpError -> maskDecisionBytes) and every
@@ -26,9 +26,9 @@ import (
 // credential is protected in exactly the renderings that were registered, and
 // every registration site must register every rendering the credential takes:
 //
-//   - inject.go: the FORMATTED header value ("Bearer sk-…") AND the bare
+//   - inject.go: the formatted header value ("Bearer sk-…") and the bare
 //     token — the form a vendor echoes in an error body;
-//   - git_broker.go: the raw installation token AND its wire form,
+//   - git_broker.go: the raw installation token and its wire form,
 //     base64("x-access-token:" + tok);
 //   - pat_broker.go: its credential too;
 //   - upstream.go: all three renderings of the corp-proxy credential, the

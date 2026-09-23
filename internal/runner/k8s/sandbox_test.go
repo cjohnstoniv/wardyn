@@ -229,7 +229,7 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 		}
 		createOrder = append(createOrder, a.GetResource().Resource)
 	}
-	// NetworkPolicies FIRST, then the Secret (the policies must strictly
+	// NetworkPolicies first, then the Secret (the policies must strictly
 	// outlive the Secret so the orphan sweep can find it by their labels without
 	// holding `secrets: list`), then proxy pod, then agent pod.
 	want := []string{"networkpolicies", "networkpolicies", "secrets", "pods", "pods"}
@@ -1100,7 +1100,7 @@ func TestCreateSandbox_SecretEnvRidesTheRunSecret(t *testing.T) {
 // TestPodStuckReason covers the sentence a pod that never started produces.
 //
 // The motivating case is the drive one: a claim that never bound leaves the
-// pod Pending with NO container status at all, so every check inside
+// pod Pending with no container status at all, so every check inside
 // waitContainerRunning's poll reads an empty list, and without this the
 // caller gets "context deadline exceeded" and nothing else — while the
 // scheduler has been saying why the whole time, in the one place nothing

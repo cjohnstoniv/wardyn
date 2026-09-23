@@ -75,7 +75,7 @@ type recordStore struct {
 	// means "no heartbeat ever" (ErrNotFound), same as a host with no sensor.
 	heartbeat *types.AuditEvent
 	// mergeErr, when set, is what MergeWorkspaceRequirements returns instead
-	// of applying `add` — the seam for a store error on the widening AFTER
+	// of applying `add` — the seam for a store error on the widening after
 	// the promotion marker CAS already committed.
 	mergeErr error
 }
@@ -272,7 +272,7 @@ func TestReconcileRecordRun_EmptyCaptureIsFailureNeverNoEgress(t *testing.T) {
 }
 
 // TestReconcileRecordRun_NeverStartedGetsDispatchHintNotNetworkingGuess is
-// A record run whose SandboxRef is EMPTY never
+// A record run whose SandboxRef is empty never
 // reached CreateSandbox at all — it failed on the dispatch side (image build,
 // resource limits, a concurrent kill racing dispatch), never got a chance to
 // observe egress. Blaming the operator's proxy/WSL2 networking
@@ -617,11 +617,11 @@ func TestRecordWorkspace_Guards(t *testing.T) {
 }
 
 // TestRecordWorkspace_ClaimedButNotYetCreatedRunIsBusy:
-// ClaimWorkspaceActiveRun CAS's ws.ActiveRunID onto the workspace BEFORE
+// ClaimWorkspaceActiveRun CAS's ws.ActiveRunID onto the workspace before
 // Store.CreateRun persists the claiming run's own row (the clone-grant FK
 // needs the run row first). A second record request landing in that window
 // sees GetRun(ActiveRunID) => ErrNotFound; that indeterminate GetRun error
-// must be treated as busy (only a CONFIRMED terminal run may proceed), not
+// must be treated as busy (only a confirmed terminal run may proceed), not
 // read as "not busy" by a `gerr == nil && !isTerminalRunState(...)` check, or
 // the serial import-step gate is jumped into two concurrent open-egress
 // sandboxes.
@@ -744,10 +744,10 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 }
 
 // TestPromoteRecordEgress_MergeFailureDoesNotLeaveMarkerSet: the
-// EgressPromoted marker CAS commits BEFORE MergeWorkspaceRequirements, so a
+// EgressPromoted marker CAS commits before MergeWorkspaceRequirements, so a
 // store error from the merge (a concurrent-cap race, or any other failure)
 // could leave the record claiming a widening that never landed. The handler
-// must return the merge error to the caller (never a 200) AND leave the
+// must return the merge error to the caller (never a 200) and leave the
 // persisted marker at its pre-click value, so a retry does not skip
 // re-attempting the merge on the mistaken belief it already happened.
 func TestPromoteRecordEgress_MergeFailureDoesNotLeaveMarkerSet(t *testing.T) {

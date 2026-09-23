@@ -62,7 +62,7 @@ func (c *countingCapStore) ListCapabilityGrants(context.Context) ([]types.Capabi
 
 // ListGroupDenyGrants is the read capUnresolvableGroupDeny makes on the stale
 // path, in place of the whole-table ListCapabilityGrants above, which costs
-// O(grant table) per checked value on the path EVERY pre-0.7 API token takes;
+// O(grant table) per checked value on the path every pre-0.7 API token takes;
 // the predicate here mirrors the SQL exactly (group + deny + this kind) so
 // this double cannot be the reason the two agree.
 //
@@ -92,7 +92,7 @@ func (c *countingCapStore) total() int64 {
 
 // TestCapBatch_StoreReadsAreFlatInCallerInput is the pin for the growth law.
 //
-// spec.AllowedDomains is the REQUEST BODY's list, and nothing on this path caps
+// spec.AllowedDomains is the request body's list, and nothing on this path caps
 // or de-duplicates it before narrowMemberInlinePolicy's loop:
 // validatePolicySpec's count caps have no allowed_domains arm AND run after
 // boundMemberSpec, and composer.Clamp's intersection preserves duplicates of a

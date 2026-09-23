@@ -66,7 +66,7 @@ func TestNonCanonicalLiteralIPIsDeniedLikeItsCanonicalSpelling(t *testing.T) {
 		{"0xa000001", "10.0.0.1", "hexadecimal RFC1918"},
 		{"167772161", "10.0.0.1", "bare 32-bit RFC1918"},
 		// Second axis: net.ParseIP is nil for a zoned IPv6 literal, so the zone
-		// id alone must not decide allow-vs-deny for the SAME address.
+		// id alone must not decide allow-vs-deny for the same address.
 		{"fe80::1%eth0", "fe80::1", "zone-suffixed IPv6 link-local"},
 		{"fe80::1%25eth0", "fe80::1", "percent-encoded zone (RFC 6874 authority form)"},
 		{"ff02::1%eth0", "ff02::1", "zone-suffixed IPv6 multicast"},

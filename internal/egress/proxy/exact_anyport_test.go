@@ -64,11 +64,11 @@ func TestAllowedExactHostAcceptsAnAuthoredPort(t *testing.T) {
 		{"allow_all_egress alone is still not exact", types.RunPolicySpec{AllowAllEgress: true}},
 		{"a denied host stays denied however it is allowed", types.RunPolicySpec{
 			AllowedDomains: []string{"m.corp:443"}, DeniedDomains: []string{"m.corp"}}},
-		// The ASYMMETRY to guard: the allow side is any-port, so the deny side
+		// The asymmetry to guard: the allow side is any-port, so the deny side
 		// must be able to cancel the ports it names. CompilePolicy routes a
-		// port-qualified deny to deniedExactPort ONLY, which the port-less deny
+		// port-qualified deny to deniedExactPort only, which the port-less deny
 		// checks above never read — so without the per-port shadow this policy
-		// would BUILD an injector where it must fail closed, and the credential
+		// would build an injector where it must fail closed, and the credential
 		// would ride an https request to a port the operator denied in writing.
 		{"a port-qualified deny cancels the port-qualified allow", types.RunPolicySpec{
 			AllowedDomains: []string{"m.corp:443"}, DeniedDomains: []string{"m.corp:443"}}},

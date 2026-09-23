@@ -112,7 +112,7 @@ func TestEventSink_RefreshesTokenOn401(t *testing.T) {
 }
 
 // TestEventSink_RetriesOn502KeepsBatch pins that a non-2xx status (including
-// a transient 502) does not permanently DROP the batch — that would silently
+// a transient 502) does not permanently drop the batch — that would silently
 // lose kernel events on a stream billed as tamper-proof. A 502 means "retry
 // the batch": assert the batch is kept and delivered once the transient
 // failure clears, not dropped after the first bad status.

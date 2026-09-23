@@ -6,8 +6,8 @@
 // redirectProbeScript directly, and need no Postgres — every test here is pure
 // or loopback-only.
 //
-// Invariant under test: probe 1 of the redirect probe dials ONLY the stored To
-// (host, port AND scheme), and its verdict about "the mirror" is never derived
+// Invariant under test: probe 1 of the redirect probe dials only the stored To
+// (host, port and scheme), and its verdict about "the mirror" is never derived
 // from a dial that actually landed on the public From host; probe 2's verdict
 // "From is correctly blocked" is never emitted when the public host answered. A
 // case tagged wantRedToday is expected to fail and names the hypothesis it
@@ -148,7 +148,7 @@ func TestF7_RedirectProbeTo_Probe1DialsOnlyTheStoredTo(t *testing.T) {
 	cases := []struct {
 		name         string
 		red          types.EgressRedirect
-		wantRedToday string // non-empty: expected to FAIL, naming the hypothesis
+		wantRedToday string // non-empty: expected to fail, naming the hypothesis
 	}{
 		{
 			name: "hostname To, https From (baseline: no swap)",

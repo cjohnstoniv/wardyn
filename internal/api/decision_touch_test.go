@@ -28,7 +28,7 @@ func (s *touchStore) TouchRun(_ context.Context, id uuid.UUID) error {
 // TestInternalDecisionTouchesRun pins the idle clock to real agent activity.
 // The reaper measures idleness as the age of agent_runs.updated_at, so agent
 // activity must bump it, not only the interactive attach keepalive — otherwise
-// a NON-interactive run is hard-killed at its auto_stop_after_sec cap while
+// a non-interactive run is hard-killed at its auto_stop_after_sec cap while
 // actively working, under an audit event claiming it was idle
 // (internal/lifecycle). The blind case is asserted too because it returns
 // early, before the egress audit write.

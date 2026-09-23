@@ -151,7 +151,7 @@ func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[strin
 }
 
 // TestB4F2_TheTrackerIsSubordinateToTheRow: the in-memory buildState is this
-// daemon's MEMORY of a build, while the workspace row is what a run actually
+// daemon's memory of a build, while the workspace row is what a run actually
 // resolves. If the tracker answered "done" from st.Image before consulting the
 // row, an image invalidated underneath it (a PUT that removeStaleImage'd the
 // ref, a rescan that changed the profile hash) would still read `done` with a
@@ -227,8 +227,8 @@ func TestB4F2_TheTrackerIsSubordinateToTheRow(t *testing.T) {
 // B4-F3: a respelling of the same source wiped every reviewed field
 
 // TestB4F3_ARespellingOfTheSameSourceKeepsEveryReviewedField: sourcesChanged
-// must compare canonical forms on both sides. Comparing the request's RAW
-// source against the store's CANONICAL one would read a re-PUT of the identical
+// must compare canonical forms on both sides. Comparing the request's raw
+// source against the store's canonical one would read a re-PUT of the identical
 // composition with a trailing slash or a differently-cased repo slug as a
 // content change, and throw away ApprovedEgress, Requirements, RecordResults
 // and the built image — with a 200 and nothing anywhere saying it had happened.
@@ -367,7 +367,7 @@ func (s *b4PagerStore) ListRunsPage(_ context.Context, p store.Page) ([]types.Ag
 }
 
 // TestB4F9_ObservedEgressReadsABoundedPage pins the bound on a member-reachable
-// route: it must not read the WHOLE runs table and window it in Go.
+// route: it must not read the whole runs table and window it in Go.
 func TestB4F9_ObservedEgressReadsABoundedPage(t *testing.T) {
 	h := newHarness(t)
 	wsID := uuid.New()

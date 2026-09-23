@@ -47,9 +47,9 @@ var _ runner.Runner = (*execLessCapsRunner)(nil)
 
 // TestStartAgentOrIdle_BYOIOnExecLessRuntime_RefusedWithoutWastingTheSlot: on
 // an exec-less (krun/CC3) runtime, running byoiSelftest for a BYOI image
-// consumes the sandbox's ONE process, so the immediately-following task Exec
+// consumes the sandbox's one process, so the immediately-following task Exec
 // is guaranteed to fail against an already-exited container (Exec would be
-// called TWICE: once for the selftest, once for the task). The combination is
+// called twice: once for the selftest, once for the task). The combination is
 // refused up front: Exec must never be called at all, the run must land
 // FAILED, and the sandbox must be torn down exactly once.
 func TestStartAgentOrIdle_BYOIOnExecLessRuntime_RefusedWithoutWastingTheSlot(t *testing.T) {

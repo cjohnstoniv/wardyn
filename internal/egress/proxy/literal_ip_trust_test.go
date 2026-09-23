@@ -98,7 +98,7 @@ func TestTrustsExactLiteralIP_UnconfiguredProxyIsUnchanged(t *testing.T) {
 // by the shape of the host, and the right one. The IP arm is the literal-IP case
 // (a DNS-only leaf for a literal-IP mirror fails every TLS client); the hostname
 // arm is the other half — an ordinary MITM'd LLM host must keep a DNS SAN and
-// must NOT grow a bogus IP SAN.
+// must not grow a bogus IP SAN.
 func TestLeafFor_SANKindFollowsTheCONNECTHost(t *testing.T) {
 	certPEM, keyPEM := genTestCA(t)
 	ca, err := newCertAuthority(certPEM, keyPEM)

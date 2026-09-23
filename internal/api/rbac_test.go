@@ -239,7 +239,7 @@ var gatedRoutes = []struct{ method, path string }{
 	// of here, this table's own GET entry needs rbacStore.ListRoleMappings
 	// stubbed above so the admin-passes probe actually reaches the handler.
 	{http.MethodGet, "/api/v1/access"},
-	// 8. The site-config READ. Its PUT is item 5 above; the GET returns the same
+	// 8. The site-config read. Its PUT is item 5 above; the GET returns the same
 	// whole document, integration credential refs included, so both belong to
 	// the same tier: a member must not get it on a console page load.
 	{http.MethodGet, "/api/v1/site-config"},
@@ -251,23 +251,23 @@ var gatedRoutes = []struct{ method, path string }{
 // readRoutes are the reads in those same clusters. A member keeps all of them —
 // this gate refuses writes, it does not blind anyone.
 //
-// NOT here: GET /api/v1/approvals. It is OWNERSHIP-scoped for a member (item 2)
+// Not here: GET /api/v1/approvals. It is ownership-scoped for a member (item 2)
 // rather than a flat pass-through, which needs a store/Approvals fake that can
 // answer "which runs did this principal create" — rbacServer's fakeApprovals
 // models approvals only, not run ownership. The chi.Walk-enumerated matrix in
-// authz_test.go does NOT cover that behaviour: it classifies the route
+// authz_test.go does not cover that behaviour: it classifies the route
 // classMember, but the classMember arm only calls assertNotBlocked, which reads
-// a status code and never inspects the body, so it cannot see WHICH rows come
+// a status code and never inspects the body, so it cannot see which rows come
 // back. The real coverage lives in approvals_list_test.go
 // (TestListApprovals_MemberSeesOnlyTheirOwnRuns and its fail-closed twin) and,
-// for the JOIN those rest on, in internal/store's
+// for the join those rest on, in internal/store's
 // TestPG_ListApprovalsPageByRunCreator.
 //
-// NOT here either: GET /api/v1/site-config, which is in gatedRoutes above. It
-// returns the WHOLE site-config document — the upstream-proxy secret ref, every
+// Not here either: GET /api/v1/site-config, which is in gatedRoutes above. It
+// returns the whole site-config document — the upstream-proxy secret ref, every
 // integration's secret_name, and the internal proxy/SCM/artifact hosts — so
 // "this gate refuses writes, it does not blind anyone" is the wrong rule for it:
-// the read IS the disclosure. Its sibling reads GET /sources,
+// the read is the disclosure. Its sibling reads GET /sources,
 // /sources/{id} and /base-images are gated with it and asserted by the
 // chi.Walk-enumerated matrix in authz_test.go rather than duplicated here, the
 // same division of labour the approvals note above describes.
@@ -278,7 +278,7 @@ var readRoutes = []string{
 }
 
 // TestRequireOperator_ViewerRefusedOnEveryGatedRoute: a signed-in human with the
-// MEMBER role must be refused on every gated route.
+// member role must be refused on every gated route.
 func TestRequireOperator_ViewerRefusedOnEveryGatedRoute(t *testing.T) {
 	srv := rbacServer(t, rbacOperator)
 	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleMember)

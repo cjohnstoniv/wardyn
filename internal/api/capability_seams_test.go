@@ -393,7 +393,7 @@ func TestInlinePolicy_SecretNarrowing(t *testing.T) {
 }
 
 // TestInlinePolicy_DropsAreAggregatedPerReason: a spec that loses many things
-// produces ONE event per reason, not one per thing, and the ceiling drop is
+// produces one event per reason, not one per thing, and the ceiling drop is
 // among them rather than a bare warning.
 func TestInlinePolicy_DropsAreAggregatedPerReason(t *testing.T) {
 	h := capPolicyServer(t, nil, map[string]bool{capEgressHost: true, capSecret: true})

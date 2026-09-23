@@ -85,8 +85,8 @@ func TestOverageWidensRole(t *testing.T) {
 	}
 }
 
-// TestOverageLoginDeniedNotPromoted is the end-to-end pin: ONE human, ONE role
-// map, ONE default, and the only difference between the two legs is whether
+// TestOverageLoginDeniedNotPromoted is the end-to-end pin: one human, one role
+// map, one default, and the only difference between the two legs is whether
 // the IdP sent the claim.
 //
 // Leg 1 (claim present): "walled-contractors" maps to member, so the human is

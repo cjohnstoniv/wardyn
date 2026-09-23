@@ -93,7 +93,7 @@ func installCanaryReactor(t *testing.T, cs *fake.Clientset, unenforced bool) {
 }
 
 // installCanaryReactorExitCodes is installCanaryReactor generalized to an
-// ARBITRARY phase B exit code — the unexpected-exit-code test scripts 128 (a
+// arbitrary phase B exit code — the unexpected-exit-code test scripts 128 (a
 // StartError shape) to prove that only exactly 0 or 1 is ever read as a
 // verdict; anything else is indeterminate.
 func installCanaryReactorExitCodes(t *testing.T, cs *fake.Clientset, phaseAExit, phaseBExit int32) {

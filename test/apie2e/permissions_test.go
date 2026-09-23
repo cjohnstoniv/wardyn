@@ -69,7 +69,7 @@ func TestPermissions_AdminRoundTrip(t *testing.T) {
 		t.Errorf("created grant = %+v (want allow + server-assigned created_by)", created)
 	}
 
-	// POST again, same natural key: 200 and the SAME row, effect flipped
+	// POST again, same natural key: 200 and the same row, effect flipped
 	regranted := postGrant(t, grants, http.StatusOK, map[string]any{
 		"subject_type": "user", "subject": subject,
 		"capability": "egress_host", "value": host, "effect": "deny",
@@ -135,7 +135,7 @@ func TestPermissions_AdminRoundTrip(t *testing.T) {
 		t.Errorf("PUT enforcement with unknown kind status = %d, want 400 (body=%s)", status, raw)
 	}
 
-	// GET /me/capabilities: the caller's OWN set
+	// GET /me/capabilities: the caller's own set
 	status, raw = doAdmin(t, http.MethodGet, h.srv.URL+"/api/v1/me/capabilities", nil)
 	if status != http.StatusOK {
 		t.Fatalf("GET /me/capabilities status = %d, want 200 (body=%s)", status, raw)

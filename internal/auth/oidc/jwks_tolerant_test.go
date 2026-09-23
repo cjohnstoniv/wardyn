@@ -181,7 +181,7 @@ func TestFilterJWKSPassesThroughWhatItDoesNotUnderstand(t *testing.T) {
 }
 
 // TestTolerantJWKSEndToEndLogin is the wiring pin: a behavioural floor that
-// talks to go-oidc DIRECTLY
+// talks to go-oidc directly
 // stays green while Wardyn's own login is down, because nothing proves the
 // Authenticator actually fetches its key set through the tolerant client.
 //

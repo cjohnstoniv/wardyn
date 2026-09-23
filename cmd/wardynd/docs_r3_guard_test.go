@@ -609,7 +609,7 @@ func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
 
 // TestLiteralIPRedirectDocsNameThePortScope pins OPERATIONS.md and
 // THREAT-MODEL.md's "scoped to that address" claim to what
-// substituteArtifactEgress writes: a PORT-QUALIFIED entry, so the trust it
+// substituteArtifactEgress writes: a port-qualified entry, so the trust it
 // grants is to `to:port` and not to that address on any port.
 //
 // The guard is derived against the tree, so the docs can never describe a
@@ -708,7 +708,7 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 			t.Fatalf("revokeNote no longer says %q — re-derive the doc row before trusting this guard", want)
 		}
 	}
-	// The mint has a discard door that DOES call GitHub's endpoint, so a blanket
+	// The mint has a discard door that does call GitHub's endpoint, so a blanket
 	// "wardyn does not call it" is false. Neither this row nor this note may say
 	// it while discardMinted exists.
 	if strings.Contains(note, "wardyn does not call") {
@@ -1080,9 +1080,9 @@ func TestDataFlowAuditSinkRowCarriesTheOutageQualifier(t *testing.T) {
 // So the rule here is the one the live-citation guard can then enforce: in
 // these rows every site is spelled out in full, and no bare `:N` shorthand is
 // left for a reader (or a guard) to resolve by guesswork. What "in full" means
-// is a SYMBOL — `path/file.go#Symbol`, resolved with go/parser — because a
+// is a symbol — `path/file.go#Symbol`, resolved with go/parser — because a
 // line-anchored form makes every insertion above a cited line a failure of the
-// required build check. The COUNT is what this
+// required build check. The count is what this
 // guard adds over its neighbour: a row that names one of several emitters
 // still tells an operator the others do not exist.
 func TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite(t *testing.T) {

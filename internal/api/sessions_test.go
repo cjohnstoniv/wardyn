@@ -246,8 +246,8 @@ func TestRevokeSessions_AuditEmitted(t *testing.T) {
 // TestSecurityAdminRouteTier (authz_test.go) probes this route with
 // bodyFor("POST") == "{}", which 400s in handleRevokeSessions' default arm
 // before any target is named, so it proves only that the router gate admits a
-// security_admin, and the other tests in this file use an ADMIN caller. This
-// one names a super admin as the TARGET, so adding a target-role guard reds
+// security_admin, and the other tests in this file use an admin caller. This
+// one names a super admin as the target, so adding a target-role guard reds
 // here.
 //
 // The reasoning is on handleRevokeSessions; the short form is that revocation
@@ -342,7 +342,7 @@ func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
 // time-critical half of incident response, and both the CLI flag help and
 // OPERATIONS.md advertise "sub/email". On any IdP where the two differ — Entra,
 // whose sub is an opaque per-app identifier, the shape the SSO work targets —
-// keying on the OIDC sub ALONE would stamp a cutoff for the email that matches
+// keying on the OIDC sub alone would stamp a cutoff for the email that matches
 // nobody and sweeps no tokens, and the responder's only feedback would be 204
 // plus an append-only outcome=success row.
 //

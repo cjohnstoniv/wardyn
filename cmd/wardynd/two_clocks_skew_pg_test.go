@@ -23,7 +23,7 @@ package main
 //     margin, so a few minutes of skew ahead STOPS an actively-attached run and
 //     revokes its credentials; skew behind never reaps at all.
 //
-// The SKEW is simulated honestly, the way session_revocation_clock_pg_test.go
+// The skew is simulated honestly, the way session_revocation_clock_pg_test.go
 // does it: by handing the app-clock seam a clock that runs ahead of the
 // database's — store.PG.Now for the stamps, lifecycle.Config.Now for the
 // measurement — and stamping everything wardynd would stamp from that same fast
@@ -231,7 +231,7 @@ func TestPG_AFastClockDoesNotReapAnActiveRun(t *testing.T) {
 	// 30s of TouchDebounce slack, which is the finding: the skew is added
 	// directly to the measured age, so it only has to exceed the policy.
 	run := skewedRun(t, pg, 60)
-	// The attach keepalive, which stamps updated_at with the DATABASE's now() —
+	// The attach keepalive, which stamps updated_at with the database's now() —
 	// as does every writer of that column but CreateRun.
 	if err := pg.TouchRun(ctx, run.ID); err != nil {
 		t.Fatalf("TouchRun: %v", err)
@@ -284,7 +284,7 @@ func TestPG_AFastClockStampsARunsUpdatedAtOnTheDatabaseClock(t *testing.T) {
 			"Every other writer of this column uses now(); this one bound wardynd's clock, so the row the idle "+
 			"reaper measures was born %s in the future of the clock it measures with", run.UpdatedAt, at, twoClocksSkew)
 	}
-	// And it is not now() EITHER: a run whose struct was stamped earlier in the
+	// And it is not now() either: a run whose struct was stamped earlier in the
 	// request keeps that instant, back-dated by its own age.
 	old := types.AgentRun{
 		ID: uuid.New(), CreatedAt: twoClocksFastClock(), UpdatedAt: twoClocksFastClock().Add(-90 * time.Second),

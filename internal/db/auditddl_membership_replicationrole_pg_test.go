@@ -3,7 +3,7 @@
 
 package db
 
-// PIN for AuditDDLProtected's FOURTH leg — the session_replication_role one —
+// Pin for AuditDDLProtected's fourth leg — the session_replication_role one —
 // following role membership the way the first three legs do.
 //
 // The shape: GRANT SET ON PARAMETER session_replication_role TO admin; GRANT
@@ -11,7 +11,7 @@ package db
 // FALSE — app holds no such grant of its own and inherits nothing — so a leg
 // that asked only that would report the deployment PROTECTED. app can
 // nonetheless run SET ROLE admin; SET session_replication_role = 'replica';
-// RESET ROLE and, back as ITSELF, append rows past all three simply-enabled
+// RESET ROLE and, back as itself, append rows past all three simply-enabled
 // audit triggers.
 // This test executes that bypass rather than arguing it (the INSERT comes back
 // with row_hash NULL, proving the chain trigger did not fire) and then asserts
@@ -97,8 +97,8 @@ func TestPG_AuditDDLProtectedFollowsMembershipToTheReplicationRoleGrant(t *testi
 	}
 	t.Cleanup(appPool.Close)
 
-	// PRECONDITION, and it is the whole point: none of the first three legs
-	// fire, AND a fourth leg that asks has_parameter_privilege alone answers
+	// Precondition, and it is the whole point: none of the first three legs
+	// fire, and a fourth leg that asks has_parameter_privilege alone answers
 	// false — so a verdict of PROTECTED here is exactly what that leg would
 	// return.
 	var superLeg, ownerLeg, triggerLeg, ownGrant, memberOfAdm bool

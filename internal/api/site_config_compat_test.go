@@ -96,7 +96,7 @@ func TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName(t *testing.T) {
 	}
 
 	// The anti-forgetting half, and the reason this is a rule rather than a
-	// list of hand-rescued fields: the NEXT key added to types.SiteConfig has
+	// list of hand-rescued fields: the next key added to types.SiteConfig has
 	// the same footgun. Every key must sit on one declared side of the v0.6.6
 	// line.
 	t.Run("every SiteConfig key has a decided compatibility side", func(t *testing.T) {

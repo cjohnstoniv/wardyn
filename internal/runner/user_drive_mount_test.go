@@ -68,7 +68,7 @@ func TestParseUserDriveHostRoots(t *testing.T) {
 		}
 	})
 
-	// A root under a DENIED BIND PREFIX is dead exactly as "/" is, and must be
+	// A root under a denied bind prefix is dead exactly as "/" is, and must be
 	// refused as loudly: UserDriveHostRootCheck runs ValidateMountSource before
 	// it ever compares against the roots, so /dev/shm, a share mounted under
 	// /var/run, or a relocated Docker data-root under /var/lib/docker would
@@ -195,7 +195,7 @@ func TestUserDriveHostRootCheck(t *testing.T) {
 		t.Error("a symlink out of the ceiling was accepted — a lexical match would have missed it")
 	}
 
-	// The spelling table. withinAnyRoot resolves BOTH sides, so a ceiling and a
+	// The spelling table. withinAnyRoot resolves both sides, so a ceiling and a
 	// drive row may name one tree by two different paths — which is the ordinary
 	// operator shape rather than an edge case: /srv/homes is a symlink to the
 	// mount point on plenty of hosts, and an admin fills the form in from
@@ -353,7 +353,7 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 		t.Errorf("resolved path = %q, want the link's target %q", got, wantElsewhere)
 	}
 
-	// The same spelling table as the authoring check, plus the rule only a BIND
+	// The same spelling table as the authoring check, plus the rule only a bind
 	// has: the root is resolved before the comparison, so a ceiling naming the
 	// link and a source naming the real tree (or the other way round) agree —
 	// and the strict-subdirectory rule survives that resolution, which is the

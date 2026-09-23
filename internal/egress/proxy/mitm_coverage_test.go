@@ -32,7 +32,7 @@ const bedrockVPCEHost = "vpce-0abc1234.bedrock-runtime.us-east-1.vpce.amazonaws.
 //
 // If serveMITMRequest ran inspectForwardBody only when `mitmSource ==
 // ruleSourceArtifactMITM` (i.e. only when !isLLMHost), a matcher change such as
-// widening isBedrockHost to the PrivateLink form would MOVE vpce Bedrock hosts
+// widening isBedrockHost to the PrivateLink form would move vpce Bedrock hosts
 // from the artifact branch (scanned) to the LLM branch, where channelForHost is
 // ChannelGeneric and classifyLLM maps that to scanNone: the body would stream
 // through unscanned and the row would be a bare `scan:mitm` allow with no scan
@@ -113,8 +113,8 @@ func mitmPost(t *testing.T, proxyURL string, caPEM []byte, host, path, body stri
 // decidable without the port.
 //
 // A clamp inside handleConnect's isCorpMITMHost branch alone would let a port
-// MISMATCH fall through to `if p.isLLMHost(host)` -> mitmLLMHost, which
-// consults no port at all. Any operator-configured MITM host that ALSO
+// mismatch fall through to `if p.isLLMHost(host)` -> mitmLLMHost, which
+// consults no port at all. Any operator-configured MITM host that also
 // satisfies isLLMHost — a bedrock/vpce host, which dispatch itself authors
 // onto MITMHosts, or a configured gateway host — would then be TLS-terminated
 // and credential-injected on ports the operator never configured.

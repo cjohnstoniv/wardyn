@@ -35,7 +35,7 @@ func (f *fakeSweepImageBuilder) SweepOrphanedBuilds(context.Context) error {
 // TestStartBackgroundWorkers_ReconcilesBootIndependentOfRunner pins the boot
 // reconcile at its actual call site: api.Server.ReconcileOnBoot already
 // self-limits correctly on a nil Runner (internal/api/reconcile.go runs the
-// envbuild sweep BEFORE checking s.cfg.Runner), so this package's own call
+// envbuild sweep before checking s.cfg.Runner), so this package's own call
 // to it must not be wrapped in `if run != nil` — that would leave a `-runner
 // none -envbuild` headless-API deployment never sweeping orphaned build
 // containers even though ReconcileOnBoot is fully able to. Constructs

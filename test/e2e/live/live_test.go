@@ -189,7 +189,7 @@ func TestLive_RealModel(t *testing.T) {
 			})
 		}
 
-		// There is no COMPOSER sub-test ("AI Run Composer -> real sandbox ->
+		// There is no composer sub-test ("AI Run Composer -> real sandbox ->
 		// graded"): POST /api/v1/runs/compose does not exist. The paths above
 		// cover what mattered about it: a real model driving a real sandbox to
 		// a graded result.

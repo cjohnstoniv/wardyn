@@ -121,7 +121,7 @@ func TestADOEgressDomains(t *testing.T) {
 // single-lane", the sibling of TestBrokeredRunWithholdsSSHGrantEnv. git_pat is
 // not exempt from the three seams on the reasoning that such a grant is "already
 // dead twice over": one of those two deaths is wardyn-git-helper's in-sandbox
-// refusal, which binds only a caller that asks GIT for the credential. An agent
+// refusal, which binds only a caller that asks git for the credential. An agent
 // that POSTs the mint route never meets it, so the surviving barrier would be a
 // name-keyed egress deny that does not bind a raw-IP CONNECT under
 // allow_all_egress. Withholding the grant id is what makes the credential absent

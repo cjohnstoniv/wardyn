@@ -124,7 +124,7 @@ const (
 // ownerTier names WHICH ADMIN TIER an owner-scoped route's admin bypass belongs
 // to. Required whenever class == classOwner, the same way entity already is.
 //
-// Why the table needed A third dimension (F155). routeMatrix is what routes.go
+// Why the table needed a third dimension (F155). routeMatrix is what routes.go
 // calls authoritative, and classAdmin/classSecurity carry the tier so that a
 // route wired to the wrong predicate reddens TestSecurityAdminRouteTier.
 // classOwner carried none, so all 16 owner-scoped routes were SKIPPED by that
@@ -287,9 +287,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// cascade across every run in the deployment from one call, and the host is
 	// one of the three axes securityOps never gets.
 	//
-	// It is not justified by reach INTO runs: the sweep skips every non-terminal
-	// run (it reaps the sandbox of runs that have ALREADY ended), and the
-	// security tier CAN stop a foreign run, on purpose — ownsRunOrAdmin is
+	// It is not justified by reach into runs: the sweep skips every non-terminal
+	// run (it reaps the sandbox of runs that have already ended), and the
+	// security tier can stop a foreign run, on purpose — ownsRunOrAdmin is
 	// isSecurityOperator, so kill admits it on any run. See
 	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
 	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
@@ -298,7 +298,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// already puts on the security tier (classSecurity below).
 	"POST /api/v1/admin/devices/enrolment-tokens": {class: classAdmin},
 
-	// security (0.7 §B: admin OR security_admin; a member still 403s)
+	// security (0.7 §B: admin or security_admin; a member still 403s)
 	// The admin twins of /me/tokens: the deployment-wide inventory names other
 	// humans, and revoke-any is the remediation path for a token whose owner was
 	// demoted or has left (migration 0045's stamp ceiling). Incident response,
@@ -752,9 +752,9 @@ func TestAuthzMatrix(t *testing.T) {
 		t.Fatalf("seed device: %v", err)
 	}
 
-	// discover every ACTUAL route via chi.Walk; classify or fail
+	// discover every actual route via chi.Walk; classify or fail
 	//
-	// Both shipped configurations are walked, and the UNION is what must be
+	// Both shipped configurations are walked, and the union is what must be
 	// classified. UIDir decides the root route — `GET /*` with a console,
 	// `GET /` without — so walking one server alone asserts completeness for a
 	// router half the deployments do not run. The shipped image sets

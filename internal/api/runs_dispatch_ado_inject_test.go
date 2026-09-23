@@ -441,7 +441,7 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	assertADOPlainLaneRefused(t, cfg.Listen, seen)
 }
 
-// The wired source on A deployment with no ENTRA row is indistinguishable from
+// The wired source on a deployment with no Entra row is indistinguishable from
 // NO SOURCE: same sign-in answer, and the console login is not widened.
 func TestADOSignIn_UnconfiguredSourceAnswersLikeNoSource(t *testing.T) {
 	answer := func(src ADOEntraSource) (int, string, bool) {

@@ -40,7 +40,7 @@
 // A SECOND test (TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates)
 // pins the capability-grant resolver (Server.capScan in capabilities.go)
 // against the same truncation: it must honour the truncation bit, or a group
-// DENY grant whose group fell off the cookie cap silently stops matching for
+// deny grant whose group fell off the cookie cap silently stops matching for
 // that token.
 package api
 
@@ -252,8 +252,8 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 
 // TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates: the governance resolver
 // treats a truncated snapshot as unanswerable (effectiveCeiling in governance.go), and the
-// CAPABILITY resolver (capScan in capabilities.go) must too. If capScan discards `stale`
-// and never reads the truncation bit, a group DENY grant written against the group that
+// capability resolver (capScan in capabilities.go) must too. If capScan discards `stale`
+// and never reads the truncation bit, a group deny grant written against the group that
 // fell off the cap matches nothing for this token, and the seam answers "allowed".
 //
 // The seam under test is capAllowed itself, reached through the real
@@ -261,7 +261,7 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 // (member decides an egress approval), narrowMemberInlinePolicy in
 // inline_policy.go and memberVisibleOperatorSecretNames in secrets.go take.
 // None of those seams is preceded by an effectiveCeiling call, so on a
-// deployment with group DENY grants but no group governance
+// deployment with group deny grants but no group governance
 // assignments, capAllowed is the only thing that can answer 403.
 func TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates(t *testing.T) {
 	srv, pg, _ := truncProbeServer(t)

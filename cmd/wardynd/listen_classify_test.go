@@ -252,7 +252,7 @@ func TestListenIsRoutablePublicResolvesHostnames(t *testing.T) {
 // -e WARDYN_LISTEN` with no value, a compose `WARDYN_LISTEN=` passthrough,
 // or `-listen=`) must not survive to net/http, whose Server.Addr == "" means
 // ":http" — 0.0.0.0:80 — and every classifier reads "" as "cannot classify",
-// which would skip ALL THREE listen-based boot refusals on the way there. An
+// which would skip all three listen-based boot refusals on the way there. An
 // empty bind states no intent, so it falls back to the same default the
 // -listen usage string advertises.
 func TestEmptyListenNeverReachesTheClassifiers(t *testing.T) {

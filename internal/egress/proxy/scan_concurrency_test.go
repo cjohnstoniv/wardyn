@@ -43,7 +43,7 @@ func (b *blockingBody) Read(p []byte) (int, error) {
 }
 
 // TestScanBufferedBodyBoundsConcurrentBuffering: the number of request bodies
-// buffered+extracted AT ONCE has to be bounded, because the extractor's
+// buffered+extracted at once has to be bounded, because the extractor's
 // live-heap amplification (~5.3x, measured, and independent of the detector set)
 // against a 32 MiB per-body cap does not fit twice inside the proxy sidecar's
 // hard 256 MiB cgroup ceiling: unbounded, one in-cap 30 MiB body peaks at ~158

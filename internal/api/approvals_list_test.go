@@ -114,7 +114,7 @@ func TestListApprovals_PagedLister(t *testing.T) {
 // assertNotBlocked — a status code, never the body — so it cannot see WHICH rows
 // come back.
 //
-// COUNTERFACTUAL: deleting the whole member branch from handleListApprovals, so
+// Counterfactual: deleting the whole member branch from handleListApprovals, so
 // a member is served the fleet-wide queue, must fail this test; the authz matrix
 // cannot see it.
 func TestListApprovals_MemberSeesOnlyTheirOwnRuns(t *testing.T) {

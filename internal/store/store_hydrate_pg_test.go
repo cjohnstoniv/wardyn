@@ -173,7 +173,7 @@ func TestPG_SourceScanSeedsOwnContract(t *testing.T) {
 }
 
 // TestPG_SourceScanSeed_RebuildDropsStaleScanSeededRows pins, at the store,
-// that a rescan's seed REBUILDS the scan_seeded
+// that a rescan's seed rebuilds the scan_seeded
 // subset of a source's contract instead of only filling gaps, so a name a
 // prior scan found but this one no longer does is DROPPED — while an
 // operator's own row survives untouched regardless of what the new seed
@@ -223,7 +223,7 @@ func TestPG_SourceScanSeed_RebuildDropsStaleScanSeededRows(t *testing.T) {
 	}
 	assertRebuilt(t, "fenced", got.Requirements)
 
-	// The other half: an EMPTY (non-nil) seed — a rescan that legitimately
+	// The other half: an empty (non-nil) seed — a rescan that legitimately
 	// finds nothing — must still drop stale scan_seeded rows, not leave them
 	// stranded because an empty map serialized to SQL NULL, indistinguishable
 	// from "scan failed, don't touch anything".

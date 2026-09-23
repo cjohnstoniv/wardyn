@@ -166,7 +166,7 @@ func TestInstallSh_EnvWrittenUnderRestrictiveUmask(t *testing.T) {
 }
 
 // TestInstallShGuards_AreNotSatisfiedByComments is the permanent counterfactual
-// for the two guards above: each case DELETES the one executable line that
+// for the two guards above: each case deletes the one executable line that
 // closes a settled finding, leaves every comment that discusses it in place,
 // and requires the guard to notice. A guard that does not strip comments stays
 // green on all three mutations while scripts/test-install-sh-trust.sh goes red.

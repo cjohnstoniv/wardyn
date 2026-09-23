@@ -21,7 +21,7 @@ import (
 //
 // F269 gave GET /me the launch door's own bind DECISION so the console would
 // stop offering a mount the create path refuses. What came with it is that a
-// Display read on A timer now performs the share probe: up to two uncancellable
+// Display read on a timer now performs the share probe: up to two uncancellable
 // filesystem syscalls, each bounded at five seconds, on a path the operator
 // mounted. The syscall takes no context, so every probe the bound gives up on
 // leaves a thread in the kernel until the mount answers — and on a hard mount
@@ -318,7 +318,7 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 }
 
 // TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot: the bound this file's
-// header promises is per REQUEST, not per ROOT.
+// header promises is per request, not per root.
 //
 // driveShareProbe bounds each probe at driveShareProbeTimeout and remembers the
 // strand — but that memory only short-circuits the SECOND request. On the FIRST
@@ -330,7 +330,7 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 //
 // Honest about what this pins: no unit test can make EvalSymlinks/stat actually
 // block (that needs a real hung NFS mount), so the elapsed assertion below is a
-// FORWARD pin over the strand short-circuit and the deadline together, not a
+// forward pin over the strand short-circuit and the deadline together, not a
 // reproduction of the multi-root wait. What the deadline buys is stated at
 // userDriveHostRootsUsableWithin and driveHostRootNesting.
 func TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot(t *testing.T) {

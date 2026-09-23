@@ -22,7 +22,7 @@ import (
 )
 
 // This file locks down decision SCOPES (once / run / until / always). Every test
-// here is a fail-OPEN guard: the failure mode each one catches is a
+// here is a fail-open guard: the failure mode each one catches is a
 // host reaching the internet with no human decision behind it, which is exactly
 // the class a green build cannot see.
 //
@@ -65,8 +65,8 @@ func seed(a *approvalClient, host string, st hostApproval) {
 }
 
 // TestOnceServedToExactlyOneConcurrentResolver is the headline guard: a cached
-// `once` grant must be spent by exactly ONE of N racing callers. Code that
-// snapshotted state under the lock and returned AFTER unlocking would let every
+// `once` grant must be spent by exactly one of N racing callers. Code that
+// snapshotted state under the lock and returned after unlocking would let every
 // racer observe apApproved, making the "one connection" promise a lie bounded
 // only by how many goroutines happen to arrive.
 func TestOnceServedToExactlyOneConcurrentResolver(t *testing.T) {
@@ -155,7 +155,7 @@ func TestConsumedOnceDoesNotReapproveViaStaleID(t *testing.T) {
 }
 
 // TestStalePollerCannotResurrectConsumedEntry covers the fifth leak, reachable
-// only BECAUSE consume introduces apNone resets: two callers can both pass
+// only because consume introduces apNone resets: two callers can both pass
 // needPoll whenever a round trip outlives pollInterval, and the slow one must not
 // relock and write its result onto an entry a sibling has already spent. The id
 // discriminator is what stops it.
@@ -202,7 +202,7 @@ func TestStalePollerCannotResurrectConsumedEntry(t *testing.T) {
 }
 
 // TestResolveWaitOnceReleasesExactlyOneHolder: each held connection runs its own
-// ticker and polls the same approval, so if every holder returned its OWN poll
+// ticker and polls the same approval, so if every holder returned its own poll
 // result, up to maxHolds callers would consume a single `once`. The control plane
 // cannot help — it does not know about consumption — so the cache is the only
 // place the spend is recorded.

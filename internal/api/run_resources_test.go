@@ -57,7 +57,7 @@ func kvExecSession(stdout string) *runner.ExecSession {
 // A run with no sandbox is a 409, and writes NO audit row.
 //
 // Handing an empty ref to ExecStream would error into the failure branch: a
-// 500 plus a run.resources failure row EVERY 4 SECONDS per open tab, for a
+// 500 plus a run.resources failure row every 4 seconds per open tab, for a
 // PENDING/STARTING run that simply is not up yet — against a handler whose
 // own comment says failures are "the rare, interesting case". It would also
 // disagree with the Files widget beside it in the same rail, which returns a

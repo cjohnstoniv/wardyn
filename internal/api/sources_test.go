@@ -156,7 +156,7 @@ func TestSources_ReAddAppliesRenameOnIdentityHit(t *testing.T) {
 	}
 }
 
-// A missing --locator must report the LOCATOR error, not the
+// A missing --locator must report the locator error, not the
 // derived-name symptom — Name is empty only because it derives from an empty
 // locator, so the locator-specific message has to win.
 func TestSources_MissingLocatorReportsLocatorError(t *testing.T) {
@@ -204,7 +204,7 @@ func TestSources_DeleteInUseIsLoud(t *testing.T) {
 		t.Error("a refused delete must not delete")
 	}
 
-	// A forced delete's response body NAMES the workspaces it just
+	// A forced delete's response body names the workspaces it just
 	// detached — the operator's only visibility, since nothing 422s downstream
 	// (force silently narrows those workspaces to their remaining sources).
 	forced := do(t, srv, http.MethodDelete, "/api/v1/sources/"+id.String()+"?force=1", adminToken, "")

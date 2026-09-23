@@ -226,8 +226,8 @@ func TestRun_UploadURL(t *testing.T) {
 	}
 }
 
-// TestRun_UploadURL_ServerError pins that a failed recording UPLOAD is
-// NON-FATAL. The agent already ran, so wardyn-rec must NOT turn a delivery
+// TestRun_UploadURL_ServerError pins that a failed recording upload is
+// non-fatal. The agent already ran, so wardyn-rec must not turn a delivery
 // error into a non-zero exit (which the runner would mis-map to RunFailed).
 func TestRun_UploadURL_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

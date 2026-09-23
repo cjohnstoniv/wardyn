@@ -56,7 +56,7 @@ type mountSummary struct {
 // assertMountSet asserts the agent's applied mounts are EXACTLY want — the whole
 // slice, compared as a sorted set, never a member of it.
 //
-// Why the set and not A lookup. Every mount assertion in this package finds its
+// Why the set and not a lookup. Every mount assertion in this package finds its
 // mount by target (findMount, or an inline loop) and checks that one, which says
 // nothing at all about what ELSE the driver attached. A `mount.Mount{Type:
 // mount.TypeBind, Source: "/", Target: "/work/host"}` appended in agentMounts —
@@ -238,12 +238,12 @@ func TestCreateSandbox_DeniedMountsRejected(t *testing.T) {
 		{"empty-source", runner.Mount{Source: "", Target: "/work/x"}},
 		{"bad-target-prefix", runner.Mount{Source: "/home/u/repo", Target: "/etc"}},
 		{"bad-target-usr", runner.Mount{Source: "/home/u/repo", Target: "/usr/local"}},
-		// The reserved target, arriving from a STORED POLICY ROW.
+		// The reserved target, arriving from a stored policy row.
 		// validatePolicySpec refuses it at authoring, but a row written before the
 		// reservation existed is exactly what this defense-in-depth re-check is
 		// for. The driver's check must carry the reservation:
 		// runner.ValidateMount's ValidateTarget alone does not, so the bind would
-		// land INSIDE the member's drive — nesting over a rw bind makes runc mkdir
+		// land inside the member's drive — nesting over a rw bind makes runc mkdir
 		// the intermediate directories in the share, and whichever mount lands
 		// second shadows the other.
 		{"reserved-drive-target", runner.Mount{Source: "/home/u/repo", Target: runner.DriveTarget}},
@@ -264,7 +264,7 @@ func TestCreateSandbox_DeniedMountsRejected(t *testing.T) {
 	}
 }
 
-// USER DRIVES (host_path): the same deny matrix, one object up
+// User drives (host_path): the same deny matrix, one object up
 
 // driveHostRoot makes a real, symlink-resolved root with this person's home
 // directory under it — the shape a host_path drive actually has (the OPERATOR
@@ -433,14 +433,14 @@ func TestCreateSandbox_HostPathDriveHomeMustResolveToThisPrincipal(t *testing.T)
 // WARDYN_USER_DRIVE_HOST_ROOTS is the OPERATOR's outer bound over every drive
 // at once, so with two share drives — one rooted at /srv/a, one at /srv/b,
 // both inside the ceiling — it cannot tell one drive's tree from the other's.
-// A home under A replaced host-side by a link to the SAME-NAMED home under B
+// A home under A replaced host-side by a link to the same-named home under B
 // satisfies every check the ceiling alone offers — inside a configured root,
 // not a root, no denied segment, and `filepath.Base` still says "alice" — and
 // binds drive B's directory, another person's whenever B names "alice" for
 // somebody else.
 //
 // The mount carries the drive's own host_root and the driver asserts the
-// resolved path is a strict subdirectory of THAT root. The ceiling stays as
+// resolved path is a strict subdirectory of that root. The ceiling stays as
 // the
 // outer bound (an admin-authored row must not be able to name a tree the
 // operator never allowed), so both are asserted, and the sub-tests below are
@@ -520,7 +520,7 @@ func TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot(t *testing.T) {
 		}
 	})
 
-	// FAIL CLOSED on a mount that carries no host_root. "" means this
+	// Fail closed on a mount that carries no host_root. "" means this
 	// DriveMount was built by something that does not know the field — an
 	// older control plane, or an in-process caller that assembled the
 	// SandboxSpec itself — and falling through would skip the drive-root check
@@ -741,10 +741,10 @@ func TestCreateSandbox_DriveTargetIsPinnedToTheReservedPath(t *testing.T) {
 // TestDriveMount_HostPathCeilingIsUnconditional pins the ceiling on
 // driveMount, the function that does the conversion (its single caller).
 //
-// A ceiling written `if m.DriveAuthored` is fail-OPEN by shape, since the
+// A ceiling written `if m.DriveAuthored` is fail-open by shape, since the
 // flag's only false state is a refactor that stops setting it. The ceiling is
 // unconditional, so the property worth pinning is the ceiling itself: the
-// SAME call that binds an in-root share refuses when the deployment named no
+// same call that binds an in-root share refuses when the deployment named no
 // roots, with nothing in between that could turn it off. The happy-path half
 // also asserts that source, target and mode arrive verbatim from the
 // resolver, never re-derived here.

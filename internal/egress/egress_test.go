@@ -257,7 +257,7 @@ func TestValidHeaderName(t *testing.T) {
 	}
 }
 
-// The PIN'S query ARM is unambiguous by construction (security re-round
+// The pin's query arm is unambiguous by construction (security re-round
 // SHOULD-1). Pinned here as well as through both proxy lanes, because this is
 // where the rule is decided and the shapes are easier to read without a server
 // in the way.

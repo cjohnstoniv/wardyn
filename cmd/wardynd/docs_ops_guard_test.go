@@ -298,9 +298,9 @@ func TestDocsOpsSessionCookieDocsMatchTheCodec(t *testing.T) {
 }
 
 // TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo pins the disk-cap row to what
-// each substrate does, and the two differ. Docker warns and runs UNCAPPED when a
+// each substrate does, and the two differ. Docker warns and runs uncapped when a
 // cap is demanded but unsupported — it does not fail closed. The k8s substrate
-// SETS the agent container's resources.limits[ephemeral-storage] and the kubelet
+// sets the agent container's resources.limits[ephemeral-storage] and the kubelet
 // enforces it by evicting the pod, so it has no such warning, and "both
 // substrates warn" is false.
 //
@@ -779,7 +779,7 @@ func networkSectionCIDRGuidanceGaps(section, hint string) []string {
 
 // TestDocsOpsNetworkSectionInvertsTheCIDRSDefault: the Network section must
 // not tell an operator to "declare tight cidrs" — the ranges an operator's
-// own machine resolves for a private endpoint are not the ranges the SANDBOX
+// own machine resolves for a private endpoint are not the ranges the sandbox
 // resolves into, so that advice fails runs. The doc must say the opposite
 // (empty cidrs is the default) and must quote the 403's own hint verbatim,
 // not a paraphrase that can drift from it.

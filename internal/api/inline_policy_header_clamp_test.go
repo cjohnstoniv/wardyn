@@ -18,10 +18,10 @@ func apiKeyRuleGrant(host, secret, header, format string) types.GrantSpec {
 	})}
 }
 
-// TestFilterMemberGrants_ReHeaderedGrantDropped is the CLAMP half. The member
+// TestFilterMemberGrants_ReHeaderedGrantDropped is the clamp half. The member
 // pairing check must compare the header and format as well as (host, secret,
 // known_hosts): otherwise a member or profile grant that keeps the operator's
-// blessed pairing and names a DIFFERENT header — or a different format —
+// blessed pairing and names a different header — or a different format —
 // matches the operator's ceiling entry and is kept. That is a re-homing of the
 // operator's blessed
 // secret: the proxy writes the authored header verbatim onto the forwarded
@@ -65,9 +65,9 @@ func TestFilterMemberGrants_ReHeaderedGrantDropped(t *testing.T) {
 	}
 }
 
-// TestValidateEligibleGrant_FormatRule is the VALIDATION half. The sink does
+// TestValidateEligibleGrant_FormatRule is the validation half. The sink does
 // fmt.Sprintf(format, secret) unconditionally (formatInjectionValue), so the
-// policy path and the INTEGRATION authoring path must both reject a format that
+// policy path and the integration authoring path must both reject a format that
 // is not exactly one %s with no CR/LF. One rule (validInjectionFormat), both
 // authoring paths.
 func TestValidateEligibleGrant_FormatRule(t *testing.T) {

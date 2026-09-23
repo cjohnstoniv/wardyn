@@ -13,7 +13,7 @@ import (
 
 // asciiOnlyPredicates are the homes of the "is this string pure ASCII" rule.
 //
-// One LINE per HOME, deliberately: the rule is duplicated, and the point of this
+// One line per home, deliberately: the rule is duplicated, and the point of this
 // guard is that a new copy costs one line to enrol and cannot then answer
 // differently from the others. types.ASCIIOnlySubject is the second home and is
 // commented out because it does not exist on this branch — it lands with lane

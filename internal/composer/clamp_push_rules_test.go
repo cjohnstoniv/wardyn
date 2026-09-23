@@ -97,12 +97,12 @@ func TestClamp_PushRulesMergedWhenBothSet(t *testing.T) {
 // TestClamp_PushRulesDenyPathsUnionIsCaseSensitive: union() (the
 // denied_domains helper) folds case and whitespace, which is correct for a DNS
 // name but wrong for a git path — Linux paths are case- and space-sensitive.
-// union also seeds its seen-set from its FIRST argument (here, the proposal),
+// union also seeds its seen-set from its first argument (here, the proposal),
 // so a member re-typing the ceiling's own rule in a different case would
-// silently DISPLACE the ceiling's spelling, leaving the member with strictly
+// silently displace the ceiling's spelling, leaving the member with strictly
 // weaker effective rules than the operator set — the one security property
 // this field has. clampPushRules uses unionPaths (exact-string) instead, so
-// BOTH spellings survive.
+// both spellings survive.
 func TestClamp_PushRulesDenyPathsUnionIsCaseSensitive(t *testing.T) {
 	ceiling := operatorCeiling(t)
 	ceiling.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}

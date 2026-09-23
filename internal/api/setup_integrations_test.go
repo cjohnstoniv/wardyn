@@ -121,7 +121,7 @@ func TestSetupHarnessTools(t *testing.T) {
 // naming an image-map id the catalog does not know would otherwise never
 // appear in Harnesses, making a fresh pick of it impossible (only a clone of
 // an existing custom-agent run would work, since that flow never consults
-// this list). The invariant is catalog ∪ roster: every catalog row, PLUS any
+// this list). The invariant is catalog ∪ roster: every catalog row, plus any
 // roster row whose id resolves through AgentImages and is not already a
 // catalog id.
 func TestSetupHarnessTools_RosterCustomImageAgentAppended(t *testing.T) {

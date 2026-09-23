@@ -3,10 +3,10 @@
 
 package api
 
-// "View as a NEW member (not signed in)" — the server half. Clamping only the
-// ROLE would leave the admin's own per-user AWS session in place, so an admin
+// "View as a new member (not signed in)" — the server half. Clamping only the
+// role would leave the admin's own per-user AWS session in place, so an admin
 // who has signed in could not reach the one state every new member on a
-// per_user deployment is in. ONE guard at the
+// per_user deployment is in. One guard at the
 // read chokepoint (readAWSSSOBlob, via previewHidesOwnCredential) is what moves
 // every downstream surface into that state, and each case below drives a REAL
 // route rather than the predicate, because the claim is about what the surfaces
@@ -440,7 +440,7 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 // is created inside the preview rather than refused, and the sandbox it
 // dispatches must carry no AWS SSO material.
 //
-// GREEN by construction, and a pin on the direction rather than a reproduction:
+// Green by construction, and a pin on the direction rather than a reproduction:
 // an exec run is not a model run, so no lane credentials it — there is no
 // ungated run shape that resolves Bedrock. If an exec lane ever starts
 // resolving a model credential, this case reds unless the preview moves with

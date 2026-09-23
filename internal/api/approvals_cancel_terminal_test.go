@@ -20,7 +20,7 @@ import (
 // they would keep the header reading "1 waiting", the nav badge counting it, and
 // the Approvals tab rendering live Approve/Deny buttons on a run the same screen
 // labels Killed, until the 24h stale sweeper aged the row out. These tests drive
-// BOTH call sites of the one function — handleKillRun (which does not route
+// both call sites of the one function — handleKillRun (which does not route
 // through finalizeRunTail) and finalizeRunTail itself — plus the deliberate
 // exemption on failAndRevoke.
 
@@ -256,7 +256,7 @@ func TestFailAndRevoke_EmitsNoApprovalCancellation(t *testing.T) {
 	}
 }
 
-// V1-D1: the THIRD terminal writer, and the decide-side backstop
+// V1-D1: the third terminal writer, and the decide-side backstop
 
 // TestIdleStopSeam_CancelsWithRunStopped drives CancelTerminalRunApprovals — the
 // exported seam cmd/wardynd's idle reaper (lifecycleStopper.StopRun) calls after

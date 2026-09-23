@@ -401,9 +401,9 @@ func TestClamp_LLMInspectionInheritsCeiling(t *testing.T) {
 }
 
 // TestClamp_LLMInspectionInheritUnionsSidecarHostIntoAllowedDomains: the
-// AllowedDomains intersection above runs BEFORE the LLMInspection
+// AllowedDomains intersection above runs before the LLMInspection
 // ceiling-inherit block, and internal/api's validateLLMInspection requires
-// the ceiling's detector_sidecar_url host to be an EXACT entry on this SAME
+// the ceiling's detector_sidecar_url host to be an exact entry on this same
 // post-clamp spec's own allowed_domains — so unless the host is unioned in,
 // every compose/profile/inline_policy run under an operator that sets
 // detector_sidecar_url self-rejects. The host must land in the clamped
@@ -450,9 +450,9 @@ func domainsContain(domains []string, want string) bool {
 // inline_policy.llm_inspection must not pass through unclamped when the
 // ceiling sets none — exactly the shipped default.json posture (it sets no
 // llm_inspection at all). That would let a member turn the content-inspection
-// sidecar on and point it (detector_sidecar_url) at ANY URL the wardyn-proxy
+// sidecar on and point it (detector_sidecar_url) at any URL the wardyn-proxy
 // process can reach, or flip intercept_tls, with zero operator opinion in the
-// way. Symmetric with the workspace_mounts drop: an unset ceiling is the FLOOR
+// way. Symmetric with the workspace_mounts drop: an unset ceiling is the floor
 // for this field, not "no opinion".
 func TestClamp_LLMInspectionDroppedUnderNilCeiling(t *testing.T) {
 	ceiling := operatorCeiling(t) // sets no llm_inspection opinion, like default.json
@@ -472,9 +472,9 @@ func TestClamp_LLMInspectionDroppedUnderNilCeiling(t *testing.T) {
 
 // TestClamp_LLMInspectionCopyRedactsSecretValues: the ceiling's
 // llm_inspection is unconditionally inherited (see above), but a
-// compose/profile PROPOSAL is advisory output returned straight to the caller
-// in an HTTP response — it must never carry the resolved secret VALUES, only
-// the NAMES a caller needs to know which secrets are covered. Dispatch alone
+// compose/profile proposal is advisory output returned straight to the caller
+// in an HTTP response — it must never carry the resolved secret values, only
+// the names a caller needs to know which secrets are covered. Dispatch alone
 // resolves names->values, in memory, for the proxy sidecar (see
 // runs_dispatch.go).
 func TestClamp_LLMInspectionCopyRedactsSecretValues(t *testing.T) {
@@ -503,9 +503,9 @@ func TestClamp_LLMInspectionCopyRedactsSecretValues(t *testing.T) {
 
 // TestClamp_GitHubEmptyCeilingRepoListDeniesAll: a member's hand-authored
 // inline_policy github_token grant must not survive Clamp when the ceiling's
-// OWN grant sets no repo allowlist. The SHIPPED default.json ceiling —
+// own grant sets no repo allowlist. The shipped default.json ceiling —
 // resolveRunPolicy's real DefaultPolicy on exactly this path
-// (internal/api/inline_policy.go) — ships EXACTLY this shape ("repos": [], a
+// (internal/api/inline_policy.go) — ships exactly this shape ("repos": [], a
 // template for the composer/profile pipelines to ground, not an "any repo"
 // grant for a raw member), and operatorCeiling(t) above never exercises it,
 // since its own github_token grant carries a non-empty repos list. Loaded
@@ -742,14 +742,14 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 	}
 	// -1 is preserved, not rewritten to 0 with a warning: internal/lifecycle's
 	// reaper skips every run whose policy value is <= 0, so 0 and -1 are the
-	// same never-reaped run, and a rewrite would change the NUMBER and not the
-	// OUTCOME. It would also contradict the value's documented meaning
+	// same never-reaped run, and a rewrite would change the number and not the
+	// outcome. It would also contradict the value's documented meaning
 	// (docs/POLICIES.md's auto_stop_after_sec row; the console's field help
 	// calls -1 "never reaped, stated explicitly — identical behavior to leaving
 	// it out"), warning a member who wrote their intent down but not one who
 	// omitted the field.
 	//
-	// So this asserts the value is preserved, there is no warning, AND the
+	// So this asserts the value is preserved, there is no warning, and the
 	// outcome invariant directly: under a ceiling with no positive maximum,
 	// neither an omitted nor a negative auto_stop leaves the run reapable.
 	for _, proposed := range []int{-1, 0} {

@@ -11,8 +11,8 @@ import (
 
 // TestKillOrderDocs_MatchC002CASFirst: threatmodel/THREAT-MODEL.md and
 // pkg/client/client.go's KillRun doc comment must state the CAS-first kill
-// order for the explicit-kill path (handleKillRun/runs_lifecycle.go, see "WIN
-// THE TERMINAL TRANSITION FIRST"), not sandbox teardown before the state CAS
+// order for the explicit-kill path (handleKillRun/runs_lifecycle.go, see "Win
+// the terminal transition first"), not sandbox teardown before the state CAS
 // — with teardown first, a kill that lost a race to a concurrent
 // forward-transition could revoke credentials out from under a run it no
 // longer owned.

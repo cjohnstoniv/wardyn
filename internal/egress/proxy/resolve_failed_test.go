@@ -3,7 +3,7 @@
 
 package proxy
 
-// A name the proxy could not RESOLVE is not a private-address block.
+// A name the proxy could not resolve is not a private-address block.
 //
 // evaluate() keeps egressTarget's error: stamping every post-resolution
 // denial "builtin:private-ip" would make a resolver outage, an NXDOMAIN and a
@@ -13,7 +13,7 @@ package proxy
 // loosening an SSRF control in response to one.
 //
 // These pins hold both halves: the three resolver outcomes audit as
-// themselves (still DENIED — fail closed either way, only the attribution
+// themselves (still denied — fail closed either way, only the attribution
 // differs), and a host that really does resolve into private space still
 // audits builtin:private-ip with the site-config advice that actually fixes
 // it.

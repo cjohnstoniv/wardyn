@@ -19,7 +19,7 @@ import (
 // procRegistry is what Proxy.httpError and the decision-log sink (maskDecisionBytes)
 // run every sandbox-visible error string and every emitted decision row through.
 // Four proxy-side credential sources feed it — the injector, the GitHub App
-// lane, the LLM-inspection secrets, and the git_pat lane, which mints a RAW
+// lane, the LLM-inspection secrets, and the git_pat lane, which mints a raw
 // operator PAT server-side on the same request path. The git_pat lane must
 // register its PAT too: a lane that re-implements the mint instead of sharing
 // the GitHub lane's skips the AddGlobal beside that mint, and a `glpat-…` then
@@ -28,7 +28,7 @@ import (
 // token, it is a property of the current call sites.
 //
 // The two subtests are deliberately the same assertion against the two lanes:
-// the github_token case is the CONTROL that must keep passing, so a change
+// the github_token case is the control that must keep passing, so a change
 // that unregisters both is not read as "the pin moved".
 func TestBrokeredCredentialsAreMaskRegistered(t *testing.T) {
 	// A decision row shaped like the ones both sinks actually carry, so this

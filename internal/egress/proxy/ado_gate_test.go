@@ -245,7 +245,7 @@ func TestADOGate_UncoveredHostStandsAside(t *testing.T) {
 	}
 }
 
-// One RULE per ref across both doors: a REST push to the run's own branch
+// One rule per ref across both doors: a REST push to the run's own branch
 // namespace needs code_write, exactly as a git push through the broker does
 // (adoRunRefProtected).
 func TestADOGate_RunNamespacePushNeedsCodeWrite(t *testing.T) {

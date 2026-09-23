@@ -47,7 +47,7 @@ func TestSubscriptionDisconnect_IdempotentOnStatusNotOnBodyText(t *testing.T) {
 	}{
 		{"200-removed", http.StatusOK, `{"status":"disconnected"}`, false},
 		{"404-absent-is-success", http.StatusNotFound, `{"error":"no managed credential"}`, false},
-		// The trap: a real failure whose body merely CONTAINS the phrase.
+		// The trap: a real failure whose body merely contains the phrase.
 		{"500-store-error-mentioning-not-found", http.StatusInternalServerError,
 			`{"error":"delete managed credential: pg secretstore: relation \"secrets\" not found"}`, true},
 		{"503-no-secret-store", http.StatusServiceUnavailable, `{"error":"secret store is not configured"}`, true},

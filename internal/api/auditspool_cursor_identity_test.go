@@ -13,14 +13,14 @@ import (
 	"testing"
 )
 
-// TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool pins the cursor IDENTITY
+// TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool pins the cursor identity
 // check.
 //
-// A SIZE BOUND alone (`n < 0 || n > size`) cannot say what the cursor code must
+// A size bound alone (`n < 0 || n > size`) cannot say what the cursor code must
 // hold: that "a cursor past the end of the file describes a file that no longer
 // exists … and honouring it would SKIP un-replayed events, which is the one
 // direction this file never errs in". An offset left over a REPLACED spool that
-// happens to be at least as large is IN range, so a size-bound-only check
+// happens to be at least as large is in range, so a size-bound-only check
 // honours it and Drain begins past lines nothing has replayed — 4 of 5 events
 // replayed, one credential.mint silently lost: a C1 violation, the invariant
 // the whole file exists to hold.

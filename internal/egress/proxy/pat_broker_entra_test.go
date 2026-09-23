@@ -205,7 +205,7 @@ func mustBeGitRefusal(t *testing.T, out string, err error, want string) {
 	}
 }
 
-// A real clone through the broker carries the PERSON'S bearer, and nothing the
+// A real clone through the broker carries the person's bearer, and nothing the
 // sandbox put on the request; the Clone-button spelling (<org>@dev.azure.com)
 // lands on the same broker path; and the bearer is mask-registered by the
 // broker itself before anything can log it.
@@ -243,7 +243,7 @@ func TestADOGitBroker_LegacyHostClone(t *testing.T) {
 	h.finish(t)
 }
 
-// A push on the RUN'S own branch succeeds with code_write.
+// A push on the run's own branch succeeds with code_write.
 func TestADOGitBroker_PushWithCodeWrite(t *testing.T) {
 	h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
 	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
@@ -286,7 +286,7 @@ func TestADOGitBroker_PushWithoutCodeWriteIsRefusedInGitsTerms(t *testing.T) {
 	}
 }
 
-// A push outside the RUN'S branch namespace moves A protected ref — every ref
+// A push outside the run's branch namespace moves a protected ref — every ref
 // is protected until a grant says otherwise, as on the REST gate — and needs
 // policy_bypass.
 func TestADOGitBroker_ProtectedRefNeedsPolicyBypass(t *testing.T) {
@@ -447,7 +447,7 @@ func TestADOGitBroker_HeldPushApprovedForTheRun(t *testing.T) {
 	h.finish(t)
 }
 
-// A ref outside the RUN'S branch namespace asks for policy_bypass, as a
+// A ref outside the run's branch namespace asks for policy_bypass, as a
 // protected ref, not code_write.
 func TestADOGitBroker_HeldNonRunRefAsksPolicyBypass(t *testing.T) {
 	h := newADOGitHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)
@@ -464,7 +464,7 @@ func TestADOGitBroker_HeldNonRunRefAsksPolicyBypass(t *testing.T) {
 	h.finish(t)
 }
 
-// A PACK larger than http.postBuffer makes git send an empty probe POST to
+// A pack larger than http.postBuffer makes git send an empty probe POST to
 // git-receive-pack before the real one (remote-curl's probe_rpc). The probe
 // moves no ref, so it neither asks nor spends: one approval still covers the
 // push.
@@ -497,7 +497,7 @@ func TestADOGitBroker_HeldLargePushProbeDoesNotSpend(t *testing.T) {
 	h.finish(t)
 }
 
-// A NUL on A later command LINE is refused before anything reaches Azure
+// A NUL on a later command line is refused before anything reaches Azure
 // DevOps, in receive-pack terms: "<old> <new> refs/heads/wardyn/<run>/x\0
 // refs/heads/main" on line 2 must not pass as the run's own ref.
 func TestADOGitBroker_NULOnALaterCommandIsRefused(t *testing.T) {

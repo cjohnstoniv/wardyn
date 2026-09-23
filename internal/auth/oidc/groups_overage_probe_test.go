@@ -4,7 +4,7 @@
 // Groups overage. A failure here means the overage marker no longer reaches
 // sessionGroups.
 //
-// Invariant under test: a login whose ID token carries an IdP-side GROUPS
+// Invariant under test: a login whose ID token carries an IdP-side groups
 // OVERAGE marker instead of the groups themselves (Entra ID emits
 // `_claim_names: {"groups": "src1"}` + `_claim_sources` and OMITS `groups`
 // when the user is in more groups than the token limit — 150 for JWTs) must

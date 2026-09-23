@@ -386,9 +386,9 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 
 // TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit pins the ui.open and
 // ui.close Data-fields cells to what the emit passes: `duration_sec` is
-// computed only at CLOSE (s.auditUI's caller at internal/api/uigateway.go
+// computed only at close (s.auditUI's caller at internal/api/uigateway.go
 // passes it in the ui.close call's map literal, not ui.open's), and
-// TestAuditActionsDocCitationsAreLive only checks citation PROXIMITY, never
+// TestAuditActionsDocCitationsAreLive only checks citation proximity, never
 // the Data-fields column's content.
 //
 // Scoped to these two rows rather than a general derived parity check: the
@@ -397,7 +397,7 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 // one built by a helper), several behind indirection the existing forward
 // guard's fixed-point wrapper resolution does not (and does not need to)
 // follow for the ACTION argument. A general version would have to re-derive
-// that whole shape for the DATA argument too; this pins the two rows with the
+// that whole shape for the data argument too; this pins the two rows with the
 // same "read it back out of the source" method instead of hand
 // re-typing a second copy of what the code passes.
 func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
@@ -455,7 +455,7 @@ func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 // invisible precisely because everything passes. So this asserts the view, not
 // the verdict:
 //
-//   - the emitter set is DERIVED and contains all three in-tree emit helpers,
+//   - the emitter set is derived and contains all three in-tree emit helpers,
 //     at the right parameter index: `auditEvent`, (*Provider).audit and
 //     auditFor. A hardcoded set that misses one lets a brand-new action added
 //     through it leave the whole suite green.

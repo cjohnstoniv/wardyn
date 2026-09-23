@@ -56,7 +56,7 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		// where an injected script on this admin-bearing origin may ship data, so
 		// it is checked as a WHOLE SEGMENT (like media-src below), never with
 		// Contains: a Contains check passes with an extra source appended, and
-		// bare `ws:`/`wss:` SCHEMES would match ANY host, bounding nothing at all.
+		// bare `ws:`/`wss:` schemes would match any host, bounding nothing at all.
 		// It is built per request from r.Host, and do() drives every request with
 		// Host 127.0.0.1.
 		const wantConnect = "connect-src 'self' ws://127.0.0.1 wss://127.0.0.1"

@@ -405,7 +405,7 @@ func TestRecordWorkspaceIsSuperAdminOnly(t *testing.T) {
 	// rather than assumed.
 	//
 	// The same tier does not get 404 on GET /workspaces/{id}: that read is
-	// WIDENED deliberately (ownsWorkspaceOrSecurityAdmin in helpers.go). A
+	// widened deliberately (ownsWorkspaceOrSecurityAdmin in helpers.go). A
 	// security admin already lists every workspace and already rewrites any
 	// workspace's approved/denied egress, so refusing it the row — and
 	// especially /observed-egress, the traffic that is the INPUT to the egress

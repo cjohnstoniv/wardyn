@@ -151,9 +151,9 @@ func TestMigrateAppliesAndIsIdempotent(t *testing.T) {
 }
 
 // TestMigrateAdvisoryLockSerializesBoots: Migrate() takes the dedicated
-// session-level advisory lock so a second, concurrent boot BLOCKS until the
+// session-level advisory lock so a second, concurrent boot blocks until the
 // first finishes rather than racing the migration loop. We simulate an
-// in-flight migration on "another boot" by holding the SAME advisory lock on
+// in-flight migration on "another boot" by holding the same advisory lock on
 // a separate connection, then assert a concurrent Migrate() blocks (returns a
 // deadline error) instead of completing; without the lock it would return nil
 // immediately.
@@ -216,7 +216,7 @@ func insertAgentRun(t *testing.T, pool *pgxpool.Pool, state string) (uuid.UUID, 
 func TestAgentRunStateCheckEnforcedLive(t *testing.T) {
 	pool := pgPool(t)
 
-	// ACCEPT: COMPLETED must be insertable.
+	// Accept: COMPLETED must be insertable.
 	if _, err := insertAgentRun(t, pool, "COMPLETED"); err != nil {
 		t.Fatalf("INSERT agent_runs state=COMPLETED rejected by live CHECK: %v; "+
 			"the 0003 COMPLETED fix is not in effect on this DB", err)
@@ -363,7 +363,7 @@ func TestMigrateRestoresADisabledChainTrigger(t *testing.T) {
 // ensureAuditTriggers. The chain trigger is restored because its migrations are
 // replayable; the append-only trigger is defined by 0001 (the whole initial
 // schema), so replaying it at boot to fix one trigger is a bigger blast radius
-// than refusing — but the process must NOT continue silently either.
+// than refusing — but the process must not continue silently either.
 func TestMigrateRefusesWithoutTheAppendOnlyTrigger(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()
@@ -550,7 +550,7 @@ func TestMigrateDoesNotHardenATriggerNobodyHardened(t *testing.T) {
 	}
 }
 
-// the 0048-0054 upgrade set, applied over NON-EMPTY data
+// the 0048-0054 upgrade set, applied over non-empty data
 
 // partialSchemaPool migrates a throwaway schema up to (but NOT including)
 // upTo, and returns a pool pointed at it. It is probeSchemaPool's other half:

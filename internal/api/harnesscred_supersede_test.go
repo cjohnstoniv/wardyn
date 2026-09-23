@@ -294,7 +294,7 @@ func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
 // supersede seam and no live login run, so moving the 409 below the launch (or
 // hoisting the supersede into the handler — a plausible refactor, since the
 // comment at the supersede call already argues about placement) would kill the
-// admin's REAL sign-in from inside a preview with every other test still green.
+// admin's real sign-in from inside a preview with every other test still green.
 // That is the worst possible shape of this feature: a view that destroys the
 // thing it is pretending not to have.
 func TestMemberPreview_SignInRefusalPrecedesTheSupersede(t *testing.T) {

@@ -4,11 +4,11 @@
 package main
 
 // TestConnectAndMigrate_SeparateBudgets pins that connect and migrate get
-// INDEPENDENT timeout budgets, not one shared deadline. With a single ctx
-// bounding BOTH db.Connect and db.Migrate, a slow migration (e.g. an index
+// independent timeout budgets, not one shared deadline. With a single ctx
+// bounding both db.Connect and db.Migrate, a slow migration (e.g. an index
 // build on the unbounded audit table) has no knob separate from the fixed 30s
 // connect budget and crash-loops the upgrade. A migrateTimeout of 0 forces
-// db.Migrate to fail on ITS OWN already-expired deadline while connectTimeout
+// db.Migrate to fail on its own already-expired deadline while connectTimeout
 // stays generous, proving the two are independently controllable.
 //
 // Guarded by WARDYN_TEST_PG: skipped cleanly when unset, must PASS when set.

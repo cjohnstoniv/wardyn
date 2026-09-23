@@ -49,7 +49,7 @@ func (s *partialScanStore) SetSourceScanResultUnfenced(_ context.Context, id uui
 // fails its stat, scanAttachedSources must not return without an audit
 // event recording that sources 0..i-1 already scanned inline first (their
 // side effect — the stat, the profile write — already landed regardless).
-// The failure audit must name the failing source AND list what already
+// The failure audit must name the failing source and list what already
 // succeeded before it.
 func TestScanAttachedSources_FailureAuditsWhatAlreadySucceeded(t *testing.T) {
 	h := newHarness(t)

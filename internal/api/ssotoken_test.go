@@ -170,7 +170,7 @@ func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 
 // TestUploadSSOToken_HalfResolvedCaptureRejected: wardyn-aws-sso's account/role
 // resolution is best-effort and can come up empty (no accounts, a timeout, a
-// malformed response) while every OTHER field is well-formed.
+// malformed response) while every other field is well-formed.
 // awsSSOBlob.valid() requires account_id/role_name because resolveBedrockAuth
 // selects a stored SSO credential ahead of the host-mode ~/.aws mount and
 // static-key lanes: a half-resolved capture that can never satisfy
@@ -196,10 +196,10 @@ func TestUploadSSOToken_HalfResolvedCaptureRejected(t *testing.T) {
 
 // TestUploadSSOToken_MaliciousStartURLRejected is defense in depth: a
 // non-empty check alone on start_url would let a newline-bearing value be
-// baked VERBATIM, with no escaping, into every subsequent Bedrock run's
+// baked verbatim, with no escaping, into every subsequent Bedrock run's
 // ~/.aws/config INI (awsSSOConfigFileContents, runs_bedrock.go's fmt.Sprintf)
 // — smuggling extra INI keys/sections into a file shared across every run that
-// credential mode serves, since the blob is captured ONCE and reused
+// credential mode serves, since the blob is captured once and reused
 // thereafter. start_url takes the same https-URL/no-whitespace guard the
 // operator's own pre-login input takes (validateSSOStartURL, harnesscred.go).
 func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {

@@ -465,7 +465,7 @@ func TestMemberMode_RefusesTokenAndKeyMint(t *testing.T) {
 }
 
 // TestMemberMode_ExistingAPITokenKeepsItsOwnRole is ceiling 4, made
-// executable. The mode is per-SESSION: a `wdn_` token the human already holds
+// executable. The mode is per-session: a `wdn_` token the human already holds
 // replays its own DB-stamped role (apitokens.go), so it still reaches
 // operator-only routes while the very same human's browser cookie is clamped.
 // The 409 mint doors stop NEW credentials; they cannot reach into old ones.
@@ -514,11 +514,11 @@ func sessionCookieFrom(t *testing.T, cookies []*http.Cookie) *http.Cookie {
 // TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker pins the marker on the
 // two in-handler admin-tier refusals.
 //
-// TestMemberMode_AuditRowsNameTheAdmin above pins FOUR sites, and the doc
+// TestMemberMode_AuditRowsNameTheAdmin above pins four sites, and the doc
 // comment on authzDeniedDatum names those four as "every admin-tier refusal".
 // Two more emitters build their own Data map: resolveAlwaysTarget's rule 6
 // (`always` is security-admin-only) and denyMemberField (the
-// `workspaces.llm_cred` arm is `admin_surface`). Both are reachable INSIDE the
+// `workspaces.llm_cred` arm is `admin_surface`). Both are reachable inside the
 // mode by an admin doing exactly what the member Getting Started card invites —
 // deciding their own run's held egress, creating a workspace — so without the
 // marker a reviewer filtering the denial stream reads an admin's own member walk

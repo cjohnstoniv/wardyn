@@ -422,7 +422,7 @@ func TestNewSessionRecorder_HarnessLoginRunIsNeverRecorded(t *testing.T) {
 
 // TestNewSessionRecorder_OversizeCastTruncatedNotLost pins the bound on the
 // live-attach cast. Unbounded, it would grow in the daemon's heap for the whole
-// session and then be REJECTED WHOLE by the store's own 64 MiB cap at close,
+// session and then be rejected whole by the store's own 64 MiB cap at close,
 // destroying a long interactive session's evidence at exactly the moment it is
 // supposed to be persisted. The buffer stops at maxSessionCastBytes and what was
 // recorded up to that point is kept — still a well-formed asciicast (whole event

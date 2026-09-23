@@ -29,7 +29,7 @@ func (s renameConflictPolicyStore) UpdatePolicy(context.Context, uuid.UUID, stri
 	return types.RunPolicy{}, store.ErrConflict
 }
 
-// TestUpdatePolicyDuplicateName: RENAMING a policy onto a taken name must
+// TestUpdatePolicyDuplicateName: renaming a policy onto a taken name must
 // answer 409, like creating one under that name does — not fall through to
 // handleUpdatePolicy's blanket 500, which leaks the raw Postgres constraint
 // text and tells the admin nothing they can act on.

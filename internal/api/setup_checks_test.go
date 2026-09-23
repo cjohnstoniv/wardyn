@@ -151,7 +151,7 @@ func TestTlsCookiePostureCheck(t *testing.T) {
 // canary can never reach here). Never confuses Indeterminate with Enforcing.
 // TestSiteConfigCheck_DanglingSecretRef pins that siteConfigCheck grades on
 // whether the secret UpstreamProxySecretRef/EgressRedirects/ScmHosts name is
-// actually present, not only on whether those fields are SET. After the
+// actually present, not only on whether those fields are set. After the
 // documented reset+apply recovery (`wardyn site-config get > f` before a
 // reset, `wardyn site-config apply f` after) with the referenced secret never
 // restored, "info" ("every run inherits it") would read as fully configured
@@ -375,7 +375,7 @@ func TestK8sEgressContainmentCheck_Acknowledged(t *testing.T) {
 
 // TestRunnerCheckCC1OnlyFixIsDriverAware: a CC1-only host's Fix must not
 // unconditionally read "run `wardyn setup wall` (or `wardyn setup vault`)" — a
-// DOCKER host command that means nothing on a k8s runner, where the actual
+// Docker host command that means nothing on a k8s runner, where the actual
 // lever is pinning a cluster-registered RuntimeClass via Helm
 // (k8s.runtimeClasses.CC2/.CC3). The docker driver keeps that command; only
 // k8s swaps to the Helm-shaped fix.
@@ -534,7 +534,7 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 }
 
 // TestAgeKeyCheckFixSteersToASecretBackedKey: the warn arm's Fix must not offer
-// `helm: env.WARDYN_AGE_KEY` — that renders the secret store's MASTER key as a
+// `helm: env.WARDYN_AGE_KEY` — that renders the secret store's master key as a
 // plaintext literal in the Deployment object, readable by anything with `get
 // deploy` and captured in every `helm get manifest`. The chart has two
 // Secret-backed doors (deploy/helm/wardyn/values.yaml's secrets.ageKeyFromSecret

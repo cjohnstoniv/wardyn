@@ -183,7 +183,7 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 // TestPreflight_AlreadyReflectsWorkspaceScannedEgress: launch-time
 // unionRunEgress (runs.go) widens the enforced spec's egress from a
 // referenced workspace's scanned-profile hosts, so preflight must widen the
-// spec FIRST too, or it grades and checklists a NARROWER envelope than the
+// spec first too, or it grades and checklists a narrower envelope than the
 // run launches with. The "egress:workspace" informational row re-computes
 // what launch would add (setupEgressWorkspaceItem), so with the spec already
 // widened that row must read "no additional egress needed" — proving Review
@@ -270,8 +270,8 @@ func (preflightIntegrationStore) ListWorkspaces(context.Context) ([]types.Worksp
 }
 
 // TestPreflight_ModelAccessFromExplicitIntegrationID: preflight must fold the
-// WHOLE run-level integration precedence chain (foldRunIntegration), not just
-// the workspace tier. A run naming an explicit integration_id and NO workspace
+// whole run-level integration precedence chain (foldRunIntegration), not just
+// the workspace tier. A run naming an explicit integration_id and no workspace
 // at all must still see model access satisfied on the checklist — proving the
 // fold reaches tier 1, not only the workspace-ref tier.
 func TestPreflight_ModelAccessFromExplicitIntegrationID(t *testing.T) {

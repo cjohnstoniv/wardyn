@@ -14,10 +14,10 @@ import (
 // from wardyn_egress_denies_total: the gateway-vet refusal is counted, not an
 // accepted residual.
 //
-// When gatewayTarget returns errGatewayVet — vetTrustedHost's GUARD refusal
+// When gatewayTarget returns errGatewayVet — vetTrustedHost's guard refusal
 // of the configured model gateway — internal/egress/proxy/llm_routes.go
 // labels it with its own rule_source (ruleSourceGatewayVetFailed,
-// egress_target.go), not builtin:dial-failed. That label is deliberately NOT
+// egress_target.go), not builtin:dial-failed. That label is deliberately not
 // in isPolicyDeny's exclusion list, so it counts as a denial like any other
 // guard refusal; reusing builtin:dial-failed would drop it out of the counter
 // alongside the three genuine dial failures the exclusion exists for.

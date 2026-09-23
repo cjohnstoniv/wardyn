@@ -10,13 +10,13 @@ import (
 	"testing"
 )
 
-// TestLLMUpstreamPathIsTheClassifiedPath: the path content inspection JUDGED
-// and the path the upstream RECEIVES must be the same bytes.
+// TestLLMUpstreamPathIsTheClassifiedPath: the path content inspection judged
+// and the path the upstream receives must be the same bytes.
 //
 // classifyLLM keys on `rest`, which is derived from r.URL.Path — the
-// PERCENT-DECODED path. Rebuilding the upstream URL by string-concatenating
+// percent-decoded path. Rebuilding the upstream URL by string-concatenating
 // that decoded value and handing it to http.NewRequestWithContext would
-// re-PARSE it: a decoded "#" becomes a FRAGMENT and a decoded "?" a QUERY. So
+// re-parse it: a decoded "#" becomes a fragment and a decoded "?" a query. So
 // a sandbox POST to /wardyn/llm/anthropic/v1/messages%23z would classify as
 // "v1/messages#z" (scanNone — streamed through unscanned, no scan summary)
 // while the wire carried POST /v1/messages, the exact endpoint the operator

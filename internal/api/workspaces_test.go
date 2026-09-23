@@ -77,7 +77,7 @@ func TestCreateWorkspaceValidation(t *testing.T) {
 }
 
 // TestDecodeWorkspaceRequest_DuplicateExplicitTargetsRejected: two sources
-// sharing an explicit target both resolve to the SAME in-sandbox mount/clone
+// sharing an explicit target both resolve to the same in-sandbox mount/clone
 // path — validatePolicyWorkspaces (policy.go) then 422s that composition on
 // every subsequent run. Rejecting it here, at onboarding time, catches it
 // before it's even possible to run — and before a wizard's own basename
@@ -324,12 +324,12 @@ func TestUpdateWorkspace_ContentChangeClearsEveryReviewedField(t *testing.T) {
 
 // TestUpdateWorkspace_ContentChangeStampsTheEgressEdit: migration 0055 names
 // the two scoped setters as the stampers of egress_edited_at, but this handler
-// is a third durable writer of approved_egress — it CLEARS the list when the
+// is a third durable writer of approved_egress — it clears the list when the
 // composition changes — so it must stamp too. egress_edited_at is
-// ReconcileWorkspaceEgressDecisions's ONLY newer-action guard: without the
+// ReconcileWorkspaceEgressDecisions's only newer-action guard: without the
 // stamp, an `always` approval decided before the edit still reads
 // APPROVED/always at the next boot and the heal puts the host straight back,
-// with an audit event saying "success" — a durable, fail-OPEN re-widening of a
+// with an audit event saying "success" — a durable, fail-open re-widening of a
 // list the operator had just emptied by changing what the workspace is.
 //
 // Asserted as "newer than the pre-edit stamp", not merely non-nil: a workspace
@@ -359,7 +359,7 @@ func TestUpdateWorkspace_ContentChangeStampsTheEgressEdit(t *testing.T) {
 	if got.EgressEditedAt == nil || !got.EgressEditedAt.After(before) {
 		t.Errorf("EgressEditedAt = %v, want a stamp newer than the pre-edit %v — without it the boot heal re-applies every `always` approval onto the list this edit just cleared", got.EgressEditedAt, before)
 	}
-	// And the stamp is the STORE'S, not this handler's clock (B8-F3). The value
+	// And the stamp is the store's, not this handler's clock (B8-F3). The value
 	// is compared against approvals.decided_at, which Postgres stamps, so a
 	// handler-side time.Now() put the daemon/DB skew inside the boot heal's only
 	// newer-action guard — fail-OPEN when wardynd runs behind. The handler asks;
@@ -402,7 +402,7 @@ func TestUpdateWorkspace_SourceChangeReclaimsSupersededImage(t *testing.T) {
 }
 
 // TestDeleteWorkspace_ReclaimsBuiltImage is the other half: deleting a
-// workspace drops the ONLY store pointer to its built image tag, so it must be
+// workspace drops the only store pointer to its built image tag, so it must be
 // reclaimed at delete time or it leaks forever — nothing else will ever name
 // it again.
 func TestDeleteWorkspace_ReclaimsBuiltImage(t *testing.T) {
@@ -535,7 +535,7 @@ func TestWriteEnvAsCode_WritesNestedFiles(t *testing.T) {
 // O_TRUNC every emitted key unconditionally — that would silently destroy an
 // operator's own hand-authored Dockerfile the first time they click "Write
 // into the directory". A pre-existing Dockerfile is left alone and reported in
-// the skipped list; every OTHER emitted key (Wardyn's own regenerate-on-demand
+// the skipped list; every other emitted key (Wardyn's own regenerate-on-demand
 // output) still refreshes, so the feature does not turn into a
 // first-write-only no-op.
 func TestWriteEnvAsCode_PreservesExistingDockerfile(t *testing.T) {

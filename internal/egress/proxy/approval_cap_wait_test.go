@@ -19,8 +19,8 @@ import (
 )
 
 // TestResolveWaitDoesNotRetryTheHostCap: past maxApprovalHosts, Resolve fails
-// closed with no entry, no raise and no row, and reports it as a DISTINCT
-// state (apCapped), not as {apPending, uuid.Nil} — the SAME shape a raise
+// closed with no entry, no raise and no row, and reports it as a distinct
+// state (apCapped), not as {apPending, uuid.Nil} — the same shape a raise
 // still in flight has. Otherwise ResolveWait's concurrent-raise retry loop
 // cannot tell them apart and sleeps its whole budget (concurrentRaiseRetries *
 // holdPollInterval = 5s) for every new host, holding a goroutine and a socket
@@ -28,7 +28,7 @@ import (
 //
 // That would turn the fail-closed cap into a way for the sandbox to pin
 // unbounded goroutines for 5 s each in a 256 MiB sidecar: the cap is reached
-// by NAMING hosts, which the agent controls. evaluate's default arm maps
+// by naming hosts, which the agent controls. evaluate's default arm maps
 // anything that is not approved/denied to Pending, so the wire answer is the
 // same either way.
 //
@@ -60,7 +60,7 @@ func TestResolveWaitDoesNotRetryTheHostCap(t *testing.T) {
 	}
 }
 
-// TestCappedHostIsAuditedAsTheHostCap: apCapped and apPending are DIFFERENT FACTS,
+// TestCappedHostIsAuditedAsTheHostCap: apCapped and apPending are different facts,
 // and the operator reading decision rows must be able to tell them apart. "An
 // approval is waiting on you" and "the run's host table is full, nothing was
 // raised and nothing ever will be" have different fixes, and one slog line in the

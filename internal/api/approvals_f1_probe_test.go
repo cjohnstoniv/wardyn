@@ -392,7 +392,7 @@ func f1SeedDecidedAlways(f *scopeFixture, state types.ApprovalState, decidedAt t
 // leave the workspace with H on approved_egress and off denied_egress. The boot
 // heal (ReconcileWorkspaceEgressDecisions in approvals.go) must not walk states
 // in a fixed order [APPROVED, DENIED] instead of by decided_at — that would
-// apply the OLDER deny LAST and silently reverse the operator's newest decision
+// apply the older deny last and silently reverse the operator's newest decision
 // on every restart, with no audit event.
 func TestF1_ReconcileDoesNotReverseNewerDecision(t *testing.T) {
 	f := newScopeFixture(t)
@@ -426,7 +426,7 @@ func TestF1_ReconcileDoesNotReverseNewerDecision(t *testing.T) {
 // undo, handleSetApprovedEgress in workspaces.go) must not get H back on the
 // allowlist at the next boot just because the approval row still says
 // APPROVED/always: re-applying it in ReconcileWorkspaceEgressDecisions would be
-// a durable, fail-OPEN widening of a workspace the operator explicitly narrowed,
+// a durable, fail-open widening of a workspace the operator explicitly narrowed,
 // and nothing would audit it.
 func TestF1_ReconcileDoesNotResurrectRemovedHost(t *testing.T) {
 	f := newScopeFixture(t)

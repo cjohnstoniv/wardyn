@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// EDGE whitespace and trailing DOTS. The service trims a segment's trailing
+// Edge whitespace and trailing dots. The service trims a segment's trailing
 // spaces and dots before routing it — Windows path canonicalisation — so ".. "
 // is ".." to Azure DevOps and "hooks." is "hooks". The dot-segment refusal
 // compared the untrimmed text and missed both. Each spelling has its encoded
@@ -74,7 +74,7 @@ func TestOverrideOnNonPostIsIgnoredUnlessItRaises(t *testing.T) {
 
 // A read the minted token cannot perform. Reads are an enumerated table: an
 // area outside it is refused as unclassified, and every area in it carries its
-// read scope. A read floor that answered CapRead for ANY area would classify
+// read scope. A read floor that answered CapRead for any area would classify
 // an area with no read scope as a read that 403s at the forge.
 func TestReadsAreEnumerated(t *testing.T) {
 	unclassifiedRead := CapUnclassifiedRead

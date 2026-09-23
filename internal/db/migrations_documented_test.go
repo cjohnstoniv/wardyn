@@ -25,13 +25,13 @@ const migrationDocFloor = 38
 
 // undocumentedMigrations is a SHRINKING allowlist, not an exemption list. Each
 // entry is a migration at or above the floor that nothing in the repo's
-// markdown names — debt this guard exists to stop GROWING. The test fails in
+// markdown names — debt this guard exists to stop growing. The test fails in
 // both directions:
 // a new undocumented migration fails because it is not listed here, and a
 // listed one that has since been documented fails too, so the list can only
 // ever get shorter.
 //
-// 0060 is the one an operator can feel: it adds a CHECK that REJECTS a class
+// 0060 is the one an operator can feel: it adds a CHECK that rejects a class
 // of api_tokens write that older binaries accepted.
 var undocumentedMigrations = map[string]string{
 	"0044_run_failure_hint":         "adds agent_runs.failure_hint",

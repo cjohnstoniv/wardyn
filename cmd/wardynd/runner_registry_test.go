@@ -58,7 +58,7 @@ func TestBuildRunnerFromFlags_UnknownFailsClosed(t *testing.T) {
 	}
 }
 
-// /healthz must report what recording ACTUALLY does, not what the flag says. The stock Helm install
+// /healthz must report what recording actually does, not what the flag says. The stock Helm install
 // sets WARDYN_RECORDING_STORE=off (persistence.enabled=false by default), which recording.New
 // resolves to a nil Store per its own "disabled" contract — so componentsInfo must not echo
 // *f.recordingSel, or /healthz advertises a live "fs" store while every run silently records

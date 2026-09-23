@@ -97,7 +97,7 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	// `wardyn setup` is a subcommand group, so a bare invocation prints
 	// help and exits 0 — it never starts wardynd, so the recovery hint must
 	// not send an operator there. `make setup` is a live alternative.
-	// (Every group has a help-only RunE so a MISTYPED subcommand exits
+	// (Every group has a help-only RunE so a mistyped subcommand exits
 	// non-zero; the bare invocation still succeeds, and
 	// TestBareGroupStillPrintsHelpAndSucceeds pins that.)
 	if hint := dialHint(err); strings.Contains(hint, "`wardyn setup`") {
@@ -174,7 +174,7 @@ func TestWarnPlaintextToken(t *testing.T) {
 }
 
 // The whole status taxonomy in one table, so no class falls through to 1.
-// pkg/client mints an *sdk.APIError for EVERY non-2xx (client.go: `StatusCode
+// pkg/client mints an *sdk.APIError for every non-2xx (client.go: `StatusCode
 // < 200 || > 299`), 3xx included — nothing follows redirects — so an
 // interposed proxy's 302 must not land on the catch-all 1, the code docs/CI.md
 // reserves for a FAILED run's own task exit code. Every typed API error is a

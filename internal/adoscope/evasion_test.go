@@ -364,7 +364,7 @@ func withRawHeader(r Request, key, value string) Request {
 	return r
 }
 
-// Git-over-HTTP. The transport is OUT OF SCOPE for this catalogue and is
+// Git-over-HTTP. The transport is out of scope for this catalogue and is
 // refused by name, which a consumer can act on; answering
 // CapUnclassifiedWrite for both verbs would leave a consumer unable to tell a
 // clone from a push.

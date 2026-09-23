@@ -20,7 +20,7 @@ import (
 //
 // v4.1.5 carries seven upstream-labelled security fixes on the two paths this
 // package parses tokens Wardyn did not mint — jwt/claims.go, json/scanner.go,
-// jws.go, jwk.go, asymmetric.go, cipher/cbc_hmac.go — and NO Advisory covers
+// jws.go, jwk.go, asymmetric.go, cipher/cbc_hmac.go — and no Advisory covers
 // any of them. govulncheck is advisory-ID driven, so it cannot hold this
 // floor, and nothing else in CI reads upstream release notes: this test is
 // what holds it.

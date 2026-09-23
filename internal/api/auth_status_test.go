@@ -25,13 +25,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// B6-F2 + B6-F5: a rejected session gets its OWN answer
+// B6-F2 + B6-F5: a rejected session gets its own answer
 
 // TestSessionRejectionResponse is the reason→answer table. The 503 is the
 // load-bearing row: a revocation-store outage must not fall through to
 // adminAuth and answer 401 "missing bearer token" — that drives the console's
 // sign-in gate, which drives a successful SSO login (the callback never
-// consults revocations), which answers 401 again: a sign-in LOOP during a
+// consults revocations), which answers 401 again: a sign-in loop during a
 // Postgres incident, reported to the operator as a credential problem.
 func TestSessionRejectionResponse(t *testing.T) {
 	cases := []struct {
@@ -143,7 +143,7 @@ func TestRejectedSessionAnswersItself(t *testing.T) {
 		}
 	})
 
-	// The narrowing keys on bearer PRESENCE, not validity, and this pins the
+	// The narrowing keys on bearer presence, not validity, and this pins the
 	// residual that leaves. An unknown `wdn_` token (a console holding a stale
 	// one in localStorage) suppresses the 503 short-circuit, hits ErrNotFound
 	// in apiTokenAuth, falls through to adminAuth and gets 401 — so the sign-in

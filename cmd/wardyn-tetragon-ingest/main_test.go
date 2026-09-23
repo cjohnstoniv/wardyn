@@ -22,7 +22,7 @@ import (
 
 // TestTailExport_ReadsRotatedFileFromStart pins rotation handling: a rotation
 // reopen starts at offset 0 so the new file's beginning (unread data) is read.
-// Reopening the NEW file and seeking to END (io.SeekEnd) would silently drop
+// Reopening the new file and seeking to the end (io.SeekEnd) would silently drop
 // every ground-truth event written to it before the rotation was noticed — a
 // security-signal loss.
 //
@@ -177,7 +177,7 @@ func appendLine(t *testing.T, path, line string) {
 
 // TestTailExport_ReassemblesLineSplitAcrossEOF pins that a Tetragon JSON line
 // whose bytes straddle an EOF read boundary (the writer flushes it in two
-// syscalls) is REASSEMBLED, not split into two undecodable fragments that both
+// syscalls) is reassembled, not split into two undecodable fragments that both
 // drop. Processing the first half on io.EOF fails the JSON parse (dropped), and
 // the later-arriving remainder then fails as its own fragment (also dropped), so
 // the event would be silently lost from the tamper-proof stream.

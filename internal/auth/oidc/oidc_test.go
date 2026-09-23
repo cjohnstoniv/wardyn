@@ -806,11 +806,11 @@ func TestCallbackRoleMapUnsetDefaultsAdmin(t *testing.T) {
 }
 
 func TestCallbackRoleMapUnsetLegacyListStillSplitsAdminMember(t *testing.T) {
-	// Silent viewer→admin escalation on upgrade: with the role map UNSET but
-	// WARDYN_OIDC_OPERATOR_EMAILS SET — the mandatory-minimum SSO config
+	// Silent viewer→admin escalation on upgrade: with the role map unset but
+	// WARDYN_OIDC_OPERATOR_EMAILS set — the mandatory-minimum SSO config
 	// (validateOperatorPosture refuses an empty list; a role map is opt-in on top) —
 	// the operator allowlist alone must still split admin from member. An empty-map
-	// short-circuit in deriveRole returning RoleAdmin for EVERYONE would promote
+	// short-circuit in deriveRole returning RoleAdmin for everyone would promote
 	// every existing viewer to admin.
 	env := newIdPEnv(t)
 	auth := env.newRoleAuth(t, nil, "", []string{"olivia@corp.example"}) // role map unset, operator list set

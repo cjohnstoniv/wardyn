@@ -548,7 +548,7 @@ func TestResolveUserDrive(t *testing.T) {
 		if !got.Writable {
 			t.Error("writable = false; an explicit writable_override on a read-only drive must win")
 		}
-		// The CASE the SLUG exists for. An override is written on the GRANT, so
+		// The case the slug exists for. An override is written on the grant, so
 		// it does not move when the grant is re-pointed at another drive; the
 		// drive's slug is the only thing keeping the two volumes apart.
 		if got.HomeName != "bsmith" || got.ObjectName != "wardyn-drive-corp-nas-bsmith" {
@@ -738,7 +738,7 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
-	// a paused allocation is TOLD, not resolved to nothing
+	// a paused allocation is told, not resolved to nothing
 
 	t.Run("a DISABLED winner resolves to PAUSED, not to nothing", func(t *testing.T) {
 		// Before this arm the store's WHERE excluded the row, so a member whose
@@ -902,16 +902,16 @@ func previewDriveHTTP(t *testing.T, srv *Server, users, groups []string) *httpte
 func TestPreviewUserDrive(t *testing.T) {
 	t.Run("a match is answered with the object name", func(t *testing.T) {
 		// A static PVC on `sub`. k8s_pvc_static + `email_local` is refused:
-		// Wardyn MINTS the claim name for a static PVC, so an email-local home
+		// Wardyn mints the claim name for a static PVC, so an email-local home
 		// folds two addresses that share a local part onto one claim. Every
-		// assertion below is about the PREVIEW answering through the resolver,
+		// assertion below is about the preview answering through the resolver,
 		// not about which template it answered for: the claim still folds to
 		// lowercase, the object name is still the one an admin copies into an
 		// offboarding command, the enforcement is still external, and both
 		// literals are still tied back to types.DriveHomeName /
 		// types.DriveObjectName.
 		//
-		// The email-local FOLD has its own subtest below, on a host_path drive
+		// The email-local fold has its own subtest below, on a host_path drive
 		// — the backend where that template is the right answer.
 		d := driveFixture(func(d *types.UserDrive) {
 			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateSub
@@ -1004,7 +1004,7 @@ func TestPreviewUserDrive(t *testing.T) {
 		}
 	})
 
-	// A provisioning PVC's size IS a request the cluster acts on, and it is the
+	// A provisioning PVC's size is a request the cluster acts on, and it is the
 	// one enforcement value that differs from what the object holding it does —
 	// so it is previewed on its own drive rather than folded into the row above,
 	// where `email_local` is now refused.
@@ -1278,9 +1278,9 @@ func TestPreviewUserDrive(t *testing.T) {
 }
 
 // TestPreviewUserDriveAnswersTheSameRefusalAsLaunch is the
-// preview-IS-enforcement pin. The endpoint runs the launch path's gates, not
+// preview-is-enforcement pin. The endpoint runs the launch path's gates, not
 // resolveUserDriveFor alone (the store read and the fold): with the launch's
-// gates living above and below it, a claim set that WOULD be refused at launch
+// gates living above and below it, a claim set that would be refused at launch
 // would preview green and the member would find out by ticking the box.
 //
 // Every arm below asserts the LAUNCH's status and the LAUNCH's bytes, because
@@ -1373,7 +1373,7 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 		}
 	})
 
-	// The unanswerable group TIER. A request carrying no `groups` has not
+	// The unanswerable group tier. A request carrying no `groups` has not
 	// evaluated the group tier, which is the condition a nil snapshot creates at
 	// launch — and answering it from the `all` row is how an admin gets a
 	// confident preview of a drive no run will mount. The console always sends
@@ -1401,7 +1401,7 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 	})
 }
 
-// preview IS enforcement, in the answer as well as in the refusal
+// preview is enforcement, in the answer as well as in the refusal
 
 // drivePreviewAnswer is the derived answer, comparable by value, in the shape
 // BOTH surfaces produce it: what the run resolver decided (types.ResolvedDrive)
@@ -1571,7 +1571,7 @@ func TestPreviewUserDriveDerivesTheSameAnswerAsEnforcement(t *testing.T) {
 // (newResolvedDrive, which takes the caller's real claims) untouched, and the
 // rest of the api suite stays green — home names, object names and subject
 // hashes are all still correct, because they are derived from the claims rather
-// than from the row. What changes is WHOSE allocation was found, which is the
+// than from the row. What changes is whose allocation was found, which is the
 // one thing this resolver decides, and this test is what asserts it.
 func TestResolveUserDriveLooksTheGrantUpForTheCALLER(t *testing.T) {
 	d := driveFixture(nil)
@@ -1613,7 +1613,7 @@ func TestResolveUserDriveLooksTheGrantUpForTheCALLER(t *testing.T) {
 // TestPreviewDoorTakesTheUnusableGroupTier pins the preview DOOR against the
 // launch's ceiling, on the one claim shape where they can disagree.
 //
-// The preview's RESOLVER takes driveWithUnusableGroups when a request carries
+// The preview's resolver takes driveWithUnusableGroups when a request carries
 // no groups, and the door beside it must take the same unusable arm when it
 // resolves the governance profile with that empty list. Otherwise, on a
 // deployment with group-tier governance assignments, a hand-made preview

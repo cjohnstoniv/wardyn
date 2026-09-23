@@ -66,7 +66,7 @@ func TestDispatch_AuditsEffectivePolicyEnvelope(t *testing.T) {
 }
 
 // TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues: the
-// run.policy.effective envelope must not mustJSON(policy) the FULL spec
+// run.policy.effective envelope must not mustJSON(policy) the full spec
 // straight into the append-only audit log — that would include
 // llm_inspection.workspace_secret_values, contradicting the field's own
 // "NEVER logged" doc comment (types.LLMInspectionSpec). The envelope carries

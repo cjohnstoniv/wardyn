@@ -66,7 +66,7 @@ func TestClassifyLLMBothSpellingsOfEveryPromptBearingArm(t *testing.T) {
 		{"anthropic", http.MethodPost, "v1/models", scanOpaque},
 		{"anthropic", http.MethodGet, "models", scanNone},
 		{"anthropic", http.MethodGet, "v1/models", scanNone},
-		// SECOND AXIS — the VERB. hasScannableBody accepts POST, PUT and PATCH,
+		// Second axis — the verb. hasScannableBody accepts POST, PUT and PATCH,
 		// so a PUT/PATCH body reaches the vendor exactly as a POST body does; a
 		// classifier answering scanNone for anything but a POST would make `PUT
 		// /v1/messages` a silent brokered forward with the secret in the body

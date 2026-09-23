@@ -59,10 +59,10 @@ func TestPutSiteConfig_CannotTouchOnboardingState(t *testing.T) {
 	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{OnboardingCompletedAt: &stamped}}
 	srv, _ := newSiteConfigHarness(t, fake)
 
-	// A client that tries to SET it does not get to: the write succeeds (the
+	// A client that tries to set it does not get to: the write succeeds (the
 	// document's other fields are the point of the request) and the submitted
-	// mark is dropped, never persisted. The invariant is "cannot SET, CLEAR or
-	// MOVE the mark", which the carry-forward enforces — a 400 here would
+	// mark is dropped, never persisted. The invariant is "cannot set, clear or
+	// move the mark", which the carry-forward enforces — a 400 here would
 	// enforce nothing extra and break two documented recovery flows
 	// (TestPutSiteConfig_IgnoresASubmittedMarkOnTheRecoveryFlows).
 	w := do(t, srv, http.MethodPut, "/api/v1/site-config",

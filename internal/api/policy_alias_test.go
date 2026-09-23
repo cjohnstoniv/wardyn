@@ -12,7 +12,7 @@ import (
 )
 
 // These are the counterfactuals for policy aliasing: if resolvePolicy handed
-// out a SHALLOW copy of the process-global cfg.DefaultPolicy, every caller's
+// out a shallow copy of the process-global cfg.DefaultPolicy, every caller's
 // slice header would point at the global's backing array. Two concurrent
 // create-runs appending run-specific egress would then race the same
 // spare-capacity element (one run's domain replacing another's in the

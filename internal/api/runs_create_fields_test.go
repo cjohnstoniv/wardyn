@@ -16,7 +16,7 @@ import (
 
 // TestCreateRun_TextFieldsAreCappedAndControlCharFree pins the field caps.
 //
-// title and description are rune-capped AND control-char-checked, and repo,
+// title and description are rune-capped and control-char-checked, and repo,
 // devcontainer_repo, task and agent are capped too — the 1 MiB body limit is
 // not a field bound. A NUL in a title would reach Postgres, which rejects it,
 // so the caller would get a 500 instead of a 400 naming the field; a 1 MiB

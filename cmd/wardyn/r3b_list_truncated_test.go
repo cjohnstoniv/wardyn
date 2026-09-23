@@ -62,7 +62,7 @@ func r3bCaptureStdout(t *testing.T, fn func()) string {
 // indistinguishable from a complete list. `wardyn audit` warns on exactly this
 // signal, and the four list families do the same.
 //
-// ALL FOUR, because two is easy to mistake for done. `policy list` and
+// All four, because two is easy to mistake for done. `policy list` and
 // `workspace list` must call the truncation-aware SDK wrappers too, or the
 // truncation bit the server sets is discarded before the CLI can see it and
 // neither command has an --offset to page with. A table with two of the four

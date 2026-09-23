@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// WARDYN_REQUIRE_OPERATOR_SET_EGRESS defaults ON.
+// WARDYN_REQUIRE_OPERATOR_SET_EGRESS defaults on.
 //
-// The SECRET side of the very same switch statement applies this provenance
+// The secret side of the very same switch statement applies this provenance
 // check unconditionally, and calls the boundary "security-critical — do not
 // relax". The reason is identical for egress — a hostile, or simply
 // never-reviewed, repo could widen a run's allowlist just by naming a host in a

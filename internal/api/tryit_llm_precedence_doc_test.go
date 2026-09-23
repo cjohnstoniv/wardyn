@@ -13,7 +13,7 @@ import (
 // TestTRYITDoc_LLMPrecedenceMatchesResolveLLMTransport pins docs/TRY-IT.md's
 // precedence claim to what resolveLLMTransport implements
 // (runs_dispatch_llm.go): not a three-way "subscription → Bedrock → api-key"
-// order, but one that includes the managed-subscription step AND the
+// order, but one that includes the managed-subscription step and the
 // api-key-opt-in-suppresses-managed exception. Anchor the doc's claim to that
 // function's own precedence comment so the two can't drift apart silently.
 func TestTRYITDoc_LLMPrecedenceMatchesResolveLLMTransport(t *testing.T) {

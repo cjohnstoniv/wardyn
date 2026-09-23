@@ -41,12 +41,12 @@ var testDriveID = uuid.MustParse("6f1d4b6e-3c2a-4d5f-9a71-8b0c1d2e3f40")
 
 // testDriveSubject is the fixture's subject digest, and it is NON-EMPTY on
 // purpose. With SubjectHash left at "", the third identity label would be
-// unfalsifiable everywhere it is read: `existingDriveClaim` is stamped FROM the
+// unfalsifiable everywhere it is read: `existingDriveClaim` is stamped from the
 // drive, so both sides of every reuse comparison would be "", and
 // driveClaimIdentity's own check is presence-guarded (`got != "" && …`), so ""
 // on both sides is the arm that always passes. Deleting `labelDriveSubject:
 // drive.SubjectHash` from ensureDrivePVC's create would leave the whole file
-// green, while every claim created thereafter became ADOPTABLE by any principal
+// green, while every claim created thereafter became adoptable by any principal
 // sharing this drive's id and home — precisely the collision the label exists to
 // break.
 const testDriveSubject = "0f1e2d3c4b5a69788796"
@@ -162,7 +162,7 @@ func TestEnsureDrivePVC_ManagedCreatesTheClaim(t *testing.T) {
 	if got := pvc.Labels[labelDriveHome]; got != drive.HomeName {
 		t.Errorf("%s = %q, want %q", labelDriveHome, got, drive.HomeName)
 	}
-	// The third identity label, on the claim this code path CREATED. Every other
+	// The third identity label, on the claim this code path created. Every other
 	// assertion on wardyn.subject in this file runs against existingDriveClaim,
 	// a fixture stamped by the same rule the code uses — so the create path was
 	// the one place the label could go missing unobserved, and
@@ -239,7 +239,7 @@ func TestEnsureDrivePVC_StaticShareIsNeverCreated(t *testing.T) {
 		t.Errorf("claim verbs = %v, want no create for a static share", verbs)
 	}
 	// The message is the run's failure hint verbatim, so it has to name the
-	// remedy in words the person reading it can act on — and NOT the namespace
+	// remedy in words the person reading it can act on — and not the namespace
 	// (`claim %q is absent from namespace %q`), which would hand every member
 	// of an unprovisioned share the runs namespace.
 	if got := err.Error(); !strings.Contains(got, "not provisioned on this cluster") {
@@ -753,7 +753,7 @@ func assertRefusalKeepsClusterNamesToItself(t *testing.T, err error) {
 
 // TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch is the DEFAULT deployment's
 // failure: userDrives.enabled is off out of the box, so the Role has no
-// persistentvolumeclaims rule at all and the LOOKUP is refused — before any
+// persistentvolumeclaims rule at all and the lookup is refused — before any
 // Create. Unmapped, it surfaces the apiserver's own "cannot get resource"
 // text, which names no switch an operator could flip.
 func TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch(t *testing.T) {
@@ -793,7 +793,7 @@ func TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch(t *testing.T) {
 // the opposite remedy: a namespace ResourceQuota.
 //
 // The driver picks between the two remedies rather than interpolating the
-// apiserver's message ahead of a sentinel that carries BOTH: leaving the reader
+// apiserver's message ahead of a sentinel that carries both: leaving the reader
 // to pick would mean showing the raw 403, and a raw 403 spells the runs
 // namespace and the runner's ServiceAccount to whichever member's run failed.
 // The driver picks on the same substring the reader would have used, and this

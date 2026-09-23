@@ -67,7 +67,7 @@ func linuxNative() dockerEnv {
 	return dockerEnv{goos: "linux", hasDocker: true, infoOK: true, osType: "linux", initSys: "systemd", family: "debian"}
 }
 
-// TestSetupCmd_BareInvocationPrintsHelpNotStartsDaemon documents WHY
+// TestSetupCmd_BareInvocationPrintsHelpNotStartsDaemon documents why
 // fix removed `wardyn setup` from dialHint's recovery text: the bare command is
 // a subcommand group with no RunE, so it exits 0 having started nothing — never
 // a working "start wardynd" recovery step.

@@ -22,14 +22,14 @@ import (
 // A token carries the role and group snapshot of the session that minted it and
 // replays them on every request. The SSH-key analogue of that stamp is published
 // as residual #15 and is bounded-stale: every login re-stamps the key and a TTL
-// expires the override. The token stamp has the login bound on both its ROLE and
-// GROUP halves. The remaining gap is the same shape #15 has: no TTL, so a human
+// expires the override. The token stamp has the login bound on both its role and
+// group halves. The remaining gap is the same shape #15 has: no TTL, so a human
 // who never signs in again keeps the stamp indefinitely — and because the stamp
 // carries `security_admin` verbatim, it carries governance authority, so the only
 // thing standing between a demoted security admin who never signs in again and
 // the profile/grant/approval surface is an operator remembering to revoke.
 //
-// What this guard reads (its scope IS part of its correctness): the migration
+// What this guard reads (its scope is part of its correctness): the migration
 // that creates api_tokens, internal/store/store_apitokens.go, this package's
 // boot_deps.go, docs/OPERATIONS.md and threatmodel/THREAT-MODEL.md. What it does
 // NOT read: the CLI's help strings, the console's token screen, docs/MEMBERS.md
@@ -82,7 +82,7 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// (3) The contrast the docs draw is real: SSH keys DO get re-stamped on
 	// login, which is why the token stamp is the worse of the two.
 	//
-	// Read as structure, NOT AS A STRING. This was
+	// Read as structure, not as a string. This was
 	// strings.Contains(boot_deps.go, "RefreshAPITokenRoles"), and the refactor
 	// that fixed the transposition half of this finding DEFEATED it — in the one
 	// direction it was the only cover for. At the time, that name occurred in

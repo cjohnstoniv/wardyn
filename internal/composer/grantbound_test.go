@@ -22,18 +22,18 @@ func sshKeyGrant(t *testing.T, host, keyRef string, approval bool, ttl int) type
 // TestClampGrantsBoundsByPairingNotKind is the pin for the runtime half of
 // the one comparator.
 //
-// clampGrants indexes the ceiling by PAIRING, not by KIND alone: a ceiling
+// clampGrants indexes the ceiling by pairing, not by kind alone: a ceiling
 // holding two grants of one kind is the normal shape for two SSH forges, two
 // api_key hosts or two git_pat hosts, and a by-kind index
-// (`ceilByKind[cg.Kind] = cg`) would collapse them to whichever came LAST,
+// (`ceilByKind[cg.Kind] = cg`) would collapse them to whichever came last,
 // letting that arbitrary grant supply the approval posture and the TTL for
 // every proposal of the kind. Two consequences, both pinned here:
 //
-//   - APPROVAL STRIPPED. A proposal naming the STRICT forge's pairing would
-//     be clamped against the PERMISSIVE forge's grant and keep
+//   - Approval stripped. A proposal naming the strict forge's pairing would
+//     be clamped against the permissive forge's grant and keep
 //     requires_approval false — and a stripped approval flag auto-mints the
 //     injection at proxy boot with no human in the loop.
-//   - ORDER DEPENDENCE. The same ceiling SET would produce different clamps
+//   - Order dependence. The same ceiling set would produce different clamps
 //     depending on slice order, in a codebase where a ceiling is a set
 //     everywhere else.
 func TestClampGrantsBoundsByPairingNotKind(t *testing.T) {

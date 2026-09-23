@@ -102,7 +102,7 @@ func TestWorkspaceRequirementsRouteRequiresAdminAuth(t *testing.T) {
 	}
 }
 
-// HTTP-level: validation (fails BEFORE any store call, so a no-Store
+// HTTP-level: validation (fails before any store call, so a no-Store
 // harness is sufficient — parseIDParam only needs a well-formed UUID).
 
 func TestSetWorkspaceRequirements_Validation(t *testing.T) {

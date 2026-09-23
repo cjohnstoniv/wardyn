@@ -150,11 +150,11 @@ func parseRawSSOTime(v string) (time.Time, error) {
 // WARDYN_AWS_SSO_ENDPOINT_OVERRIDE passthrough (refused unless
 // WARDYN_ALLOW_TEST_ENDPOINTS=true, WARNing on every boot, and published as
 // residual #45 in internal/api/awssso_endpoint.go), and asserts from the fake's
-// own /_seen that the MEMBER's pinned pair is what botocore asked for.
+// own /_seen that the member's pinned pair is what botocore asked for.
 //
 // This test is not a substitute for that walk; it is its hermetic,
-// Docker-only-gated FLOOR. It runs with no cluster, in seconds, and it isolates
-// the GENERATOR: an identical-shaped config naming the wrong account passes the
+// Docker-only-gated floor. It runs with no cluster, in seconds, and it isolates
+// the generator: an identical-shaped config naming the wrong account passes the
 // sibling test above and fails this one, because the assertion is on what
 // botocore asked the portal to mint. A real two-entitlement
 // AWS tenant remains owner-hardware-only.

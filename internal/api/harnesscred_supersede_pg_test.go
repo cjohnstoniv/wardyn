@@ -183,7 +183,7 @@ func sizedPool(t *testing.T, base *pgxpool.Pool, maxConns int) *pgxpool.Pool {
 // The failure this pins is daemon-wide. A lock hold borrows a connection for
 // its whole span and the guarded work needs another, so one connection per
 // concurrent sign-in can exhaust the pool; `lock_timeout` does not bound a pool
-// acquire (it bounds a LOCK wait), and pgxpool's Acquire does not error on an
+// acquire (it bounds a lock wait), and pgxpool's Acquire does not error on an
 // empty pool, it blocks on the context. With no WriteTimeout and no
 // TimeoutHandler in front of the route, that context ends only when the client
 // disconnects — so both sign-ins, and every other database-backed request in

@@ -68,29 +68,29 @@ func r3bJWKS(t *testing.T, extra ...string) (jwksURL, token string) {
 	return srv.URL, token
 }
 
-// TestR3BJWKSSurvivesAnUnrepresentableKey pins EXACTLY the dependency floor —
+// TestR3BJWKSSurvivesAnUnrepresentableKey pins exactly the dependency floor —
 // not the broader property.
 //
-// Below go-oidc v3.21.0, a SINGLE JWKS entry whose `kty` the JOSE stack
+// Below go-oidc v3.21.0, a single JWKS entry whose `kty` the JOSE stack
 // cannot represent — and which carries no `alg` member — makes RemoteKeySet
-// fail the WHOLE document ("failed to decode keys: ... unsupported key
+// fail the whole document ("failed to decode keys: ... unsupported key
 // type/format"), so no signing key loads and every ID-token signature check
 // fails: every SSO login down, caused by one key Wardyn never needed. v3.21.0
 // skips the entry it cannot represent and keeps working on the keys it can.
 //
-// What that does and does not BUY. go-oidc v3.21.0 quotes RFC 7517 section 5
+// What that does and does not buy. go-oidc v3.21.0 quotes RFC 7517 section 5
 // — "Implementations SHOULD ignore JWKs within a JWK Set that use `kty`
 // values that are not understood by them, that are missing required members,
 // or for which values are out of the supported ranges" — and implements the
-// FIRST clause only. An unrepresentable key TYPE is skipped; a MALFORMED key
+// first clause only. An unrepresentable key type is skipped; a malformed key
 // of a supported type (a short EC `x`, an RSA missing `n`, an Ed25519 `x`
 // that is not 32 bytes) still fails the whole document. Arms that exercise
 // only the narrow property cannot vouch for the broad one.
 //
 // So arms A-C below are the dependency floor and use go-oidc RAW: they answer
 // "is go-oidc still at least v3.21.0", and an MVS downgrade turns arm B red.
-// Arm D is the broad property, and it goes through the key set WARDYN
-// ACTUALLY BUILDS, because that is where the broad property comes from —
+// Arm D is the broad property, and it goes through the key set Wardyn
+// actually builds, because that is where the broad property comes from —
 // tolerantJWKSTransport, not the dependency. Its depth (EC, RSA, several at
 // once, and the floor that an unusable key still verifies nothing) lives in
 // jwks_tolerant_test.go.
@@ -133,8 +133,8 @@ func TestR3BJWKSSurvivesAnUnrepresentableKey(t *testing.T) {
 		}
 	})
 
-	// ARM D: the broad property, on the key set Wardyn builds. A MALFORMED key
-	// of a SUPPORTED type is the class arms A-C never touch and go-oidc does
+	// Arm D: the broad property, on the key set Wardyn builds. A malformed key
+	// of a supported type is the class arms A-C never touch and go-oidc does
 	// not skip — the class malformed Ed25519 (under go-jose v4.1.5), EC and RSA
 	// entries are all in.
 	//
@@ -157,7 +157,7 @@ func TestR3BJWKSSurvivesAnUnrepresentableKey(t *testing.T) {
 		}
 	})
 
-	// ARM E: the same clause, on the two shapes NO dependency version handles.
+	// Arm E: the same clause, on the two shapes no dependency version handles.
 	// A malformed EC or RSA entry is accepted by no go-jose version on any
 	// go-oidc — it fails the whole key set — so "one odd JWKS key cannot break
 	// login" holds for this class only because the tolerance is Wardyn's own

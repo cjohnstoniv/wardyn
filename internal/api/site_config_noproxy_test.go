@@ -40,7 +40,7 @@ func TestValidateUpstreamProxyNoProxy(t *testing.T) {
 	}
 }
 
-// TestRedirectProbeTo pins WHICH url probe 1 requests and whether it swaps
+// TestRedirectProbeTo pins which url probe 1 requests and whether it swaps
 // the TCP target. A hostname To must stay byte-identical: no swap.
 func TestRedirectProbeTo(t *testing.T) {
 	cases := []struct {

@@ -198,10 +198,10 @@ func execRun(t *testing.T, agentExecID string) types.AgentRun {
 
 // TestReconcileOnBoot_ExecRunFinalizesFromAgentExit: after a restart, a RUNNING
 // exec-based run whose agent has exited (but whose idle sandbox container is still
-// up) MUST finalize + revoke + tear down, not strand. The reconciler observes
+// up) must finalize + revoke + tear down, not strand. The reconciler observes
 // AgentStatus (the persisted exec id), not container Status, which for an idle
 // `sleep infinity` reports RUNNING forever. Counterfactual: the runner's container
-// Status IS RUNNING here — a reconciler reading it would re-attach the run and
+// Status is RUNNING here — a reconciler reading it would re-attach the run and
 // never finalize it, so `transitioned` would stay false.
 func TestReconcileOnBoot_ExecRunFinalizesFromAgentExit(t *testing.T) {
 	h := newHarness(t)
@@ -500,18 +500,18 @@ func (r *mainProcessRunner) AgentStatus(_ context.Context, _, execID string) (ru
 	return runner.Status{State: types.RunRunning}, nil
 }
 
-// TestSweepRunWatchers_ExecLessRunNotFinalized: a healthy EXEC-LESS
-// (krun/CC3) launch has Runner.Exec return "" with NO error — dispatch must
+// TestSweepRunWatchers_ExecLessRunNotFinalized: a healthy exec-less
+// (krun/CC3) launch has Runner.Exec return "" with no error — dispatch must
 // not let that collide with the strand guard's "never exec'd" signal. This
-// drives the REAL path end to end — startAgentOrIdle persists whatever
+// drives the real path end to end — startAgentOrIdle persists whatever
 // dispatch decides via SetRunAgentExecID, then sweepRunWatchers reads that
-// SAME persisted value back — rather than hand-setting AgentExecID, so it
+// same persisted value back — rather than hand-setting AgentExecID, so it
 // exercises the value dispatch persists (runs_dispatch.go's
 // mainProcessExecID sentinel), not merely the guard's "== \"\"" condition
 // in isolation.
 //
 // Counterfactual: if startAgentOrIdle persisted the bare "" Exec returned,
-// the strand guard would finalize FAILED + tear down ANY non-interactive
+// the strand guard would finalize FAILED + tear down any non-interactive
 // task run with AgentExecID=="" without ever probing the runner — killing
 // this healthy run outright (transitioned=true, to=FAILED), which is
 // exactly what this test must catch red.

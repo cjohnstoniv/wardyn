@@ -12,7 +12,7 @@ import (
 // decode_strict_test.go pins decodeStrict alignment: POST /runs and POST
 // /runs/preflight reject an unknown JSON field the same way POST /policies
 // does (decodeStrict, helpers.go), so a typo'd field surfaces as a 400
-// instead of being silently DROPPED. Go's
+// instead of being silently dropped. Go's
 // json.Decoder.DisallowUnknownFields recurses into nested structs on its own,
 // so the same swap also catches a typo inside inline_policy with no separate
 // wiring.

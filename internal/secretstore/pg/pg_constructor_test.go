@@ -10,7 +10,7 @@ import (
 )
 
 // New must accept a generated *age.X25519Identity. An anonymous interface
-// asserting the WRONG Recipient() return type (the age.Recipient interface
+// asserting the wrong Recipient() return type (the age.Recipient interface
 // instead of the concrete *age.X25519Recipient) can never match, and breaks
 // wardynd boot.
 func TestNew_AcceptsX25519Identity(t *testing.T) {

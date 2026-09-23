@@ -86,7 +86,7 @@ func TestADONames_ApprovalRepoKeyIsOneSpelling(t *testing.T) {
 	}
 }
 
-// A HELD push on a spaced repository asks the control plane about the
+// A held push on a spaced repository asks the control plane about the
 // repository by its name, and the query carries the space intact.
 func TestADONames_HeldPushAsksByName(t *testing.T) {
 	h := newADOGitHarness(t, adoscope.CapRead)

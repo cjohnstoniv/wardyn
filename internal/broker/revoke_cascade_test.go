@@ -252,7 +252,7 @@ func pgApprovalsForRun(ctx context.Context, t *testing.T, pool *pgxpool.Pool, ru
 }
 
 // TestNoStaleMintedJTIsReferences keeps the retired MintedJTIs name out of
-// this package. The cascade is sourced from what the run ACTUALLY minted,
+// this package. The cascade is sourced from what the run actually minted,
 // through MintedCredentials (mintedCredentialsSQL) on both TxBeginner and
 // PgxStore; there is no MintedJTIs bulk read, so any mention of it in this
 // package is a comment describing code that does not exist — the kind that

@@ -28,7 +28,7 @@ import (
 //
 // Every case folds its lanes through selectedMechanism rather than naming a
 // mechanism directly: the residency must be graded from the lane that actually
-// RESOLVES, never from the roster's declared enum — case "shared bedrock_bearer
+// resolves, never from the roster's declared enum — case "shared bedrock_bearer
 // row, chain falls to the ~/.aws mount" is the trap.
 func TestGradeModelCredential(t *testing.T) {
 	var srv Server

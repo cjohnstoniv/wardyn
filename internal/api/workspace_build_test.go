@@ -142,9 +142,9 @@ func TestBuildLogWriter_ClampsOversizedLine(t *testing.T) {
 }
 
 // TestResolveBuildView_ExplicitImageNeedsBuilder: a registry/byo base image
-// is NOT "boots as-is" on a builder-less host — resolveWorkspaceImage wraps
+// is not "boots as-is" on a builder-less host — resolveWorkspaceImage wraps
 // it with the agent runtime via FinalizeBase, the same wrap a devcontainer
-// build needs, and runs_create.go's wsRefs door REFUSES the run outright when
+// build needs, and runs_create.go's wsRefs door refuses the run outright when
 // no builder is wired (never silently substitutes the convention image).
 // resolveBuildView must not report "nothing_to_build ... boots as-is — no
 // build involved" regardless of whether a builder exists — that is false on

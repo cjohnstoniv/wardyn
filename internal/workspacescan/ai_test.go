@@ -75,7 +75,7 @@ func TestAdviseProfile_MergeOnlyFillsEmptyNeverOverrides(t *testing.T) {
 
 func TestAdviseProfile_AIEgressForcesReview(t *testing.T) {
 	// An AI-suggested host must flip NeedsReview true (never silently trusted)
-	// and must land ONLY in SuggestedEgress — NEVER in EgressDomains, the sole
+	// and must land only in SuggestedEgress — never in EgressDomains, the sole
 	// field seedSourceRequirements/applyWorkspaceRequirements treat as an
 	// auto-granted, auto-unioned contract row. If mergeAdvice gap-filled
 	// EgressDomains directly, an AI guess would ride the exact same auto-union
@@ -143,7 +143,7 @@ func TestAdviseProfile_HighConfidenceUnchangedWhenNothingAdded(t *testing.T) {
 		Source:          SourceDeterministic,
 	}
 	// egress_domains empty: SuggestedEgress unions whatever the AI proposes
-	// regardless of EgressDomains' own fill state (a DIFFERENT field),
+	// regardless of EgressDomains' own fill state (a different field),
 	// so this profile stays a fair "AI has nothing new to say" fixture only if
 	// the AI's own advice is empty here too.
 	adv := wrapper(`{"languages":["Zig"],"package_managers":["zig"],"tools":[],"egress_domains":[],"needs_review":false,"notes":""}`)

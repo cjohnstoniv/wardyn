@@ -383,7 +383,7 @@ func TestConsoleLoginCapturesAzureDevOpsAccess(t *testing.T) {
 }
 
 // TestConsoleLoginSucceedsWhenAzureDevOpsConsentIsDeclined IS THE ONE THAT
-// Would lock an organisation OUT.
+// Would lock an organisation out.
 //
 // The tenant refuses the Azure DevOps scopes — a declined consent, a policy, a
 // tenant that will not issue them. The login MUST still succeed: the person

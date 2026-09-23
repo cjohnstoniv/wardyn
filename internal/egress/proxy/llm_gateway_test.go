@@ -126,8 +126,8 @@ func TestLLMGateway_SameHostOnConnectPath_StillBuiltinPrivateIP(t *testing.T) {
 
 // TestLLMGateway_GatewayHostnameOnConnectPath_StillBuiltinPrivateIP:
 // egressTarget must run p.vetHost before checking gatewayVendor, or a gateway
-// HOSTNAME in allowed_domains resolving to an RFC1918 address (no
-// InternalHosts declared) is ALLOWED on the ordinary sandbox CONNECT/MITM
+// hostname in allowed_domains resolving to an RFC1918 address (no
+// InternalHosts declared) is allowed on the ordinary sandbox CONNECT/MITM
 // paths, not only the brokered LLM route — on every port an agent might try,
 // since that branch never looks at the port. Both call sites (evaluate and
 // serveMITMRequest) must independently deny.
@@ -383,7 +383,7 @@ func TestLLMGateway_TrailingDotBaseURL_KeyTrimmed(t *testing.T) {
 }
 
 // TestLLMGateway_DecisionRecordsRealPort: a gateway configured on a non-443
-// port must be recorded in the decision log on THAT port. Hard-coding 443 for
+// port must be recorded in the decision log on that port. Hard-coding 443 for
 // every LLM/MITM row would make a gateway on :8443 produce an audit row naming
 // a port nothing was dialled on. docs/AUDIT-ACTIONS.md lists `port` as an
 // egress.* detail field; a wrong one is a dishonest row, not a cosmetic detail.

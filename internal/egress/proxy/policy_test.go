@@ -53,7 +53,7 @@ func TestEvalHost(t *testing.T) {
 }
 
 // TestEvalHostPortQualified asserts an "host:port" allow/deny entry is honored
-// (matches ONLY that port) while a bare entry matches any port. Stored as the
+// (matches only that port) while a bare entry matches any port. Stored as the
 // exact host "api.test:443" and never compared against the bare request host, a
 // port-qualified allow would be silently dead (and a port-qualified deny would
 // never fire).

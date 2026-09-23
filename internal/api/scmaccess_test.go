@@ -228,7 +228,7 @@ func TestScmAccessValue(t *testing.T) {
 	})
 }
 
-// the wire handler: GET /me/scm-access is an ARRAY (review finding F6)
+// the wire handler: GET /me/scm-access is an array (review finding F6)
 
 func TestHandleGetSCMAccess(t *testing.T) {
 	sc := adoTestSiteConfig(false)

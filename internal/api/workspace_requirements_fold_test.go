@@ -119,7 +119,7 @@ func TestApplyWorkspaceRequirements_Egress(t *testing.T) {
 // TestApplyWorkspaceRequirements_EgressTrustBoundary:
 // RequireOperatorSetEgress applies the SAME provenance gate to a scan_seeded
 // egress requirement that TestApplyWorkspaceRequirements_TrustBoundary pins
-// for secrets — but ONLY when the flag is set. With the flag unset/false, any
+// for secrets — but only when the flag is set. With the flag unset/false, any
 // enabled requirement folds in regardless of provenance (see
 // TestApplyWorkspaceRequirements_Egress).
 func TestApplyWorkspaceRequirements_EgressTrustBoundary(t *testing.T) {
@@ -470,7 +470,7 @@ func TestSetupWorkspaceSecretItems_ContractRequiredAbsentEscalatesToBlockingKind
 	})
 
 	t.Run("a scan-only (non-contract) required secret is unaffected", func(t *testing.T) {
-		// A workspace with NO requirements contract entry for this name must keep
+		// A workspace with no requirements contract entry for this name must keep
 		// the neutral, non-blocking behavior exactly.
 		scanOnly := types.Workspace{ID: uuid.New(), Name: "legacy-app"}
 		items := setupWorkspaceSecretItems([]types.Workspace{scanOnly}, map[string]bool{})

@@ -18,9 +18,9 @@ import (
 const oracleAgentRunPath = "../../../deploy/images/oracle/agent-run"
 
 // TestOracleAgentRun_IdleHoldsOpen pins that both runners (driver.go,
-// k8s/sandbox.go) launch `agent-run --idle` as the ENTIRE main process for
+// k8s/sandbox.go) launch `agent-run --idle` as the entire main process for
 // every interactive run — never Exec'ing a task into it — so an image's
-// agent-run MUST hold that process open, not exit. Without an --idle branch
+// agent-run must hold that process open, not exit. Without an --idle branch
 // the oracle image (the e2e stand-in) would fall through to normal task mode,
 // where `--idle` is treated as a missing solution.sh path and exits 1 almost
 // instantly, stranding an interactive run RUNNING with a dead main process
@@ -29,7 +29,7 @@ const oracleAgentRunPath = "../../../deploy/images/oracle/agent-run"
 // Proof without a real container: run the actual script under `timeout`. A
 // script that exits immediately reports ITS OWN exit code before the timeout
 // fires; a script that holds the process open (`exec sleep infinity`) gets
-// killed BY timeout, which reports 124. That distinction is the assertion.
+// killed by timeout, which reports 124. That distinction is the assertion.
 func TestOracleAgentRun_IdleHoldsOpen(t *testing.T) {
 	scriptPath, err := filepath.Abs(oracleAgentRunPath)
 	if err != nil {

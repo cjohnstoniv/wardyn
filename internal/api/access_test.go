@@ -104,7 +104,7 @@ func (b accessOIDCBridge) ListRoleMappings(ctx context.Context) ([]oidc.RoleMapp
 	return out, nil
 }
 
-// a REAL *oidc.Authenticator, not the zero-value stub every other API
+// a real *oidc.Authenticator, not the zero-value stub every other API
 // test uses
 //
 // Every other internal/api test authenticates through a session cookie whose
@@ -502,7 +502,7 @@ func TestAccess_GetReflectsEmailDomainsConfigured(t *testing.T) {
 	}
 }
 
-// A-5: guard matrix over a SHADOWED row (merged map, not raw counts)
+// A-5: guard matrix over a shadowed row (merged map, not raw counts)
 
 // TestAccess_ShadowedRowGuards: chart is EMPTY; the console's ONLY row
 // collides with the OPERATOR ALLOWLIST and is shadowed (mergeRoleMaps drops
@@ -829,7 +829,7 @@ func TestAccess_LockoutGuard_POST(t *testing.T) {
 // the 2048-byte truncation) cannot re-derive the admin access the caller
 // demonstrably holds — PreviewRoleAgainst against the snapshot alone comes
 // out non-admin regardless of the write. Such a write must get the distinct
-// accessStaleSnapshot refusal, not the LOCKOUT message (a false positive),
+// accessStaleSnapshot refusal, not the lockout message (a false positive),
 // and the row must survive.
 func TestAccess_StaleSnapshot_NilGroupsNeverReadsAsLockout(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
@@ -1241,7 +1241,7 @@ func TestAccess_DeleteUnknownID404(t *testing.T) {
 	}
 }
 
-// A-6: delete audit records WHICH mapping was removed
+// A-6: delete audit records which mapping was removed
 
 // TestAccess_DeleteRecordsValueAndRoleInAudit: once a row is gone, the store
 // can no longer say what it named — the audit event must carry the matched

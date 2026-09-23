@@ -134,7 +134,7 @@ func (f fakeGTCorrelator) RunForContainer(id string) (uuid.UUID, bool) {
 }
 
 // TestUnmappedHostEventNotForwardedByDefault pins the default gate. Tetragon
-// is a HOST sensor and observes every process on the box, not only Wardyn's.
+// is a host sensor and observes every process on the box, not only Wardyn's.
 // An exec event from a container the docker correlator does not recognise (a
 // non-Wardyn container, or a bare host process) must not reach the control
 // plane's undeletable audit log / SIEM fanout with run_id NULL +
@@ -218,7 +218,7 @@ func TestGatedMapper_ForwardsUnmappedWhenOptedIn(t *testing.T) {
 // Short-lived containers must keep moving the counters
 
 // TestDockerCorrelator_ResolvesAfterContainerExits is half of the frozen-counter
-// guard. If Refresh REPLACED the index with the current `docker ps` snapshot,
+// guard. If Refresh replaced the index with the current `docker ps` snapshot,
 // then the moment a run's container exited (and teardown removed it) every
 // kernel event still coming down the lagging Tetragon tail would resolve
 // unmapped, be gated, and move no counter at all. Entries outlive their

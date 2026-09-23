@@ -158,15 +158,15 @@ func callsNamed(fn *ast.FuncDecl, name string) bool {
 }
 
 // TestDrivePreviewWritesNoDenial: the authz.denied emit lives at the deciding
-// sites, and BOTH of them are reached by the admin drive preview:
+// sites, and both of them are reached by the admin drive preview:
 // drivePreviewDoorIsOpen resolves the previewed principal's ceiling,
 // previewResolveUserDrive resolves their drive. An admin asking "what would
-// carol get" must not write an authz.denied row — it would name THE ADMIN as the
+// carol get" must not write an authz.denied row — it would name the admin as the
 // refused principal, because the row is stamped from the request's own identity
 // (one preview of carol's drive would record `authz.denied
 // target=governance.ceiling actor="sub-admin-alice"`).
 //
-// handlePreviewUserDrive's own doc says this endpoint is "STILL NOT AUDITED …
+// handlePreviewUserDrive's own doc says this endpoint is "still not audited …
 // nothing is minted and nothing changes". A denial stream with the wrong person
 // in it is worse than no denial at all: silence is at least honest about who was
 // refused.

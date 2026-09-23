@@ -15,14 +15,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The click IS the check. A captured AWS SSO session whose access token has
+// The click is the check. A captured AWS SSO session whose access token has
 // lapsed but whose refresh token still lives is redeemed at create, not
-// ADMITTED with refresh=false on the promise that "dispatch renews it" — when
+// admitted with refresh=false on the promise that "dispatch renews it" — when
 // AWS has already retired that refresh token, that promise fails at dispatch,
 // on the run's own page, after the person has been told it launched. A renewal
 // AWS refuses (spent) is refused at create with the class the console's launch
 // door acts on; one AWS did not answer is refused with "launch again in a
-// moment" and NO class, because a sign-in repairs nothing about an outage.
+// moment" and no class, because a sign-in repairs nothing about an outage.
 // Preflight (Review) stays a dry run.
 
 // expiredRenewableMemberBlob stores, for pinTestMember, a session whose access

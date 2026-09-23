@@ -19,7 +19,7 @@ import (
 
 // counterfactual: the live completion watcher (startCompletionWatcher) and the
 // boot reconciler (reconcileFinalize) are the two run-finalize paths, and both
-// route through finalizeRunTail rather than each inlining the SAME terminal
+// route through finalizeRunTail rather than each inlining the same terminal
 // sequence to be hand-kept in sync. This test drives each path and
 // asserts the identical terminal side effects: a success audit, exactly one
 // revoke-cascade, and exactly one sandbox teardown. If either caller stops

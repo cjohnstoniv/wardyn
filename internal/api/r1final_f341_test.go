@@ -17,11 +17,11 @@ import (
 
 // An admin's cross-principal ?owner= must not be used as a raw namespace key,
 // with no canonicalization and no resolution: naming a real member by their
-// EMAIL (or by a case-variant of their subject) would answer 204 with an
+// email (or by a case-variant of their subject) would answer 204 with an
 // outcome=success audit row while the PUT lands in a namespace nobody reads and
 // the DELETE leaves the live secret in place.
 //
-// The contract, pinned below: ?owner= names a HUMAN, and is resolved to
+// The contract, pinned below: ?owner= names a human, and is resolved to
 // the namespace key that human's own writes land in — matched case-insensitively
 // against the principals this deployment knows, and mapped from the email form
 // through the SAME (principal, email) pairing revokeAPITokensFor already matches

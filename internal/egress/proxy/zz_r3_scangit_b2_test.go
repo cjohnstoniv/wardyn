@@ -12,8 +12,8 @@ import (
 
 // TestScanSummaryFrom_FindingsCappedStillAlerts: findings_capped sets
 // Result.Skipped, so scanSummaryFrom must not resolve `case res.Skipped`
-// BEFORE reaching the "alert" default — that would flip the decision's Action
-// from "alert" to "skipped" exactly when the scan produced the MOST findings.
+// before reaching the "alert" default — that would flip the decision's Action
+// from "alert" to "skipped" exactly when the scan produced the most findings.
 // egress.ScanSummary.Action is the literal audit-action suffix
 // (docs/AUDIT-ACTIONS.md:71: llm.scan.alert vs llm.scan.skipped), so a
 // 500-finding capped body would audit as llm.scan.skipped instead of

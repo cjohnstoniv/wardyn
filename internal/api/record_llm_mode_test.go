@@ -113,7 +113,7 @@ func (s *recordLLMModeStore) lastRecord() RecordTaskResult {
 }
 
 // TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode: launchRecordRun
-// computes llm_mode/model BEFORE dispatch, from a
+// computes llm_mode/model before dispatch, from a
 // mount-target check (specHasMountTarget(claudeCredTarget)) that only ever
 // sees a HOST-STAGED resident subscription. The Wardyn-MANAGED subscription
 // (no mount at all — compose-mode, gated on s.managedInjectReady/ManagedToken)

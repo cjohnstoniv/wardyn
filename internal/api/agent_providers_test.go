@@ -249,7 +249,7 @@ func TestAgentProvidersPut(t *testing.T) {
 		t.Error("PUT echoes no ETag")
 	}
 
-	// The audit datum, and the one field that must NEVER be in it.
+	// The audit datum, and the one field that must never be in it.
 	var writes []types.AuditEvent
 	for _, ev := range audit.events {
 		if ev.Action == "agent_provider.write" {

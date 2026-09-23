@@ -223,8 +223,8 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 	// receive-pack branch-namespace parser cannot read, because SSH is opaque to it.
 	// The lane is closed here (and refused at policy-write by
 	// validateGrantLaneExclusivity), so the brokered route is the only route to the
-	// forge BY NAME — a name-based deny never binds an IP literal, the standing
-	// caveat the four HTTPS denies already carry. The deny here is the BARE host,
+	// forge by name — a name-based deny never binds an IP literal, the standing
+	// caveat the four HTTPS denies already carry. The deny here is the bare host,
 	// which covers every port. If this assertion ever flips, docs/POLICIES.md and
 	// threatmodel/THREAT-MODEL.md are wrong and must change with it.
 	sshLane := types.RunPolicySpec{AllowedDomains: []string{"github.com", "ssh.github.com:443"}}
@@ -236,7 +236,7 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 		t.Errorf("ssh.github.com must be denied by the git-broker confinement, got denied=%v", sshLane.DeniedDomains)
 	}
 
-	// The case that matters: the SSH confinement fires ONLY for a brokered
+	// The case that matters: the SSH confinement fires only for a brokered
 	// run. An ssh_key run with no broker map keeps its lane untouched — nothing is
 	// subtracted and nothing is denied.
 	sshOnly := types.RunPolicySpec{AllowedDomains: []string{"ssh.github.com:443", "api.anthropic.com"}}
@@ -256,7 +256,7 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 		t.Errorf("non-brokered run mutated: allowed=%v denied=%v", plain.AllowedDomains, plain.DeniedDomains)
 	}
 
-	// The dedup key is the RAW entry, and this case is the only thing that says so.
+	// The dedup key is the raw entry, and this case is the only thing that says so.
 	// A policy that already denies "github.com:443" must STILL get the bare-host
 	// deny: keying the dedup map on egressEntryHost(d) instead looks like tidy-up
 	// now that the helper exists, passes every other test in the repo, and leaves
@@ -306,7 +306,7 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 // A trailing slash surviving into the slug (the shell's bare-slug regex then
 // drops the record entirely) or an http:// clone URL (which never prefix-matches
 // the https insteadOf) would leave the clone dialing github.com directly, a route
-// a brokered run does not have. A BARE slug is already canonical and must come
+// a brokered run does not have. A bare slug is already canonical and must come
 // through byte-identical, casing included.
 func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{

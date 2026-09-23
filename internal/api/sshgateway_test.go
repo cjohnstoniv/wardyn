@@ -724,9 +724,9 @@ func TestSSHGateway_OverrideRoleIsBoundedStale(t *testing.T) {
 }
 
 // TestSSHGateway_OfferWithoutSignatureNeverAudited: PublicKeyCallback (sshAuth)
-// fires on the UNSIGNED "query" every pubkey auth attempt opens with (RFC 4252 §7)
+// fires on the unsigned "query" every pubkey auth attempt opens with (RFC 4252 §7)
 // — before the client ever proves it holds the matching private key. Auditing
-// "ssh.auth success" there would let an attacker who merely KNOWS a victim's
+// "ssh.auth success" there would let an attacker who merely knows a victim's
 // public key — never the private key — mint a forged success row attributed to
 // that victim. The offered key here is genuinely registered and owned (sshAuth's
 // own checks all pass, so the query itself is accepted server-side) — but
@@ -1026,7 +1026,7 @@ func TestSSHGateway_DirectTCPIPLoopbackRestriction(t *testing.T) {
 }
 
 // TestSSHGateway_ForwardAuditSurvivesKill pins an audit race: killing the
-// WHOLE SSH session (not just the forwarded conn) races handleSSHConn's
+// whole SSH session (not just the forwarded conn) races handleSSHConn's
 // connCtx cancellation — deferred, fires the instant the connection tears
 // down — against handleSSHDirectTCPIP's own trailing recordAudit call for
 // ssh.forward. On connCtx that write would be attempted on an
@@ -1311,8 +1311,8 @@ func containsPrefix(env []string, prefix string) bool {
 // TestSSHGateway_MixedChannelTypesShareOneCap is B2′.
 //
 // TestSSHGateway_MaxSessionsPerRunEnforced above exercises "session" channels
-// ONLY. This proves that "direct-tcpip" (-L forwards) draws on the SAME
-// per-run counter: Wardyn's cap is per-RUN and shared across channel TYPES,
+// only. This proves that "direct-tcpip" (-L forwards) draws on the same
+// per-run counter: Wardyn's cap is per-run and shared across channel types,
 // inverting the OpenSSH model, where MaxSessions scopes to session channels
 // and a direct-tcpip is dispatched straight to the forward path. That
 // inversion is why a client which opens shells and forwards together (VS Code

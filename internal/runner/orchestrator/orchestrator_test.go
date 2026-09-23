@@ -290,7 +290,7 @@ func TestOrchestrator_NameIsSoleSubstrate(t *testing.T) {
 
 // TestOrchestrator_ClassesCachedWithinTTL pins Capabilities()/substrateFor()
 // memoize each substrate's ClassSupport for capsCacheTTL, so repeated hot-path
-// calls collapse to ONE daemon probe per substrate per TTL, not a live docker
+// calls collapse to one daemon probe per substrate per TTL, not a live docker
 // Info() round-trip every call. A countable fake proves the probe
 // count; a fake clock proves the TTL boundary forces exactly one refresh.
 func TestOrchestrator_ClassesCachedWithinTTL(t *testing.T) {

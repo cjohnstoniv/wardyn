@@ -18,7 +18,7 @@ import (
 // never be able to forge run.Task into a server-set discriminator by simply
 // POSTing it. task="harness login" would otherwise reach
 // handleUploadSSOToken's own gate (run.Task == harnessLoginTask && run.Agent
-// == awsSSOAgent — BOTH client-settable, neither backed by a second
+// == awsSSOAgent — both client-settable, neither backed by a second
 // trusted-linkage field like the workspace-scoped tasks below have) and
 // runIsUnrecordable's recording-suppression check, completely bypassing the
 // operatorOnly gate on the real POST /setup/harness-login door. Parametrized

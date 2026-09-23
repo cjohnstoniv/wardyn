@@ -14,10 +14,10 @@ import (
 
 // TestEgressDeniesTotalCountsPolicyDeniesOnly: wardyn_egress_denies_total
 // counts policy denials only. Its exposition declares it "Egress decisions
-// ingested with decision=deny, by reason (proxy decision ingest)" (DRAFT, M2
+// ingested with decision=deny, by reason (proxy decision ingest)" (draft, M2
 // canon pending) — the only egress counter Wardyn exposes — and two large
 // classes of Deny are not policy denials at all: builtin:dial-failed (a failed
-// upstream dial on a request policy ALLOWED, emitted from four proxy sites)
+// upstream dial on a request policy allowed, emitted from four proxy sites)
 // and the synthetic egress.decisions.dropped:<n> summary (an audit-fidelity
 // alert about lost decision records). Counting them would page an operator
 // alerting on the series for a flaky upstream or a wedged control plane, and

@@ -47,7 +47,7 @@ func (s *scanReconcileStore) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws 
 
 // TestReconcileWorkspaceRun_StuckScanUsesScopedWrite: the scan-error reconcile
 // branch must use the scoped SetWorkspaceImportState (status + cleared
-// active_run_id only), NOT the full-row UpdateWorkspace, which replays a stale
+// active_run_id only), not the full-row UpdateWorkspace, which replays a stale
 // snapshot over every column. It also honors the same newer-run fence the
 // verify branch does.
 func TestReconcileWorkspaceRun_StuckScanUsesScopedWrite(t *testing.T) {

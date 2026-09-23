@@ -1,16 +1,16 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The workspace access rule is spelled with one predicate for the LIST, the
-// direct READ and the EGRESS WRITE, so a security_admin gets one answer about
-// ONE member-owned row. Three predicates (isSecurityOperator for the list,
+// The workspace access rule is spelled with one predicate for the list, the
+// direct read and the egress write, so a security_admin gets one answer about
+// one member-owned row. Three predicates (isSecurityOperator for the list,
 // ownsWorkspaceOrAdmin -> isOperator for the read, securityOps with no ownership
 // check for the write) would hand it the list, answer the read with the
 // foreign-workspace 404, and let the write succeed.
 //
 // The read is the harmful odd one out: the tier could write a workspace's
 // denylist but could not read /observed-egress, the observed traffic that is the
-// INPUT to that decision.
+// input to that decision.
 package api
 
 import (
@@ -259,7 +259,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
 	}
 
-	// the HOST axis, field by field
+	// the host axis, field by field
 	for i, src := range got.Sources {
 		if src.Type == types.WorkspaceSourceTypeLocalDir && src.Path != "" {
 			t.Errorf("sources[%d].path = %q, want blank — this is the exact datum /sources answers this tier 403 for",
@@ -280,7 +280,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 		}
 	}
 
-	// what the tier KEEPS, because withholding it would break the decision
+	// what the tier keeps, because withholding it would break the decision
 	// this tier is widened to make
 	if got.Name != "payments" {
 		t.Errorf("name = %q, want the workspace to remain identifiable", got.Name)

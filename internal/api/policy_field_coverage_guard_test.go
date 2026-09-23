@@ -18,7 +18,7 @@ import (
 )
 
 // This guard answers one question: which RunPolicySpec fields does anything
-// actually BOUND?
+// actually bound?
 //
 // Reading two files side by side is the only other way to find out, and that
 // is how a field slips through: max_holds and first_use_hold_seconds, left
@@ -187,7 +187,7 @@ func stripGoComments(t *testing.T, src string) string {
 	return out.String()
 }
 
-// Negative control: a field named only inside a comment must NOT count
+// Negative control: a field named only inside a comment must not count
 // as bounded once stripGoComments runs — proving the strip actually closes
 // the loophole the guard's own doc comment declares ("It reads the SOURCE
 // rather than exercising behaviour deliberately").

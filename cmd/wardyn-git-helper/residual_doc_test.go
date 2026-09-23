@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestResidualDoc_MintRouteHonesty_GoDoc guards the CODE side of this
+// TestResidualDoc_MintRouteHonesty_GoDoc guards the code side of this
 // residual: the package doc's "Caller authentication"
 // RESIDUAL paragraph must say plainly that the per-run caller-auth secret
 // only binds a caller going through THIS BINARY, and that the proxy's local

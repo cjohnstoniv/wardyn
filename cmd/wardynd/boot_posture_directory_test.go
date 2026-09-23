@@ -31,7 +31,7 @@ func TestResolveDirectoryConfig(t *testing.T) {
 		// on success: the credentials the connector must receive
 		wantTenant, wantClientID, wantSecret string
 	}{
-		// OFF: the default, and it must stay a total no-op
+		// Off: the default, and it must stay a total no-op
 		{
 			name: "unset provider is the feature off, not an error",
 			// Even with a full OIDC deployment sitting right there.
@@ -42,7 +42,7 @@ func TestResolveDirectoryConfig(t *testing.T) {
 			provider: "   ",
 		},
 
-		// PF-29 leg 1: a PUBLIC OIDC client (PKCE, no secret)
+		// PF-29 leg 1: a public OIDC client (PKCE, no secret)
 		// This is a SUPPORTED, documented OIDC shape (WARDYN_OIDC_CLIENT_SECRET is
 		// optional — some IdPs refuse to issue one), which is exactly why it has
 		// to be refused here: nothing else in boot would find it odd.
@@ -77,7 +77,7 @@ func TestResolveDirectoryConfig(t *testing.T) {
 			wantErr: "no OIDC issuer is configured",
 		},
 
-		// the DEFAULT path: reuse the OIDC confidential app
+		// the default path: reuse the OIDC confidential app
 		{
 			name:     "entra derives the tenant from the OIDC issuer",
 			provider: "entra",
@@ -119,7 +119,7 @@ func TestResolveDirectoryConfig(t *testing.T) {
 			wantErr: "no Entra tenant can be derived",
 		},
 
-		// the DEDICATED app registration override
+		// the dedicated app registration override
 		{
 			name:      "all three dedicated vars win over the OIDC ones",
 			provider:  "entra",

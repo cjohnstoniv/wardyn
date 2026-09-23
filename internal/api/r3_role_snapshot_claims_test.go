@@ -50,7 +50,7 @@ func TestRoleSnapshotClaimsMatchTheRefreshThatShipped(t *testing.T) {
 	})
 
 	// The inverted claims, banned by their exact wording. The OnLogin
-	// re-stamp covers the GROUP snapshot as well as the role
+	// re-stamp covers the group snapshot as well as the role
 	// (store.RefreshAPITokenIdentity), so "frozen at mint"/"signing in again
 	// does not refresh it" is false for both halves, and every ban below
 	// applies to either.

@@ -13,7 +13,7 @@ import (
 )
 
 // TestSplitHostPortStripsAllTrailingDots pins the parser funnel: every FQDN-root
-// spelling of a host reduces to the SAME canonical dot-free host. A single
+// spelling of a host reduces to the same canonical dot-free host. A single
 // TrimSuffix would leave "evil.com..:443" as "evil.com." and miss a dot-free
 // deny key.
 func TestSplitHostPortStripsAllTrailingDots(t *testing.T) {
@@ -39,7 +39,7 @@ func TestSplitHostPortStripsAllTrailingDots(t *testing.T) {
 }
 
 // TestTrailingDotDenyBypass is the end-to-end proof: under allow_all_egress with
-// "evil.com" on denied_domains, every trailing-dot spelling of the host is DENIED
+// "evil.com" on denied_domains, every trailing-dot spelling of the host is denied
 // (403, upstream never reached), the multi-dot forms included.
 func TestTrailingDotDenyBypass(t *testing.T) {
 	for _, hostport := range []string{"evil.com..:80", "evil.com.", "evil.com...:80"} {

@@ -158,7 +158,7 @@ func TestCapture(t *testing.T) {
 			},
 		},
 		{
-			// A deny during a CONFINED replay is the advertised
+			// A deny during a confined replay is the advertised
 			// containment proof working as designed, not an anomaly a
 			// synthesis must second-guess — it must still show up on the
 			// per-host DomainObservation (nothing hidden), just not in

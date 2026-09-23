@@ -5,7 +5,7 @@ package api
 
 import "testing"
 
-// The KILL switch is one constant, and these are the tests that make that
+// The kill switch is one constant, and these are the tests that make that
 // sentence true rather than merely written down (general B3).
 //
 // It was false as shipped: cmd/wardynd hard-coded the flag default string

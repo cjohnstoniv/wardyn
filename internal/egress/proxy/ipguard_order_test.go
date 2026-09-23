@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A literal blocked IP must be denied by the builtin guard BEFORE the
+// A literal blocked IP must be denied by the builtin guard before the
 // first-use approval path (caught live by e2e). With policy/approval first,
 // 169.254.169.254 falls into "unknown host" and raises an approvable
 // egress_domain request — meaning an admin could approve egress to the cloud

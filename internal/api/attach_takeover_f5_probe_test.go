@@ -7,7 +7,7 @@
 // authzStore, touchCountingStore, sshTestRecorder). No Postgres is needed: every
 // store here is the package's in-memory authzStore. Run them under -race.
 //
-// An in-flight write has NO test here: its strict zero-residual form — "a
+// An in-flight write has no test here: its strict zero-residual form — "a
 // frame already inside the runner Session's Write is not delivered" — is
 // unsatisfiable, because bytes already inside that Write cannot be recalled by
 // any gate, and a fake that records every Write it enters can never represent
@@ -352,7 +352,7 @@ func TestF5_SSHPump_KeystrokesAfterEvictionDropped(t *testing.T) {
 
 // TestF5_SSHPump_ResizeAfterEvictionDropped: sshShellPump's resize goroutine
 // must gate on holder.canWrite(), not `holder == nil` (in
-// sshgateway_channels.go), or an EVICTED ssh holder keeps resizing the shared
+// sshgateway_channels.go), or an evicted ssh holder keeps resizing the shared
 // tmux window under the new holder until its channel actually dies. The web
 // lane gates the same frame on canWrite() (attachPump in attach.go); the two
 // lanes must agree.
@@ -394,7 +394,7 @@ func TestF5_SSHPump_ResizeAfterEvictionDropped(t *testing.T) {
 
 // TestF5_SSHDisplace_BlockedStderrDoesNotStrandEvictedPump: the SSH displace()
 // prints the reason on the channel's stderr (bridgeSSHShell in
-// sshgateway_channels.go). If it printed and only THEN cancelled the pump, on a
+// sshgateway_channels.go). If it printed and only then cancelled the pump, on a
 // goroutine with no deadline, a displaced client whose channel window is
 // exhausted (stopped reading — a suspended ssh(1)) would park that goroutine
 // forever: cancel() would never run, and the evicted pump would keep its exec (a
@@ -442,7 +442,7 @@ func TestF5_SSHDisplace_BlockedStderrDoesNotStrandEvictedPump(t *testing.T) {
 // security_admin — who can neither mint an attach ticket for a foreign run
 // (handleAttachTicket in attach_ticket.go) nor SSH into it (handleAddSSHKey in
 // sshkeys.go stamps member) — must not be able to evict its live holder either.
-// The three-tier doctrine says the security tier never reaches INTO a run;
+// The three-tier doctrine says the security tier never reaches into a run;
 // ending another human's terminal is a kick, not a read.
 func TestF5_Takeover_SecurityAdminCannotEvictForeignHolder(t *testing.T) {
 	srv, gr, audit, run := f5Server(t)

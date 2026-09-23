@@ -40,9 +40,9 @@ import (
 // in its own right, so each one is either previewed by preflight or named in
 // preflightGateExceptions with its own reason.
 //
-// This is deliberately NARROW: one exception per real gap, never one per
+// This is deliberately narrow: one exception per real gap, never one per
 // wrapper. A blanket entry for `decodeAndValidateCreateRun` would license the
-// WHOLE wrapper — including requestRepoProviderRefusals, which lives inside it —
+// whole wrapper — including requestRepoProviderRefusals, which lives inside it —
 // and leave this guard structurally unable to say that preflight never calls it.
 //
 // The value is the file the wrapper is declared in, so a move reds here naming

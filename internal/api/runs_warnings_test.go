@@ -133,7 +133,7 @@ func (s *collisionStore) ActiveRunsAtWorkspacePath(_ context.Context, path strin
 // policy bounds, to decide whether to print one sentence that usually is not
 // printed. The predicate is two columns; Postgres can answer it with a WHERE.
 //
-// The output is identical either WAY, which is exactly why this needs a test
+// The output is identical either way, which is exactly why this needs a test
 // that watches the read: every existing assertion about the warning's text
 // passes on both implementations, so without this nothing would stop a silent
 // revert to the full scan.

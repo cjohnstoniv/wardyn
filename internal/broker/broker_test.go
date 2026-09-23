@@ -536,7 +536,7 @@ func TestMintForGrant_NoApprovalYet_CreatesPending(t *testing.T) {
 	}
 }
 
-// The approval sweeper EXPIREs a stale PENDING approval. The next
+// The approval sweeper expires a stale PENDING approval. The next
 // mint attempt must raise a FRESH PENDING request (a human can still decide it)
 // — not re-find the swept row forever and return ErrApprovalDenied, which
 // wedged the run permanently with nothing left in the queue to approve.
@@ -852,8 +852,8 @@ func TestMintForGrant_EmptyRepoScopeFails(t *testing.T) {
 	}
 }
 
-// TestMint_AuditRidesTxAtomicWithJTI: the credential.mint SUCCESS row must be
-// written INSIDE the mint tx — atomically with the minted_jti single-use burn — not
+// TestMint_AuditRidesTxAtomicWithJTI: the credential.mint success row must be
+// written inside the mint tx — atomically with the minted_jti single-use burn — not
 // on a separate connection after commit, where a crash in the window between commit
 // and that write would burn the approval with no audit row and nothing delivered.
 //

@@ -71,7 +71,7 @@ func TestCreatePolicyValidation(t *testing.T) {
 
 // TestCreatePolicy_UnknownSecretRefFailsAtAuthorTime pins the author-time
 // fail-fast for validateWorkspaceSources' sibling reference: a typo'd api_key
-// secret name must not save GREEN and then 422 at every launch that references
+// secret name must not save green and then 422 at every launch that references
 // the policy — the failure mode the workspace check prevents, on the other
 // referenced resource. Advisory, not the load-bearing gate: the secret can be
 // deleted afterwards, so run-create still re-checks.

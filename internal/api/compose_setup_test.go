@@ -120,11 +120,11 @@ func TestDeriveSetupItems_LLMAccessReusesVerdict(t *testing.T) {
 }
 
 // TestDeriveSetupItems_LLMAccessFixNamesTheRunsActualGrantSecret: an
-// integration-bound run's api_key grant can carry a NON-convention secret
+// integration-bound run's api_key grant can carry a non-convention secret
 // name (applyIntegrationCreds grants the integration's own secret, e.g.
 // via its DisplayName), not the provider convention default. The
 // "add_secret" fix must name that secret, not the convention one
-// (anthropic-api-key) — an operator who added THAT secret would see the
+// (anthropic-api-key) — an operator who added that secret would see the
 // checklist go green while the run still authenticates through the
 // integration's own (still-missing) secret, unaffected by what they just
 // added.
@@ -251,7 +251,7 @@ func TestDeriveSetupItems_PrimaryGitWorkspaceResolvedFromWorkspaceRepos(t *testi
 // One derivation, not two: deriveSetupItems must trust spec.WorkspaceRepos/
 // WorkspaceMounts ALONE for its workspace rows — never a fallback keyed on
 // run.Repo. A bare spec must show no workspace row even when run.Repo names
-// a slug that WOULD resolve under such a fallback.
+// a slug that would resolve under such a fallback.
 func TestDeriveSetupItems_WorkspaceRowsComeOnlyFromSpec(t *testing.T) {
 	primary := types.Workspace{
 		ID:      uuid.New(),
@@ -460,7 +460,7 @@ func TestDeriveSetupItems_BackendNonContiguousClassesMirrorsLaunchGate(t *testin
 }
 
 // CC3 unavailable: fixable-here (needs setup) vs not-fixable-on-this-host (no
-// /dev/kvm) is a REAL hardware probe (internal/setup) — mirror
+// /dev/kvm) is a real hardware probe (internal/setup) — mirror
 // its live result rather than assuming this test host's hardware either way.
 func TestDeriveSetupItems_BackendCC3SplitsOnKVM(t *testing.T) {
 	srv := newSetupTestServer()

@@ -48,9 +48,9 @@ func TestValidatePolicySpec_GrantScopeShapes(t *testing.T) {
 		{"cloudsts empty object", grant(types.GrantCloudSTS, `{}`), false},
 		{"cloudsts null", grant(types.GrantCloudSTS, `null`), false},
 		{"cloudsts non-object", grant(types.GrantCloudSTS, `"role-arn"`), true},
-		// api_key must fail closed on an undecodable scope, the SAME as
+		// api_key must fail closed on an undecodable scope, the same as
 		// git_pat/ssh_key just below — a missing host/secret_name or non-JSON
-		// scope must not be silently ACCEPTED (as a check that only ran `if
+		// scope must not be silently accepted (as a check that only ran `if
 		// derr == nil` would), or a malformed default-policy api_key grant
 		// boots wardynd clean and only 422s at first run-creation.
 		{"api_key valid", grant(types.GrantAPIKey, `{"host":"api.anthropic.com","secret_name":"anthropic-api-key"}`), false},
@@ -121,8 +121,8 @@ func TestValidateLLMInspection(t *testing.T) {
 		{"entropy ok", &types.LLMInspectionSpec{Mode: "alert", DetectEntropy: true}, nil, true},
 		{"pii ok", &types.LLMInspectionSpec{Mode: "alert", DetectPII: true}, nil, true},
 		{"sidecar url is a detector, host allowlisted", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:8080/scan"}, presidio, true},
-		// belt-and-braces: a well-formed http(s) sidecar URL is STILL refused
-		// when its host is not in the SAME policy's own egress allowlist — the
+		// belt-and-braces: a well-formed http(s) sidecar URL is still refused
+		// when its host is not in the same policy's own egress allowlist — the
 		// operator must explicitly bless it, exactly like a brokered api_key
 		// injection requires an exact allowlist entry (domainAllowedExact).
 		// Checking only the http(s) prefix would let an operator-authored (or
@@ -135,7 +135,7 @@ func TestValidateLLMInspection(t *testing.T) {
 		{"require_inspectable needs intercept_tls", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true}, nil, false},
 		{"require_inspectable with intercept_tls ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true, InterceptTLS: true}, nil, true},
 		{"intercept_tls alone ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, InterceptTLS: true}, nil, true},
-		// A raw VALUE can never be authored — only NAMES.
+		// A raw value can never be authored — only names.
 		{"workspace_secret_values rejected on write; author workspace_secret_names instead", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretValues: []string{"super-secret-value"}}, nil, false},
 		{"workspace_secret_names ok (the field an operator actually authors)", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretNames: []string{"prod-db-password"}}, nil, true},
 	}

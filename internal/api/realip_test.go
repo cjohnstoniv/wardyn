@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestSourceIPNotForgeableViaXForwardedFor: the router must NOT install
+// TestSourceIPNotForgeableViaXForwardedFor: the router must not install
 // chi middleware.RealIP, which would
 // overwrite r.RemoteAddr from the client-supplied X-Forwarded-For / X-Real-IP
 // headers with no trusted-proxy allowlist. Because r.RemoteAddr is persisted as

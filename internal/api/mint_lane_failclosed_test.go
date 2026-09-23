@@ -26,11 +26,11 @@ func (erroringGrantsStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.
 }
 
 // TestInternalMint_GrantListErrorFailsClosed: brokeredForgeMintKind is the
-// mint-time residual check for a policy STORED BEFORE
+// mint-time residual check for a policy stored before
 // validateGrantLaneExclusivity: an ssh_key/git_pat grant row for a brokered forge
 // that anyone who learns the grant id can still mint. For exactly that residual
 // this check is the ONLY belt — the broker's own checks (ownership, approval,
-// no-widening) do not cover it — so it must fail CLOSED on a ListGrantsByRun
+// no-widening) do not cover it — so it must fail closed on a ListGrantsByRun
 // error, not answer the mint with the raw credential for the length of a store
 // hiccup.
 //

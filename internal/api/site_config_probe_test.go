@@ -204,12 +204,12 @@ func TestClassifyRedirectProbe_TimedOut(t *testing.T) {
 	}
 }
 
-// TestRedirectProbeScript_HTTPErrorIsNotReached runs the ACTUAL
+// TestRedirectProbeScript_HTTPErrorIsNotReached runs the actual
 // redirectProbeScript text (not just classifyRedirectProbe's exit-code table)
 // through a real shell+curl against a local server that answers the To probe
 // with a plain HTTP 403 -- exactly what wardyn-proxy's own policy deny looks
 // like, and what any mirror's auth failure looks like too. Without -f, curl
-// treats a well-formed 403 response as a SUCCESSFUL connection (exit 0) and
+// treats a well-formed 403 response as a successful connection (exit 0) and
 // never looks at the status line, so the script would fall through to its
 // "From correctly failed" exit-0 branch once the From dial (an unroutable
 // loopback port, refused instantly) also failed -- "reached" for a request
@@ -242,12 +242,12 @@ func TestRedirectProbeScript_HTTPErrorIsNotReached(t *testing.T) {
 }
 
 // TestProbeFailureDetail_RunCompleteFailureWithoutExitCodeIsNotReached: a
-// run.complete FAILURE event (the completion watcher's own Wait error or
+// run.complete failure event (the completion watcher's own Wait error or
 // panic, see startCompletionWatcher in runs_lifecycle.go) carries no
 // exit_code key at all. Decoding that into an int would default to 0 -- a
 // clean exit that never happened -- and report the probe as "reached" for a
 // run whose task result was never actually observed. Decoding into *int must
-// leave hasExitCode false, and since the run DID reach run.complete (only its
+// leave hasExitCode false, and since the run did reach run.complete (only its
 // own completion accounting failed), neverRan must stay false too.
 func TestProbeFailureDetail_RunCompleteFailureWithoutExitCodeIsNotReached(t *testing.T) {
 	runID := uuid.New()
@@ -657,7 +657,7 @@ func TestHandleTestSiteConfigProxy_BlockedWithRealError(t *testing.T) {
 // http-only gate existed — the store fixture below bypasses that gate on
 // purpose, to model exactly that) cannot be used by resolveRunUpstreamProxy
 // at real dispatch (the sidecar's plaintext-CONNECT hop cannot carry https),
-// so a run goes DIRECT. The probe must not read UpstreamProxyURL straight off
+// so a run goes direct. The probe must not read UpstreamProxyURL straight off
 // stored config for its `upstream` display — that would report via=proxy /
 // "chained to https://..." for a chain no run ever actually traverses. It
 // must report via=direct and say why.
@@ -683,7 +683,7 @@ func TestHandleTestSiteConfigProxy_UnresolvableUpstreamReportsDirect(t *testing.
 
 // TestHandleTestSiteConfigProxy_UnresolvableSecretRefReportsDirect is the
 // sibling case to the https:// one above: a configured
-// upstream_proxy_secret_ref that names no ACTUALLY stored secret (no secret
+// upstream_proxy_secret_ref that names no actually stored secret (no secret
 // store wired at all here -- the simplest way to make it unresolvable) must
 // not report via=proxy / state=reached either. The probe's `upstream`
 // display must ask whether the ref resolves to anything a real run could
@@ -1214,7 +1214,7 @@ func TestSiteConfigProbe_TimeoutReclaimsSandbox(t *testing.T) {
 // before the run itself ever reported completion must report `timed_out`,
 // never `blocked` — a `blocked` verdict claims a real network fact was
 // observed, a false signal for a KILLED run with no run.complete event that
-// is not a proxy problem at all. The detail must carry BOTH the sandbox
+// is not a proxy problem at all. The detail must carry both the sandbox
 // agent status at the
 // deadline (probeFakeRunner's default AgentStatus: RunRunning) and the
 // control-plane URL to check, and the sandbox must still be reclaimed.

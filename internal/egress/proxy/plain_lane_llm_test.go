@@ -141,7 +141,7 @@ func TestPlainLaneInjectionStripsSandboxCredential(t *testing.T) {
 
 // TestPlainLaneHTTPSAbsoluteFormPort pins the port half: an https
 // absolute-form request with no explicit port means 443 — the port the proxy
-// vets, dials and RECORDS — not 80 with a TLS handshake run against it.
+// vets, dials and records — not 80 with a TLS handshake run against it.
 func TestPlainLaneHTTPSAbsoluteFormPort(t *testing.T) {
 	cu := captureUpstream(t, true, "upstream-ok")
 	p, buf := newPlainLaneProxy(t, upstreamAddr(cu.srv), nil)

@@ -70,14 +70,14 @@ func TestLease_RunScopedDecisionReMints(t *testing.T) {
 // TestLease_NormalizedLegacyDecisionIsNotALease pins the raw-vs-Normalize()
 // comparison.
 //
-// Every credential approval decided before the lease existed carries an EMPTY
+// Every credential approval decided before the lease existed carries an empty
 // decision_scope: the column's NOT NULL DEFAULT, and api.decide refused any
 // explicit scope on a credential approval. types.ApprovalScope.Normalize()
 // deliberately maps "" to ScopeRun ("those already meant run-scoped"), which
 // is right for egress and catastrophic here — comparing normalized would turn
 // EVERY legacy approval in EVERY deployment into a standing re-mint lease on
 // upgrade, silently deleting the single-use guarantee those decisions were
-// made under. The assertion below pins that: a decision whose Normalize() IS
+// made under. The assertion below pins that: a decision whose Normalize() is
 // ScopeRun must still fail closed with ErrAlreadyMinted.
 func TestLease_NormalizedLegacyDecisionIsNotALease(t *testing.T) {
 	legacy := types.ApprovalScope("")
@@ -101,7 +101,7 @@ func TestLease_BoundedByScopeKindAndState(t *testing.T) {
 		t.Fatalf("once-scoped decision: err=%v, want ErrAlreadyMinted", err)
 	}
 
-	// A different KIND with the same run-scoped decision: the lease is git_pat
+	// A different kind with the same run-scoped decision: the lease is git_pat
 	// only. github_token is brokered proxy-side and re-minting it from a sandbox
 	// is exactly what single-use exists to stop.
 	b2, db2, _, _ := newTestBroker(t)

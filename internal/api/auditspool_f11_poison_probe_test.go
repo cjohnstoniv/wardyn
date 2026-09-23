@@ -1,9 +1,9 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Poison line: AuditSpool.Drain must not stop at the FIRST replay error and
+// Poison line: AuditSpool.Drain must not stop at the first replay error and
 // keep that line at the head of the file forever. Keeping it is right for a
-// store that is DOWN (retry later) and wrong for a line the store will NEVER
+// store that is down (retry later) and wrong for a line the store will never
 // accept (a CHECK-constraint violation, a payload the column type rejects, a
 // line a human edited): every event behind it would never be replayed, and
 // the only signal would be wardyn_audit_spool_lines never returning to 0.

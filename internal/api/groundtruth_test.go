@@ -149,7 +149,7 @@ func (r *failingRecorder) Record(_ context.Context, ev types.AuditEvent) error {
 }
 
 // TestGroundtruthPartialBatchDoesNotCommitGoodEventsOnBadOne: a batch whose
-// FIRST event is valid
+// first event is valid
 // (kernel.*, NULL run_id) but whose SECOND event is invalid (non-kernel action)
 // must NOT silently commit the good event while returning a 400 — that loses
 // events and miscounts. The whole batch is validated before anything commits, so
@@ -293,7 +293,7 @@ func healthzEbpf(t *testing.T, h *harness) map[string]any {
 	return gt
 }
 
-// TestHealthzEbpfIdleWhenNoEventsObserved: a FRESH heartbeat proves the sidecar
+// TestHealthzEbpfIdleWhenNoEventsObserved: a fresh heartbeat proves the sidecar
 // process is alive and reaching the control
 // plane, but if it has mapped zero kernel events (Tetragon dead / wrong export
 // path / no TracingPolicy) the stream is BLIND. /healthz must report "idle", not
@@ -314,8 +314,8 @@ func TestHealthzEbpfIdleWhenNoEventsObserved(t *testing.T) {
 }
 
 // TestHealthzEbpfIdleNamesBrokenCorrelation: a sensor that saw kernel events
-// but could bind NONE of them to a run (a frozen correlator counter) must not
-// report the SAME idle/observed_total:0 as a sensor seeing nothing at all —
+// but could bind none of them to a run (a frozen correlator counter) must not
+// report the same idle/observed_total:0 as a sensor seeing nothing at all —
 // one is a quiet host, the other is a broken pipeline no amount of waiting
 // fixes. The gated-drop count must reach /healthz and the reason must say
 // which of the two failures this is.
@@ -357,11 +357,11 @@ func TestHealthzEbpfHealthyWhenEventsObserved(t *testing.T) {
 }
 
 // TestHealthzEbpfPartialWhenOneKindNeverArrives: a sensor that has mapped
-// real events (observed_total>0) but only EVER for one kind (a mis-scoped
+// real events (observed_total>0) but only ever for one kind (a mis-scoped
 // TracingPolicy that never fires for network.connect, say) must not read
 // "healthy" like one seeing every required kind — the aggregate alone cannot
 // tell them apart. With the per-kind breakdown published, this must report
-// "partial" and name the missing kind. kernel.file.write is NOT in the
+// "partial" and name the missing kind. kernel.file.write is not in the
 // required set (it fires only on a narrow credential-path write, so its
 // absence is not a coverage gap — see
 // TestHealthzEbpfHealthyWithoutFileWrite) and so is never named here.
@@ -402,7 +402,7 @@ func TestHealthzEbpfHealthyWhenAllKindsArrive(t *testing.T) {
 	}
 }
 
-// TestHealthzEbpfHealthyWithoutFileWrite: requiring ALL THREE kernel event
+// TestHealthzEbpfHealthyWithoutFileWrite: requiring all three kernel event
 // kinds — including kernel.file.write — before reporting "healthy" is wrong,
 // because sensitive.go's own allowlist filter means file.write fires only on
 // a write to a narrow credential-shaped path (~/.ssh, ~/.aws, ...), which
@@ -516,7 +516,7 @@ func (notFoundStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) 
 }
 
 // TestGroundtruthUnknownRunIDDowngradesNotRejectsBatch: a batch with
-// ONE event whose run_id is
+// one event whose run_id is
 // present-but-unknown (e.g. an orphaned container after a DB reset/re-point)
 // must NOT 400 the whole batch — the sensor treats a 4xx as a non-retryable
 // whole-batch drop, so every co-batched event would be permanently lost. The

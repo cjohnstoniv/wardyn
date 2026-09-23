@@ -10,7 +10,7 @@ import (
 )
 
 // TestBuildRunMountsDropsSubscriptionForNonModelRun: a task-mode=exec (or
-// non-interactive scan) run gets NO LLM credential by contract
+// non-interactive scan) run gets no LLM credential by contract
 // (resolveLLMTransport's modelRun gate), so buildRunMounts must not copy
 // policy.WorkspaceMounts verbatim regardless of modelRun — a resolved policy
 // that happens to carry the resident ~/.claude subscription mount (e.g. an

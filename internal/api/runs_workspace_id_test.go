@@ -330,7 +330,7 @@ func TestResolveWorkspaceImage_AlwaysBakesStandardAgentTool(t *testing.T) {
 // cache miss, so the tag it supersedes must be removed (ImageRemove) or every
 // rescan/edit leaks a full docker image forever. A cache-miss rebuild (a stale
 // ImageRef whose BuiltProfileHash no longer matches p.CacheKey()) must reclaim
-// the OLD tag once the new one has actually built.
+// the old tag once the new one has actually built.
 func TestResolveWorkspaceImage_RebuildReclaimsSupersededTag(t *testing.T) {
 	h := newHarness(t)
 	profile := workspacescan.WorkspaceProfile{
@@ -634,7 +634,7 @@ func TestResolveBuildView_AgreesWithBuiltHash(t *testing.T) {
 	}
 }
 
-// TestResolveWorkspaceImage_ByoiCachesAcrossSessions: tagging EVERY byoi
+// TestResolveWorkspaceImage_ByoiCachesAcrossSessions: tagging every byoi
 // wrap with the run id (`wardyn-byoi/<runid>:latest`) would make two
 // record/replay sessions against the identical base image always rebuild — a
 // multi-minute FinalizeBase call on every single launch. A cache hit must

@@ -531,12 +531,12 @@ func TestTeardown_UnresolvableRunReportsError(t *testing.T) {
 }
 
 // TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork: when the agent
-// container is ALREADY GONE (crashed, OOM-killed, or a concurrent teardown
+// container is already gone (crashed, OOM-killed, or a concurrent teardown
 // beat this one to it), ContainerInspect returns not-found and the label/name
 // recovery on the err==nil branch never runs at all — so teardown must still
 // resolve the run id, or it reports success while leaking the sibling proxy
 // sidecar (still holding the run's credentials) and the per-run network. Ref
-// must recover via runIDFromAgentName(ref) on BOTH substrates:
+// must recover via runIDFromAgentName(ref) on both substrates:
 //   - krun (exec-less/CC3): ref is the deterministic agent name
 //     (agentContainerName(runID)).
 //   - runc/gVisor (exec-based, the DEFAULT/common substrate): CreateSandbox
@@ -812,7 +812,7 @@ func TestExecLess_MainProcessLifecycle(t *testing.T) {
 //
 // Counterfactual: without the sentinel case AgentStatus tries
 // ExecInspect("main-process"), the fake reports it not-found, and — because
-// the container is still RUNNING — the AMBIGUOUS-404 branch (GAP-RECONCILE-1)
+// the container is still RUNNING — the ambiguous-404 branch (GAP-RECONCILE-1)
 // returns an ERROR instead of a live status, so this test's `err != nil` check
 // fails red.
 func TestAgentStatus_MainProcessSentinelFallsBackToContainerStatus(t *testing.T) {

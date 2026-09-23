@@ -202,7 +202,7 @@ func TestRunFiles_NotAGitWorkTree(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"files":[]`) {
 		t.Errorf("files serialized as null, not []: %s", w.Body.String())
 	}
-	// Naming the PATH is what makes a wrong answer legible. The mount target is
+	// Naming the path is what makes a wrong answer legible. The mount target is
 	// configurable per workspace source (workspace_run.go), so "not a git
 	// repository" on its own cannot be told apart from "we looked in the wrong
 	// directory" — which, silently, is the worst failure this endpoint has.

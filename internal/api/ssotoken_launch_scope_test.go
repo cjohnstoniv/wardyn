@@ -43,7 +43,7 @@ func sharedClaudeRow() types.SiteConfig {
 // TestUploadSSOToken_ScopeIsBoundToLaunchNotUploadTime pins that the scope is
 // fixed at launch time, not re-resolved at upload time.
 //
-// handleUploadSSOToken must not re-resolve the credential scope from the LIVE
+// handleUploadSSOToken must not re-resolve the credential scope from the live
 // roster. A login run stays alive to harnessLoginIdleCap, so an admin flipping
 // the row from per_user to shared inside that window would turn a member's
 // still-running sandbox's PUT into a write of the OPERATOR-WIDE reserved

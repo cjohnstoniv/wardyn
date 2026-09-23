@@ -13,8 +13,8 @@ import (
 )
 
 // TestEventSink_ReadsAndRefreshesTokenFromFile covers the recovery path: the
-// file-backed token source (WARDYN_GROUNDTRUTH_TOKEN_FILE) is the ONLY wiring that
-// survives the ~1h token TTL. The sink must seed its token from the file AND, on
+// file-backed token source (WARDYN_GROUNDTRUTH_TOKEN_FILE) is the only wiring that
+// survives the ~1h token TTL. The sink must seed its token from the file and, on
 // refresh (the 401 path), re-read the file — so once the wardynd rotator rewrites it,
 // the ingest recovers.
 func TestEventSink_ReadsAndRefreshesTokenFromFile(t *testing.T) {

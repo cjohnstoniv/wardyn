@@ -44,7 +44,7 @@ func TestWriteUserDriveTellsItsThree409sApart(t *testing.T) {
 			want: "derives home directory names by a different rule",
 		},
 		{
-			// The FOURTH: the drive was refused because somebody was allocated it
+			// The fourth: the drive was refused because somebody was allocated it
 			// while the edit was in flight, and re-sending is the whole remedy —
 			// the guard then meets the allocation on its own read and says what
 			// re-homing would cost. The store's attribution must not fall through

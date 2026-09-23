@@ -30,7 +30,7 @@ func orderOf(cs *fake.Clientset, verb string, resources ...string) []string {
 }
 
 // TestTheSecretNeverOutlivesItsNetworkPolicies is the invariant that lets the
-// orphan sweep find a run's Secret WITHOUT holding `list` on secrets.
+// orphan sweep find a run's Secret without holding `list` on secrets.
 //
 // 0.7.4 bought the both-pods-gone reclaim with a namespace-wide `secrets: list`
 // — and a list returns every Secret's body, so with the default runsNamespace

@@ -7,7 +7,7 @@
 // file's fixtures (govServer, govMemberCtx, govProfile, containsAll) and
 // governance_nonescape_test.go's (govSession, newGovEscapeStore, doSSO).
 //
-// Invariant under test: a caller whose group snapshot is TRUNCATED (present,
+// Invariant under test: a caller whose group snapshot is truncated (present,
 // non-nil, incomplete — GroupsTruncated=true on the cookie / api_tokens row)
 // and for whom a group-tier governance assignment EXISTS is REFUSED (403
 // groups_snapshot_stale via governance.go writeCeilingError) unless a

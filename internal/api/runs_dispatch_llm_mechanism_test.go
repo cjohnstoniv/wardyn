@@ -534,7 +534,7 @@ func pgRosterSrv(t *testing.T, fr *fakeRunner, row types.AgentProvider) *Server 
 }
 
 // TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch pins that create and
-// dispatch resolve the MANAGED subscription lane on the same terms:
+// dispatch resolve the managed subscription lane on the same terms:
 // selectedMechanism tests subscription before Bedrock, so if the two ends differ
 // they disagree about what a run would dispatch on.
 //
@@ -576,7 +576,7 @@ func TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch(t *testing.T) {
 	// operator's own subscription to a member. Create must honour that too:
 	// reading "managed" as the lane would admit a subscription-row run that then
 	// reaches dispatch with nothing — 201, then FAILED with no sandbox, the
-	// boot-and-die this gate exists to prevent. It must be refused AT THE DOOR
+	// boot-and-die this gate exists to prevent. It must be refused at the door
 	// instead.
 	t.Run("off-posture managed is refused at the door, never launched", func(t *testing.T) {
 		fr := &fakeRunner{}
@@ -815,10 +815,10 @@ func TestEnforceCreateLLMMechanism_AuditsNothing(t *testing.T) {
 
 // TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor: the refusal must
 // send each reader to their own door, not always to "Settings → Model provider"
-// — that is the ADMIN's page, and under a per_user row its AWS button is
+// — that is the admin's page, and under a per_user row its AWS button is
 // admin-only, so the one person who could repair their own captured session
-// would be sent to the one page that will not let them. Asserted THROUGH the
-// constants; the sentences are DRAFT until M2 canon rules them.
+// would be sent to the one page that will not let them. Asserted through the
+// constants; the sentences are draft until M2 canon rules them.
 func TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor(t *testing.T) {
 	sharedRow := types.AgentProvider{
 		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,

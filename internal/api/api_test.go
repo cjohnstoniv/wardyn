@@ -110,9 +110,9 @@ func (f *fakeApprovals) Request(_ context.Context, req types.ApprovalRequest) (t
 	// requested_scope) for every kind but `credential`, which 0064 notes now
 	// covers credential_reauth too).
 	//
-	// Without it this double would let N concurrent raises for ONE run each
+	// Without it this double would let N concurrent raises for one run each
 	// insert a row, because approval.RequestApproval's dedup is a
-	// LIST-then-INSERT with a real race window between the two — which the
+	// list-then-insert with a real race window between the two — which the
 	// database closes. Every api-level concurrency assertion of the form "N
 	// callers, one question" would then be decided by goroutine scheduling:
 	// passing most runs and failing some, proving nothing either way.

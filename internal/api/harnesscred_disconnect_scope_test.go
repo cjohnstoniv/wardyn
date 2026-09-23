@@ -52,7 +52,7 @@ func perUserDisconnectSrv(t *testing.T, admin, member string) (*Server, *memSecr
 // answer {"captured": false}: an operator's own Disconnect would be a silent
 // no-op on a per-user estate.
 //
-// The route tier stays operatorOnly, so this revokes the CALLER's own session
+// The route tier stays operatorOnly, so this revokes the caller's own session
 // and nobody else's. A member's stored session is superseded by their next
 // sign-in, ends at the IdP when an admin revokes the session there, and expires
 // with its registration — docs/OPERATIONS.md's "AWS SSO per-user" subsection and

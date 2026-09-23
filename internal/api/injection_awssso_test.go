@@ -746,8 +746,8 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		t.Fatalf("first resolve: code = %d, want 423", w.Code)
 	}
 	ap := onlyReauthRow(t, f.srv)
-	// BOTH TIERS. The admin token is the security tier; the run's own member
-	// token is the other. The plan's promise is 409 on EVERY tier, so a member
+	// Both tiers. The admin token is the security tier; the run's own member
+	// token is the other. The plan's promise is 409 on every tier, so a member
 	// must get the 409 and not the member gate's refusal — refused either way,
 	// but "you may not use this verb" is the wrong reason where "this verb does
 	// not exist for this kind" is the right one.
@@ -761,7 +761,7 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		}
 	}
 
-	// The member TIER, through a real OIDC session — and the two halves of it
+	// The member tier, through a real OIDC session — and the two halves of it
 	// (security round-2 SHOULD-1). The run's OWNER is told the same thing the
 	// security operator is: the verb does not exist for this kind. A member who
 	// does NOT own the run is told nothing at all, because a 409 there would
@@ -890,7 +890,7 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 
 // legacy open mode: no roster
 
-// The two halves, JOINED. Dispatch and resolve each had thorough tests and they
+// The two halves, joined. Dispatch and resolve each had thorough tests and they
 // disagreed about the same deployment, because no test ever ran both: every
 // resolver case seeds a roster row (reauthRosterRow) and every no-roster case
 // stops at dispatch.

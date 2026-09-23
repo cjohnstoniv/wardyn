@@ -246,7 +246,7 @@ func documentedVars(docText string) map[string]bool {
 //
 // Compare against the tokenized name set the reverse ratchet builds, not
 // strings.Contains over the whole document: under a substring match any var
-// that is a strict PREFIX of another documented var passes with its own row
+// that is a strict prefix of another documented var passes with its own row
 // deleted — the secret WARDYN_GROUNDTRUTH_TOKEN, for one, is absorbed by
 // WARDYN_GROUNDTRUTH_TOKEN_FILE.
 func envDocForwardMissing(read map[string]bool, docText string) []string {
@@ -447,7 +447,7 @@ func readE2EShellVars(t *testing.T, root string) map[string]bool {
 // This passes on the doc row alone, never on `envDocAllow[v] ||
 // envDocShellOnly[v]`: the WARDYN_E2E_* vars are in envDocAllow, so an
 // allowlist pass would mean a deleted row could never turn it red.
-// envDocAllow/envDocShellOnly stay the gate for the OTHER two ratchets above
+// envDocAllow/envDocShellOnly stay the gate for the other two ratchets above
 // (which reason about Go readers, a question those maps genuinely answer);
 // this one reasons about shell scripts, where the only question is "does
 // docs/ENV.md say this name anywhere", so the check is that condition alone.

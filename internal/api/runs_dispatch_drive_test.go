@@ -103,7 +103,7 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 	// The row's one rendered detail, and the one field whose reader is not the
 	// operator. The console's Audit tab draws a row from time, actor, action and
 	// Target and reads nothing out of Data, and auditScope lets a run's CREATOR
-	// read their own run's rows — so for a SHARE a target of
+	// read their own run's rows — so for a share a target of
 	// `/srv/wardyn-drives/alice` would hand the member the operator's filesystem
 	// layout on their own run page. Two sites in this same tree refuse to
 	// disclose exactly

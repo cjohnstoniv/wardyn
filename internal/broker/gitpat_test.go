@@ -268,7 +268,7 @@ func TestBrokerMint_GitPATAndSSHKey_OwnerScoped(t *testing.T) {
 
 // TestMintOnApproval_MemberRunResolvesOwnerNamespace: an approval-gated
 // git_pat mint via mintOnApproval, with the run's CreatedBy passed as sub,
-// resolves the MEMBER's own secret row — not the operator's. A bare
+// resolves the member's own secret row — not the operator's. A bare
 // &identity.Claims{RunID} with no Sub would fall back to the operator
 // namespace on this path.
 func TestMintOnApproval_MemberRunResolvesOwnerNamespace(t *testing.T) {

@@ -48,7 +48,7 @@ func (s terminalRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRu
 }
 
 // internalDoors is every /internal/* route a run token can open, with a body
-// that gets past decoding. The TABLE is the point: a run-state re-check added to
+// that gets past decoding. The table is the point: a run-state re-check added to
 // one door (handleInternalTokenRenew, say) and not its siblings leaves the
 // surface open, so the pin has to be over the whole surface rather than over
 // any one door.

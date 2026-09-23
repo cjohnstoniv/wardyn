@@ -17,7 +17,7 @@ import (
 
 // TestLogoutRouteMountedClearsSession: the UI POSTs /api/v1/auth/logout, so with
 // OIDC configured that POST must be routed (not 404), invoke the OIDC
-// LogoutHandler, and clear the session cookie. A logout mounted ONLY as a root
+// LogoutHandler, and clear the session cookie. A logout mounted only as a root
 // GET /auth/logout would leave the POST hitting no route, the HttpOnly
 // wardyn_session cookie surviving, and the next probe silently re-signing the
 // operator in.

@@ -61,7 +61,7 @@ func TestSynthesizeProfile_StampsEbpfGroundtruthCaveat(t *testing.T) {
 // handleSynthesizeProfile must not hardcode confined=false for a "workspace
 // record" run whose own record_results entry (keyed by RunID — the exact
 // discriminator reconcileRecordRun uses in workspace_run.go) says
-// Confined=true. A CONFINED replay's denials are the advertised containment
+// Confined=true. A confined replay's denials are the advertised containment
 // proof working as designed, not an anomaly — recordmode.Capture's own doc
 // comment — so labelling them "during open recording" is misleading security
 // copy about a session that was never open. The handler looks up the matching

@@ -187,16 +187,16 @@ func TestUpstreamPrivateIPException(t *testing.T) {
 }
 
 // TestUpstreamDoesNotWeakenLiteralIPGuard pins that the private-IP exception
-// is scoped to the CONFIGURED proxy address ONLY: with an upstream proxy set,
-// an AGENT-chosen egress target that is a literal private/loopback/metadata IP
-// is STILL denied by the step-0 guard (no SSRF-via-corp-proxy).
+// is scoped to the configured proxy address only: with an upstream proxy set,
+// an agent-chosen egress target that is a literal private/loopback/metadata IP
+// is still denied by the step-0 guard (no SSRF-via-corp-proxy).
 //
 // Why the policy and the rule_source assertion are load-bearing: under
-// DEFAULT-DENY (AllowedDomains=["tls.test"]) every host named here is refused
+// default-deny (AllowedDomains=["tls.test"]) every host named here is refused
 // by `policy:default-deny` whether or not the builtin guard exists, so
 // deleting evaluate's whole step-0 block would leave an assertion of "Deny"
-// GREEN — pinning the policy engine, not the guard. Under allow_all_egress the
-// ONLY thing that can deny these targets is the builtin guard, and the
+// green — pinning the policy engine, not the guard. Under allow_all_egress the
+// only thing that can deny these targets is the builtin guard, and the
 // rule_source assertion says so out loud. The table also carries the
 // non-canonical inet_aton spellings, which a corp proxy's own getaddrinfo
 // resolves to the same blocked addresses.
@@ -353,10 +353,10 @@ func TestControlPlaneBypassesUpstream(t *testing.T) {
 }
 
 // TestGitBrokerDialsGithubByNameThroughUpstream: handleGitBroker must go
-// through egressTarget, not call vetURL UNCONDITIONALLY — ignoring p.upstream
+// through egressTarget, not call vetURL unconditionally — ignoring p.upstream
 // would require local DNS resolution the sandbox host frequently cannot do at
-// all under a corp upstream, and (with a resolver that DOES answer, as here)
-// hand the corp proxy a resolved IP LITERAL to CONNECT instead of
+// all under a corp upstream, and (with a resolver that does answer, as here)
+// hand the corp proxy a resolved IP literal to CONNECT instead of
 // "github.com". Many corp proxies allowlist CONNECT targets by hostname, so an
 // IP-literal CONNECT is exactly the shape that breaks the one governed git
 // lane on the network it exists for. This proves the CONNECT the corp proxy

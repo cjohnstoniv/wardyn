@@ -23,10 +23,10 @@ import (
 // authors net.JoinHostPort(host, port) for exactly that reason (and
 // internal/egress/proxy/mitm_test.go's
 // TestMITMCorpHost_PortMismatchFallsThroughOpaque proves a port-scoped entry
-// falls through opaque on any other port). The Bedrock bearer lane is a LIVE
+// falls through opaque on any other port). The Bedrock bearer lane is a live
 // caller: authoring a bare host there would let an agent that can reach the
 // Bedrock host at all CONNECT to it on a port nobody configured, have that
-// tunnel TLS-terminated with the Wardyn leaf, and have the OPERATOR's Bearer
+// tunnel TLS-terminated with the Wardyn leaf, and have the operator's Bearer
 // injected onto whatever answers there.
 //
 // The pin holds the property (the entry is port-scoped, at the port the run

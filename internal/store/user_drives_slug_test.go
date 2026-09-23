@@ -3,7 +3,7 @@
 
 package store
 
-// The two halves OF the SLUG refusal that need no database.
+// The two halves of the slug refusal that need no database.
 //
 // The refusal itself is a partial unique index (migration 0061), so proving it
 // refuses needs Postgres — user_drives_slug_pg_test.go does that. Two things

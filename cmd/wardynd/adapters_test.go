@@ -47,16 +47,16 @@ func TestRunMarker(t *testing.T) {
 // FIX #5: approval recorder is the masked + fanout recorder
 
 // TestApprovalRecorderIsMaskedFanout pins that the approval FSM + sweeper record
-// through the masked+fanout audit.Recorder, not the PLAIN store.Recorder (Postgres
+// through the masked+fanout audit.Recorder, not the plain store.Recorder (Postgres
 // only) — otherwise approval.decide / approval.expire audit events bypass masking
-// AND the SIEM fanout that idp/broker use (maskedRec). The recorder seam must
+// and the SIEM fanout that idp/broker use (maskedRec). The recorder seam must
 // therefore hold an audit.Recorder, not a concrete store.Recorder, and events must
-// flow through it MASKED.
+// flow through it masked.
 //
 // A fakeAuditRecorder is an audit.Recorder but NOT a store.Recorder — assigning
 // it (and a maskingRecorder) into approvalStore.rec only compiles because that
 // field is audit.Recorder. If the field were a store.Recorder this test would
-// fail to compile. approvalService holds the SAME approvalStore value, so the FSM
+// fail to compile. approvalService holds the same approvalStore value, so the FSM
 // and
 // the sweeper cannot drift onto two different recorders.
 func TestApprovalRecorderIsMaskedFanout(t *testing.T) {
@@ -252,7 +252,7 @@ func TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak(t *testing.T) {
 // TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies pins that a run-less
 // audit row (ev.RunID == nil — policy.inline, secret.*, an admin action) is
 // still masked: a guard like `m.reg != nil && ev.RunID != nil` would skip the
-// whole block whenever RunID is nil. It is masked against the PROCESS-GLOBAL
+// whole block whenever RunID is nil. It is masked against the process-global
 // corpus (Bedrock SSO / subscription creds registered via AddGlobal) —
 // Snapshot(uuid.Nil) returns exactly that (globals only; uuid.Nil is never a
 // real run's perRun key).

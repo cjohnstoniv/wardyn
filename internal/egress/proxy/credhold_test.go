@@ -170,7 +170,7 @@ func shortBudget(t *testing.T, v string) {
 	t.Setenv(envCredentialReauthTimeout, v)
 }
 
-// The happy PATH: 423, two PENDING polls, APPROVED, exactly ONE re-resolve, and
+// The happy path: 423, two PENDING polls, APPROVED, exactly one re-resolve, and
 // the header the SDK needed.
 func TestResolveInjectionHolding_HoldsThenResolvesOnce(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
@@ -295,7 +295,7 @@ func TestResolveCtx_ACallerThatHangsUpIsReleasedAndTheHoldContinues(t *testing.T
 	if elapsed > 2*time.Second {
 		t.Errorf("the caller took %v to be released, want ~its own 300ms deadline", elapsed)
 	}
-	// The HOLD is still running: the workflow owns its deadline, not the caller.
+	// The hold is still running: the workflow owns its deadline, not the caller.
 	inj.reauth.mu.Lock()
 	wf := inj.reauth.workflows[is.approvalID]
 	inj.reauth.mu.Unlock()
@@ -457,7 +457,7 @@ func TestResolveInjectionHolding_SixtyFourResolversShareOneWorkflow(t *testing.T
 	}
 }
 
-// A LATE arrival, after the workflow's terminal result, does not open a second
+// A late arrival, after the workflow's terminal result, does not open a second
 // hold for the same lapse: it re-resolves and takes whatever the control plane
 // now says (here: another 423, which is a NEW, separately counted workflow).
 func TestResolveInjectionHolding_LateArrivalStartsANewCountedWorkflow(t *testing.T) {
@@ -756,7 +756,7 @@ func TestResolveCtx_LeaderDisconnectLeavesTheWorkflowAndItsDeadlineAlone(t *test
 	}
 }
 
-// A LATE arrival after the expiry gets that terminal result at once: no second
+// A late arrival after the expiry gets that terminal result at once: no second
 // hold, no second count, and — because the decision row is claimed once — no
 // second deny row. With the measured ~30 s SDK cadence this is the difference
 // between one recorded expiry and one per retry for ten minutes.
@@ -832,7 +832,7 @@ func TestResolveCtx_ANewApprovalIDStartsASecondCountedWorkflow(t *testing.T) {
 	}
 }
 
-// Two stacked joiners, and the SECOND hangs up. Adopted verbatim from
+// Two stacked joiners, and the second hangs up. Adopted verbatim from
 // REVIEW-2-security's appendix (SHOULD-2), because the brief's own
 // counterfactual did not discriminate: with a fake that answers 423 once, the
 // follower in every other test re-resolves into a direct 200 and never joins

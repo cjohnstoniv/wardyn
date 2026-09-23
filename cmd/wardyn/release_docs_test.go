@@ -23,7 +23,7 @@ func readRepoDoc(t *testing.T, path string) string {
 // TestReleasingDocumentsVersionBump pins that RELEASING.md's release steps
 // instruct bumping the four shipped version strings
 // cmd/wardyn/version_test.go's TestShippedVersionStringsAgree enforces agree.
-// That test only checks the FILES agree with each other, not that the PROCESS
+// That test only checks the files agree with each other, not that the process
 // document tells a maintainer to touch them, so a by-the-book release could
 // otherwise tag a version-string mismatch with the gate never re-run to catch
 // it.
@@ -126,7 +126,7 @@ func TestThreatModelSSOSessionNotStale(t *testing.T) {
 
 // TestReleaseWorkflowPublishesAgentAWSSSO pins that release.yml publishes
 // agent-aws-sso. harnesscred.go's launchHarnessLoginRun resolves the AWS
-// SSO login sandbox's image through agentImage("aws-sso", ...) — the SAME
+// SSO login sandbox's image through agentImage("aws-sso", ...) — the same
 // ghcr.io/cjohnstoniv/agent-<key>:latest fallback convention the two coding
 // harnesses use — so release.yml must build+push agent-aws-sso exactly like
 // agent-claude-code/agent-codex-cli, or a by-the-book Helm install (no

@@ -12,7 +12,7 @@ import (
 )
 
 // TestSweepRunSecrets_EvictsCacheOnlyRuns: Registry.Masker caches a derived
-// Masker per run id UNCONDITIONALLY — including for a run with no per-run
+// Masker per run id unconditionally — including for a run with no per-run
 // secrets at all (a scan run, a grantless run), whose corpus is just the
 // process globals. RunIDs() must include those ids, or the sweep never sees
 // them and their cached entries live for the process lifetime.

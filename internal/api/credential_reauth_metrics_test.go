@@ -54,7 +54,7 @@ func TestCredentialReauthMetrics_EveryPlannedLabelIsExposed(t *testing.T) {
 	}
 }
 
-// A HOLD expiry is not A policy denial. Policy allowed the host and allowed the
+// A hold expiry is not a policy denial. Policy allowed the host and allowed the
 // request; what ran out was a person's time. Counting it on
 // wardyn_egress_denies_total — the series whose HELP promises "denial by
 // policy" and which operators alert on — pages security for somebody at lunch.
@@ -153,7 +153,7 @@ func TestCredentialReauthMetrics_CancelledCountedWhenTheRunEnds(t *testing.T) {
 	if after == before {
 		t.Fatalf("cancelling a held run's request did not move the cancelled label (%s -> %s)", before, after)
 	}
-	// A later resolve meeting the now-terminal row must NOT count again: with
+	// A later resolve meeting the now-terminal row must not count again: with
 	// the measured ~30 s retry cadence that is dozens of "outcomes" for one row.
 	if w := f.resolve(t); w.Code != http.StatusForbidden {
 		t.Fatalf("resolve after the cancel: code = %d, want 403", w.Code)

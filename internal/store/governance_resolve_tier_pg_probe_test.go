@@ -6,7 +6,7 @@
 // Package store_test, guarded by WARDYN_TEST_PG like governance_pg_test.go
 // (reuses its seedGovernanceProfile / seedGovernanceAssignment / runsPGPool).
 //
-// Invariant under test: the TIER value ResolveGovernanceProfile returns is the
+// Invariant under test: the tier value ResolveGovernanceProfile returns is the
 // matched row's subject_type — the value internal/api's ceilingWithUnusableGroups
 // (internal/api/governance.go) trusts to tell "serve" from "refuse" on a
 // truncated snapshot. TestPG_ResolveGovernanceProfile discards the tier on every

@@ -189,7 +189,7 @@ func TestWorkspaceOwnership_OwnerReachesOwn(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
 
-	// The MUTATIONS are in here too, and each gets its OWN fixture from inside
+	// The mutations are in here too, and each gets its own fixture from inside
 	// the loop: one shared workspace would be renamed by a PUT and removed by a
 	// DELETE under the cases that follow, leaving the four {id} mutations with
 	// their foreign-404 direction pinned and their owner-ADMIT direction pinned

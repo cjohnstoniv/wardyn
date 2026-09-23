@@ -294,11 +294,11 @@ func trackedMarkdown(t *testing.T, root string) []string {
 // specification, so a comment claiming a managed object is named by the home "and
 // by nothing else" misstates the very exposure that refusal bounds.
 //
-// Scoped to that one FILE, DELIBERATELY. Other packages may name the retired
+// Scoped to that one file, deliberately. Other packages may name the retired
 // shape on purpose — to explain what a rename gate refuses, say — and a guard
-// that cannot tell a stale SPECIFICATION from a deliberate account of what
+// that cannot tell a stale specification from a deliberate account of what
 // changed would demand that account be deleted, and would be silenced within a
-// round. This file DEFINES DriveObjectName, so its own comments have no business
+// round. This file defines DriveObjectName, so its own comments have no business
 // narrating a retired shape at all; every other package legitimately may.
 //
 // Only tokens carrying a `<placeholder>` are checked. `wardyn-drive-bsmith` in

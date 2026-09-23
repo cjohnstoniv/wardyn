@@ -379,13 +379,13 @@ func TestMaskingWriter_NoSecrets_PassThrough(t *testing.T) {
 	}
 }
 
-// Fail-CLOSED-on-panic tests (invariant-1)
+// Fail-closed-on-panic tests (invariant-1)
 
 // TestSafeMask_PanicFailsClosed proves that when Masker.Mask panics, the
 // recovered path does NOT forward the raw input bytes (which could contain
 // secrets) — it substitutes the placeholder and returns the panic as an error.
 //
-// A fail-OPEN recovery would return the original input, so the leaked raw bytes
+// A fail-open recovery would return the original input, so the leaked raw bytes
 // would be present and this assertion would fail.
 func TestMaskingWriter_PanicFailsClosed_NoRawLeak(t *testing.T) {
 	// Inject a masker that panics on every call (simulates a crash inside Mask).

@@ -96,14 +96,14 @@ func ssoBlobBody(startURL, region, accessToken string) string {
 }
 
 // TestUploadSSOToken_ForeignIdPRejected. The guards ahead of this one
-// authenticate WHICH run may upload (claimsForRunUpload, then
-// run.Task/run.Agent against trusted server state) and shape-check WHAT is
+// authenticate which run may upload (claimsForRunUpload, then
+// run.Task/run.Agent against trusted server state) and shape-check what is
 // uploaded (valid, validateSSOStartURL, repoFieldSafe); this one compares
 // the blob to the operator's own declaration. Without it, code running
-// INSIDE the vendor login sandbox could PUT a structurally perfect blob
-// naming an ATTACKER's IdP and region; it would land under the OPERATOR-WIDE
+// inside the vendor login sandbox could PUT a structurally perfect blob
+// naming an attacker's IdP and region; it would land under the operator-wide
 // reserved harness name, and resolveBedrockAuth would pick it ahead of the
-// host ~/.aws mount and the static-key lanes for every LATER Bedrock run,
+// host ~/.aws mount and the static-key lanes for every later Bedrock run,
 // baking the attacker's start_url/account/role into that run's ~/.aws/config
 // and appending the attacker region's oidc./portal.sso. hosts to its egress
 // allowlist.
@@ -165,7 +165,7 @@ func TestUploadSSOToken_SecondCaptureRefused(t *testing.T) {
 	}
 }
 
-// finding 1: the capture must name the account it was AUTHORIZED to name
+// finding 1: the capture must name the account it was authorized to name
 //
 // The reported failure was a capture that named a CONFIDENTLY WRONG AWS
 // account: structurally perfect, every guard above satisfied, stored, and then

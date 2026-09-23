@@ -285,7 +285,7 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
-			// Region+model set but NO credential anywhere in resolveBedrockAuth's
+			// Region+model set but no credential anywhere in resolveBedrockAuth's
 			// ladder (bearer / SSO / mount / resident keys): the matrix must not
 			// read "available" off region+model alone — three readiness surfaces
 			// would then believe in a run that silently gets no Bedrock transport at

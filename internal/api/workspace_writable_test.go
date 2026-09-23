@@ -13,7 +13,7 @@ import (
 
 // The import flow's Record/Verify runs bind-mount a local_dir workspace. Because
 // WorkspaceMount.ReadOnly is a *bool whose SAFE DEFAULT is read-only when omitted,
-// a nil left by wireWorkspaceSource would mount EVERY imported workspace read-only
+// a nil left by wireWorkspaceSource would mount every imported workspace read-only
 // with no opt-in anywhere — breaking the Record step's own promise ("so the agent
 // can make changes"): `pnpm install` cannot write node_modules, a build cannot
 // emit artifacts, and no source file can be edited. These tests pin both
