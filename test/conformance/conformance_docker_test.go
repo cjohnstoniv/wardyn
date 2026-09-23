@@ -100,6 +100,7 @@ func requireStrongestClass(t *testing.T, r runner.Runner) {
 		t.Fatalf("WARDYN_TEST_REQUIRE_CLASS=%s but the strongest class this daemon advertises is not it (classes %v): is its runtime installed and registered with dockerd?",
 			want, caps.ConfinementClasses)
 	}
+	t.Logf("WARDYN_TEST_REQUIRE_CLASS=%s: every conformance case below runs at %s", want, want)
 }
 
 // agentUserImage commits base with USER 1000:1000 — the image contract's
