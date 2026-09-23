@@ -32,6 +32,7 @@ type fakeVault struct {
 	jwts        map[string]string // projected SA token -> role it may log in as
 	ttl         int               // lease/ttl handed out, seconds
 	casRequired bool
+	revoked     bool // the policy is gone: every data/ and metadata/ call is denied
 	kv          map[string]*kvEntry
 	force       []int // statuses to answer with, one per request, before anything else
 	calls       []string
@@ -119,6 +120,8 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, map[string]any{"auth": map[string]any{"client_token": r.Header.Get("X-Vault-Token"), "lease_duration": f.ttl, "renewable": true}})
 	case strings.HasPrefix(path, f.mount+"/destroy/"), strings.HasPrefix(path, f.mount+"/undelete/"):
 		f.t.Errorf("wardynd called %s %s: the documented policy has no destroy/ or undelete/ stanza", r.Method, path)
+		fail(w, http.StatusForbidden, "permission denied")
+	case f.revoked && (strings.HasPrefix(path, f.mount+"/data/") || strings.HasPrefix(path, f.mount+"/metadata/")):
 		fail(w, http.StatusForbidden, "permission denied")
 	case strings.HasPrefix(path, f.mount+"/data/"):
 		f.data(w, r.Method, strings.TrimPrefix(path, f.mount+"/data/"), body)

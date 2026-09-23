@@ -288,10 +288,19 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// namespace, unchanged, for every pre-0.7 deployment.
 	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
 	if err != nil {
-		// Fail closed; the proxy refuses to start without its injections.
+		// Fail closed; the proxy refuses to start without its injections. The
+		// reason tells a store outage from a credential that is gone or refused.
+		reason := "refused"
+		switch {
+		case errors.Is(err, secretstore.ErrUnavailable):
+			reason = "store-unavailable"
+		case errors.Is(err, secretstore.ErrNotFound):
+			reason = "not-found"
+		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", minted.Injection.SecretName, "failure", nil))
-		if errors.Is(err, secretstore.ErrUnavailable) {
+			"secret.read", minted.Injection.SecretName, "failure",
+			mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
+		if reason == "store-unavailable" {
 			// Transient: the organisation's store did not answer. A distinct
 			// status, so it is never mistaken for a credential that is gone.
 			writeError(w, http.StatusServiceUnavailable,

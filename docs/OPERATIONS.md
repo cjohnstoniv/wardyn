@@ -4615,13 +4615,13 @@ Removing a credential is `DELETE metadata/<path>`, every version at once.
 Paths carry the owner and name, so they reach your Vault audit log.
 
 **Policy.** Least privilege, templated so another install in another namespace
-cannot read this one's paths. There is no `destroy/` or `undelete/` stanza:
-Wardyn never calls either.
+cannot read this one's paths. There is no `destroy/` or `undelete/` stanza and
+no `delete` on `data/`: Wardyn never calls any of them.
 
 ```hcl
 # <accessor> is the Kubernetes auth mount's accessor (vault auth list)
 path "wardyn/data/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
-  capabilities = ["create", "update", "read", "delete"]
+  capabilities = ["create", "update", "read"]
 }
 path "wardyn/metadata/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
   capabilities = ["create", "update", "read", "delete", "list"]
@@ -4644,7 +4644,7 @@ design.
   ```
 - *Token file* (`WARDYN_VAULT_AUTH=token-file`), for compose and VMs: a
   Vault Agent sink or a CSI file at `WARDYN_VAULT_TOKEN_FILE`, re-read
-  whenever Vault answers 403. `deploy/compose/docker-compose.vault.yaml` is
+  when Vault answers 403. `deploy/compose/docker-compose.vault.yaml` is
   the compose overlay.
 
 wardynd logs in at boot and **refuses to start if it cannot**, renews its token
@@ -4659,9 +4659,10 @@ credential sink answers the proxy 503, "Wardyn couldn't reach the service that
 holds this run's credential", distinct from a missing credential's 424. (No
 last-good grace period rides out a transient failure yet.)
 A 401 or 403, a value that is gone, or a binding that does not match is
-*definitive*: revoking Wardyn's Vault role bites at once. **Do not restart
-wardynd during a Vault outage**: its boot keys are in Vault, so it will wait
-for Vault rather than boot.
+*definitive*: revoking Wardyn's Vault role bites at once. (A 401 or 403 makes
+wardynd log in again, or re-read its token file, at most once every 30 s.)
+**Do not restart wardynd during a Vault outage**: its boot keys are in Vault,
+so it will wait for Vault rather than boot.
 
 **Moving an install to Vault, and back.** Online, one row per transaction, safe
 while a daemon serves; idempotent and resumable.

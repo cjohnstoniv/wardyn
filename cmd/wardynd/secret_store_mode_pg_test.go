@@ -4,13 +4,19 @@
 package main
 
 // The boot half of store mode (credential-storage design §2.3a.7), against a
-// real Postgres and an in-memory external store: no age key is needed or
-// generated, local rows left behind refuse boot by name, and a boot key whose
-// external value is gone fails boot instead of being minted over (rule 17).
+// real Postgres and an in-memory external store (or the real Vault client
+// against a minimal Vault): no age key is needed or generated, local rows left
+// behind refuse boot by name, and a boot key whose external value is gone or
+// not in Wardyn's format fails boot instead of being minted over (rule 17).
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -117,6 +123,82 @@ func TestLoadOrCreateSecret_NeverMintsOverAGoneExternalValue(t *testing.T) {
 	}
 	if len(ext.vals) != 0 {
 		t.Fatal("a signing key was written over the lost one")
+	}
+}
+
+// miniVault is just enough Vault KV v2 for the real vaultkv client's Put and
+// Get: token lookup, and metadata and data reads and writes. dataWrites counts
+// every data write.
+type miniVault struct {
+	mu         sync.Mutex
+	meta, data map[string]any
+	dataWrites int
+}
+
+func (v *miniVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p := strings.TrimPrefix(r.URL.Path, "/v1/")
+	route, rel, _ := strings.Cut(strings.TrimPrefix(p, "wardyn/"), "/")
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	var out any
+	switch {
+	case p == "auth/token/lookup-self":
+		out = map[string]any{"data": map[string]any{"ttl": 0}}
+	case r.Method == http.MethodPost && route == "metadata":
+		v.meta[rel] = body["custom_metadata"]
+	case r.Method == http.MethodPost && route == "data":
+		v.data[rel] = body["data"]
+		v.dataWrites++
+	case v.meta[rel] == nil:
+		w.WriteHeader(http.StatusNotFound)
+		return
+	case route == "metadata":
+		out = map[string]any{"data": map[string]any{"current_version": 1, "max_versions": 1,
+			"custom_metadata": v.meta[rel], "versions": map[string]any{"1": map[string]any{}}}}
+	default:
+		out = map[string]any{"data": map[string]any{"data": v.data[rel], "metadata": map[string]any{"custom_metadata": v.meta[rel]}}}
+	}
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// Rule 17 through the real Vault client: a writer at Vault replaced the
+// signing key's data with another shape (its custom_metadata survives a data
+// write, so the binding still matches). Boot refuses it rather than reading
+// zero bytes and minting a fresh signing key over it.
+func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T) {
+	pool := envelopeDB(t)
+	v := &miniVault{meta: map[string]any{}, data: map[string]any{}}
+	srv := httptest.NewServer(v)
+	t.Cleanup(srv.Close)
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ext, err := vaultkv.New(t.Context(), vaultkv.Config{Addr: srv.URL, Auth: vaultkv.AuthTokenFile, TokenFile: tokenFile,
+		Mount: "wardyn", Prefix: "ns1", MaxVersions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadOrCreateSigningKey(t.Context(), s); err != nil {
+		t.Fatalf("first boot mints the signing key: %v", err)
+	}
+	v.mu.Lock()
+	v.data["ns1/platform/"+secretSigningKey] = map[string]any{"password": "x"}
+	writes := v.dataWrites
+	v.mu.Unlock()
+	if _, err := loadOrCreateSigningKey(t.Context(), s); err == nil {
+		t.Fatal("boot accepted a signing key whose Vault data holds no value")
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.dataWrites != writes {
+		t.Fatal("a fresh signing key was written over the one at Vault")
 	}
 }
 

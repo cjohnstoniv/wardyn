@@ -10,6 +10,7 @@ package vaultkv
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -334,9 +335,12 @@ func TestReconcile_ReportsBothSidesAndDeletesNothing(t *testing.T) {
 	if _, err := ext.Put(ctx, "bob", "orphan", "", []byte("v"), false); err != nil {
 		t.Fatal(err)
 	}
-	f.mu.Lock()
-	delete(f.kv, "ns1/operator/dangling")
-	f.mu.Unlock()
+	// Soft-deleted at Vault: the metadata is still there, the current version
+	// holds no value.
+	if _, err := ext.c.call(ctx, http.MethodDelete, "wardyn/data/ns1/operator/dangling", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	deletesBefore := f.callCount("DELETE")
 	rep, err := s.Reconcile(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +351,7 @@ func TestReconcile_ReportsBothSidesAndDeletesNothing(t *testing.T) {
 	if len(rep.Orphans) != 1 || rep.Orphans[0].Owner != "bob" || rep.Orphans[0].Name != "orphan" {
 		t.Fatalf("orphans = %+v; want bob's orphan", rep.Orphans)
 	}
-	deletes := f.callCount("DELETE")
+	deletes := f.callCount("DELETE") - deletesBefore
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.kv["ns1/operator/kept"]; !ok || deletes != 0 {

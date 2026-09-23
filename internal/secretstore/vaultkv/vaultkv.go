@@ -21,9 +21,9 @@
 // name. A pointer moved under another person's row therefore derives a path
 // that holds nothing, or a value bound to someone else: a refusal either way.
 //
-// Wardyn only ever calls data/ and metadata/ (and auth/): never destroy/ or
-// undelete/, so the policy needs neither. "Remove" is DELETE metadata/, which
-// drops every version.
+// Wardyn only ever calls data/ and metadata/ (and auth/): never destroy/,
+// undelete/ or a DELETE on data/, so the policy grants none of them. "Remove"
+// is DELETE metadata/, which drops every version.
 package vaultkv
 
 import (
@@ -155,6 +155,9 @@ func kind(owner, name string) string {
 // rel is the path under the mount DERIVED from the row. It is the only way
 // this store ever computes where a value lives.
 func (s *Store) rel(owner, name string) (string, error) {
+	if strings.Contains(name, "/") {
+		return "", fmt.Errorf("secret name %q cannot be a Vault path: it holds a \"/\"", name)
+	}
 	if err := validSegments(name); err != nil {
 		return "", fmt.Errorf("secret name cannot be a Vault path: %w", err)
 	}
@@ -193,10 +196,15 @@ func binding(owner, name string) map[string]string {
 	return m
 }
 
-// bound checks the value's own custom_metadata against the row.
+// bound checks the value's own custom_metadata against the row, key by key
+// (other keys the organisation adds are left alone). A wardyn-format other
+// than v2 is a value this wardynd does not know how to read.
 func bound(meta map[string]string, owner, name string) error {
-	if meta[metaOwner] != owner || meta[metaName] != name || meta[metaKind] != kind(owner, name) {
-		return fmt.Errorf("refused: the value's metadata names owner %q, name %q and kind %q, not this row's", meta[metaOwner], meta[metaName], meta[metaKind])
+	want := binding(owner, name)
+	for _, k := range []string{metaOwner, metaName, metaKind, metaFormat} {
+		if meta[k] != want[k] {
+			return fmt.Errorf("refused: the value's metadata %s is %q, but this row needs %q", k, meta[k], want[k])
+		}
 	}
 	return nil
 }
@@ -304,8 +312,11 @@ func (s *Store) Get(ctx context.Context, owner, name, ref string) ([]byte, error
 	if err := bound(r.Data.Metadata.CustomMetadata, owner, name); err != nil {
 		return nil, err
 	}
-	v, err := base64.StdEncoding.DecodeString(r.Data.Data["value"])
-	if err != nil {
+	// A data map with no "value" key is refused like a value that is not
+	// base64: read as zero bytes, it would let a boot key be minted over.
+	raw, ok := r.Data.Data["value"]
+	v, err := base64.StdEncoding.DecodeString(raw)
+	if !ok || err != nil {
 		return nil, fmt.Errorf("refused: the value at %s is not in Wardyn's format", ref)
 	}
 	return v, nil
