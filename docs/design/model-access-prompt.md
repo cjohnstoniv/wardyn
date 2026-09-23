@@ -152,7 +152,7 @@ the clock and a failure-streak floor both have to agree before the wait calls it
 
 | Verdict | Condition | Sentence |
 |---|---|---|
-| `starting` | Default / a healthy short wait / a read blip under the retrying floor | No sentence: the door's steps (`login-pane-copy.ts#SIGNIN_PROGRESS`, #628) say it — "Starting the sign-in sandbox", or "Downloading the sign-in image — first time only" with "Can take a few minutes the first time." while the substrate reports `Pulling`. |
+| `starting` | Default / a healthy short wait / a read blip under the retrying floor | No sentence: the door's steps (`login-pane-copy.ts#SIGNIN_PROGRESS`, #628) say it — "Starting the sign-in sandbox", or "Downloading the sign-in image — first time only" with "Can take a few minutes the first time." while the substrate reports `Pulling` — the Docker runner only; the kubelet reports `ContainerCreating` through a pull, so on Kubernetes the first step stays lit. |
 | `slow` | Reads are healthy, ≥ `RUN_POLL_SLOW_START_MS` (60 s) elapsed, still not up | The run's own `status_detail` sentence if one exists, else `LOGIN_SANDBOX_SLOW_START` — "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. A first start may need to pull the image, which can take a few minutes." |
 | `retrying` | Reads have been failing for ≥ `RUN_POLL_RETRYING_AFTER_MS` (10 s) but under the unreadable floor | `LOGIN_SANDBOX_READ_RETRYING` — "Wardyn can't read the sign-in sandbox right now — still trying. It may be starting normally." |
 | `unreadable` | Reads failing ≥ `RUN_POLL_UNREADABLE_AFTER_MS` (`LAUNCH_DEADLINE_MS`) **and** ≥ `RUN_POLL_MIN_FAILURES` (15) consecutive failures | `LOGIN_SANDBOX_UNREADABLE` — "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again." Ends the wait; phase → `error`. |
@@ -167,8 +167,11 @@ carries one.
 
 | Condition | Text |
 |---|---|
-| Auth URL known, tab blocked | `auth-tab-handle.ts#AUTH_TAB_BLOCKED_NOTE` — "Your browser blocked the automatic tab — use the link above to open the verification page." |
-| Neither `signedIn` nor auto-captured yet | "In the tab that opened (or the link above), enter the user code shown in the terminal and approve. Wardyn captures the session automatically when the login completes." |
+| Link not yet printed | `login-pane-copy.ts#SIGNIN_PROGRESS.WAIT_HINT` — "Waiting on {provider} to hand back a verification link." (`signin-progress.tsx`) |
+| Link ready, tab not opened | `SIGNIN_PROGRESS.OPEN` — "Open {provider} sign-in" (the provider tab opens only from this button), with the device code beside it |
+| Link ready, popup blocked | `SIGNIN_PROGRESS.COPY_LEAD` + `COPY_LINK` — "If nothing opens:" "copy the link" — {url} |
+| Tab opened | `SIGNIN_PROGRESS.TAB_OPEN` — "The {provider} sign-in tab is open. Waiting for your approval there." |
+| Tab opened, person wants it again | `SIGNIN_PROGRESS.REOPEN` — "Reopen tab" |
 | CLI printed its own success line (`capture-confirm.ts#extractSignedIn`, a hint only — never a verdict) | `capture-confirm.ts#CAPTURE_HANDOFF` — "The sign-in tool reports you are signed in. Wardyn is waiting for the sandbox to hand over your session. If the terminal above lists accounts or roles, click or tab into it, type the number you want and press Enter — it may ask twice, account then role." |
 | Auto-captured, still saving | "SSO session captured — connecting…" |
 

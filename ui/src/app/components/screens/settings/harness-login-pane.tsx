@@ -697,7 +697,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       {error && (
         <div
           role="alert"
-          className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning"
+          className={`flex items-start gap-2 rounded-lg px-3 py-2 text-xs ${imageFailed ? "border border-danger/30 bg-danger-subtle text-danger" : "border border-warning/30 bg-warning-subtle text-warning"}`}
         >
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           {/* The server's detail is a wire value, so it reads as one. */}

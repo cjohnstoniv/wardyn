@@ -14,7 +14,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   an about:blank tab straight away, and on a first launch the person sat on it while the sign-in
   image downloaded. The dialog now stays put and shows three steps: starting the sign-in sandbox,
   downloading the sign-in image ("Can take a few minutes the first time." — no runner reports pull
-  progress, so there is no percentage), and waiting for the provider. Once the provider's page is
+  progress, so there is no percentage; the step lights while the runner reports `Pulling`, which only
+  the Docker runner does — on Kubernetes the kubelet reports `ContainerCreating` through a pull, so the
+  first step stays lit), and waiting for the provider. Once the provider's page is
   ready, an "Open AWS sign-in" (or "Open Claude sign-in") button opens it, with the device code
   beside it and a copy-link fallback; the tab still has its `opener` severed. A failed image pull
   shows the server's own reason and a Retry that starts a fresh sandbox. The Azure DevOps

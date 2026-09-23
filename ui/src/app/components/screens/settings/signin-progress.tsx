@@ -53,7 +53,7 @@ function marksFor(step: SignInStep): [Mark, Mark, Mark | null] {
 function StepMark({ mark }: { mark: Mark }) {
   if (mark === "done") return <Check className="size-3.5 shrink-0 text-success" aria-hidden />;
   if (mark === "active") return <Loader2 className="size-3.5 shrink-0 animate-spin text-info" aria-hidden />;
-  if (mark === "failed") return <TriangleAlert className="size-3.5 shrink-0 text-warning" aria-hidden />;
+  if (mark === "failed") return <TriangleAlert className="size-3.5 shrink-0 text-danger" aria-hidden />;
   return <span className="size-3.5 shrink-0 rounded-full border border-border" aria-hidden />;
 }
 
