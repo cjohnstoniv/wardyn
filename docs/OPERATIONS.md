@@ -1888,7 +1888,7 @@ does not have. If the grant tables cannot be read, those lists come back empty
 rather than unfiltered. Admins are exempt, as at every door; a `security_admin`
 is bounded like a member.
 
-**Managing them** (the four `/permissions` rows are `securityOps` — admin or
+**Managing them** (the five `/permissions` rows are `securityOps` — admin or
 `security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
 is member-safe):
 
@@ -1898,6 +1898,7 @@ is member-safe):
 | `POST /permissions/grants` | upsert one grant on its natural key (`201` new, `200` updated) |
 | `DELETE /permissions/grants/{id}` | remove one grant |
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
+| `GET /permissions/explain?subject_type=&subject=&kinds=` | the Explain grid (K4): for one named `user`, `group` or `user_type` subject, every kind's state — `everyone`, `this_type`, `blocked`, `admins_only` (a widening kind with no allow), or the reserved `not_available` (needs UT-10's restriction bit, not yet on this tree) — at the wildcard default plus any specific value a grant names; `kinds` defaults to all seven |
 | `GET /access` | the merged role-mapping table (chart + console rows, with collision/shadow provenance) plus the same before/after/changes posture the write guards below evaluate |
 | `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
 | `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
