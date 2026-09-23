@@ -4737,10 +4737,15 @@ every application secret; verify a secret-dependent run after recovery too.
 The at-rest cipher is AES-256-GCM from the Go standard library
 (`cipher.NewGCMWithRandomNonce`, which draws each 96-bit nonce inside Go's
 cryptographic module) with HKDF-SHA256 key derivation, so Go's FIPS 140-3 mode
-(`GODEBUG=fips140=on`) applies to it — and with the Go version in `go.mod` it also
-runs under `GODEBUG=fips140=only`. That is a statement about this path only: the
-build does not pin a frozen module snapshot (`GOFIPS140`), and age (used once,
-to convert pre-envelope rows) is outside it.
+(`GODEBUG=fips140=on`) applies to it — and with the Go version in `go.mod` the
+envelope also runs under `GODEBUG=fips140=only`. That is a statement about this
+path only: the build does not pin a frozen module snapshot (`GOFIPS140`), and age
+(used once, to convert pre-envelope rows) is outside it. The `local` key's id is
+taken over the age key's public recipient, which is X25519, and
+`GODEBUG=fips140=only` forbids X25519: under it wardynd refuses to start with a
+`WARDYN_AGE_KEY` (or an ephemeral one) and names store mode. Store mode
+(`WARDYN_SECRET_STORE=vaultkv`, below) needs no age key and boots under
+`GODEBUG=fips140=only`.
 
 `wardynd -rotate-age-key <key-file>` is the supported rotation, a **maintenance
 mode, not a server start**: it mints a new identity, rewraps every row's data key

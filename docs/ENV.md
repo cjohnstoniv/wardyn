@@ -445,7 +445,9 @@ allowlisted in the ratchet test: `WARDYN_TEST_BOOL`, `WARDYN_TEST_DUR`,
 `internal/secretstore/vaultkv/live_test.go`: the server's address and a file
 holding a token that can mount and write policies),
 `WARDYN_TEST_VAULT_K8S_JWT_FILE` (the same file's Kubernetes-auth case: a
-projected service-account token with audience `vault`), `WARDYN_TEST_DOCKER`,
+projected service-account token with audience `vault`), `WARDYN_TEST_FIPS_CHILD`
+(set by `secretstoretest.UnderFIPSOnly` on the child it re-runs a test in under
+`GODEBUG=fips140=only`), `WARDYN_TEST_DOCKER`,
 `WARDYN_TEST_CACHE_REPO`, `WARDYN_TEST_TOOLS_DIR`, `WARDYN_ENVBUILD_TEST_FLOAT`,
 `WARDYN_ENVBUILD_TEST_INT`, `WARDYN_FAKE_MARKER`, `WARDYN_NEGCTL`,
 `WARDYN_E2E_BASE_URL`, `WARDYN_E2E_CLAUDE_CREDS`, `WARDYN_E2E_REAL_MODEL`,

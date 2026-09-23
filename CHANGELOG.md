@@ -105,6 +105,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **The `local` key refuses to start under `GODEBUG=fips140=only` (#682).** That mode forbids
+  X25519, and age drops the error, so every `WARDYN_AGE_KEY` got the same empty public recipient
+  and every local key the same `kek_id`. wardynd now refuses to start with an age key (set or
+  ephemeral) in that mode and names store mode (`WARDYN_SECRET_STORE=vaultkv`), which needs no age
+  key. New tests prove, in a child process under `fips140=only`, that the envelope round trip works
+  and that a store-mode boot mints and re-reads every boot key without X25519. `make helm-lint` now
+  checks that store mode with `secretFiles.enabled` renders no secret as an env value or
+  `secretKeyRef`.
 - **Store mode: credentials can live in your organisation's Vault, and Wardyn holds no key
   (#644).** `WARDYN_SECRET_STORE=vaultkv` writes every stored credential to a Vault KV v2 engine
   (OpenBao is a supported endpoint) and keeps only a pointer row in Postgres (`enc_version` 2, no

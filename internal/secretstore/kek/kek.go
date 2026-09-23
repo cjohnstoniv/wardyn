@@ -131,8 +131,16 @@ var _ KEK = (*Local)(nil)
 // round-trips to; age exposes no raw scalar. The id is "local:" plus the first
 // 8 bytes of SHA-256 over the public recipient, hex — so a row names which
 // age key sealed it without naming the key.
+//
+// The recipient is X25519 of the identity, which GODEBUG=fips140=only forbids.
+// age drops that error and leaves the recipient empty, which would give every
+// identity the same kek_id, so a recipient that does not parse is refused.
 func NewLocal(identity *age.X25519Identity) (*Local, error) {
-	return newLocal(identity.String(), identity.Recipient().String())
+	recipient := identity.Recipient().String()
+	if _, err := age.ParseX25519Recipient(recipient); err != nil {
+		return nil, errors.New("local KEK: the age identity has no public recipient (X25519 failed; GODEBUG=fips140=only forbids it) — the local key cannot run in FIPS 140-only mode; use a store mode (WARDYN_SECRET_STORE=vaultkv), which needs no WARDYN_AGE_KEY")
+	}
+	return newLocal(identity.String(), recipient)
 }
 
 // newLocal is NewLocal over the two strings it reads, so the golden vectors can
