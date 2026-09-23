@@ -27,6 +27,22 @@ Your admin can see this page's world for themselves without a second login —
 — which is worth knowing when you report something: they can usually look at
 exactly what you are looking at.
 
+**Autonomy levels (0.8).** If your admin has set an autonomy rubric on your
+profile, it caps what a run may do unattended, graded on what your run actually
+reaches and holds — not on you personally. Four levels: `L0` (attended —
+interactive only), `L1` (gated — non-interactive runs are allowed, but tool
+approvals are silently switched from `auto` to `hold`, so an agent still stops
+for you at every gated call), `L2` (unattended — auto-approval and seeded auto
+tools are allowed), `L3` (adds `task_mode=exec`, unsupervised execution). The
+level is graded on your run's egress reach, whether it holds a secret and how
+powerful one, and its confinement class — never on which agent you picked. A run
+whose shape exceeds what your resolved level permits is refused
+`governance_profile`, the same refusal a denied `task_mode` or interactive flag
+already gives you — see
+[OPERATIONS.md § Every denial that isn't a 404](OPERATIONS.md#every-denial-that-isnt-a-404).
+An `L1` run is not refused for lacking supervision; it launches with its tool
+approvals derived to `hold` and the create response carries a warning saying so.
+
 Three things worth naming here, because they read as bugs otherwise:
 
 - A run id that isn't yours answers **404**, not 403 — Wardyn never confirms

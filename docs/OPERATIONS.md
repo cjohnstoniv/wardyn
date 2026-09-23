@@ -2131,6 +2131,33 @@ widening). Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
 
+**The autonomy rubric (0.8, #77).** A profile may also carry `limits.autonomy_rubric`,
+nine closed fields — three egress postures (`egress_open`, `egress_reviewed`,
+`egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`,
+`secrets_none`) and three enforced confinement classes (`confinement_cc1`,
+`confinement_cc2`, `confinement_cc3`) — each unset or one of four autonomy levels:
+`L0` attended (interactive only, supervised seeding), `L1` gated (adds
+non-interactive runs, but `tool_approvals` is derived to `hold`), `L2` unattended
+(adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the
+door that routes around every other gate, so it is the top rung). `resolveRunAutonomy`
+(`internal/api/runs_autonomy.go`) grades the run's real posture — egress reach
+graded on the same union `unionRunEgress` builds, secret power, and the
+already-enforced confinement class — against the assigned profile's rubric and
+folds every field the posture matches to its **minimum** level; a nil rubric, or a
+posture none of the nine fields caps, binds nothing (today's behaviour, unchanged).
+The same function backs both `POST /runs` and `POST /runs/preflight`, so the level
+Review shows is the level launch enforces. A run whose declared shape exceeds its
+resolved level is refused `governance_profile` (see the `target` list above); a
+non-interactive run resolved to exactly `L1` is not refused, it launches with its
+tool approvals silently derived to `hold`, and the 201 carries a warning saying so.
+The resolution — level, posture, and every rubric field that tied at that level
+(`bound_by`) — rides the create audit row's `autonomy` field and is frozen on
+`agent_runs.autonomy_level`. **Not in the posture:** the model-provider hosts
+egress dispatch resolves from global configuration after this gate runs (a Bedrock
+run's region, for one), and any stored-credential residency — a run's autonomy
+level is graded on what the run can reach and hold, not on where its model
+credential lives.
+
 ### When everyone is an admin, and what a refused person is told
 
 **The everyone-is-an-admin warning.** With SSO configured, a person nobody has
