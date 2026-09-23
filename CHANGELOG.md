@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The drive editor's home-template rule for `k8s_pvc_static` now matches the server (#808).**
+  The picker treated `k8s_pvc_static` as a plain share: it disabled `hash`, the server's default
+  and recommended template for a static PVC, and offered `email_local`, the one template the
+  server always refuses on this backend. `k8s_pvc_static` is a third case — an admin
+  pre-provisions the claim, but Wardyn still names it — so the editor now enables `hash` and `sub`
+  there and disables only `email_local`, mirroring `ManagedBackendRejectsTemplate` /
+  `ShareBackendRejectsTemplate` (`internal/types/user_drive.go`) through one shared predicate.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
