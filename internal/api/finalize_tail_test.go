@@ -216,8 +216,32 @@ func TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly(t *testing.T) {
 
 	srv.startCompletionWatcher(run.ID, "ref-never-started", "exec-1")
 
+	// The watcher's CAS to FAILED and its finalizeRunTail side effects (the
+	// audit write, StopSandbox) are sequential in the SAME goroutine, but that
+	// sequence keeps running after the CAS — so a poll that stops on state
+	// alone can observe FAILED a step before the audit event or the
+	// StopSandbox call it implies. Poll the joint condition instead: state,
+	// audit and teardown must all have landed before any of them is asserted.
+	failures, sawExecStartedFalse := 0, false
+	ready := func() bool {
+		failures, sawExecStartedFalse = 0, false
+		for _, ev := range audit.eventsFor(run.ID, "run.complete") {
+			if ev.Outcome != "failure" {
+				continue
+			}
+			failures++
+			var d struct {
+				ExecStarted *bool `json:"exec_started"`
+			}
+			_ = json.Unmarshal(ev.Data, &d)
+			if d.ExecStarted != nil && !*d.ExecStarted {
+				sawExecStartedFalse = true
+			}
+		}
+		return st.State() == types.RunFailed && rn.stopCount() == 1 && failures >= 1
+	}
 	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && st.State() != types.RunFailed {
+	for time.Now().Before(deadline) && !ready() {
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -226,22 +250,6 @@ func TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly(t *testing.T) {
 	}
 	if rn.stopCount() != 1 {
 		t.Errorf("StopSandbox calls = %d, want exactly 1 (finalized through the normal terminal tail)", rn.stopCount())
-	}
-
-	failures := 0
-	sawExecStartedFalse := false
-	for _, ev := range audit.eventsFor(run.ID, "run.complete") {
-		if ev.Outcome != "failure" {
-			continue
-		}
-		failures++
-		var d struct {
-			ExecStarted *bool `json:"exec_started"`
-		}
-		_ = json.Unmarshal(ev.Data, &d)
-		if d.ExecStarted != nil && !*d.ExecStarted {
-			sawExecStartedFalse = true
-		}
 	}
 	if failures != 1 {
 		t.Errorf("run.complete failure events = %d, want exactly 1 (no duplicate audit)", failures)

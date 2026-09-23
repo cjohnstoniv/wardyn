@@ -481,6 +481,19 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 }
 
+// secretStoreCheck is store_external in store mode (design §3,
+// SETUP_CHECK.STORE_EXTERNAL): the credentials live in the organisation's
+// store, and there is no local key to be durable. Otherwise the age-key row.
+func secretStoreCheck(external string, durable bool) SetupCheck {
+	if external == "" {
+		return ageKeyCheck(durable)
+	}
+	return SetupCheck{
+		ID: "store_external", Label: "Credential storage", Status: "ok",
+		Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there.",
+	}
+}
+
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream
 // proxy, egress redirects, default SCM hosts) has been authored yet. "info" for
 // the unconfigured/fully-configured cases — it is optional and skippable, never

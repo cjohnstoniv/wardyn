@@ -36,10 +36,10 @@ import { SHELL } from "../wardyn/copy";
 // which is the rationale B1 recorded.
 
 const ADMIN_ROUTES = [
-  "/settings",
-  "/governance",
-  "/permissions",
-  "/audit",
+  "/admin/settings",
+  "/admin/governance",
+  "/admin/permissions",
+  "/admin/audit",
 ] as const;
 
 function stubMe(me: Record<string, unknown> | null) {
@@ -167,9 +167,9 @@ describe("AppShell — a settled-but-unknown identity gets no route (V1-D3)", ()
       operator: true,
       security_operator: true,
     });
-    renderAt("/audit");
+    renderAt("/admin/audit");
     await waitFor(() =>
-      expect(screen.getByTestId("screen")).toHaveTextContent("screen /audit"),
+      expect(screen.getByTestId("screen")).toHaveTextContent("screen /admin/audit"),
     );
     expect(screen.queryByText(SHELL.UNKNOWN_BODY)).toBeNull();
     expect(
