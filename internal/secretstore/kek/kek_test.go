@@ -6,6 +6,8 @@ package kek
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -32,6 +34,23 @@ const (
 	goldenCT        = "202122232425262728292a2ba1518b1102ec377a7f0f36e3b77d978dbf3bc1eae6ec168bbacc783f86d2ed44ea98fa7184516832"
 	goldenValue     = "sk-ant-test-vector-value"
 )
+
+// nonceSize is GCM's standard 96-bit nonce, the prefix Seal writes.
+const nonceSize = 12
+
+// sealWithNonce is Seal with the nonce fixed, for the golden vectors only:
+// production never supplies a nonce (Seal draws it inside the module).
+func sealWithNonce(key, nonce, plaintext, aad []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	return aead.Seal(append([]byte(nil), nonce...), nonce, plaintext, aad), nil
+}
 
 func seq(from byte, n int) []byte {
 	b := make([]byte, n)

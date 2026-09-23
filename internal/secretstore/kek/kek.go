@@ -17,7 +17,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -53,11 +52,6 @@ func Bind(owner, name string) map[string]string {
 // DEKSize is the data key length: AES-256.
 const DEKSize = 32
 
-// nonceSize is AES-GCM's standard 96-bit nonce. Every Seal draws a fresh one
-// from crypto/rand; one message per DEK and one wrap per local-KEK call keep
-// each key far below SP 800-38D's 2^32 random-nonce bound.
-const nonceSize = 12
-
 // Encode is the injective field encoding every AAD uses: for each field, its
 // length as a big-endian uint32, then its bytes. Field 1 is the domain label,
 // so an AAD for one purpose can never parse as another's.
@@ -75,22 +69,19 @@ func Encode(fields ...string) []byte {
 }
 
 // Seal returns nonce(12) ‖ AES-256-GCM(key, nonce, plaintext, aad) under a
-// fresh random nonce. It is the one framing of both the value (under the DEK)
-// and the local wrap (under the KEK).
+// fresh random 96-bit nonce. It is the one framing of both the value (under
+// the DEK) and the local wrap (under the KEK). The nonce is drawn inside Go's
+// cryptographic module (cipher.NewGCMWithRandomNonce, whose output is exactly
+// this framing), so no caller ever supplies one and none can be reused — and
+// it stays the approved GCM under GODEBUG=fips140=on/only, where a
+// caller-supplied IV is not. One message per DEK and one wrap per local-KEK
+// call keep each key far below SP 800-38D's 2^32 random-nonce bound.
 func Seal(key, plaintext, aad []byte) ([]byte, error) {
-	nonce := make([]byte, nonceSize)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("draw nonce: %w", err)
-	}
-	return sealWithNonce(key, nonce, plaintext, aad)
-}
-
-func sealWithNonce(key, nonce, plaintext, aad []byte) ([]byte, error) {
 	aead, err := newGCM(key)
 	if err != nil {
 		return nil, err
 	}
-	return aead.Seal(nonce, nonce, plaintext, aad), nil
+	return aead.Seal(nil, nil, plaintext, aad), nil
 }
 
 // Open reverses Seal. Any mismatch — key, AAD, or a flipped byte — is one
@@ -100,10 +91,10 @@ func Open(key, sealed, aad []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(sealed) < nonceSize+aead.Overhead() {
+	if len(sealed) < aead.Overhead() {
 		return nil, errors.New("sealed blob is shorter than a nonce and a tag")
 	}
-	plain, err := aead.Open(nil, sealed[:nonceSize], sealed[nonceSize:], aad)
+	plain, err := aead.Open(nil, nil, sealed, aad)
 	if err != nil {
 		return nil, errors.New("authentication failed")
 	}
@@ -118,7 +109,7 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cipher.NewGCM(block)
+	return cipher.NewGCMWithRandomNonce(block)
 }
 
 // localInfo is the HKDF info string and the AAD domain label of a local wrap.
