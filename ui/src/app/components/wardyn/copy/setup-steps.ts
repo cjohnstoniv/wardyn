@@ -50,6 +50,7 @@ export const PEOPLE_STEP = {
 // M-6 (QM-8/§4.8, admin-member-modes-design.md, modes-b.html) — the admin
 // funnel's Finish step, once the demos and the "Your work" name both left it.
 export const SETUP = {
+  FINISH_TITLE: "Finish",
   FINISH_SWITCH: "Switch to user view",
 } as const;
 

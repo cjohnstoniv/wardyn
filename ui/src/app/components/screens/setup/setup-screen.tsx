@@ -38,6 +38,7 @@ import type { AccessLoadState } from "./access-panel";
 import { resolveDefaultCc } from "../../wardyn/default-confinement";
 import { deploymentMode, deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
+import { switchView, useViewAccess } from "../../wardyn/console-view";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
@@ -101,7 +102,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate();
   const [stepId, setStepId] = React.useState<SetupStepId>(() => {
     const want = searchParams.get("step");
-    // Validated against the FULL order — status (and so which conditional demo
+    // Validated against the FULL order — status (and so which conditional
     // steps survive) isn't known yet at mount, which is exactly what
     // stepOrder(null) returns. An unmet step that slips through here is pulled
     // back by the re-correct effect below the moment status lands.
@@ -503,9 +504,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   }, [status]);
 
   // …and the OTHER correction, deliberately its own effect and deliberately
-  // UN-LATCHED: a conditional demo step can leave the walk at any time (the
-  // operator deletes the demo secret on /secrets, a model disconnects), not
-  // just at mount. If the step on screen is no longer in stepOrder(status),
+  // UN-LATCHED: a conditional step can leave the walk at any time, not just at
+  // mount. If the step on screen is no longer in stepOrder(status),
   // indexOf(current) === -1 and the shell's "Step N of M"/prev/next and the
   // rail's active state all quietly break. Fall BACK to the nearest surviving
   // step — never forward, which would advance the operator past something they
@@ -534,17 +534,29 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   }, [onDone]);
 
   // M-6 (QM-8/§4.8): the Finish step's own offer — the admin's own model
-  // connection and first run are in the User view, so Finish hands off there
-  // instead of leaving the admin to find the switch themselves. Distinct from
-  // `finish` above: this does not dismiss the funnel or record onboarding
-  // completion, it just leaves. A PLAIN navigation, deliberately not a
-  // switchView() call of its own: /setup is a USER_ONLY path (console-
-  // view.tsx), so ViewGate already turns this into the real, already-tested
-  // clamp-and-reload for a session-admin (ViewInterstitial, its own busy/
-  // failed state and "Stay in admin view" out) and a plain pass-through for
-  // a single-operator install (D1, `access === "url"`) — reimplementing
-  // either branch here would just be a second, driftable copy of both.
-  const finishSwitchToUser = React.useCallback(() => navigate("/setup"), [navigate]);
+  // connection and first run are in the User view, so Finish hands off there.
+  // It finishes setup too, as `finish` does: otherwise `/` keeps landing a
+  // single-operator install (D1) back in this funnel. The click is the
+  // confirmation, so a session-admin switches here rather than meeting
+  // ViewGate's interstitial and being asked again; if that switch fails, the
+  // plain navigation below lands on the interstitial, which can retry. Every
+  // other principal takes the plain navigation, which ViewGate answers.
+  const viewAccess = useViewAccess();
+  const finishSwitchToUser = React.useCallback(async () => {
+    // Awaited: a session-admin's switch reloads the page, which could cut the
+    // request short. completeOnboarding never rejects.
+    await setupApi.completeOnboarding();
+    dismissSetup();
+    if (viewAccess === "session-admin") {
+      try {
+        await switchView("user", "/setup");
+        return;
+      } catch {
+        // Fall through to the interstitial.
+      }
+    }
+    navigate("/setup");
+  }, [viewAccess, navigate]);
 
   const readiness = status ? deriveReadiness(status) : null;
   // Effective default-barrier selection: the explicit click this session if
@@ -815,7 +827,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             rechecking={rechecking}
             lastCheckedAt={lastCheckedAt}
             onJump={selectStep}
-            onSwitchToUser={finishSwitchToUser}
+            onSwitchToUser={() => void finishSwitchToUser()}
           />
         )}
       </SetupLayout>

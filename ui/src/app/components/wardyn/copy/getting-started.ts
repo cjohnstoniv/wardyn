@@ -59,6 +59,10 @@ export const MEMBER_GETTING_STARTED = {
   DEMOS_EGRESS_TITLE: "Egress demos",
   DEMOS_SECRETS_TITLE: "Secrets demos",
   DEMO_OPEN: "Open",
+  // Packet M-B (modes-b.html): the "Your model connections · in Your account"
+  // row, which links to /account.
+  MODEL_CONNECTIONS: "Your model connections",
+  MODEL_CONNECTIONS_WHERE: "in Your account",
 } as const;
 
 // DRAFT (M2 canon pending) — X3-F4, the MEMBER's empty runs board. The operator

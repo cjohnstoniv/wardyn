@@ -128,11 +128,9 @@ export function ReviewStep({
   rechecking,
   lastCheckedAt,
   onJump,
-  // M-6 (QM-8/§4.8): Finish's own offer — a plain navigation to /setup
-  // (setup-screen.tsx's finishSwitchToUser), which ViewGate itself turns into
-  // the real clamp-and-reload for an SSO admin or a pass-through for a
-  // single-operator install; this step stays presentational, same as every
-  // other body in this file. Optional (defaulted to a no-op) so the other
+  // M-6 (QM-8/§4.8): Finish's own offer (setup-screen.tsx's
+  // finishSwitchToUser); this step stays presentational, same as every other
+  // body in this file. Optional (defaulted to a no-op) so the other
   // step-bodies.test.tsx cases — which render this step without ever
   // touching Finish — need not pass it.
   onSwitchToUser = () => {},
@@ -186,13 +184,11 @@ export function ReviewStep({
     <div className="space-y-4">
       {/* M-6 (QM-8/§4.8, modes-b.html): the admin's own model connection and
           first run live in the User view, never here — Finish hands off
-          instead of leaving the admin to find the switch themselves. The
-          click is a plain navigation (onSwitchToUser's own comment); a
-          session-admin sees ViewGate's own "This page is in the user view"
-          interstitial, which carries the failed/busy state — no second copy
-          of it belongs here. */}
-      <SectionCard title="Finish">
-        <Button size="sm" onClick={onSwitchToUser}>
+          instead of leaving the admin to find the switch themselves. Outline:
+          the footer's "Finish setup" is this surface's one affirmative
+          action. */}
+      <SectionCard title={SETUP.FINISH_TITLE}>
+        <Button variant="outline" size="sm" onClick={onSwitchToUser}>
           {SETUP.FINISH_SWITCH}
         </Button>
       </SectionCard>

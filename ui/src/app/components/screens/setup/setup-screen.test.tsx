@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
 
 // api is mocked module-wide (by resolved path), which also covers the wizard's
@@ -89,8 +89,15 @@ vi.mock("../../attach-terminal", () => ({
 vi.mock("../../wardyn/live-approvals", () => ({
   LiveApprovals: () => null,
 }));
+// Finish's "Switch to user view" flips an SSO session's view itself.
+const switchViewMock = vi.fn(async (..._a: unknown[]) => {});
+vi.mock("../../wardyn/console-view", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../wardyn/console-view")>()),
+  switchView: (...a: unknown[]) => switchViewMock(...a),
+}));
 
 import { SetupScreen, setupDismissed, dismissSetup } from "./setup-screen";
+import { ViewAccessProvider, type ViewAccess } from "../../wardyn/console-view";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import { DRIVES } from "../../../lib/user-drives-copy";
 
@@ -141,6 +148,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
   beforeEach(() => {
     localStorage.clear();
+    completeOnboardingMock.mockClear();
+    switchViewMock.mockReset().mockResolvedValue(undefined);
     getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
     listSecretsMock.mockReset().mockResolvedValue([]);
     setSecretMock.mockReset().mockResolvedValue(undefined);
@@ -597,6 +606,45 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // The INSTALL records completion too — the server call is what makes
     // onboarding survive a browser change and agree across origins.
     expect(completeOnboardingMock).toHaveBeenCalledTimes(1);
+  });
+
+  // M-6: Finish's "Switch to user view" finishes setup as "Finish setup" does,
+  // or `/` keeps landing a single-operator install back in the funnel.
+  async function switchToUserFromReview(access: ViewAccess) {
+    render(
+      <ViewAccessProvider value={access}>
+        <MemoryRouter initialEntries={["/admin/setup"]}>
+          <Routes>
+            <Route path="/admin/setup" element={<SetupScreen onDone={() => {}} />} />
+            <Route path="/setup" element={<p>User Getting Started</p>} />
+          </Routes>
+        </MemoryRouter>
+      </ViewAccessProvider>,
+    );
+    await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+    await user.click(screen.getByRole("button", { name: /^Review —/ }));
+    await user.click(screen.getByRole("button", { name: "Switch to user view" }));
+  }
+
+  it("'Switch to user view' on a single-operator install finishes setup and opens /setup", async () => {
+    await switchToUserFromReview("url");
+    expect(await screen.findByText("User Getting Started")).toBeInTheDocument();
+    expect(completeOnboardingMock).toHaveBeenCalledTimes(1);
+    expect(setupDismissed()).toBe(true);
+    expect(switchViewMock).not.toHaveBeenCalled();
+  });
+
+  it("'Switch to user view' for an SSO admin switches the session itself, with no second confirmation", async () => {
+    await switchToUserFromReview("session-admin");
+    await waitFor(() => expect(switchViewMock).toHaveBeenCalledWith("user", "/setup"));
+    expect(completeOnboardingMock).toHaveBeenCalledTimes(1);
+    expect(setupDismissed()).toBe(true);
+    // The switch reloads the page; this tab never renders /setup itself.
+    expect(screen.queryByText("User Getting Started")).not.toBeInTheDocument();
   });
 
   // "Open Runs" was the Launch step's second exit, and it dismissed setup so

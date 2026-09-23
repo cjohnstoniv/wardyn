@@ -41,6 +41,17 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect(page.getByText("Pick your barrier")).toHaveCount(0);
   });
 
+  // Packet M-B (modes-b.html): the model-connection row links to Your account.
+  test("the model connections row opens Your account", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+
+    const link = page.getByRole("link", { name: MEMBER_GETTING_STARTED.MODEL_CONNECTIONS });
+    await expect(link).toHaveAttribute("href", "/account");
+    await link.click();
+    await expect(page).toHaveURL(/\/account$/);
+  });
+
   test("the episode rail leads with the member's own path, then core (Shape C)", async ({
     page,
   }) => {

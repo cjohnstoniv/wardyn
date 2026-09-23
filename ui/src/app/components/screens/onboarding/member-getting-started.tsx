@@ -291,13 +291,14 @@ export function MemberGettingStarted() {
   // (setup/steps.ts's PHASES, before M-6), gated by the same precondition
   // that used to drop an unmet one from that walk (walkableDemos — needsModel
   // without a connected model, needsSecret without that secret stored).
-  // KNOWN GAP: internal/api/setup.go's redactSetupStatusForMember always
-  // zeroes secrets.present for a non-operator, so a needsSecret demo (five of
-  // the eight "secrets" ones) reads unmet — and so never offered — for every
-  // member, even once an admin has stored the org secret it needs. Closing
-  // that needs a server-side change to what a member's own /setup/status can
-  // prove, which is out of this UI-only PR's scope; filed as a follow-up
-  // rather than silently claimed fixed here.
+  // KNOWN GAPS, all in #850. internal/api/setup.go's redactSetupStatusForMember
+  // zeroes secrets.present and providers for a caller the server answers as a
+  // user, so a needsSecret demo (five of the eight "secrets" ones) is never
+  // offered to an SSO user, and neither is a needsModel one unless the model
+  // access is a managed subscription or Bedrock. And a demo run by a user goes
+  // through the user ceiling (boundMemberSpec), which changes several demos'
+  // policies (D5); none is watch-only yet. A single-operator install (D1) is
+  // unaffected by all three.
   const walkable = new Set(walkableDemos(status).map((d) => d.id));
   const egressDemos = DEMOS.filter((d) => d.section === "egress" && walkable.has(d.id));
   const secretsDemos = DEMOS.filter((d) => d.section === "secrets" && walkable.has(d.id));
@@ -510,6 +511,14 @@ export function MemberGettingStarted() {
                   {MEMBER.GS_BODY(governanceProfile)}
                 </p>
               )}
+              {/* Packet M-B (modes-b.html): your model connections live in
+                  Your account. */}
+              <p className="mt-3 text-sm text-muted-foreground">
+                <Link to="/account" className="font-medium text-info hover:underline">
+                  {T.MODEL_CONNECTIONS}
+                </Link>{" "}
+                {T.MODEL_CONNECTIONS_WHERE}
+              </p>
             </>
           )}
         </SectionCard>

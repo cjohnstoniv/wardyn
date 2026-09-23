@@ -79,7 +79,7 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict (X2-F1
     // The setup ROUTE renders the welcome hero instead of the funnel until
     // this per-browser flag is set (onboardingSeen()) — same pre-seed
     // demos.spec.ts uses for its own ?step= deep links, needed here because
-    // Settings' link is a client-side navigate() to /setup?step=corp_network,
+    // Settings' link is a client-side navigate() to /admin/setup?step=corp_network,
     // and the flag is read at GettingStarted's mount regardless of the query
     // string it carries.
     await page.addInitScript(() => {
@@ -94,7 +94,9 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict (X2-F1
     await navToRoute(page, "/admin/settings");
     await page.getByRole("button", { name: "Corporate proxy & egress" }).click();
 
-    await expect(page).toHaveURL(/\/setup\?step=corp_network/);
+    // The Admin view's funnel, never plain /setup: that is the User view's
+    // Getting Started, which has no Network step (M-6).
+    await expect(page).toHaveURL(/\/admin\/setup\?step=corp_network/);
     await expect(page.getByRole("heading", { name: "Network", level: 2 })).toBeVisible();
 
     await page.getByRole("tab", { name: "Egress redirection" }).click();

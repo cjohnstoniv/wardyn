@@ -162,7 +162,7 @@ function HostCard({
       {operator && (
         <button
           type="button"
-          onClick={() => navigate("/setup?step=corp_network")}
+          onClick={() => navigate("/admin/setup?step=corp_network")}
           className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
         >
           <span>
