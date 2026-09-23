@@ -17,6 +17,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   bypassed its own audited refusal path (a capability, consent or sign-in hold that could not even
   raise its approval request) now leave the same `secret.read` failure row every sibling refusal
   does (#204).
+- **The AWS SSO and Bedrock bearer credential-injection lanes carry the same machine `reason` on
+  the wire the Azure DevOps lane's refusals do** — both lanes already computed a reason for the
+  audit row; the resolve refusal, and the AWS SSO re-auth hold's terminal/exhausted/raise-failed
+  refusals, now send it in the body too. The reason vocabulary is now one closed set
+  (`internal/api/reasons.go`) shared across all three lanes, so the same reason means the same
+  thing regardless of which lane sent it (#656, continuing #204's sweep).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

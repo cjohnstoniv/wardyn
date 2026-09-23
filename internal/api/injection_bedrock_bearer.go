@@ -80,21 +80,25 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", bedrockAPIKeySecret, "failure",
 			mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
-		writeError(w, status, body)
+		// reason reaches the wire now (#656, following #204's ADO-lane
+		// precedent): the same machine class already recorded on the audit
+		// row, so the proxy can branch on it instead of string-matching the
+		// human sentence in body.
+		writeJSON(w, status, errorBody{Error: body, Reason: reason})
 		return true
 	}
 
 	var recorded bedrockBearerSnapshot
 	if !s.grantSnapshot(ctx, claims.RunID, grantID, &recorded) || recorded.CredentialSource == "" {
-		return fail(http.StatusForbidden, "missing_scope_snapshot", bedrockBearerNotRecorded)
+		return fail(http.StatusForbidden, reasonMissingScopeSnapshot, bedrockBearerNotRecorded)
 	}
 	run, rerr := s.cfg.Store.GetRun(ctx, claims.RunID)
 	if rerr != nil {
-		return fail(http.StatusServiceUnavailable, "run_unreadable", credentialReauthRunUnreadableBody)
+		return fail(http.StatusServiceUnavailable, reasonRunUnreadable, credentialReauthRunUnreadableBody)
 	}
 	siteCfg, scErr := s.cfg.Store.GetSiteConfig(ctx)
 	if scErr != nil {
-		return fail(http.StatusServiceUnavailable, "roster_unreadable", credentialReauthStoreErrorBody)
+		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, credentialReauthStoreErrorBody)
 	}
 	// The recorded namespace must still be the one the roster names for this
 	// run's OWN subject (the run token, not the grant, is authority for who that
@@ -103,14 +107,14 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 	// resolveAWSSSOInjection enforces for the session lane.
 	scope := awsSSOScopeFor(siteCfg, run.Agent, claims.Sub)
 	if bedrockBearerSnapshotOf(scope) != recorded || !scope.readsBearer() {
-		return fail(http.StatusForbidden, "scope_changed", credentialReauthScopeChangedRefusal)
+		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal)
 	}
 	secret := s.bedrockBearerFor(ctx, scope)
 	if len(secret) == 0 {
 		if scope.perUser {
-			return fail(http.StatusFailedDependency, "per_user_bearer_absent", bedrockBearerNamespaceNotOwn)
+			return fail(http.StatusFailedDependency, reasonPerUserBearerAbsent, bedrockBearerNamespaceNotOwn)
 		}
-		return fail(http.StatusFailedDependency, "bearer_absent", bedrockBearerOperatorAbsent)
+		return fail(http.StatusFailedDependency, reasonBearerAbsent, bedrockBearerOperatorAbsent)
 	}
 
 	formatted := formatInjectionValue(minted.Injection.Format, secret)

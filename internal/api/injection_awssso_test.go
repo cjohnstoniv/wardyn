@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -412,6 +413,15 @@ func TestResolveAWSSSOInjection_GrantNamingAnotherOwnerIsRefused(t *testing.T) {
 	if !f.audit.hasReason("secret.read", "scope_changed") {
 		t.Error("no scope_changed failure for a grant naming another member")
 	}
+	// #656: the audited reason must also reach the wire body — the proxy has
+	// no audit access and used to see only the human sentence.
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != reasonScopeChanged {
+		t.Errorf("wire reason = %q, want %q", body.Reason, reasonScopeChanged)
+	}
 }
 
 // A DEAD session raises exactly ONE visible request and answers 423 with the id
@@ -477,8 +487,17 @@ func TestResolveAWSSSOInjection_CancelledRequestIsTerminalNotHeld(t *testing.T) 
 	if _, err := f.srv.cfg.Approvals.CancelForRun(context.Background(), f.runID, "run_killed"); err != nil {
 		t.Fatal(err)
 	}
-	if w := f.resolve(t); w.Code != http.StatusForbidden {
+	w := f.resolve(t)
+	if w.Code != http.StatusForbidden {
 		t.Fatalf("resolve after the run was killed: code = %d, want 403 terminal; body=%s", w.Code, w.Body.String())
+	}
+	// #656: a terminal hold now carries a machine reason on the wire too.
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != reasonSigninClosed {
+		t.Errorf("wire reason = %q, want %q", body.Reason, reasonSigninClosed)
 	}
 }
 
@@ -719,6 +738,14 @@ func TestResolveAWSSSOInjection_WorkflowCapRefusesTheNinth(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "too many times") {
 		t.Errorf("cap refusal body = %s, want the capped sentence", w.Body.String())
+	}
+	// #656: the hold chain now carries a machine reason on the wire too.
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != reasonSigninHoldsExhausted {
+		t.Errorf("wire reason = %q, want %q", body.Reason, reasonSigninHoldsExhausted)
 	}
 }
 
@@ -1033,5 +1060,28 @@ func TestResolveAWSSSOInjection_ARaiseThatLostTheRaceAuditsNothing(t *testing.T)
 	}
 	if after := reauthCount(t, f.srv, "requested"); after != before {
 		t.Errorf("outcome=requested moved %s -> %s for a request this caller did not raise", before, after)
+	}
+}
+
+// #656, following #204's ADO-lane precedent: a raise that cannot even ask (the
+// approval store errors) now carries reason "raise_failed" on the wire, not
+// just the human sentence — the AWS SSO hold shares the ADO sign-in hold's
+// refusal vocabulary because it is the same shape (an approval-backed hold
+// whose own raise can fail).
+func TestResolveAWSSSOInjection_RaiseFailureCarriesReasonOnWire(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.putBlob(t, "alice@example.com", deadSSOBlob())
+	f.st.approvals.requestErr = errors.New("approvals store unavailable")
+
+	w := f.resolve(t)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("resolve: code = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != reasonRaiseFailed {
+		t.Errorf("wire reason = %q, want %q", body.Reason, reasonRaiseFailed)
 	}
 }
