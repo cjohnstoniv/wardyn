@@ -34,6 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/nodump"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -66,6 +67,11 @@ const (
 var groundtruthSensorRunID = uuid.Nil
 
 func main() {
+	// First, before any credential is read: no core dump, no same-uid ptrace.
+	if err := nodump.Disable(); err != nil {
+		slog.Error("wardynd: fatal", slog.Any("err", err))
+		os.Exit(1)
+	}
 	if err := run(); err != nil {
 		slog.Error("wardynd: fatal", slog.Any("err", err))
 		os.Exit(1)

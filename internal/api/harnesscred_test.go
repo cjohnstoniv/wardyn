@@ -184,15 +184,17 @@ func TestManagedCredProvider(t *testing.T) {
 	if tok.Value != "sk-ant-oat01-real-token" {
 		t.Fatalf("wrong token: %q", tok.Value)
 	}
-	// Managed tokens carry no machine-readable expiry (zero) so the sink treats
-	// them as static — no re-resolve churn.
+	// Managed tokens carry no machine-readable expiry (zero): the sink gives
+	// them a stored key's expiry instead (storedKeyExpiry).
 	if !tok.ExpiresAt.IsZero() {
 		t.Fatalf("managed token must have zero expiry, got %v", tok.ExpiresAt)
 	}
 
-	// Empty token blob == not connected.
+	// Empty token blob == not connected. The write goes behind the provider's
+	// back, so drop its 60-second cache as a capture or disconnect does.
 	empty, _ := json.Marshal(managedCredBlob{Token: ""})
 	_ = store.Put(context.Background(), harnessCredSecretName("anthropic"), empty)
+	p.(*managedCredProvider).evict()
 	if _, err := p.Current(context.Background()); err == nil {
 		t.Fatal("empty token must fail closed")
 	}

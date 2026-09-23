@@ -392,8 +392,16 @@ const RunSecretGrace = time.Hour
 // new one can be forgotten. It fails CLOSED on anything it cannot positively
 // prove terminal-and-cold: a store error, or a held run id with no row in the
 // listing, keeps its secrets.
+//
+// It also drops the process-wide mask copies of credentials that were refreshed
+// or deleted more than RunSecretGrace ago (secretmask.Registry.SweepGlobals),
+// on the same grace and for the same reason.
 func (s *Server) SweepRunSecrets(ctx context.Context) int {
-	if s.cfg.MaskRegistry == nil || s.cfg.Store == nil {
+	if s.cfg.MaskRegistry == nil {
+		return 0
+	}
+	s.cfg.MaskRegistry.SweepGlobals(s.cfg.Now().Add(-RunSecretGrace))
+	if s.cfg.Store == nil {
 		return 0
 	}
 	held := s.cfg.MaskRegistry.RunIDs()

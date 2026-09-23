@@ -420,9 +420,11 @@ type CredentialGrant struct {
 // ResolvedInjection is the ONE wire contract of GET
 // /api/v1/internal/injection/{grantID}: the control plane's injection-resolve
 // result, carrying the header name and the FORMATTED secret value (formatting
-// applied server-side). ExpiresAt (unix ms, 0 = never) marks a rotating
-// credential the proxy must re-resolve before it lapses (the subscription OAuth
-// token); a static api-key grant leaves it 0.
+// applied server-side). ExpiresAt (unix ms, 0 = never) marks a credential the
+// proxy must re-resolve before it lapses: an OAuth token's real expiry, or the
+// ten-minute one the sink gives a stored key so a removed or refused key stops
+// being injected. Only an approval-gated grant, whose mint is single-use,
+// leaves it 0.
 //
 // It lives here, in the neutral package both sides already import, because the
 // api server (encoder) and the wardyn-proxy (decoder) previously each kept a

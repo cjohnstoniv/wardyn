@@ -71,7 +71,7 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// credentialReauthRaiseFailedBody is a frozen operator-facing sentence and
 	// aerr here is s.cfg.Approvals.Request's own error, never driver/substrate
 	// text. #173's DO NOT TOUCH names this site explicitly.
-	"injection_awssso.go:361": "modelled AWS SSO reauth-raise body; #173 DO NOT TOUCH",
+	"injection_awssso.go:367": "modelled AWS SSO reauth-raise body; #173 DO NOT TOUCH",
 	// handleRunResourcesExecStream's unsupported arm is reached only after errors.Is(err,
 	// runner.ErrExecStreamUnsupported) just matched, so err.Error() here is
 	// always that sentinel's own fixed text ("runner: ExecStream not

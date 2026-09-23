@@ -447,7 +447,7 @@ func TestUpstreamCredentialMasked(t *testing.T) {
 		t.Fatal("expected credential mask values")
 	}
 	for _, v := range vals {
-		procRegistry.AddGlobal(v)
+		procMask(v)
 	}
 	b64 := base64.StdEncoding.EncodeToString([]byte("alice:s3cr3t-longpass"))
 	line := []byte(`{"proxy_authorization":"Basic ` + b64 + `","pw":"s3cr3t-longpass"}`)

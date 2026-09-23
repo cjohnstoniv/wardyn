@@ -105,7 +105,11 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 	if bedrockBearerSnapshotOf(scope) != recorded || !scope.readsBearer() {
 		return fail(http.StatusForbidden, "scope_changed", credentialReauthScopeChangedRefusal)
 	}
-	secret := s.bedrockBearerFor(ctx, scope)
+	secret, rerr := s.bedrockBearerRead(ctx, scope)
+	if rerr != nil {
+		status, reason, body := storeReadRefusal(bedrockAPIKeySecret, rerr)
+		return fail(status, reason, body)
+	}
 	if len(secret) == 0 {
 		if scope.perUser {
 			return fail(http.StatusFailedDependency, "per_user_bearer_absent", bedrockBearerNamespaceNotOwn)
@@ -129,10 +133,11 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 			"owner": recorded.OwnerSubject, "credential_source": recorded.CredentialSource,
 		})))
 	writeJSON(w, http.StatusOK, injectionResponse{
-		Host:   minted.Injection.Host,
-		Header: minted.Injection.Header,
-		Value:  formatted,
-		JTI:    minted.JTI,
+		Host:      minted.Injection.Host,
+		Header:    minted.Injection.Header,
+		Value:     formatted,
+		JTI:       minted.JTI,
+		ExpiresAt: s.storedKeyExpiry(minted),
 	})
 	return true
 }

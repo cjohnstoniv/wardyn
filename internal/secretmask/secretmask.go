@@ -29,8 +29,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"slices"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -48,9 +50,19 @@ var placeholder = []byte("<secret-hidden>")
 //
 // A nil *Registry is safe: all methods on a nil pointer are no-ops.
 type Registry struct {
-	mu      sync.RWMutex
-	perRun  map[uuid.UUID][][]byte // run id -> set of secret values
-	globals [][]byte               // process-wide secrets applied to every run
+	mu     sync.RWMutex
+	perRun map[uuid.UUID][][]byte // run id -> set of secret values
+	// globals is every process-wide value masked right now, on every run: the
+	// union of current and retired, rebuilt by reflatten whenever either changes.
+	globals [][]byte
+	// current holds each credential's live values by (owner, name), so a
+	// refreshed or deleted credential's old values can be let go (CS-4, F5)
+	// instead of living for the daemon's whole life.
+	current map[globalKey][][]byte
+	// retired holds values that are no longer current. They stay masked until
+	// SweepGlobals drops them: masking fails open, and an event quoting the old
+	// value can still arrive after the credential moved on.
+	retired []retiredValue
 
 	// gen bumps on every mutation that CHANGES the corpus (a de-duplicated Add
 	// is not a change). It is the cache key below: a Masker built at generation
@@ -62,6 +74,13 @@ type Registry struct {
 	// without this the masking hot path re-derives an unchanged set thousands of
 	// times per run. Evict drops a run's entry with its secrets.
 	cached map[uuid.UUID]*runMaskers
+}
+
+type globalKey struct{ owner, name string }
+
+type retiredValue struct {
+	value []byte
+	at    time.Time
 }
 
 // runMaskers is one run's derived masking state at a single registry generation.
@@ -77,7 +96,7 @@ type runMaskers struct {
 
 // NewRegistry returns an empty, ready-to-use Registry.
 func NewRegistry() *Registry {
-	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}}
+	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][][]byte{}}
 }
 
 // Add registers value as a secret for runID. Values shorter than MinLen are
@@ -111,24 +130,102 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 	r.gen++
 }
 
-// AddGlobal registers value as a process-global secret applied on every run.
-// Values shorter than MinLen are ignored. Re-registering the same value is a
-// no-op: per-run call sites (Bedrock SSO auth resolution, subscription inject)
-// re-add the same blob on every dispatch and every preflight, and duplicates
-// would grow globals without bound — Snapshot clones and NewMasker sorts the
-// whole set on every masked chunk, so the masking hot path pays for each one.
-func (r *Registry) AddGlobal(value []byte) {
-	if r == nil || len(value) < MinLen {
+// AddGlobal registers values as the CURRENT values of one credential, the row
+// (owner, name), masked process-wide on every run. Values shorter than MinLen
+// are ignored, and so are repeats: a caller re-registers the same credential on
+// every dispatch and every refresh.
+//
+// The key is what lets the registry let go. Every value the credential held
+// before and does not hold now (a refreshed access token, a rotated refresh
+// token) is retired, not dropped, and SweepGlobals drops it later. Pass every
+// value the credential currently holds in one call: a value left out is retired.
+func (r *Registry) AddGlobal(owner, name string, values ...[]byte) {
+	if r == nil {
+		return
+	}
+	var keep [][]byte
+	for _, v := range values {
+		if len(v) >= MinLen && !containsSlice(keep, v) {
+			keep = append(keep, bytes.Clone(v))
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := globalKey{owner, name}
+	r.retireLocked(k, keep)
+	if len(keep) > 0 {
+		r.current[k] = keep
+		// A value that comes back is current again, not waiting to be swept.
+		r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return containsSlice(keep, rv.value) })
+	}
+	r.reflattenLocked()
+}
+
+// EvictGlobal retires every current value of the credential (owner, name): the
+// credential was deleted. The values stay masked until SweepGlobals drops them.
+// Idempotent.
+func (r *Registry) EvictGlobal(owner, name string) {
+	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, g := range r.globals {
-		if bytes.Equal(g, value) {
-			return
+	r.retireLocked(globalKey{owner, name}, nil)
+	r.reflattenLocked()
+}
+
+// SweepGlobals drops the values retired before cutoff and reports how many it
+// dropped. The production caller is api.Server.SweepRunSecrets, with the same
+// grace a finished run's corpus gets.
+func (r *Registry) SweepGlobals(cutoff time.Time) int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	before := len(r.retired)
+	r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return rv.at.Before(cutoff) })
+	r.reflattenLocked()
+	return before - len(r.retired)
+}
+
+// retireLocked moves k's current values that are not in keep to retired and
+// forgets k. The caller holds r.mu.
+func (r *Registry) retireLocked(k globalKey, keep [][]byte) {
+	now := time.Now()
+	for _, v := range r.current[k] {
+		if !containsSlice(keep, v) {
+			r.retired = append(r.retired, retiredValue{value: v, at: now})
 		}
 	}
-	r.globals = append(r.globals, bytes.Clone(value))
+	delete(r.current, k)
+}
+
+// reflattenLocked rebuilds globals from current and retired, and bumps gen only
+// when the masked set changed: retiring a value masks exactly what it did
+// before, so it must not invalidate every run's cached Masker. The caller
+// holds r.mu.
+func (r *Registry) reflattenLocked() {
+	seen := map[string]bool{}
+	var out [][]byte
+	add := func(v []byte) {
+		if !seen[string(v)] {
+			seen[string(v)] = true
+			out = append(out, v)
+		}
+	}
+	for _, vs := range r.current {
+		for _, v := range vs {
+			add(v)
+		}
+	}
+	for _, rv := range r.retired {
+		add(rv.value)
+	}
+	if len(out) == len(r.globals) && !slices.ContainsFunc(r.globals, func(v []byte) bool { return !seen[string(v)] }) {
+		return
+	}
+	r.globals = out
 	r.gen++
 }
 

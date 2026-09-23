@@ -62,7 +62,7 @@ func TestEvict_GenerationBumpsOnlyOnARealDelete(t *testing.T) {
 // process lifetime.
 func TestRunIDs_IncludesCacheOnlyRuns(t *testing.T) {
 	r := NewRegistry()
-	r.AddGlobal([]byte("a-process-global-secret"))
+	r.AddGlobal("", "test-credential", []byte("a-process-global-secret"))
 	withSecret, cacheOnly := uuid.New(), uuid.New()
 	r.Add(withSecret, []byte("per-run-secret-value"))
 	_ = r.Masker(cacheOnly)

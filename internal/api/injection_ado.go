@@ -58,6 +58,7 @@ const (
 	adoResolveConsentRequired   = "Azure DevOps has not been consented for the access this run was granted — an administrator or the person must grant consent, then relaunch"
 	adoResolveInteractionNeeded = "Azure DevOps requires the person to sign in interactively (a Conditional Access policy) — sign in to Azure DevOps again, then relaunch"
 	adoResolveUnavailable       = "renewing the Azure DevOps sign-in behind this run did not complete; nothing about the credential is known to be wrong"
+	adoResolveStoreRefused      = "the secret store refused the Azure DevOps sign-in behind this run (it was moved or changed at the store, or Wardyn's access to it was revoked) — sign in to Azure DevOps again, or ask an administrator to check the store"
 	adoResolveTokenModeRefusal  = "this run's Azure DevOps token mode cannot be issued by Wardyn"
 )
 
@@ -323,6 +324,8 @@ func adoResolveFailureAnswer(class ADOEntraFailure) (int, string) {
 		return http.StatusForbidden, adoResolveConsentRequired
 	case ADOEntraFailureInteractionRequired:
 		return http.StatusForbidden, adoResolveInteractionNeeded
+	case ADOEntraFailureStoreRefused:
+		return http.StatusForbidden, adoResolveStoreRefused
 	default:
 		return http.StatusServiceUnavailable, adoResolveUnavailable
 	}

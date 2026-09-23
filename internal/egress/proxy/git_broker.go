@@ -418,7 +418,7 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	// live leak is known (this token is set as Basic auth on the OUTBOUND request
 	// only and never appears in an error the sandbox sees), but "no path today"
 	// is not a property of the token, it is a property of the current call sites.
-	// AddGlobal dedupes by value, so the cache's re-mints add at most one entry
+	// procMask dedupes by value, so the cache's re-mints add at most one entry
 	// per rotation on a process that lives one run.
 	//
 	// Both renderings (F155): the raw token AND the base64(username + ":" + tok)

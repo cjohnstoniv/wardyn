@@ -213,7 +213,9 @@ func (s *Store) Get(ctx context.Context, name string) ([]byte, error) {
 			errors.Join(secretstore.ErrNotFound, pgx.ErrNoRows))
 	}
 	if err != nil {
-		return nil, fmt.Errorf("pg secretstore: get %s: %w", rowRef(s.owner, name), err)
+		// The database did not answer: transient, like an external store's
+		// outage, so a running run rides it out on its last-good value (K8).
+		return nil, fmt.Errorf("pg secretstore: get %s: %w: %w", rowRef(s.owner, name), secretstore.ErrUnavailable, err)
 	}
 	return s.open(ctx, e)
 }
@@ -271,7 +273,7 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 func (s *Store) List(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT name FROM secrets WHERE owned_by=$1 ORDER BY name`, s.owner)
 	if err != nil {
-		return nil, fmt.Errorf("pg secretstore: list: %w", err)
+		return nil, fmt.Errorf("pg secretstore: list: %w: %w", secretstore.ErrUnavailable, err)
 	}
 	defer rows.Close()
 	var names []string

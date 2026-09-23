@@ -591,8 +591,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Mask BEFORE anything can log or persist either value.
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.AccessToken))
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.RefreshToken))
+	s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(resp.AccessToken), []byte(resp.RefreshToken))
 
 	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{

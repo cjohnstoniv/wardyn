@@ -44,7 +44,7 @@ func TestRegistryAddDeduplicates(t *testing.T) {
 
 	// A value already registered process-globally is not re-added per-run.
 	glob := []byte("a-process-global-subscription-blob")
-	r.AddGlobal(glob)
+	r.AddGlobal("", "test-credential", glob)
 	r.Add(runID, glob)
 	if n := len(r.Snapshot(runID)); n != 7 {
 		t.Errorf("Snapshot after re-adding a global per-run = %d entries, want 7", n)

@@ -127,7 +127,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 	}
 
 	// Mask BEFORE anything can log or persist it.
-	s.cfg.MaskRegistry.AddGlobal([]byte(grant.RefreshToken))
+	s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(grant.RefreshToken))
 
 	now := s.cfg.Now()
 	expiresAt := grant.Expiry.UTC()

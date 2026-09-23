@@ -252,7 +252,7 @@ func TestMaskDecisionBytesMasksJSONEscapedSecrets(t *testing.T) {
 		"f125-nl\nsecret-value-0003", // newline -> \n
 		"f125-plain-ascii-value-04",  // control: masked before this fix too
 	} {
-		procRegistry.AddGlobal([]byte(secret))
+		procMask([]byte(secret))
 		body, err := json.Marshal(decisionLog(
 			egress.Request{Host: "x.test", Method: http.MethodGet, Path: "/x?k=" + secret},
 			egress.Allow, "policy:allowed"))

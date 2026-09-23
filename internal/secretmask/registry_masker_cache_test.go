@@ -36,7 +36,7 @@ func TestRegistryMaskerIsCachedPerGeneration(t *testing.T) {
 		t.Errorf("a secret registered after the first Masker() was not masked: %q", got)
 	}
 	// So must a global, and an eviction.
-	r.AddGlobal([]byte("a-late-process-global-value"))
+	r.AddGlobal("", "test-credential", []byte("a-late-process-global-value"))
 	if got := r.Masker(runID).Mask([]byte("x a-late-process-global-value y")); bytes.Contains(got, []byte("a-late-process-global")) {
 		t.Errorf("a global registered after the last Masker() was not masked: %q", got)
 	}

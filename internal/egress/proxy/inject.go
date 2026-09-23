@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,6 +35,12 @@ import (
 // initialise it (or not needing it) is a safe no-op rather than a panic.
 var procRegistry = secretmask.NewRegistry()
 
+// procMask registers v with procRegistry for the life of this process. The
+// sidecar serves one run, so what it holds is that run's corpus, filed under
+// uuid.Nil: the key every proxy-side reader (decisions.go, the content scanner)
+// masks with. It is never evicted, because the process ends with the run.
+func procMask(v []byte) { procRegistry.Add(uuid.Nil, v) }
+
 // InjectionConfig pairs an egress.InjectionRule with the credential grant the
 // proxy mints from at startup. The minted secret lives ONLY in proxy memory:
 // it is never exposed to the sandbox (no env, no disk, no args). CONNECT
@@ -52,11 +59,23 @@ type InjectionConfig struct {
 // provider's own refresh margin so the provider refreshes when the proxy asks.
 const injectRefreshMargin = 5 * time.Minute
 
-// injector holds the per-host injection headers. A STATIC entry (api-key grant,
-// expiresAt == 0) is fetched once at startup and cached for the run. A DYNAMIC
-// entry (the subscription OAuth token, expiresAt != 0) is re-resolved via the
-// control plane when it nears expiry — so the injected credential never goes
-// stale. base/token/client are retained for those re-resolves.
+// lastGoodGrace is how long past its expiry an entry keeps serving its
+// last-good header while re-resolving it fails TRANSIENTLY: the control plane,
+// or the store behind it, did not answer (credential-storage design K8). A
+// definitive refusal drops the header at once, whatever is left of the grace.
+const lastGoodGrace = 15 * time.Minute
+
+// lastGoodRetry paces re-resolves while a last-good header is being served, so
+// an outage is asked once per interval per entry, not once per request.
+const lastGoodRetry = 30 * time.Second
+
+// injector holds the per-host injection headers. A STATIC entry (expiresAt ==
+// 0: an approval-gated api-key grant, whose mint is single-use) is fetched once
+// at startup and cached for the run. A DYNAMIC entry (expiresAt != 0: an OAuth
+// token, and every other stored key, which the sink gives a ten-minute expiry)
+// is re-resolved via the control plane when it nears expiry — so the injected
+// credential never goes stale, and one removed or refused at the store stops
+// being injected. base/token/client are retained for those re-resolves.
 type injector struct {
 	mu     sync.Mutex // guards byHost lookups
 	byHost map[string]*injEntry
@@ -97,6 +116,35 @@ type injEntry struct {
 	// buildInjector for requireTLS's reason, so it needs no lock.
 	rule      egress.InjectionRule
 	expiresAt int64 // unix ms
+	// retryAt is set while the last-good header is served after a transient
+	// failure (lastGood); until then the entry counts as fresh. Guarded by reMu.
+	retryAt time.Time
+}
+
+// lastGood reports whether e may keep serving its header after a re-resolve
+// failed with err: only when err is transient, the header was not already
+// dropped, and e is within lastGoodGrace of its expiry. On true it paces the
+// next attempt. The caller holds reMu.
+func (e *injEntry) lastGood(err error, now time.Time) bool {
+	if !transientResolveFailure(err) || e.header.value == "" || e.expiresAt == 0 ||
+		!now.Before(time.UnixMilli(e.expiresAt).Add(lastGoodGrace)) {
+		return false
+	}
+	e.retryAt = now.Add(lastGoodRetry)
+	return true
+}
+
+// transientResolveFailure reports whether a re-resolve failed because nothing
+// answered: the sink's 503 (the store, or the control plane's own database,
+// did not answer) or no answer from the control plane at all. Every other
+// failure is a refusal.
+func transientResolveFailure(err error) bool {
+	var se injectionStatusError
+	if errors.As(err, &se) {
+		return se.status == http.StatusServiceUnavailable
+	}
+	var ue *url.Error
+	return errors.As(err, &ue)
 }
 
 // buildInjector mints each injection rule's secret once and formats its
@@ -159,8 +207,9 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 // returns the startup-minted value; for a dynamic (expiring) entry it re-resolves
 // via the control plane when within injectRefreshMargin of expiry. The bool
 // reports whether a rule EXISTS for the host; a non-nil error means a rule exists
-// but its (dynamic) credential could not be refreshed — the caller MUST fail
-// closed rather than forward a stale credential.
+// but its (dynamic) credential could not be refreshed and may not be served as
+// last-good (injEntry.lastGood) — the caller MUST fail closed rather than
+// forward a stale credential.
 func (i *injector) resolve(host string) (injectedHeader, bool, error) {
 	return i.resolveCtx(context.Background(), host)
 }
@@ -197,10 +246,11 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 	// for minutes.
 	for {
 		e.reMu.Lock()
-		if e.expiresAt == 0 || time.Now().Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
+		now := time.Now()
+		if e.expiresAt == 0 || now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) || now.Before(e.retryAt) {
 			h := e.header
 			e.reMu.Unlock()
-			return h, true, nil // static, or dynamic and still fresh
+			return h, true, nil // static, dynamic and still fresh, or riding out an outage
 		}
 		if wf := e.reauth; wf != nil {
 			if wf.finished() {
@@ -229,11 +279,23 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 		if err == nil {
 			e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
 			e.expiresAt = resolved.ExpiresAt
+			e.retryAt = time.Time{}
 			h := e.header
 			e.reMu.Unlock()
 			registerHeaderCredential(resolved.Value)
 			return h, true, nil
 		}
+		if e.lastGood(err, time.Now()) {
+			h := e.header
+			e.reMu.Unlock()
+			slog.WarnContext(ctx, "wardyn-proxy: re-resolving an injected credential failed transiently; serving the last-good value",
+				slog.String("host", key), slog.Time("until", time.UnixMilli(e.expiresAt).Add(lastGoodGrace)), slog.Any("err", err))
+			return h, true, nil
+		}
+		// Definitive, or the grace is spent: the header goes now, so nothing
+		// later can serve it as last-good. A 423 is included — the control
+		// plane just said this credential needs a person.
+		e.header, e.retryAt = injectedHeader{}, time.Time{}
 		var pending errReauthPending
 		if !errors.As(err, &pending) {
 			e.reMu.Unlock()
@@ -300,6 +362,7 @@ func (i *injector) installHeader(e *injEntry, wf *reauthWorkflow, resolved types
 	e.reMu.Lock()
 	e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
 	e.expiresAt = resolved.ExpiresAt
+	e.retryAt = time.Time{}
 	if e.reauth == wf {
 		e.reauth = nil // the hold is over and its credential is installed
 	}
@@ -366,20 +429,20 @@ func registerHeaderCredential(formatted string) {
 	if formatted == "" {
 		return
 	}
-	procRegistry.AddGlobal([]byte(formatted))
+	procMask([]byte(formatted))
 	i := strings.LastIndexByte(formatted, ' ')
 	if i < 0 || i+1 >= len(formatted) {
 		return // no scheme prefix: the formatted value IS the credential
 	}
 	tail := formatted[i+1:]
-	procRegistry.AddGlobal([]byte(tail))
+	procMask([]byte(tail))
 	dec, err := base64.StdEncoding.DecodeString(tail)
 	if err != nil {
 		return
 	}
 	if c := bytes.IndexByte(dec, ':'); c >= 0 && c+1 < len(dec) {
-		procRegistry.AddGlobal(dec)
-		procRegistry.AddGlobal(dec[c+1:])
+		procMask(dec)
+		procMask(dec[c+1:])
 	}
 }
 
@@ -396,7 +459,7 @@ func registerBasicAuthCredential(user, tok string) {
 	if tok == "" {
 		return
 	}
-	procRegistry.AddGlobal([]byte(tok))
+	procMask([]byte(tok))
 	registerHeaderCredential("Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+tok)))
 }
 
