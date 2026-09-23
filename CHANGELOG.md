@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The setup checklist's ephemeral-age-key warning now says rows are unrecoverable, not just
+  "unreadable" (#755).** A fresh age identity is minted on every restart when none is configured,
+  so secret rows written while an earlier ephemeral key was in use cannot be decrypted once that
+  key is lost — no key set afterward recovers them. The console's "Secret store durability" row
+  said only that secrets "become unreadable after a restart", which read as a one-time future
+  event; it now states the consequence plainly, matching the wording every other front door for
+  this same trap (the Helm chart's render refusal, its values.yaml comment, `install.sh`,
+  `scripts/up.sh`, `docs/ENV.md`) already used.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

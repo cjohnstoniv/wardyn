@@ -584,6 +584,25 @@ func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	}
 }
 
+// TestAgeKeyCheckDetailNamesUnrecoverableConsequence is #755 (0.7.12 release
+// review, F3). The warn arm's Detail said secrets "become unreadable after a
+// restart", which reads as a one-time, future event — it does not say that a
+// fresh ephemeral identity is minted on EVERY boot with none configured, so
+// rows written while an EARLIER ephemeral key was in use are gone the moment
+// that key is lost (the next restart), with no way to set a key afterwards
+// and recover them. Every other front door that hits this same trap (the
+// Helm chart's render refusal, its values.yaml comment, install.sh, up.sh,
+// docs/ENV.md) already says so; this console row was the one place an
+// operator sees it live and did not.
+func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
+	detail := ageKeyCheck(false).Detail
+	for _, want := range []string{"earlier ephemeral key", "cannot be decrypted"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("Detail does not say %q — Detail = %q", want, detail)
+		}
+	}
+}
+
 // ── finding 3: bedrock_provider / llm_provider under a per-principal caller ──
 
 // bedrockRowVia is bedrockProviderCheck fed the SAME setupBedrock a real
