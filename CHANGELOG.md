@@ -98,6 +98,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
   `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
   handler written in this indirect style no longer passes CI clean.
+- **An Azure DevOps address's host could be misread past a `#` or `?`, and an invalid-UTF-8 name
+  could reach storage.** `splitRepoAddress` ended the host at the first `/`, so
+  `https://github.com#@dev.azure.com/acme/x%20y` let a fragment's `@host` be read back as the real
+  host by the `@`-strip that follows, making a non-Azure-DevOps address pass as one that carries
+  `%`-escapes; the host now ends at the first `/`, `?` or `#` (#563). Separately, `UnescapeName`
+  accepted a decoded name that was not valid UTF-8 (e.g. `%C0%AF`, `%FF`), which a store column
+  would likely reject with a Postgres error where a 400 was expected; it now refuses one, in the
+  same shape as every other refused spelling.
 
 ### Fixed
 
