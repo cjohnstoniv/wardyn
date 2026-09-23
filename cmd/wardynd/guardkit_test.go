@@ -195,20 +195,26 @@ func funcBody(t *testing.T, src, name string) string {
 }
 
 // methodBody returns a method's body by its bare name, whatever type it hangs
-// off — every guard call site names a method unambiguously within the one
-// file it hands in, so the first citedSymbolBodies key ending in ".name" is
-// the right one.
+// off. A name two types share is refused rather than resolved: map order would
+// pick either body, and an absence check could then pass on the wrong one.
 func methodBody(t *testing.T, src, name string) string {
 	t.Helper()
 	bodies, err := citedSymbolBodies("src.go", []byte(src))
 	if err != nil {
 		t.Fatalf("methodBody: parse: %v", err)
 	}
-	for sym, body := range bodies {
+	var matches []string
+	for sym := range bodies {
 		if strings.HasSuffix(sym, "."+name) {
-			return body
+			matches = append(matches, sym)
 		}
 	}
-	t.Fatalf("method %s not found — the guard's anchor moved, so it is asserting nothing", name)
+	switch len(matches) {
+	case 0:
+		t.Fatalf("method %s not found — the guard's anchor moved, so it is asserting nothing", name)
+	case 1:
+		return bodies[matches[0]]
+	}
+	t.Fatalf("method %s is ambiguous (%v) — cite it as Type.Method", name, matches)
 	return ""
 }
