@@ -88,6 +88,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   now refuses to start while any row is sealed under an age key, instead of minting an ephemeral
   key that strands them. Still open: a database writer can copy an older row back into its own
   slot (THREAT-MODEL residual 48).
+- **Every read of a stored secret is now audited, once (#647).** Before, only the injection
+  sinks recorded `secret.read`; boot-key reads, the GitHub App and git PAT/SSH key reads at mint,
+  resident secrets placed at dispatch, and every status check that decrypts a captured sign-in or
+  the managed subscription token left no row. wardynd now wraps its secret store in one decorator that
+  records a `secret.read` for each read, carrying why it happened (`purpose`: `boot`,
+  `broker-mint`, `dispatch`, `managed-token`, `migrate`, `sso-refresh`, `ado-refresh`, `status`),
+  whose namespace it was made for, the store, and the row it opened (`ref`, `row_owner`). The
+  injection sinks keep their own row, with its grant and jti, and now name the stored row too; the
+  decorator stays silent for those reads, so no read is counted twice. A read that finds nothing
+  records nothing, and a refused row is a `failure` without the store's error text. The first
+  0.8 boot records one `migrate` read per legacy row it converts. A guard type-checks every read
+  site and fails the build on one that says neither why it reads nor that it records the read
+  itself. Deployments that poll setup status often will see more `secret.read` rows: each status
+  check that decrypts a captured sign-in is now one.
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's

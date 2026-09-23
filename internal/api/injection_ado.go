@@ -38,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -172,7 +173,10 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if minted.Injection == nil || minted.Injection.SecretName != types.ADOEntraAccessTokenSecret {
 		return false
 	}
-	ctx := r.Context()
+	// The stored sign-in is read here to redeem the access token this resolve
+	// injects; those reads are recorded as such, and the injection below as the
+	// sentinel's own secret.read.
+	ctx := secretstore.WithPurpose(r.Context(), secretstore.PurposeADORefresh)
 	fail := func(status int, reason, body string, extra map[string]any) bool {
 		data := map[string]any{"reason": reason, "grant_id": grantID}
 		for k, v := range extra {

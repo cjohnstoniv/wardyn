@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -88,6 +89,15 @@ func (s *Server) oauthProviderForSentinel(secretName string) (provider subscript
 // contract is single-sourced and the compiler (not a parity test) enforces that
 // both sides agree — see types.ResolvedInjection for why.
 type injectionResponse = types.ResolvedInjection
+
+// withStoreRow adds the row a SiteAudited read reported — its store, ref and
+// owner — to a site's secret.read data. A read that found no row adds nothing.
+func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
+	if row.Ref != "" {
+		data["store"], data["ref"], data["row_owner"] = row.Store, row.Ref, row.Owner
+	}
+	return data
+}
 
 // handleInternalInjection resolves an api_key grant to its injectable header
 // value for the run's wardyn-proxy sidecar (startup mint).
@@ -284,18 +294,20 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// operator's writes under "" only, so no row ever exists under those
 	// strings and the lookup falls back to the operator row: today's single
 	// namespace, unchanged, for every pre-0.7 deployment.
-	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
+	rctx, row := secretstore.SiteAudited(r.Context())
+	secret, err := s.cfg.Secrets.For(claims.Sub).Get(rctx, minted.Injection.SecretName)
 	if err != nil {
 		// Fail closed; the proxy refuses to start without its injections.
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", minted.Injection.SecretName, "failure", nil))
+			"secret.read", minted.Injection.SecretName, "failure",
+			mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "owner": claims.Sub}, row))))
 		writeError(w, http.StatusFailedDependency,
 			"secret "+minted.Injection.SecretName+" is not in the store (set it with `wardyn secret set`)")
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub})))
+		mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
 
 	formattedValue := formatInjectionValue(minted.Injection.Format, secret)
 

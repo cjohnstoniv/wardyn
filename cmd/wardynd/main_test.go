@@ -231,7 +231,7 @@ func TestBuildSecretStore_RefusesEveryKnownPublicAgeKey(t *testing.T) {
 		// smuggle a published key past the guard.
 		for _, given := range []string{key, "  " + key + "\n"} {
 			// A nil pool is fine: the guard fails closed BEFORE any pool use.
-			_, err := buildSecretStore(t.Context(), nil, given, "test-store")
+			_, err := buildSecretStore(t.Context(), nil, given, "test-store", &capturingRecorder{})
 			if err == nil {
 				t.Fatalf("buildSecretStore accepted published key %q", key)
 			}

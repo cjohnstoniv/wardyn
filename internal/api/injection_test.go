@@ -57,11 +57,12 @@ func (s *memSecrets) Put(_ context.Context, name string, v []byte) error {
 	s.owned[s.owner][name] = v
 	return nil
 }
-func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
+func (s *memSecrets) Get(ctx context.Context, name string) ([]byte, error) {
 	memSecretsMu.Lock()
 	defer memSecretsMu.Unlock()
 	if s.owner != "" {
 		if v, ok := s.owned[s.owner][name]; ok {
+			secretstore.NoteRow(ctx, secretstore.Row{Store: "mem", Owner: s.owner, Name: name, Ref: "mem:" + s.owner + "/" + name})
 			return v, nil
 		}
 		// Fall through to the operator row below — the owner-view fallback.
@@ -72,6 +73,7 @@ func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
 		// so callers can tell "never stored" from a backend failure).
 		return nil, secretstore.ErrNotFound
 	}
+	secretstore.NoteRow(ctx, secretstore.Row{Store: "mem", Name: name, Ref: "mem:/" + name})
 	return v, nil
 }
 func (s *memSecrets) Delete(_ context.Context, name string) error {

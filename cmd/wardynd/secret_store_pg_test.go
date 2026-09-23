@@ -15,6 +15,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/json"
 	"net/url"
 	"os"
 	"strings"
@@ -112,7 +113,8 @@ func TestPG_BootConvertsV0BeforeBootKeysAreRead(t *testing.T) {
 	}
 	seedV0Row(t, pool, id, secretSigningKey, pemBytes)
 
-	secrets, err := buildSecretStore(ctx, pool, id.String(), "")
+	rec := &capturingRecorder{}
+	secrets, err := buildSecretStore(ctx, pool, id.String(), "", rec)
 	if err != nil {
 		t.Fatalf("first v1 boot: %v", err)
 	}
@@ -123,12 +125,28 @@ func TestPG_BootConvertsV0BeforeBootKeysAreRead(t *testing.T) {
 	if !got.Equal(orig) {
 		t.Fatal("the boot read a different signing key; the v0 row was not converted before it")
 	}
+	// Both reads of the key are on the record, once each: the conversion's and
+	// the boot's, which names the envelope's key.
+	var purposes []string
+	for _, ev := range rec.got {
+		var d map[string]string
+		if ev.Action != "secret.read" || ev.Target != secretSigningKey || ev.Outcome != "success" || json.Unmarshal(ev.Data, &d) != nil {
+			t.Fatalf("unexpected audit event %+v", ev)
+		}
+		if d["purpose"] == "boot" && !strings.HasPrefix(d["ref"], "local:") {
+			t.Errorf("boot read records ref %q, want the row's local kek_id", d["ref"])
+		}
+		purposes = append(purposes, d["purpose"])
+	}
+	if strings.Join(purposes, ",") != "migrate,boot" {
+		t.Fatalf("recorded secret.read purposes %v, want [migrate boot]", purposes)
+	}
 	version, wrapped, ct := envelopeColumns(t, pool, secretSigningKey)
 	if version != 1 {
 		t.Fatalf("signing-key row enc_version = %d after boot, want 1", version)
 	}
 
-	if _, err := buildSecretStore(ctx, pool, id.String(), ""); err != nil {
+	if _, err := buildSecretStore(ctx, pool, id.String(), "", &capturingRecorder{}); err != nil {
 		t.Fatalf("second boot: %v", err)
 	}
 	v2, w2, ct2 := envelopeColumns(t, pool, secretSigningKey)
@@ -145,7 +163,7 @@ func TestPG_BootAbortsOnAnUndecryptableV0Row(t *testing.T) {
 	stray, _ := age.GenerateX25519Identity()
 	seedV0Row(t, pool, stray, "github-app-key", []byte("under-another-key"))
 
-	_, err := buildSecretStore(t.Context(), pool, id.String(), "")
+	_, err := buildSecretStore(t.Context(), pool, id.String(), "", &capturingRecorder{})
 	if err == nil {
 		t.Fatal("boot succeeded over an undecryptable v0 row")
 	}
@@ -164,14 +182,14 @@ func TestPG_BootAbortsOnAnUndecryptableV0Row(t *testing.T) {
 // boot instead of minting a key that would strand them. An empty store boots.
 func TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows(t *testing.T) {
 	empty := envelopeDB(t)
-	if _, err := buildSecretStore(t.Context(), empty, "", ""); err != nil {
+	if _, err := buildSecretStore(t.Context(), empty, "", "", &capturingRecorder{}); err != nil {
 		t.Fatalf("an ephemeral key over an empty store must boot: %v", err)
 	}
 
 	for label, seed := range map[string]func(*testing.T, *pgxpool.Pool){
 		"v1 local rows": func(t *testing.T, pool *pgxpool.Pool) {
 			id, _ := age.GenerateX25519Identity()
-			s, err := buildSecretStore(t.Context(), pool, id.String(), "")
+			s, err := buildSecretStore(t.Context(), pool, id.String(), "", &capturingRecorder{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -187,7 +205,7 @@ func TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows(t *testing.T) {
 		t.Run(label, func(t *testing.T) {
 			pool := envelopeDB(t)
 			seed(t, pool)
-			_, err := buildSecretStore(t.Context(), pool, "", "")
+			_, err := buildSecretStore(t.Context(), pool, "", "", &capturingRecorder{})
 			if err == nil || !strings.Contains(err.Error(), "WARDYN_AGE_KEY is unset, but 1 stored secrets") {
 				t.Fatalf("ephemeral boot over %s = %v, want the rule-14 refusal", label, err)
 			}
@@ -202,7 +220,7 @@ func TestPG_TamperedBootKeyFailsClosed(t *testing.T) {
 	pool := envelopeDB(t)
 	ctx := t.Context()
 	id, _ := age.GenerateX25519Identity()
-	secrets, err := buildSecretStore(ctx, pool, id.String(), "")
+	secrets, err := buildSecretStore(ctx, pool, id.String(), "", &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,10 +13,12 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
 // ConvertV0 re-seals every legacy (enc_version 0, age-encrypted) row as an
-// envelope v1 row under this store's KEK, and returns how many it converted.
+// envelope v1 row under this store's KEK, and returns the rows it converted —
+// each one a read of a stored value, which the caller records.
 // wardynd runs it at boot BEFORE the boot keys are read (they share the
 // table), so there is no v0 read path anywhere else.
 //
@@ -26,19 +28,19 @@ import (
 // naming the row — never skipped, since a skipped row is a credential silently
 // lost. That makes it idempotent (a converted store has no v0 rows) and
 // resumable (an abort committed nothing; fix the row or the key and boot again).
-func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) (int, error) {
+func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretstore.Row, error) {
 	tx, err := beginReadCommitted(ctx, s.pool)
 	if err != nil {
-		return 0, fmt.Errorf("pg secretstore: convert begin: %w", err)
+		return nil, fmt.Errorf("pg secretstore: convert begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.SecretConvertLockKey); err != nil {
-		return 0, fmt.Errorf("pg secretstore: convert lock: %w", err)
+		return nil, fmt.Errorf("pg secretstore: convert lock: %w", err)
 	}
 	rows, err := tx.Query(ctx, `SELECT owned_by, name, ciphertext FROM secrets WHERE enc_version=0 ORDER BY owned_by, name FOR UPDATE`)
 	if err != nil {
-		return 0, fmt.Errorf("pg secretstore: convert select: %w", err)
+		return nil, fmt.Errorf("pg secretstore: convert select: %w", err)
 	}
 	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (envelope, error) {
 		var e envelope
@@ -46,20 +48,22 @@ func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) (int, error)
 		return e, err
 	})
 	if err != nil {
-		return 0, fmt.Errorf("pg secretstore: convert scan: %w", err)
+		return nil, fmt.Errorf("pg secretstore: convert scan: %w", err)
 	}
 
 	// Row at a time, so at most ONE plaintext is resident at any moment.
+	converted := make([]secretstore.Row, 0, len(all))
 	for i, e := range all {
 		if err := s.convertRow(ctx, tx, legacy, e); err != nil {
-			return 0, fmt.Errorf("pg secretstore: v0 conversion ABORTED after %d of %d rows (nothing committed; the store is still v0 and older wardynd can still read it): %s %w",
+			return nil, fmt.Errorf("pg secretstore: v0 conversion ABORTED after %d of %d rows (nothing committed; the store is still v0 and older wardynd can still read it): %s %w",
 				i, len(all), rowRef(e.ownedBy, e.name), err)
 		}
+		converted = append(converted, secretstore.Row{Store: s.Name(), Owner: e.ownedBy, Name: e.name})
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("pg secretstore: convert commit (%d rows, nothing committed): %w", len(all), err)
+		return nil, fmt.Errorf("pg secretstore: convert commit (%d rows, nothing committed): %w", len(all), err)
 	}
-	return len(all), nil
+	return converted, nil
 }
 
 func (s *Store) convertRow(ctx context.Context, tx pgx.Tx, legacy age.Identity, e envelope) error {
