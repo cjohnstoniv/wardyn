@@ -38,6 +38,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Stopped runs no longer wait out the full kill timeout (#468).** The sandbox's idle main
+  process ended in `exec sleep infinity`; as PID 1, `sleep` ignores SIGTERM, so every stop
+  (k8s and docker, task mode and interactive `agent-run --idle`) sat out the whole grace period
+  before the runtime force-killed it. It now traps TERM/INT and exits immediately.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and

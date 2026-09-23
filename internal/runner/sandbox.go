@@ -62,7 +62,13 @@ const (
 // REPLACE the client trust store, so the bare CA there would break non-MITM'd
 // CONNECT-tunneled hosts. Keep in lockstep with install_mitm_ca in
 // deploy/images/common/agent-run-lib.sh. No-op when the run did not opt into
-// TLS-MITM (WARDYN_MITM_CA_PEM unset).
+// TLS-MITM (WARDYN_MITM_CA_PEM unset). The idle loop below (rather than `exec
+// sleep infinity`) is TERM-aware: as PID 1, `sleep` ignores SIGTERM, so a stop
+// always waited out the full kill timeout (k8s pod grace period + teardown
+// slack, docker's stop timeout) instead of exiting promptly. `trap ... TERM
+// INT; while :; do sleep 3600 & wait $!; done` is POSIX sh (busybox/dash
+// compatible): the backgrounded sleep is what receives the signal and `wait`
+// returns immediately, running the trap.
 const AgentIdleScript = `d=/tmp/wardyn
 if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
   mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
@@ -81,7 +87,8 @@ if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
     cp "$d/mitm-ca.pem" /usr/local/share/ca-certificates/wardyn-mitm.crt 2>/dev/null && update-ca-certificates >/dev/null 2>&1 || true
   fi
 fi
-exec sleep infinity`
+trap 'exit 0' TERM INT
+while :; do sleep 3600 & wait $!; done`
 
 // knownNonVaultRuntimes are OCI runtime families known to NOT boot a
 // per-sandbox KVM VM: runc/crun/sysbox share the host kernel, and runsc

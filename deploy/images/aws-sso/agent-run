@@ -144,7 +144,11 @@ if [[ "${1:-}" == "--idle" ]]; then
     : > "$HOME/.wardyn/prep-done"
     echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
     echo "agent-run: the sign-in session is running '${WARDYN_AWS_SSO_LOGIN_COMMAND}'" >&2
-    exec sleep infinity
+    # TERM-aware idle loop (not `exec sleep infinity`): as PID 1, sleep
+    # ignores SIGTERM, so a stop always waited out the full kill timeout
+    # instead of exiting promptly (wardyn issue #468).
+    trap 'exit 0' TERM INT
+    while :; do sleep 3600 & wait $!; done
 fi
 
 # ── normal task mode ─────────────────────────────────────────────────────────
