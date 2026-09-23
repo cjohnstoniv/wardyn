@@ -30,7 +30,6 @@ import (
 	"filippo.io/age"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
@@ -693,45 +692,6 @@ func genAndPrintAgeKey(w io.Writer) error {
 	}
 	_, err = fmt.Fprintln(w, id.String())
 	return err
-}
-
-// buildSecretStore constructs the secret store and readies its rows
-// (convertSecretStore). The age identity comes from -age-key; if empty one is
-// generated and logged (operators MUST persist it across restarts to keep prior
-// ciphertext readable).
-func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string) (secretstore.Store, error) {
-	var id *age.X25519Identity
-	var err error
-	if ageKey == "" {
-		id, err = age.GenerateX25519Identity()
-		if err != nil {
-			return nil, fmt.Errorf("generate age identity: %w", err)
-		}
-		// F10: log the PUBLIC recipient as a fingerprint, never the secret identity.
-		// The old message printed the full AGE-SECRET-KEY- to a log file created at
-		// the default umask (~/.wardyn/host-wardynd.log), leaking the secret-store
-		// master key. To persist, mint one with `wardynd -gen-age-key` (prints to
-		// stdout by design) and set WARDYN_AGE_KEY — do not copy it out of this log.
-		slog.Warn("wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY",
-			slog.String("public_recipient", id.Recipient().String()),
-		)
-	} else {
-		if isKnownPublicAgeKey(ageKey) {
-			return nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is a publicly-known key (published in this repo's git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or mint your own with `wardynd -gen-age-key`")
-		}
-		id, err = age.ParseX25519Identity(ageKey)
-		if err != nil {
-			return nil, fmt.Errorf("parse age identity: %w", err)
-		}
-	}
-	s, err := secretstore.New(storeName, secretstore.Deps{Pool: pool, AgeIdentity: id})
-	if err != nil {
-		return nil, fmt.Errorf("secret store: %w", err)
-	}
-	if err := convertSecretStore(ctx, s, id, ageKey == ""); err != nil {
-		return nil, err
-	}
-	return s, nil
 }
 
 // secretKeyStore is the minimal secret-store surface loadOrCreateSecret needs.
