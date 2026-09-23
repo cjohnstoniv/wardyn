@@ -62,7 +62,8 @@
 // blob's content released when the parse ends, so a Result keeps only trees,
 // commits and tags; bookkeeping of at most 160 bytes an object (115 measured),
 // about 30 MiB at maxObjects; and a change set of at most maxChanges entries,
-// measured at 36 MiB with the tree that names them. About 200 MiB in all, most
+// measured at 36 MiB with the tree that names them, plus up to maxObjectBytes
+// for one delta result built before it is charged. About 232 MiB in all, most
 // of it the inflation ceiling. How many inspections run at once is the
 // caller's to cap; the egress proxy runs one at a time (its scanSlots).
 package gitpack

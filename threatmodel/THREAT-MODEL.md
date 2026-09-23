@@ -2519,11 +2519,12 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   and retained-bytes budget as LLM request scanning, and a push that cannot get
   them in time is refused, never forwarded unread. The slot is one wide
   (`internal/egress/proxy`'s `maxConcurrentScans`), so inspections run one at a
-  time. One inspection is bounded beyond its body at about 200 MiB, as
+  time. One inspection is bounded beyond its body at about 232 MiB, as
   `internal/gitpack`'s package comment breaks down: `maxInflatedBytes` (128 MiB)
   of inflated objects, per-object bookkeeping held under 160 bytes an object by
   `maxObjects` (200,000; about 30 MiB), and a change set of at most
-  `maxChanges` entries. Before #250 the object ceiling was 1,048,576, and a
+  `maxChanges` entries, plus one delta result (up to `maxObjectBytes`) that is
+  built before it is charged. Before #250 the object ceiling was 1,048,576, and a
   legal 16.8 MB pack of that many near-empty blobs was inspected while holding
   656 MiB; it is now refused as uninspectable. The residual is that the
   ceilings are not sized jointly to the sidecar: a 64 MiB body (the most
