@@ -56,6 +56,7 @@ build_fails = {}   # ImportPath -> [Output, ...]
 pkg_fails = set()  # Package: failed with no Test and not a build failure
 tail = {}          # Package -> its last few output lines
 panics = {}        # Package -> its first `panic:` line and the lines after it
+panic_test = {}    # Package -> the test that panic was attributed to, if any
 
 
 def emit(out):
@@ -84,6 +85,7 @@ with open(sys.argv[1]) as f:
             # `panic:` line and the ones after it are what name the cause.
             if pkg not in panics and out.startswith("panic: "):
                 panics[pkg] = [out]
+                panic_test[pkg] = ev.get("Test", "")
             elif pkg in panics and len(panics[pkg]) < 8:
                 panics[pkg].append(out)
         elif action == "fail" and ev.get("Test"):
@@ -104,7 +106,10 @@ if build_fails:
             emit(out)
 
 named_fail_pkgs = {pkg for pkg, _ in fails}
-unnamed = sorted(p for p in pkg_fails if p in panics or p not in named_fail_pkgs)
+# An ordinary panic in a test fails that test, already named above; a -timeout
+# panic fails no test, so it still needs its package listed here.
+orphan_panics = {p for p in panics if (p, panic_test[p]) not in fails}
+unnamed = sorted(p for p in pkg_fails if p in orphan_panics or p not in named_fail_pkgs)
 if unnamed:
     print(">> failed outside any named test:")
     for pkg in unnamed:
