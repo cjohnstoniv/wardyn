@@ -92,6 +92,20 @@ test.describe("unsaved guard — Back/Forward against the real app (#460 review 
     await expect(page).toHaveURL(/\/settings$/);
   });
 
+  test("after a reload, the first Back from a dirty editor is still guarded", async ({ page }) => {
+    await gotoDirtyProviders(page);
+    await page.reload();
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+    await page.getByRole("button", { name: PROVIDERS.STORAGE_TAB }).click();
+    await page.getByLabel(PROVIDERS.FIELD_DEFAULT_DISK).fill("54321");
+    await expect(page.getByTestId("unsaved-marker")).toBeVisible();
+
+    await page.goBack();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await expect(page).toHaveURL(/\/providers$/);
+    await expect(page.getByLabel(PROVIDERS.FIELD_DEFAULT_DISK)).toHaveValue("54321");
+  });
+
   test("the skip link's fragment jump opens no dialog and moves focus to main; a real Back afterward is still guarded", async ({
     page,
   }) => {

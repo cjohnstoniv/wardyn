@@ -107,6 +107,9 @@ function trackIndex(): void {
 // inline in the patch, rather than via a second listener elsewhere.
 function installUnsavedGuard(): void {
   if (typeof window === "undefined") return;
+  // A reload lands on an entry the router already tagged, so it never calls
+  // replaceState: read the current index now or the first Back is unguarded.
+  trackIndex();
 
   const originalPush = window.history.pushState.bind(window.history);
   window.history.pushState = (...args: Parameters<History["pushState"]>) => {
