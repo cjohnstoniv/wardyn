@@ -65,6 +65,31 @@ func TestPackCeiling_ObjectCountIsRefused(t *testing.T) {
 	}
 }
 
+// TestPackCeiling_InflatedBytesIsRefused pins the inflate ceiling (#254): five
+// distinct all-zero blobs, each exactly maxObjectBytes and individually legal,
+// push the cumulative inflated total past maxInflatedBytes on the fifth. Each
+// blob compresses to a handful of bytes, so the pack body stays small while
+// what it declares does not — the same shape charge() exists to catch.
+func TestPackCeiling_InflatedBytesIsRefused(t *testing.T) {
+	if testing.Short() {
+		t.Skip("inflates over maxInflatedBytes of blob content")
+	}
+	var objs []rawObject
+	for range 5 {
+		objs = append(objs, rawObject{typ: objBlob, payload: make([]byte, maxObjectBytes)})
+	}
+	tree := mkTree()
+	commit := mkCommit(hashObject("tree", tree))
+	objs = append(objs, rawObject{typ: objTree, payload: tree}, rawObject{typ: objCommit, payload: commit})
+	cmd := strings.Repeat("0", 40) + " " + hashObject("commit", commit) + " refs/heads/main"
+	body := append(commandSection("report-status", cmd), buildPack(t, objs...)...)
+
+	_, err := Inspect(body)
+	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "inflates") {
+		t.Fatalf("5x%d-byte blobs: err = %v, want ErrTooLarge naming the inflate ceiling", maxObjectBytes, err)
+	}
+}
+
 // bookkeepingPerObject is the per-object heap the package comment states an
 // inspection keeps: measured at 115 bytes, with headroom for how the runtime's
 // maps happen to size.
