@@ -25,35 +25,46 @@ func TestSsoRBACCheck(t *testing.T) {
 		oidcConfigured    bool
 		roleMapConfigured bool
 		consoleRows       bool
+		adminList         bool
 		wantOK            bool
 		wantStatus        string
 	}{
-		{"OIDC off: absent regardless of role map", false, true, false, false, ""},
-		{"OIDC off, everything unset: still absent", false, false, false, false, ""},
-		{"OIDC on, chart map set: ok", true, true, false, true, "ok"},
-		{"OIDC on, chart+console both unset: warn", true, false, false, true, "warn"},
-		// The widened case this signature exists for: no chart map, but the
-		// People step has at least one console row — still ok, not warn.
-		{"OIDC on, env unset + console rows: ok", true, false, true, true, "ok"},
-		{"OIDC on, chart AND console both set: still ok", true, true, true, true, "ok"},
+		{"OIDC off: absent regardless of role map", false, true, false, false, false, ""},
+		{"OIDC off, everything unset: still absent", false, false, false, false, false, ""},
+		// Q457-5: the warn fires ONLY when neither a role map nor an admin list
+		// is set — the one state in which everyone who signs in is an admin.
+		{"none: no role map, no admin list: warn", true, false, false, false, true, "warn"},
+		{"admin list only: ok", true, false, false, true, true, "ok"},
+		{"role map only (chart): ok", true, true, false, false, true, "ok"},
+		{"role map only (People-step rows): ok", true, false, true, false, true, "ok"},
+		{"both role map and admin list: ok", true, true, true, true, true, "ok"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			chk, ok := ssoRBACCheck(tc.oidcConfigured, tc.roleMapConfigured, tc.consoleRows)
+			chk, ok := ssoRBACCheck(tc.oidcConfigured, tc.roleMapConfigured, tc.consoleRows, tc.adminList)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
 			if !ok {
 				return
 			}
-			if chk.ID != "sso_rbac" {
-				t.Errorf("ID = %q, want %q", chk.ID, "sso_rbac")
+			if chk.ID != "sso_rbac" || chk.Label != "Who is an admin" {
+				t.Errorf("ID/Label = %q/%q, want sso_rbac/Who is an admin", chk.ID, chk.Label)
 			}
 			if chk.Status != tc.wantStatus {
 				t.Errorf("Status = %q, want %q", chk.Status, tc.wantStatus)
 			}
-			if tc.wantStatus == "warn" && chk.Fix == "" {
-				t.Error("warn status must carry a Fix")
+			// The frozen strings (docs/design/admin-access-canon.md), byte for byte.
+			if tc.wantStatus == "warn" {
+				if chk.Detail != "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin." ||
+					chk.Fix != "Map people to admin or member on the People step, so only the people you name can change this deployment." {
+					t.Errorf("warn strings drifted from the canon: %+v", chk)
+				}
+				if !chk.Blocking {
+					t.Error("warn must stay Blocking")
+				}
+			} else if chk.Detail != "People are mapped to admin or member, so a person's role comes from their sign-in." || chk.Blocking {
+				t.Errorf("ok row drifted from the canon or blocks: %+v", chk)
 			}
 		})
 	}
@@ -699,7 +710,7 @@ func TestLLMProviderCheck_MechanismPrincipalIsInfo(t *testing.T) {
 var setupCheckBlockingStatus = map[string]string{
 	"runner":            "fail", // no live confinement class: runs cannot launch at all
 	"confinement_floor": "warn", // every run on the default policy refused before launch
-	"sso_rbac":          "warn", // no role mapping: every SSO user is an admin
+	"sso_rbac":          "warn", // no role map and no admin list: everyone who signs in is an admin
 }
 
 // setupCheckNeverBlocks is every OTHER id /setup/status can emit. NOT the
@@ -756,12 +767,17 @@ func TestSetupCheckBlocking(t *testing.T) {
 		t.Fatal("confinementFloorCheck absent, want a floor-mismatch row")
 	}
 
-	if chk, ok := ssoRBACCheck(true, false, false); ok {
+	if chk, ok := ssoRBACCheck(true, false, false, false); ok {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("ssoRBACCheck absent")
 	}
-	if chk, ok := ssoRBACCheck(true, true, false); ok {
+	if chk, ok := ssoRBACCheck(true, true, false, false); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("ssoRBACCheck absent")
+	}
+	if chk, ok := ssoRBACCheck(true, false, false, true); ok {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("ssoRBACCheck absent")
