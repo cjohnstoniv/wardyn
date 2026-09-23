@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -164,7 +165,13 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 		// secret here would let a member redirect every run's egress to a
 		// server of their own choosing with no SSRF guard on that hop at all,
 		// not merely widen what a vetted destination allows.
-		getSecret = s.cfg.Secrets.For("").Get
+		// A closure, not the method value: the read carries its purpose
+		// (the Audited store refuses a read without one), and the read guard
+		// can see it.
+		sec := s.cfg.Secrets.For("")
+		getSecret = func(ctx context.Context, name string) ([]byte, error) {
+			return sec.Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), name)
+		}
 	}
 	detail := map[string]any{
 		"secret_ref": siteCfg.UpstreamProxySecretRef, "url_configured": siteCfg.UpstreamProxyURL != "",

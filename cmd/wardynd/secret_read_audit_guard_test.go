@@ -36,6 +36,10 @@ package main
 // included) must be reached only from Get or those two bulk readers, so a new
 // way to open a value fails here until it is classified. Reconcile is not a
 // read: it calls the external store's Check and Walk, which read metadata only.
+//
+// A Get (or bulk reader) taken as a method value or passed as a function value
+// fails: the call its context reaches cannot be followed. And External.Get is
+// the pg store's alone: any use of it elsewhere fails.
 
 import (
 	"encoding/json"
@@ -110,19 +114,37 @@ type secretRef struct {
 
 // getSite is one Get call and where its context comes from.
 type getSite struct {
-	pos string
-	ctx int
+	pos  string
+	ctx  int
+	note string // why the site cannot be followed, when that is the finding
 }
 
 type secretReadScan struct {
 	fset      *token.FileSet
 	storeType *types.Interface
+	extType   *types.Interface       // secretstore.External
 	getSites  map[string][]getSite   // enclosing function -> its Get calls
 	refs      map[string][]secretRef // function -> references to it
 	siteMarks map[string]string      // function calling SiteAudited -> its position
 	emitters  map[string]bool        // function whose body holds the literal "secret.read"
 	purposes  int
 	pgCallers map[string][]string // inside the pg store: callee -> its callers
+	extGets   []string            // External.Get used outside the pg store
+}
+
+// newSecretReadScan returns an empty scan against store, the secretstore
+// package (the real one, or a fixture's).
+func newSecretReadScan(fset *token.FileSet, store *types.Package) *secretReadScan {
+	return &secretReadScan{
+		fset:      fset,
+		storeType: store.Scope().Lookup("Store").Type().Underlying().(*types.Interface),
+		extType:   store.Scope().Lookup("External").Type().Underlying().(*types.Interface),
+		getSites:  map[string][]getSite{},
+		refs:      map[string][]secretRef{},
+		siteMarks: map[string]string{},
+		emitters:  map[string]bool{},
+		pgCallers: map[string][]string{},
+	}
 }
 
 func goListExport(t *testing.T, root string) []listedPkg {
@@ -318,6 +340,7 @@ func (s *secretReadScan) scanFunc(info *types.Info, fd *ast.FuncDecl) {
 		case *ast.CallExpr:
 			s.scanCall(info, sc, from, v, callOf)
 		case *ast.Ident:
+			s.scanReadValue(info, from, v, callOf[v] != nil)
 			to := funcKey(info.Uses[v])
 			if to == "" || to == from || strings.HasPrefix(to, guardStorePkg+".") {
 				return true
@@ -330,6 +353,34 @@ func (s *secretReadScan) scanFunc(info *types.Info, fd *ast.FuncDecl) {
 		}
 		return true
 	})
+}
+
+// scanReadValue flags two reads the call walk cannot see: a store's Get (or a
+// bulk reader) referenced other than as a call's function, i.e. taken as a
+// method value or passed on as a function value, whose context cannot be
+// followed; and any use of External.Get, which only the pg store may call.
+func (s *secretReadScan) scanReadValue(info *types.Info, from string, id *ast.Ident, called bool) {
+	fn, ok := info.Uses[id].(*types.Func)
+	if !ok {
+		return
+	}
+	recv := fn.Signature().Recv()
+	pos := s.fset.Position(id.Pos()).String()
+	switch {
+	case fn.Name() == "Get" && recv != nil && s.implements(recv.Type(), s.extType):
+		s.extGets = append(s.extGets, pos+" in "+from)
+	case called:
+	case fn.Name() == "Get" && recv != nil && s.isStore(recv.Type()), guardBulkReaders[funcKey(fn)]:
+		s.getSites[from] = append(s.getSites[from], getSite{pos: pos, ctx: ctxOther, note: "a method value cannot be followed"})
+	}
+}
+
+func (s *secretReadScan) implements(t types.Type, iface *types.Interface) bool {
+	if types.Implements(t, iface) || types.Implements(types.NewPointer(t), iface) {
+		return true
+	}
+	u, ok := t.Underlying().(*types.Interface)
+	return ok && types.Implements(iface, u)
 }
 
 // scanCall records a Get site or a mark call, and notes which identifier names
@@ -372,15 +423,8 @@ func scanSecretReads(t *testing.T, root string) *secretReadScan {
 	for _, p := range pkgs {
 		exports[p.ImportPath] = p.Export
 	}
-	s := &secretReadScan{
-		fset:      token.NewFileSet(),
-		getSites:  map[string][]getSite{},
-		refs:      map[string][]secretRef{},
-		siteMarks: map[string]string{},
-		emitters:  map[string]bool{},
-		pgCallers: map[string][]string{},
-	}
-	imp := importer.ForCompiler(s.fset, "gc", func(path string) (io.ReadCloser, error) {
+	fset := token.NewFileSet()
+	imp := importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
 		if exports[path] == "" {
 			return nil, fmt.Errorf("no export data for %s", path)
 		}
@@ -390,7 +434,7 @@ func scanSecretReads(t *testing.T, root string) *secretReadScan {
 	if err != nil {
 		t.Fatalf("import %s: %v", guardStorePkg, err)
 	}
-	s.storeType = ss.Scope().Lookup("Store").Type().Underlying().(*types.Interface)
+	s := newSecretReadScan(fset, ss)
 
 	for _, p := range pkgs {
 		pgStore := p.ImportPath == guardPGPkg
@@ -482,6 +526,10 @@ func (s *secretReadScan) unmarkedPaths() []string {
 			switch g.ctx {
 			case ctxMarked:
 			case ctxOther:
+				if g.note != "" {
+					bad = append(bad, why+" — "+g.note)
+					continue
+				}
 				bad = append(bad, why+" — its context is neither marked nor a parameter of "+fn)
 			default:
 				if line := s.firstUnmarked(fn, g.ctx, why); line != "" {
@@ -681,6 +729,108 @@ func get(ctx int) {}
 	}
 }
 
+// guardFixtureStore stands in for internal/secretstore in the scan fixtures.
+const guardFixtureStore = `package secretstore
+
+import "context"
+
+type Store interface {
+	Get(ctx context.Context, name string) ([]byte, error)
+}
+
+type External interface {
+	Get(ctx context.Context, owner, name, ref string) ([]byte, error)
+}
+
+func WithPurpose(ctx context.Context, p string) context.Context { return ctx }
+`
+
+// scanFixture runs the guard's scan over src, a package that imports the
+// fixture secretstore, exactly as it scans a real package.
+func scanFixture(t *testing.T, src string) *secretReadScan {
+	t.Helper()
+	fset := token.NewFileSet()
+	std := importer.Default()
+	parse := func(name, text string) *ast.File {
+		f, err := parser.ParseFile(fset, name, text, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		return f
+	}
+	store, err := (&types.Config{Importer: std}).Check(guardStorePkg, fset, []*ast.File{parse("store.go", guardFixtureStore)}, nil)
+	if err != nil {
+		t.Fatalf("type-check the fixture store: %v", err)
+	}
+	imp := importerFunc(func(path string) (*types.Package, error) {
+		if path == guardStorePkg {
+			return store, nil
+		}
+		return std.Import(path)
+	})
+	file := parse("fixture.go", src)
+	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+	if _, err := (&types.Config{Importer: imp}).Check(guardModPath+"/cmd/fixture", fset, []*ast.File{file}, info); err != nil {
+		t.Fatalf("type-check fixture: %v", err)
+	}
+	s := newSecretReadScan(fset, store)
+	for _, d := range file.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil {
+			s.scanFunc(info, fd)
+		}
+	}
+	return s
+}
+
+// TestScanFlagsReadsItCannotFollow pins the scan against reads that reach a
+// store without a call it can classify: a Get taken as a method value (P1) or
+// passed on as a function value (P4) is flagged, since neither context can be
+// followed, and External.Get used outside the pg store (P5) is flagged, since
+// only the pg store may open a value behind a pointer row. The control (P0), a
+// marked direct Get, is not.
+func TestScanFlagsReadsItCannotFollow(t *testing.T) {
+	const src = `package fixture
+
+import (
+	"context"
+
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+)
+
+func p0(ctx context.Context, s secretstore.Store) {
+	_, _ = s.Get(secretstore.WithPurpose(ctx, "x"), "p0")
+}
+
+func p1(ctx context.Context, s secretstore.Store) {
+	g := s.Get
+	_, _ = g(secretstore.WithPurpose(ctx, "x"), "p1")
+}
+
+func p4(s secretstore.Store) {
+	call(s.Get)
+}
+
+func call(func(context.Context, string) ([]byte, error)) {}
+
+func p5(ext secretstore.External) {
+	_, _ = ext.Get(context.Background(), "", "p5", "ref")
+}
+`
+	s := scanFixture(t, src)
+	bad := strings.Join(s.unmarkedPaths(), "\n")
+	for _, fn := range []string{"fixture.p1", "fixture.p4"} {
+		if !strings.Contains(bad, "in "+guardModPath+"/cmd/"+fn+" — a method value") {
+			t.Errorf("the scan did not flag the Get taken as a value in %s; findings:\n%s", fn, bad)
+		}
+	}
+	if strings.Contains(bad, "fixture.p0") {
+		t.Errorf("the scan flagged the marked direct Get in p0: %s", bad)
+	}
+	if len(s.extGets) != 1 || !strings.Contains(s.extGets[0], "fixture.go:25") {
+		t.Errorf("External.Get outside the pg store = %v; want p5's call at fixture.go:25", s.extGets)
+	}
+}
+
 func TestEverySecretReadIsAuditedOnce(t *testing.T) {
 	s := scanSecretReads(t, repoRoot(t))
 
@@ -712,6 +862,9 @@ func TestEverySecretReadIsAuditedOnce(t *testing.T) {
 	}
 	for _, fn := range unclassified {
 		t.Errorf("%s can open a stored value but is neither Get nor a bulk reader the guard checks (%v): route the read through Get, or add it to guardBulkReaders and guardPGReadEntries with a marked context at every call", fn, slices.Sorted(maps.Keys(guardBulkReaders)))
+	}
+	for _, pos := range s.extGets {
+		t.Errorf("secretstore.External.Get used at %s: External.Get is the pg store's alone; route the read through Store.Get", pos)
 	}
 	for fn, pos := range s.siteMarks {
 		if !s.emitters[fn] {
