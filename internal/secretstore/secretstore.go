@@ -96,6 +96,9 @@ type External interface {
 	// Check reports whether the value behind ref exists and is bound to
 	// (owner, name), without reading it (-reconcile).
 	Check(ctx context.Context, owner, name, ref string) error
+	// Ref is the ref DERIVED from (owner, name): where the row's value must
+	// live, whatever the row records (-reconcile).
+	Ref(owner, name string) (string, error)
 	// Delete removes every version of the value behind ref. Idempotent.
 	Delete(ctx context.Context, owner, name, ref string) error
 	// Walk lists every value this install holds in the store (-reconcile).

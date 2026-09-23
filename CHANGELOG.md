@@ -88,8 +88,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   variable; it refuses `http://` to a non-loopback Vault and uses a TLS config of its own. A
   sealed, throttled or unreachable Vault is transient (the credential sink answers 503, distinct
   from a missing credential's 424, and audits `secret.read` with `reason` `store-unavailable`); a
-  401/403 is definitive, and re-authenticates at most once every 30 s. The documented Vault policy
-  grants no `delete` on `data/`, and no `destroy/` or `undelete/`. `wardynd -migrate-secrets
+  401/403 is definitive, and re-authenticates at most once every 30 s. There is no last-good grace
+  period yet: a transient failure fails the credential at once (the grace is CS-4). A KV v2 mount
+  that does not exist fails boot, and a write or delete Vault answers 404 fails rather than reading
+  as done. The documented Vault policy grants `read` on `<mount>/config`, no `delete` on `data/`,
+  and no `destroy/` or `undelete/`. `wardynd -migrate-secrets
   -to=vaultkv|local` moves rows online in either direction (`secret.migrate`), and
   `wardynd -reconcile` reports pointers without values and values without pointers. The chart's
   `secretStore.vault.*` values, a compose token-file overlay, a setup row naming the store, and

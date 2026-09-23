@@ -24,6 +24,7 @@ import (
 	"filippo.io/age"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
 )
 
@@ -51,6 +52,7 @@ func (m *memExternal) Get(_ context.Context, owner, name, ref string) ([]byte, e
 	}
 	return v, nil
 }
+func (m *memExternal) Ref(owner, name string) (string, error) { return m.key(owner, name), nil }
 func (m *memExternal) Check(ctx context.Context, owner, name, ref string) error {
 	_, err := m.Get(ctx, owner, name, ref)
 	return err
@@ -146,6 +148,8 @@ func (v *miniVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case p == "auth/token/lookup-self":
 		out = map[string]any{"data": map[string]any{"ttl": 0}}
+	case p == "wardyn/config":
+		out = map[string]any{"data": map[string]any{"max_versions": 0}}
 	case r.Method == http.MethodPost && route == "metadata":
 		v.meta[rel] = body["custom_metadata"]
 	case r.Method == http.MethodPost && route == "data":
@@ -199,6 +203,56 @@ func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T)
 	defer v.mu.Unlock()
 	if v.dataWrites != writes {
 		t.Fatal("a fresh signing key was written over the one at Vault")
+	}
+}
+
+// failingExternal refuses every write.
+type failingExternal struct{ memExternal }
+
+func (*failingExternal) Put(context.Context, string, string, string, []byte, bool) (string, error) {
+	return "", fmt.Errorf("vault POST wardyn/data/x: 404")
+}
+
+// An aborted migration is audited, not only a successful one: secret.migrate
+// with outcome failure and the rows committed before the abort.
+func TestMigrateMode_AuditsAnAbort(t *testing.T) {
+	pool := envelopeDB(t)
+	id, _ := age.GenerateX25519Identity()
+	ext := &failingExternal{memExternal{vals: map[string][]byte{}}}
+	s, err := buildSecretStore(t.Context(), pool, id.String(), "", ext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(t.Context(), "k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	rec := &fakeAuditRecorder{}
+	if err := migrateMode(t.Context(), s.(*secretstorepg.Store), rec, vaultkv.Name); err == nil {
+		t.Fatal("migrateMode succeeded with every write refused")
+	}
+	if rec.last.Action != "secret.migrate" || rec.last.Outcome != "failure" || !strings.Contains(string(rec.last.Data), `"count":0`) {
+		t.Fatalf("last audit row = %s %s %s; want secret.migrate failure with count 0", rec.last.Action, rec.last.Outcome, rec.last.Data)
+	}
+}
+
+// -reconcile lists every owner and name in the store, so it leaves one
+// audit row with its counts.
+func TestReconcileMode_Audits(t *testing.T) {
+	pool := envelopeDB(t)
+	ext := &memExternal{vals: map[string][]byte{}}
+	s, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(t.Context(), "k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	rec := &fakeAuditRecorder{}
+	if err := reconcileMode(t.Context(), s.(*secretstorepg.Store), rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.calls != 1 || rec.last.Action != "secret.reconcile" || rec.last.Outcome != "success" || !strings.Contains(string(rec.last.Data), `"checked":1`) {
+		t.Fatalf("audit = %d rows, last %s %s %s; want one secret.reconcile success with checked 1", rec.calls, rec.last.Action, rec.last.Outcome, rec.last.Data)
 	}
 }
 

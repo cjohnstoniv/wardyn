@@ -4616,10 +4616,16 @@ Paths carry the owner and name, so they reach your Vault audit log.
 
 **Policy.** Least privilege, templated so another install in another namespace
 cannot read this one's paths. There is no `destroy/` or `undelete/` stanza and
-no `delete` on `data/`: Wardyn never calls any of them.
+no `delete` on `data/`: Wardyn never calls any of them. `read` on
+`wardyn/config` lets wardynd check at boot that a KV v2 engine is mounted at
+`WARDYN_VAULT_KV_MOUNT`: a mistyped mount, or an engine not yet enabled, fails
+boot instead of the first write.
 
 ```hcl
 # <accessor> is the Kubernetes auth mount's accessor (vault auth list)
+path "wardyn/config" {
+  capabilities = ["read"]
+}
 path "wardyn/data/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
   capabilities = ["create", "update", "read"]
 }
@@ -4627,6 +4633,16 @@ path "wardyn/metadata/{{identity.entity.aliases.<accessor>.metadata.service_acco
   capabilities = ["create", "update", "read", "delete", "list"]
 }
 ```
+
+With token-file authentication (compose, VMs) there is no Kubernetes alias to
+template on: write the install's `WARDYN_VAULT_KV_PREFIX` literally, as
+`wardyn/data/<prefix>/*` and `wardyn/metadata/<prefix>/*`, and give each
+install its own policy.
+
+Until a second role for the boot keys lands (`WARDYN_VAULT_ROLE_PLATFORM`,
+CS-12b), one role writes both `platform/` and `people/`: whoever holds
+Wardyn's Vault token can create, update and delete the boot keys and every
+person's credentials alike.
 
 **Authentication.** There is no Vault token in an environment variable, by
 design.
