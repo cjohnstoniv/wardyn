@@ -9,12 +9,12 @@ import (
 	"log/slog"
 	"maps"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -181,15 +181,13 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	return resolved
 }
 
-// envEnabled reports whether an operator env-toggle string is truthy
-// (1/true/yes/on, case-insensitive). Empty/unset/anything else is false.
-func envEnabled(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
+// envEnabled reports whether an operator env-toggle named by env is truthy
+// (1/true/yes/on, case-insensitive; 0/false/no/off is false), via
+// cliutil.EnvBool — the one boolean parser every WARDYN_* read goes through
+// (#202). Unset/empty is false; a value that is neither is a boot refusal
+// (envFatal exits 2), never a silent false the way this used to swallow one.
+func envEnabled(env string) bool {
+	return cliutil.EnvBool(env, false)
 }
 
 // noProxyFor builds the sandbox's NO_PROXY: the CONFIGURED proxy host plus
@@ -273,7 +271,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 	// the approval queue shows only task-relevant egress. An operator who WANTS
 	// agent telemetry sets WARDYN_ALLOW_AGENT_TELEMETRY (1/true/yes/on) to omit
 	// these; default-unset keeps the suppression on.
-	if !envEnabled(os.Getenv("WARDYN_ALLOW_AGENT_TELEMETRY")) {
+	if !envEnabled("WARDYN_ALLOW_AGENT_TELEMETRY") {
 		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 		env["DISABLE_TELEMETRY"] = "1"
 	}

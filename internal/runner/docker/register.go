@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
@@ -47,8 +48,11 @@ func init() {
 			RecordingMount:  recordingMount,
 			InternalNetwork: os.Getenv("WARDYN_INTERNAL_NETWORK"),
 			// Fail closed by default when the host can't enforce resource caps;
-			// WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 (trusted host) downgrades to a warn.
-			AllowUnenforceableCaps: os.Getenv("WARDYN_ALLOW_UNENFORCEABLE_CAPS") == "1",
+			// WARDYN_ALLOW_UNENFORCEABLE_CAPS=true (trusted host) downgrades to a
+			// warn. cliutil.EnvBool, not a literal "1" compare (#202): the same
+			// truthy token set every other WARDYN_* bool accepts, and a garbage
+			// value now exits 2 at boot instead of silently staying off.
+			AllowUnenforceableCaps: cliutil.EnvBool("WARDYN_ALLOW_UNENFORCEABLE_CAPS", false),
 			ConfinementRuntimes:    d.ConfinementRuntimes,
 			// The deployment's host_path user-drive ceiling, parsed once at
 			// boot and passed down rather than re-read here (see Deps).

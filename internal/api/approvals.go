@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -648,11 +647,11 @@ const envEgressSecondHuman = "WARDYN_EGRESS_SECOND_HUMAN"
 //
 // Exported for exactly one caller — cmd/wardynd's boot-time local-mode check,
 // which warns when the switch is combined with a mode that cannot enforce it.
-// It is a function rather than a second os.Getenv at the boot site so the env
-// NAME and the truthiness rule keep ONE definition: a boot guard that disagreed
-// with the runtime gate about what "on" means would warn about a deployment that
-// is fine, or stay silent for one that is not.
-func EgressSecondHumanEnabled() bool { return envEnabled(os.Getenv(envEgressSecondHuman)) }
+// It is a function rather than a second cliutil.EnvBool at the boot site so
+// the env NAME and the truthiness rule keep ONE definition: a boot guard that
+// disagreed with the runtime gate about what "on" means would warn about a
+// deployment that is fine, or stay silent for one that is not.
+func EgressSecondHumanEnabled() bool { return envEnabled(envEgressSecondHuman) }
 
 // decideErrorClass names WHY a decision failed for the break-glass audit row,
 // in the same three buckets the response switch below answers with — a class,
@@ -757,7 +756,7 @@ func bypassRunID(ap types.ApprovalRequest, haveAP bool) *uuid.UUID {
 // worth keeping, since it is what holds this line correct if an empty principal
 // ever becomes reachable.
 func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool) (bool, bool) {
-	if !envEnabled(os.Getenv(envEgressSecondHuman)) {
+	if !envEnabled(envEgressSecondHuman) {
 		return false, true
 	}
 	actorType, principal := actorFromRequest(r)

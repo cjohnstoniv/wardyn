@@ -107,7 +107,12 @@ func TestThreatModelDocCapabilityKindsMatchCode(t *testing.T) {
 // fail-closed override field. These are the knobs that let a deployment boot
 // PAST a gate the threat model describes as unconditional, so each one is a
 // residual the published document has to carry.
-var overrideEnv = regexp.MustCompile(`(?:AllowUnenforced\w*|AllowUnenforceable\w*|AckAmbient\w*):\s*os\.Getenv\("(WARDYN_[A-Z0-9_]+)"\)`)
+//
+// Matches cliutil.EnvBool("WARDYN_X", false) — the one boolean parser every
+// WARDYN_* read goes through (#202); before that these three compared
+// os.Getenv("WARDYN_X") against the literal "1", which is the shape this
+// regex matched until the parser unified.
+var overrideEnv = regexp.MustCompile(`(?:AllowUnenforced\w*|AllowUnenforceable\w*|AckAmbient\w*):\s*cliutil\.EnvBool\("(WARDYN_[A-Z0-9_]+)"`)
 
 func TestThreatModelDocNamesFailClosedOverrides(t *testing.T) {
 	var envs []string
