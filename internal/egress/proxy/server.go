@@ -234,7 +234,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		MITMLLM:              cfg.MITMLLM,
 		GitGrants:            cfg.GitGrants,
 		PATGrants:            cfg.PATGrants,
-		ADOGrants:            newADOGrantSource(cfg.ADOGrants),
+		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
 		ControlPlaneURL:      cfg.ControlPlaneURL,
 		RunToken:             ts,
 		Upstream:             up,

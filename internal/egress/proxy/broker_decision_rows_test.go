@@ -100,7 +100,7 @@ func TestBrokerDecisionRows(t *testing.T) {
 					Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
 					Resolver: publicResolver{}, Dial: splitDial(forge, forge),
 					RunToken: newTokenSource("RUNTOK"), TLSClientConfig: testInsecureTLSConfig,
-					ADOGrants: adoGrantMap{"dev.azure.com": {Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}}},
+					ADOGrants: adoGrantsByHost{"dev.azure.com": {Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}}},
 				})
 			}},
 	}

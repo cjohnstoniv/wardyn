@@ -439,12 +439,12 @@ type ResolvedInjection struct {
 	// Organisation is the Azure DevOps organisation a per-person Azure DevOps
 	// credential was dispatched for, on that lane's resolves only (empty on
 	// every other). It is informational: the proxy does not read it. The
-	// proxy's REST gate pins the organisation from the dispatch-time ADOGrants
+	// proxy's REST gate pins the organisation from the dispatch-time ADOGrant
 	// in its own configuration (proxy.ADOGrantConfig), never from a resolve.
 	Organisation string `json:"organisation,omitempty"`
 	// Capabilities is the same lane's GRANTED capability set, in the
 	// internal/adoscope vocabulary. The gate does NOT hold requests to it: it
-	// reads the dispatch-time ADOGrants. The proxy reads it in one place only,
+	// reads the dispatch-time ADOGrant. The proxy reads it in one place only,
 	// on a capability ask's resolve (ado_hold.go), to confirm the capability it
 	// asked for came back granted. Empty on every other lane.
 	Capabilities []string `json:"capabilities,omitempty"`
