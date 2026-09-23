@@ -77,6 +77,7 @@ var envDocAllow = map[string]bool{
 	"WARDYN_LIVE_ENTRA": true, "WARDYN_LIVE_ADO": true, "WARDYN_LIVE_BEDROCK": true,
 	"WARDYN_LIVE_AWS_SSO": true, "WARDYN_LIVE_BASE_URL": true, "WARDYN_LIVE_IDENTITIES_FILE": true,
 	"WARDYN_LIVE_ADO_ORG": true, "WARDYN_LIVE_ADO_PROJECT": true, "WARDYN_LIVE_ADO_REPO": true,
+	"WARDYN_LIVE_ADO_SPACED_PROJECT": true, "WARDYN_LIVE_ADO_SPACED_REPO": true,
 	"WARDYN_LIVE_AWS_SSO_START_URL": true, "WARDYN_LIVE_AWS_SSO_REGION": true,
 	"WARDYN_LIVE_AWS_SSO_TOKEN_FILE": true, "WARDYN_LIVE_BEDROCK_ACCOUNT_ID": true,
 	"WARDYN_LIVE_BEDROCK_ROLE_NAME": true, "WARDYN_LIVE_BEDROCK_REGION": true,
@@ -467,11 +468,7 @@ func TestEnvDoc_E2EShellVarsAreDocumented(t *testing.T) {
 
 func readEnvDoc(t *testing.T, root string) string {
 	t.Helper()
-	doc, err := os.ReadFile(filepath.Join(root, "docs", "ENV.md"))
-	if err != nil {
-		t.Fatalf("read docs/ENV.md: %v", err)
-	}
-	return string(doc)
+	return readRepo(t, filepath.Join(root, "docs", "ENV.md"))
 }
 
 // TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs — B12b-F3+F8: a knob

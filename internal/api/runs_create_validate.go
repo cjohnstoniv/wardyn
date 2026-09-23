@@ -69,6 +69,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	if !decodeStrict(w, r, &req) {
 		return req, noCeiling, "", "", false
 	}
+	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
 	// Only agent is hard-required. Repo is OPTIONAL: an inline-policy run that
 	// mounts a local host folder (WorkspaceMount target /work) has no git repo to
 	// clone, so requiring a repo would block the local-folder wizard path. The

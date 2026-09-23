@@ -84,6 +84,7 @@ vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: v
 
 import { RunDetailScreen } from "./run-detail";
 import { RUN_COCKPIT, SECURITY_ONLY_REASON } from "../wardyn/copy";
+import { STATES } from "../wardyn/states";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { sessionOptionLabel } from "./run-detail/recording-tab-copy";
 import { toast } from "sonner";
@@ -883,7 +884,7 @@ describe("RunDetailScreen — a slow or unwatched control plane costs one set of
 // 500 "approval listing is not scoped for members on this backend" without
 // ApprovalsByRunCreatorPager (internal/api/approvals.go), and a degraded audit
 // store fails listAudit.
-const CONTROL_PLANE_SENTENCE = "We couldn't reach the Wardyn control plane. Please try again.";
+const CONTROL_PLANE_SENTENCE = STATES.ERROR_DEFAULT;
 
 describe("RunDetailScreen — a failing side fetch is not an outage", () => {
   it("keeps the cockpit — heading, state and Kill — when audit and approvals both fail", async () => {

@@ -26,6 +26,10 @@ const (
 	EnvADOOrg     = "WARDYN_LIVE_ADO_ORG"
 	EnvADOProject = "WARDYN_LIVE_ADO_PROJECT"
 	EnvADORepo    = "WARDYN_LIVE_ADO_REPO"
+	// The LL2 project and repository whose names carry a space (#485);
+	// optional, defaulting to the fixture names docs/LIVE-TESTS.md lists.
+	EnvADOSpacedProject = "WARDYN_LIVE_ADO_SPACED_PROJECT"
+	EnvADOSpacedRepo    = "WARDYN_LIVE_ADO_SPACED_REPO"
 
 	EnvSSORegion    = "WARDYN_LIVE_AWS_SSO_REGION"
 	EnvSSOTokenFile = "WARDYN_LIVE_AWS_SSO_TOKEN_FILE"

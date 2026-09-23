@@ -937,6 +937,17 @@ carries a path. Dot-segment and percent-encoded paths do NOT reach this
 question at all: `https://github.com/acme/../evil/repo.git` and
 `…/acme%2Fevil/…` are refused outright at every admission door and at both
 write doors, because git and the server would read such a path differently.
+The one escape that is admitted is an Azure DevOps project or repository name,
+which may carry spaces and most punctuation: every door stores such an address
+in one spelling — `https://dev.azure.com/acme/Payments Platform/_git/Card Auth
+(v2).Service` is stored as `…/Payments%20Platform/_git/Card%20Auth%20(v2).Service`
+— and an escape that decodes to a separator, a dot segment or a control
+character is still refused. An `azure_devops` row may likewise be scoped to such
+a project (`https://tfs.corp.example/Payments Platform`); names compare as
+written, case included. Such a row cannot name a project whose name holds
+``& ' $ ; | < > " ` `` (site-config values refuse them); scope the row to the
+organisation instead. An Azure DevOps Server host takes these names only when
+an `azure_devops` provider row names it.
 
 **On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
 `/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the
@@ -3645,16 +3656,14 @@ Consequences worth knowing:
   `harness.credential.refused` / `reason = run_killed`, even inside the five-minute grace a terminal
   run otherwise has for its own tail uploads. Credential revocation alone is best-effort; this is the
   belt.
-- **The old sandbox is torn down INSIDE the launch request, and that can take time.** The supersede
-  is not a background sweep: the launch POST runs the old run's full kill cascade before it answers
-  — the state change, the sandbox teardown, the run identity's revocation and the audit row, up to
-  about 30 seconds per superseded run, and on Kubernetes it waits for the pod to actually go away.
-  The teardown itself is detached from the client's connection, so it finishes either way. What does
-  NOT finish is the rest of the launch: a client that gives up (a closed tab, a proxy timeout) can
-  leave the old sign-in already gone and no new one created. Nothing is lost and nothing is stuck —
-  start the sign-in again. This is also why a sign-in that hangs is worth waiting out once rather
-  than clicking twice. **This synchronous kill cascade is still open at 0.8** — moving the teardown
-  to after the response is tracked separately from the rest of this section.
+- **The old sandbox's teardown is detached from the launch request.** The state change is still
+  synchronous — the launch POST claims the KILLED transition (and frees the concurrency slot it held)
+  before it answers, so the superseded run already reads `KILLED` by the time the caller sees a
+  response — but the sandbox teardown, the run identity's revocation and the `run.kill` audit row now
+  run on a goroutine detached from the request, up to about 30 seconds per superseded run, and on
+  Kubernetes it waits for the pod to actually go away. None of that holds the sign-in POST open: a
+  client that gives up (a closed tab, a proxy timeout) has already gotten its answer either way.
+  Nothing is lost and nothing is stuck — start the sign-in again.
 - **Two sign-ins started at once almost always leave one.** A double-click, or the console and a
   `wdn_` token driving the route for the same person, used to leave BOTH sandboxes alive: each
   launch checks for live sign-ins before its own run row exists, so neither could see the other. The

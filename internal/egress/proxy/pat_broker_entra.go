@@ -66,6 +66,11 @@ type adoGitPush struct {
 // serveADOGit serves one validated smart-HTTP request (verb is info/refs,
 // git-upload-pack or git-receive-pack) for a host the Entra grant covers.
 func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, verb string, grant ADOGrant) {
+	if _, ok := adoGitKeys(r); !ok {
+		p.refuseADOGit(w, r, host, nil, nil,
+			"Wardyn refused this git request: its path spells a project or repository name Azure DevOps would read as another.")
+		return
+	}
 	if !adoOrgMatches(host, rest, grant.Organization) {
 		p.refuseADOGit(w, r, host, nil, nil, fmt.Sprintf(
 			"Wardyn refused this git request: this run is granted the %q Azure DevOps organisation only.", grant.Organization))
@@ -201,15 +206,41 @@ func adoGitVerdict(need adoscope.Capability, push *adoGitPush) adoscope.Verdict 
 }
 
 // adoGitAsk describes a held git request for the approval: its method, the
-// broker-stripped path, and the repository — the segment after _git.
+// broker-stripped path, and the repository — the segment after _git, keyed
+// exactly as the REST gate's adoRepoOf keys it.
 func adoGitAsk(r *http.Request) adoAsk {
 	_, rest, _ := parsePATBrokerPath(r.URL.Path)
 	ask := adoAsk{method: r.Method, path: rest}
-	segs := strings.Split(strings.ToLower(strings.Trim(rest, "/")), "/")
-	if i := slices.Index(segs, "_git"); i >= 0 && i+1 < len(segs) {
-		ask.repo = segs[i+1]
+	if keys, ok := adoGitKeys(r); ok {
+		if i := slices.Index(keys, "_git"); i >= 0 && i+1 < len(keys) {
+			ask.repo = keys[i+1]
+		}
 	}
 	return ask
+}
+
+// adoGitKeys is every segment of a git request's broker-stripped path as
+// adoscope.NameKey reads it — the rule the REST gate classifies with — taken
+// from the path as it ARRIVED (EscapedPath). Never the decoded Path: decoding
+// first and keying after would decode a name holding "%" twice. ok=false when
+// any segment is one that rule refuses (a trailing dot or edge space the
+// service trims, an escape decoding to a separator, a double encoding), so a
+// spelling the REST gate refuses is refused here too rather than keyed as a
+// second repository.
+func adoGitKeys(r *http.Request) ([]string, bool) {
+	_, rest, _ := parsePATBrokerPath(r.URL.EscapedPath())
+	var keys []string
+	for _, seg := range strings.Split(strings.Trim(rest, "/"), "/") {
+		if seg == "" {
+			continue
+		}
+		k := adoscope.NameKey(seg)
+		if k == "" {
+			return nil, false
+		}
+		keys = append(keys, k)
+	}
+	return keys, true
 }
 
 // writeADOGitRefusal answers git in its own terms, never as a 401.
