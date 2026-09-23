@@ -25,6 +25,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   set and member mode unset and asserts the boot refusal fires. One paragraph in
   `deploy/helm/wardyn/README.md` (plus a `values.yaml` comment) now says managed laptops enrol
   through the console Ingress at `POST /api/v1/devices/enrol`.
+- **A governance profile narrower than the deployment default on `push_rules` silently dropped
+  its members' content-inspection rules.** Resolving a profile's effective ceiling now warns when
+  the deployment default carries `push_rules` and the profile's own ceiling does not — mirroring
+  the resolve-time grant-drop warning — so the drop shows up in the run-create and preflight
+  `warnings[]` instead of vanishing at the assignment boundary (#272).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
