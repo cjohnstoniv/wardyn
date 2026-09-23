@@ -144,3 +144,16 @@ f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generi
 e7b3bc6464a6645ea7945e270bef64fc21365a55:internal/egress/proxy/pat_broker_mask_test.go:gitlab-pat:46
 0e7795b4d41970bc01f0ec754381582a8f008cc8:internal/egress/proxy/pat_broker_mask_test.go:gitlab-pat:46
 ab7173568b195893e0dc798c3c419976425acd27:internal/egress/proxy/pat_broker_mask_test.go:gitlab-pat:46
+# 0.7.12 backport of PR #594 (envelope v1): generic-api-key false positive on the AAD
+# domain-separation label constant secretAADLabel in internal/secretstore/pg/pg.go —
+# a public constant, not a secret. (Its literal is deliberately not quoted here: the
+# assignment itself is what the rule matches, in this file too.) Commit-scoped to
+# the backport commit that introduced it (its SHA differs from main's b8132867).
+f65039b62411308eb147a61b54b202fa65b4643d:internal/secretstore/pg/pg.go:generic-api-key:39
+# PR #594 (envelope v1): generic-api-key false positive on the public AAD
+# domain-separation label constant in internal/secretstore/pg/pg.go (secretAADLabel),
+# not a secret. Commit-scoped to the commit that introduced it.
+b813286778427f215c0bb7c76b50a87685e607f7:internal/secretstore/pg/pg.go:generic-api-key:39
+# PR #594 (envelope v1), rebased onto main after #758: the same AAD label false
+# positive, commit-scoped to the rebased commit that introduces it.
+a405534ec304241fb0e3fdcedc1b2a6539170e16:internal/secretstore/pg/pg.go:generic-api-key:39

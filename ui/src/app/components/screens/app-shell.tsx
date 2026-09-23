@@ -375,6 +375,10 @@ const ModelAccessBanner = React.lazy(() =>
 const ConfinementPostureBanner = React.lazy(() =>
   import("../wardyn/confinement-posture").then((m) => ({ default: m.ConfinementPostureBanner })),
 );
+// #484 — same lazy rationale; mounted between the two bands above.
+const EveryoneAdminBanner = React.lazy(() =>
+  import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
+);
 
 const navLinkClass = (isActive: boolean) =>
   cn(
@@ -666,6 +670,11 @@ export function AppShell({
             <div role="status">
               <React.Suspense fallback={null}>
                 <ModelAccessBanner />
+              </React.Suspense>
+              {/* #484 — admins only: after the per-person credential block,
+              before the cluster-wide confinement note. */}
+              <React.Suspense fallback={null}>
+                <EveryoneAdminBanner />
               </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are
