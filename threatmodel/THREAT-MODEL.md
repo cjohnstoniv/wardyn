@@ -2566,13 +2566,16 @@ residuals particular to holding:
   deny path matched), and a push the inspector could not read is refused
   before either list is consulted: holding it would ask a person to approve a
   push nobody inspected.
-- **An approval covers commits, and sticks for the run.** The dedup key is the
-  sorted commit ids plus a digest of every matched path
-  (`types.PushContentScope`), so a repacked retry of the same commits is
-  forwarded on an approval already given and a denial refuses the same commits
-  again without asking. Identical commits are identical content, so this admits
-  nothing the admin did not see; the sidecar's memory of it (`pushHolds`) is
-  per process and bounded, so a restarted sidecar asks again.
+- **An approval covers commits, for the repository and branch it named, and
+  sticks for the run.** The dedup key is the whole scope — repository, refs,
+  sorted commit ids and a digest of every matched path
+  (`types.PushContentScope`; the sidecar's `pushScope` keys its memory the same
+  way) — so a repacked retry of the same push is forwarded on an approval
+  already given and a denial refuses the same push again without asking. The
+  same commits pushed to another repository or branch the run can reach are a
+  new question and are held again: an approval of content for one destination
+  is not one for every destination. The sidecar's memory (`pushHolds`) is per
+  process and bounded, so a restarted sidecar asks again.
 - **Members cannot decide one, not even on their own run.**
   `authorizeMemberDecision` keeps members to `egress_domain` (and their own
   Azure DevOps escalations); a member approving their own run's workflow-file
@@ -2587,7 +2590,12 @@ residuals particular to holding:
   charged to the process-wide retained-bytes budget for the whole hold (at most
   600 seconds), and at most `maxPushHoldsActive` pushes are held at once; past
   that a push is refused, never forwarded. The hold is taken after the
-  inspection slot is given back, so a held push does not stall LLM scanning.
+  inspection slot is given back, so it does not hold the slot — but the held
+  pack stays charged to the retained-scan budget (`scanRetained`) for the whole
+  hold, up to 600 seconds, so while held packs fill that budget other buffered
+  scans on the run's sidecar — an LLM request body, another push — cannot
+  retain theirs and fail closed (refused, never forwarded unread) until the
+  hold ends.
 - **The Azure DevOps Entra lane applies no content rules.** Pushes through the
   per-person Azure DevOps lane (`Proxy.serveADOGit`) are governed by the
   capability gate only; neither `deny_paths` nor `require_review_paths` reads

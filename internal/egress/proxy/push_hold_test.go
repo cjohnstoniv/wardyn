@@ -480,3 +480,55 @@ func recordedPushArgs(t *testing.T, ref string, files map[string]string, pushArg
 	runGit(t, work, append(pushArgs, "push", "-q", f.srv.URL+"/octocat/hello-world.git", "HEAD:"+ref)...)
 	return f.pushBody()
 }
+
+// TestPushHoldApprovalDoesNotTravel: an approval covers the commits it named
+// for the repository and branch it named. The same commits pushed to another
+// branch, or to another repository the run can reach, are a new question —
+// raised as their own row and held, never forwarded on the first approval.
+func TestPushHoldApprovalDoesNotTravel(t *testing.T) {
+	t.Run("another branch on the App lane", func(t *testing.T) {
+		p, _, up, cp, _ := newAppLaneHold(t, reviewSpec(1, []string{".github/workflows/**"}), types.ApprovalApproved)
+		work := recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush)
+		other := recordedPush(t, BranchNSPrefix(p.runID)+"other", workflowPush)
+		if newCommit(t, work) != newCommit(t, other) {
+			t.Fatal("the two recordings carry different commits; this test would prove nothing")
+		}
+		if rec := postPush(t, p, string(work)); rec.Code != http.StatusOK {
+			t.Fatalf("approved push: status = %d body %q", rec.Code, rec.Body.String())
+		}
+		hits := up.gitHits
+		cp.set(types.ApprovalPending)
+		if rec := postPush(t, p, string(other)); rec.Code != http.StatusForbidden {
+			t.Fatalf("same commits to another branch: status = %d, want 403 (held, then timed out)", rec.Code)
+		}
+		if raises, _ := cp.counts(); raises != 2 || up.gitHits != hits {
+			t.Errorf("raises = %d, forge hits %d->%d; want a second row and no forward", raises, hits, up.gitHits)
+		}
+	})
+	t.Run("another repository on the token lane", func(t *testing.T) {
+		up := newPATBrokerUpstream(t, "pat-token", "oauth2")
+		p, _ := newPATBrokerProxySpec(t, reviewSpec(1, []string{".github/workflows/**"}),
+			map[string]PATGrant{"gitlab.com": {GrantID: uuid.New(), Username: "oauth2"}}, upstreamAddr(up.srv))
+		cp := newPushCP(t, types.ApprovalApproved)
+		cp.wire(t, p)
+		body := recordedPush(t, "refs/heads/main", workflowPush)
+		post := func(repo string) int {
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+				"/wardyn/git/gitlab.com/org/"+repo+".git/git-receive-pack", bytes.NewReader(body)))
+			return rec.Code
+		}
+		if got := post("repo-a"); got != http.StatusOK {
+			t.Fatalf("approved push to repo-a: status = %d", got)
+		}
+		hits := up.gitHits
+		cp.set(types.ApprovalPending)
+		if got := post("repo-b"); got != http.StatusForbidden {
+			t.Fatalf("same commits to repo-b: status = %d, want 403 (held, then timed out)", got)
+		}
+		_, raises := cp.raised()
+		if len(raises) != 2 || raises[1].Repo != "gitlab.com/org/repo-b.git" || up.gitHits != hits {
+			t.Errorf("raises = %+v, forge hits %d->%d; want a second row for repo-b and no forward", raises, hits, up.gitHits)
+		}
+	})
+}
