@@ -125,7 +125,15 @@ const (
 	// `sh`/`test` in when Config.DriveProbeImage is unset — the same image the
 	// conformance suite already leans on elsewhere in this package for a
 	// minimal image with no daemon of its own.
-	defaultDriveProbeImage = "busybox:latest"
+	//
+	// Pinned by digest (SF-14), not `:latest`: this image is pulled on the
+	// create/preflight request path (ensureImage, above), with a host
+	// directory bind-mounted into the container it runs — a floating tag
+	// resolved at request time is one registry push (or MITM) away from
+	// running something other than busybox against that mount. Refresh by
+	// re-pulling `busybox:latest` and updating the digest, same as any other
+	// pinned base image in this repo.
+	defaultDriveProbeImage = "busybox@sha256:cac8f90bbee42dc962a6b38bb1a235948d070385bb9d996bba15a6db8d364008"
 )
 
 func (d *Driver) driveProbeImage() string {

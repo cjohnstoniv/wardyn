@@ -735,6 +735,10 @@ func TestSeedRequestDriveProbeErrorFailsOpen(t *testing.T) {
 	if !ok || mount == nil {
 		t.Fatalf("a probe transport error was refused rather than failed open: %d %s", w.Code, w.Body.String())
 	}
+	// SF-14: failing open must not also fail SILENT — the graphable signal.
+	if got := srv.metrics.driveProbeErrors; got != 1 {
+		t.Errorf("wardyn_drive_probe_errors_total = %d, want 1", got)
+	}
 }
 
 // TestSeedRequestDriveNoProberIsUnchanged is the upgrade-day pin: a Runner

@@ -57,6 +57,9 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
+		// SF-14: pull the proxy and drive-probe images now, in the
+		// background, rather than let a live request pay for the first pull.
+		s.PrewarmImages()
 		return s, nil // avoid the typed-nil interface trap
 	})
 }

@@ -664,6 +664,10 @@ func (s *Server) driveHomeReadableByAgent(ctx context.Context, resolved types.Re
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: user drive: the agent-readability probe did not run",
 			slog.String("drive", resolved.Drive.Name), slog.String("err", err.Error()))
+		// SF-14: a probe that could not run is a silent fail-open (the log
+		// line above is easy to miss); this is the graphable signal that a
+		// host_path drive's readability check is going unanswered.
+		s.metrics.driveProbeErrorInc()
 		return nil
 	}
 	if probe.Result == runner.DriveProbeUnreadable {
