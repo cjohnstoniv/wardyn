@@ -7,6 +7,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { PEOPLE_STEP } from "../src/app/components/wardyn/copy";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../src/app/lib/people-access-copy";
+import { ADMIN_ACCESS_BANNER, SIGNIN_HELP } from "../src/app/lib/access-posture-copy";
 
 // People step's role-mappings editor (0.7 SSO Phase 3, ui/src/app/components/
 // screens/setup/access-panel.tsx). The seeded e2e backend runs with
@@ -610,5 +611,81 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     // The editor (AccessPanel) never mounts on the single-user branch at all.
     await expect(page.getByText(PEOPLE.TABLE_TITLE)).toHaveCount(0);
     expect(accessHit).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------
+  // (i) #484 — the everyone-is-an-admin banner round trip: shown to an admin
+  // while /setup/status's sso_rbac row warns, its CTA opens this step, and it
+  // is gone the moment a mapping lands (the step re-reads the SHELL's status).
+  // ---------------------------------------------------------------------
+  test("(i) #484 banner round trip: shows, opens People, clears once a mapping lands", async ({ page }) => {
+    let mapped = false;
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.auth = { ...json.auth, mode: "sso" };
+      const row = mapped
+        ? { id: "sso_rbac", label: "Who is an admin", status: "ok" }
+        : { id: "sso_rbac", label: "Who is an admin", status: "warn", blocking: true };
+      json.checks = [...(json.checks ?? []).filter((c: { id: string }) => c.id !== "sso_rbac"), row];
+      await route.fulfill({ response, json });
+    });
+    await mockAccessGet(page, baseAccessBody({ posture: { map_empty: false, before: "an admin", after: "be denied", changes: false } }));
+    await page.route("**/api/v1/access/mappings", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      mapped = true;
+      const body = route.request().postDataJSON() as { value: string; role: string };
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "new1", value: body.value, role: body.role, created_by: "e2e", created_at: new Date().toISOString() }),
+      });
+    });
+
+    await page.goto("/setup?step=environment");
+    const title = page.getByText(ADMIN_ACCESS_BANNER.TITLE, { exact: true });
+    await expect(title).toBeVisible();
+    await expect(page.getByText(ADMIN_ACCESS_BANNER.BODY, { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: ADMIN_ACCESS_BANNER.ACTION }).click();
+    await expect(page).toHaveURL(/step=people/);
+    await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible();
+
+    await page.getByLabel(PEOPLE.FIELD_VALUE, { exact: true }).fill("Wardyn.Admin");
+    await page.getByRole("button", { name: PEOPLE.ADD_CTA }).click();
+    await expect(title).toHaveCount(0);
+  });
+
+  // (j) #484 — the help card saves through the REAL PUT /site-config (with
+  // If-Match) and /healthz publishes it; the test clears it again so no other
+  // spec sees it.
+  test("(j) #484 the help card saves to site config and /healthz publishes it", async ({ page }) => {
+    await mockSsoStatus(page);
+    await gotoPeopleStep(page);
+    const text = page.getByLabel(SIGNIN_HELP.TEXT_LABEL);
+    const link = page.getByLabel(SIGNIN_HELP.URL_LABEL);
+    const save = page.getByRole("button", { name: SIGNIN_HELP.SAVE });
+    await expect(page.getByText(SIGNIN_HELP.EMPTY_NOTE)).toBeVisible();
+
+    await text.fill(`Ask in #it-helpdesk — it's quick.`);
+    await link.fill("https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc");
+    await expect(page.getByText("33 / 1000")).toBeVisible();
+    await expect(page.getByTestId("sign-in-help").getByRole("link", { name: SIGNIN_HELP.LINK_LABEL })).toBeVisible();
+    await save.click();
+    await expect(save).toBeDisabled();
+
+    const published = await (await page.request.get("/healthz")).json();
+    expect(published.sign_in_help_text).toBe(`Ask in #it-helpdesk — it's quick.`);
+    expect(published.sign_in_help_url).toBe("https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc");
+
+    await page.reload();
+    await expect(text).toHaveValue(`Ask in #it-helpdesk — it's quick.`);
+    await text.fill("");
+    await link.fill("");
+    await save.click();
+    await expect(page.getByText(SIGNIN_HELP.EMPTY_NOTE)).toBeVisible();
+    await expect(save).toBeDisabled();
+    const cleared = await (await page.request.get("/healthz")).json();
+    expect(cleared.sign_in_help_text).toBeUndefined();
+    expect(cleared.sign_in_help_url).toBeUndefined();
   });
 });
