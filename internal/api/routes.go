@@ -740,11 +740,13 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 // grant table + enforcement map in one call (the console Permissions screen's
 // entire data need).
 //
-// All four on securityOps: this IS the org allow/denylist primitive — it
+// All five on securityOps: this IS the org allow/denylist primitive — it
 // bounds every member's blast radius rather than a single run's — and it is
 // delegable ONLY because of the no-capability-reaches-admin invariant spelled
 // out on securityOps in routes(). A security admin may write their own grants
-// here; every write is audited, and none of them widens isOperator. The
+// here; every write is audited, and none of them widens isOperator. Explain
+// (K4, capabilities_explain.go) is a read over this same table at a NAMED
+// subject rather than the caller's own — still securityOps, never wider. The
 // member-safe read of a caller's OWN effective set is GET /me/capabilities,
 // which stays on the plain authenticated group in routes().
 //
@@ -757,6 +759,7 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Post("/permissions/grants", s.handleUpsertCapabilityGrant)
 	securityOps.Delete("/permissions/grants/{id}", s.handleDeleteCapabilityGrant)
 	securityOps.Put("/permissions/enforcement", s.handlePutCapabilityEnforcement)
+	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,

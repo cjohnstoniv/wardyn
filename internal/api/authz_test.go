@@ -335,6 +335,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/permissions/grants":        {class: classSecurity},
 	"DELETE /api/v1/permissions/grants/{id}": {class: classSecurity},
 	"PUT /api/v1/permissions/enforcement":    {class: classSecurity},
+	"GET /api/v1/permissions/explain":        {class: classSecurity},
 	// Cutting a compromised human's live sessions: the time-critical half of
 	// incident response, and a revocation only ever SUBTRACTS reach.
 	"POST /api/v1/sessions/revoke": {class: classSecurity},
@@ -1156,11 +1157,14 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 38 SUPER. 0.8's hybrid enrolment then added three: minting a device
 	// enrolment token creates a credential, so it is born SUPER (= 39), while
 	// the device inventory and revoke are the /tokens pair's twins and land on
-	// the security tier (= 26 SEC). A route silently reclassified in the table
-	// above would still pass every probe — it would just be enforcing the WRONG
-	// tier, exactly the drift the per-route loop cannot see.
-	if sec != 26 || super != 39 {
-		t.Errorf("tier split = %d security / %d admin, want 26 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	// the security tier (= 26 SEC). AK-5 (#739) then added GET
+	// /permissions/explain beside the rest of /permissions — the same table,
+	// read at a named subject rather than the caller's own — = 27 SEC. A route
+	// silently reclassified in the table above would still pass every probe —
+	// it would just be enforcing the WRONG tier, exactly the drift the
+	// per-route loop cannot see.
+	if sec != 27 || super != 39 {
+		t.Errorf("tier split = %d security / %d admin, want 27 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + AK-5's /permissions/explain, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 
