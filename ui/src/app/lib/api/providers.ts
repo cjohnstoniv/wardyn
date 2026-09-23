@@ -81,6 +81,8 @@ export const providers = {
     if (etag) headers["If-Match"] = etag;
     const res = await wfetch("/workspace-providers", {
       method: "PUT",
+      // #483: this is the /providers screen's Save (useWriteDropped("providers")).
+      save: "providers",
       headers,
       body: JSON.stringify(next),
     });

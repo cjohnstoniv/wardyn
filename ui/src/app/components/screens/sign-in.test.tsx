@@ -343,11 +343,11 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
   });
 });
 
-// X3-F7: App.tsx's onUnauthorized handler now hands SignIn a `reason` for a
-// mid-session expiry — rendered in the SAME alert slot submitToken's own
-// failures use, so the gate stops reading as a silent, unexplained teleport.
-describe("SignIn — a mid-session expiry's reason (X3-F7)", () => {
-  it("renders the reason prop in the alert slot on mount", async () => {
+// #483: a session this browser held that was refused on load — App.tsx hands
+// SignIn a `reason`, rendered as an amber warning (role=status), not in the
+// error box submitToken's own failures use.
+describe("SignIn — the signed-out notice (#483)", () => {
+  it("renders the reason as a warning, not an error, on mount", async () => {
     window.history.pushState({}, "", "/");
     healthMock.mockResolvedValue({});
     render(
@@ -355,16 +355,17 @@ describe("SignIn — a mid-session expiry's reason (X3-F7)", () => {
         <SignIn onSignIn={() => {}} reason={SESSION_ENDED_REASON} />
       </ThemeProvider>,
     );
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/your session ended/i);
+    expect(await screen.findByRole("status")).toHaveTextContent(SESSION_ENDED_REASON);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   // Negative control: the ordinary mount-probe gate (never signed in this tab
   // at all) passes no reason — must render exactly as it always did.
-  it("neg: no reason prop means no alert on mount", () => {
+  it("neg: no reason prop means no notice on mount", () => {
     window.history.pushState({}, "", "/");
     healthMock.mockResolvedValue({});
     renderSignIn();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
   });
 });

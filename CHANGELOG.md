@@ -120,6 +120,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **A session that ends mid-page no longer throws the page away (#483).** The console keeps the
+  page and asks you to sign in again over it, by SSO or admin token. Signed back in as the same
+  person, you carry on where you were, with everything you typed still there; a save that hit the
+  expiry is not re-sent, and the screen tells you to save again. If your role no longer reaches
+  the page you can copy your changes and go to Runs. If a different person signs in, the page
+  reloads fresh for them. "Not now" leaves the page read-only under a bar with Sign in. The full
+  sign-in screen now shows a signed-out notice as a warning, not an error, and always lands on
+  Runs.
 - **The egress proxy now offers HTTP/2 to TLS peers, deliberately.** Its forward transport offers
   `h2,http/1.1` over ALPN and speaks HTTP/2 when a peer chooses it; the control-plane transport
   stays HTTP/1.1. The first connection to a host whose handshake negotiates no ALPN protocol waits

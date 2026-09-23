@@ -43,6 +43,8 @@ export const agentProviders = {
     if (etag) headers["If-Match"] = etag;
     const res = await wfetch("/agent-providers", {
       method: "PUT",
+      // #483: this is the /providers screen's Save (useWriteDropped("agent-providers")).
+      save: "agent-providers",
       headers,
       body: JSON.stringify(next),
     });

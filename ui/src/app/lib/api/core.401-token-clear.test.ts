@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getToken, onUnauthorized, SESSION_ENDED_REASON, setToken, wfetch } from "./core";
+import { getToken, onUnauthorized, setSignedOutHold, setToken, wfetch } from "./core";
 
 // F6-F8 — a REAL 401 means the bearer token wfetch just sent was rejected (an
 // expired/revoked admin token, or a stale one from another session). Today's
@@ -27,6 +27,7 @@ describe("wfetch — a real 401 clears the stored admin token", () => {
     vi.stubGlobal("fetch", fetchMock);
   });
   afterEach(() => {
+    setSignedOutHold(false);
     vi.unstubAllGlobals();
     onUnauthorized(() => {});
   });
@@ -67,20 +68,44 @@ describe("wfetch — a real 401 clears the stored admin token", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  // X3-F7: the handler used to take no arguments at all — a mid-session 401
-  // swapped the whole tree for a bare SignIn with no explanation and no way
-  // back. wfetch now hands it a reason and the pathname it was called from —
-  // captured HERE, at the module level (window.location.pathname), because by
-  // the time a component could ask, the routed tree the SignIn branch
-  // replaces is already gone (App.tsx renders SignIn OUTSIDE <Routes>).
-  it("X3-F7: the handler receives a reason and window.location.pathname", async () => {
-    window.history.pushState({}, "", "/workspaces/ws-1");
+  // #483: the handler learns whether the refused request was a WRITE, and —
+  // only for a request marked as a screen's Save — whose. A save that hit the
+  // expiry is never re-sent, so that screen, and no other, has to say so.
+  it("#483: the handler is told whether the refused request was a write, and whose Save", async () => {
     const handler = vi.fn();
     onUnauthorized(handler);
-    setToken("t-abc");
     fetchMock.mockResolvedValue(new Response("", { status: 401 }));
     await expect(wfetch("/runs")).rejects.toBeTruthy();
-    expect(handler).toHaveBeenCalledWith(SESSION_ENDED_REASON, "/workspaces/ws-1");
+    expect(handler).toHaveBeenLastCalledWith({ write: false, save: undefined });
+    fetchMock.mockResolvedValue(new Response("", { status: 401 }));
+    await expect(wfetch("/policies/grade", { method: "POST", body: "{}" })).rejects.toBeTruthy();
+    expect(handler).toHaveBeenLastCalledWith({ write: true, save: undefined });
+    fetchMock.mockResolvedValue(new Response("", { status: 401 }));
+    await expect(wfetch("/workspace-providers", { method: "PUT", body: "{}", save: "providers" })).rejects.toBeTruthy();
+    expect(handler).toHaveBeenLastCalledWith({ write: true, save: "providers" });
+  });
+
+  // #483: signed out mid-page, no write leaves the tab — whoever holds a
+  // session by then (another tab can have signed in as someone else) must
+  // never receive the page's draft. Reads still go out.
+  it("#483: the signed-out hold refuses every write unsent, and lets reads through", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    setSignedOutHold(true);
+    await expect(wfetch("/workspace-providers", { method: "PUT", body: "{}", save: "providers" })).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenLastCalledWith({ write: true, save: "providers" });
+    fetchMock.mockResolvedValue(new Response("[]", { status: 200 }));
+    await expect(wfetch("/runs")).resolves.toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The logout alone passes, per request — the hold itself stays up.
+    fetchMock.mockResolvedValue(new Response("", { status: 200 }));
+    await expect(wfetch("/auth/logout", { method: "POST", endsSession: true })).resolves.toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(wfetch("/workspace-providers", { method: "PUT", body: "{}" })).rejects.toMatchObject({ status: 401 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   // Live repro (found via e2e auth.spec.ts, not this file): App.tsx's mount

@@ -14,7 +14,7 @@ import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { onUnauthorized, probeAuth, safeReturnPath, setToken } from "./lib/api/core";
+import { getToken, onUnauthorized, probeAuth, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
 // From setup-gate, NOT setup-screen: the screen re-exports this, but importing it
@@ -29,7 +29,8 @@ import {
 import { useOperatorResolved, useRole, useRoleResolved } from "./components/wardyn/operator-context";
 import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
-import { usePoll } from "./lib/use-poll";
+import { PollPauseContext, usePoll } from "./lib/use-poll";
+import { ReauthContext, useReauthController } from "./lib/reauth";
 import { AttentionPublisherProvider, type AttentionCounts } from "./lib/attention-context";
 import { ModelAccessProvider } from "./components/wardyn/model-access-context";
 import type {
@@ -315,45 +316,30 @@ const ATTENTION_POLL_MS = 5000;
 // A named module constant on purpose: a field report moves one number here.
 const MODEL_ACCESS_POLL_MS = 300_000;
 
-// M2: can THIS role reach a captured return path? Scoped to the one place a
-// wrong answer is a dead end the plan named (restoring a mid-session-401
-// path after re-auth) — NOT a general client-side route guard (nav-hiding
-// elsewhere is deliberately cosmetic; the server is the real gate). Mirrors
-// this file's own <Route> tree tiers below: a member's REACHABLE surface is
-// wider than their NAV set — Runs/Approvals/Workspaces PLUS the three
-// self-service routes with no sidebar entry at all (/secrets: WRITE/DELETE
-// are self-service since migration 0050, routes.go; /settings and
-// /ssh-keys: the account menu renders both for every role,
-// app-shell.tsx:820-831). /drives and /providers are the two SUPER-only
-// routes with no nav entry for anyone, gated operatorOnly server-side —
-// restorable only for an actual admin, never a security admin either.
-const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/settings", "/ssh-keys"];
-const OPERATOR_ONLY_PREFIXES = ["/drives", "/providers"];
-export function roleCanReach(path: string, role: string): boolean {
-  const under = (prefixes: string[]) =>
-    prefixes.some((p) => path === p || path.startsWith(`${p}/`));
-  if (role === "member") return under(MEMBER_REACHABLE_PREFIXES);
-  if (under(OPERATOR_ONLY_PREFIXES)) return role === "admin";
-  return true;
-}
-
 export default function App() {
   const [auth, setAuth] = React.useState<AuthStatus>("checking");
   const [pendingApprovals, setPendingApprovals] = React.useState(0);
   const [attentionCount, setAttentionCount] = React.useState(0);
   const navigate = useNavigate();
-  // X3-F7: why the gate reopened (rendered in SignIn's own alert slot) and
-  // where to return once re-authenticated. The path is captured by wfetch
-  // itself (lib/api/core.ts), not read here — by the time this component
-  // could ask, the routed tree the SignIn branch replaces (rendered OUTSIDE
-  // <Routes> below) is already gone.
-  const [authReason, setAuthReason] = React.useState<string | undefined>();
-  const returnPathRef = React.useRef<string | null>(null);
+  // #483: a 401 on a signed-in console keeps the page and asks over it
+  // (lib/reauth.ts; the shell's reauth layer draws it). The full sign-in
+  // screen is only for a load with no session at all, and its notice only
+  // for a session this browser held that was refused on load (a stored
+  // token the mount probe sent and got a 401 for) — never a first visit,
+  // never a deliberate sign-out.
+  const [signedOut, setSignedOut] = React.useState(false);
+  const signingOutRef = React.useRef(false);
+  // Someone else signed in over the page: nothing of it may survive, so the
+  // tree unmounts first (dropping every draft and its beforeunload guard)
+  // and the document then loads fresh as them.
+  const [reloadTo, setReloadTo] = React.useState<string | null>(null);
+  const { reauth, lapse, reset: resetReauth } = useReauthController(setReloadTo);
+  const lapsed = reauth.phase !== "none";
   // H1: onUnauthorized fires for EVERY 401, including the cold mount probe
   // (no session at all yet) — mirrored in a ref (not read from `auth` state
-  // directly) because the handler below is registered once, in a mount
-  // effect with an empty dep array, and closing over `auth` there would
-  // freeze it at "checking" forever.
+  // directly) because the handler below is registered once (its only
+  // dependency is stable), and closing over `auth` there would freeze it at
+  // "checking" forever.
   const authRef = React.useRef<AuthStatus>(auth);
   React.useEffect(() => {
     authRef.current = auth;
@@ -400,9 +386,11 @@ export default function App() {
   // so that flag clears itself the moment the daemon comes back.
   React.useEffect(() => {
     let active = true;
+    const hadToken = getToken() !== null;
     void probeAuth().then((probe) => {
       if (!active) return;
       if (probe === "unreachable") setUnreachable(true);
+      if (probe === "unauthed" && hadToken) setSignedOut(true);
       setAuth(probe === "authed" ? "authed" : "unauthed");
     });
     return () => {
@@ -410,22 +398,24 @@ export default function App() {
     };
   }, []);
 
-  // An expired session / revoked token (any HTTP 401) returns to the gate —
-  // X3-F7: carrying WHY (into SignIn's alert slot) and WHERE FROM (restored
-  // after re-auth below), so a mid-session expiry stops reading as a silent
-  // teleport back to the gate with everything unexplained and unrecoverable.
+  // Any HTTP 401. H1: it also fires for the cold mount probe (no session ever
+  // established this tab), which is the gate's business, not the dialog's.
   React.useEffect(() => {
-    onUnauthorized((reason, path) => {
-      // H1: this fires for EVERY 401, including the cold mount probe above
-      // (no session ever established this tab) — a reason/return-path only
-      // means something for a session that WAS authed and just got cut off.
-      if (authRef.current === "authed") {
-        returnPathRef.current = path;
-        setAuthReason(reason);
-      }
-      setAuth("unauthed");
+    onUnauthorized((refused) => {
+      if (signingOutRef.current) return;
+      if (authRef.current !== "authed") return setAuth("unauthed");
+      // Held from this request on, not from the next render: no write may
+      // slip out between the 401 and the dialog (core.ts setSignedOutHold).
+      setSignedOutHold(true);
+      lapse(refused);
     });
-  }, []);
+  }, [lapse]);
+  // …and released only when the lapse ends: the same person resumed, or the
+  // console was signed out and reset.
+  React.useEffect(() => setSignedOutHold(lapsed), [lapsed]);
+  React.useEffect(() => {
+    if (reloadTo !== null) window.location.assign(reloadTo);
+  }, [reloadTo]);
 
   React.useEffect(() => {
     if (auth === "authed") refreshBadges();
@@ -442,7 +432,7 @@ export default function App() {
   // publishAttention below — pausing this tick with nothing feeding the
   // badges from the other side would freeze both of them for as long as the
   // operator sat on /runs.
-  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || location.pathname === "/runs");
+  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || lapsed || location.pathname === "/runs");
   // R-1: the setter side of the publish — RunsScreen calls this (via
   // usePublishAttention) every time its own fetch resolves, driving the SAME
   // state the paused poll above would have updated. Stable identity so it is
@@ -533,7 +523,7 @@ export default function App() {
   // is told at 09:00 and never again, and the strip below would be as stale as
   // the tab is old. Paused while unauthenticated — the endpoint 401s, and the
   // landing read above is what re-arms it.
-  usePoll(refreshSetupStatus, MODEL_ACCESS_POLL_MS, auth !== "authed");
+  usePoll(refreshSetupStatus, MODEL_ACCESS_POLL_MS, auth !== "authed" || lapsed);
   // R4/F027: reachability is NOT gated on being signed in. /healthz is the one
   // unauthenticated endpoint the console has, and the state where it matters
   // most is the one an auth-gated poll would skip — an outage that sent the
@@ -544,7 +534,7 @@ export default function App() {
   }, [refreshHealth]);
   usePoll(refreshHealth, HEALTH_POLL_MS, false);
 
-  if (auth === "checking") {
+  if (auth === "checking" || reloadTo !== null) {
     return (
       <ThemeProvider>
         <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background">
@@ -563,33 +553,12 @@ export default function App() {
     return (
       <ThemeProvider>
         <SignIn
-          reason={authReason}
-          onSignIn={async () => {
-            // X3-F7/H2: restore the path the 401 interrupted, same-origin
-            // pathname only (safeReturnPath) — root/setup are landing
-            // decisions, not "somewhere to return to", so those (and "no
-            // path captured", the ordinary mount-probe gate) fall back to
-            // Runs like every other finished flow.
-            const path = safeReturnPath(returnPathRef.current);
-            returnPathRef.current = null;
-            // M2: nothing to check for the Runs fallback itself — every role
-            // reaches it. A real captured path might belong to the caller
-            // who was signed in BEFORE (an admin's /drives), not whoever
-            // just signed back in on this tab — a member landing there
-            // would hit a bare 403 instead of the plan's stated /runs
-            // fallback, so ask who signed in before trusting it.
-            //
-            // L4: resolved BEFORE flipping auth, not after — the routed tree
-            // only mounts once auth is "authed", so awaiting here first
-            // (rather than between setAuth and navigate) means it never
-            // mounts for one commit at the pre-401 URL, firing an
-            // operator-only screen's own GET (and a 403 audit row) a beat
-            // before the bounce.
-            const me = path === "/runs" ? null : await health.whoami().catch(() => null);
-            const target = me && !roleCanReach(path, me.role) ? "/runs" : path;
-            setAuthReason(undefined);
+          reason={signedOut ? SESSION_ENDED_REASON : undefined}
+          onSignIn={() => {
+            signingOutRef.current = false;
+            setSignedOut(false);
             setAuth("authed");
-            navigate(target, { replace: true });
+            navigate("/runs", { replace: true });
           }}
         />
         <Toaster />
@@ -599,6 +568,8 @@ export default function App() {
 
   return (
     <ThemeProvider>
+      <ReauthContext.Provider value={reauth}>
+      <PollPauseContext.Provider value={lapsed}>
       <AttentionPublisherProvider value={publishAttention}>
       {/* The door: one model-access answer and one sign-in dialog for the strip
           in the shell, the New Run rail, a credential-failed run's failure
@@ -627,12 +598,23 @@ export default function App() {
                 // one thing the button exists to prevent. The toast outlives
                 // the branch switch below: sonner's store is a module
                 // singleton and the sign-in gate mounts its own <Toaster />.
+                //
+                // #483: a deliberate sign-out is not a session that ended — the
+                // logout's own 401 (a session already dead) and any read still
+                // in flight must open neither the dialog nor the gate's notice.
+                //
+                // The signed-out hold stays up through the logout (which alone
+                // passes it, core.ts WfetchInit.endsSession) and drops with
+                // resetReauth below, once the logout has settled.
+                signingOutRef.current = true;
                 if (!(await health.logout())) {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
                   });
                 }
                 setToken(null);
+                resetReauth();
+                setSignedOut(false);
                 setAuth("unauthed");
               }}
             />
@@ -817,6 +799,8 @@ export default function App() {
       </Routes>
       </ModelAccessProvider>
       </AttentionPublisherProvider>
+      </PollPauseContext.Provider>
+      </ReauthContext.Provider>
       <Toaster />
     </ThemeProvider>
   );

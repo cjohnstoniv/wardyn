@@ -53,7 +53,9 @@ vi.mock("./lib/api/health", () => ({
 // a later render's call OVERWRITES the earlier one, so reading the map after
 // settling gives each poller's final, real paused state.
 const pollRegistry = new Map<() => void | Promise<unknown>, { ms: number; paused: boolean }>();
-vi.mock("./lib/use-poll", () => ({
+vi.mock("./lib/use-poll", async (importOriginal) => ({
+  // PollPauseContext stays real: App provides it around every route (#483).
+  ...(await importOriginal<typeof import("./lib/use-poll")>()),
   usePoll: (fn: () => void | Promise<unknown>, ms: number, paused: boolean) => {
     pollRegistry.set(fn, { ms, paused });
   },
