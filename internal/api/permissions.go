@@ -436,10 +436,11 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 
 // meCapabilitiesResponse is GET /me/capabilities's body: what the CALLER
 // personally holds, never the full admin table (that stays behind
-// GET /permissions). Grants is exactly ListCapabilityGrantsFor(users, groups)
-// — the same subject resolution capAllowed itself uses — so the console can
-// answer "am I granted X" the identical way the server would, without a
-// dedicated per-value probe endpoint.
+// GET /permissions). Grants is exactly
+// ListCapabilityGrantsFor(users, groups, userType) — the same subject
+// resolution capAllowed itself uses — so the console can answer "am I
+// granted X" the identical way the server would, without a dedicated
+// per-value probe endpoint.
 type meCapabilitiesResponse struct {
 	Grants              []types.CapabilityGrant `json:"grants"`
 	Enforcement         map[string]bool         `json:"enforcement"`

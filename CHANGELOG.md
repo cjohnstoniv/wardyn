@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A deleted user type's orphaned subject row could silently rebind to a same-id type created
+  later.** `userTypeSubjectExists`' existence check races a concurrent `DeleteUserType`: a
+  capability grant, governance assignment or drive grant can finish writing just after the type it
+  names was deleted (migration `0071` carries no FK, by design), leaving a row nothing owns.
+  `CreateUserType` now refuses (`409`) an id any of those three tables still names, so the id stays
+  dead until an operator clears the orphan rows themselves, rather than quietly inheriting whatever
+  a later type of the same id is given to (#610).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

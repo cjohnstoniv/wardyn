@@ -270,6 +270,37 @@ func TestStaleSnapshotDoesNotTrustATypeTierCeiling(t *testing.T) {
 	}
 }
 
+// TestStaleSnapshotDoesNotTrustATypeTierDrive is
+// TestStaleSnapshotDoesNotTrustATypeTierCeiling's drive twin: driveWithUnusable
+// Groups' trusted shapes are a USER-tier winner or no group-tier grant at all,
+// so a TYPE-tier winner must be refused (errGroupsSnapshotStale) while a
+// group-tier drive grant exists, and served (the type's drive) when none do —
+// pinning the tier == CapabilitySubjectUser check at user_drives_resolve.go
+// against being loosened to also trust a type-tier winner.
+func TestStaleSnapshotDoesNotTrustATypeTierDrive(t *testing.T) {
+	d := driveFixture(nil)
+	g := grantFixture(d.ID, func(g *types.UserDriveGrant) {
+		g.SubjectType = types.CapabilitySubjectUserType
+		g.Subject = utPM
+	})
+	for _, hasGroupTier := range []bool{true, false} {
+		st := &capStore{
+			userTypes:         utKnown,
+			drive:             d,
+			driveGrant:        g,
+			driveTier:         types.CapabilitySubjectUserType,
+			driveHasGroupTier: hasGroupTier,
+		}
+		resolved, err := govServer(st).resolveUserDrive(utCtx(oidc.RoleUser, utPM, nil), 0)
+		switch {
+		case hasGroupTier && !errors.Is(err, errGroupsSnapshotStale):
+			t.Errorf("group tier exists: err = %v, want errGroupsSnapshotStale", err)
+		case !hasGroupTier && (err != nil || resolved == nil || resolved.Drive.ID != d.ID):
+			t.Errorf("no group tier: resolved = %+v, %v; want the type's drive", resolved, err)
+		}
+	}
+}
+
 // TestUnknownUserTypeSessionIsRefusedThroughTheRouter: the SSO lane publishes
 // the session's type, and a deleted one is a 403 with the capitalised
 // sentence, not a 500.

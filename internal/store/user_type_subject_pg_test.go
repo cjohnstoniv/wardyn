@@ -196,3 +196,29 @@ func TestPG_DeleteUserType_RefusedWhileASubjectRowNamesIt(t *testing.T) {
 		})
 	}
 }
+
+// TestPG_CreateUserType_RefusedWhileAnOrphanedSubjectRowNamesTheID pins the
+// close for userTypeSubjectExists' disclosed check-then-insert race: a
+// subject row can be written just after a delete's reference check passed,
+// outliving the type it names (migration 0071 has no FK by design). Recreating
+// that id must stay refused, or the orphan would silently rebind to whatever
+// type is created next with the same id.
+func TestPG_CreateUserType_RefusedWhileAnOrphanedSubjectRowNamesTheID(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	id := seedSubjectUserType(t, st, "orphan")
+	if _, err := st.UpsertCapabilityGrant(ctx, types.CapabilityGrant{
+		ID: uuid.New(), SubjectType: types.CapabilitySubjectUserType, Subject: id,
+		Capability: "agent", Value: "x", Effect: types.CapabilityAllow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Force the race DeleteUserType's own reference check normally prevents:
+	// the user_types row gone while the grant still names its id.
+	if _, err := st.Pool.Exec(ctx, `DELETE FROM user_types WHERE id = $1`, id); err != nil {
+		t.Fatalf("force-delete: %v", err)
+	}
+	if _, err := st.CreateUserType(ctx, types.UserType{ID: id, Name: "Reborn " + id}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("recreate orphaned id = %v, want ErrConflict", err)
+	}
+}
