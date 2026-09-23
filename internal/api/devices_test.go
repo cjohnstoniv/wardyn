@@ -194,8 +194,10 @@ func (f *fakeDeviceStore) ingestedFor(id uuid.UUID) int {
 func (f *fakeDeviceStore) ListAuditEventsAfterSeq(context.Context, int64, int) ([]types.FederatedAuditEvent, error) {
 	return nil, nil
 }
-func (f *fakeDeviceStore) GetFederationCursor(context.Context) (int64, error) { return 0, nil }
-func (f *fakeDeviceStore) SetFederationCursor(context.Context, int64) error   { return nil }
+func (f *fakeDeviceStore) GetFederationCursor(context.Context) (int64, string, error) {
+	return 0, "", nil
+}
+func (f *fakeDeviceStore) SetFederationCursor(context.Context, int64, string) error { return nil }
 
 // storeWithoutDevices hides the capability: embedding the Store interface
 // exposes Store's methods and nothing else, which is exactly the shape of a

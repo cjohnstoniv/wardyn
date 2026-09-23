@@ -75,12 +75,12 @@ func (s *hybridStore) AuditHeadSeq(context.Context) (int64, error) {
 	defer s.mu.Unlock()
 	return s.head, nil
 }
-func (s *hybridStore) GetFederationCursor(context.Context) (int64, error) {
+func (s *hybridStore) GetFederationCursor(context.Context) (int64, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cursor, nil
+	return s.cursor, "", nil
 }
-func (s *hybridStore) SetFederationCursor(_ context.Context, seq int64) error {
+func (s *hybridStore) SetFederationCursor(_ context.Context, seq int64, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cursor = seq

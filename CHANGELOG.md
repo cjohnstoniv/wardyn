@@ -13,6 +13,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
 
+- A managed laptop whose audit table is reset so that its seq restarts, and which then writes up to or
+  past its old forwarding cursor before the forwarder runs, no longer halts forwarding with a 422
+  `chain_mismatch` (#520). The forwarder's cursor now keeps the row hash the organisation
+  acknowledged beside the seq (`org_federation.last_forwarded_row_hash`, migration
+  `0071_org_federation_row_hash`); when the laptop's row at that seq is gone or carries another hash,
+  the forwarder resends from the new genesis and the organisation records a
+  `device.audit.chain_reset`. A laptop upgrading onto this migration resends once from the start;
+  the organisation skips the rows it already holds.
+
 ### Added
 
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
