@@ -40,6 +40,12 @@ const encVersion = 1
 // writes.
 var ageHeader = []byte("age-encryption.org/v1\n")
 
+// unknownVersion refuses a row format this binary predates: a newer wardynd
+// wrote it (a mixed-version window, or a rollback). It is never read as
+// not-found and never handed to the age path — only ConvertV0 reads age, and
+// only enc_version 0.
+const unknownVersion = "has enc_version %d which this wardynd does not understand; upgrade wardynd"
+
 // secretAADLabel is the domain label of AAD_secret, the value's binding.
 const secretAADLabel = "wardyn/secret/v1"
 
@@ -183,7 +189,7 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 	case e.version == 0:
 		return nil, fmt.Errorf("pg secretstore: %s is a pre-envelope (v0) row written after this database was converted — an older wardynd is still writing to it; stop every older replica, then restart this one to convert the row", ref)
 	case e.version != encVersion:
-		return nil, fmt.Errorf("pg secretstore: %s has envelope version %d, which this wardynd does not read", ref, e.version)
+		return nil, fmt.Errorf("pg secretstore: row %s "+unknownVersion, ref, e.version)
 	case e.kekID != s.kek.ID():
 		return nil, fmt.Errorf("pg secretstore: %s is sealed under key %q, but this wardynd is configured with %q", ref, e.kekID, s.kek.ID())
 	}
@@ -321,8 +327,10 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID age.Identity) (
 // rewrap moves one row's data key from one KEK to another.
 func rewrap(ctx context.Context, from, to kek.KEK, e envelope) ([]byte, error) {
 	switch {
+	case e.version == 0:
+		return nil, fmt.Errorf("is a pre-envelope (v0) row — boot this wardynd once to convert it before rotating")
 	case e.version != encVersion:
-		return nil, fmt.Errorf("is an envelope v%d row, not v%d — boot this wardynd once to convert it before rotating", e.version, encVersion)
+		return nil, fmt.Errorf(unknownVersion, e.version)
 	case e.kekID != from.ID():
 		return nil, fmt.Errorf("is sealed under key %q, not the old key %q", e.kekID, from.ID())
 	}
