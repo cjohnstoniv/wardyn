@@ -11,7 +11,7 @@
 // file is the one seam that proves the real pipeline end to end: an SSO
 // principal's role from /me, through useShellView, into the mounted band.
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./app-shell";
@@ -20,6 +20,12 @@ import { MODEL_ACCESS_BANNER } from "../wardyn/model-access-copy";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { POSTURE_UNENFORCED_BANNER } from "../wardyn/confinement-posture-copy";
 import { baseStatus } from "../../lib/test-fixtures";
+// Both bands are React.lazy chunks, and the strip's is the slow one (the login
+// pane rides in it). Loaded here, each lazy import resolves from the module
+// cache on first render, so a positive control proves its neighbour rendered
+// too — an absence below is the view rule, not a chunk still in flight.
+import "../wardyn/model-access-banner";
+import "../wardyn/confinement-posture";
 
 const PER_USER_ROW = {
   id: "claude-code",
@@ -75,8 +81,10 @@ function renderShellAt(path: string, me: Record<string, unknown>, healthExtra: R
 
 describe("the model-access strip is absent in the Admin view (§4.2, M-3)", () => {
   it("a per-user deployment's strip does not reach an admin in /admin/runs", async () => {
-    renderShellAt("/admin/runs", ADMIN_ME);
-    await waitFor(() => expect(screen.getByRole("status")).toBeInTheDocument());
+    renderShellAt("/admin/runs", ADMIN_ME, { runner: "k8s", network_policy: "unenforced" });
+    // Positive control first: the posture band is Admin-view only, so seeing it
+    // proves /me resolved to the Admin view.
+    expect(await screen.findByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeInTheDocument();
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
@@ -101,7 +109,9 @@ describe("the confinement posture band is absent in the User view (§4.2, M-3)",
       runner: "k8s",
       network_policy: "unenforced",
     });
-    await waitFor(() => expect(screen.getByRole("status")).toBeInTheDocument());
+    // Positive control first: the member's own per-user strip proves /me
+    // resolved to the User view.
+    expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
     expect(screen.queryByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeNull();
   });
 });
