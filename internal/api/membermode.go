@@ -43,7 +43,7 @@ const (
 	// fired by OnLogin), so a "member" token would quietly become an admin one
 	// and outlive the mode that created it. The SSH-key door no longer refuses:
 	// a key registered in the mode is stored capped instead (sshkeys.go,
-	// migration 0069).
+	// migration 0070).
 	memberModeMintRefusal = "Exit member mode to mint a token."
 )
 

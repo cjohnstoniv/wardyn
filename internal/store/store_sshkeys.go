@@ -69,7 +69,7 @@ func (s PG) GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (typ
 // delete-then-re-register needed. A principal with no registered keys is a
 // normal, silent no-op (RowsAffected 0) — logging in has nothing to refresh.
 //
-// A CAPPED key (migration 0069, registered in the user view) keeps its member
+// A CAPPED key (migration 0070, registered in the user view) keeps its member
 // role: the login refreshes only its timestamp, never promotes it.
 func (s PG) RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error {
 	_, err := s.Pool.Exec(ctx,

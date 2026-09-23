@@ -415,7 +415,7 @@ endpoint.
 
 **A key registered in the user view is capped, for good.** An admin whose
 console session is in the user view (member mode) can register a key; it is
-stored with `capped = true` (migration `0069_ssh_key_view_capped`) and role
+stored with `capped = true` (migration `0070_ssh_key_view_capped`) and role
 `member`. A capped key never gains the admin override: the sign-in re-stamp
 (`RefreshSSHKeyRoles`) refreshes its `role_checked_at` but leaves its role
 `member`, the database refuses a capped row that reads `admin`, and the gateway

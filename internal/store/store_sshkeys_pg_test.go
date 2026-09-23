@@ -186,7 +186,7 @@ func TestPG_SSHKeys_RoleCheckedAtRoundTripsAndRefreshes(t *testing.T) {
 	}
 }
 
-// TestPG_SSHKeys_CappedKeyStaysMemberAtLogin pins migration 0069 at the login
+// TestPG_SSHKeys_CappedKeyStaysMemberAtLogin pins migration 0070 at the login
 // re-stamp: an admin's login refreshes role_checked_at on every key they own,
 // promotes their uncapped key to admin as it always has, and leaves their
 // capped key (registered in the user view) a member key. The CHECK refuses a
@@ -238,9 +238,9 @@ func TestPG_SSHKeys_CappedKeyStaysMemberAtLogin(t *testing.T) {
 	bad.Role = "admin"
 	if _, err := st.AddSSHKey(ctx, bad); err == nil {
 		_ = st.DeleteSSHKey(ctx, bad.Fingerprint, principal)
-		t.Error("a capped key stamped admin was stored; the 0069 CHECK must refuse it")
+		t.Error("a capped key stamped admin was stored; the 0070 CHECK must refuse it")
 	}
 	if _, err := pool.Exec(ctx, `UPDATE ssh_public_keys SET role = 'admin' WHERE fingerprint = $1`, capped.Fingerprint); err == nil {
-		t.Error("a hand-run UPDATE promoted a capped key to admin; the 0069 CHECK must refuse it")
+		t.Error("a hand-run UPDATE promoted a capped key to admin; the 0070 CHECK must refuse it")
 	}
 }

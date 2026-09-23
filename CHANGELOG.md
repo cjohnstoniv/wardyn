@@ -90,7 +90,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   slot (THREAT-MODEL residual 48).
 - **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
   view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
-  The key is stored with a `capped` bit (migration `0069_ssh_key_view_capped`) and role `member`,
+  The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `member`,
   and it never gains the admin override: the sign-in re-stamp leaves its role alone, a CHECK
   refuses a capped row that reads `admin`, and the SSH gateway refuses the override for it
   (`ssh.auth` reason "capped key (registered in the user view): no admin override"). It still

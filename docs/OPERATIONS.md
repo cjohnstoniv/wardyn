@@ -2223,7 +2223,7 @@ does not get the override on the key they already have until it is refreshed**:
 backfills `role_checked_at` as `NULL`, which `sshAuth` treats as infinitely
 stale. A member's key never satisfies the override, and neither does a key an
 admin registered while in the user view, which is stored capped (migration
-`0069_ssh_key_view_capped`; `docs/SSH.md`'s Bounds section;
+`0070_ssh_key_view_capped`; `docs/SSH.md`'s Bounds section;
 `threatmodel/THREAT-MODEL.md` residual #15). See
 [ROADMAP.md](../ROADMAP.md) for what's queued.
 
@@ -2314,7 +2314,7 @@ your next sign-in, so one minted "as a member" would quietly become an admin
 credential that outlives the mode. Exit first.
 
 Registering an SSH key (`POST /me/ssh-keys`) is allowed in the mode, and the key
-is stored **capped** (migration `0069_ssh_key_view_capped`): it is a member key
+is stored **capped** (migration `0070_ssh_key_view_capped`): it is a member key
 for good. Your sign-in re-stamp leaves its role at `member`, and the SSH
 gateway never grants it the admin override, even while you are an admin. It
 reaches your own runs and nothing else. A break-glass key that reaches other

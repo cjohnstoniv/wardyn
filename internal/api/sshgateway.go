@@ -188,7 +188,7 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // sshAuth is the gateway's auth+authz DECISION (ServerConfig's
 // PublicKeyCallback): registered public keys only, OWNER-OR-ADMIN
 // authorization — run.CreatedBy == the key's principal, OR the key's own
-// stored role is oidc.RoleAdmin and it is not capped (migration 0069).
+// stored role is oidc.RoleAdmin and it is not capped (migration 0070).
 // Username = the target run's UUID (conn.User()) — SSH has no cookie, so the
 // run id IS the addressing the client supplies, the same way `ssh host` names
 // a machine.
@@ -261,7 +261,7 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	}
 	override := run.CreatedBy != rec.Principal
 	if override && rec.Capped {
-		// Registered in the user view (migration 0069): a member key for good,
+		// Registered in the user view (migration 0070): a member key for good,
 		// whatever its role column says. Checked before the role so the trail
 		// names the cap rather than a plain "not the run owner".
 		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "capped key (registered in the user view): no admin override")

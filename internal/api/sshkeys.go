@@ -112,7 +112,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// interactive shell in every developer's sandbox.
 	//
 	// A key registered in the user view (member mode) is CAPPED (migration
-	// 0069): the mode's clamp already makes isOperator false, and the cap keeps
+	// 0070): the mode's clamp already makes isOperator false, and the cap keeps
 	// it that way. OnLogin re-stamps every key from the human's REAL role, so
 	// without the cap this key would come back admin at the next sign-in and
 	// outlive the view that made it.

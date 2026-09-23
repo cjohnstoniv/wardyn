@@ -756,7 +756,7 @@ type AuditEvent struct {
 // treats nil as infinitely stale, never as fresh.
 //
 // Capped marks a key registered while an admin's session was in the user view
-// (migration 0069): Role stays member through every login re-stamp, and
+// (migration 0070): Role stays member through every login re-stamp, and
 // sshAuth never grants it the admin override.
 type SSHPublicKey struct {
 	Fingerprint   string     `json:"fingerprint"`
