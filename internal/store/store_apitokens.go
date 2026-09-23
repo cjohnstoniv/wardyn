@@ -98,7 +98,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 // `revoked_at IS NULL` is in the WHERE, not checked by the caller, and that is
 // the security shape: a revoked token, an unknown token and a token whose hash
 // does not match all fail IDENTICALLY with ErrNotFound, so the boundary is not
-// an oracle for "this token used to exist".
+// an oracle for "this token once existed".
 func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error) {
 	const q = `
 		SELECT ` + apiTokenCols + `

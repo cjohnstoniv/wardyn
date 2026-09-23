@@ -225,8 +225,8 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 //     only after that — so a DNS-rebind denial or a failed dial burns the grant
 //     and the operator is re-asked. Consuming after the dial instead would mean
 //     holding a.mu across it; this is the cheaper end of that trade, not an
-//     oversight. The METHOD check is no longer part of that window: since F032
-//     it runs BEFORE the approval flow (proxy.go, evaluate step 2), so a
+//     oversight. The METHOD check is no longer part of that window: it runs
+//     BEFORE the approval flow (proxy.go, evaluate step 2), so a
 //     method-denied request neither raises an approval, nor takes a hold slot,
 //     nor spends a `once` grant.
 //   - `until` is enforced against TWO CLOCKS. The control plane validates
@@ -436,7 +436,7 @@ type resolveResult struct {
 // same string in both, deliberately, because those are the two surfaces that
 // would disagree if they ever diverged.
 //
-// P0.3 (R3-F001/F108/F145) asked whether an egress_domain approval is host-wide
+// This asks whether an egress_domain approval is host-wide
 // or host:port-scoped. The answer for 0.7.2 is HOST-WIDE, unchanged, and the
 // three surfaces are being aligned to SAY so rather than quietly relying on it.
 // This function is the server-side half of that: it strips a port if one is ever
@@ -627,7 +627,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 // Mode carries the run's first-use mode so the UI can tell a live-HELD
 // (wait_for_review) request apart from a passive deny_with_review pending.
 //
-// Host, and no port, and that is the semantic (P0.3 — R3-F001/F108/F145): a
+// Host, and no port, and that is the semantic: a
 // decision on this approval reaches EVERY port of that host for whatever span
 // its decision_scope names. Host is always the bare host — approvalHostKey
 // guarantees it, and is the same value this client keys its cache on — so the

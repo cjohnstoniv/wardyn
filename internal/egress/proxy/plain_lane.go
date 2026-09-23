@@ -151,7 +151,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		blocked      bool
 	)
 	// releaseBody returns the inspected body's bytes to maxRetainedScanBytes; it
-	// has to outlive the RoundTrip that reads them (F074).
+	// has to outlive the RoundTrip that reads them.
 	releaseBody := func() {}
 	defer func() { releaseBody() }()
 	channel := p.channelForHost(host)

@@ -73,15 +73,24 @@ func classifyADOUpstream(resp *http.Response) adoUpstreamClass {
 
 // ruleSource is the class's decision-log rule source on the REST or git door.
 func (c adoUpstreamClass) ruleSource(git bool) string {
-	src := map[adoUpstreamClass][2]string{
-		adoUpstreamNotSignedIn: {ruleSourceADOUpstreamNotSignedIn, ruleSourceADOGitUpstreamNotSignedIn},
-		adoUpstreamRefused:     {ruleSourceADOUpstreamRefused, ruleSourceADOGitUpstreamRefused},
-		adoUpstreamNoAccess:    {ruleSourceADOUpstreamNoAccess, ruleSourceADOGitUpstreamNoAccess},
-	}[c]
-	if git {
-		return src[1]
+	switch c {
+	case adoUpstreamNotSignedIn:
+		if git {
+			return ruleSourceADOGitUpstreamNotSignedIn
+		}
+		return ruleSourceADOUpstreamNotSignedIn
+	case adoUpstreamRefused:
+		if git {
+			return ruleSourceADOGitUpstreamRefused
+		}
+		return ruleSourceADOUpstreamRefused
+	case adoUpstreamNoAccess:
+		if git {
+			return ruleSourceADOGitUpstreamNoAccess
+		}
+		return ruleSourceADOUpstreamNoAccess
 	}
-	return src[0]
+	return ""
 }
 
 // message is the run-facing sentence for the class. target is host plus the
@@ -143,13 +152,13 @@ func (p *Proxy) relayUpstream(w http.ResponseWriter, r *http.Request, host strin
 // refuseADOGitUpstream answers git, in git's own terms, when Azure DevOps
 // refused a brokered git request, and reports whether it did. A relayed 401
 // would make git prompt for a username; a relayed 203 page is not a git answer.
-func (p *Proxy) refuseADOGitUpstream(w http.ResponseWriter, r *http.Request, host, rest string, push *adoGitPush, resp *http.Response) bool {
+func (p *Proxy) refuseADOGitUpstream(w http.ResponseWriter, r *http.Request, host, rest string, port int, push *adoGitPush, resp *http.Response) bool {
 	c := classifyADOUpstream(resp)
 	if c == adoUpstreamOK {
 		return false
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-	p.noteADOUpstream(r, host, 443, c, true, resp.StatusCode)
+	p.noteADOUpstream(r, host, port, c, true, resp.StatusCode)
 	writeADOGitRefusal(w, push, "Wardyn's git broker: "+c.message(host+(&url.URL{Path: rest}).EscapedPath(), resp.StatusCode))
 	return true
 }

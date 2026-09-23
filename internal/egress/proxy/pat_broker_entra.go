@@ -127,7 +127,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if !p.refuseADOGitUpstream(w, r, host, rest, push, resp) {
+	if !p.refuseADOGitUpstream(w, r, host, rest, 443, push, resp) {
 		relay(w, resp)
 	}
 }

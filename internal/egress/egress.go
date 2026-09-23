@@ -114,7 +114,7 @@ type ScanSummary struct {
 	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel" | "findings_capped"
 	Findings   []ScanFinding `json:"findings,omitempty"`
 	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
-	// THE WIRE (F075).
+	// THE WIRE.
 	//
 	// Findings above carries at most the cap's worth of rows, so a truncated
 	// scan would otherwise be indistinguishable in the audit from one that

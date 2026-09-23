@@ -215,7 +215,7 @@ const (
 // and Languages/PackageManagers/Tools are written VERBATIM into the AGENTS.md
 // that the next agent reads. An entry carrying a newline and a "## SYSTEM:"
 // heading is therefore a prompt-injection re-entry path through a field that
-// used to be trimmed and nothing else. adviceItemSafe is what closes it; the
+// is only trimmed, nothing else. adviceItemSafe is what closes it; the
 // count and length caps close the size half.
 func cleanSet(xs []string) []string {
 	set := make(map[string]struct{}, len(xs))

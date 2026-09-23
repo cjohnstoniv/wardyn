@@ -57,7 +57,7 @@ func extractGeneric(body []byte, yield func(Span)) error {
 // decodeAttachmentBase64 tries every base64 alphabet a real client attachment
 // might arrive in — standard padded, standard unpadded (RawStdEncoding), and
 // the URL-safe alphabet (both padded and unpadded) — before declaring a
-// decode failure (F056). A well-formed attachment that merely used a
+// decode failure. A well-formed attachment that merely used a
 // non-StdEncoding alphabet must not be silently treated as "nothing here".
 func decodeAttachmentBase64(s string) ([]byte, bool) {
 	for _, enc := range []*base64.Encoding{
@@ -75,8 +75,8 @@ func decodeAttachmentBase64(s string) ([]byte, bool) {
 // default). It reports (via the return value) whether any base64 block could
 // not be decoded under ANY known alphabet, so the caller can record an honest
 // Skipped{attachment_decode_error} instead of a silent "inspected clean"
-// (F056) — a malformed body is still tolerated (returns false, nothing to
-// report) the same as before.
+// A malformed body is still tolerated (returns false, nothing to
+// report).
 func extractAnthropicAttachments(body []byte, yield func(Span)) bool {
 	var req struct {
 		Messages []json.RawMessage `json:"messages"`
@@ -114,7 +114,7 @@ func extractAnthropicAttachments(body []byte, yield func(Span)) bool {
 			dec, ok := decodeAttachmentBase64(blk.Source.Data)
 			if !ok {
 				// Genuinely undecodable under every known alphabet: the caller must
-				// NOT record this as a clean scan (F056) — it sets
+				// NOT record this as a clean scan — it sets
 				// Skipped{attachment_decode_error} so ShouldBlock/on_scanner_error
 				// still governs whether this refuses the request under block mode.
 				decodeFailed = true
@@ -134,7 +134,7 @@ func extractAnthropicAttachments(body []byte, yield func(Span)) bool {
 // extractOpenAIChat yields the text the agent is sending THIS turn for an OpenAI
 // /v1/chat/completions request: every role:"system" message (OpenAI/Codex has
 // no top-level `system` field the way Anthropic does — the system prompt rides
-// as a message, F049) plus the LAST message's content (string or text parts)
+// as a message) plus the LAST message's content (string or text parts)
 // and its tool_call function arguments (a JSON string we walk). Same
 // newest-message heuristic and known false-negatives as the Anthropic walker.
 func extractOpenAIChat(body []byte, yield func(Span)) error {

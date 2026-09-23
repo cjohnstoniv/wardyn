@@ -322,7 +322,7 @@ var leakSeverity = map[string]int{
 // path/kind/line/source ordering the two callers already produced, so equal
 // input still yields byte-identical output.
 //
-// truncated is the second half of B11b-F9: the drop used to be SILENT, on a
+// truncated flags the drop instead of leaving it SILENT, on a
 // package whose documented promise is never to drop a suspected secret. The
 // callers stamp NeedsReview with it, so a profile missing findings stops
 // reading as the whole picture.
@@ -1293,7 +1293,7 @@ func validateBuildMemoryMiB(v int) int {
 // relative path, dedupes by (path, kind, line), then sorts riskiest-first and
 // caps (capLeakFindings). Never carries a value (LeakFinding has no value field
 // by construction). truncated reports that the cap DROPPED findings, which the
-// caller turns into NeedsReview — B11b-F9: the drop used to be silent.
+// caller turns into NeedsReview instead of a silent drop.
 func validateLeakFindings(raw []LeakFinding) (out []LeakFinding, truncated bool) {
 	type key struct {
 		path, kind string

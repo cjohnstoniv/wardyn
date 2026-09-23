@@ -46,10 +46,9 @@ func EnvOr(key, def string) string {
 // Unset — or set to the empty string, which is what `docker run -e VAR` and a
 // compose `VAR=` passthrough produce for a var the operator never set — means
 // "use the default", exactly like FlagBool/FlagDuration/FlagIntEnv/EnvOr. It
-// used to honour an explicit empty as an intentional blank, which silently
-// erased thirteen non-empty compiled defaults (WARDYN_LISTEN ":8080",
-// WARDYN_RUNNER "none", WARDYN_DEFAULT_POLICY, WARDYN_GIT_PAT_BROKER "on", ...)
-// for anyone whose orchestrator passes every known variable through. The
+// never treats an explicit empty as an intentional blank — doing so would
+// erase a compiled default for anyone whose orchestrator passes every known
+// variable through. The escape hatch for a genuinely-intended blank is
 // escape hatch for a genuinely-intended blank is `-name=`, which states it.
 //
 // The env value is applied to the flag's VARIABLE, never to its registered

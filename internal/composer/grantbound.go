@@ -36,7 +36,7 @@ import (
 // F110-residual: require_tls rides the same rule for the same reason (see the
 // field below).
 //
-// F097: header/format are part of that IDENTITY for api_key, not a bound.
+// Header/format are part of that IDENTITY for api_key, not a bound.
 // Matching only on (host, secret, known_hosts) would let a member or profile
 // grant that keeps the operator's blessed (host, secret) pairing but names a
 // DIFFERENT header — or a different format — match the ceiling regardless.
@@ -129,7 +129,7 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 		if json.Unmarshal(g.Scope, &sc) != nil || sc.Host == "" || sc.SecretName == "" {
 			return grantPairing{}, true, false
 		}
-		// header/format ride the identity (F097) — see grantPairing.
+		// header/format ride the identity — see grantPairing.
 		return grantPairing{
 			host: sc.Host, secretRef: sc.SecretName,
 			header: apiKeyHeader(sc.Header), format: apiKeyFormat(sc.Format),
@@ -180,7 +180,7 @@ func samePairing(a, b grantPairing) bool {
 // It takes the whole proposed grant rather than a destructured pairing so the
 // pairing rule lives in exactly ONE decoder (grantPairingOf) — a destructured
 // (kind, host, secretRef, knownHostsRef) signature cannot carry an api_key
-// axis added to the pairing later (header/format, F097).
+// axis added to the pairing later (header/format).
 // A grant whose kind names no stored secret, or whose scope does not decode,
 // is in no pairing (fail closed); its kind-level ceiling membership is the
 // caller's question (CeilingGrantsCovering).

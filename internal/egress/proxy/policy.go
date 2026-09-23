@@ -697,7 +697,7 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 //
 // It exists so a resolver outage is never labelled builtin:private-ip with
 // literalIPDenialDetail's "declare it under internal_hosts" advice attached
-// (F055): that advice cannot fix a resolver outage, and it points at loosening
+// That advice cannot fix a resolver outage, and it points at loosening
 // an SSRF control for a fault that is neither.
 const resolveFailedDetail = "this host did not resolve (DNS failure, no such name, or no address records), so no address " +
 	"could be vetted; this is a name-resolution fault, not the private-address guard — check the sandbox's resolver, " +

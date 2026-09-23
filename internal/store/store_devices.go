@@ -165,7 +165,7 @@ func (s PG) CreateDevice(ctx context.Context, d types.Device, raw string) (types
 // the WHERE, not checked by the caller — the same shape GetAPITokenByRaw
 // uses — so a revoked credential, an unknown one and a mismatched hash all
 // fail IDENTICALLY with ErrNotFound: the boundary is not an oracle for "this
-// device used to be enrolled".
+// device was once enrolled".
 func (s PG) GetDeviceByRaw(ctx context.Context, raw string) (types.Device, error) {
 	const q = `SELECT ` + deviceCols + ` FROM devices WHERE credential_sha256 = $1 AND revoked_at IS NULL`
 	return scanDevice(s.Pool.QueryRow(ctx, q, hashToken(raw)))

@@ -114,7 +114,7 @@ const brokerRefreshMargin = 30 * time.Second
 // it. WARDYN_GIT_APPROVAL_TIMEOUT names it; defaultGitApprovalTimeout is the
 // default.
 //
-// Trust boundary (F070 sibling): the env var alone bounds only the approval
+// Trust boundary: the env var alone bounds only the approval
 // WAIT's timer; nothing else bounds the HTTP calls that timer supervises —
 // handleGitBroker/handlePATBroker pass r.Context() (server.go sets
 // ReadTimeout/WriteTimeout to 0) and forwardToControlPlane rides p.localClient,
@@ -400,7 +400,7 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 		return e.token, e.username, nil
 	}
 	// One budget for the whole acquisition below — the first mint, the approval
-	// wait and every poll (F070 sibling; see gitApprovalBudget). Armed after the
+	// wait and every poll (see gitApprovalBudget). Armed after the
 	// cache check so a cache hit costs nothing.
 	ctx, cancel := context.WithTimeout(ctx, gitApprovalBudget())
 	defer cancel()
@@ -716,7 +716,7 @@ var branchNSWarnOnce sync.Once
 // git_pat lane must refuse in the same words as the App lane, and the only way
 // two lanes say the same thing forever is that there is one place saying it.
 //
-// The name is the lane-neutral half of the split (F015): the confinement is
+// The name is the lane-neutral half of the split: the confinement is
 // ONE rule with two brokers, which is also why the git_pat lane reuses the
 // brokered:git:branch-ns* rule sources rather than minting its own vocabulary.
 // Which lane may reach it, and under which switch, stays the caller's decision —

@@ -27,7 +27,7 @@ import (
 //     DefaultRole is configured.
 //  6. Creates a signed Wardyn session cookie.
 //
-// W31-S1-5: the USER-actionable denials (5's role-denied, 4's domain/
+// The USER-actionable denials (5's role-denied, 4's domain/
 // unverified-email) redirect to "/?auth_error=<code>" (302) instead of a
 // bare http.Error text page — a login failure otherwise dead-ended the
 // browser on plain text with no way back to the console, and no chance for
@@ -149,7 +149,7 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 	// since each has its own struct.
 	//
 	// TOLERATING THE SHAPE AND REPORTING THE LOSS ARE DIFFERENT JOBS, and the
-	// decode error used to be discarded, which collapsed them. A claim the IdP
+	// decode error must not be discarded, or the two collapse. A claim the IdP
 	// DID send in a shape this build cannot read then arrived at derivation as
 	// nil — byte-for-byte "asked, there were none". The group the human really
 	// holds vanished from the snapshot with the PF-26 partial bit CLEAR, so

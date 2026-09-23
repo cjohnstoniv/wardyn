@@ -66,7 +66,7 @@ type Config struct {
 	// CredPath is the path to the resident credentials file. Empty defaults to
 	// ~/.claude/.credentials.json.
 	CredPath string
-	// ClaudeBin is the resident CLI used to delegate a refresh. Empty defaults
+	// ClaudeBin is the resident CLI that delegates a refresh. Empty defaults
 	// to "claude" (resolved against PATH).
 	ClaudeBin string
 	// Now is overridable in tests; defaults to time.Now.
@@ -175,7 +175,7 @@ func (p *provider) read() (Token, error) {
 // The egress proxy single-flights per HOST (inject.go's reMu), so the stampede
 // it does not cover is the CROSS-proxy one: N runs each POST /internal/injection
 // inside the 10-minute margin and arrive here as N concurrent refreshes. Each
-// used to spawn its own `claude -p ok`, and the sharp end of that is not the
+// would each spawn its own `claude -p ok`, and the sharp end of that is not the
 // wasted turns — it is N processes writing the ONE resident
 // ~/.claude/.credentials.json, whose atomic write-back `claude` owns and
 // coordinates only with itself.

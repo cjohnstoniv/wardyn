@@ -146,7 +146,7 @@ func (s *decisionSink) run() {
 			// Individual decision: best-effort, must never block egress — but a
 			// decision the control plane REFUSED is a decision that was not
 			// individually recorded, which is exactly what s.dropped counts and
-			// reportDropped summarizes (F075 fix-up). Discarding the error would
+			// reportDropped summarizes. Discarding the error would
 			// let an over-large or rejected decision vanish from the audit trail
 			// with nothing anywhere saying so: internal/api's MaxBytesReader
 			// 413s a body over maxJSONBody, and that 413 must not be silent.
