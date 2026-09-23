@@ -46,17 +46,18 @@ func TestRunMarker(t *testing.T) {
 
 // FIX #5: approval recorder is the masked + fanout recorder
 
-// TestApprovalRecorderIsMaskedFanout is the regression guard for FIX #5: the
-// approval FSM + sweeper were constructed with the PLAIN store.Recorder (Postgres
-// only), so approval.decide / approval.expire audit events bypassed masking AND
-// the SIEM fanout that idp/broker already used (maskedRec). The recorder seam must
-// therefore hold an audit.Recorder (the masked+fanout one), not a concrete
-// store.Recorder, and events must flow through it MASKED.
+// TestApprovalRecorderIsMaskedFanout pins that the approval FSM + sweeper record
+// through the masked+fanout audit.Recorder, not the PLAIN store.Recorder (Postgres
+// only) — otherwise approval.decide / approval.expire audit events bypass masking
+// AND the SIEM fanout that idp/broker use (maskedRec). The recorder seam must
+// therefore hold an audit.Recorder, not a concrete store.Recorder, and events must
+// flow through it MASKED.
 //
 // A fakeAuditRecorder is an audit.Recorder but NOT a store.Recorder — assigning
 // it (and a maskingRecorder) into approvalStore.rec only compiles because that
-// field is audit.Recorder. If it regressed to store.Recorder this test would fail
-// to compile. approvalService holds the SAME approvalStore value, so the FSM and
+// field is audit.Recorder. If the field were a store.Recorder this test would
+// fail to compile. approvalService holds the SAME approvalStore value, so the FSM
+// and
 // the sweeper cannot drift onto two different recorders.
 func TestApprovalRecorderIsMaskedFanout(t *testing.T) {
 	reg := secretmask.NewRegistry()
@@ -248,14 +249,13 @@ func TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak(t *testing.T) {
 	}
 }
 
-// TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies is
-// A run-less audit row (ev.RunID == nil —
-// policy.inline, secret.*, an admin action) used to bypass masking ENTIRELY,
-// because the old guard (`m.reg != nil && ev.RunID != nil`) short-circuited
-// the whole block whenever RunID was nil. It must still be masked against the
-// PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered via
-// AddGlobal) — Snapshot(uuid.Nil) returns exactly that (globals only; uuid.Nil
-// is never a real run's perRun key).
+// TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies pins that a run-less
+// audit row (ev.RunID == nil — policy.inline, secret.*, an admin action) is
+// still masked: a guard like `m.reg != nil && ev.RunID != nil` would skip the
+// whole block whenever RunID is nil. It is masked against the PROCESS-GLOBAL
+// corpus (Bedrock SSO / subscription creds registered via AddGlobal) —
+// Snapshot(uuid.Nil) returns exactly that (globals only; uuid.Nil is never a
+// real run's perRun key).
 func TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	const secret = "ghp_supersecrettoken123"
@@ -293,15 +293,14 @@ func TestMaskingRecorder_DelegationErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestMaskingRecorder_MasksJSONEscapedSecretInData is the D31 regression: ev.Data
-// is JSON, so a registered secret bearing a newline/quote/backslash (an ssh_key
-// PEM is the real case broker.mint mask-registers) appears in Data in its
-// JSON-escaped form (newlines → \n), which the raw-value masker misses. The
-// maskingRecorder now expands the snapshot with JSONEscapedVariants, so the
-// escaped rendering is masked too.
+// TestMaskingRecorder_MasksJSONEscapedSecretInData: ev.Data is JSON, so a
+// registered secret bearing a newline/quote/backslash (an ssh_key PEM is the real
+// case broker.mint mask-registers) appears in Data in its JSON-escaped form
+// (newlines → \n), which the raw-value masker misses. The maskingRecorder expands
+// the snapshot with JSONEscapedVariants, so the escaped rendering is masked too.
 //
-// RED before the fix (raw snapshot only): the distinctive marker survives in the
-// forwarded Data. GREEN after: it is replaced by the placeholder.
+// With the raw snapshot only, the distinctive marker survives in the forwarded
+// Data; with the variants it is replaced by the placeholder.
 func TestMaskingRecorder_MasksJSONEscapedSecretInData(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	runID := uuid.New()

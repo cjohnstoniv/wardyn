@@ -23,8 +23,8 @@ import (
 // appendChained inserts one audit event through the real path and returns it
 // with the hashes Postgres computed. Data deliberately carries out-of-order
 // keys: jsonb re-sorts them on the way in, so hashing the caller's bytes
-// instead of the stored jsonb would make every row fail verification — this is
-// the regression that catches it.
+// instead of the stored jsonb would make every row fail verification, and this
+// catches it.
 func appendChained(t *testing.T, pool *pgxpool.Pool, actor string) types.AuditEvent {
 	t.Helper()
 	ev := types.AuditEvent{

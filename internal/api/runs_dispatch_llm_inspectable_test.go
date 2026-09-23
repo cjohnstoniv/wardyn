@@ -27,16 +27,16 @@ func (s *inspectableGateStore) UpdateRunStateIf(_ context.Context, _ uuid.UUID, 
 	return true, nil
 }
 
-// TestEnforceInspectableLLM_BedrockBearerIsOpaque is the F048 regression.
-// require_inspectable_llm is a RUNTIME guarantee (policy.go) and THREAT-MODEL
-// 5.1a promises a strict operator that an opaque-transport run fails CLOSED at
-// schedule time, with "Bedrock stays opaque regardless". The gate exempted the
-// Bedrock BEARER sub-mode on the claim that proxy-injected + MITM'd makes it
-// inspectable — but MITM only makes the body READABLE. There is no Bedrock
-// extractor (contentscan.Extract covers anthropic.messages / openai.chat /
-// generic / mcp.jsonrpc) and channelForHost maps a bedrock-runtime host to
-// ChannelGeneric, which classifyLLM treats as not prompt-bearing, so such a run
-// was admitted as "inspectable" with ZERO scan coverage.
+// TestEnforceInspectableLLM_BedrockBearerIsOpaque. require_inspectable_llm is a
+// RUNTIME guarantee (policy.go) and THREAT-MODEL 5.1a promises a strict
+// operator that an opaque-transport run fails CLOSED at schedule time, with
+// "Bedrock stays opaque regardless". The Bedrock BEARER sub-mode gets no
+// exemption for being proxy-injected + MITM'd: MITM only makes the body
+// READABLE. There is no Bedrock extractor (contentscan.Extract covers
+// anthropic.messages / openai.chat / generic / mcp.jsonrpc) and channelForHost
+// maps a bedrock-runtime host to ChannelGeneric, which classifyLLM treats as
+// not prompt-bearing, so admitting such a run as "inspectable" would give it
+// ZERO scan coverage.
 func TestEnforceInspectableLLM_BedrockBearerIsOpaque(t *testing.T) {
 	strict := &types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{
 		Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true, InterceptTLS: true,

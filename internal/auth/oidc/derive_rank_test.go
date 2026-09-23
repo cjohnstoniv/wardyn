@@ -191,11 +191,11 @@ func TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03(t *testing.T) {
 		t.Fatalf("ParseRoleMap(%q): %v", composeDefault, err)
 	}
 
-	// (a) An allowlist-only deployment: today bob@corp.com is a MEMBER with a
+	// (a) An allowlist-only deployment: bob@corp.com is a MEMBER with a
 	// working login via arm 1's legacy-allowlist branch (alice is admin,
 	// everyone else who signs in is a member). Under the compose default, bob
 	// matches neither the chart map nor the allowlist, and no DefaultRole is
-	// set — the login that used to succeed is now denied.
+	// set — so the same login is denied.
 	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "bob@corp.com", roleMap, []string{"alice@corp.com"}, ""); ok {
 		t.Fatalf("bob@corp.com resolved to %q under the compose default role map — want deny (ok=false); this is the allowlist-only lockout R-03 exists to prevent", role)
 	}

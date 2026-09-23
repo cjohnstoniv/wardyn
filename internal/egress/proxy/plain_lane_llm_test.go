@@ -18,12 +18,11 @@ import (
 )
 
 // The PLAIN forward lane with an ABSOLUTE-FORM request URI — the lane
-// ServeHTTP routes to handlePlain, and the one every LLM test in this package
-// used to skip: they all reach inspection through CONNECT/MITM
-// (serveMITMRequest, mitmConnect) or the brokered local route
-// (/wardyn/llm/...). Nothing drove `POST https://api.anthropic.com/v1/messages`
-// straight at the proxy, so the handleConnect/handlePlain divergence was
-// completely unpinned (F141) and the divergence itself was live (F103, F104).
+// ServeHTTP routes to handlePlain. The other LLM tests in this package reach
+// inspection through CONNECT/MITM (serveMITMRequest, mitmConnect) or the
+// brokered local route (/wardyn/llm/...); these drive `POST
+// https://api.anthropic.com/v1/messages` straight at the proxy, so the
+// handleConnect/handlePlain divergence is pinned.
 
 // newPlainLaneProxy builds a proxy whose only allowlisted host is the Anthropic
 // vendor host, dialling a local (TLS) stand-in upstream. TLSClientConfig is set
@@ -140,10 +139,9 @@ func TestPlainLaneInjectionStripsSandboxCredential(t *testing.T) {
 	}
 }
 
-// TestPlainLaneHTTPSAbsoluteFormPort pins F141's port half: an https
+// TestPlainLaneHTTPSAbsoluteFormPort pins the port half: an https
 // absolute-form request with no explicit port means 443 — the port the proxy
-// vets, dials and RECORDS. It used to be evaluated and audited as 80 while the
-// transport ran a TLS handshake against it.
+// vets, dials and RECORDS — not 80 with a TLS handshake run against it.
 func TestPlainLaneHTTPSAbsoluteFormPort(t *testing.T) {
 	cu := captureUpstream(t, true, "upstream-ok")
 	p, buf := newPlainLaneProxy(t, upstreamAddr(cu.srv), nil)

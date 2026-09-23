@@ -85,25 +85,25 @@ func TestApprovalScopeIsDocumentedAsPortWide(t *testing.T) {
 	}
 }
 
-// TestUpstreamGuardResidualIsDocumented (F008) pins the threat model and the
-// proxy package's own SECURITY INVARIANTS to what egressTarget's corp-upstream
-// branch now does — and to the two residuals it deliberately keeps.
+// TestUpstreamGuardResidualIsDocumented pins the threat model and the proxy
+// package's own SECURITY INVARIANTS to what egressTarget's corp-upstream branch
+// does — and to the two residuals it deliberately keeps.
 //
-// That branch used to return BEFORE p.vetHost, so the "unconditional"
-// private/loopback/metadata guard held only for the LITERAL spelling under an
-// operator upstream: a name the agent controlled that resolved to
-// 169.254.169.254 was handed to the corp proxy to resolve and dial. It now
-// resolves for the guard and denies a blocked answer, forwarding only a name it
-// cannot resolve at all — which the documents have to say out loud, because a
-// reader who takes "unconditional" literally would be wrong about that case.
+// That branch runs p.vetHost before handing off, so the
+// private/loopback/metadata guard holds for more than the LITERAL spelling
+// under an operator upstream: a name the agent controls that resolves to
+// 169.254.169.254 is denied, not handed to the corp proxy to resolve and dial.
+// It resolves for the guard and denies a blocked answer, forwarding only a name
+// it cannot resolve at all — which the documents have to say out loud, because
+// a reader who takes "unconditional" literally would be wrong about that case.
 //
 // TWO residuals, not one: the target is still sent BY NAME, so the guard is
 // checked against THIS proxy's resolution while the corp proxy performs its own.
 // A name that answers differently to the two resolvers (short-TTL rebinding, or
 // a split-horizon zone only the corp proxy can see) is bound at check time only.
-// The mustNotSay arms below are the other half of the fix: the retired
-// "the guard is SKIPPED under an upstream" claim survived verbatim in five
-// passages this lane did not first touch — the fifth being egress_target.go's
+// The mustNotSay arms below are the other half: the "the guard is SKIPPED
+// under an upstream" claim is false, and five passages are known to carry its
+// shape — the fifth being egress_target.go's
 // own file header — so the guard pins its absence in the documents AND in the
 // code comments rather than only pinning the replacement in one.
 //

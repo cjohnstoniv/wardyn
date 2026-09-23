@@ -74,14 +74,14 @@ func TestAdviseProfile_MergeOnlyFillsEmptyNeverOverrides(t *testing.T) {
 }
 
 func TestAdviseProfile_AIEgressForcesReview(t *testing.T) {
-	// regression: an AI-suggested host must flip NeedsReview true (never
-	// silently trusted) and must land ONLY in SuggestedEgress — NEVER in
-	// EgressDomains, the sole field seedSourceRequirements/
-	// applyWorkspaceRequirements treat as an auto-granted, auto-unioned contract
-	// row. Before the fix, mergeAdvice gap-filled EgressDomains directly, so an
-	// AI guess rode the exact same auto-union privilege as a real filename-keyed
-	// marker-table hit, silently widening a run's allowlist with no operator
-	// approval — defeating the NeedsReview promise this test's name describes.
+	// An AI-suggested host must flip NeedsReview true (never silently trusted)
+	// and must land ONLY in SuggestedEgress — NEVER in EgressDomains, the sole
+	// field seedSourceRequirements/applyWorkspaceRequirements treat as an
+	// auto-granted, auto-unioned contract row. If mergeAdvice gap-filled
+	// EgressDomains directly, an AI guess would ride the exact same auto-union
+	// privilege as a real filename-keyed marker-table hit, silently widening a
+	// run's allowlist with no operator approval — defeating the NeedsReview
+	// promise this test's name describes.
 	base := WorkspaceProfile{
 		Languages:   []string{"Ada"},
 		Confidence:  ConfidenceMedium,

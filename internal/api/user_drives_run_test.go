@@ -169,12 +169,12 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 				t.Fatalf("code = %d, want 403: %s", w.Code, w.Body.String())
 			}
 			// The mock round's frozen member copy, byte-exact — and NO
-			// BACKTICKS. The canon module (ui/src/app/lib/user-drives-copy.ts)
-			// carries none anywhere: §7's header note makes a backticked
-			// substring in the doc a MONO SPAN the console applies at display
-			// time, never characters on the wire. This refusal used to ship
-			// "Launch without `drive`." and members read the backticks as
-			// punctuation.
+			// BACKTICKS. The canon module
+			// (ui/src/app/lib/user-drives-copy.ts) carries none anywhere:
+			// §7's header note makes a backticked substring in the doc a MONO
+			// SPAN the console applies at display time, never characters on
+			// the wire, and members read literal backticks ("Launch without
+			// `drive`.") as punctuation.
 			if got := refusalBody(t, w); got != tc.want {
 				t.Errorf("body  = %s\nwant BYTE-EXACT: %s", got, tc.want)
 			}
@@ -271,10 +271,10 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			msg: "drive: this deployment cannot mount your drive",
 		},
 		{
-			// A paused allocation IS an answer. The disabled row used to be
-			// excluded from the resolution outright, so this member read "no
-			// user drive is allocated to you" and went to their admin to ask
-			// for the thing that admin had just turned off.
+			// A paused allocation IS an answer. Excluding the disabled row
+			// from the resolution would tell this member "no user drive is
+			// allocated to you" and send them to their admin to ask for the
+			// thing that admin had just turned off.
 			name: "the allocation is paused", store: pausedDriveStore(nil),
 			runnerTarget: "docker", req: driveRunRequest(true, nil),
 			want: "drive: your allocation is paused by an admin",
@@ -324,10 +324,9 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 		},
 		{
 			// The HOME DERIVATION cannot answer: email_local with no email
-			// claim. Byte-exact like the rest — this refusal used to carry the
-			// derivation's own error in trailing brackets, which made it the one
-			// whose shipped bytes were not the frozen sentence; the cause now
-			// goes to the log, where the operator who has to act on it looks.
+			// claim. Byte-exact like the rest — the derivation's own error goes
+			// to the log, where the operator who has to act on it looks, not
+			// into trailing brackets on the frozen sentence.
 			name: "the home name cannot be derived",
 			store: &driveStore{
 				drive: driveFixture(func(d *types.UserDrive) {
@@ -469,7 +468,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 // re-established at the moment of the mount rather than trusted from authoring
 // time.
 //
-// Both were previously unchecked here, and both fail in the direction that
+// Neither can be trusted from the row, and both fail in the direction that
 // loses work rather than the direction that refuses it:
 //
 //   - THE CEILING. handleUpsertUserDrive applied WARDYN_USER_DRIVE_HOST_ROOTS
@@ -781,18 +780,15 @@ func TestSeedRequestDriveTruncatedGroupsIs403(t *testing.T) {
 			if !strings.Contains(w.Body.String(), "groups_snapshot_stale") {
 				t.Errorf("body = %s, want the stale-snapshot refusal naming its remedy", w.Body.String())
 			}
-			// It is an authz.denied, and it did not used to be. The comment
-			// here read "this is 'we cannot tell', not 'you may not'" and
-			// asserted an empty audit stream — while the GOVERNANCE resolver's
+			// It is an authz.denied. "We cannot tell" is what the REASON says,
+			// not a licence to say nothing: the GOVERNANCE resolver's
 			// mirror-image branch, for the same member on the same request,
-			// recorded the refusal (ceilingWithUnusableGroups, R1 F227). One
-			// tree cannot hold both readings of one condition, and R1 F317
-			// settled it the way the docs already had: OPERATIONS.md's "Every
-			// denial that isn't a 404" and AUDIT-ACTIONS.md:208's closed enum
-			// both list groups_snapshot_stale as an authz.denied reason. A
-			// member who cannot launch is a denial whichever resolver noticed
-			// first; "we cannot tell" is what the REASON says, not a licence to
-			// say nothing.
+			// records the refusal (ceilingWithUnusableGroups), and one tree
+			// cannot hold both readings of one condition. OPERATIONS.md's
+			// "Every denial that isn't a 404" and AUDIT-ACTIONS.md:208's
+			// closed enum both list groups_snapshot_stale as an authz.denied
+			// reason, and a member who cannot launch is a denial whichever
+			// resolver noticed first.
 			//
 			// Asserted exactly rather than loosened to "at least one": one
 			// refused launch is one row, at the drive seam's own target, and a
@@ -1079,18 +1075,19 @@ func TestMeUserDrive(t *testing.T) {
 		}
 	})
 
-	// The three states that USED to be one. Each is a distinct server state the
-	// LAUNCH path refuses with its own status and its own remedy — 403 sign in
-	// again, 422 ask an admin, 500 try again — and each arrived here as the same
-	// `user_drive: null` a genuinely unallocated member gets. The console
-	// renders that as no drive affordance at all, so the member could never
-	// reach the sentence naming their remedy, and the one piece of advice the
-	// card could give ("ask an admin for an allocation") was wrong for all three.
+	// Three states the LAUNCH path tells apart. Each is a distinct server state
+	// the LAUNCH path refuses with its own status and its own remedy — 403 sign
+	// in again, 422 ask an admin, 500 try again — and none may arrive here as
+	// the same `user_drive: null` a genuinely unallocated member gets: the
+	// console renders that as no drive affordance at all, so the member could
+	// never reach the sentence naming their remedy, and the one piece of advice
+	// the card could give ("ask an admin for an allocation") would be wrong for
+	// all three.
 	//
 	// The object stays null in every arm — a display read must not 500 the
 	// console shell over a drive card, which is the posture
-	// TestUnusableGroupSnapshotRefusesTheLaunchWhileMeStaysQuiet fixes in place.
-	// What changed is that null is no longer the WHOLE answer.
+	// TestUnusableGroupSnapshotRefusesTheLaunchWhileMeStaysQuiet fixes in
+	// place. Null is just not the WHOLE answer.
 	t.Run("a state /me cannot answer for is named, not collapsed into null", func(t *testing.T) {
 		d := driveFixture(nil)
 		for _, tc := range []struct {
@@ -1542,15 +1539,14 @@ func TestSeedRequestDriveGatesOnRunnerCapability(t *testing.T) {
 // TestDriveRefusalLeavesAnOperatorVisibleRecord is the observability half of
 // the 422 matrix above.
 //
-// Every one of those refusals used to be a sentence to the MEMBER and silence
-// everywhere else: no audit row (the profile DOOR's authz.denied is the one arm
-// that had one), no log line for five of the six, no metric, and no request log
-// either — routes.go wires RequestID and Recoverer and nothing that records a
-// 422. So the deployment-wide failures — the share moved, the roots were
-// narrowed, WARDYN_RUNNER was re-pointed — looked from an operator's side
-// exactly like nobody launching runs, and the failure the runbook itself
-// predicts ("a missing home is a 422 at run create") arrived as a support
-// ticket or not at all.
+// Every one of those refusals must leave more than a sentence to the MEMBER.
+// With no audit row, log line or metric — and no request log either, since
+// routes.go wires RequestID and Recoverer and nothing that records a 422 —
+// the deployment-wide failures (the share moved, the roots were narrowed,
+// WARDYN_RUNNER was re-pointed) look from an operator's side exactly like
+// nobody launching runs, and the failure the runbook itself predicts ("a
+// missing home is a 422 at run create") arrives as a support ticket or not at
+// all.
 //
 // BOTH HALVES, because either alone is a trap: a log line nobody greps for is
 // not an alert, and a counter with no line beside it names no drive to go and
@@ -1711,13 +1707,11 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 	// every reason this file emits is printed: a label set that drifts is a
 	// dashboard that silently stops counting an arm.
 	//
-	// Anchored in the constant declarations, not in driveRefusalReasons (R1
-	// F310). This loop used to walk driveRefusalReasons and look for each entry
-	// in /metrics — while metrics.go builds that output by walking the SAME
-	// slice. Deleting an entry deleted it from both sides at once, so the guard
-	// passed, the whole package passed, and the series for a still-reachable
-	// refusal simply stopped existing. Executed: with driveRefusalReadOnly
-	// removed from the slice, this test and all 221 test files were green.
+	// Anchored in the constant declarations, not in driveRefusalReasons:
+	// metrics.go builds its output by walking driveRefusalReasons, so a loop
+	// over the SAME slice would delete an entry from both sides at once — the
+	// guard, and the whole package, would pass while the series for a
+	// still-reachable refusal simply stopped existing.
 	//
 	// The declarations are the independent source, so the comparison has two
 	// sides that can actually disagree: a constant with no entry is an arm that

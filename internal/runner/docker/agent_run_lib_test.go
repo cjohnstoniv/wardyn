@@ -69,12 +69,12 @@ func TestAgentRunLib_MakeToolchainDirsNoopWhenUnset(t *testing.T) {
 	}
 }
 
-// TestAgentRunLib_MaybeExecTaskModePreservesPATH is the shell-level regression
-// for: maybe_exec_task_mode used to `exec /bin/sh
-// -lc "$1"` — the `-l` makes it a LOGIN shell, which sources /etc/profile and
-// reassembles PATH from scratch, destroying every BYOI/devcontainer image's
-// own Dockerfile ENV PATH toolchain before the task command ever runs. Plain
-// `-c` (no login) must leave an inherited PATH byte-for-byte untouched.
+// TestAgentRunLib_MaybeExecTaskModePreservesPATH: maybe_exec_task_mode must
+// not `exec /bin/sh -lc "$1"` — the `-l` makes it a LOGIN shell, which sources
+// /etc/profile and reassembles PATH from scratch, destroying every
+// BYOI/devcontainer image's own Dockerfile ENV PATH toolchain before the task
+// command ever runs. Plain `-c` (no login) must leave an inherited PATH
+// byte-for-byte untouched.
 func TestAgentRunLib_MaybeExecTaskModePreservesPATH(t *testing.T) {
 	libPath, err := filepath.Abs(agentRunLibPath)
 	if err != nil {
@@ -95,14 +95,14 @@ func TestAgentRunLib_MaybeExecTaskModePreservesPATH(t *testing.T) {
 	}
 }
 
-// TestAgentRunLib_SelftestReportRepoAndGitFailsClosedWithoutHelper is the
-// regression for: selftest_report_repo_and_git
-// used to be pure report-only, so a BYOI-wrapped image (which COPYs the
-// wardyn-git-helper binary onto PATH but never wires `git config --system
-// credential.helper` — only the prebuilt claude-code/codex-cli images bake
-// that RUN line in) passed --selftest cleanly even though a granted run's
-// git brokering would silently never fire. It must now fail closed (nonzero
-// return) exactly when a git grant is present AND no helper is wired.
+// TestAgentRunLib_SelftestReportRepoAndGitFailsClosedWithoutHelper:
+// selftest_report_repo_and_git must not be report-only — a BYOI-wrapped image
+// that COPYs the wardyn-git-helper binary onto PATH without wiring `git
+// config --system credential.helper` (only the prebuilt claude-code/codex-cli
+// images bake that RUN line in) would pass --selftest cleanly even though a
+// granted run's git brokering would silently never fire. It fails closed
+// (nonzero return) exactly when a git grant is present AND no helper is
+// wired.
 func TestAgentRunLib_SelftestReportRepoAndGitFailsClosedWithoutHelper(t *testing.T) {
 	libPath, err := filepath.Abs(agentRunLibPath)
 	if err != nil {

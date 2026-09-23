@@ -1,17 +1,17 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// jwks_tolerant_test.go pins the property F242's commit CLAIMED and only ever
-// half-delivered: one odd entry in the IdP's JWKS cannot break login.
+// jwks_tolerant_test.go pins that one odd entry in the IdP's JWKS cannot break
+// login.
 //
 // go-oidc v3.21.0 buys that for entries whose `kty`/`crv` it cannot represent
 // and nothing else, so a MALFORMED key of a supported type — RFC 7517 section
 // 5's other two clauses, "missing required members" and "values out of the
-// supported ranges" — still failed the whole document. The go-jose v4.1.5 bump
-// (taken for its seven upstream security fixes, and NOT to be reverted) moved
-// malformed Ed25519 keys into exactly that unprotected class. These tests hold
-// the whole property, so a future MVS change cannot silently move a key shape
-// between the protected and unprotected halves again.
+// supported ranges" — still fails the whole document, and go-jose v4.1.5 (a
+// floor kept for its seven upstream security fixes) puts malformed Ed25519 keys
+// into exactly that unprotected class. These tests hold the whole property, so
+// a future MVS change cannot silently move a key shape between the protected
+// and unprotected halves.
 package oidc_test
 
 import (
@@ -72,8 +72,9 @@ func TestTolerantJWKSSurvivesAMalformedSupportedKey(t *testing.T) {
 		name  string
 		extra string
 	}{
-		// The regression the go-jose v4.1.5 bump introduced: harmless at
-		// v4.1.4 (silently zero-padded), fatal to the whole key set after.
+		// A malformed Ed25519 x: go-jose v4.1.4 silently zero-padded it,
+		// v4.1.5 rejects it, and without tolerance that rejection fails the
+		// whole key set.
 		{"malformed Ed25519 (the v4.1.5 regression)", badEd25519JWK},
 		// The two that were broken BEFORE the wave as well — same RFC 7517
 		// clause, same outage, never protected by go-oidc's kty filter.
@@ -179,8 +180,8 @@ func TestFilterJWKSPassesThroughWhatItDoesNotUnderstand(t *testing.T) {
 	})
 }
 
-// TestTolerantJWKSEndToEndLogin is the wiring pin, and it is the one F325's
-// finding is really about: a behavioural floor that talks to go-oidc DIRECTLY
+// TestTolerantJWKSEndToEndLogin is the wiring pin: a behavioural floor that
+// talks to go-oidc DIRECTLY
 // stays green while Wardyn's own login is down, because nothing proves the
 // Authenticator actually fetches its key set through the tolerant client.
 //

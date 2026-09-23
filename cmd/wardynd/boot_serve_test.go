@@ -32,13 +32,13 @@ func (f *fakeSweepImageBuilder) SweepOrphanedBuilds(context.Context) error {
 	return nil
 }
 
-// TestStartBackgroundWorkers_ReconcilesBootIndependentOfRunner pins the
-// wave-1 regression at its actual call site: api.Server.ReconcileOnBoot
-// already self-limits correctly on a nil Runner (internal/api/reconcile.go
-// runs the envbuild sweep BEFORE checking s.cfg.Runner), but this package's
-// own call to it used to be wrapped in `if run != nil`, so a
-// `-runner none -envbuild` headless-API deployment never swept orphaned
-// build containers even though ReconcileOnBoot was fully able to. Constructs
+// TestStartBackgroundWorkers_ReconcilesBootIndependentOfRunner pins the boot
+// reconcile at its actual call site: api.Server.ReconcileOnBoot already
+// self-limits correctly on a nil Runner (internal/api/reconcile.go runs the
+// envbuild sweep BEFORE checking s.cfg.Runner), so this package's own call
+// to it must not be wrapped in `if run != nil` — that would leave a `-runner
+// none -envbuild` headless-API deployment never sweeping orphaned build
+// containers even though ReconcileOnBoot is fully able to. Constructs
 // exactly that configuration: run == nil, an ImageBuilder wired standalone.
 func TestStartBackgroundWorkers_ReconcilesBootIndependentOfRunner(t *testing.T) {
 	fb := &fakeSweepImageBuilder{}

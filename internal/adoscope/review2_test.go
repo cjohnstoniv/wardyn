@@ -72,11 +72,10 @@ func TestOverrideOnNonPostIsIgnoredUnlessItRaises(t *testing.T) {
 	})
 }
 
-// F-C — a read the minted token cannot perform. The read floor used to answer
-// CapRead for ANY area, so an area whose read scope was missing classified as
-// a read that 403s at the forge. Reads are now an enumerated table; an area
-// outside it is refused as unclassified, and the three areas that were missing
-// their scopes carry them.
+// A read the minted token cannot perform. Reads are an enumerated table: an
+// area outside it is refused as unclassified, and every area in it carries its
+// read scope. A read floor that answered CapRead for ANY area would classify
+// an area with no read scope as a read that 403s at the forge.
 func TestReadsAreEnumerated(t *testing.T) {
 	unclassifiedRead := CapUnclassifiedRead
 	onHost := func(host string, r Request) Request { r.Host = host; return r }

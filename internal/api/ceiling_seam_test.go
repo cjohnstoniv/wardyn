@@ -20,7 +20,7 @@ import (
 
 // flakyCeilingStore answers the FIRST governance resolve and fails every one
 // after it — what a concurrent profile edit or a transient store blip produces
-// between two of the reads a single create used to make.
+// between two reads, if a single create ever resolved more than once.
 type flakyCeilingStore struct {
 	store.Store
 	calls atomic.Int64

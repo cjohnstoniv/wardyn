@@ -231,7 +231,7 @@ exit 0`
 // that a REAL apiserver accepts the ephemeral container Exec builds for a run
 // whose disk_mib is set.
 //
-// WHY IT IS ITS OWN CASE. A disk budget makes CreateSandbox mount the two scratch
+// Why it is its own case. A disk budget makes CreateSandbox mount the two scratch
 // emptyDirs on the main container, and Exec copies that container's VolumeMounts
 // VERBATIM onto the ephemeral container. The apiserver refuses mount shapes THERE
 // that it accepts on an ordinary container — a subPath above all ("Subpath mounts
@@ -242,8 +242,8 @@ exit 0`
 // error as EXPECTED, because on a substrate that does enforce, the exec transport
 // dies with the pod it is filling.
 //
-// It is a REGRESSION PIN — green the day it was written — and it deliberately
-// says nothing about enforcement, only about admission and writability.
+// It is a standing pin, and it deliberately says nothing about enforcement,
+// only about admission and writability.
 func testExecIsAcceptedWithADiskBudget(t *testing.T, r runner.Runner, agentImage string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

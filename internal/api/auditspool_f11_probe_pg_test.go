@@ -1,16 +1,12 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F11 PROBE — destination: internal/api/auditspool_f11_probe_pg_test.go
-//
 // The spool → drain → store hop of the append-only claim: a spooled line can
 // carry ANY prev_hash/row_hash (the JSON tags exist on types.AuditEvent) and
 // even a "seq", yet what lands in audit_events must be chained by Postgres at
 // the CURRENT head — the INSERT statement never names those columns and the
 // 0047 BEFORE INSERT trigger overwrites them unconditionally. Guarded by
 // WARDYN_TEST_PG (db.Connect + db.Migrate, the pgHarness convention).
-//
-// Expected result on feat/v0.7-profiles @ fa910735: GREEN (pins the claim).
 package api
 
 import (

@@ -3,16 +3,14 @@
 
 package db
 
-// THE CLOSED-ENUM PARITY GUARD, ASKED OF POSTGRES ITSELF.
+// The closed-enum parity guard, asked of Postgres itself.
 //
-// TestClosedEnumChecksMatchConstants reads the MIGRATION TEXT and models it. That
-// model was once blind to a disjunct outside the IN-list — a value the database
-// admitted and the guard reported clean, which is the finding this file closes
-// the other half of. The text parser was fixed to read the whole expression and
-// to REFUSE a clause it cannot model, which is the right discipline; it is still
-// a model. `pg_get_constraintdef` is not: it is the constraint the server will
-// actually enforce, after every migration in the tree has run, normalised by
-// Postgres rather than by a regexp of ours.
+// TestClosedEnumChecksMatchConstants reads the MIGRATION TEXT and models it: it
+// reads the whole expression, including a disjunct outside the IN-list, and
+// REFUSES a clause it cannot model, which is the right discipline — but it is
+// still a model. `pg_get_constraintdef` is not: it is the constraint the server
+// will actually enforce, after every migration in the tree has run, normalised
+// by Postgres rather than by a regexp of ours.
 //
 // The two guards share one case table (closedEnumChecks) and one comparison
 // (compareClosedEnum), so they cannot come to different ideas of what parity
@@ -20,8 +18,8 @@ package db
 // hand-altered, dropped, or written in a form the text parser reads differently
 // from the server shows up here.
 //
-// It carries its own counterfactual. A parity guard that cannot fail is the
-// original defect wearing a different hat, so the last subtest widens a real
+// It carries its own counterfactual. A parity guard that cannot fail proves
+// nothing, so the last subtest widens a real
 // constraint in the throwaway schema — the way a hand-applied ALTER would, with
 // no migration to show for it — and asserts this guard reports it.
 

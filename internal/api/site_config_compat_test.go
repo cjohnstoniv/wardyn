@@ -22,15 +22,15 @@ var siteConfigKeysV066 = []string{
 	"egress_redirects", "scm_hosts", "integrations",
 }
 
-// TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName is F285.
+// TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName.
 //
 // PUT /site-config is a whole-document replace, so a v0.6.6 `site-config get |
 // edit | apply` round trip re-marshals a struct that has no field for anything
-// 0.7 added — and the newer keys are simply absent from the body. The handler
-// could not tell that from "cleared", so internal_hosts and
-// upstream_proxy_no_proxy were silently erased, with no warning on either side.
-// The identical footgun was solved by hand twice before, for integrations and
-// onboarding_completed_at; these two arrived afterwards and were not.
+// added since — and the newer keys are simply absent from the body. The handler
+// cannot tell that from "cleared" on its own, so without the carry-forward
+// internal_hosts and upstream_proxy_no_proxy would be silently erased, with no
+// warning on either side — the same footgun integrations and
+// onboarding_completed_at already guard against.
 func TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName(t *testing.T) {
 	stored := types.SiteConfig{
 		UpstreamProxyURL:     "http://proxy.corp.example:3128",
@@ -94,10 +94,10 @@ func TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName(t *testing.T) {
 		})
 	}
 
-	// THE ANTI-FORGETTING HALF, and the reason this is a rule rather than two
-	// more hand-rescued fields: the NEXT key added to types.SiteConfig has the
-	// same footgun, and nothing would have caught it. Every key must sit on one
-	// declared side of the v0.6.6 line.
+	// THE ANTI-FORGETTING HALF, and the reason this is a rule rather than a
+	// list of hand-rescued fields: the NEXT key added to types.SiteConfig has
+	// the same footgun. Every key must sit on one declared side of the v0.6.6
+	// line.
 	t.Run("every SiteConfig key has a decided compatibility side", func(t *testing.T) {
 		// Refused (or ignored) on PUT and supplied by the server:
 		// integrations/onboarding_completed_at are carried forward from the

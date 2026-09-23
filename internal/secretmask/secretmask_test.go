@@ -385,8 +385,8 @@ func TestMaskingWriter_NoSecrets_PassThrough(t *testing.T) {
 // recovered path does NOT forward the raw input bytes (which could contain
 // secrets) — it substitutes the placeholder and returns the panic as an error.
 //
-// Red-first: against the old fail-OPEN code this asserts the leaked raw bytes
-// are absent, which fails because the old code returned the original input.
+// A fail-OPEN recovery would return the original input, so the leaked raw bytes
+// would be present and this assertion would fail.
 func TestMaskingWriter_PanicFailsClosed_NoRawLeak(t *testing.T) {
 	// Inject a masker that panics on every call (simulates a crash inside Mask).
 	orig := secretmask.MaskCallForTest

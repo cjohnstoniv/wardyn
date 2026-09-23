@@ -290,8 +290,8 @@ func TestSecretsAPI_RejectsShortSecret(t *testing.T) {
 
 // TestSecretsAPI_ListExcludesReserved asserts the list endpoint NEVER surfaces a
 // reserved platform-internal secret name even when the underlying store holds
-// one (they back identity/session handling and are not user-managed). This was a
-// real leak: the reserved names were previously listable.
+// one (they back identity/session handling and are not user-managed, so listing
+// them would leak them).
 func TestSecretsAPI_ListExcludesReserved(t *testing.T) {
 	h, sec := newSecretsHarness(t)
 	// Seed a reserved key directly in the store (bypassing the write API, which

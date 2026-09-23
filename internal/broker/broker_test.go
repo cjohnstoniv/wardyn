@@ -852,15 +852,13 @@ func TestMintForGrant_EmptyRepoScopeFails(t *testing.T) {
 	}
 }
 
-// TestMint_AuditRidesTxAtomicWithJTI is the D29 regression: the credential.mint
-// SUCCESS row must be written INSIDE the mint tx — atomically with the minted_jti
-// single-use burn — not on a separate connection after commit. Before the fix the
-// success event went through the post-commit Recorder (au); a crash in the window
-// between commit and that write burned the approval with no audit row and nothing
-// delivered.
+// TestMint_AuditRidesTxAtomicWithJTI: the credential.mint SUCCESS row must be
+// written INSIDE the mint tx — atomically with the minted_jti single-use burn — not
+// on a separate connection after commit, where a crash in the window between commit
+// and that write would burn the approval with no audit row and nothing delivered.
 //
-// RED before: db.mintAudits() is empty (no in-tx insert), and au holds the success
-// event. GREEN after: the success row rode the tx (preCommit) and au holds none.
+// In-tx, the success row rides the tx (preCommit) and au holds none; post-commit,
+// db.mintAudits() is empty and au holds the success event.
 func TestMint_AuditRidesTxAtomicWithJTI(t *testing.T) {
 	b, db, au, _ := newTestBroker(t)
 	runID := uuid.New()

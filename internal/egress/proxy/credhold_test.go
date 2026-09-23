@@ -198,15 +198,14 @@ func TestResolveInjectionHolding_HoldsThenResolvesOnce(t *testing.T) {
 	}
 }
 
-// The regression that keeps every other grant untouched: a non-423 error
-// returns immediately, with no hold, no poll and no second resolve.
+// The case that keeps every other grant untouched: a non-423 error returns
+// immediately, with no hold, no poll and no second resolve.
 func TestResolveInjectionHolding_NonLockedErrorIsUnchanged(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
 	// The budget is set even though this test must never reach it: without it a
-	// REGRESSION here (a 424 mistaken for a 423) parks for the 600 s default and
+	// mistake here (a 424 mistaken for a 423) parks for the 600 s default and
 	// reds as a ten-minute test-binary panic instead of an assertion. The clamp's
-	// floor makes the same regression fail in ~11 s with the message below
-	// (general N-new-2).
+	// floor makes the same mistake fail in ~11 s with the message below.
 	shortBudget(t, "10s")
 	is := &injectionServer{approvalID: uuid.New()}
 	is.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

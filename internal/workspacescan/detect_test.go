@@ -178,7 +178,7 @@ func TestScan_WrapperPropertiesAreStaticEgress(t *testing.T) {
 	eq(t, "Tools", got.Tools, []string{"gradle-wrapper", "maven-wrapper"})
 }
 
-// TestScan_ValuesNeverLeak is the load-bearing security regression: secret
+// TestScan_ValuesNeverLeak is the load-bearing security pin: secret
 // VALUES planted in every detector-target file must appear nowhere in the
 // emitted facts OR the derived profile.
 func TestScan_ValuesNeverLeak(t *testing.T) {
@@ -283,8 +283,8 @@ func TestScan_EnvAccessFromSourceIsAdvisory(t *testing.T) {
 	}
 }
 
-// TestScan_PlatformEnvNamesAreNotSecretNeeds is the junk-secrets-wall
-// regression: platform/runtime env-var reads (HOME, NODE_ENV, MODE) must
+// TestScan_PlatformEnvNamesAreNotSecretNeeds: platform/runtime env-var reads
+// (HOME, NODE_ENV, MODE) must
 // never surface as a secret need, however many source files read them — only
 // an actual application secret read the same way (STRIPE_SECRET_KEY) survives.
 func TestScan_PlatformEnvNamesAreNotSecretNeeds(t *testing.T) {

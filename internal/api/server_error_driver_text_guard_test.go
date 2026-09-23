@@ -43,12 +43,12 @@ import (
 // shape a re-added leak is overwhelmingly likely to take: nobody accidentally
 // routes a hardcoded 500 through three layers of indirection.
 //
-// #295's ONE-HOP EXTENSION. A direct writeError(w, 5xx, "..."+err.Error())
-// call site is not the only shape #173 left standing: a handler can build the
-// (status, message) pair and hand it to a HELPER that calls writeError
-// itself, and the helper's own call site is all this guard used to read —
-// where the message has already collapsed into one opaque string argument.
-// serverErrorForwarders below names the helpers this guard now follows one
+// ONE-HOP EXTENSION. A direct writeError(w, 5xx, "..."+err.Error()) call site
+// is not the only shape the leak takes: a handler can build the (status,
+// message) pair and hand it to a HELPER that calls writeError itself, and the
+// helper's own call site is where the message has already collapsed into one
+// opaque string argument. serverErrorForwarders below names the helpers this
+// guard follows one
 // hop into: refuseCapture and uiFail take (status, msg) as ordinary
 // arguments, so the same is5xxStatusArg/callsErrorMethod checks run against
 // the ARGUMENT EXPRESSIONS at their call sites instead of writeError's.
@@ -80,8 +80,8 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// sentinel staying in the 501 body so the console/operator can tell this
 	// case apart from the no-runner-configured guard beside it.
 	"run_resources.go:201": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
-	// Every other site #173 found was FIXED, not allowlisted — a new entry
-	// here needs the same kind of justification (a named fixed sentinel or a
+	// Every other such site is FIXED, not allowlisted — a new entry here
+	// needs the same kind of justification (a named fixed sentinel or a
 	// design record, plus a pinning test) as these two, not just a passing
 	// build.
 }

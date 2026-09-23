@@ -13,18 +13,17 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 )
 
-// TestR3BJOSERejectsMalformedEd25519JWK is F241's pin: the floor on
+// TestR3BJOSERejectsMalformedEd25519JWK holds the floor on
 // github.com/go-jose/go-jose/v4, expressed as BEHAVIOUR rather than as a
 // version string, so an MVS downgrade or a revert fails here instead of
 // silently reopening the window.
 //
-// v4.1.5 (2026-09-03) shipped seven upstream-labelled security fixes on the two
-// paths this package parses tokens Wardyn did not mint — jwt/claims.go,
-// json/scanner.go, jws.go, jwk.go, asymmetric.go, cipher/cbc_hmac.go. NO
-// Advisory was filed for any of them, which is the structural half of the
-// finding: govulncheck is advisory-ID driven, so it was green on v4.1.4 and
-// would have stayed green forever. Nothing else in CI reads upstream release
-// notes, so this test is what holds the floor.
+// v4.1.5 carries seven upstream-labelled security fixes on the two paths this
+// package parses tokens Wardyn did not mint — jwt/claims.go, json/scanner.go,
+// jws.go, jwk.go, asymmetric.go, cipher/cbc_hmac.go — and NO Advisory covers
+// any of them. govulncheck is advisory-ID driven, so it cannot hold this
+// floor, and nothing else in CI reads upstream release notes: this test is
+// what holds it.
 //
 // "Reject malformed Ed25519 JWKs" (#250) is the fix pinned here because it is
 // reachable through the public API on the exact path that matters: every JWKS

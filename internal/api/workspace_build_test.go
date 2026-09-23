@@ -141,15 +141,15 @@ func TestBuildLogWriter_ClampsOversizedLine(t *testing.T) {
 	}
 }
 
-// TestResolveBuildView_ExplicitImageNeedsBuilder is the regression: a
-// registry/byo base image is NOT "boots as-is" on a builder-less host —
-// resolveWorkspaceImage wraps it with the agent runtime via FinalizeBase, the
-// same wrap a devcontainer build needs, and runs_create.go's wsRefs door
-// REFUSES the run outright when no builder is wired (never silently
-// substitutes the convention image). Pre-fix, resolveBuildView reported
-// "nothing_to_build ... boots as-is — no build involved" regardless of
-// whether a builder existed — false on every bare-binary default and every
-// Helm/k8s install that doesn't set WARDYN_ENVBUILD.
+// TestResolveBuildView_ExplicitImageNeedsBuilder: a registry/byo base image
+// is NOT "boots as-is" on a builder-less host — resolveWorkspaceImage wraps
+// it with the agent runtime via FinalizeBase, the same wrap a devcontainer
+// build needs, and runs_create.go's wsRefs door REFUSES the run outright when
+// no builder is wired (never silently substitutes the convention image).
+// resolveBuildView must not report "nothing_to_build ... boots as-is — no
+// build involved" regardless of whether a builder exists — that is false on
+// every bare-binary default and every Helm/k8s install that doesn't set
+// WARDYN_ENVBUILD.
 func TestResolveBuildView_ExplicitImageNeedsBuilder(t *testing.T) {
 	ws := types.Workspace{BaseImage: &types.WorkspaceBaseImage{Kind: "byo", Image: "golang:1.26"}}
 

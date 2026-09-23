@@ -26,17 +26,17 @@ import (
 // WARDYN_BEDROCK_BASE_URL names a VPC endpoint.
 const bedrockVPCEHost = "vpce-0abc1234.bedrock-runtime.us-east-1.vpce.amazonaws.com"
 
-// TestMITMGenericChannelBodyIsScannedWhateverTheHostClassification pins F036: on
-// a TLS-terminated tunnel the inspection core must be chosen by whether the body
+// TestMITMGenericChannelBodyIsScannedWhateverTheHostClassification: on a
+// TLS-terminated tunnel the inspection core must be chosen by whether the body
 // is PARSEABLE (the channel), never by whether the host is classified as an LLM.
 //
-// serveMITMRequest used to run inspectForwardBody only when
-// `mitmSource == ruleSourceArtifactMITM`, i.e. only when !isLLMHost. Widening
-// isBedrockHost to the PrivateLink form — a legitimate matcher fix — therefore
-// MOVED vpce Bedrock hosts from the artifact branch (scanned) to the LLM branch,
-// where channelForHost is ChannelGeneric and classifyLLM maps that to scanNone:
-// the body streamed through unscanned and the row was a bare `scan:mitm` allow
-// with no scan block at all, which an auditor reads as "inspected via MITM".
+// If serveMITMRequest ran inspectForwardBody only when `mitmSource ==
+// ruleSourceArtifactMITM` (i.e. only when !isLLMHost), a matcher change such as
+// widening isBedrockHost to the PrivateLink form would MOVE vpce Bedrock hosts
+// from the artifact branch (scanned) to the LLM branch, where channelForHost is
+// ChannelGeneric and classifyLLM maps that to scanNone: the body would stream
+// through unscanned and the row would be a bare `scan:mitm` allow with no scan
+// block at all, which an auditor reads as "inspected via MITM".
 func TestMITMGenericChannelBodyIsScannedWhateverTheHostClassification(t *testing.T) {
 	for _, host := range []string{
 		bedrockVPCEHost,
@@ -109,15 +109,15 @@ func mitmPost(t *testing.T, proxyURL string, caPEM []byte, host, path, body stri
 	return resp
 }
 
-// TestMITMPortClampHoldsOnTheLLMBranchToo pins F009: MITM eligibility must not
-// be decidable without the port.
+// TestMITMPortClampHoldsOnTheLLMBranchToo: MITM eligibility must not be
+// decidable without the port.
 //
-// The clamp lived inside handleConnect's isCorpMITMHost branch alone,
-// so a port MISMATCH fell through to `if p.isLLMHost(host)` -> mitmLLMHost,
-// which consulted no port at all. Any operator-configured MITM host that ALSO
-// satisfies isLLMHost — a bedrock/vpce host, which dispatch itself authors onto
-// MITMHosts, or a configured gateway host — was TLS-terminated and
-// credential-injected on ports the operator never configured.
+// A clamp inside handleConnect's isCorpMITMHost branch alone would let a port
+// MISMATCH fall through to `if p.isLLMHost(host)` -> mitmLLMHost, which
+// consults no port at all. Any operator-configured MITM host that ALSO
+// satisfies isLLMHost — a bedrock/vpce host, which dispatch itself authors
+// onto MITMHosts, or a configured gateway host — would then be TLS-terminated
+// and credential-injected on ports the operator never configured.
 func TestMITMPortClampHoldsOnTheLLMBranchToo(t *testing.T) {
 	certPEM, keyPEM := genTestCA(t)
 	ca, err := newCertAuthority(certPEM, keyPEM)

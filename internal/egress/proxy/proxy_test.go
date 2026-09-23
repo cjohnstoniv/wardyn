@@ -321,13 +321,12 @@ func TestFirstUseApprovedThenAllowed(t *testing.T) {
 	}
 }
 
-// TestFirstUseApprovedAttributesRuleSourceToApproval is the
-// regression: an approval-RELEASED request's ALLOW decision must attribute to
-// the releasing approval — rule_source "approval:<id>", ApprovalID set — not
-// "policy:allowed" with no approval_id, which is indistinguishable from a
-// standing policy allow and breaks the audit join from "this egress happened"
-// back to "who approved it". Fails on base 6d76911 (rule_source ==
-// "policy:allowed", ApprovalID == nil for the post-approval request).
+// TestFirstUseApprovedAttributesRuleSourceToApproval: an approval-RELEASED
+// request's ALLOW decision must attribute to the releasing approval —
+// rule_source "approval:<id>", ApprovalID set — not "policy:allowed" with no
+// approval_id, which is indistinguishable from a standing policy allow and
+// breaks the audit join from "this egress happened" back to "who approved
+// it".
 func TestFirstUseApprovedAttributesRuleSourceToApproval(t *testing.T) {
 	state := apState(types.ApprovalPending)
 	cp := approvalCPStub(state, nil, nil)

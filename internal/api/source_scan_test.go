@@ -56,10 +56,9 @@ func TestSeedSourceRequirements_EveryRowValidates(t *testing.T) {
 }
 
 // TestSeedSourceRequirements_SuggestedEgressNeverSeeded is the end-to-end half
-// of the fix, at the exact boundary the finding's acceptance
-// criterion names: "an AI-suggested host is NOT auto-unioned into a run's
+// of the guarantee that "an AI-suggested host is NOT auto-unioned into a run's
 // allowlist without operator approval". workspacescan.AdviseProfile (ai.go)
-// now lands an AI-suggested host in SuggestedEgress, never EgressDomains (see
+// lands an AI-suggested host in SuggestedEgress, never EgressDomains (see
 // ai_test.go); this test locks in the OTHER half of that guarantee — that
 // seedSourceRequirements (the only producer of the "required"/auto-unioned
 // egress:<host> contract rows applyWorkspaceRequirements folds into a run's
@@ -90,11 +89,11 @@ func (s *localDirScanStore) SetSourceScanResultUnfenced(_ context.Context, _ uui
 	return types.Source{Status: status}, nil
 }
 
-// TestScanLocalDirSource_ConsultsAIAdvisor is the regression:
-// WARDYN_SCAN_AI_ADVISOR used to run ONLY for the sandboxed repo-scan upload
-// lane (uploadSourceScanResult) — a local_dir source's host-side scan called
-// workspacescan.Scan directly and never consulted s.cfg.ScanAIAdvisor at all,
-// even though the flag's own help text makes no repo-only distinction. A real
+// TestScanLocalDirSource_ConsultsAIAdvisor: WARDYN_SCAN_AI_ADVISOR applies to
+// a local_dir source's host-side scan too, not ONLY to the sandboxed
+// repo-scan upload lane (uploadSourceScanResult) — the flag's own help text
+// makes no repo-only distinction, so the local_dir scan must consult
+// s.cfg.ScanAIAdvisor rather than calling workspacescan.Scan bare. A real
 // on-disk unrecognized build file (setup.py — unmappedBuildFiles,
 // markers.go) makes ShouldAdvise true exactly the way a real scan would.
 func TestScanLocalDirSource_ConsultsAIAdvisor(t *testing.T) {

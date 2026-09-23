@@ -134,11 +134,11 @@ func TestCreateRun_ToolApprovals_Validation(t *testing.T) {
 		}
 	})
 
-	// C.3: the field used to be ACCEPTED AND SILENTLY DISCARDED on an
-	// interactive run — applyDispatchModeEnv writes WARDYN_TOOL_APPROVALS only
-	// when !interactive, so the caller got a 201 and none of the supervision they
-	// asked for. A field accepted and thrown away is worse than one refused: the
-	// caller believes the run is gated.
+	// The field must not be ACCEPTED AND SILENTLY DISCARDED on an interactive run
+	// — applyDispatchModeEnv writes WARDYN_TOOL_APPROVALS only when !interactive,
+	// so the caller would get a 201 and none of the supervision they asked for. A
+	// field accepted and thrown away is worse than one refused: the caller
+	// believes the run is gated.
 	t.Run("hold is refused for an interactive run", func(t *testing.T) {
 		h := newHarness(t)
 		w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken,

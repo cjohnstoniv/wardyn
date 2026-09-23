@@ -188,7 +188,7 @@ func TestValidateConfig(t *testing.T) {
 // TestValidateConfig_SecureCookiesNeverOnPlainHTTP pins the most security-
 // sensitive invariant on its own: with no built-in TLS and no terminating
 // proxy, Secure cookies MUST be false (a Secure cookie is never sent over plain
-// HTTP and would break login). Asserted directly so a regression that flips the
+// HTTP and would break login). Asserted directly so a change that flips the
 // default can never hide inside the larger table.
 func TestValidateConfig_SecureCookiesNeverOnPlainHTTP(t *testing.T) {
 	posture, err := validateConfig("postgres://localhost/wardyn", "", "", "", false, false)
@@ -422,15 +422,15 @@ func TestResolveLocalModeRefusesPublishedDemoToken(t *testing.T) {
 	}
 }
 
-// TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC is the bug-rbac-1
-// regression: humanOrAdminAuth branches on LocalMode FIRST and bypasses OIDC
-// entirely without ever consulting it, so an explicit -local-mode alongside a
-// configured -oidc-issuer used to boot clean and silently disable the whole
-// configured SSO/RBAC deployment — every request became the fixed
-// local:operator, full admin. Refused unless allowLocalModeWithOIDC
-// (WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC) explicitly overrides it; the AUTO-
-// enable heuristic (no explicit flag, no admin token, loopback bind) is
-// untouched — it already excludes a configured issuer on its own.
+// TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC: humanOrAdminAuth
+// branches on LocalMode FIRST and bypasses OIDC entirely without ever
+// consulting it, so an explicit -local-mode alongside a configured
+// -oidc-issuer would silently disable the whole configured SSO/RBAC
+// deployment — every request the fixed local:operator, full admin. It is
+// refused unless allowLocalModeWithOIDC (WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC)
+// explicitly overrides it; the AUTO-enable heuristic (no explicit flag, no
+// admin token, loopback bind) is untouched — it already excludes a configured
+// issuer on its own.
 func TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -20,7 +20,7 @@ import (
 // ssoBindingStore is an aws-sso harness-login run PLUS the run's own audit
 // trail — the two pieces of TRUSTED server state handleUploadSSOToken must
 // bind an uploaded credential to. Self-contained (rather than extending
-// ssoLoginRunStore) so this pin compiles unchanged against the pre-fix tree.
+// ssoLoginRunStore) so this pin does not depend on that fixture's shape.
 type ssoBindingStore struct {
 	store.Store
 	run     types.AgentRun
@@ -95,17 +95,18 @@ func ssoBlobBody(startURL, region, accessToken string) string {
 	}`
 }
 
-// TestUploadSSOToken_ForeignIdPRejected is the F006 regression. Every guard
-// ahead of it authenticates WHICH run may upload (claimsForRunUpload, then
-// run.Task/run.Agent against trusted server state) and shape-checks WHAT is
-// uploaded (valid, validateSSOStartURL, repoFieldSafe) — none compares the
-// blob to the operator's own declaration. So code running INSIDE the vendor
-// login sandbox could PUT a structurally perfect blob naming an ATTACKER's
-// IdP and region; it lands under the OPERATOR-WIDE reserved harness name and
-// resolveBedrockAuth then picks it ahead of the host ~/.aws mount and the
-// static-key lanes for every LATER Bedrock run, baking the attacker's
-// start_url/account/role into that run's ~/.aws/config and appending the
-// attacker region's oidc./portal.sso. hosts to its egress allowlist.
+// TestUploadSSOToken_ForeignIdPRejected. The guards ahead of this one
+// authenticate WHICH run may upload (claimsForRunUpload, then
+// run.Task/run.Agent against trusted server state) and shape-check WHAT is
+// uploaded (valid, validateSSOStartURL, repoFieldSafe); this one compares
+// the blob to the operator's own declaration. Without it, code running
+// INSIDE the vendor login sandbox could PUT a structurally perfect blob
+// naming an ATTACKER's IdP and region; it would land under the OPERATOR-WIDE
+// reserved harness name, and resolveBedrockAuth would pick it ahead of the
+// host ~/.aws mount and the static-key lanes for every LATER Bedrock run,
+// baking the attacker's start_url/account/role into that run's ~/.aws/config
+// and appending the attacker region's oidc./portal.sso. hosts to its egress
+// allowlist.
 func TestUploadSSOToken_ForeignIdPRejected(t *testing.T) {
 	cases := map[string]string{
 		"foreign start_url and region": ssoBlobBody("https://attacker.example.com/start", "eu-central-1", "attacker-token"),

@@ -16,10 +16,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestEventSink_RefreshesTokenOn401 covers the HIGH finding: the host sensor
-// minted its bearer token once at boot with a fixed ~1h ceiling and reused it
-// forever, so after expiry every POST to /api/v1/internal/groundtruth returned
-// 401 and the second audit stream silently died with no recovery.
+// TestEventSink_RefreshesTokenOn401: the host sensor's bearer token has a fixed
+// ~1h ceiling, so a token minted once at boot and reused forever would make
+// every POST to /api/v1/internal/groundtruth 401 after expiry, and the second
+// audit stream would silently die with no recovery.
 //
 // Red-first contract: the sink must, on a 401, re-fetch the token from its
 // configured token source and retry the POST once. We stand up an httptest
@@ -111,11 +111,11 @@ func TestEventSink_RefreshesTokenOn401(t *testing.T) {
 	}
 }
 
-// TestEventSink_RetriesOn502KeepsBatch covers H10a: the sender used to
-// permanently DROP any batch on a non-2xx status (including a transient 502),
-// silently losing kernel events on a stream billed as tamper-proof. A 502
-// means "retry the batch" — assert the batch is kept and delivered once the
-// transient failure clears, not dropped after the first bad status.
+// TestEventSink_RetriesOn502KeepsBatch pins that a non-2xx status (including
+// a transient 502) does not permanently DROP the batch — that would silently
+// lose kernel events on a stream billed as tamper-proof. A 502 means "retry
+// the batch": assert the batch is kept and delivered once the transient
+// failure clears, not dropped after the first bad status.
 func TestEventSink_RetriesOn502KeepsBatch(t *testing.T) {
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -232,12 +232,11 @@ func TestEventSink_Persistent401Drops(t *testing.T) {
 	}
 }
 
-// TestEventSink_ConcurrentEmitDuringCloseNoPanic is the groundtruth-latch
-// regression the completed crown review live-reproduced: emit() read `closed` and
-// then sent on s.ch as two separate steps, so close() closing the channel in that
-// gap made emit send on a closed channel -> panic, crashing wardyn-tetragon-ingest
-// on shutdown. emit now holds the lock across the send. Run under -race; reaching
-// the end without a panic is the assertion.
+// TestEventSink_ConcurrentEmitDuringCloseNoPanic pins the groundtruth latch: if
+// emit() read `closed` and then sent on s.ch as two separate steps, close()
+// closing the channel in that gap would make emit send on a closed channel ->
+// panic, crashing wardyn-tetragon-ingest on shutdown. emit holds the lock across
+// the send. Run under -race; reaching the end without a panic is the assertion.
 func TestEventSink_ConcurrentEmitDuringCloseNoPanic(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

@@ -114,16 +114,16 @@ func TestSetupHarnessTools(t *testing.T) {
 	}
 }
 
-// TestSetupHarnessTools_RosterCustomImageAgentAppended is B7-F3:
-// OPERATIONS.md's "Capabilities: what one member, or one group, may do"
-// section documents a WARDYN_AGENT_IMAGES id as a supported
-// custom agent, but setupHarnessTools used to publish ONLY harnessCatalog
-// rows — a roster entry naming an image-map id the catalog does not know
-// never appeared in Harnesses at all, so a fresh pick of it was impossible
-// (only a clone of an existing custom-agent run worked, since that flow
-// never consulted this list). The invariant is now catalog ∪ roster: every
-// catalog row, PLUS any roster row whose id resolves through AgentImages and
-// is not already a catalog id.
+// TestSetupHarnessTools_RosterCustomImageAgentAppended: OPERATIONS.md's
+// "Capabilities: what one member, or one group, may do" section documents a
+// WARDYN_AGENT_IMAGES id as a supported custom agent, so setupHarnessTools
+// must publish roster rows as well as harnessCatalog rows — a roster entry
+// naming an image-map id the catalog does not know would otherwise never
+// appear in Harnesses, making a fresh pick of it impossible (only a clone of
+// an existing custom-agent run would work, since that flow never consults
+// this list). The invariant is catalog ∪ roster: every catalog row, PLUS any
+// roster row whose id resolves through AgentImages and is not already a
+// catalog id.
 func TestSetupHarnessTools_RosterCustomImageAgentAppended(t *testing.T) {
 	const customID = "internal-refactor-bot"
 	sc := types.SiteConfig{AgentProviders: agentBlock(

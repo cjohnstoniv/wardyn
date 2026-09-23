@@ -469,7 +469,7 @@ func TestAutonomyReviewRefusesWhatLaunchRefuses(t *testing.T) {
 // launch handed the member L3, the rung that permits `task_mode=exec`.
 //
 // The rubric therefore names the two egress postures with DIFFERENT levels, so
-// a regression shows up as a wrong level and not merely a wrong label.
+// a mistake shows up as a wrong level and not merely a wrong label.
 func TestAutonomyPostureIncludesWorkspaceEgressAtBothDoors(t *testing.T) {
 	const beyondBaselineHost = "forge.corp.example"
 	// workspace_repos, the same second door into the workspace lane row 10 of
@@ -930,18 +930,19 @@ func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
 
 // the per-person Azure DevOps lane (#474)
 
-// TestAutonomyPostureGradesTheADOEntraCredentialAtCreate is the security
-// review's probe, kept: the posture graded at create for a run on the
+// TestAutonomyPostureGradesTheADOEntraCredentialAtCreate compares the
+// posture graded at create for a run on the
 // per-person Azure DevOps lane, against the same run once dispatch has written
 // the api_key grants createADOEntraGrants authors for it.
 //
 // The two must fold to the SAME level, and the reason is the whole gate: the
 // level is frozen at create (resolveRunAutonomy) and the credential is
 // authored at dispatch (authorADOEntraLane), so a secrets axis reading
-// spec.EligibleGrants alone graded this run `none` — and launched it on the
-// autonomous rung while it carried the person's Entra bearer proxy-side.
+// spec.EligibleGrants alone would grade this run `none` — and launch it on
+// the autonomous rung while it carries the person's Entra bearer
+// proxy-side.
 //
-// The rubric names the secrets rows apart from the egress one so a regression
+// The rubric names the secrets rows apart from the egress one so a mistake
 // shows up as a wrong LEVEL, not merely a wrong label: the workspace's own
 // clone host already makes this run `open`, and with every row at one level
 // the miss would be invisible.

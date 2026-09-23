@@ -135,8 +135,8 @@ func (s *collisionStore) ActiveRunsAtWorkspacePath(_ context.Context, path strin
 //
 // The output is identical either WAY, which is exactly why this needs a test
 // that watches the read: every existing assertion about the warning's text
-// passes on both implementations, so nothing stood between the fix and a
-// silent revert to the full scan.
+// passes on both implementations, so without this nothing would stop a silent
+// revert to the full scan.
 func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 	const path = "/srv/shared-workspace"
 	mine, other, done, elsewhere := uuid.New(), uuid.New(), uuid.New(), uuid.New()

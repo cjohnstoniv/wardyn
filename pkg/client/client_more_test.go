@@ -3,10 +3,10 @@
 
 package client_test
 
-// client_more_test.go fills the gaps left by client_test.go: the ERROR half of
-// the 2 KiB body-limit regression, context-cancellation propagation, typed-error
-// decode (well-formed and malformed bodies), and the policy/grant methods that
-// the original suite left uncovered. It reuses the shared helpers
+// client_more_test.go covers what client_test.go does not: the ERROR half of the
+// 2 KiB body limit, context-cancellation propagation, typed-error decode
+// (well-formed and malformed bodies), and the policy/grant methods. It reuses
+// the shared helpers
 // (newTestClient, writeJSON, checkAuth, assertAPIError, testToken) defined in
 // client_test.go — same external test package.
 
@@ -29,7 +29,7 @@ import (
 )
 
 // --------------------------------------------------------------------------
-// Body-limit regression — ERROR side (HIGH)
+// Body limit — ERROR side (HIGH)
 // --------------------------------------------------------------------------
 
 // TestErrorBody_CappedAt2KiB is the companion to
@@ -215,7 +215,7 @@ func TestContextDeadlineExceeded_Propagates(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// ListGrants (previously uncovered)
+// ListGrants
 // --------------------------------------------------------------------------
 
 func TestListGrants_Success(t *testing.T) {
@@ -250,7 +250,7 @@ func TestListGrants_Success(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// ListPolicies / GetPolicy (previously uncovered)
+// ListPolicies / GetPolicy
 // --------------------------------------------------------------------------
 
 func TestListPolicies_Success(t *testing.T) {
@@ -309,7 +309,7 @@ func TestGetPolicy_Success(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// CreatePolicy (previously uncovered)
+// CreatePolicy
 // --------------------------------------------------------------------------
 
 // TestCreatePolicy_Success asserts CreatePolicy POSTs to /api/v1/policies with
@@ -358,7 +358,7 @@ func TestCreatePolicy_Success(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// UpdatePolicy (previously uncovered)
+// UpdatePolicy
 // --------------------------------------------------------------------------
 
 // TestUpdatePolicy_Success asserts UpdatePolicy PUTs to
@@ -396,7 +396,7 @@ func TestUpdatePolicy_Success(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// DeletePolicy (previously uncovered)
+// DeletePolicy
 // --------------------------------------------------------------------------
 
 // TestDeletePolicy_Success asserts DeletePolicy issues a DELETE to
@@ -417,11 +417,11 @@ func TestDeletePolicy_Success(t *testing.T) {
 	}
 }
 
-// TestDeleteSource_ReturnsDetachedFrom is the W6-S1-2 regression: a forced
-// delete's response used to be discarded entirely (out=nil), so the CLI had
-// no way to tell the operator which workspaces it just detached from — the
-// only signal available, since nothing 422s downstream at run time. The
-// server answers 200 with {"detached_from": [...]}; the SDK must surface it.
+// TestDeleteSource_ReturnsDetachedFrom: a forced delete's response must not
+// be discarded (out=nil) — it is the CLI's only way to tell the operator
+// which workspaces it just detached from, since nothing 422s downstream at
+// run time. The server answers 200 with {"detached_from": [...]}; the SDK
+// must surface it.
 func TestDeleteSource_ReturnsDetachedFrom(t *testing.T) {
 	id := uuid.New()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -479,13 +479,12 @@ func TestGetRecording_StreamsCastWithAuth(t *testing.T) {
 	}
 }
 
-// W21-S1-6: an interactive run can carry MULTIPLE recordings, one per attach
-// session, each stored under the composite key "<run-id>~<session>"
-// (castKey, mirroring internal/recording.CastKey) — the server has always
-// served that shape, but GetRecording hardcoded the cast key to the bare run
-// id, so nothing on the CLI/SDK side could ever reach any recording but the
-// run's own. The optional
-// session argument composes the SAME key the server expects.
+// An interactive run can carry MULTIPLE recordings, one per attach session,
+// each stored under the composite key "<run-id>~<session>" (castKey,
+// mirroring internal/recording.CastKey), and the server serves that shape —
+// so GetRecording must not hardcode the cast key to the bare run id, or
+// nothing on the CLI/SDK side could reach any recording but the run's own.
+// The optional session argument composes the SAME key the server expects.
 func TestGetRecording_SessionArgUsesCompositeKey(t *testing.T) {
 	id := uuid.New()
 	var gotPath string
@@ -509,9 +508,8 @@ func TestGetRecording_SessionArgUsesCompositeKey(t *testing.T) {
 }
 
 // A zero-arg call (every existing caller) must keep composing the bare-id
-// key, byte-identical to before session was added — TestGetRecording_
-// StreamsCastWithAuth above already pins this, but that test predates session
-// existing at all; pin it explicitly here too so a regression in the
+// key. TestGetRecording_StreamsCastWithAuth above already pins this, but it
+// passes no session at all; pin it explicitly here too so a break in the
 // variadic's zero-length branch specifically is caught by name.
 func TestGetRecording_NoSessionArgDefaultsToBareRunID(t *testing.T) {
 	id := uuid.New()

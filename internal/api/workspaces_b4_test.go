@@ -24,9 +24,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
-// B4: the workspace lane's admission/build/observed-egress regressions. Each
-// test here was written RED against the unfixed tree and names the finding it
-// pins, so a later reader can tell a deliberate rule from an accident.
+// The workspace lane's admission/build/observed-egress rules. Each test here
+// names the rule it pins, so a reader can tell a deliberate rule from an
+// accident.
 
 // B4-F1: the failed build's raw builder error is the operator's
 
@@ -150,14 +150,13 @@ func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[strin
 	return "", errors.New("step 3/7 : RUN go build — exit code 2")
 }
 
-// TestB4F2_TheTrackerIsSubordinateToTheRow is the invalidation regression: the
-// in-memory buildState is this daemon's MEMORY of a build, while the workspace
-// row is what a run actually resolves. The tracker answered "done" from
-// st.Image before anything consulted the row, so an image invalidated
-// underneath it (a PUT that removeStaleImage'd the ref, a rescan that changed
-// the profile hash) still read `done` with a ref no run would ever resolve —
-// and POST /build short-circuited on that same view, so the workspace could
-// never be rebuilt until wardynd restarted.
+// TestB4F2_TheTrackerIsSubordinateToTheRow: the in-memory buildState is this
+// daemon's MEMORY of a build, while the workspace row is what a run actually
+// resolves. If the tracker answered "done" from st.Image before consulting the
+// row, an image invalidated underneath it (a PUT that removeStaleImage'd the
+// ref, a rescan that changed the profile hash) would still read `done` with a
+// ref no run would ever resolve — and POST /build, short-circuiting on that
+// same view, could never rebuild the workspace until wardynd restarted.
 func TestB4F2_TheTrackerIsSubordinateToTheRow(t *testing.T) {
 	h := newHarness(t)
 	profile := workspacescan.WorkspaceProfile{
@@ -227,12 +226,12 @@ func TestB4F2_TheTrackerIsSubordinateToTheRow(t *testing.T) {
 
 // B4-F3: a respelling of the same source wiped every reviewed field
 
-// TestB4F3_ARespellingOfTheSameSourceKeepsEveryReviewedField is the data-loss
-// regression: sourcesChanged compared the request's RAW source against the
-// store's CANONICAL one, so re-PUTting the identical composition with a
-// trailing slash or a differently-cased repo slug read as a content change and
-// threw away ApprovedEgress, Requirements, RecordResults and the built image —
-// with a 200 and nothing anywhere saying it had happened.
+// TestB4F3_ARespellingOfTheSameSourceKeepsEveryReviewedField: sourcesChanged
+// must compare canonical forms on both sides. Comparing the request's RAW
+// source against the store's CANONICAL one would read a re-PUT of the identical
+// composition with a trailing slash or a differently-cased repo slug as a
+// content change, and throw away ApprovedEgress, Requirements, RecordResults
+// and the built image — with a 200 and nothing anywhere saying it had happened.
 func TestB4F3_ARespellingOfTheSameSourceKeepsEveryReviewedField(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -368,7 +367,7 @@ func (s *b4PagerStore) ListRunsPage(_ context.Context, p store.Page) ([]types.Ag
 }
 
 // TestB4F9_ObservedEgressReadsABoundedPage pins the bound on a member-reachable
-// route that used to read the WHOLE runs table before windowing it in Go.
+// route: it must not read the WHOLE runs table and window it in Go.
 func TestB4F9_ObservedEgressReadsABoundedPage(t *testing.T) {
 	h := newHarness(t)
 	wsID := uuid.New()

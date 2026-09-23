@@ -157,8 +157,8 @@ func TestCreateSandbox_ScratchReachesTheAgentsOwnContainer(t *testing.T) {
 	}
 }
 
-// TestCreateSandbox_NoMountCarriesASubPath is a REGRESSION PIN, green the day it
-// was written, and it is the one assertion a fake clientset can still make about
+// TestCreateSandbox_NoMountCarriesASubPath is a standing pin, and it is the one
+// assertion a fake clientset can still make about
 // a rule only a real apiserver enforces: "Subpath mounts are not allowed for
 // ephemeral containers" (corev1.VolumeMount's own contract). Exec copies the
 // main container's mounts VERBATIM, so a subPath added anywhere in this package

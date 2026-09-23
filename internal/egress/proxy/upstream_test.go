@@ -186,20 +186,19 @@ func TestUpstreamPrivateIPException(t *testing.T) {
 	}
 }
 
-// TestUpstreamDoesNotWeakenLiteralIPGuard is the regression that the private-IP
-// exception is scoped to the CONFIGURED proxy address ONLY: with an upstream
-// proxy set, an AGENT-chosen egress target that is a literal private/loopback/
-// metadata IP is STILL denied by the step-0 guard (no SSRF-via-corp-proxy).
+// TestUpstreamDoesNotWeakenLiteralIPGuard pins that the private-IP exception
+// is scoped to the CONFIGURED proxy address ONLY: with an upstream proxy set,
+// an AGENT-chosen egress target that is a literal private/loopback/metadata IP
+// is STILL denied by the step-0 guard (no SSRF-via-corp-proxy).
 //
-// F004 — why the policy and the rule_source assertion are load-bearing: this
-// test used to run under AllowedDomains=["tls.test"], i.e. DEFAULT-DENY, and
-// assert only `dec != egress.Deny`... in fact only that the decision was Deny.
-// Every host it named was refused by `policy:default-deny` whether or not the
-// builtin guard existed, so deleting evaluate's whole step-0 block left it
-// GREEN — it pinned the policy engine, not the guard it is named for. Under
-// allow_all_egress the ONLY thing that can deny these targets is the builtin
-// guard, and the rule_source assertion says so out loud. The table also carries
-// the non-canonical inet_aton spellings, which a corp proxy's own getaddrinfo
+// Why the policy and the rule_source assertion are load-bearing: under
+// DEFAULT-DENY (AllowedDomains=["tls.test"]) every host named here is refused
+// by `policy:default-deny` whether or not the builtin guard exists, so
+// deleting evaluate's whole step-0 block would leave an assertion of "Deny"
+// GREEN — pinning the policy engine, not the guard. Under allow_all_egress the
+// ONLY thing that can deny these targets is the builtin guard, and the
+// rule_source assertion says so out loud. The table also carries the
+// non-canonical inet_aton spellings, which a corp proxy's own getaddrinfo
 // resolves to the same blocked addresses.
 func TestUpstreamDoesNotWeakenLiteralIPGuard(t *testing.T) {
 	f := startFakeUpstream(t)
@@ -353,16 +352,15 @@ func TestControlPlaneBypassesUpstream(t *testing.T) {
 	}
 }
 
-// TestGitBrokerDialsGithubByNameThroughUpstream is the
-// regression for the git broker: before egressTarget existed, handleGitBroker
-// called vetURL UNCONDITIONALLY, ignoring p.upstream entirely — requiring
-// local DNS resolution the sandbox host frequently cannot do at all under a
-// corp upstream, and (with a resolver that DOES answer, as here) handing the
-// corp proxy a resolved IP LITERAL to CONNECT instead of "github.com". Many
-// corp proxies allowlist CONNECT targets by hostname, so an IP-literal CONNECT
-// is exactly the shape that breaks the one governed git lane on the network it
-// exists for. This proves the CONNECT the corp proxy actually receives names
-// github.com, not an IP.
+// TestGitBrokerDialsGithubByNameThroughUpstream: handleGitBroker must go
+// through egressTarget, not call vetURL UNCONDITIONALLY — ignoring p.upstream
+// would require local DNS resolution the sandbox host frequently cannot do at
+// all under a corp upstream, and (with a resolver that DOES answer, as here)
+// hand the corp proxy a resolved IP LITERAL to CONNECT instead of
+// "github.com". Many corp proxies allowlist CONNECT targets by hostname, so an
+// IP-literal CONNECT is exactly the shape that breaks the one governed git
+// lane on the network it exists for. This proves the CONNECT the corp proxy
+// actually receives names github.com, not an IP.
 func TestGitBrokerDialsGithubByNameThroughUpstream(t *testing.T) {
 	f := startFakeUpstream(t)
 	up, err := parseUpstreamProxy("http://" + f.addr())

@@ -22,11 +22,10 @@ import (
 // A token carries the role and group snapshot of the session that minted it and
 // replays them on every request. The SSH-key analogue of that stamp is published
 // as residual #15 and is bounded-stale: every login re-stamps the key and a TTL
-// expires the override. The token stamp originally had neither the bound nor the
-// residual; 0.7 gave the ROLE half the login bound, and #152 widened it to the
-// GROUP half too. The remaining gap is the same shape #15 has: no TTL, so a human
-// who never signs in again keeps the stamp indefinitely — and since 0.7 stamps
-// `security_admin` verbatim, that now carries governance authority, so the only
+// expires the override. The token stamp has the login bound on both its ROLE and
+// GROUP halves. The remaining gap is the same shape #15 has: no TTL, so a human
+// who never signs in again keeps the stamp indefinitely — and because the stamp
+// carries `security_admin` verbatim, it carries governance authority, so the only
 // thing standing between a demoted security admin who never signs in again and
 // the profile/grant/approval surface is an operator remembering to revoke.
 //

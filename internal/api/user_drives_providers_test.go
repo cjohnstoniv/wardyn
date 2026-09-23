@@ -339,10 +339,9 @@ func TestDrivesDisabledBeatsTheProfileDoorAtEverySurface(t *testing.T) {
 	}
 }
 
-// TestDriveRehomeRaceIsRefusedAtTheWrite closes the window driveRehomeGuard's own
-// doc used to name as its residual: the gate reads the allocations, finds none,
-// and the write lands AFTER somebody is allocated the drive — re-homing them
-// silently, exactly as before the gate existed.
+// TestDriveRehomeRaceIsRefusedAtTheWrite closes the window a read-then-write gate
+// leaves: the gate reads the allocations, finds none, and the write lands AFTER
+// somebody is allocated the drive — re-homing them silently.
 //
 // grantsAppear makes that happen deterministically, inside the write itself. The
 // precondition rides the statement, so the write is refused rather than applied,

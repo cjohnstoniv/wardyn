@@ -116,11 +116,10 @@ func TestMintSSHKey_FailsClosed(t *testing.T) {
 		{"reserved-known-hosts", sshKeySpec("github.com", "real-key", "", "wardyn-signing-key")},
 		{"reserved-harness-oauth-key", sshKeySpec("github.com", "wardyn-harness-anthropic-oauth", "", "")},
 		{"missing-known-hosts", sshKeySpec("github.com", "real-key", "", "no-such-known-hosts")},
-		// regression: an ssh_key grant must not resolve the GitHub App PEM
-		// private key (or its sibling platform-internal value-returning secrets)
-		// into the sandbox, whether named as the key material or as known_hosts.
-		// Fails on base 6d76911 (reservedBrokerSecretNames omitted these names);
-		// passes once the map is widened.
+		// An ssh_key grant must not resolve the GitHub App PEM private key (or its
+		// sibling platform-internal value-returning secrets) into the sandbox,
+		// whether named as the key material or as known_hosts:
+		// reservedBrokerSecretNames covers these names.
 		{"reserved-github-app-key-as-keyref", sshKeySpec("github.com", "github-app-key", "", "")},
 		{"reserved-github-app-id-as-keyref", sshKeySpec("github.com", "github-app-id", "", "")},
 		{"reserved-ssh-host-key-as-keyref", sshKeySpec("github.com", "wardyn-ssh-host-key", "", "")},
@@ -141,12 +140,11 @@ func TestMintSSHKey_FailsClosed(t *testing.T) {
 	}
 }
 
-// TestMintSSHKey_RegistersMask asserts the mint() path registers the private key
-// VALUE in the mask registry (so it is redacted from PTY/asciicast streams — the
-// residual-key-exposure mitigation for the resident-key exception), and also
-// registers the known_hosts material too — previously the only mint output
-// never mask-registered at all (fails on base 6d76911: KnownHosts was
-// skipped in mint()'s maskReg.Add call; passes once it is included).
+// TestMintSSHKey_RegistersMask asserts the mint() path registers the private
+// key VALUE in the mask registry (so it is redacted from PTY/asciicast streams
+// — the residual-key-exposure mitigation for the resident-key exception), and
+// registers the known_hosts material too, so no mint output skips mask
+// registration.
 func TestMintSSHKey_RegistersMask(t *testing.T) {
 	const key = "-----BEGIN OPENSSH PRIVATE KEY-----\nsecretkeybytes\n-----END OPENSSH PRIVATE KEY-----\n"
 	const kh = "github.com ssh-ed25519 AAAAsecretknownhostsmaterial"

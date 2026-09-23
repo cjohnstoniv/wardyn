@@ -287,12 +287,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// cascade across every run in the deployment from one call, and the host is
 	// one of the three axes securityOps never gets.
 	//
-	// It used to be justified here as "it TEARS DOWN containers — other people's
-	// live runs, mid-flight — which is reach INTO runs the caller does not own,
-	// the one axis the security tier never gets". Both halves were false: the
-	// sweep skips every non-terminal run (it reaps the sandbox of runs that have
-	// ALREADY ended), and the security tier CAN stop a foreign run, on purpose —
-	// ownsRunOrAdmin is isSecurityOperator, so kill admits it on any run. See
+	// It is not justified by reach INTO runs: the sweep skips every non-terminal
+	// run (it reaps the sandbox of runs that have ALREADY ended), and the
+	// security tier CAN stop a foreign run, on purpose — ownsRunOrAdmin is
+	// isSecurityOperator, so kill admits it on any run. See
 	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
 	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
 	// Minting a device enrolment token creates a credential, so it is SUPER;
@@ -1438,7 +1436,7 @@ func (s *authzStore) setWorkspaceEgressList(id uuid.UUID, domains []string, appr
 // it, not merely its signature. The cross-list removal is the half worth
 // mirroring: deny beats allow everywhere the proxy evaluates policy, so a host
 // left on both lists makes one direction a silent no-op — a fake that only
-// appended would let exactly that regression through green. Dedupe and the
+// appended would let exactly that fault through green. Dedupe and the
 // "an already-listed host always passes the cap" rule are here for the same
 // reason: an idempotent re-decide must not be reported as "cap reached".
 func (s *authzStore) AddWorkspaceEgressDecision(_ context.Context, id uuid.UUID, host string, allow bool, maxApproved int) (types.Workspace, error) {

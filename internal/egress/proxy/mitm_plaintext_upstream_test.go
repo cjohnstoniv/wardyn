@@ -148,18 +148,17 @@ const plainMITMHost = "wardyn-awsssofake.wardyn.svc.cluster.local"
 // SDK actually sends (measured — TestMITMConnect_PlaintextClientInsideTheTunnelIsServed
 // below).
 //
-// An earlier version of this file assumed only the TLS shape, which is what a
-// MITM is "supposed" to see — and that assumption is what let walk-5 stay red
-// after the upstream leg was fixed.
+// The TLS shape is only what a MITM is "supposed" to see; assuming it alone
+// leaves the SDK's plaintext client unserved.
 
-// The client LEG, MEASURED. The test above drives the tunnel the
-// way a TLS client does. The agent's SDK does NOT: with a proxy configured it
-// reaches an `http://` endpoint by CONNECT and then sends PLAINTEXT inside the
-// tunnel — first byte 0x47, `G`, never 0x16. Reproduced offline against the real
-// wardyn/agent-claude-code:local, and it is why walk-5 was still red after the
-// upstream leg was fixed: mitmConnect handshook at that client, failed, and
-// dropped the connection, so the request was never seen, never injected and
-// never forwarded. The SDK retried 36-69 times a run and the portal saw nothing.
+// The client LEG, MEASURED. The test above drives the tunnel the way a TLS
+// client does. The agent's SDK does NOT: with a proxy configured it reaches an
+// `http://` endpoint by CONNECT and then sends PLAINTEXT inside the tunnel —
+// first byte 0x47, `G`, never 0x16 (reproduced offline against the real
+// wardyn/agent-claude-code:local). A mitmConnect that handshakes at that client
+// fails and drops the connection, so the request is never seen, never injected
+// and never forwarded — the SDK retries 36-69 times a run and the portal sees
+// nothing.
 func TestMITMConnect_PlaintextClientInsideTheTunnelIsServed(t *testing.T) {
 	var gotHeader, gotPath string
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +314,7 @@ func TestMITMConnect_TLSClientAgainstAPlaintextEntryStillWorks(t *testing.T) {
 	}
 }
 
-// ONE HOST, TWO ENTRIES, TWO SCHEMES (W6-S F2). The scheme belongs to the
+// One host, two entries, two schemes. The scheme belongs to the
 // ENTRY, and entries are port-scoped: a cleartext entry on :8090 must not make
 // the TLS entry on :443 for the same host re-originate in cleartext. Keyed by
 // host alone it did — the flag was sticky while the port map was
@@ -341,7 +340,7 @@ func TestCompileMITMHosts_PlaintextIsPortScoped(t *testing.T) {
 	}
 }
 
-// the path/query pin (W6-S F3)
+// the path/query pin
 
 // The injected session rides one request shape, NOT ONE HOST.
 //

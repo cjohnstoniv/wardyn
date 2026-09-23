@@ -9,7 +9,8 @@ import (
 	"testing"
 )
 
-// TestSecurityHeadersOnEveryResponse is the regression for the published
+// TestSecurityHeadersOnEveryResponse pins the mitigation for the
+// published
 // residual risk (threatmodel/THREAT-MODEL.md §5): the console is a full-admin
 // surface, so every response — the anonymous /healthz, a 401 from the admin-gated
 // API, and the SPA — must carry the clickjacking/sniffing defenses. It also pins
@@ -18,9 +19,8 @@ import (
 // media-src's exact two hosts (a wildcard here would let the console's
 // admin-bearing origin embed arbitrary third-party media) — and base-uri /
 // object-src 'none', which the threat model publishes as SHIPPED mitigations
-// for the admin-token-in-web-storage residual and which nothing pinned: the
-// testing lens deleted both from the served header and the whole internal/api
-// suite stayed green.
+// for the admin-token-in-web-storage residual; deleting either from the
+// served header must fail here.
 func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 	h := newHarness(t)
 
@@ -55,10 +55,10 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		// connect-src is the PTY attach's grant AND the only directive bounding
 		// where an injected script on this admin-bearing origin may ship data, so
 		// it is checked as a WHOLE SEGMENT (like media-src below), never with
-		// Contains: a Contains check passes with an extra source appended, and the
-		// bare `ws:`/`wss:` SCHEMES this used to carry matched ANY host, which
-		// made the directive bound nothing at all. It is now built per request
-		// from r.Host, and do() drives every request with Host 127.0.0.1.
+		// Contains: a Contains check passes with an extra source appended, and
+		// bare `ws:`/`wss:` SCHEMES would match ANY host, bounding nothing at all.
+		// It is built per request from r.Host, and do() drives every request with
+		// Host 127.0.0.1.
 		const wantConnect = "connect-src 'self' ws://127.0.0.1 wss://127.0.0.1"
 		var gotConnect string
 		for _, seg := range strings.Split(csp, "; ") {

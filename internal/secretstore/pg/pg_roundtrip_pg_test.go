@@ -107,8 +107,8 @@ func rawCiphertext(t *testing.T, pool *pgxpool.Pool, name string) []byte {
 // TestPGPutGetRoundTripAndCiphertextAtRest is the core round-trip plus the
 // at-rest invariant: Put then Get returns the plaintext verbatim, while the raw
 // `secrets.ciphertext` column is NOT the plaintext and IS age ciphertext (begins
-// with the age header intro). This is the regression that secrets are encrypted
-// at rest, never stored in the clear.
+// with the age header intro). This pins that secrets are encrypted at rest, never
+// stored in the clear.
 func TestPGPutGetRoundTripAndCiphertextAtRest(t *testing.T) {
 	s, pool, _ := newPGStore(t)
 	ctx := context.Background()

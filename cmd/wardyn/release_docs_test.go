@@ -20,13 +20,13 @@ func readRepoDoc(t *testing.T, path string) string {
 	return string(raw)
 }
 
-// TestReleasingDocumentsVersionBump is the regression proof for:
-// RELEASING.md's release steps must actually instruct bumping the four
-// shipped version strings cmd/wardyn/version_test.go's
-// TestShippedVersionStringsAgree enforces agree — that test only checks the
-// FILES agree with each other; nothing checked that the PROCESS document ever
-// told a maintainer to touch them, so a by-the-book release could tag a
-// version-string mismatch with the gate never re-run to catch it.
+// TestReleasingDocumentsVersionBump pins that RELEASING.md's release steps
+// instruct bumping the four shipped version strings
+// cmd/wardyn/version_test.go's TestShippedVersionStringsAgree enforces agree.
+// That test only checks the FILES agree with each other, not that the PROCESS
+// document tells a maintainer to touch them, so a by-the-book release could
+// otherwise tag a version-string mismatch with the gate never re-run to catch
+// it.
 func TestReleasingDocumentsVersionBump(t *testing.T) {
 	doc := readRepoDoc(t, "RELEASING.md")
 	for _, want := range []string{
@@ -40,10 +40,10 @@ func TestReleasingDocumentsVersionBump(t *testing.T) {
 	}
 }
 
-// TestReleasingAndMakefileNameConformanceK8s is the regression proof for
-// The pre-tag gate's "cannot run locally" job list (RELEASING.md
-// and the matching release-check summary in the Makefile) must name
-// conformance-k8s and helm-install-test, not just the pre-k8s-runner three.
+// TestReleasingAndMakefileNameConformanceK8s pins that the pre-tag gate's
+// "cannot run locally" job list (RELEASING.md and the matching
+// release-check summary in the Makefile) names conformance-k8s and
+// helm-install-test, not just the pre-k8s-runner three.
 func TestReleasingAndMakefileNameConformanceK8s(t *testing.T) {
 	releasing := readRepoDoc(t, "RELEASING.md")
 	if !strings.Contains(releasing, "conformance-k8s") {
@@ -58,11 +58,11 @@ func TestReleasingAndMakefileNameConformanceK8s(t *testing.T) {
 	}
 }
 
-// TestContributingConformanceGateNotStale is the regression proof for the
-// CONTRIBUTING.md half of: the Kubernetes conformance target shipped
-// in v0.5 (test/conformance/conformance_k8s_test.go, the ci.yml
-// conformance-k8s job) — CONTRIBUTING.md must not still call it
-// "[v0.5+ — planned]" / "has no conformance target yet".
+// TestContributingConformanceGateNotStale pins the CONTRIBUTING.md half:
+// the Kubernetes conformance target exists
+// (test/conformance/conformance_k8s_test.go, the ci.yml conformance-k8s
+// job), so CONTRIBUTING.md must not call it "[v0.5+ — planned]" / "has no
+// conformance target yet".
 func TestContributingConformanceGateNotStale(t *testing.T) {
 	doc := readRepoDoc(t, "CONTRIBUTING.md")
 	if strings.Contains(doc, "has no conformance target yet") {
@@ -111,9 +111,9 @@ func TestReleaseNotesMatchSBOMReality(t *testing.T) {
 	}
 }
 
-// TestThreatModelSSOSessionNotStale is the regression proof for:
-// SSO-session auth shipped in v0.5 (internal/auth/oidc, ui/.../sign-in.tsx) —
-// THREAT-MODEL.md must not still call it "not yet built, unscheduled".
+// TestThreatModelSSOSessionNotStale pins that THREAT-MODEL.md does not call
+// SSO-session auth (internal/auth/oidc, ui/.../sign-in.tsx) "not yet built,
+// unscheduled".
 func TestThreatModelSSOSessionNotStale(t *testing.T) {
 	doc := readRepoDoc(t, "threatmodel/THREAT-MODEL.md")
 	if strings.Contains(doc, "not yet built, unscheduled") {
@@ -124,9 +124,9 @@ func TestThreatModelSSOSessionNotStale(t *testing.T) {
 	}
 }
 
-// TestReleaseWorkflowPublishesAgentAWSSSO is the regression proof for
-// Harnesscred.go's launchHarnessLoginRun resolves the AWS SSO
-// login sandbox's image through agentImage("aws-sso", ...) — the SAME
+// TestReleaseWorkflowPublishesAgentAWSSSO pins that release.yml publishes
+// agent-aws-sso. harnesscred.go's launchHarnessLoginRun resolves the AWS
+// SSO login sandbox's image through agentImage("aws-sso", ...) — the SAME
 // ghcr.io/cjohnstoniv/agent-<key>:latest fallback convention the two coding
 // harnesses use — so release.yml must build+push agent-aws-sso exactly like
 // agent-claude-code/agent-codex-cli, or a by-the-book Helm install (no
@@ -148,14 +148,13 @@ func TestReleaseWorkflowPublishesAgentAWSSSO(t *testing.T) {
 	}
 }
 
-// TestRunHostMapsAwsSsoImage is the regression proof for host-mode
-// half: `make agent-images` builds wardyn/agent-aws-sso:local, but
-// run-host.sh's WARDYN_AGENT_IMAGES default never routed the "aws-sso" agent
-// id to it, so a host-mode guided AWS SSO login fell back to the unpublished
-// ghcr convention ref even locally. The 0.6.5 "base" row is the same shape of
-// proof for the setup connectivity probe's image (site_config_probe.go
-// dispatches the "base" key). The default lives in a single-quoted shell
-// variable now, so the keys are asserted unescaped.
+// TestRunHostMapsAwsSsoImage is the host-mode half: `make agent-images`
+// builds wardyn/agent-aws-sso:local, so run-host.sh's WARDYN_AGENT_IMAGES
+// default must route the "aws-sso" agent id to it, or a host-mode guided AWS
+// SSO login falls back to the unpublished ghcr convention ref even locally.
+// The "base" row is the same proof for the setup connectivity probe's image
+// (site_config_probe.go dispatches the "base" key). The default lives in a
+// single-quoted shell variable, so the keys are asserted unescaped.
 func TestRunHostMapsAwsSsoImage(t *testing.T) {
 	doc := readRepoDoc(t, "scripts/run-host.sh")
 	for _, want := range []string{

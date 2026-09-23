@@ -45,7 +45,7 @@ func TestLive_RecordingReplay(t *testing.T) {
 	ctx := context.Background()
 	best := h.bestInstalledClass(ctx)
 
-	// ── 1. OPEN run: allow-all egress, contacts exactly one host (github.com). ──
+	// 1. OPEN run: allow-all egress, contacts exactly one host (github.com).
 	openWS := h.seedScriptWorkspace("rec-open", recOpenProbe)
 	openSpec := types.RunPolicySpec{
 		MinConfinementClass: types.ConfinementClass(best),
@@ -65,7 +65,7 @@ func TestLive_RecordingReplay(t *testing.T) {
 		t.Fatalf("open run did not reach github.com (code=%q); recording is meaningless without recorded behavior", code)
 	}
 
-	// ── 2. SYNTHESIZE a profile from the recording (live endpoint). ──
+	// 2. SYNTHESIZE a profile from the recording (live endpoint).
 	prof := h.synthesizeProfile(t, openRun.ID)
 	if prof.Kind != "profile_proposal" {
 		t.Fatalf("expected a profile_proposal, got kind=%q", prof.Kind)
@@ -87,7 +87,7 @@ func TestLive_RecordingReplay(t *testing.T) {
 			"in internal/recordmode; the RELAUNCH below proves confinement to the recorded-behavior allowlist directly.")
 	}
 
-	// ── 3. RELAUNCH from the recorded-behavior profile + prove confinement. ──
+	// 3. RELAUNCH from the recorded-behavior profile + prove confinement.
 	// The reusable profile = the recorded allowlist ([github.com]); recordmode
 	// never synthesizes mounts, so the operator merges the workspace mount back
 	// (mounts are operator-authored); first_use_approval OFF for an unattended

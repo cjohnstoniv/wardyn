@@ -63,8 +63,8 @@ func sweepRun(state types.RunState, sandboxRef string) types.AgentRun {
 	}
 }
 
-// TestSweepTerminalSandboxes_TearsDownOrphanedLiveSandbox is the regression for
-// A terminal run (COMPLETED here — FAILED/STOPPED/ARCHIVED/KILLED hit
+// TestSweepTerminalSandboxes_TearsDownOrphanedLiveSandbox: a terminal run
+// (COMPLETED here — FAILED/STOPPED/ARCHIVED/KILLED hit
 // the identical gap) whose sandbox is STILL running because a prior finalize's
 // teardown/revoke step failed has NO other in-product retry surface —
 // ReconcileOnBoot skips terminal runs outright (reconcile.go), and

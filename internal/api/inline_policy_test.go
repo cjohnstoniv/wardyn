@@ -22,20 +22,19 @@ import (
 )
 
 // The no-Pool newHarness leaves Config.Store nil, so a create-run request that
-// gets PAST all validation used to dereference it inside store.CreateRun — a
-// recovered nil-pointer panic the chi Recoverer turned into an unremarkable
-// 500. That made "the store write was reached" indistinguishable from a real
-// bug on the exact same status code (#338), so the tests below that need to
-// PROVE a request got past validation (rather than just check a 4xx never
-// happened) set Store to createRunUnconfiguredStore instead of leaving it nil:
+// gets PAST all validation would dereference it inside store.CreateRun — a
+// recovered nil-pointer panic the chi Recoverer turns into an unremarkable
+// 500, indistinguishable from a real bug on the same status code. So the tests
+// below that need to PROVE a request got past validation (rather than just
+// check a 4xx never happened) set Store to createRunUnconfiguredStore instead
+// of leaving it nil:
 //   - a request REJECTED by validation returns its 4xx (400/422) and never
 //     reaches the store;
 //   - a request ACCEPTED past the validation boundary reaches CreateRun, which
 //     answers errCreateRunNoStoreConfigured, and handleCreateRun's ordinary
-//     writeServerError path turns that into the SAME 500 as before — now a
-//     controlled response instead of a crash, and a request that reaches any
-//     OTHER store method still panics loudly rather than quietly matching this
-//     double's intent.
+//     writeServerError path turns that into a 500 — a controlled response
+//     instead of a crash, and a request that reaches any OTHER store method
+//     still panics loudly rather than quietly matching this double's intent.
 //
 // Status 500 is still the "accepted past validation" sentinel in this harness.
 //
@@ -273,16 +272,14 @@ func TestFilterMemberGrants(t *testing.T) {
 	}
 }
 
-// TestFilterMemberGrants_SSHKeyKnownHostsPairing is the regression: an
-// ssh_key grant's known_hosts_secret_ref must match the ceiling's OWN
-// known_hosts_secret_ref for that exact (host, key_secret_ref) pairing — a
-// member must not be able to reuse an operator-approved key pairing while
-// attaching a DIFFERENT known_hosts_secret_ref of their own choosing. Before the
-// fix, storedSecretGrantPairing ignored known_hosts_secret_ref entirely, so a
-// mismatched/added ref here was wrongly KEPT (it would let mintSSHKey, broker.go,
-// return an arbitrary stored secret's value as Minted.KnownHosts, escaping this
-// gate). Fails on base 6d76911; passes once known_hosts_secret_ref is part of
-// the pairing comparison.
+// TestFilterMemberGrants_SSHKeyKnownHostsPairing: an ssh_key grant's
+// known_hosts_secret_ref must match the ceiling's OWN known_hosts_secret_ref for
+// that exact (host, key_secret_ref) pairing — a member must not be able to reuse
+// an operator-approved key pairing while attaching a DIFFERENT
+// known_hosts_secret_ref of their own choosing. If storedSecretGrantPairing
+// ignored known_hosts_secret_ref, a mismatched/added ref here would be KEPT,
+// letting mintSSHKey (broker.go) return an arbitrary stored secret's value as
+// Minted.KnownHosts and escape this gate.
 func TestFilterMemberGrants_SSHKeyKnownHostsPairing(t *testing.T) {
 	h := newHarness(t)
 	sshKey := func(host, keyRef, khRef string) types.GrantSpec {
@@ -597,11 +594,10 @@ func TestPolicy_RejectsBedrockResidentSecretAtSinks(t *testing.T) {
 	}
 }
 
-// H1 regression: the stored/default policy branch now runs the SAME
-// validateInlineSecretRefs check as the inline branch (previously it only ran
-// for inline_policy) — a stored or default policy naming a missing secret now
-// 422s at create, naming the secret, instead of only failing later at first
-// proxy injection. See CHANGELOG.md "Changed".
+// The stored/default policy branch runs the SAME validateInlineSecretRefs
+// check as the inline branch — a stored or default policy naming a missing
+// secret 422s at create, naming the secret, instead of only failing later at
+// first proxy injection.
 
 // stubPolicyStore is a minimal store.Store for the stored-policy path: it
 // embeds the interface (nil — any other method panics if called, which is
@@ -700,16 +696,16 @@ func TestCreateRun_StoredPolicyNoSecretStoreRejected(t *testing.T) {
 	}
 }
 
-// TestStoredSecretGrantPairing_UnknownKindIsRefused is the closed-switch
-// regression. storedSecretGrantPairing's default arm used to return
-// covered=false — indistinguishable from "github_token names no stored secret"
-// — so BOTH member gates waved an unrecognized kind straight through:
-// filterMemberGrants kept it unclamped by the operator's eligible-grant
-// pairing, and narrowMemberInlinePolicy kept it unchecked against capSecret.
-// Any grant kind added to types.GrantKind and wired to a stored secret was
-// therefore member-authorable until somebody remembered to extend the switch.
-// It must now be REFUSED (covered=true WITH an error), which filterMemberGrants
-// renders as a 422 and narrowMemberInlinePolicy as a drop.
+// TestStoredSecretGrantPairing_UnknownKindIsRefused pins the closed switch. If
+// storedSecretGrantPairing's default arm returned covered=false —
+// indistinguishable from "github_token names no stored secret" — BOTH member
+// gates would wave an unrecognized kind straight through: filterMemberGrants
+// would keep it unclamped by the operator's eligible-grant pairing, and
+// narrowMemberInlinePolicy would keep it unchecked against capSecret, so any
+// grant kind added to types.GrantKind and wired to a stored secret would be
+// member-authorable until somebody remembered to extend the switch. It must be
+// REFUSED (covered=true WITH an error), which filterMemberGrants renders as a
+// 422 and narrowMemberInlinePolicy as a drop.
 func TestStoredSecretGrantPairing_UnknownKindIsRefused(t *testing.T) {
 	unknown := types.GrantSpec{
 		Kind:  types.GrantKind("some_future_kind"),
@@ -925,10 +921,10 @@ func TestCreateRun_OperatorStillUnclamped(t *testing.T) {
 // synthesises the legacy anthropic_api_key integration row and provisions
 // model access with no "no model access" warning — proven at the unit level
 // AND through the real POST /api/v1/runs handler (handleCreateRun), which
-// used to consult the operator-only presentSecretNames and so disagreed with
-// preflight's presentSecretNamesFor (handleCreateRun's since-fixed miss). The
-// negative control (same request, member owns nothing) proves the warning
-// still fires — the fix widens presence, it does not silence the check.
+// must consult presentSecretNamesFor like preflight does, not the
+// operator-only presentSecretNames. The negative control (same request,
+// member owns nothing) proves the warning still fires — member presence
+// widens what counts, it does not silence the check.
 func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}

@@ -324,12 +324,11 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 	})
 
 	// The two governance reads ceilingWithUnusableGroups makes fail
-	// INDEPENDENTLY, and each needs its own case. They used to share one
-	// fixture field, which meant the second could never be reached: the
-	// resolver errors and returns before the gate is ever asked, so the case
-	// named for the gate was re-testing the resolver. Deleting the gate's
-	// error check left the ENTIRE package green — executed, 53s — with this
-	// subtest still passing under its old name.
+	// INDEPENDENTLY, and each needs its own case with its own fixture field:
+	// with one shared field the second can never be reached — the resolver
+	// errors and returns before the gate is ever asked, so the case named
+	// for the gate re-tests the resolver, and deleting the gate's error
+	// check leaves the ENTIRE package green.
 	t.Run("ResolveGovernanceProfile failing is an error, not a pass", func(t *testing.T) {
 		boom := errors.New("pg: connection refused")
 		st := &capStore{govErr: boom}

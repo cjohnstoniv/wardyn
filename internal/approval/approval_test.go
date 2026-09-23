@@ -232,12 +232,10 @@ func TestDecide_AdminTokenRecordsAsSystem(t *testing.T) {
 	}
 }
 
-// TestDecide_AuditDataIncludesRequestedScopeHost is companion
-// fix: approval.Decide's audit event now surfaces the approval's own
-// requested_scope host at the top level (when it has one), so a SIEM consumer
-// can join "who decided this" straight to "which host" without parsing the
-// nested requested_scope JSON itself. Fails on base 6d76911, whose audit data
-// carries only approval_id/decision/reason.
+// TestDecide_AuditDataIncludesRequestedScopeHost: approval.Decide's audit
+// event surfaces the approval's own requested_scope host at the top level
+// (when it has one), so a SIEM consumer can join "who decided this" straight
+// to "which host" without parsing the nested requested_scope JSON itself.
 func TestDecide_AuditDataIncludesRequestedScopeHost(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}
@@ -605,7 +603,7 @@ func isAlreadyDecided(err error) bool {
 	return err != nil && err == approval.ErrAlreadyDecided
 }
 
-// the unique index's loser (patch-review batch E)
+// The unique index's loser
 
 // racyDupStore is the TOCTOU window itself, made deterministic.
 //

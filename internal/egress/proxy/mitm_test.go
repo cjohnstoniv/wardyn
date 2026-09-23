@@ -247,16 +247,15 @@ func TestMITMBlockRefusesOverTunnel(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_DialsConfiguredPort is the regression. A corp
-// artifact MITM host is matched by HOSTNAME (mitmHosts), so before this fix
-// serveMITMRequest hardcoded the dial target to port 443 regardless of which
-// port the sandbox actually CONNECTed to. An operator's mirror living on a
-// non-443 port (npmrc/pip.conf/etc. pointing at "mirror.corp:5000") would
-// still get its tunnel TLS-terminated (hostname matched) and its registry
-// token injected — then FORWARDED to port 443 of that same host, presenting
-// the token to whatever answers there instead of the configured mirror. This
-// test fails on base 6d76911 (captures a dial to port 443) and passes once
-// the real CONNECT port is threaded through mitmConnect/serveMITMRequest.
+// TestMITMCorpHost_DialsConfiguredPort: a corp artifact MITM host is matched
+// by HOSTNAME (mitmHosts), so serveMITMRequest must dial the port the sandbox
+// actually CONNECTed to, not a hardcoded 443. An operator's mirror living on
+// a non-443 port (npmrc/pip.conf/etc. pointing at "mirror.corp:5000") gets
+// its tunnel TLS-terminated (hostname matched) and its registry token
+// injected, so a 443 dial would FORWARD it to port 443 of that same host,
+// presenting the token to whatever answers there instead of the configured
+// mirror. The real CONNECT port is threaded through
+// mitmConnect/serveMITMRequest.
 func TestMITMCorpHost_DialsConfiguredPort(t *testing.T) {
 	cu := captureUpstream(t, true, "mirror-ok")
 
@@ -388,14 +387,14 @@ func TestMITMCorpHost_PortMismatchFallsThroughOpaque(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_ForwardEgressScanCoversBody is the regression.
-// channelForHost maps every corp artifact MITM host to ChannelGeneric, which
-// classifyLLM unconditionally treats as scanNone (not prompt-bearing) — so
-// inspectLLM alone streamed an artifact-MITM body through completely
-// unscanned, even with inspect_forward_egress on (the flag that already
-// extends inspection to the PLAIN, non-MITM forward path). A secret leaking
-// through a "corp registry" MITM tunnel must be caught exactly like one
-// leaking through a plain HTTP connector.
+// TestMITMCorpHost_ForwardEgressScanCoversBody: channelForHost maps every
+// corp artifact MITM host to ChannelGeneric, which classifyLLM
+// unconditionally treats as scanNone (not prompt-bearing) — so inspectLLM
+// alone would stream an artifact-MITM body through completely unscanned, even
+// with inspect_forward_egress on (the flag that extends inspection to the
+// PLAIN, non-MITM forward path). A secret leaking through a "corp registry"
+// MITM tunnel must be caught exactly like one leaking through a plain HTTP
+// connector.
 func TestMITMCorpHost_ForwardEgressScanCoversBody(t *testing.T) {
 	cu := captureUpstream(t, true, "mirror-ok")
 
@@ -488,16 +487,16 @@ func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_DecisionCarriesRealPort is the audit half of.
-// TestMITMCorpHost_DialsConfiguredPort already pins that the real CONNECT port
-// reaches the DIAL; this pins that it also reaches the DECISION LOG. The two are
-// separate plumbing — mitmConnect threads port into serveMITMRequest, which
-// hands it to BOTH egressTarget and emitLLMDecision — so a regression that
+// TestMITMCorpHost_DecisionCarriesRealPort is the audit half of
+// TestMITMCorpHost_DialsConfiguredPort: that test pins that the real CONNECT
+// port reaches the DIAL; this pins that it also reaches the DECISION LOG. The
+// two are separate plumbing — mitmConnect threads port into serveMITMRequest,
+// which hands it to BOTH egressTarget and emitLLMDecision — so a change that
 // reverted only the decision arm would leave the audit trail saying the
-// operator's registry token went to mirror.corp:443 while the wire says :5000.
-// On a host-matched MITM lane the port is the ONLY field distinguishing the
-// configured mirror from anything else answering on that hostname, so a row
-// naming the wrong one is worse than no row.
+// operator's registry token went to mirror.corp:443 while the wire says
+// :5000. On a host-matched MITM lane the port is the ONLY field
+// distinguishing the configured mirror from anything else answering on that
+// hostname, so a row naming the wrong one is worse than no row.
 func TestMITMCorpHost_DecisionCarriesRealPort(t *testing.T) {
 	cu := captureUpstream(t, true, "mirror-ok")
 

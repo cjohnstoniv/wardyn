@@ -830,10 +830,10 @@ func TestExtractOpenAIChat_ContentShapes(t *testing.T) {
 			want: []Span{{FieldPath: "messages[0].content[0].content", Text: "inner"}},
 		},
 		{
-			// The row the superset claim used to be false for: a typed block
-			// carrying a STRAY text sibling. The OpenAI-only walker read it
-			// (type-blind); a walkBlock that only yielded .text under `case
-			// "text"` dropped it. Both the text and the tool_use input must land.
+			// The row the superset claim most easily misses: a typed block
+			// carrying a STRAY text sibling. A type-blind walker reads it; a
+			// walkBlock that only yields .text under `case "text"` drops it.
+			// Both the text and the tool_use input must land.
 			name: "a tool_use part's stray text field is scanned alongside its input",
 			body: `{"messages":[{"role":"user","content":[{"type":"tool_use","text":"stray","input":{"pw":"v"}}]}]}`,
 			want: []Span{

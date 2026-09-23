@@ -10,13 +10,13 @@ import (
 	"testing"
 )
 
-// TestTRYITDoc_NoStaleReplayTab is the regression: docs/TRY-IT.md used
-// to send the first-run user to a "Replay tab" that has never existed — the run
-// detail screen's tab is named "Recording" (run-detail.tsx's Tab type union).
-// Live viewing is `wardyn attach <id>` / the run's attach terminal, not a
-// replay surface (the recording only shows the finished capture after the
-// session ends). Anchor both halves so a rename on either side breaks this
-// loudly instead of the doc silently drifting again.
+// TestTRYITDoc_NoStaleReplayTab pins that docs/TRY-IT.md does not send the
+// first-run user to a "Replay tab" — the run detail screen's tab is named
+// "Recording" (run-detail.tsx's Tab type union). Live viewing is `wardyn attach
+// <id>` / the run's attach terminal, not a replay surface (the recording only
+// shows the finished capture after the session ends). Anchor both halves so a
+// rename on either side breaks this loudly instead of the doc silently
+// drifting.
 func TestTRYITDoc_NoStaleReplayTab(t *testing.T) {
 	root := repoRoot(t)
 

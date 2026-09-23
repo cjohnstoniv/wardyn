@@ -287,24 +287,19 @@ func trackedMarkdown(t *testing.T, root string) []string {
 // written repo-wide so a section-scoped check could not miss the runbook's
 // reclaim command. It still could not see the RATIONALE COMMENTS in
 // internal/types/user_drive.go, which restate the minted shape to carry a
-// security argument about what an object name exposes — and which went on
-// stating the retired pre-slug rule (`wardyn-drive-<home>`, "named by the HOME
-// and by nothing else") after every minted name took the drive slug. A reader
+// security argument about what an object name exposes — and which must not state
+// the retired pre-slug rule (`wardyn-drive-<home>`, "named by the HOME and by
+// nothing else") now that every minted name carries the drive slug. A reader
 // auditing the managed-backend template refusal reads those comments as the
-// specification; one of them claimed a managed object is named by the home "and
-// by nothing else", which is a claim about the very exposure that refusal bounds.
+// specification, so a comment claiming a managed object is named by the home "and
+// by nothing else" misstates the very exposure that refusal bounds.
 //
-// Scoped to that one FILE, DELIBERATELY, and the reason is what a repo-wide
-// version could not do. Run over all of cmd/ and internal/, this flags four more
-// sites, and only two are defects: internal/api/user_drives.go's rename gate
-// says the shape is `wardyn-drive-<drive-slug>-<home>` and then correctly
-// recounts that "it used to be `wardyn-drive-<home>`" — load-bearing history the
-// fix wave wrote on purpose. A guard that cannot tell a stale SPECIFICATION from
-// a deliberate account of what changed would demand the history be deleted, and
-// would be silenced within a round. This file DEFINES DriveObjectName, so its
-// own comments have no business narrating a retired shape at all; every other
-// package legitimately may. The genuinely stale siblings this found are filed,
-// not allowlisted.
+// Scoped to that one FILE, DELIBERATELY. Other packages may name the retired
+// shape on purpose — to explain what a rename gate refuses, say — and a guard
+// that cannot tell a stale SPECIFICATION from a deliberate account of what
+// changed would demand that account be deleted, and would be silenced within a
+// round. This file DEFINES DriveObjectName, so its own comments have no business
+// narrating a retired shape at all; every other package legitimately may.
 //
 // Only tokens carrying a `<placeholder>` are checked. `wardyn-drive-bsmith` in
 // DriveObjectName's own doc is a deliberate example of the RETIRED name, quoted

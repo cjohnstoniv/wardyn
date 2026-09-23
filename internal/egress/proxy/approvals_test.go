@@ -57,11 +57,11 @@ func TestApprovalStaleApprovedRevalidatesFailClosed(t *testing.T) {
 	}
 }
 
-// TestApprovalConcurrentFirstUseRaisesOnce locks down ITEM 30: concurrent first
-// requests to an unknown host must raise EXACTLY ONE approval. Before the fix
-// both goroutines snapshot apNone under the lock, release it, and both call
-// raise() -> two duplicate approvals. The slow raise handler widens the window
-// so the pre-fix double-raise is reliably observed.
+// TestApprovalConcurrentFirstUseRaisesOnce: concurrent first requests to an
+// unknown host must raise EXACTLY ONE approval. If both goroutines snapshot
+// apNone under the lock, release it, and both call raise(), that is two
+// duplicate approvals. The slow raise handler widens the window so a
+// double-raise would be reliably observed.
 func TestApprovalConcurrentFirstUseRaisesOnce(t *testing.T) {
 	var raises atomic.Int32
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -190,9 +190,9 @@ func TestResolveWaitHold(t *testing.T) {
 		// on the (slow, widened-window) raise() network call; every OTHER
 		// goroutine must observe apPending with the RAISER'S host claimed but
 		// no id recorded yet — and must retry rather than bail out as if the
-		// raise had already failed. Before the fix, those siblings returned
-		// near-instantly with ApprovalID==Nil, skipping the hold entirely
-		// (wait_for_review silently degraded to deny_with_review for them).
+		// raise had already failed. Returning near-instantly with
+		// ApprovalID==Nil would skip the hold entirely (wait_for_review
+		// silently degraded to deny_with_review for them).
 		// This subtest needs its own (larger) poll interval: the retry budget
 		// is concurrentRaiseRetries * holdPollInterval, and it must clear the
 		// raise's simulated network delay below. Save/restore around the
@@ -299,8 +299,8 @@ func TestResolveWaitBoundsTheWholeHoldAgainstAHungControlPlane(t *testing.T) {
 	t.Cleanup(func() { close(done); cp.Close() })
 
 	const hold = 2 * time.Second
-	// A client Timeout stands in for the proxy's own 130s ceiling: the only bound
-	// these calls used to have, and one the retry loop multiplies.
+	// A client Timeout stands in for the proxy's own 130s ceiling: without it that
+	// is the only bound these calls have, and one the retry loop multiplies.
 	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(),
 		&http.Client{Transport: cp.Client().Transport, Timeout: time.Second})
 	ap.configureHold(types.FirstUseWaitForReview, hold, 4)

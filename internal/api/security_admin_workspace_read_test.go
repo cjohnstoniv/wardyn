@@ -1,15 +1,16 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The workspace access rule used to be spelled with three different predicates,
-// and a security_admin got three different answers about ONE member-owned row:
-// the LIST handed it over (isSecurityOperator), the direct READ answered the
-// foreign-workspace 404 (ownsWorkspaceOrAdmin -> isOperator), and the EGRESS
-// WRITE succeeded (securityOps, no ownership check at all).
+// The workspace access rule is spelled with one predicate for the LIST, the
+// direct READ and the EGRESS WRITE, so a security_admin gets one answer about
+// ONE member-owned row. Three predicates (isSecurityOperator for the list,
+// ownsWorkspaceOrAdmin -> isOperator for the read, securityOps with no ownership
+// check for the write) would hand it the list, answer the read with the
+// foreign-workspace 404, and let the write succeed.
 //
-// The read was the odd one out, and it was the harmful one: the tier could write
-// a workspace's denylist but could not read /observed-egress, the observed
-// traffic that is the INPUT to that decision.
+// The read is the harmful odd one out: the tier could write a workspace's
+// denylist but could not read /observed-egress, the observed traffic that is the
+// INPUT to that decision.
 package api
 
 import (

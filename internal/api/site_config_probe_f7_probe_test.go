@@ -1,28 +1,17 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F7 PROBE (lane F7-redirect-probe-sni-literal-ip) — NOT part of the tree.
+// Redirect probe: SNI, a literal-IP To, and scheme. These reach the unexported
+// redirectProbeTo, probeTargetURL, redirectPort, validateSiteConfig and
+// redirectProbeScript directly, and need no Postgres — every test here is pure
+// or loopback-only.
 //
-// Intended destination: internal/api/site_config_probe_f7_probe_test.go
-// (package api — it reaches the unexported redirectProbeTo, probeTargetURL,
-// redirectPort, validateSiteConfig and redirectProbeScript directly).
-//
-// Run (no Postgres needed — every test here is pure or loopback-only):
-//
-//   cp local/review-0.7/deep/F7-redirect-probe-sni-literal-ip/site_config_probe_f7_probe_test.go internal/api/
-//   nice -n 10 GOMAXPROCS=8 go test -p 4 ./internal/api -run 'TestF7_' -count=1 -v
-//   rm internal/api/site_config_probe_f7_probe_test.go
-//
-// Invariant under test (see ../F7-redirect-probe-sni-literal-ip.md §0):
-// probe 1 of the redirect probe dials ONLY the stored To (host, port AND
-// scheme), and its verdict about "the mirror" is never derived from a dial
-// that actually landed on the public From host; probe 2's verdict "From is
-// correctly blocked" is never emitted when the public host answered.
-//
-// Expected state at fa910735 (this is a finding-seeding probe, not a green
-// gate): the subtests tagged wantRedToday FAIL on the unmodified tree — each
-// one is a numbered hypothesis in the trace doc (H-1, H-2, H-4). Everything
-// else must pass; a new failure elsewhere is a regression.
+// Invariant under test: probe 1 of the redirect probe dials ONLY the stored To
+// (host, port AND scheme), and its verdict about "the mirror" is never derived
+// from a dial that actually landed on the public From host; probe 2's verdict
+// "From is correctly blocked" is never emitted when the public host answered. A
+// case tagged wantRedToday is expected to fail and names the hypothesis it
+// probes; every other case must pass.
 
 package api
 
@@ -159,7 +148,7 @@ func TestF7_RedirectProbeTo_Probe1DialsOnlyTheStoredTo(t *testing.T) {
 	cases := []struct {
 		name         string
 		red          types.EgressRedirect
-		wantRedToday string // non-empty: expected to FAIL at fa910735, naming the hypothesis
+		wantRedToday string // non-empty: expected to FAIL, naming the hypothesis
 	}{
 		{
 			name: "hostname To, https From (baseline: no swap)",
@@ -294,8 +283,8 @@ func TestF7_IPv6LiteralTo_IsRefusedAtWriteOrBracketed(t *testing.T) {
 // directly (redirect enforced)", classifyRedirectProbe's exit-0 arm in
 // site_config_probe_classify.go).
 //
-// Expected RED at fa910735 (H-2): probe 2's `-f` turns the 403 into a curl
-// failure, the `&& exit 250` is skipped, and the script exits 0.
+// If probe 2's `-f` turned the 403 into a curl failure, the `&& exit 250`
+// would be skipped and the script would exit 0.
 func TestF7_RedirectProbeScript_PublicHostHTTPErrorIsBypassNotReached(t *testing.T) {
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
@@ -331,7 +320,7 @@ func TestF7_RedirectProbeScript_PublicHostHTTPErrorIsBypassNotReached(t *testing
 // wardyn-proxy. The stand-in records what it was asked for: for an http://
 // From, curl sends `GET http://<From>/ HTTP/1.1` to the proxy (absolute-form,
 // no CONNECT), so the proxy is asked for the PUBLIC host, never the To
-// address named in --connect-to. Expected RED at fa910735.
+// address named in --connect-to.
 func TestF7_HTTPFrom_LiteralIPTo_EndToEndThroughScript(t *testing.T) {
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")

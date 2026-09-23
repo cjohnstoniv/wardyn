@@ -685,8 +685,9 @@ func TestAccess_PostureFlipGuard_InertWhenChartNonEmpty(t *testing.T) {
 	auth := newAccessAuth(t, map[string]string{"chart-row": oidc.RoleMember}, "", []string{"ops@corp.example"}, nil)
 	srv := accessServer(t, auth, &roleMapStore{})
 
-	// Same operator-emails + no-default combination TestAccess_PostureFlipGuard_FiresAndAcknowledges
-	// used to trip the guard — but the chart is non-empty here, so it must not.
+	// Same operator-emails + no-default combination that trips the guard in
+	// TestAccess_PostureFlipGuard_FiresAndAcknowledges — but the chart is non-empty here, so it
+	// must not.
 	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"member"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (guard inert when the chart map is non-empty); body=%s", w.Code, w.Body.String())
@@ -827,9 +828,9 @@ func TestAccess_LockoutGuard_POST(t *testing.T) {
 // whose groups snapshot is nil (a pre-0.6 cookie, or a group that fell off
 // the 2048-byte truncation) cannot re-derive the admin access the caller
 // demonstrably holds — PreviewRoleAgainst against the snapshot alone comes
-// out non-admin regardless of the write. Before the fix this 400'd with the
-// LOCKOUT message on every such write (false positive); now it must get the
-// distinct accessStaleSnapshot refusal instead, and the row must survive.
+// out non-admin regardless of the write. Such a write must get the distinct
+// accessStaleSnapshot refusal, not the LOCKOUT message (a false positive),
+// and the row must survive.
 func TestAccess_StaleSnapshot_NilGroupsNeverReadsAsLockout(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
@@ -1289,10 +1290,10 @@ func TestAccess_DeleteRecordsValueAndRoleInAudit(t *testing.T) {
 
 // A-10: acknowledge_access_change via strconv.ParseBool
 
-// TestAccess_DeleteAcknowledgeAcceptsParseBoolForms: the query param used to
-// accept only the literal "true" — strconv.ParseBool also takes "1"/"T"/
-// "TRUE", and a garbage value must still read as false (never error the
-// request), same as an absent param.
+// TestAccess_DeleteAcknowledgeAcceptsParseBoolForms: the query param accepts
+// every strconv.ParseBool form ("1"/"T"/"TRUE" as well as "true"), and a
+// garbage value must still read as false (never error the request), same as
+// an absent param.
 func TestAccess_DeleteAcknowledgeAcceptsParseBoolForms(t *testing.T) {
 	// emails + no default: the reverse posture-flip guard fires on an
 	// unacknowledged delete of the deployment's only row, which is exactly

@@ -189,11 +189,10 @@ func TestLive_RealModel(t *testing.T) {
 			})
 		}
 
-		// The COMPOSER path ("AI Run Composer -> real sandbox -> graded") used to
-		// be this suite's headline sub-test. The composer was cut in 0.5 and
-		// POST /api/v1/runs/compose no longer exists, so the sub-test would have
-		// 404'd on its first run. The paths above still cover what mattered
-		// about it: a real model driving a real sandbox to a graded result.
+		// There is no COMPOSER sub-test ("AI Run Composer -> real sandbox ->
+		// graded"): POST /api/v1/runs/compose does not exist. The paths above
+		// cover what mattered about it: a real model driving a real sandbox to
+		// a graded result.
 	}
 }
 

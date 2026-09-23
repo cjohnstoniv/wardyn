@@ -13,17 +13,17 @@ import (
 	"testing"
 )
 
-// TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool is F280.
+// TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool pins the cursor IDENTITY
+// check.
 //
-// The cursor sidecar used to be trusted on a SIZE BOUND alone (`n < 0 || n >
-// size`), while the comment above it claimed something a size bound cannot say:
-// that "a cursor past the end of the file describes a file that no longer
+// A SIZE BOUND alone (`n < 0 || n > size`) cannot say what the cursor code must
+// hold: that "a cursor past the end of the file describes a file that no longer
 // exists … and honouring it would SKIP un-replayed events, which is the one
 // direction this file never errs in". An offset left over a REPLACED spool that
-// happens to be at least as large is IN range, so it was honoured, and Drain
-// began past lines nothing had replayed. Executed on the shipped code: 4 of 5
-// events replayed, one credential.mint silently lost — a C1 violation, the
-// invariant the whole file exists to hold.
+// happens to be at least as large is IN range, so a size-bound-only check
+// honours it and Drain begins past lines nothing has replayed — 4 of 5 events
+// replayed, one credential.mint silently lost: a C1 violation, the invariant
+// the whole file exists to hold.
 //
 // The sidecar is written the way the daemon itself would have written it for the
 // ORIGINAL file — a well-formed, in-range, correctly-fingerprinted cursor — so

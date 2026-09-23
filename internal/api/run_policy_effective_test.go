@@ -65,13 +65,13 @@ func TestDispatch_AuditsEffectivePolicyEnvelope(t *testing.T) {
 	}
 }
 
-// TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues is
-// (secret-leak): the run.policy.effective envelope used to
-// mustJSON(policy) the FULL spec straight into the append-only audit log —
-// including llm_inspection.workspace_secret_values, contradicting the
-// field's own "NEVER logged" doc comment (types.LLMInspectionSpec). The
-// envelope must instead carry a redaction placeholder, and the redaction must
-// never corrupt what dispatch actually hands the proxy sidecar.
+// TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues: the
+// run.policy.effective envelope must not mustJSON(policy) the FULL spec
+// straight into the append-only audit log — that would include
+// llm_inspection.workspace_secret_values, contradicting the field's own
+// "NEVER logged" doc comment (types.LLMInspectionSpec). The envelope carries
+// a redaction placeholder instead, and the redaction must never corrupt what
+// dispatch actually hands the proxy sidecar.
 func TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues(t *testing.T) {
 	fr := &fakeRunner{}
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)

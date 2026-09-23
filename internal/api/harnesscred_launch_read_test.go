@@ -13,22 +13,16 @@ import (
 )
 
 // TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks is a CHARACTERIZATION
-// test, and it is expected GREEN — it is not red-first, and saying so is the
-// point of it.
+// test, and it is expected GREEN.
 //
-// The 0.7.4 field report (finding 6) reads as if the pane's poll had been unable
-// to READ the run during a cold image pull: "Wardyn stopped being able to read
-// the sign-in sandbox". The read path says otherwise — handleGetRun is a plain
-// store SELECT with no runner call, no lock and no dependence on dispatch — and
-// the pane's budget was a tick count that a 131-second pull with healthy reads
-// never trips. So the pane's sentence was fixed (login-start-wait.ts) and the
-// server was NOT changed. This test is the evidence for that decision: with
-// CreateSandbox held open, the launching member reads their own run over and
-// over, and gets it.
+// handleGetRun is a plain store SELECT with no runner call, no lock and no
+// dependence on dispatch, so a sign-in pane polling during a cold image pull can
+// always READ the run; the pane's budget is a tick count that a 131-second pull
+// with healthy reads never trips (login-start-wait.ts). With CreateSandbox held
+// open, the launching member reads their own run over and over, and gets it.
 //
-// If this ever goes RED the cause is in-tree and the console fix is treating a
-// real server bug as a wording problem — stop and report rather than adjusting
-// the test.
+// If this ever goes RED the cause is in-tree: the server has a real read bug,
+// not a wording problem — stop and report rather than adjusting the test.
 func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
 	gr := &coldPullRunner{
 		fakeRunner: &fakeRunner{},

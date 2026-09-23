@@ -162,9 +162,9 @@ func TestPG_UserDrive_DuplicateNameConflicts(t *testing.T) {
 // race, closed at the only place that can close it.
 //
 // driveRehomeGuard (internal/api) reads the allocations and then writes; a grant
-// created in between used to be re-homed silently, because the write was
-// unconditional. The precondition now rides the WRITING statement, so the window
-// is gone whatever happens between the read and the write — which is what this
+// created in between would be re-homed silently by an unconditional write. The
+// precondition rides the WRITING statement, so the window is gone whatever happens
+// between the read and the write — which is what this
 // asserts: with a grant present, a write carrying refuseIfAllocated changes
 // nothing and answers ErrDriveAllocated; the same write without it still applies,
 // because the rule is the API boundary's and only the precondition lives here.

@@ -25,7 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// ─── sources (tier 1) ───────────────────────────────────────────────────────
+// sources (tier 1)
 
 // TestSources_CRUDAndLifecycle exercises the source library end to end over
 // the SDK: create with a seeded requirements contract -> get -> list contains
@@ -96,7 +96,7 @@ func TestSources_CRUDAndLifecycle(t *testing.T) {
 	// Attach: a workspace whose local_dir source names the SAME canonical
 	// locator dedupes onto this exact source row (canonicalSourceIdentity) —
 	// how a source becomes "in use" through the public API. An ephemeral
-	// scratch dir rides ALONGSIDE it (W6-S1-1): force-detaching the ONLY
+	// scratch dir rides ALONGSIDE it: force-detaching the ONLY
 	// attachment a workspace has is exactly what STORE-1 refuses
 	// (workspacesOrphanedBySource, internal/store/store_sources.go) — this
 	// mirrors TestPG_DeleteSourceInUse's ws-c, so this fixture exercises the
@@ -127,7 +127,7 @@ func TestSources_CRUDAndLifecycle(t *testing.T) {
 	assertAPIStatus(t, err, http.StatusConflict)
 
 	// force=1: detaches everywhere and deletes, echoing which workspace(s) it
-	// detached (W6-S1-2: the operator's only signal — nothing 422s downstream).
+	// detached (the operator's only signal — nothing 422s downstream).
 	detachedFrom, err := h.sdk.DeleteSource(ctx, created.ID, true)
 	if err != nil {
 		t.Fatalf("DeleteSource(force=true): %v", err)
@@ -139,7 +139,7 @@ func TestSources_CRUDAndLifecycle(t *testing.T) {
 	assertAPIStatus(t, gerr, http.StatusNotFound)
 }
 
-// ─── base images (tier 2) ──────────────────────────────────────────────────
+// base images (tier 2)
 
 // baseImageDoc decodes the base-image JSON shape (types.BaseImageEntry) for
 // the raw-HTTP calls below — the SDK has no base-image methods.
@@ -176,9 +176,9 @@ func TestBaseImages_CRUDAndDeleteInUse(t *testing.T) {
 	}
 	t.Cleanup(func() { doAdmin(t, http.MethodDelete, base+"/"+created.ID+"?force=1", nil) })
 
-	// W7-S1-1: there is no GET /base-images/{id} (DEADCODE-1, sources.go) — a
-	// base image's own catalog row is read back via the list, never a
-	// by-id route (mountLibraryRoutes registers no Get for it).
+	// There is no GET /base-images/{id} (DEADCODE-1, sources.go) — a base
+	// image's own catalog row is read back via the list, never a by-id route
+	// (mountLibraryRoutes registers no Get for it).
 	status, raw = doAdmin(t, http.MethodGet, base, nil)
 	if status != http.StatusOK {
 		t.Fatalf("GET /base-images status = %d (body=%s)", status, raw)
@@ -226,8 +226,8 @@ func TestBaseImages_CRUDAndDeleteInUse(t *testing.T) {
 		t.Errorf("workspace base_image_id after force-detach = %v, want nil (falls back to the derived recommended build)", fresh.BaseImageID)
 	}
 
-	// No GET /base-images/{id} to re-probe (W7-S1-1, see above) — assert
-	// absence from the list instead.
+	// No GET /base-images/{id} to re-probe (see above) — assert absence from
+	// the list instead.
 	status, raw = doAdmin(t, http.MethodGet, base, nil)
 	if status != http.StatusOK {
 		t.Fatalf("GET /base-images after delete status = %d (body=%s)", status, raw)
@@ -243,7 +243,7 @@ func TestBaseImages_CRUDAndDeleteInUse(t *testing.T) {
 	}
 }
 
-// ─── integrations ───────────────────────────────────────────────────────────
+// integrations
 
 // integrationDoc decodes the wire shape GET/PUT/adopt integrations all share
 // (api.SetupIntegration, which flattens types.Integration's fields plus
@@ -279,11 +279,9 @@ func (d integrationDoc) roleSecret(role string) string {
 // PUT is a full replacement that persists the row (source flips legacy ->
 // stored) and proves it editable in the same stroke.
 //
-// This used to also drive POST /integrations/{id}/adopt (adopt-then-edit,
-// re-adopt 409) — that route was deliberately removed with the integrations
-// collapse (the Settings cards absorbed the surface; PUT alone stores a
-// row now), and the test's adopt beats went stale unnoticed because this
-// suite only runs under WARDYN_TEST_PG, the lane local gates skip.
+// There is no POST /integrations/{id}/adopt: PUT alone stores a row. This
+// suite only runs under WARDYN_TEST_PG, which the local gates skip, so a
+// stale step here can go unnoticed.
 func TestIntegrations_ListAndPutBack(t *testing.T) {
 	h := newHarness(t, harnessOpts{})
 	ctx := context.Background()

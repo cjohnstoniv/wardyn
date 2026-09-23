@@ -17,19 +17,19 @@ import (
 // resolution pattern agent_run_lib_test.go uses for agent-run-lib.sh.
 const oracleAgentRunPath = "../../../deploy/images/oracle/agent-run"
 
-// TestOracleAgentRun_IdleHoldsOpen pins: both
-// runners (driver.go, k8s/sandbox.go) launch `agent-run --idle` as the ENTIRE
-// main process for every interactive run — never Exec'ing a task into it — so
-// an image's agent-run MUST hold that process open, not exit. Before this fix
-// the oracle image (the e2e stand-in) had no --idle branch: `--idle` fell
-// through to normal task mode, where it is treated as a missing solution.sh
-// path and exits 1 almost instantly, stranding an interactive run RUNNING
-// with a dead main process and no attach target.
+// TestOracleAgentRun_IdleHoldsOpen pins that both runners (driver.go,
+// k8s/sandbox.go) launch `agent-run --idle` as the ENTIRE main process for
+// every interactive run — never Exec'ing a task into it — so an image's
+// agent-run MUST hold that process open, not exit. Without an --idle branch
+// the oracle image (the e2e stand-in) would fall through to normal task mode,
+// where `--idle` is treated as a missing solution.sh path and exits 1 almost
+// instantly, stranding an interactive run RUNNING with a dead main process
+// and no attach target.
 //
 // Proof without a real container: run the actual script under `timeout`. A
 // script that exits immediately reports ITS OWN exit code before the timeout
-// fires; a script that holds the process open (the fix: `exec sleep infinity`)
-// gets killed BY timeout, which reports 124. That distinction is the fix.
+// fires; a script that holds the process open (`exec sleep infinity`) gets
+// killed BY timeout, which reports 124. That distinction is the assertion.
 func TestOracleAgentRun_IdleHoldsOpen(t *testing.T) {
 	scriptPath, err := filepath.Abs(oracleAgentRunPath)
 	if err != nil {

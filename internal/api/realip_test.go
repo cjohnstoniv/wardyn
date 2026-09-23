@@ -14,8 +14,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestSourceIPNotForgeableViaXForwardedFor is the regression for the HIGH
-// finding: the router must NOT install chi middleware.RealIP, which would
+// TestSourceIPNotForgeableViaXForwardedFor: the router must NOT install
+// chi middleware.RealIP, which would
 // overwrite r.RemoteAddr from the client-supplied X-Forwarded-For / X-Real-IP
 // headers with no trusted-proxy allowlist. Because r.RemoteAddr is persisted as
 // the append-only audit source_ip (handlePostDecision / handleGroundtruthEvents),

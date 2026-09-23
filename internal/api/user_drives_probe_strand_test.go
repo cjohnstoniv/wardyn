@@ -317,21 +317,21 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 	}
 }
 
-// TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot is R-03: the bound
-// this file's header promises is per REQUEST, and the loops were per ROOT.
+// TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot: the bound this file's
+// header promises is per REQUEST, not per ROOT.
 //
 // driveShareProbe bounds each probe at driveShareProbeTimeout and remembers the
 // strand — but that memory only short-circuits the SECOND request. On the FIRST
-// request after a mount hangs, a deployment with N distinct dead roots paid N
-// times the timeout, on a server that sets no WriteTimeout. Both admin loops now
-// run under one context deadline, and driveShareProbe already selects on
-// ctx.Done, so every probe after the first strand returns at once.
+// request after a mount hangs, per-root bounds would make a deployment with N
+// distinct dead roots pay N times the timeout, on a server that sets no
+// WriteTimeout. Both admin loops run under one context deadline, and
+// driveShareProbe selects on ctx.Done, so every probe after the first strand
+// returns at once.
 //
 // Honest about what this pins: no unit test can make EvalSymlinks/stat actually
 // block (that needs a real hung NFS mount), so the elapsed assertion below is a
-// FORWARD regression pin over the strand short-circuit and the deadline
-// together, not a reproduction of the multi-root wait. It is green on both
-// sides of the deadline change; what the deadline buys is stated at
+// FORWARD pin over the strand short-circuit and the deadline together, not a
+// reproduction of the multi-root wait. What the deadline buys is stated at
 // userDriveHostRootsUsableWithin and driveHostRootNesting.
 func TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot(t *testing.T) {
 	stranded, live := t.TempDir(), t.TempDir()

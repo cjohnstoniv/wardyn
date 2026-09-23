@@ -14,15 +14,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestCreateRun_ReservedTaskIsRejected is the W15-d regression: a client (here
-// a plain member — the finding's own threat actor) must never be able to
-// forge run.Task into a server-set discriminator by simply POSTing it. Before
-// the fix, task="harness login" reached handleUploadSSOToken's own gate
-// (run.Task == harnessLoginTask && run.Agent == awsSSOAgent — BOTH
-// client-settable, neither backed by a second trusted-linkage field like the
-// workspace-scoped tasks below have) and runIsUnrecordable's recording-
-// suppression check, completely bypassing the operatorOnly gate on the real
-// POST /setup/harness-login door. Parametrized over every entry in
+// TestCreateRun_ReservedTaskIsRejected: a client (here a plain member) must
+// never be able to forge run.Task into a server-set discriminator by simply
+// POSTing it. task="harness login" would otherwise reach
+// handleUploadSSOToken's own gate (run.Task == harnessLoginTask && run.Agent
+// == awsSSOAgent — BOTH client-settable, neither backed by a second
+// trusted-linkage field like the workspace-scoped tasks below have) and
+// runIsUnrecordable's recording-suppression check, completely bypassing the
+// operatorOnly gate on the real POST /setup/harness-login door. Parametrized
+// over every entry in
 // reservedRunTasks so this test breaks the moment the enumeration and the
 // guard it backs drift apart. Runs as a MEMBER (never operator/admin) — the
 // guard must reject regardless of caller identity, since none of these
@@ -44,7 +44,7 @@ func TestCreateRun_ReservedTaskIsRejected(t *testing.T) {
 	}
 }
 
-// TestCreateRun_LegitimateTasksStillPass proves the W15-d guard stays narrowly
+// TestCreateRun_LegitimateTasksStillPass proves the reserved-task guard stays narrowly
 // scoped to exactly the four reserved discriminators: ordinary free-text
 // tasks (including the common empty-task case, and an exec-mode shell
 // command) plus the OTHER, deliberately-NOT-reserved step-run task strings
@@ -69,11 +69,11 @@ func TestCreateRun_LegitimateTasksStillPass(t *testing.T) {
 	}
 }
 
-// TestDecodeAndValidateCreateRun_NoTaskCoercesInteractive is the
-// regression: a non-interactive request with no task used to sail through
-// decodeAndValidateCreateRun untouched, dispatching a sandbox that execs
-// nothing and never reaches a terminal state. The shared chokepoint now
-// coerces it to interactive (idle, attachable, reapable) and surfaces why.
+// TestDecodeAndValidateCreateRun_NoTaskCoercesInteractive: a
+// non-interactive request with no task would dispatch a sandbox that execs
+// nothing and never reaches a terminal state, so the shared chokepoint
+// decodeAndValidateCreateRun coerces it to interactive (idle, attachable,
+// reapable) and surfaces why.
 func TestDecodeAndValidateCreateRun_NoTaskCoercesInteractive(t *testing.T) {
 	h := newHarness(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs",

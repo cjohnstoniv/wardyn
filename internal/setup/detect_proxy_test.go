@@ -56,7 +56,7 @@ func TestMaskProxyURL(t *testing.T) {
 }
 
 // An unparseable proxy value that still contains credentials must be redacted
-// entirely, never echoed raw (regression guard for the credential-leak fix).
+// entirely, never echoed raw.
 func TestMaskProxyURL_UnparseableRedacts(t *testing.T) {
 	in := "http://user:s3cr3t@%zzproxy.corp:8080" // %zz is an invalid escape → url.Parse errors
 	masked, hasCred := maskProxyURL(in)

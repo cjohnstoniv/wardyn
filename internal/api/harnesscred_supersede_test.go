@@ -288,16 +288,15 @@ func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
 // TestMemberPreview_SignInRefusalPrecedesTheSupersede pins the ORDER of the two
 // guards on this route, which nothing else does.
 //
-// Green on the unfixed TREE — a regression pin, not a defect fix. The
-// no-credential preview's 409 sits in handleHarnessLogin, before
-// launchHarnessLoginRun and therefore before the supersede; the existing preview
+// The no-credential preview's 409 sits in handleHarnessLogin, before
+// launchHarnessLoginRun and therefore before the supersede; the other preview
 // case asserts only "no run row, no harness.login.started" on a fixture with no
 // supersede seam and no live login run, so moving the 409 below the launch (or
 // hoisting the supersede into the handler — a plausible refactor, since the
 // comment at the supersede call already argues about placement) would kill the
-// admin's REAL sign-in from inside a preview with every test still green. That
-// is the worst possible shape of this feature: a view that destroys the thing it
-// is pretending not to have.
+// admin's REAL sign-in from inside a preview with every other test still green.
+// That is the worst possible shape of this feature: a view that destroys the
+// thing it is pretending not to have.
 func TestMemberPreview_SignInRefusalPrecedesTheSupersede(t *testing.T) {
 	f := newSupersedeFixture(t, nil, nil)
 
@@ -736,7 +735,7 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 	}
 }
 
-// TestKillRunCascade_FinishesAfterTheCallersContextDies is R1-F1: the cascade
+// TestKillRunCascade_FinishesAfterTheCallersContextDies: the cascade
 // detaches ITSELF, so no caller can leak a cancellation into a half-applied
 // kill.
 //
@@ -748,8 +747,8 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 //
 // BOTH callers, because the property belongs to the cascade and not to either
 // of them: the supersede runs on the launch POST's context (a person closing
-// that tab mid-launch is this lane's whole subject), and the kill route is the
-// regression pin for the detach it has always had.
+// that tab mid-launch is this lane's whole subject), and the kill route
+// carries the same detach.
 func TestKillRunCascade_FinishesAfterTheCallersContextDies(t *testing.T) {
 	t.Run("the login supersede", func(t *testing.T) {
 		f := newSupersedeFixture(t, nil, nil)
@@ -1028,7 +1027,7 @@ func TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown(t *testing.T) {
 
 	// The second POST, run on its own goroutine and answered through a channel
 	// rather than asserted there — t.FailNow (which t.Fatal calls) may only run
-	// on the test's own goroutine — so a synchronous-teardown regression fails
+	// on the test's own goroutine — so a synchronous teardown fails
 	// this test with a clear timeout instead of hanging until `go test`'s own
 	// deadline.
 	type postResult struct {

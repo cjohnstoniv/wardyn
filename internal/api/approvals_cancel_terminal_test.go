@@ -16,13 +16,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// B4 — killing (or otherwise ending) a run used to strand its PENDING approvals:
-// the header read "1 waiting", the nav badge counted it, and the Approvals tab
-// rendered live Approve/Deny buttons on a run the same screen labelled Killed,
-// until the 24h stale sweeper eventually aged the row out. The terminal cascade
-// now cancels them. These tests drive BOTH call sites of the one function —
-// handleKillRun (which does not route through finalizeRunTail) and
-// finalizeRunTail itself — plus the deliberate exemption on failAndRevoke.
+// Killing (or otherwise ending) a run cancels its PENDING approvals. Stranded,
+// they would keep the header reading "1 waiting", the nav badge counting it, and
+// the Approvals tab rendering live Approve/Deny buttons on a run the same screen
+// labels Killed, until the 24h stale sweeper aged the row out. These tests drive
+// BOTH call sites of the one function — handleKillRun (which does not route
+// through finalizeRunTail) and finalizeRunTail itself — plus the deliberate
+// exemption on failAndRevoke.
 
 // seedPendingApproval puts one PENDING approval on runID and returns its id.
 func seedPendingApproval(t *testing.T, fa *fakeApprovals, runID uuid.UUID) uuid.UUID {

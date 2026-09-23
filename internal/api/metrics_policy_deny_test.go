@@ -12,22 +12,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestEgressDeniesTotalCountsPolicyDeniesOnly pins F065. Every egress.Deny the
-// proxy ingests used to move wardyn_egress_denies_total, whose exposition
-// declares it "Egress decisions ingested with decision=deny, by reason (proxy
-// decision ingest)" (DRAFT, M2 canon pending) — the only egress counter Wardyn
-// exposes. Two large classes of Deny are not policy
-// denials at all: builtin:dial-failed (a failed upstream dial on a request
-// policy ALLOWED, emitted from four proxy sites) and the synthetic
-// egress.decisions.dropped:<n> summary (an audit-fidelity alert about lost
-// decision records). An operator alerting on the series was paged for a flaky
-// upstream or a wedged control plane and could not read the true deny rate.
-//
-// RED on the base tree: the series reads 4 instead of 2.
+// TestEgressDeniesTotalCountsPolicyDeniesOnly: wardyn_egress_denies_total
+// counts policy denials only. Its exposition declares it "Egress decisions
+// ingested with decision=deny, by reason (proxy decision ingest)" (DRAFT, M2
+// canon pending) — the only egress counter Wardyn exposes — and two large
+// classes of Deny are not policy denials at all: builtin:dial-failed (a failed
+// upstream dial on a request policy ALLOWED, emitted from four proxy sites)
+// and the synthetic egress.decisions.dropped:<n> summary (an audit-fidelity
+// alert about lost decision records). Counting them would page an operator
+// alerting on the series for a flaky upstream or a wedged control plane, and
+// hide the true deny rate. Counting every Deny, the series reads 4 instead of
+// 2.
 //
 // The audit half is asserted in the same test on purpose: scoping the COUNTER
-// must not have quietly stopped recording the egress.deny rows those decisions
-// still legitimately produce.
+// must not stop recording the egress.deny rows those decisions still
+// legitimately produce.
 func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintRunToken(t, uuid.New())

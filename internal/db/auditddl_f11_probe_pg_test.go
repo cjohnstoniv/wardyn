@@ -1,22 +1,16 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F11 PROBE — destination: internal/db/auditddl_f11_probe_pg_test.go
-//
-// db.AuditDDLProtected is 0% covered (docs/TEST-GAPS.md) because every live
-// lane connects as the container superuser and the split-role mode is never
-// exercised. This probe manufactures the split: it creates a throwaway LOGIN
-// role with only INSERT+SELECT on audit_events (0007's intended app role),
-// connects as it, and checks what the boot-time claim and the DB actually do.
+// db.AuditDDLProtected in the split-role mode. Every other live lane connects
+// as the container superuser, so that mode is exercised only here: this
+// creates a throwaway LOGIN role with only INSERT+SELECT on audit_events
+// (0007's intended app role), connects as it, and checks what the boot-time
+// claim and the DB actually do — including that a TRIGGER privilege on
+// audit_events counts against the claim, and that Migrate restores a dropped
+// chain trigger.
 //
 // Needs WARDYN_TEST_PG in URL form and a role with CREATEROLE/superuser (CI's
 // pg lane is `postgres`). Skips otherwise. Cleans the role up.
-//
-// Expected result on feat/v0.7-profiles @ fa910735:
-//
-//	TestPG_ProbeF11_AuditDDLProtected/…                     GREEN except the last subtest
-//	TestPG_ProbeF11_AuditDDLProtected/TRIGGER_privilege…    RED (hypothesis H4)
-//	TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate  RED (hypothesis H2)
 package db
 
 import (
@@ -269,16 +263,14 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 	})
 }
 
-// TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate — hypothesis H2.
+// TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate.
 //
 // An owner/superuser drops the 0047 trigger. Migrate() records 0047 as applied
-// and skips it on every later boot (isMigrationApplied), and nothing at boot
-// reads pg_trigger — so the trigger stays gone across restarts and every row
-// written from then on is unchained (which H1 shows the sweep never reports).
-// The desired property asserted here — the next Migrate (or boot) restores or
-// at least refuses without the trigger — did not hold on the RC; it does now
-// (ensureAuditTriggers), so this is a GREEN regression pin. The
-// trigger is put back afterwards by re-executing 0047 (idempotent DDL).
+// and skips it on every later boot (isMigrationApplied), so without a
+// boot-time check the trigger would stay gone across restarts and every row
+// written from then on would be unchained. The next Migrate (or boot) must
+// restore it or refuse — ensureAuditTriggers restores it. The trigger is put
+// back afterwards by re-executing 0047 (idempotent DDL).
 func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()

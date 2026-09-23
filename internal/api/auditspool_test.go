@@ -66,12 +66,11 @@ func newTestEvent(action string) types.AuditEvent {
 	}
 }
 
-// TestNewAuditSpool_CreatesMissingParentDir pins the fix: the flag
-// default (cmd/wardynd/boot_flags.go) is the RELATIVE "./data/audit-spool.jsonl",
-// and the chart's own defaults point it at a directory nothing has created yet
-// (an emptyDir or a fresh PVC). Before the MkdirAll in NewAuditSpool, opening a
-// path whose parent directory does not exist failed outright — this fails on
-// that base and passes once the parent is created for it.
+// TestNewAuditSpool_CreatesMissingParentDir: the flag default
+// (cmd/wardynd/boot_flags.go) is the RELATIVE "./data/audit-spool.jsonl", and the
+// chart's own defaults point it at a directory nothing has created yet (an
+// emptyDir or a fresh PVC), so NewAuditSpool must create the parent directory
+// rather than fail to open the path.
 func TestNewAuditSpool_CreatesMissingParentDir(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "audit", "audit-spool.jsonl")
 	sp, err := NewAuditSpool(path)
@@ -159,15 +158,14 @@ func TestAuditSpoolDrainBounded(t *testing.T) {
 		t.Fatalf("first drain: got=%d err=%v, want 2,nil", got, err)
 	}
 	// The BACKLOG is what shrinks per pass, and Lines() is the number operators
-	// and /metrics read. This used to assert the on-disk line count instead,
-	// which pinned the MECHANISM (a whole-file rewrite every pass) rather than
-	// the contract -- and that mechanism is what made clearing a backlog of N
-	// cost O(N^2) in fsynced writes. Drain now retires a pass by advancing a
-	// byte offset and reclaims the space when the reclaim pays for itself, so
-	// the file can legitimately still hold the replayed prefix here. What must
-	// stay true is asserted instead, and it is more than was asserted before:
-	// the backlog falls every pass, the file never GROWS during a drain, and
-	// both reach 0 when the spool is empty.
+	// and /metrics read. Asserting the on-disk line count instead would pin a
+	// MECHANISM (a whole-file rewrite every pass) rather than the contract —
+	// and that mechanism makes clearing a backlog of N cost O(N^2) in fsynced
+	// writes. Drain retires a pass by advancing a byte offset and reclaims the
+	// space when the reclaim pays for itself, so the file can legitimately
+	// still hold the replayed prefix here. What must stay true is asserted
+	// instead: the backlog falls every pass, the file never GROWS during a
+	// drain, and both reach 0 when the spool is empty.
 	if n := sp.Lines(); n != 3 {
 		t.Fatalf("after first drain: backlog %d, want 3", n)
 	}
@@ -235,7 +233,7 @@ func TestAuditSpoolDrainReopensAfterTrim(t *testing.T) {
 	}
 }
 
-// TestAuditSpoolAppendRecoversTornTail is the D30 regression: an ENOSPC episode
+// TestAuditSpoolAppendRecoversTornTail: an ENOSPC episode
 // (or a partial Write that landed bytes then errored) leaves a newline-less
 // fragment at EOF. The NEXT Append must not concatenate onto it — otherwise
 // Drain reads `fragment{good event}` as one line, fails to unmarshal it, and
@@ -243,8 +241,8 @@ func TestAuditSpoolDrainReopensAfterTrim(t *testing.T) {
 // failed. The separator confines the loss to the torn fragment; the good event
 // survives and is replayed, and the torn line is counted.
 //
-// RED before the fix: recovered == 0 (the good event was swallowed with the
-// fragment) and TornDrops covers a merged line. GREEN after: recovered == 1 and
+// Without the separator, recovered == 0 (the good event is swallowed with the
+// fragment) and TornDrops covers a merged line; with it, recovered == 1 and
 // TornDrops == 1.
 func TestAuditSpoolAppendRecoversTornTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")

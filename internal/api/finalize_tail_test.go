@@ -17,10 +17,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// counterfactual: the live completion watcher (startCompletionWatcher) and
-// the boot reconciler (reconcileFinalize) are the two run-finalize paths that
-// used to inline the SAME terminal sequence and had to be hand-kept in sync.
-// They now both route through finalizeRunTail, so this test drives each path and
+// counterfactual: the live completion watcher (startCompletionWatcher) and the
+// boot reconciler (reconcileFinalize) are the two run-finalize paths, and both
+// route through finalizeRunTail rather than each inlining the SAME terminal
+// sequence to be hand-kept in sync. This test drives each path and
 // asserts the identical terminal side effects: a success audit, exactly one
 // revoke-cascade, and exactly one sandbox teardown. If either caller stops
 // calling the shared tail (re-inlines and drops, e.g., the revoke or the
@@ -199,8 +199,8 @@ func (r *execNeverStartedRunner) stopCount() int {
 	return r.stops
 }
 
-// TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly is the 0.6.6
-// regression: a Wait error wrapping runner.ErrExecNeverStarted is proof the
+// TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly: a Wait error
+// wrapping runner.ErrExecNeverStarted is proof the
 // agent exec will never reach a terminal state on its own — it must NOT be
 // treated as a transient probe error and handed off to reconcileWatch (which
 // would retry the identical dead end forever). The run must instead fail

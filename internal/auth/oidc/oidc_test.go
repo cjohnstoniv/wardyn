@@ -108,7 +108,7 @@ func (e *idpEnv) buildIDTokenWithRoles(t *testing.T, sub, email string, roles, g
 }
 
 // buildIDTokenRawClaim is buildIDToken plus one arbitrary extra claim of any
-// shape — H1's tolerant-decode regression coverage: a real IdP sometimes
+// shape, for tolerant-decode coverage: a real IdP sometimes
 // sends "roles"/"groups" as a scalar string (or object) instead of the JSON
 // array deriveRole expects. Signs with roleCallbackNonce so the result works
 // directly with doCallback.
@@ -806,12 +806,12 @@ func TestCallbackRoleMapUnsetDefaultsAdmin(t *testing.T) {
 }
 
 func TestCallbackRoleMapUnsetLegacyListStillSplitsAdminMember(t *testing.T) {
-	// Regression (silent viewer→admin escalation on upgrade): with the role map
-	// UNSET but WARDYN_OIDC_OPERATOR_EMAILS SET — the mandatory-minimum SSO config
-	// an upgrading 0.4.5 deployment runs (validateOperatorPosture refuses an empty
-	// list; a role map is opt-in on top) — the operator allowlist alone must still
-	// split admin from member. Before the fix, deriveRole's empty-map short-circuit
-	// returned RoleAdmin for EVERYONE, promoting every existing viewer to admin.
+	// Silent viewer→admin escalation on upgrade: with the role map UNSET but
+	// WARDYN_OIDC_OPERATOR_EMAILS SET — the mandatory-minimum SSO config
+	// (validateOperatorPosture refuses an empty list; a role map is opt-in on top) —
+	// the operator allowlist alone must still split admin from member. An empty-map
+	// short-circuit in deriveRole returning RoleAdmin for EVERYONE would promote
+	// every existing viewer to admin.
 	env := newIdPEnv(t)
 	auth := env.newRoleAuth(t, nil, "", []string{"olivia@corp.example"}) // role map unset, operator list set
 
@@ -1411,8 +1411,8 @@ func TestNewAcceptsPublicClientWithNoSecret(t *testing.T) {
 	}
 }
 
-// TestCallbackPublicClientCompletesWithoutASecret is C2's end-to-end
-// regression: a full login (LoginHandler's PKCE state through
+// TestCallbackPublicClientCompletesWithoutASecret is the end-to-end pin: a
+// full login (LoginHandler's PKCE state through
 // CallbackHandler's token exchange and session issuance) against a public
 // client — no ClientSecret configured at all — must complete exactly like a
 // confidential client's does. The fake token endpoint (idpEnv.tokenSrv)

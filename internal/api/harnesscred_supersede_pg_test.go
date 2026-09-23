@@ -180,15 +180,15 @@ func sizedPool(t *testing.T, base *pgxpool.Pool, maxConns int) *pgxpool.Pool {
 // by DIFFERENT people. Their actor strings fold to different objids, so they
 // never contend on the lock at all — what they contend for is the POOL.
 //
-// The regression this pins was real and daemon-wide. A lock hold borrows a
-// connection for its whole span and the guarded work needs another, so one
-// connection per concurrent sign-in exhausted the pool; `lock_timeout` does not
-// bound a pool acquire (it bounds a LOCK wait), and pgxpool's Acquire does not
-// error on an empty pool, it blocks on the context. With no WriteTimeout and no
-// TimeoutHandler in front of the route, that context ends when the client
+// The failure this pins is daemon-wide. A lock hold borrows a connection for
+// its whole span and the guarded work needs another, so one connection per
+// concurrent sign-in can exhaust the pool; `lock_timeout` does not bound a pool
+// acquire (it bounds a LOCK wait), and pgxpool's Acquire does not error on an
+// empty pool, it blocks on the context. With no WriteTimeout and no
+// TimeoutHandler in front of the route, that context ends only when the client
 // disconnects — so both sign-ins, and every other database-backed request in
-// the daemon, hung. At pool_max_conns=3 two people were enough; at the floor
-// docs/ENV.md blesses, 2, one was.
+// the daemon, would hang. At pool_max_conns=3 two people are enough; at the
+// floor docs/ENV.md blesses, 2, one is.
 //
 // Sized at both, with the single-instance lock held exactly as a serving
 // wardynd holds it (one connection, whole process lifetime) — that hold is what

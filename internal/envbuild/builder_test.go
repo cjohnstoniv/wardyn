@@ -157,21 +157,20 @@ func TestNewPushRef_EmptyCacheRepoReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestBuild_ConcurrentBuildsUsePerBuildPushRef pins (HIGH,
-// confinement bypass): two builds sharing a Builder — and therefore its one
-// CacheRepo — must never resolve the SAME registry ref for envbuilder's push
-// and finalize's pull-back. Before the fix, pushedBaseRef() was a pure
-// function of b.CacheRepo alone, identical on every call regardless of which
-// build made it, so a workspace-B push landing between workspace A's
-// envbuilder-push and finalize-pull would get silently pulled and permanently
-// tagged as workspace A's image (finalizeImage's pullBase=true pull is
-// unconditional "pull fresh", so there is no re-validation step to catch it).
+// TestBuild_ConcurrentBuildsUsePerBuildPushRef pins a confinement bypass
+// (HIGH): two builds sharing a Builder — and therefore its one CacheRepo —
+// must never resolve the SAME registry ref for envbuilder's push and
+// finalize's pull-back. If pushedBaseRef() were a pure function of
+// b.CacheRepo alone, identical on every call regardless of which build made
+// it, a workspace-B push landing between workspace A's envbuilder-push and
+// finalize-pull would get silently pulled and permanently tagged as workspace
+// A's image (finalizeImage's pullBase=true pull is unconditional "pull
+// fresh", so there is no re-validation step to catch it).
 //
-// This test needs no real goroutines to expose the bug: the OLD code computed
-// the identical ref on every call regardless of timing, so two SEQUENTIAL
-// builds already reproduce it deterministically — this FAILS against base
-// 6d76911 (both builds' push/pull refs compare equal) and PASSES after the
-// fix (each build gets its own random-tagged ref).
+// This test needs no real goroutines: a CacheRepo-only ref is identical on
+// every call regardless of timing, so two SEQUENTIAL builds expose it
+// deterministically — both builds' push/pull refs would compare equal. Each
+// build gets its own random-tagged ref.
 func TestBuild_ConcurrentBuildsUsePerBuildPushRef(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	b := newPushBuilder(t, f)
@@ -516,9 +515,9 @@ func TestBuild_NeverBindsDockerSocket(t *testing.T) {
 // context into a containerized wardynd (its own /tmp is not host-visible to
 // the daemon — see BuildFromDevcontainerFiles's doc comment), so the
 // generated files MUST be streamed into the created container as a tar via
-// CopyToContainer, never a bind. Regression: the old MkdirTemp+bind
-// implementation staged an empty workspace in that case and every
-// containerized build died with exit 1.
+// CopyToContainer, never a bind: a MkdirTemp+bind staging would give the
+// build an empty workspace in that case, and every containerized build would
+// die with exit 1.
 func TestBuildFromDevcontainerFiles_DeliversTarContext(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	b := newPushBuilder(t, f)
@@ -542,9 +541,8 @@ func TestBuildFromDevcontainerFiles_DeliversTarContext(t *testing.T) {
 	}
 }
 
-// Regression for the CRITICAL host-root finding: registry PUSH is the only
-// delivery path, so a build without a CacheRepo must FAIL CLOSED (the retired
-// docker.sock fallback no longer exists).
+// The host-root rule: registry PUSH is the only delivery path, so a build
+// without a CacheRepo must FAIL CLOSED (there is no docker.sock fallback).
 func TestBuild_FailsClosedWithoutCacheRepo(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	b := newWithClient(f, "envbuilder:test", "") // no CacheRepo
@@ -644,8 +642,8 @@ func TestBuild_AppliesResourceCaps(t *testing.T) {
 // TestBuild_AppliesExactCapabilitySet pins hardenedHostConfig's capability
 // allowlist EXACTLY: CapDrop ALL, then CapAdd back only the file-ownership set
 // an image builder cannot extract layers/features without (see the "chown
-// /etc/gshadow" regression note on hardenedHostConfig). A wider CapAdd here
-// would silently regress the build sandbox's blast-radius bound.
+// /etc/gshadow" note on hardenedHostConfig). A wider CapAdd here would
+// silently widen the build sandbox's blast radius.
 func TestBuild_AppliesExactCapabilitySet(t *testing.T) {
 	clearSandboxEnv(t)
 	f := newFakeEnvbuilderDocker()
@@ -862,7 +860,7 @@ func TestRequiredTools_CanonicalUnion(t *testing.T) {
 // For each tool it stages a dir holding every OTHER required tool and asserts the
 // preflight fails naming the omitted one. If a future edit made the gate stop
 // consuming requiredTools (e.g. re-listing a few names inline), dropping a member
-// like wardyn-rec would no longer fail — this test catches that regression.
+// like wardyn-rec would no longer fail — this test catches that.
 func TestValidateToolsDir_ConsumesEveryRequiredTool(t *testing.T) {
 	for _, missing := range requiredTools {
 		t.Run("missing_"+missing, func(t *testing.T) {
@@ -886,17 +884,17 @@ func TestValidateToolsDir_ConsumesEveryRequiredTool(t *testing.T) {
 	}
 }
 
-// TestBuildFinalizeContext_WiresGitCredentialHelper is the regression guard for
-// the defect that made `desktop-envelope` red from the day the job was added and
-// never once green: the BYOI wrap COPYed the wardyn-git-helper BINARY onto PATH
-// but wired NOTHING to it, so git never called it. Any run whose policy declares
-// a `github_token` eligible grant then failed `agent-run --selftest` with "a git
-// grant is present but the credential helper is not wired". That is exactly what
+// TestBuildFinalizeContext_WiresGitCredentialHelper: the BYOI wrap must WIRE the
+// wardyn-git-helper binary it copies onto PATH as git's credential helper, not
+// just copy it. Unwired, git never calls it, and any run whose policy declares a
+// `github_token` eligible grant fails `agent-run --selftest` with "a git grant is
+// present but the credential helper is not wired" — which is exactly what
 // examples/policies/demo.json declares, and it is the desktop tier's own managed
-// ceiling — so this broke the entire BYOI lane, not a corner of it.
+// ceiling, so the entire BYOI lane breaks, not a corner of it (the
+// `desktop-envelope` job catches it live).
 //
-// Nothing covered buildFinalizeContext before this test, which is how a wrap
-// that produces an unusable image passed every gate.
+// buildFinalizeContext has no other coverage, so a wrap that produces an unusable
+// image would otherwise pass every gate.
 func TestBuildFinalizeContext_WiresGitCredentialHelper(t *testing.T) {
 	toolsDir := t.TempDir()
 	for _, name := range requiredTools {

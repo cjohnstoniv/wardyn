@@ -285,12 +285,11 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
-			// regression: region+model set but NO credential anywhere in
-			// resolveBedrockAuth's ladder (bearer / SSO / mount / resident keys) —
-			// the matrix must not read "available" off region+model alone. On the
-			// pre-fix code this returned CapAvailable for every cell (the bug: three
-			// readiness surfaces believing a run that would silently get no Bedrock
-			// transport at all).
+			// Region+model set but NO credential anywhere in resolveBedrockAuth's
+			// ladder (bearer / SSO / mount / resident keys): the matrix must not
+			// read "available" off region+model alone — three readiness surfaces
+			// would then believe in a run that silently gets no Bedrock transport at
+			// all.
 			name: "bedrock: region+model set, ZERO credentials — needs setup, not available",
 			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "static"}},
 			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true, BedrockCredentialPresent: false},

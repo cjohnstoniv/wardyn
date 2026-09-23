@@ -76,14 +76,14 @@ func TestCreateWorkspaceValidation(t *testing.T) {
 	}
 }
 
-// TestDecodeWorkspaceRequest_DuplicateExplicitTargetsRejected is the
-// regression: two sources sharing an explicit target both resolve to
-// the SAME in-sandbox mount/clone path — validatePolicyWorkspaces (policy.go)
-// then 422s that composition on every subsequent run. Rejecting it here, at
-// onboarding time, catches it before it's even possible to run — and before a
-// wizard's own basename collision (fixed client-side in wizard-types.ts's
-// defaultTargetFor) could ever reach the server in the first place. Exercises
-// decodeWorkspaceRequest directly (not the full handler) so it needs no store.
+// TestDecodeWorkspaceRequest_DuplicateExplicitTargetsRejected: two sources
+// sharing an explicit target both resolve to the SAME in-sandbox mount/clone
+// path — validatePolicyWorkspaces (policy.go) then 422s that composition on
+// every subsequent run. Rejecting it here, at onboarding time, catches it
+// before it's even possible to run — and before a wizard's own basename
+// collision (handled client-side in wizard-types.ts's defaultTargetFor) could
+// ever reach the server. Exercises decodeWorkspaceRequest directly (not the
+// full handler) so it needs no store.
 func TestDecodeWorkspaceRequest_DuplicateExplicitTargetsRejected(t *testing.T) {
 	body := `{"name":"w","sources":[
 		{"type":"repo","source":"acme/api","target":"/home/agent/work/api"},
@@ -322,16 +322,15 @@ func TestUpdateWorkspace_ContentChangeClearsEveryReviewedField(t *testing.T) {
 	}
 }
 
-// TestUpdateWorkspace_ContentChangeStampsTheEgressEdit is the regression for
-// the third writer migration 0055 did not know about. The migration names the
-// two scoped setters as the only stampers of egress_edited_at; this handler is
-// also a durable writer of approved_egress — it CLEARS the list when the
-// composition changes — and it left the stamp alone. Since egress_edited_at is
-// ReconcileWorkspaceEgressDecisions's ONLY newer-action guard, an `always`
-// approval decided before the edit still read APPROVED/always at the next boot
-// and the heal put the host straight back, with an audit event saying
-// "success": a durable, fail-OPEN re-widening of a list the operator had just
-// emptied by changing what the workspace is.
+// TestUpdateWorkspace_ContentChangeStampsTheEgressEdit: migration 0055 names
+// the two scoped setters as the stampers of egress_edited_at, but this handler
+// is a third durable writer of approved_egress — it CLEARS the list when the
+// composition changes — so it must stamp too. egress_edited_at is
+// ReconcileWorkspaceEgressDecisions's ONLY newer-action guard: without the
+// stamp, an `always` approval decided before the edit still reads
+// APPROVED/always at the next boot and the heal puts the host straight back,
+// with an audit event saying "success" — a durable, fail-OPEN re-widening of a
+// list the operator had just emptied by changing what the workspace is.
 //
 // Asserted as "newer than the pre-edit stamp", not merely non-nil: a workspace
 // whose lists were last touched by an earlier approval PUT already carries one,
@@ -370,12 +369,12 @@ func TestUpdateWorkspace_ContentChangeStampsTheEgressEdit(t *testing.T) {
 	}
 }
 
-// TestUpdateWorkspace_SourceChangeReclaimsSupersededImage is the
-// bug-workspace-1 regression: handleUpdateWorkspace resets ws.ImageRef to ""
-// on a content/image change but never reclaimed the docker tag it had just
-// pointed at — every rescan/edit leaked a full docker image forever. The
-// stale ref must be reclaimed via the wired Runner's ImageRemover capability
-// before the row is written back with an empty ImageRef.
+// TestUpdateWorkspace_SourceChangeReclaimsSupersededImage:
+// handleUpdateWorkspace resets ws.ImageRef to "" on a content/image change,
+// and must reclaim the docker tag it had just pointed at, or every
+// rescan/edit leaks a full docker image forever. The stale ref is reclaimed
+// via the wired Runner's ImageRemover capability before the row is written
+// back with an empty ImageRef.
 func TestUpdateWorkspace_SourceChangeReclaimsSupersededImage(t *testing.T) {
 	h := newHarness(t)
 	id := uuid.New()
@@ -402,10 +401,10 @@ func TestUpdateWorkspace_SourceChangeReclaimsSupersededImage(t *testing.T) {
 	}
 }
 
-// TestDeleteWorkspace_ReclaimsBuiltImage is the bug-workspace-1 regression's
-// other half: deleting a workspace drops the ONLY store pointer to its built
-// image tag, so it must be reclaimed at delete time or it leaks forever —
-// nothing else will ever name it again.
+// TestDeleteWorkspace_ReclaimsBuiltImage is the other half: deleting a
+// workspace drops the ONLY store pointer to its built image tag, so it must be
+// reclaimed at delete time or it leaks forever — nothing else will ever name
+// it again.
 func TestDeleteWorkspace_ReclaimsBuiltImage(t *testing.T) {
 	h := newHarness(t)
 	id := uuid.New()
@@ -531,14 +530,14 @@ func TestWriteEnvAsCode_WritesNestedFiles(t *testing.T) {
 	}
 }
 
-// TestWriteEnvAsCode_PreservesExistingDockerfile pins the R5 high-severity
-// fix: 342da88 added a generated .devcontainer/Dockerfile to EmitEnvAsCode's
-// output, and writeEnvAsCode used to O_TRUNC every emitted key unconditionally
-// — silently destroying an operator's own hand-authored Dockerfile the first
-// time they clicked "Write into the directory". A pre-existing Dockerfile is
-// now left alone and reported in the skipped list; every OTHER emitted key
-// (Wardyn's own regenerate-on-demand output) still refreshes as before, so the
-// fix does not turn the whole feature into a first-write-only no-op.
+// TestWriteEnvAsCode_PreservesExistingDockerfile: EmitEnvAsCode's output
+// includes a generated .devcontainer/Dockerfile, so writeEnvAsCode must not
+// O_TRUNC every emitted key unconditionally — that would silently destroy an
+// operator's own hand-authored Dockerfile the first time they click "Write
+// into the directory". A pre-existing Dockerfile is left alone and reported in
+// the skipped list; every OTHER emitted key (Wardyn's own regenerate-on-demand
+// output) still refreshes, so the feature does not turn into a
+// first-write-only no-op.
 func TestWriteEnvAsCode_PreservesExistingDockerfile(t *testing.T) {
 	root := t.TempDir()
 	const operatorDockerfile = "FROM my-own-base:latest\n# hand-authored, do not touch\n"

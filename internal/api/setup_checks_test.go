@@ -149,14 +149,14 @@ func TestTlsCookiePostureCheck(t *testing.T) {
 // success) and "" (indeterminate — an old daemon build, or in principle any
 // unproven state; see the field's doc for why a genuinely indeterminate LIVE
 // canary can never reach here). Never confuses Indeterminate with Enforcing.
-// TestSiteConfigCheck_DanglingSecretRef pins: on base 763beb5,
-// siteConfigCheck graded "info" ("every run inherits it") purely off whether
-// UpstreamProxySecretRef/EgressRedirects/ScmHosts were SET — never whether the
-// secret they name is actually present. After the documented reset+apply
-// recovery (`wardyn site-config get > f` before a reset, `wardyn site-config
-// apply f` after) with the referenced secret never restored, that read as
-// fully configured while the credentialed path was dead. It must now grade
-// "warn" and name the missing secret.
+// TestSiteConfigCheck_DanglingSecretRef pins that siteConfigCheck grades on
+// whether the secret UpstreamProxySecretRef/EgressRedirects/ScmHosts name is
+// actually present, not only on whether those fields are SET. After the
+// documented reset+apply recovery (`wardyn site-config get > f` before a
+// reset, `wardyn site-config apply f` after) with the referenced secret never
+// restored, "info" ("every run inherits it") would read as fully configured
+// while the credentialed path is dead. It must grade "warn" and name the
+// missing secret.
 func TestSiteConfigCheck_DanglingSecretRef(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -217,11 +217,11 @@ func TestSiteConfigCheck_DanglingSecretRef(t *testing.T) {
 	}
 }
 
-// TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured is B7-F5: a document
+// TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured: a document
 // declaring ONLY InternalHosts (the one override that LIFTS the proxy's
-// private/reserved-IP SSRF guard) used to read as "No operator-wide site
-// config yet (optional)" — the emptiness test never looked at InternalHosts,
-// UpstreamProxyNoProxy or WorkspaceProviders.
+// private/reserved-IP SSRF guard) must not read as "No operator-wide site
+// config yet (optional)" — the emptiness test has to look at InternalHosts,
+// UpstreamProxyNoProxy and WorkspaceProviders too.
 func TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured(t *testing.T) {
 	cases := []struct {
 		name string
@@ -273,8 +273,8 @@ func TestInternalHostsCheck(t *testing.T) {
 	}
 }
 
-// TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly is B7-F10:
-// every redirect network-only used to render "(ecosystems: ; 2
+// TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly: when every
+// redirect is network-only, the row must not render "(ecosystems: ; 2
 // network-only)" — a bare, truncated-looking clause. The ecosystems: segment
 // must be OMITTED, not empty, when there are no ecosystem-tagged rows.
 func TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly(t *testing.T) {
@@ -373,12 +373,12 @@ func TestK8sEgressContainmentCheck_Acknowledged(t *testing.T) {
 	}
 }
 
-// TestRunnerCheckCC1OnlyFixIsDriverAware: a CC1-only host's
-// Fix used to unconditionally read "run `wardyn setup wall` (or `wardyn setup
-// vault`)" — a DOCKER host command that means nothing on a k8s runner, where
-// the actual lever is pinning a cluster-registered RuntimeClass via Helm
-// (k8s.runtimeClasses.CC2/.CC3). The docker driver keeps the original command;
-// only k8s swaps to the Helm-shaped fix.
+// TestRunnerCheckCC1OnlyFixIsDriverAware: a CC1-only host's Fix must not
+// unconditionally read "run `wardyn setup wall` (or `wardyn setup vault`)" — a
+// DOCKER host command that means nothing on a k8s runner, where the actual
+// lever is pinning a cluster-registered RuntimeClass via Helm
+// (k8s.runtimeClasses.CC2/.CC3). The docker driver keeps that command; only
+// k8s swaps to the Helm-shaped fix.
 func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -407,7 +407,7 @@ func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
 	}
 }
 
-// TestPermissionsPostureCheck is the #19b regression: the row must always be
+// TestPermissionsPostureCheck: the row must always be
 // "info" (a posture choice, never a misconfiguration to warn/fail about — an
 // operator may legitimately leave every kind fail-open) and must name exactly
 // which of the four capability kinds are enforced vs left at the fail-open
@@ -533,14 +533,14 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 	}
 }
 
-// TestAgeKeyCheckFixSteersToASecretBackedKey is R5 F159/F190. The warn arm's Fix
-// used to offer `helm: env.WARDYN_AGE_KEY` — which renders the secret store's
-// MASTER key as a plaintext literal in the Deployment object, readable by
-// anything with `get deploy` and captured in every `helm get manifest`. The
-// chart has two Secret-backed doors (deploy/helm/wardyn/values.yaml's
-// secrets.ageKeyFromSecret over the postgres.dsn.secretRef Secret's `age-key`
-// entry, and secrets.ageKeySecretRef.name for a separate Secret), and the
-// console's own remedy has to name them.
+// TestAgeKeyCheckFixSteersToASecretBackedKey: the warn arm's Fix must not offer
+// `helm: env.WARDYN_AGE_KEY` — that renders the secret store's MASTER key as a
+// plaintext literal in the Deployment object, readable by anything with `get
+// deploy` and captured in every `helm get manifest`. The chart has two
+// Secret-backed doors (deploy/helm/wardyn/values.yaml's secrets.ageKeyFromSecret
+// over the postgres.dsn.secretRef Secret's `age-key` entry, and
+// secrets.ageKeySecretRef.name for a separate Secret), and the console's own
+// remedy has to name them.
 func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	if fix := ageKeyCheck(true).Fix; fix != "" {
 		t.Errorf("durable arm carries a Fix (%q) — an ok row has nothing to fix", fix)
@@ -626,9 +626,8 @@ func TestBedrockProviderCheck_MechanismPrincipalIsInfoNotWarn(t *testing.T) {
 	}
 }
 
-// TestBedrockProviderCheck_SharedRowUnchanged pins the load-bearing regression:
-// the ORIGINAL shared-row text, byte-for-byte, through the per_user/mechanism
-// refactor.
+// TestBedrockProviderCheck_SharedRowUnchanged pins the load-bearing shared-row
+// text, byte-for-byte, through the per_user/mechanism split.
 func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
 	chk := bedrockRowVia(t, awsSSOScope{})
 	want := SetupCheck{
@@ -642,7 +641,7 @@ func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
 }
 
 // TestLLMProviderCheck_NoBedrockRowUnchanged pins the OTHER load-bearing
-// regression: an install with no Bedrock row at all keeps today's exact
+// text: an install with no Bedrock row at all keeps the exact
 // optional-provider sentence.
 func TestLLMProviderCheck_NoBedrockRowUnchanged(t *testing.T) {
 	got := llmProviderCheck("", SetupBedrock{})

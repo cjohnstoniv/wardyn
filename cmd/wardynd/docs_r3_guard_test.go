@@ -441,9 +441,8 @@ var ruleSourceConst = regexp.MustCompile(`(?m)^\truleSource[A-Za-z]*\s+= "([a-z0
 
 // inlineRuleSourceLiteral finds evaluate()'s OWN decisionLog(...) call sites
 // in internal/egress/proxy/proxy.go whose rule_source argument is an inline
-// string literal rather than a named ruleSource* constant — the second,
-// previously-undocumented family F093's B1 blocking item added (the
-// "evaluator's own inline sources" table).
+// string literal rather than a named ruleSource* constant — the second
+// family the doc tables (the "evaluator's own inline sources" table).
 var inlineRuleSourceLiteral = regexp.MustCompile(`decisionLog\([^,]+,\s*egress\.[A-Za-z]+,\s*"([a-z:-]+)"\)`)
 
 // TestAuditActionsDocEnumeratesEveryRuleSource (F093) pins the new
@@ -608,15 +607,13 @@ func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
 	)
 }
 
-// TestLiteralIPRedirectDocsNameThePortScope (F053, re-derived for F106) pins
-// OPERATIONS.md and THREAT-MODEL.md's "scoped to that address" claim to what
-// substituteArtifactEgress now actually writes: a PORT-QUALIFIED entry, so the
-// trust it grants is to `to:port` and not to that address on any port.
+// TestLiteralIPRedirectDocsNameThePortScope pins OPERATIONS.md and
+// THREAT-MODEL.md's "scoped to that address" claim to what
+// substituteArtifactEgress writes: a PORT-QUALIFIED entry, so the trust it
+// grants is to `to:port` and not to that address on any port.
 //
-// The claim it originally pinned was the opposite one — the port was STRIPPED,
-// and the docs had to say so. F106 fixed the code; the guard is re-derived
-// against the merged tree rather than skipped, so the docs can never drift back
-// to describing either shape while the other one ships.
+// The guard is derived against the tree, so the docs can never describe a
+// port-stripped entry while a port-qualified one ships, or the reverse.
 func TestLiteralIPRedirectDocsNameThePortScope(t *testing.T) {
 	src := readSrc(t, "internal", "api", "workspace_egress.go")
 	if !strings.Contains(src, "entry := net.JoinHostPort(to, strconv.Itoa(redirectPort(r.To)))") {
@@ -711,9 +708,9 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 			t.Fatalf("revokeNote no longer says %q — re-derive the doc row before trusting this guard", want)
 		}
 	}
-	// B11a-F1 gave the mint a discard door that DOES call GitHub's endpoint, so
-	// the blanket "wardyn does not call it" this row and this note used to carry
-	// became false. Neither may say it again while discardMinted exists.
+	// The mint has a discard door that DOES call GitHub's endpoint, so a blanket
+	// "wardyn does not call it" is false. Neither this row nor this note may say
+	// it while discardMinted exists.
 	if strings.Contains(note, "wardyn does not call") {
 		t.Fatal(`revokeNote carries the blanket "wardyn does not call" claim again — discardMinted and VerifyRefRuleset both make that call, so it must stay scoped to RevokeRun`)
 	}
@@ -1076,17 +1073,16 @@ func TestDataFlowAuditSinkRowCarriesTheOutageQualifier(t *testing.T) {
 // backtick span as a CITATION only when the span carries a path, so the
 // "same file, second line" shorthand these rows used — a `proxy.go` line
 // number followed by a bare `:N` sibling — is read as a bare ANCHOR and never
-// resolved against anything. Both were wrong: the step-0 private-IP guard moved out of
-// proxy.go entirely (literal_ip_guard.go), and `builtin:dial-failed` is emitted
-// from four places, none of them the duplicated line. A citation nobody checks
-// is how the doc came to name a file the guard no longer lives in.
+// resolved against anything. The step-0 private-IP guard lives in literal_ip_guard.go,
+// not proxy.go, and `builtin:dial-failed` is emitted from four places; a citation
+// nobody checks can name a file the code does not live in, or one site of several.
 //
 // So the rule here is the one the live-citation guard can then enforce: in
 // these rows every site is spelled out in full, and no bare `:N` shorthand is
 // left for a reader (or a guard) to resolve by guesswork. What "in full" means
-// is now a SYMBOL — `path/file.go#Symbol`, resolved with go/parser — because
-// the line-anchored form these rows used to carry made every insertion above a
-// cited line a failure of the required build check. The COUNT is what this
+// is a SYMBOL — `path/file.go#Symbol`, resolved with go/parser — because a
+// line-anchored form makes every insertion above a cited line a failure of the
+// required build check. The COUNT is what this
 // guard adds over its neighbour: a row that names one of several emitters
 // still tells an operator the others do not exist.
 func TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite(t *testing.T) {

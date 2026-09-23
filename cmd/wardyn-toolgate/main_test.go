@@ -12,17 +12,15 @@ import (
 	"time"
 )
 
-// TestPollFailureDenyMessageNamesTheCause is the half of F159's pin that
-// compiles unchanged against the pre-fix gate struct (no new field): it only
-// inspects the returned deny message, so red-here is a genuine assertion
-// failure, not a compile error — the sibling test below additionally proves
-// the stderr diagnostic exists, which needs the new field and so cannot
-// compile pre-fix (documented there).
+// TestPollFailureDenyMessageNamesTheCause is the half of the poll-failure
+// pin that needs no new gate field: it only inspects the returned deny
+// message, so on a gate without the diagnostic it fails as an assertion, not
+// a compile error — the sibling test below additionally proves the stderr
+// diagnostic exists, which needs the field.
 //
-// Red-first: pre-fix, every poll failure is silently treated as PENDING, so
-// the loop always exhausts the deadline and returns the generic
-// "approval wait deadline reached" message even though every poll failed —
-// the assertion below fails.
+// If every poll failure is treated as PENDING, the loop exhausts the
+// deadline and returns the generic "approval wait deadline reached" message
+// even though every poll failed, so the assertion below fails.
 func TestPollFailureDenyMessageNamesTheCause(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -48,15 +46,15 @@ func TestPollFailureDenyMessageNamesTheCause(t *testing.T) {
 	}
 }
 
-// TestPollFailuresAreLoggedAndNamedInDenyMessage covers F159: every poll
-// error was treated identically to PENDING with no log anywhere (stdout,
-// stderr, or the returned message), so a control-plane outage during the wait
-// parked the agent for the full deadline and then denied it with a message
-// that reads as "no human decided in time" when in fact every poll failed.
+// TestPollFailuresAreLoggedAndNamedInDenyMessage pins that a poll error is
+// never silently treated as PENDING: with no log anywhere (stdout, stderr, or
+// the returned message), a control-plane outage during the wait would park
+// the agent for the full deadline and then deny it with a message that reads
+// as "no human decided in time" when in fact every poll failed.
 //
-// Red-first: against the pre-fix decide() (bare `if err == nil {...}`, no
-// else) stderr stays empty and the deny message is the generic deadline
-// string, so both assertions below fail.
+// If decide() drops the error (a bare `if err == nil {...}` with no else),
+// stderr stays empty and the deny message is the generic deadline string, so
+// both assertions below fail.
 func TestPollFailuresAreLoggedAndNamedInDenyMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

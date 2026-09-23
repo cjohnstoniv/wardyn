@@ -157,21 +157,19 @@ func callsNamed(fn *ast.FuncDecl, name string) bool {
 	return found
 }
 
-// TestDrivePreviewWritesNoDenial is F227's residue.
+// TestDrivePreviewWritesNoDenial: the authz.denied emit lives at the deciding
+// sites, and BOTH of them are reached by the admin drive preview:
+// drivePreviewDoorIsOpen resolves the previewed principal's ceiling,
+// previewResolveUserDrive resolves their drive. An admin asking "what would
+// carol get" must not write an authz.denied row — it would name THE ADMIN as the
+// refused principal, because the row is stamped from the request's own identity
+// (one preview of carol's drive would record `authz.denied
+// target=governance.ceiling actor="sub-admin-alice"`).
 //
-// The emit landed at the deciding sites, and BOTH of them are reached by the
-// admin drive preview: drivePreviewDoorIsOpen resolves the previewed principal's
-// ceiling, previewResolveUserDrive resolves their drive. So an admin asking
-// "what would carol get" wrote an authz.denied row — naming THE ADMIN as the
-// refused principal, because the row is stamped from the request's own identity.
-// Executed before the fix: one preview of carol's drive produced
-// `authz.denied target=governance.ceiling actor="sub-admin-alice"`.
-//
-// handlePreviewUserDrive's own doc has always said this endpoint is "STILL NOT
-// AUDITED … nothing is minted and nothing changes", so the tree stated the rule
-// and then broke it. A denial stream with the wrong person in it is worse than
-// the silence F227 set out to fix: the silence was at least honest about who had
-// been refused.
+// handlePreviewUserDrive's own doc says this endpoint is "STILL NOT AUDITED …
+// nothing is minted and nothing changes". A denial stream with the wrong person
+// in it is worse than no denial at all: silence is at least honest about who was
+// refused.
 func TestDrivePreviewWritesNoDenial(t *testing.T) {
 	st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: true}
 	audit := &recRecorder{}

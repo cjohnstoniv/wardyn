@@ -64,9 +64,9 @@ var terminalWriterCensus = map[string]string{
 	// --selftest`, a failed task Exec — with the sandbox and proxy sidecar up and
 	// an egress approval already raisable), and skips it below RUNNING, where no
 	// approval can exist yet. Both arms are pinned in internal/api. The frozen
-	// claim here USED to be "exempt: fails a run that never reached RUNNING" —
-	// which was false at three call sites and is what let a PENDING approval sit
-	// in the queue for 24h and expire as "nobody answered".
+	// claim must not read "exempt: fails a run that never reached RUNNING" —
+	// that is false at three call sites, and would let a PENDING approval sit in
+	// the queue for 24h and expire as "nobody answered".
 	"failAndRevoke": "calls cancelRunApprovals when from==RunRunning; exempt below it",
 }
 

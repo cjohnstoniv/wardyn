@@ -147,18 +147,15 @@ func createToken(t *testing.T, s *Server, clientID, clientSecret, deviceCode str
 	return resp.StatusCode, out
 }
 
-// TestListAccountRoles_ScopedToRequestedAccount is the protocol pin under
-// finding 1's whole fix: the real portal's ListAccountRoles answers for the
-// account_id it was ASKED about, and returns an error for one the session is
-// not entitled to. The fake used to ignore the parameter and answer with its
-// single fixture's role whatever was asked — so a helper that pinned an
-// account would have "verified" its pin against a list that was never scoped
-// to it, and the pin would have looked right here while being meaningless
-// against AWS.
+// TestListAccountRoles_ScopedToRequestedAccount is a protocol pin: the real
+// portal's ListAccountRoles answers for the account_id it was ASKED about,
+// and returns an error for one the session is not entitled to. A fake that
+// ignored the parameter and answered with its single fixture's role whatever
+// was asked would let a helper that pins an account "verify" its pin against
+// a list never scoped to it — right here, and meaningless against AWS.
 //
-// Red-first: on the unfixed fixture handleListAccountRoles never reads
-// account_id, so asking for account B returns account A's roles and the
-// unknown-account arm answers 200.
+// If handleListAccountRoles never read account_id, asking for account B would
+// return account A's roles and the unknown-account arm would answer 200.
 func TestListAccountRoles_ScopedToRequestedAccount(t *testing.T) {
 	s := New()
 	defer s.Close()

@@ -29,20 +29,19 @@
 //     groups_truncated = TRUE (not NULL, not FALSE).
 //  2. With a group-tier governance assignment present, that token cannot
 //     resolve ANY ceiling: GET /policies/default is 403 groups_snapshot_stale.
-//  3. A 0.6-era row (groups_truncated NULL, inserted by raw SQL exactly as a
-//     pre-0052 binary would have left it) round-trips as nil — three-valued —
-//     and is refused identically.
+//  3. A legacy row (groups_truncated NULL, inserted by raw SQL exactly as a
+//     binary that predates the column leaves it) round-trips as nil —
+//     three-valued — and is refused identically.
 //  4. Controls: with NO group-tier row the truncated token resolves the
 //     deployment ceiling (PF-21 scoping); a token minted from a COMPLETE
 //     session resolves its group profile; a user-tier row suppresses the
 //     refusal (PF-25). These keep "fail closed" from passing as "lane broken".
 //
 // A SECOND test (TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates)
-// was red on fa910735 and is GREEN since the capScan fix; it pinned hypothesis
-// H2 of the trace — the
-// capability-grant resolver (Server.capScan in capabilities.go) ignores the
-// truncation bit, so a group DENY grant whose group fell off the cookie cap
-// silently stops matching for that token. Green there means H2 was fixed.
+// pins the capability-grant resolver (Server.capScan in capabilities.go)
+// against the same truncation: it must honour the truncation bit, or a group
+// DENY grant whose group fell off the cookie cap silently stops matching for
+// that token.
 package api
 
 import (
@@ -251,22 +250,19 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 	}
 }
 
-// TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates — GREEN PIN (was
-// red on fa910735; trace hypothesis H2, fixed). The governance resolver treats a truncated
-// snapshot as unanswerable (effectiveCeiling in governance.go); the CAPABILITY
-// resolver does not (capScan in capabilities.go discards `stale` and never
-// reads the truncation bit). A group DENY grant written against the group that
-// fell off the cap therefore matches nothing for this token, and the seam
-// answers "allowed".
+// TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates: the governance resolver
+// treats a truncated snapshot as unanswerable (effectiveCeiling in governance.go), and the
+// CAPABILITY resolver (capScan in capabilities.go) must too. If capScan discards `stale`
+// and never reads the truncation bit, a group DENY grant written against the group that
+// fell off the cap matches nothing for this token, and the seam answers "allowed".
 //
 // The seam under test is capAllowed itself, reached through the real
 // apiTokenAuth context — the same path authorizeMemberDecision in approvals.go
 // (member decides an egress approval), narrowMemberInlinePolicy in
 // inline_policy.go and memberVisibleOperatorSecretNames in secrets.go take.
 // None of those seams is preceded by an effectiveCeiling call, so on a
-// deployment with
-// group DENY grants but no group governance assignments there is no 403
-// anywhere.
+// deployment with group DENY grants but no group governance
+// assignments, capAllowed is the only thing that can answer 403.
 func TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates(t *testing.T) {
 	srv, pg, _ := truncProbeServer(t)
 	ctx := context.Background()

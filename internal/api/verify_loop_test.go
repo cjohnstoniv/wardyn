@@ -95,11 +95,11 @@ func TestApproveDecision_NoDurableWriteOffTheVerifyPath(t *testing.T) {
 		{name: "deny on a record run", task: "workspace record", host: "api.stripe.com", verb: "deny"},
 		{name: "junk host shape", task: "workspace record", host: "localhost", verb: "approve"},
 		// The branch four lines ABOVE the junk-host guard. Valid JSON, not an
-		// object: json.Unmarshal into the scope struct fails and this used to
-		// `return` bare — producing the exact symptom was written to
-		// eliminate (200, empty contract, silent audit), through the neighbouring
-		// branch. Both shapes, because an array and a scalar fail differently in
-		// encoding/json and only one of them was ever likely to be tried by hand.
+		// object: json.Unmarshal into the scope struct fails, and a bare `return`
+		// there would produce the exact symptom the junk-host audit prevents (200,
+		// empty contract, silent audit), through the neighbouring branch. Both
+		// shapes, because an array and a scalar fail differently in encoding/json
+		// and only one of them is likely to be tried by hand.
 		{name: "scope is a JSON array", task: "workspace record", verb: "approve", rawScope: `[]`},
 		{name: "scope is a JSON string", task: "workspace record", verb: "approve", rawScope: `"api.stripe.com"`},
 	}
@@ -126,14 +126,12 @@ func TestApproveDecision_NoDurableWriteOffTheVerifyPath(t *testing.T) {
 			if len(fake.ws.Requirements) != 0 {
 				t.Fatalf("requirements = %+v, want NOTHING written", fake.ws.Requirements)
 			}
-			// The junk-host-shape gate used to fail silent, unlike
-			// every other give-up path in learnVerifyEgress — it must now audit
-			// the miss too, so an operator can see why the contract wasn't
-			// updated instead of wondering why the next replay still holds.
-			// EVERY give-up path in learnVerifyEgress must audit its miss — the
-			// junk host shape and, since R1, the non-object scope
-			// beside it. They are indistinguishable to the operator: a green UI
-			// and a contract that never learned the host.
+			// The junk-host-shape gate must audit its miss like every other
+			// give-up path in learnVerifyEgress, so an operator can see why
+			// the contract wasn't updated instead of wondering why the next
+			// replay still holds. The same holds for the non-object scope
+			// beside it: the two are indistinguishable to the operator — a
+			// green UI and a contract that never learned the host.
 			if tc.name == "junk host shape" || tc.rawScope != "" {
 				found := false
 				for _, ev := range h.audit.events {
@@ -176,14 +174,13 @@ func TestConfinedEgressDomains_HonorsFoldedRequiredRows(t *testing.T) {
 	}
 }
 
-// TestConfinedEgressDomains_HonorsOperatorSetProvenanceGate is the regression
-// for the half of the 0.7 provenance gate that shipped unenforced: the gate
-// (RequireOperatorSetEgress, default TRUE since 0.7) was written inline at the
-// run-create call site, so a scan_seeded `egress:` requirement — a host the
-// WORKSPACE SCANNER derived from UNTRUSTED repo content, never an operator's
-// act — was refused at launch and then unioned straight into the confined
-// REPLAY's AllowedDomains, which is the session an operator runs precisely to
-// prove least privilege. Both paths now route through egressProvenanceAllowed.
+// TestConfinedEgressDomains_HonorsOperatorSetProvenanceGate pins the provenance
+// gate on the replay path: the gate (RequireOperatorSetEgress, default TRUE)
+// applies to the confined REPLAY's AllowedDomains as well as the run-create
+// call site, so a scan_seeded `egress:` requirement — a host the WORKSPACE
+// SCANNER derived from UNTRUSTED repo content, never an operator's act —
+// refused at launch is not unioned into the session an operator runs precisely
+// to prove least privilege. Both paths route through egressProvenanceAllowed.
 func TestConfinedEgressDomains_HonorsOperatorSetProvenanceGate(t *testing.T) {
 	ws := types.Workspace{
 		EffectiveRequirements: map[string]types.WorkspaceRequirement{

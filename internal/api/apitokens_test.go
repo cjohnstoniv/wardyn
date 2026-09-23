@@ -285,7 +285,7 @@ func TestAPITokenAuth_NilGroupsStaySnapshotUnavailable(t *testing.T) {
 // TestAPITokenAuth_RevokedIsRefused: a revoked token authenticates nothing. The
 // refusal is a 401 identical to the one an unknown token gets — the store
 // collapses both to ErrNotFound, so the boundary is not an oracle for "this
-// token used to exist".
+// token once existed".
 func TestAPITokenAuth_RevokedIsRefused(t *testing.T) {
 	srv, _, _ := apiTokenTestServer(t)
 	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleMember)

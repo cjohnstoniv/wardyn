@@ -81,8 +81,8 @@ func mustUpstream(t *testing.T, addr string) *upstreamProxy {
 // TestNoProxy_BypassedHostDialsDirect_OthersStillUpstream is gap 1's core
 // claim on the FORWARDING TRANSPORT path (handlePlain -> egressDial): a
 // declared destination is dialed directly while every other host keeps
-// chaining through the corp proxy. It is also the regression for fixing the
-// bypass only in egressTarget: the transport CONNECTs everything through the
+// chaining through the corp proxy. The bypass must live in the transport too,
+// not only in egressTarget: the transport CONNECTs everything through the
 // upstream independently of that branch, so a target-only change would leave
 // the corp proxy still taking the dial.
 func TestNoProxy_BypassedHostDialsDirect_OthersStillUpstream(t *testing.T) {
@@ -311,10 +311,10 @@ func TestValidNoProxyEntry(t *testing.T) {
 }
 
 // TestRedirectLiteralIP_TrustedForItsRunOnly is gap 3: an egress redirect's
-// literal-IP To is reachable on EVERY vet path for the run whose allowlist the
-// redirect substitution actually wrote it into (egressTarget is the path
-// serveMITMRequest and both brokers re-vet through, and it used to re-deny
-// what evaluate() had already trusted), and is refused for an unrelated run.
+// literal-IP To is reachable on EVERY vet path for the run whose allowlist
+// the redirect substitution actually wrote it into (egressTarget is the path
+// serveMITMRequest and both brokers re-vet through, so it must not re-deny
+// what evaluate() has already trusted), and is refused for an unrelated run.
 func TestRedirectLiteralIP_TrustedForItsRunOnly(t *testing.T) {
 	mk := func(spec types.RunPolicySpec) *Proxy {
 		return newProxy(Options{
@@ -352,11 +352,10 @@ func TestRedirectLiteralIP_TrustedForItsRunOnly(t *testing.T) {
 		t.Fatal("a denied literal must stay denied")
 	}
 
-	// F106: the entry substituteArtifactEgress actually writes is PORT-QUALIFIED
+	// The entry substituteArtifactEgress actually writes is PORT-QUALIFIED
 	// (net.JoinHostPort of the To's host and redirectPort), matching the
 	// mitmHosts the same redirect authors. A second port of that address is
-	// therefore refused — with the BARE entry the substitution used to write,
-	// every port of it was reachable.
+	// therefore refused — a BARE entry would make every port of it reachable.
 	portScoped := mk(types.RunPolicySpec{AllowedDomains: []string{"100.64.5.7:8443"}})
 	if _, _, err := portScoped.egressTarget("100.64.5.7", 8443); err != nil {
 		t.Fatalf("the port the redirect named must be reachable: %v", err)

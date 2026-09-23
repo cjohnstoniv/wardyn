@@ -13,12 +13,12 @@ import (
 
 // The import flow's Record/Verify runs bind-mount a local_dir workspace. Because
 // WorkspaceMount.ReadOnly is a *bool whose SAFE DEFAULT is read-only when omitted,
-// wireWorkspaceSource used to leave it nil — mounting EVERY imported workspace
-// read-only, with no opt-in anywhere. That silently made the Record step's own
-// promise ("so the agent can make changes") impossible to keep: `pnpm install`
-// cannot write node_modules, a build cannot emit artifacts, and no source file can
-// be edited. These tests pin both directions: read-only stays the default, and an
-// operator's explicit Writable opt-in is actually honored.
+// a nil left by wireWorkspaceSource would mount EVERY imported workspace read-only
+// with no opt-in anywhere — breaking the Record step's own promise ("so the agent
+// can make changes"): `pnpm install` cannot write node_modules, a build cannot
+// emit artifacts, and no source file can be edited. These tests pin both
+// directions: read-only stays the default, and an operator's explicit Writable
+// opt-in is actually honored.
 func TestWireWorkspaceSource_LocalDirReadOnlyByDefault(t *testing.T) {
 	var run types.AgentRun
 	var policy types.RunPolicySpec
@@ -78,13 +78,12 @@ func TestWireWorkspaceSource_WritableOptInIsHonored(t *testing.T) {
 	}
 }
 
-// TestWireWorkspaceSource_RefIsHonored is the regression: a repo
-// source's Ref (git branch/tag/sha — part of the source's identity, same as
-// Path/Source itself) used to be dropped the instant a repo source became a
-// run's types.WorkspaceRepo, so it never reached buildRepoRecords/WARDYN_REPOS
-// and no clone ever checked it out — silently cloning the default branch
-// regardless of what the source declared. Ref must now survive the same
-// wire-through Target already gets.
+// TestWireWorkspaceSource_RefIsHonored: a repo source's Ref (git
+// branch/tag/sha — part of the source's identity, same as Path/Source itself)
+// must survive into the run's types.WorkspaceRepo, the same wire-through
+// Target gets, or it never reaches buildRepoRecords/WARDYN_REPOS and every
+// clone silently checks out the default branch regardless of what the source
+// declared.
 func TestWireWorkspaceSource_RefIsHonored(t *testing.T) {
 	var run types.AgentRun
 	var policy types.RunPolicySpec

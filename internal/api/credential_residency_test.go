@@ -20,17 +20,16 @@ import (
 // exceptions table that concerns a MODEL credential, plus the never-resident
 // closing sentence ("api_key, the Bedrock bearer token …").
 //
-// It exists because the New Run rail used to state residency as unconditional
-// static copy: "Minted at launch, injected by the proxy. Never written into the
-// sandbox." — false on the very deployment the 0.7.4 field report came from. The
-// rail now repeats what this function graded, so the threat model and the
-// console can no longer disagree; a row added to that table with no case here is
-// a row the rail would describe wrongly.
+// The New Run rail repeats what this function graded, so the threat model and
+// the console cannot disagree — static copy such as "Minted at launch, injected
+// by the proxy. Never written into the sandbox." is false on some deployments. A
+// row added to that table with no case here is a row the rail would describe
+// wrongly.
 //
 // Every case folds its lanes through selectedMechanism rather than naming a
 // mechanism directly: the residency must be graded from the lane that actually
-// RESOLVES, never from the roster's declared enum. Trap (b) of the plan's review
-// round is case "shared bedrock_bearer row, chain falls to the ~/.aws mount".
+// RESOLVES, never from the roster's declared enum — case "shared bedrock_bearer
+// row, chain falls to the ~/.aws mount" is the trap.
 func TestGradeModelCredential(t *testing.T) {
 	var srv Server
 	perUserSSORow := types.AgentProvider{
@@ -303,10 +302,9 @@ func TestSetupStatusResidency_PerUserSSOReachesTheWireSignedInOrNot(t *testing.T
 	}
 }
 
-// TestSetupStatusSaysNothingUnderASubscriptionDeployment: the daemon posture
-// that USED to be read here (an inject-off deployment blessing the ~/.claude
-// mount in its default policy) now changes nothing on this surface — there is no
-// lane resolution left on a GET at all.
+// TestSetupStatusSaysNothingUnderASubscriptionDeployment: the daemon posture (an
+// inject-off deployment blessing the ~/.claude mount in its default policy)
+// changes nothing on this surface — there is no lane resolution on a GET at all.
 func TestSetupStatusSaysNothingUnderASubscriptionDeployment(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})

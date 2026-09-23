@@ -40,14 +40,15 @@ var dns1123Subdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
 var testDriveID = uuid.MustParse("6f1d4b6e-3c2a-4d5f-9a71-8b0c1d2e3f40")
 
 // testDriveSubject is the fixture's subject digest, and it is NON-EMPTY on
-// purpose. The fixture used to leave SubjectHash at "" — which made the third
-// identity label unfalsifiable everywhere it was read: `existingDriveClaim` is
-// stamped FROM the drive, so both sides of every reuse comparison were "", and
+// purpose. With SubjectHash left at "", the third identity label would be
+// unfalsifiable everywhere it is read: `existingDriveClaim` is stamped FROM the
+// drive, so both sides of every reuse comparison would be "", and
 // driveClaimIdentity's own check is presence-guarded (`got != "" && …`), so ""
 // on both sides is the arm that always passes. Deleting `labelDriveSubject:
-// drive.SubjectHash` from ensureDrivePVC's create left the whole file green, and
-// every claim created thereafter became ADOPTABLE by any principal sharing this
-// drive's id and home — precisely the collision the label exists to break.
+// drive.SubjectHash` from ensureDrivePVC's create would leave the whole file
+// green, while every claim created thereafter became ADOPTABLE by any principal
+// sharing this drive's id and home — precisely the collision the label exists to
+// break.
 const testDriveSubject = "0f1e2d3c4b5a69788796"
 
 // testDriveMount is the shape the control plane's resolver hands the driver for
@@ -238,9 +239,9 @@ func TestEnsureDrivePVC_StaticShareIsNeverCreated(t *testing.T) {
 		t.Errorf("claim verbs = %v, want no create for a static share", verbs)
 	}
 	// The message is the run's failure hint verbatim, so it has to name the
-	// remedy in words the person reading it can act on — and NOT the namespace it
-	// used to be wrapped with (`claim %q is absent from namespace %q`), which
-	// handed every member of an unprovisioned share the runs namespace.
+	// remedy in words the person reading it can act on — and NOT the namespace
+	// (`claim %q is absent from namespace %q`), which would hand every member
+	// of an unprovisioned share the runs namespace.
 	if got := err.Error(); !strings.Contains(got, "not provisioned on this cluster") {
 		t.Errorf("err = %q, want it to say the volume is not provisioned", got)
 	}
@@ -751,11 +752,10 @@ func assertRefusalKeepsClusterNamesToItself(t *testing.T, err error) {
 }
 
 // TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch is the DEFAULT deployment's
-// failure and the one the review found unmapped: userDrives.enabled is off out
-// of the box, so the Role has no persistentvolumeclaims rule at all and the
-// LOOKUP is refused — before any Create the old code was the only mapper of.
-// Unmapped it surfaced the apiserver's own "cannot get resource" text, which
-// names no switch an operator could flip.
+// failure: userDrives.enabled is off out of the box, so the Role has no
+// persistentvolumeclaims rule at all and the LOOKUP is refused — before any
+// Create. Unmapped, it surfaces the apiserver's own "cannot get resource"
+// text, which names no switch an operator could flip.
 func TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch(t *testing.T) {
 	for _, backend := range []types.DriveBackend{types.DriveBackendK8sPVC, types.DriveBackendK8sPVCStatic} {
 		t.Run(string(backend), func(t *testing.T) {
@@ -792,12 +792,12 @@ func TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch(t *testing.T) {
 // of a 403, which no status code distinguishes from the RBAC one and which takes
 // the opposite remedy: a namespace ResourceQuota.
 //
-// The apiserver's message used to be interpolated ahead of a sentinel that
-// carried BOTH remedies, leaving the reader to pick — which meant the raw 403
-// had to be shown, and a raw 403 spells the runs namespace and the runner's
-// ServiceAccount to whichever member's run failed. The driver picks instead, on
-// the same substring the reader would have used, and this is the test that the
-// picking still works with the evidence no longer on display.
+// The driver picks between the two remedies rather than interpolating the
+// apiserver's message ahead of a sentinel that carries BOTH: leaving the reader
+// to pick would mean showing the raw 403, and a raw 403 spells the runs
+// namespace and the runner's ServiceAccount to whichever member's run failed.
+// The driver picks on the same substring the reader would have used, and this
+// is the test that the picking works with the evidence not on display.
 func TestEnsureDrivePVC_ForbiddenCarriesTheApiserverQuotaText(t *testing.T) {
 	cs := fake.NewClientset()
 	drive := testDriveMount()

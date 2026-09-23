@@ -283,15 +283,15 @@ func TestNewServer_ControlPlaneClientTrustsCorpCA(t *testing.T) {
 	}
 }
 
-// TestNewServer_CorpCAConfigNotMutatedByHTTP2 is the regression for the defect
-// that made an HTTP/2 answer reachable on the egress lane in the first place
-// (#360). The corp pool is built once and handed to several transports. The
-// sidecar's control-plane client keeps net/http's HTTP/2 support, and enabling
-// it PREPENDS "h2" to the transport's own TLSClientConfig.NextProtos on first
-// use. Shared rather than copied, that edit reached the proxy's forward
-// transport, which then offered h2 to every TLS peer with no way to speak it.
-// So: after a real control-plane round trip over TLS, the config the proxy
-// holds must still offer nothing.
+// TestNewServer_CorpCAConfigNotMutatedByHTTP2 guards the path by which an
+// HTTP/2 answer could reach the egress lane. The corp pool is built once and
+// handed to several transports. The sidecar's control-plane client keeps
+// net/http's HTTP/2 support, and enabling it PREPENDS "h2" to the transport's
+// own TLSClientConfig.NextProtos on first use. If the config were shared
+// rather than copied, that edit would reach the proxy's forward transport,
+// which would then offer h2 to every TLS peer with no way to speak it. So:
+// after a real control-plane round trip over TLS, the config the proxy holds
+// must still offer nothing.
 func TestNewServer_CorpCAConfigNotMutatedByHTTP2(t *testing.T) {
 	grant := uuid.New()
 	cp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

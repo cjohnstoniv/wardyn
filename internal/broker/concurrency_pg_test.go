@@ -382,8 +382,8 @@ func TestPG_ConcurrentMint_ExactlyOnceWins(t *testing.T) {
 // single-use approval row, so it is re-mintable BY DESIGN. We fire N concurrent
 // auto-mints for the same grant against the real pool and assert ALL succeed
 // (the grant-row FOR UPDATE serializes them but does not block re-mint), each
-// producing a distinct jti. This guards against a regression that would wrongly
-// extend single-use semantics to the auto-mint path.
+// producing a distinct jti. It guards against extending single-use semantics to
+// the auto-mint path.
 func TestPG_ConcurrentMint_AutoApprovalGrant_Independent(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()
@@ -540,13 +540,13 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestPG_ExpiredApproval_ReRaisesPending is the REAL-SQL regression for
-// (the fake-DB twin in broker_test.go exercises the fake's own
-// branch, not the query). The sweeper (approval.ExpireStale) EXPIREs a stale
-// PENDING credential approval; the next mint must raise a FRESH PENDING row a
-// human can still decide — not re-find the swept row forever and map it to
-// ErrApprovalDenied, wedging the run with nothing in the approval queue.
-// Fails RED against the pre-fix WHERE clause (no `state <> 'EXPIRED'`).
+// TestPG_ExpiredApproval_ReRaisesPending runs the REAL SQL (the fake-DB twin
+// in broker_test.go exercises the fake's own branch, not the query). The
+// sweeper (approval.ExpireStale) EXPIREs a stale PENDING credential approval;
+// the next mint must raise a FRESH PENDING row a human can still decide — not
+// re-find the swept row forever and map it to ErrApprovalDenied, wedging the
+// run with nothing in the approval queue. A WHERE clause without `state <>
+// 'EXPIRED'` fails here.
 func TestPG_ExpiredApproval_ReRaisesPending(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()

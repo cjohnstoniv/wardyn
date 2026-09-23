@@ -20,25 +20,24 @@ import (
 	"github.com/cjohnstoniv/wardyn/test/awsssofake"
 )
 
-// TestRun_NeverInvokesAWSCLIForAccountRoleLookup covers F160: run() used to
-// best-effort shell out to `aws sso list-accounts`/`list-account-roles
-// --access-token <token>`, putting the live SSO access token on that child
-// process's own argv — readable by any /proc reader in the sandbox sharing
-// its PID namespace, not just same-uid. A stub `aws` on PATH stands in for
-// the real CLI: if run() ever execs it, the token would have been on its
-// command line (see the finding's own repro, which greps /proc/self/cmdline).
+// TestRun_NeverInvokesAWSCLIForAccountRoleLookup pins that run() never shells
+// out to `aws sso list-accounts`/`list-account-roles --access-token <token>`:
+// that would put the live SSO access token on the child process's own argv,
+// readable by any /proc reader in the sandbox sharing its PID namespace, not
+// just same-uid. A stub `aws` on PATH stands in for the real CLI: if run() ever
+// execs it, the token is on its command line (what a grep of /proc/self/cmdline
+// shows).
 //
-// It also pins the fix's completeness: resolveAccountRole was rewritten to
-// call the SSO portal over HTTP (Bearer header, never argv) rather than
-// dropped outright, so a normal capture still uploads non-blank
-// account_id/role_name — a blank pair is exactly the shape
+// It also pins that the lookup itself survives: resolveAccountRole calls the SSO
+// portal over HTTP (Bearer header, never argv), so a normal capture still
+// uploads non-blank account_id/role_name — a blank pair is exactly the shape
 // internal/api/ssotoken_test.go's TestUploadSSOToken_HalfResolvedCaptureRejected
 // pins the control plane 400ing on, so a capture that could not actually be
-// stored must never again be this test's own "success".
+// stored is never this test's "success".
 //
-// Red-first: pre-fix, run() calls resolveAccountRole -> runAWSJSON, which
-// execs the stub (present on PATH) with --access-token <token>; the marker
-// file it touches on invocation exists afterward, so the assertion fails.
+// If run() reaches runAWSJSON, it execs the stub (present on PATH) with
+// --access-token <token>; the marker file the stub touches on invocation then
+// exists, so the assertion fails.
 func TestRun_NeverInvokesAWSCLIForAccountRoleLookup(t *testing.T) {
 	home := t.TempDir()
 	cacheDir := filepath.Join(home, ssoCacheSubdir)
@@ -413,7 +412,7 @@ func TestRun_ChooserSkippedWhenSingleAccountSingleRole(t *testing.T) {
 	ssoPortalBase = func(string) string { return portal.URL() }
 	t.Cleanup(func() { ssoPortalBase = prevBase })
 	// A terminal IS present, with nothing to read: a prompt would block or
-	// refuse, and either is a regression for a single-account operator.
+	// refuse, and either breaks a single-account operator.
 	withTerminal(t, "")
 
 	uploaded, out := runHelper(t, portal)
@@ -676,9 +675,9 @@ func TestChooser_SanitisesPortalSuppliedNames(t *testing.T) {
 	}
 }
 
-// TestChooser_RoleLinesHaveNoTrailingSpace is C-13: chooserOptionLine is reused
-// for roles with an empty third value, so every role line used to end in two
-// trailing spaces on the operator's terminal.
+// TestChooser_RoleLinesHaveNoTrailingSpace: chooserOptionLine is reused for
+// roles with an empty third value, and a role line must not end in two trailing
+// spaces on the operator's terminal.
 func TestChooser_RoleLinesHaveNoTrailingSpace(t *testing.T) {
 	var buf bytes.Buffer
 	prev := stdout

@@ -63,8 +63,8 @@ func TestAuditFanoutSurvivesRootCtxCancellation(t *testing.T) {
 	// SIGTERM: rootCtx dies while the HTTP server is still shutting down.
 	cancel()
 
-	// A handler that was still in flight emits. Before the fix this landed in a
-	// buffer nobody was reading.
+	// A handler that is still in flight emits. That event must not land in a
+	// buffer nobody is reading.
 	ev := types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem,
 		Actor: "wardyn/test", Action: "auth.failed", Target: "/api/v1/runs", Outcome: "failure",

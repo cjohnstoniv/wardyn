@@ -119,16 +119,15 @@ func TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
 		}
 	})
 
-	// F318. This subtest used to require ZERO rows here, and the concern behind
-	// that is kept verbatim below: nothing was decided, so no row may CLAIM a
-	// decision. But the bypass itself did happen — the gate was passed, at the
-	// gate, before Decide was ever called — and docs/ENV.md promises the
+	// The concern that nothing was decided, so no row may CLAIM a decision, is
+	// kept verbatim below. But the bypass itself happens — the gate is passed,
+	// at the gate, before Decide is ever called — and docs/ENV.md promises the
 	// operator that each admin-token bypass writes approval.second_human.bypass.
-	// An emit that fired only on success made the count of break-glass uses
-	// depend on whether the store answered, so a caller who never completes a
-	// decision left nothing behind at all. The OUTCOME is what tells the two
-	// apart, which is why the emit stays below Decide rather than moving back
-	// into the gate.
+	// An emit that fired only on success would make the count of break-glass
+	// uses depend on whether the store answered, so a caller who never completes
+	// a decision would leave nothing behind at all. The OUTCOME is what tells
+	// the two apart, which is why the emit stays below Decide rather than in the
+	// gate.
 	for _, tc := range []struct {
 		name      string
 		decideErr error

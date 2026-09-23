@@ -20,12 +20,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
-// TestDecisionSinkEmitCloseRace locks down E3: emit() must never send on a
-// closed channel. Before the fix emit() checked closed, released the lock, then
-// sent — so a concurrent close() could close the channel between the check and
-// the send, panicking. The non-blocking send now runs UNDER s.mu, mutually
-// exclusive with close()'s close(ch). Run under `go test -race`; pre-fix this
-// panics (crashing the test binary), post-fix it passes.
+// TestDecisionSinkEmitCloseRace: emit() must never send on a closed channel. If
+// emit() checked closed, released the lock, then sent, a concurrent close()
+// could close the channel between the check and the send and panic. The
+// non-blocking send runs UNDER s.mu, mutually exclusive with close()'s
+// close(ch). Run under `go test -race`; a racy emit panics, crashing the test
+// binary.
 func TestDecisionSinkEmitCloseRace(t *testing.T) {
 	log := decisionLog(egress.Request{Host: "x.test"}, egress.Allow, "policy:allowed")
 	for iter := 0; iter < 50; iter++ {

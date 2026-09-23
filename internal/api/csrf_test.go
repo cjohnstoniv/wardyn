@@ -203,10 +203,11 @@ func TestCSRFGuard(t *testing.T) {
 			wantOIDCRefused:  true,
 		},
 		{
-			// RULE 3's OWN WORDS (S2-02): the CLI/API fallthrough is "no Origin
-			// AND no Sec-Fetch-Site". A browser that omits Origin on a same-site
+			// RULE 3's OWN WORDS: the CLI/API fallthrough is "no Origin AND no
+			// Sec-Fetch-Site". A browser that omits Origin on a same-site
 			// top-level form POST — the sibling host on a shared parent domain,
-			// again — used to land in it, because only "cross-site" refused.
+			// again — must not land in it just because only "cross-site" is
+			// refused.
 			name:             "Sec-Fetch-Site: same-site with no Origin",
 			secFetchSite:     "same-site",
 			wantLocalRefused: true,
@@ -343,7 +344,7 @@ func TestCSRFGuard_BearerCallerIsNotRefused(t *testing.T) {
 	}
 }
 
-// TestCSRFGuard_EveryMutatingRouteIsFenced is the REGRESSION FENCE, and it
+// TestCSRFGuard_EveryMutatingRouteIsFenced is the route-wide fence, and it
 // hand-lists nothing. The table above drives one route (POST /auth/logout, the
 // most harmless mutation in the API); this walks authz_test.go's
 // chi.Walk-derived routeMatrix — the file's own doctrine, and the thing that

@@ -297,13 +297,12 @@ func TestDocsOpsSessionCookieDocsMatchTheCodec(t *testing.T) {
 	}
 }
 
-// TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo is F063, rewritten in 0.7.2 when
-// the two substrates stopped behaving the same way. The row originally said the
-// cap "warns/fails closed when a cap is demanded but unsupported"; neither
-// substrate failed closed on that branch, both ran UNCAPPED. Now only Docker
-// does: the k8s substrate SETS the agent container's
-// resources.limits[ephemeral-storage] and the kubelet enforces it by evicting the
-// pod, so "both substrates warn" became false the moment that warn was deleted.
+// TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo pins the disk-cap row to what
+// each substrate does, and the two differ. Docker warns and runs UNCAPPED when a
+// cap is demanded but unsupported — it does not fail closed. The k8s substrate
+// SETS the agent container's resources.limits[ephemeral-storage] and the kubelet
+// enforces it by evicting the pod, so it has no such warning, and "both
+// substrates warn" is false.
 //
 // Anchored on all three code facts — Docker's uncapped warning, the ABSENCE of
 // the k8s one, and the limit that replaced it — so a change of posture on either
@@ -495,11 +494,10 @@ func TestDocsOpsAuditStreamTriggerClaimIsScoped(t *testing.T) {
 	t.Fatal("README.md has no \"Audit + attach\" capability row — re-anchor this guard")
 }
 
-// TestDocsOpsStatusSectionCarriesNoStaleVersion is F010: the README's Status section
-// named v0.6.0 as the current release six patch releases later, while the same
-// file's install line pinned v0.6.6. It is now written version-free; this keeps
-// it that way, or forces any literal reintroduced there to match the shipped
-// version.
+// TestDocsOpsStatusSectionCarriesNoStaleVersion: the README's Status section is
+// written version-free, so it cannot name an older release than the file's own
+// install line pins. This keeps it that way, or forces any literal reintroduced
+// there to match the shipped version.
 func TestDocsOpsStatusSectionCarriesNoStaleVersion(t *testing.T) {
 	root := repoRoot(t)
 
@@ -672,19 +670,19 @@ func TestDocsOpsRunAuditRowsCiteEveryEmitFile(t *testing.T) {
 	}
 }
 
-// TestDocsOpsExternalAttributionsAreRight is F052 and F053, two attribution defects a
-// reader cannot check without leaving the page:
+// TestDocsOpsExternalAttributionsAreRight pins two attribution facts a reader cannot
+// check without leaving the page:
 //
-//   - PLUGGABILITY.md listed Kata Containers among CNCF-graduated/incubating
-//     projects in a governance due-diligence sentence. Kata is an OpenInfra
-//     Foundation project and appears in the CNCF directory at no maturity level.
-//   - OPERATIONS.md attributed a verbatim quotation about nested group
-//     membership to Entra's "Configure optional claims" page, which does not
-//     contain it — that page's only nested-group sentence points the other way.
-//     The sentence is on "Configure group claims for applications".
+//   - Kata Containers is not a CNCF-graduated or incubating project, so
+//     PLUGGABILITY.md's governance due-diligence sentence must not list it
+//     among them. Kata is an OpenInfra Foundation project and appears in the
+//     CNCF directory at no maturity level.
+//   - OPERATIONS.md's quotation about nested group membership is from Entra's
+//     "Configure group claims for applications", not "Configure optional
+//     claims" — that page's only nested-group sentence points the other way.
 //
-// Neither has an in-repo source to derive from, so these are literal guards:
-// their job is to stop the exact regression, loudly, with the reason attached.
+// Neither has an in-repo source to derive from, so these are literal guards: their
+// job is to fail loudly, with the reason attached, if either claim comes back.
 func TestDocsOpsExternalAttributionsAreRight(t *testing.T) {
 	plug := readOpsDoc(t, "docs", "PLUGGABILITY.md")
 	cncf := regexp.MustCompile(`CNCF-graduated/incubating where available \(([^)]*)\)`).FindStringSubmatch(plug)
@@ -779,12 +777,12 @@ func networkSectionCIDRGuidanceGaps(section, hint string) []string {
 	return gaps
 }
 
-// TestDocsOpsNetworkSectionInvertsTheCIDRSDefault is B7: the Network section
-// used to tell an operator to "declare tight cidrs" — advice that cost a real
-// deployment two failed runs, because the ranges an operator's own machine
-// resolves for a private endpoint are not the ranges the SANDBOX resolves
-// into. The doc must say the opposite (empty cidrs is the default) and must
-// quote the 403's own hint verbatim, not a paraphrase that can drift from it.
+// TestDocsOpsNetworkSectionInvertsTheCIDRSDefault: the Network section must
+// not tell an operator to "declare tight cidrs" — the ranges an operator's
+// own machine resolves for a private endpoint are not the ranges the SANDBOX
+// resolves into, so that advice fails runs. The doc must say the opposite
+// (empty cidrs is the default) and must quote the 403's own hint verbatim,
+// not a paraphrase that can drift from it.
 func TestDocsOpsNetworkSectionInvertsTheCIDRSDefault(t *testing.T) {
 	root := repoRoot(t)
 	section := networkSection(t, readOpsDoc(t, "docs", "OPERATIONS.md"))

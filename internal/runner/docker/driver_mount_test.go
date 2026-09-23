@@ -238,14 +238,14 @@ func TestCreateSandbox_DeniedMountsRejected(t *testing.T) {
 		{"empty-source", runner.Mount{Source: "", Target: "/work/x"}},
 		{"bad-target-prefix", runner.Mount{Source: "/home/u/repo", Target: "/etc"}},
 		{"bad-target-usr", runner.Mount{Source: "/home/u/repo", Target: "/usr/local"}},
-		// The reserved target, arriving from a STORED POLICY ROW. validatePolicySpec
-		// refuses it at authoring — but only since the reservation existed, and a
-		// row written before that is exactly what this defense-in-depth re-check
-		// is for. The driver's half used to be runner.ValidateMount, whose
-		// ValidateTarget does not carry the reservation, so the bind landed INSIDE
-		// the member's drive: nesting over a rw bind makes runc mkdir the
-		// intermediate directories in the share, and whichever mount lands second
-		// shadows the other.
+		// The reserved target, arriving from a STORED POLICY ROW.
+		// validatePolicySpec refuses it at authoring, but a row written before the
+		// reservation existed is exactly what this defense-in-depth re-check is
+		// for. The driver's check must carry the reservation:
+		// runner.ValidateMount's ValidateTarget alone does not, so the bind would
+		// land INSIDE the member's drive — nesting over a rw bind makes runc mkdir
+		// the intermediate directories in the share, and whichever mount lands
+		// second shadows the other.
 		{"reserved-drive-target", runner.Mount{Source: "/home/u/repo", Target: runner.DriveTarget}},
 		{"reserved-drive-target-nested", runner.Mount{Source: "/home/u/repo", Target: runner.DriveTarget + "/shared"}},
 		{"relative-target", runner.Mount{Source: "/home/u/repo", Target: "work"}},
@@ -428,18 +428,20 @@ func TestCreateSandbox_HostPathDriveHomeMustResolveToThisPrincipal(t *testing.T)
 }
 
 // TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot is the two-drive
-// deployment, and the hole the deployment ceiling alone could not close.
+// deployment, and the hole the deployment ceiling alone cannot close.
 //
 // WARDYN_USER_DRIVE_HOST_ROOTS is the OPERATOR's outer bound over every drive
-// at once, so with two share drives — one rooted at /srv/a, one at /srv/b, both
-// inside the ceiling — it cannot tell one drive's tree from the other's. A home
-// under A replaced host-side by a link to the SAME-NAMED home under B satisfies
-// every check the driver used to have: inside a configured root, not a root, no
-// denied segment, and `filepath.Base` still says "alice". It bound drive B's
-// directory — another person's whenever B names "alice" for somebody else.
+// at once, so with two share drives — one rooted at /srv/a, one at /srv/b,
+// both inside the ceiling — it cannot tell one drive's tree from the other's.
+// A home under A replaced host-side by a link to the SAME-NAMED home under B
+// satisfies every check the ceiling alone offers — inside a configured root,
+// not a root, no denied segment, and `filepath.Base` still says "alice" — and
+// binds drive B's directory, another person's whenever B names "alice" for
+// somebody else.
 //
-// The mount now carries the drive's own host_root and the driver asserts the
-// resolved path is a strict subdirectory of THAT root. The ceiling stays as the
+// The mount carries the drive's own host_root and the driver asserts the
+// resolved path is a strict subdirectory of THAT root. The ceiling stays as
+// the
 // outer bound (an admin-authored row must not be able to name a tree the
 // operator never allowed), so both are asserted, and the sub-tests below are
 // each half of that pair plus the fail-closed arm for a mount that carries no
@@ -518,12 +520,13 @@ func TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot(t *testing.T) {
 		}
 	})
 
-	// FAIL CLOSED on a mount that carries no host_root. "" means this DriveMount
-	// was built by something that does not know the field — an older control
-	// plane, or an in-process caller that assembled the SandboxSpec itself —
-	// and falling through would be the pre-fix behaviour reappearing exactly
-	// where nobody would look for it. The ceiling is deliberately satisfied here, so the row
-	// is a statement about the drive's own root and nothing else.
+	// FAIL CLOSED on a mount that carries no host_root. "" means this
+	// DriveMount was built by something that does not know the field — an
+	// older control plane, or an in-process caller that assembled the
+	// SandboxSpec itself — and falling through would skip the drive-root check
+	// exactly where nobody would look for it. The ceiling is deliberately
+	// satisfied here, so the row is a statement about the drive's own root and
+	// nothing else.
 	t.Run("a share mount with no host_root is refused", func(t *testing.T) {
 		root, home := driveHostRoot(t)
 		drive := hostPathDrive(home)
@@ -677,12 +680,11 @@ func TestCreateSandbox_ReservedSpecMountIsRefusedBeforeTheDriveIsAllocated(t *te
 }
 
 // TestCreateSandbox_DriveTargetIsPinnedToTheReservedPath is the DRIVER's side
-// of the reserved-target rule, and the parity fix for it: this driver used to
-// run runner.ValidateTarget alone, which asks only "is this a legal place for a
-// mount" — and /home/agent, /home/agent/.claude and /work all are. The k8s
-// driver has refused anything but runner.DriveTarget since D4
-// (validateDriveMount, errDriveTargetInvalid), so one rule had two answers
-// depending on the substrate.
+// of the reserved-target rule: runner.ValidateTarget alone asks only "is this
+// a legal place for a mount" — and /home/agent, /home/agent/.claude and /work
+// all are. The k8s driver refuses anything but runner.DriveTarget
+// (validateDriveMount, errDriveTargetInvalid), and this driver must give the
+// same answer rather than a second one that depends on the substrate.
 //
 // The rows are not interchangeable: /home/agent/.claude shadows the injected
 // credential directory with a member-owned volume that SURVIVES the run,
@@ -736,18 +738,15 @@ func TestCreateSandbox_DriveTargetIsPinnedToTheReservedPath(t *testing.T) {
 	})
 }
 
-// TestDriveMount_HostPathCeilingIsUnconditional is the pin the old
-// driveHostMount stamp test used to be, moved onto the function that now does
-// the conversion (driveMount, its single caller).
+// TestDriveMount_HostPathCeilingIsUnconditional pins the ceiling on
+// driveMount, the function that does the conversion (its single caller).
 //
-// The stamp test asserted that a share drive reached ContainerCreate carrying
-// runner.Mount.DriveAuthored, because the roots ceiling was written `if
-// m.DriveAuthored` — fail-OPEN by shape, since the flag's only false state is a
-// refactor that stops setting it. The ceiling is now unconditional, so the
-// property worth pinning is the ceiling itself: the SAME call that binds an
-// in-root share refuses when the deployment named no roots, with nothing in
-// between that could turn it off. The happy-path half also carries the old
-// test's other assertions — source, target and mode arrive verbatim from the
+// A ceiling written `if m.DriveAuthored` is fail-OPEN by shape, since the
+// flag's only false state is a refactor that stops setting it. The ceiling is
+// unconditional, so the property worth pinning is the ceiling itself: the
+// SAME call that binds an in-root share refuses when the deployment named no
+// roots, with nothing in between that could turn it off. The happy-path half
+// also asserts that source, target and mode arrive verbatim from the
 // resolver, never re-derived here.
 func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
 	root, home := driveHostRoot(t)

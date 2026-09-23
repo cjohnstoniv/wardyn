@@ -42,13 +42,13 @@ func (b *blockingBody) Read(p []byte) (int, error) {
 	return 0, io.EOF
 }
 
-// TestScanBufferedBodyBoundsConcurrentBuffering pins F074: the number of request
-// bodies buffered+extracted AT ONCE has to be bounded, because the extractor's
+// TestScanBufferedBodyBoundsConcurrentBuffering: the number of request bodies
+// buffered+extracted AT ONCE has to be bounded, because the extractor's
 // live-heap amplification (~5.3x, measured, and independent of the detector set)
 // against a 32 MiB per-body cap does not fit twice inside the proxy sidecar's
-// hard 256 MiB cgroup ceiling. Measured before the fix: one in-cap 30 MiB body
-// peaked at ~158 MiB of live heap, two concurrent at ~274 MiB — over the cap,
-// and an OOM-killed proxy sidecar takes the run's only network path with it. The
+// hard 256 MiB cgroup ceiling: unbounded, one in-cap 30 MiB body peaks at ~158
+// MiB of live heap and two concurrent at ~274 MiB — over the cap, and an
+// OOM-killed proxy sidecar takes the run's only network path with it. The
 // agent inside the sandbox chooses both the sizes and the concurrency, and
 // nothing else in internal/egress/proxy limits either (no LimitListener, no
 // semaphore, no rate limiter; the servers set timeouts only).

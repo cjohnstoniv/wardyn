@@ -9,14 +9,13 @@ import (
 	"testing"
 )
 
-// TestKillOrderDocs_MatchC002CASFirst is the regression:
-// threatmodel/THREAT-MODEL.md and pkg/client/client.go's KillRun doc comment
-// used to describe the PRE-C002 kill order (sandbox teardown before the state
-// CAS) for the explicit-kill path — the exact order C002
-// (handleKillRun/runs_lifecycle.go, see "WIN THE TERMINAL TRANSITION FIRST")
-// inverted, so a kill that lost a race to a concurrent forward-transition
-// could revoke credentials out from under a run it no longer owned. Both docs
-// must state CAS-first.
+// TestKillOrderDocs_MatchC002CASFirst: threatmodel/THREAT-MODEL.md and
+// pkg/client/client.go's KillRun doc comment must state the CAS-first kill
+// order for the explicit-kill path (handleKillRun/runs_lifecycle.go, see "WIN
+// THE TERMINAL TRANSITION FIRST"), not sandbox teardown before the state CAS
+// — with teardown first, a kill that lost a race to a concurrent
+// forward-transition could revoke credentials out from under a run it no
+// longer owned.
 func TestKillOrderDocs_MatchC002CASFirst(t *testing.T) {
 	tm, err := os.ReadFile("../../threatmodel/THREAT-MODEL.md")
 	if err != nil {

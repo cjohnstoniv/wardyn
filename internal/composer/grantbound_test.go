@@ -19,20 +19,21 @@ func sshKeyGrant(t *testing.T, host, keyRef string, approval bool, ttl int) type
 	return types.GrantSpec{Kind: types.GrantSSHKey, Scope: sc, RequiresApproval: approval, TTLSeconds: ttl}
 }
 
-// TestClampGrantsBoundsByPairingNotKind is the pin for the runtime half of the
-// one comparator.
+// TestClampGrantsBoundsByPairingNotKind is the pin for the runtime half of
+// the one comparator.
 //
-// clampGrants used to index the ceiling by KIND alone (`ceilByKind[cg.Kind] = cg`
-// for every entry), so a ceiling holding two grants of one kind — the normal
-// shape for two SSH forges, two api_key hosts or two git_pat hosts — collapsed
-// to whichever came LAST, and that arbitrary grant supplied the approval posture
-// and the TTL for every proposal of the kind. Two consequences, both here:
+// clampGrants indexes the ceiling by PAIRING, not by KIND alone: a ceiling
+// holding two grants of one kind is the normal shape for two SSH forges, two
+// api_key hosts or two git_pat hosts, and a by-kind index
+// (`ceilByKind[cg.Kind] = cg`) would collapse them to whichever came LAST,
+// letting that arbitrary grant supply the approval posture and the TTL for
+// every proposal of the kind. Two consequences, both pinned here:
 //
-//   - APPROVAL STRIPPED. A proposal naming the STRICT forge's pairing was
-//     clamped against the PERMISSIVE forge's grant and kept requires_approval
-//     false — and a stripped approval flag auto-mints the injection at proxy
-//     boot with no human in the loop.
-//   - ORDER DEPENDENCE. The same ceiling SET produced different clamps
+//   - APPROVAL STRIPPED. A proposal naming the STRICT forge's pairing would
+//     be clamped against the PERMISSIVE forge's grant and keep
+//     requires_approval false — and a stripped approval flag auto-mints the
+//     injection at proxy boot with no human in the loop.
+//   - ORDER DEPENDENCE. The same ceiling SET would produce different clamps
 //     depending on slice order, in a codebase where a ceiling is a set
 //     everywhere else.
 func TestClampGrantsBoundsByPairingNotKind(t *testing.T) {

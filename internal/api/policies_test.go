@@ -70,11 +70,11 @@ func TestCreatePolicyValidation(t *testing.T) {
 }
 
 // TestCreatePolicy_UnknownSecretRefFailsAtAuthorTime pins the author-time
-// fail-fast for validateWorkspaceSources' sibling reference. A typo'd api_key
-// secret name used to save GREEN and then 422 at every launch that referenced the
-// policy — the exact failure mode the workspace check was added to prevent, on
-// the other referenced resource. Advisory, not the load-bearing gate: the secret
-// can be deleted afterwards, so run-create still re-checks.
+// fail-fast for validateWorkspaceSources' sibling reference: a typo'd api_key
+// secret name must not save GREEN and then 422 at every launch that references
+// the policy — the failure mode the workspace check prevents, on the other
+// referenced resource. Advisory, not the load-bearing gate: the secret can be
+// deleted afterwards, so run-create still re-checks.
 func TestCreatePolicy_UnknownSecretRefFailsAtAuthorTime(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("k")}}
@@ -145,9 +145,9 @@ func TestRedactPolicyForRead(t *testing.T) {
 	}
 }
 
-// TestGetDefaultPolicy pins: the control plane's ceiling policy
+// TestGetDefaultPolicy pins that the control plane's ceiling policy
 // (Config.DefaultPolicy — the same value composer.Clamp bounds a member's
-// inline policy against) is now readable, redacted the same way a stored
+// inline policy against) is readable, redacted the same way a stored
 // policy's read path is. "default" is a static route registered ahead of
 // /policies/{id}, so it must never fall into parseIDParam's bad-uuid 400.
 func TestGetDefaultPolicy(t *testing.T) {
@@ -253,9 +253,9 @@ func (duplicateNamePolicyStore) CreatePolicy(context.Context, types.RunPolicy) (
 	return types.RunPolicy{}, store.ErrConflict
 }
 
-// TestCreatePolicyDuplicateName pins: a duplicate policy name must
-// surface as a caller-actionable 409, never handleCreatePolicy's former
-// blanket 500 (raw driver error text).
+// TestCreatePolicyDuplicateName pins that a duplicate policy name must
+// surface as a caller-actionable 409, never a blanket 500 (raw driver
+// error text).
 func TestCreatePolicyDuplicateName(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, duplicateNamePolicyStore{}))

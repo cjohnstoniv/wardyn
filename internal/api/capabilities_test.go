@@ -220,9 +220,9 @@ func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return s.govHasGroupTier, nil
 }
 
-// ListCapabilityGrants is the WHOLE fake table — the ADMIN LISTING, and now
-// nothing else. The resolver used to reach it on every unanswerable-snapshot
-// check; the counter is what keeps it from creeping back. Embedding store.Store
+// ListCapabilityGrants is the WHOLE fake table — the ADMIN LISTING, and nothing
+// else. The resolver must not reach it on an unanswerable-snapshot check; the
+// counter is what keeps it from creeping back. Embedding store.Store
 // makes an unimplemented method a nil-pointer panic rather than a silent
 // answer, which is why this one is spelled out here rather than left to the
 // embed.

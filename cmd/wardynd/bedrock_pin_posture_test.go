@@ -35,10 +35,10 @@ func perUserRoster(account string) types.SiteConfig {
 	return types.SiteConfig{AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{row}}}
 }
 
-// TestWarnBedrockSSOPinPosture (lens-S S-3): the deployment where a
-// sandbox-chosen account AND role are stored unchecked is the one that used to
-// say nothing at all at boot — the only warning there (BedrockModelARNNamesNoAccount)
-// fires exclusively for a model that LOOKS like an ARN.
+// TestWarnBedrockSSOPinPosture: the deployment where a sandbox-chosen account AND
+// role are stored unchecked must warn at boot — the only other warning there
+// (BedrockModelARNNamesNoAccount) fires exclusively for a model that LOOKS like an
+// ARN.
 func TestWarnBedrockSSOPinPosture(t *testing.T) {
 	const bare = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 	const arn = "arn:aws:bedrock:us-east-1:111111111111:inference-profile/us.anthropic.claude-v1:0"

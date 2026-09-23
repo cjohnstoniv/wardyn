@@ -57,14 +57,14 @@ func TestNAT64EmbeddedV4(t *testing.T) {
 	}
 }
 
-// F089: the gateway predicate's whole table, in the ONE place it now lives.
+// The gateway predicate's whole table, in the ONE place it lives.
 //
-// It used to be two byte-identical unexported copies (api.llmGatewayIPRefused,
-// proxy.trustedGatewayIPRefused) coupled by a comment, and the proxy copy's
-// NAT64 arm was unpinned: replacing it with `return false` left the entire
-// internal/egress/proxy suite green, while a gateway hostname resolving to
-// 64:ff9b::a9fe:a9fe — NAT64-mapped 169.254.169.254 — would be admitted by the
-// per-request re-check and dialled with the brokered model credential.
+// Two byte-identical unexported copies (api.llmGatewayIPRefused,
+// proxy.trustedGatewayIPRefused) coupled by a comment would leave one copy's
+// arms unpinned: replacing the NAT64 arm with `return false` could leave the
+// whole internal/egress/proxy suite green, while a gateway hostname resolving
+// to 64:ff9b::a9fe:a9fe — NAT64-mapped 169.254.169.254 — would be admitted by
+// the per-request re-check and dialled with the brokered model credential.
 //
 // Both halves matter and both are listed: the refusals are the trust boundary,
 // and the admissions are why this is not PrivateReserved — an internal gateway

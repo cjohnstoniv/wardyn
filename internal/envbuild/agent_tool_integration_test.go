@@ -84,7 +84,7 @@ func TestBuildFromDevcontainerFiles_BakesAgentCLI(t *testing.T) {
 	ref, err := b.BuildFromDevcontainerFiles(ctx, files, tag, &logs)
 	if err != nil {
 		// Same two environmental preconditions TestBuild_SmokeDockerd documents:
-		// classify those as SKIP, fail on anything else so a real regression is red.
+		// classify those as SKIP, fail on anything else so a real defect is red.
 		log := logs.String()
 		switch {
 		case strings.Contains(log, "operation not permitted") && strings.Contains(log, "chown"):

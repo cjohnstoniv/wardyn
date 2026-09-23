@@ -382,23 +382,22 @@ func TestAttachHolderRegistry_RoundTrip(t *testing.T) {
 	releaseFirst() // idempotent: the deferred release must be safe twice
 }
 
-// TestAttachHolderRegistry_ReleaseNeverEvictsSuccessor: after a take-over
-// evicts a holder and a fresh client claims the run, the DISPLACED handler's
-// A displaced holder must lose WRITE AUTHORITY at eviction, not whenever its
-// socket finishes dying.
+// TestAttachHolder_EvictionRevokesWriteAuthorityImmediately: a displaced holder
+// must lose WRITE AUTHORITY at eviction, not whenever its socket finishes
+// dying.
 //
-// This is the regression test for the one real hole a review found in this
-// file. The pumps gate writes on the *attachHolder they captured at attach
-// time; evictAttachHolder only removed the map entry, and displace() closes the
-// socket rather than cancelling the pump (deliberately — a cancelled context
-// sends no close frame). coder/websocket's Close does a full handshake whose
-// second half blocks on the read mutex the displaced pump holds, so between
-// "take-over returned 200" and "the old socket actually died" the OLD client
-// could still write into the same tmux session as the new one. Two writers is
-// precisely the state this file exists to prevent.
+// The pumps gate writes on the *attachHolder they captured at attach time, and
+// displace() closes the socket rather than cancelling the pump (deliberately —
+// a cancelled context sends no close frame). coder/websocket's Close does a
+// full handshake whose second half blocks on the read mutex the displaced pump
+// holds, so if eviction only removed the map entry, then between "take-over
+// returned 200" and "the old socket actually died" the OLD client could still
+// write into the same tmux session as the new one. Two writers is precisely the
+// state this file exists to prevent.
 //
 // Asserting on canWrite() rather than on the close status is the point: the
-// existing take-over test already checks the close, and it passed throughout.
+// take-over test already checks the close, and that check passes even with two
+// writers.
 func TestAttachHolder_EvictionRevokesWriteAuthorityImmediately(t *testing.T) {
 	srv := New(Config{Audit: &recRecorder{}, AdminToken: adminToken})
 	runID := uuid.New()
@@ -966,22 +965,19 @@ func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 
 // D1: a holder that outlives its socket
 
-// TestAttachWS_DeadPeerHolderIsFreed is the regression test for D1's liveness
-// probe (attachPingInterval).
+// TestAttachWS_DeadPeerHolderIsFreed pins the liveness probe
+// (attachPingInterval).
 //
-// MEASUREMENT (done before writing this fix, per the campaign spec): built the
-// same scenario below against the PRE-FIX pump — a silent PTY (never fed any
-// output) and a peer that stops reading right after the attach-mode frame, the
-// exact shape of a browser tab whose machine died or lost its network mid-
-// session. attachHolderFor(run.ID) was STILL non-nil after several real
-// seconds of polling, and nothing in the pump could ever free it: with no
-// output, attachWriteTimeout's bounded Write is never attempted; with no
-// client frame, c.Read has no deadline of its own. The slot was bounded only
-// by whatever the OS/proxy eventually notices about the dead TCP connection —
-// in the worst case (a genuine network black hole, no FIN, no RST), never.
-// Every OTHER attacher (a second browser tab, `wardyn attach`, the SSH
-// gateway) reads that run as permanently "held" until the daemon restarts —
-// this is the reported "sometimes I can never click back in".
+// The scenario: a silent PTY (never fed any output) and a peer that stops
+// reading right after the attach-mode frame — the exact shape of a browser tab
+// whose machine died or lost its network mid-session. Without a probe nothing
+// in the pump can free the holder: with no output, attachWriteTimeout's
+// bounded Write is never attempted; with no client frame, c.Read has no
+// deadline of its own. The slot would be bounded only by whatever the OS/proxy
+// eventually notices about the dead TCP connection — in the worst case (a
+// genuine network black hole, no FIN, no RST), never — and every OTHER
+// attacher (a second browser tab, `wardyn attach`, the SSH gateway) would read
+// that run as permanently "held" until the daemon restarts.
 //
 // SIMULATING "dead" without a real dead socket: coder/websocket only answers
 // (or even observes) a Ping while something on that side is calling
@@ -1032,17 +1028,16 @@ func (r *blockingDetachAudit) Record(ctx context.Context, ev types.AuditEvent) e
 	return r.sshTestRecorder.Record(ctx, ev)
 }
 
-// TestAttachWS_RemountReleasesHolderBeforeAuditTail is the regression test for
-// D2. Focus mode (canvas.tsx) remounts the terminal: the OLD attach socket
-// closes in cleanup and the NEW one opens in the same effect flush, well
-// before the OLD handler's finishRecording + session.detach audit have any
-// chance to run (they are disk/DB I/O with no bound). Pre-fix, releaseHolder
-// was deferred to run AFTER that tail, so the new handshake's
-// registerAttachHolder call landed inside that window and was admitted READ-
-// ONLY against its own vanishing self — the reported "sometimes I can never
-// click back in".
+// TestAttachWS_RemountReleasesHolderBeforeAuditTail: focus mode (canvas.tsx)
+// remounts the terminal — the OLD attach socket closes in cleanup and the NEW
+// one opens in the same effect flush, well before the OLD handler's
+// finishRecording + session.detach audit have any chance to run (they are
+// disk/DB I/O with no bound). releaseHolder runs before that tail; deferred
+// until after it, the new handshake's registerAttachHolder call would land
+// inside that window and be admitted READ-ONLY against its own vanishing self,
+// leaving the user unable to click back in.
 //
-// This also PINS the accepted audit-order trade-off the fix's own comment
+// This also PINS the accepted audit-order trade-off the handler's own comment
 // documents: releasing the slot promptly means a successor's session.attach
 // can be recorded BEFORE the departing session's session.detach lands — the
 // opposite of handleAttachTakeover's "audit first, displace second" rule,

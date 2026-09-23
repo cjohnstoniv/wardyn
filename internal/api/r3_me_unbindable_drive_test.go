@@ -120,22 +120,16 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 
 // driveRefusedMetric reads the total across every reason from /metrics.
 //
-// R1 F321: this helper could not fail. It scraped /metrics on a Server with no
-// AdminToken, so the response was a 401 whose 60-byte body contains no series at
-// all; it then matched the prefix `wardyn_user_drive_refused_total`, which
-// nothing emits — the exposition is `wardyn_drive_refusals_total`
-// (metrics.go). Two independent reasons to return 0 unconditionally, so the
-// subtest that reads "a /me read moves no refusal metric" passed with the
-// regression injected: adding s.metrics.driveRefused(...) to the top of
-// resolveMeUserDrive left it green.
-//
-// The fatals are the fix, not the prefix. A metric helper that silently returns
-// 0 when it read nothing is a helper that turns every assertion built on it into
-// a tautology, and the two defects above were each individually enough to do
-// that. So a non-200 and an empty match are now failures in their own right, and
-// the next way this helper stops seeing the series — a renamed metric, a
-// re-tiered /metrics, a harness that stops carrying the token — fails loudly
-// instead of quietly reporting that nothing happened.
+// It fails on a non-200 and on an empty match. A metric helper that silently
+// returns 0 when it read nothing turns every assertion built on it into a
+// tautology: scraping /metrics on a Server with no AdminToken yields a 401 whose
+// 60-byte body contains no series at all, and a wrong prefix (the exposition is
+// `wardyn_drive_refusals_total`, metrics.go) matches nothing — either would let
+// "a /me read moves no refusal metric" pass even with
+// s.metrics.driveRefused(...) added to the top of resolveMeUserDrive. So the
+// next way this helper stops seeing the series — a renamed metric, a re-tiered
+// /metrics, a harness that stops carrying the token — fails loudly instead of
+// quietly reporting that nothing happened.
 func driveRefusedMetric(t *testing.T, srv *Server) int {
 	t.Helper()
 	w := do(t, srv, http.MethodGet, "/metrics", adminToken, "")

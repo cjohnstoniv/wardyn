@@ -23,9 +23,9 @@ func agedRun(state types.RunState, age time.Duration) types.AgentRun {
 	return run
 }
 
-// TestSweepRunSecrets is the regression for: no production
-// path called secretmask.Registry.Evict, so every run's plaintext credentials
-// accumulated in wardynd's heap for the process lifetime. The sweep evicts a
+// TestSweepRunSecrets: the sweep is the production path that calls
+// secretmask.Registry.Evict; without it every run's plaintext credentials
+// accumulate in wardynd's heap for the process lifetime. The sweep evicts a
 // run that has been terminal past the grace period, and — because masking fails
 // OPEN — keeps everything it cannot prove terminal-and-cold: a run that only
 // just ended (late readers like the finalize audit still mask against it), a

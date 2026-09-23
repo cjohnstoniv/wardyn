@@ -11,13 +11,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// These are the counterfactuals for the crown's confirmed policy-aliasing
-// cluster: resolvePolicy used to hand out a SHALLOW copy of the process-global
-// cfg.DefaultPolicy, so every caller's slice header pointed at the global's
-// backing array. Two concurrent create-runs appending run-specific egress then
-// raced the same spare-capacity element (one run's domain replacing another's
-// in the allowlist handed to its proxy), and any in-place mutation leaked into
-// every later run. resolvePolicy now Clones.
+// These are the counterfactuals for policy aliasing: if resolvePolicy handed
+// out a SHALLOW copy of the process-global cfg.DefaultPolicy, every caller's
+// slice header would point at the global's backing array. Two concurrent
+// create-runs appending run-specific egress would then race the same
+// spare-capacity element (one run's domain replacing another's in the
+// allowlist handed to its proxy), and any in-place mutation would leak into
+// every later run. resolvePolicy Clones.
 
 // defaultPolicyWithSpareCapacity mirrors the shipped policies' real shape: a
 // decoded AllowedDomains slice with spare capacity (default.json decodes to
@@ -60,7 +60,7 @@ func TestResolvePolicy_DoesNotAliasDefaultPolicy(t *testing.T) {
 		t.Fatalf("resolvePolicy: %v", err)
 	}
 
-	// Two resolutions must not share storage (pre-fix: &a[0] == &b[0]).
+	// Two resolutions must not share storage (&a[0] != &b[0]).
 	if &specA.AllowedDomains[0] == &specB.AllowedDomains[0] {
 		t.Fatal("resolvePolicy returned two specs sharing one AllowedDomains backing array — a per-run append will corrupt a sibling run")
 	}
@@ -88,9 +88,9 @@ func TestResolvePolicy_DoesNotAliasDefaultPolicy(t *testing.T) {
 
 // TestResolvePolicy_ConcurrentUnionNoRace is the -race counterfactual: N
 // goroutines resolving the default policy and appending their own egress domain
-// concurrently. Pre-fix this fired "DATA RACE ... unionAllowedDomains (write)"
-// and one run's domain would replace another's. Each run must end up with
-// exactly its own domain and no sibling's.
+// concurrently. A shared backing array fires "DATA RACE ... unionAllowedDomains
+// (write)" and lets one run's domain replace another's. Each run must end up
+// with exactly its own domain and no sibling's.
 func TestResolvePolicy_ConcurrentUnionNoRace(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, nil)

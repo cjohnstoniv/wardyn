@@ -176,12 +176,12 @@ func TestClamp_IntersectsAllowedDomainsToCeiling(t *testing.T) {
 	}
 }
 
-// TestClamp_DenyAllCeilingClampsAllowedDomainsToEmpty is FIX #7: an operator
-// shipping the strictest posture (allow_all_egress:false, allowed_domains:[])
-// means default-deny-all egress. Before the fix, the `len(ceiling.AllowedDomains)
-// > 0` guard skipped the whole intersect block for exactly this ceiling, so a
-// prompt-injected proposal's AllowedDomains passed through untouched. It must
-// instead clamp to empty, same as clampGrants fails closed on an empty ceiling.
+// TestClamp_DenyAllCeilingClampsAllowedDomainsToEmpty: an operator shipping the
+// strictest posture (allow_all_egress:false, allowed_domains:[]) means
+// default-deny-all egress. A `len(ceiling.AllowedDomains) > 0` guard would skip
+// the whole intersect block for exactly this ceiling and pass a prompt-injected
+// proposal's AllowedDomains through untouched. It must clamp to empty, same as
+// clampGrants fails closed on an empty ceiling.
 func TestClamp_DenyAllCeilingClampsAllowedDomainsToEmpty(t *testing.T) {
 	ceiling := types.RunPolicySpec{AllowAllEgress: false, AllowedDomains: []string{}}
 	got, warns := Clamp(types.RunPolicySpec{AllowedDomains: []string{"exfil.example"}}, ceiling, 0)
@@ -400,14 +400,13 @@ func TestClamp_LLMInspectionInheritsCeiling(t *testing.T) {
 	}
 }
 
-// TestClamp_LLMInspectionInheritUnionsSidecarHostIntoAllowedDomains is the
-// bug-policy-1 regression: the AllowedDomains intersection above runs BEFORE
-// the LLMInspection ceiling-inherit block, so the narrowed proposal's own
-// AllowedDomains never carried the ceiling's detector_sidecar_url host — and
-// internal/api's validateLLMInspection requires that host to be an EXACT
-// entry on this SAME post-clamp spec's own allowed_domains, so every
-// compose/profile/inline_policy run under an operator that sets
-// detector_sidecar_url self-rejected. The host must land in the clamped
+// TestClamp_LLMInspectionInheritUnionsSidecarHostIntoAllowedDomains: the
+// AllowedDomains intersection above runs BEFORE the LLMInspection
+// ceiling-inherit block, and internal/api's validateLLMInspection requires
+// the ceiling's detector_sidecar_url host to be an EXACT entry on this SAME
+// post-clamp spec's own allowed_domains — so unless the host is unioned in,
+// every compose/profile/inline_policy run under an operator that sets
+// detector_sidecar_url self-rejects. The host must land in the clamped
 // output's AllowedDomains even when the PROPOSAL never mentioned it — it
 // comes from the operator's own ceiling config, the same trust level as the
 // DeniedDomains union above.
@@ -447,14 +446,14 @@ func domainsContain(domains []string, want string) bool {
 	return false
 }
 
-// TestClamp_LLMInspectionDroppedUnderNilCeiling is (CRIT):
-// a member's hand-authored inline_policy.llm_inspection used to pass through
-// COMPLETELY unclamped whenever the ceiling set none — exactly the shipped
-// default.json posture (it sets no llm_inspection at all). That let a member
-// turn the content-inspection sidecar on and point it (detector_sidecar_url)
-// at ANY URL the wardyn-proxy process can reach, or flip intercept_tls, with
-// zero operator opinion in the way. Symmetric with the workspace_mounts drop:
-// an unset ceiling is the FLOOR for this field, not "no opinion".
+// TestClamp_LLMInspectionDroppedUnderNilCeiling: a member's hand-authored
+// inline_policy.llm_inspection must not pass through unclamped when the
+// ceiling sets none — exactly the shipped default.json posture (it sets no
+// llm_inspection at all). That would let a member turn the content-inspection
+// sidecar on and point it (detector_sidecar_url) at ANY URL the wardyn-proxy
+// process can reach, or flip intercept_tls, with zero operator opinion in the
+// way. Symmetric with the workspace_mounts drop: an unset ceiling is the FLOOR
+// for this field, not "no opinion".
 func TestClamp_LLMInspectionDroppedUnderNilCeiling(t *testing.T) {
 	ceiling := operatorCeiling(t) // sets no llm_inspection opinion, like default.json
 	hostile := types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{
@@ -471,13 +470,13 @@ func TestClamp_LLMInspectionDroppedUnderNilCeiling(t *testing.T) {
 	}
 }
 
-// TestClamp_LLMInspectionCopyRedactsSecretValues is: the ceiling's
-// llm_inspection is unconditionally inherited (see above), but a compose/
-// profile PROPOSAL is advisory output returned straight to the caller in an
-// HTTP response (and, before the fix, embedded in the run.compose audit event
-// too) — it must never carry the resolved secret VALUES, only the NAMES a
-// caller needs to know which secrets are covered. Dispatch alone resolves
-// names->values, in memory, for the proxy sidecar (see runs_dispatch.go).
+// TestClamp_LLMInspectionCopyRedactsSecretValues: the ceiling's
+// llm_inspection is unconditionally inherited (see above), but a
+// compose/profile PROPOSAL is advisory output returned straight to the caller
+// in an HTTP response — it must never carry the resolved secret VALUES, only
+// the NAMES a caller needs to know which secrets are covered. Dispatch alone
+// resolves names->values, in memory, for the proxy sidecar (see
+// runs_dispatch.go).
 func TestClamp_LLMInspectionCopyRedactsSecretValues(t *testing.T) {
 	ceiling := operatorCeiling(t)
 	ceiling.LLMInspection = &types.LLMInspectionSpec{
@@ -502,16 +501,16 @@ func TestClamp_LLMInspectionCopyRedactsSecretValues(t *testing.T) {
 	}
 }
 
-// TestClamp_GitHubEmptyCeilingRepoListDeniesAll is: a member's
-// hand-authored inline_policy github_token grant must not survive Clamp when
-// the ceiling's OWN grant sets no repo allowlist. The SHIPPED default.json
-// ceiling — resolveRunPolicy's real DefaultPolicy on exactly this path
-// (internal/api/inline_policy.go) — ships EXACTLY this shape ("repos": [],
-// a template for the composer/profile pipelines to ground, not an "any repo"
-// grant for a raw member): operatorCeiling(t) above never exercises it, since
-// its own github_token grant carries a non-empty repos list — that is the
-// "unshipped ceiling shape" that let this bug ship. Loaded verbatim from the
-// real file so this test breaks if the shipped ceiling shape ever changes.
+// TestClamp_GitHubEmptyCeilingRepoListDeniesAll: a member's hand-authored
+// inline_policy github_token grant must not survive Clamp when the ceiling's
+// OWN grant sets no repo allowlist. The SHIPPED default.json ceiling —
+// resolveRunPolicy's real DefaultPolicy on exactly this path
+// (internal/api/inline_policy.go) — ships EXACTLY this shape ("repos": [], a
+// template for the composer/profile pipelines to ground, not an "any repo"
+// grant for a raw member), and operatorCeiling(t) above never exercises it,
+// since its own github_token grant carries a non-empty repos list. Loaded
+// verbatim from the real file so this test breaks if the shipped ceiling
+// shape ever changes.
 func TestClamp_GitHubEmptyCeilingRepoListDeniesAll(t *testing.T) {
 	ceiling := loadDefaultPolicyCeiling(t)
 	if len(ceiling.EligibleGrants) == 0 || ceiling.EligibleGrants[0].Kind != types.GrantGitHubToken {
@@ -741,20 +740,18 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 	if hasWarn(warns, "auto_stop_after_sec") {
 		t.Errorf("unexpected auto_stop_after_sec warning with no ceiling opinion: %v", warns)
 	}
-	// F062, replacing the assertion that used to stand here. That one
-	// pinned "-1 is rewritten to 0, with a warning" — a rewrite that changed the
-	// NUMBER and not the OUTCOME: internal/lifecycle's reaper skips every run
-	// whose policy value is <= 0, so 0 and -1 are the same never-reaped run. It
-	// also contradicted the value's documented meaning (docs/POLICIES.md's
-	// auto_stop_after_sec row; the console's field help calls -1 "never reaped,
-	// stated explicitly — identical behavior to leaving it out"), so a member who
-	// wrote their intent down got a warning and a member who omitted the field
-	// did not.
+	// -1 is preserved, not rewritten to 0 with a warning: internal/lifecycle's
+	// reaper skips every run whose policy value is <= 0, so 0 and -1 are the
+	// same never-reaped run, and a rewrite would change the NUMBER and not the
+	// OUTCOME. It would also contradict the value's documented meaning
+	// (docs/POLICIES.md's auto_stop_after_sec row; the console's field help
+	// calls -1 "never reaped, stated explicitly — identical behavior to leaving
+	// it out"), warning a member who wrote their intent down but not one who
+	// omitted the field.
 	//
-	// This asserts STRICTLY MORE than it replaced: the value is preserved, there
-	// is no warning, AND the outcome invariant the old branch was reaching for is
-	// stated directly — under a ceiling with no positive maximum, neither an
-	// omitted nor a negative auto_stop leaves the run reapable.
+	// So this asserts the value is preserved, there is no warning, AND the
+	// outcome invariant directly: under a ceiling with no positive maximum,
+	// neither an omitted nor a negative auto_stop leaves the run reapable.
 	for _, proposed := range []int{-1, 0} {
 		got, warns = Clamp(types.RunPolicySpec{AutoStopAfterSec: proposed}, operatorCeiling(t), 0)
 		if got.AutoStopAfterSec != proposed {

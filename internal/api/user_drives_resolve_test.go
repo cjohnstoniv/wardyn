@@ -647,14 +647,14 @@ func TestResolveUserDrive(t *testing.T) {
 	})
 
 	t.Run("a MANAGED drive templated on the sign-in subject is unmountable", func(t *testing.T) {
-		// The regression for the half of the widening that never reached the
-		// resolver. `sub` used to be the SANCTIONED alternative here, so a
-		// managed row carrying it exists on any box installed before the rule
-		// widened — and is still authorable by hand. types.ValidateUserDrive
-		// refuses it on write; the resolver keyed on `email_local` alone, so the
-		// row mounted and the object it named was `wardyn-drive-<sign-in
-		// subject>`, which `docker volume ls` and `kubectl get pvc` print with
-		// no inspect. Both sites now ask types.ManagedBackendRejectsTemplate.
+		// The half of the widening that lives in the resolver. A managed row
+		// carrying `sub` can predate the widened rule and is still authorable
+		// by hand. types.ValidateUserDrive refuses it on write, and the
+		// resolver must refuse it too rather than key on `email_local` alone:
+		// otherwise the row mounts and the object it names is
+		// `wardyn-drive-<sign-in subject>`, which `docker volume ls` and
+		// `kubectl get pvc` print with no inspect. Both sites ask
+		// types.ManagedBackendRejectsTemplate.
 		d := driveFixture(func(d *types.UserDrive) { d.HomeTemplate = types.HomeTemplateSub })
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
@@ -901,20 +901,18 @@ func previewDriveHTTP(t *testing.T, srv *Server, users, groups []string) *httpte
 // offboarding command rather than compute from a hash by hand.
 func TestPreviewUserDrive(t *testing.T) {
 	t.Run("a match is answered with the object name", func(t *testing.T) {
-		// A static PVC on `sub` (R1 F294, lane core's handoff). The pair this
-		// previously used — k8s_pvc_static + `email_local` — is the shape F294
-		// refuses: Wardyn MINTS the claim name for a static PVC, so an
-		// email-local home folds two addresses that share a local part onto one
-		// claim. Retargeted rather than deleted, because every assertion below
-		// is about the PREVIEW answering through the resolver, not about which
-		// template it answered for: the claim still folds to lowercase, the
-		// object name is still the one an admin copies into an offboarding
-		// command, the enforcement is still external, and both literals are
-		// still tied back to types.DriveHomeName / types.DriveObjectName.
+		// A static PVC on `sub`. k8s_pvc_static + `email_local` is refused:
+		// Wardyn MINTS the claim name for a static PVC, so an email-local home
+		// folds two addresses that share a local part onto one claim. Every
+		// assertion below is about the PREVIEW answering through the resolver,
+		// not about which template it answered for: the claim still folds to
+		// lowercase, the object name is still the one an admin copies into an
+		// offboarding command, the enforcement is still external, and both
+		// literals are still tied back to types.DriveHomeName /
+		// types.DriveObjectName.
 		//
-		// The email-local FOLD that pairing also covered has its own subtest
-		// below, on a host_path drive — the backend where that template is the
-		// right answer — so the property survives the move.
+		// The email-local FOLD has its own subtest below, on a host_path drive
+		// — the backend where that template is the right answer.
 		d := driveFixture(func(d *types.UserDrive) {
 			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateSub
 		})
@@ -1279,11 +1277,11 @@ func TestPreviewUserDrive(t *testing.T) {
 	})
 }
 
-// TestPreviewUserDriveAnswersTheSameRefusalAsLaunch is the preview-IS-enforcement
-// pin. The endpoint used to be resolveUserDriveFor alone — the store read and
-// the fold — with three of the launch path's gates living above and below it,
-// so a claim set that WOULD be refused at launch previewed green and the member
-// found out by ticking the box.
+// TestPreviewUserDriveAnswersTheSameRefusalAsLaunch is the
+// preview-IS-enforcement pin. The endpoint runs the launch path's gates, not
+// resolveUserDriveFor alone (the store read and the fold): with the launch's
+// gates living above and below it, a claim set that WOULD be refused at launch
+// would preview green and the member would find out by ticking the box.
 //
 // Every arm below asserts the LAUNCH's status and the LAUNCH's bytes, because
 // an admin diagnosing "why can't Bob mount his drive" should read the sentence
@@ -1565,16 +1563,16 @@ func TestPreviewUserDriveDerivesTheSameAnswerAsEnforcement(t *testing.T) {
 	}
 }
 
-// TestResolveUserDriveLooksTheGrantUpForTheCALLER pins the argument every store
-// double in this package used to throw away.
+// TestResolveUserDriveLooksTheGrantUpForTheCALLER pins the argument a store
+// double can easily throw away.
 //
 // The counterfactual is one line: patch resolveUserDriveFor to read the drive
 // for []string{"COUNTERFACTUAL-NOBODY"} while leaving the DERIVATION
 // (newResolvedDrive, which takes the caller's real claims) untouched, and the
-// whole api suite stays green — home names, object names and subject hashes are
-// all still correct, because they are derived from the claims rather than from
-// the row. What changes is WHOSE allocation was found, which is the one thing
-// this resolver decides, and nothing was asserting it.
+// rest of the api suite stays green — home names, object names and subject
+// hashes are all still correct, because they are derived from the claims rather
+// than from the row. What changes is WHOSE allocation was found, which is the
+// one thing this resolver decides, and this test is what asserts it.
 func TestResolveUserDriveLooksTheGrantUpForTheCALLER(t *testing.T) {
 	d := driveFixture(nil)
 	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
@@ -1613,14 +1611,15 @@ func TestResolveUserDriveLooksTheGrantUpForTheCALLER(t *testing.T) {
 }
 
 // TestPreviewDoorTakesTheUnusableGroupTier pins the preview DOOR against the
-// launch's ceiling, on the one claim shape where they used to disagree.
+// launch's ceiling, on the one claim shape where they can disagree.
 //
-// The preview's RESOLVER already took driveWithUnusableGroups when a request
-// carried no groups; the door beside it resolved the governance profile with
-// that same empty list and no unusable arm. So on a deployment with group-tier
-// governance assignments, a hand-made preview answered 200 — "this person
-// mounts Corp NAS" — for a principal whose every launch is refused
-// groups_snapshot_stale. A preview that drifts from enforcement is worse than
+// The preview's RESOLVER takes driveWithUnusableGroups when a request carries
+// no groups, and the door beside it must take the same unusable arm when it
+// resolves the governance profile with that empty list. Otherwise, on a
+// deployment with group-tier governance assignments, a hand-made preview
+// answers 200 — "this person mounts Corp NAS" — for a principal whose every
+// launch is refused groups_snapshot_stale. A preview that drifts from
+// enforcement is worse than
 // no preview: it is confidently wrong at the moment an admin is deciding
 // whether an allocation is right.
 func TestPreviewDoorTakesTheUnusableGroupTier(t *testing.T) {

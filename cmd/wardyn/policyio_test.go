@@ -47,11 +47,11 @@ auto_stop_after_sec: 900
 	}
 }
 
-// TestReadPolicyFile_RejectsUnknownSpecField is the regression:
-// readPolicyFile (backing `policy create -f` / `policy update -f`) used to
-// json.Unmarshal the spec leniently, so a misspelled field silently vanished
-// instead of failing at authoring time. Covers both the bare-spec shape and
-// the full-body {"name":...,"spec":{...}} shape.
+// TestReadPolicyFile_RejectsUnknownSpecField pins that readPolicyFile
+// (backing `policy create -f` / `policy update -f`) decodes the spec
+// strictly, so a misspelled field fails at authoring time instead of
+// silently vanishing. Covers both the bare-spec shape and the full-body
+// {"name":...,"spec":{...}} shape.
 func TestReadPolicyFile_RejectsUnknownSpecField(t *testing.T) {
 	dir := t.TempDir()
 

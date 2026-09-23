@@ -1,26 +1,18 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F1 PROBE — approval decide -> credential mint -> egress allow.
+// Approval decide -> credential mint -> egress allow, end to end. These reuse the package's
+// existing test fixtures (newScopeFixture / seedEgress / egressLists / decideBody from
+// approvals_decide_test.go, ssoSession / doSSO from rbac_test.go, do + adminToken from api_test.go,
+// and unionWorkspaceEgress from workspace_egress.go) — nothing new is exported or mocked, and no
+// Postgres is needed: every fixture here is the in-memory authzStore.
 //
-// DESTINATION: internal/api/approvals_f1_probe_test.go
-//   (copy this file there; it reuses the package's existing test fixtures:
-//    newScopeFixture / seedEgress / egressLists / decideBody from
-//    approvals_decide_test.go, ssoSession / doSSO from rbac_test.go, do +
-//    adminToken from api_test.go, and unionWorkspaceEgress from
-//    workspace_egress.go — nothing new is exported or mocked.)
-//
-// RUN (no PG needed — every fixture here is the in-memory authzStore):
-//   cd <repo root> && cp local/review-0.7/deep/F1-approval-to-mint-to-egress/approvals_f1_probe_test.go internal/api/ \
-//     && nice -n 10 GOMAXPROCS=8 WARDYN_TEST_PG= go test ./internal/api/ -run 'TestF1_' -count=1 -v ; rm internal/api/approvals_f1_probe_test.go
-//
-// EXPECTED on fa910735 (feat/v0.7-profiles):
-//   TestF1_AlwaysTargetsPrimaryWorkspaceOnly     GREEN  (pins the invariant; goes RED if `always` ever leaks to W')
-//   TestF1_DecideAuthzMatrix                      GREEN  (pins who-may-decide-for-whose-run; RED on any authz drift)
-//   TestF1_ReconcileDoesNotReverseNewerDecision   RED    (hypothesis H2 in the trace doc — reconcile is state-major, not time-major)
-//   TestF1_ReconcileDoesNotResurrectRemovedHost   RED    (hypothesis H3 — a PUT removal is undone at the next boot)
-// The two RED probes are deliberate: they FAIL while the defect exists and turn
-// GREEN once it is fixed. Do not "fix" the probe to pass.
+//   - TestF1_AlwaysTargetsPrimaryWorkspaceOnly: `always` never leaks to W'.
+//   - TestF1_DecideAuthzMatrix: who may decide for whose run.
+//   - TestF1_ReconcileDoesNotReverseNewerDecision: the boot heal is
+//     time-major, not state-major.
+//   - TestF1_ReconcileDoesNotResurrectRemovedHost: a PUT removal survives the
+//     next boot.
 
 package api
 
@@ -392,15 +384,16 @@ func f1SeedDecidedAlways(f *scopeFixture, state types.ApprovalState, decidedAt t
 	return id
 }
 
-// TestF1_ReconcileDoesNotReverseNewerDecision — EXPECTED RED on fa910735 (H2).
+// TestF1_ReconcileDoesNotReverseNewerDecision pins that the boot heal is
+// time-major.
 //
 // Sequence an operator can produce in two clicks: deny·always H (t1), then,
 // having changed their mind, approve·always H (t2 > t1). The live write-backs
 // leave the workspace with H on approved_egress and off denied_egress. The boot
-// heal (ReconcileWorkspaceEgressDecisions in approvals.go) then walks
-// states in the fixed order [APPROVED, DENIED] — never by decided_at — so the
-// OLDER deny is applied LAST and silently reverses the operator's newest
-// decision on every restart, with no audit event.
+// heal (ReconcileWorkspaceEgressDecisions in approvals.go) must not walk states
+// in a fixed order [APPROVED, DENIED] instead of by decided_at — that would
+// apply the OLDER deny LAST and silently reverse the operator's newest decision
+// on every restart, with no audit event.
 func TestF1_ReconcileDoesNotReverseNewerDecision(t *testing.T) {
 	f := newScopeFixture(t)
 	ws := f1SeedWorkspace(f, "ws-reconcile", f.memberID)
@@ -426,16 +419,15 @@ func TestF1_ReconcileDoesNotReverseNewerDecision(t *testing.T) {
 	}
 }
 
-// TestF1_ReconcileDoesNotResurrectRemovedHost — EXPECTED RED on fa910735 (H3).
-//
-// resolveAlwaysTarget (approvals.go) promises an `always` is "reversible via the
+// TestF1_ReconcileDoesNotResurrectRemovedHost: resolveAlwaysTarget
+// (approvals.go) promises an `always` is "reversible via the
 // denied-egress/approved-egress PUTs". An operator who approve·always'd H and
 // later removed it through PUT /workspaces/{id}/approved-egress (the documented
-// undo, handleSetApprovedEgress in workspaces.go) gets H back on the allowlist
-// at the next boot: the approval row still says APPROVED/always and reconcile
-// re-applies it (in ReconcileWorkspaceEgressDecisions). That is a durable,
-// fail-OPEN widening of a workspace the operator explicitly narrowed, and
-// nothing audits it.
+// undo, handleSetApprovedEgress in workspaces.go) must not get H back on the
+// allowlist at the next boot just because the approval row still says
+// APPROVED/always: re-applying it in ReconcileWorkspaceEgressDecisions would be
+// a durable, fail-OPEN widening of a workspace the operator explicitly narrowed,
+// and nothing would audit it.
 func TestF1_ReconcileDoesNotResurrectRemovedHost(t *testing.T) {
 	f := newScopeFixture(t)
 	ws := f1SeedWorkspace(f, "ws-undo", f.memberID)

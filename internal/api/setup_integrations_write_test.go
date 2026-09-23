@@ -226,18 +226,14 @@ func TestHandlePutIntegration_ValidationRejections(t *testing.T) {
 	}
 }
 
-// Generic kinds are REFUSED as of 0.5. Two tests used to live here proving the
-// opposite: that a kind Wardyn has no code for (artifactory, postgres) could be
-// written with its own egress + proxy-header delivery, and that the capability
-// matrix reported honest egress_host/credential cells for it. That was the
-// operator-extensibility surface behind the /integrations catalog — "add a
-// system Wardyn has never heard of, with no backend change" — and the catalog
-// is gone. Connections are the four Settings cards now, over closed kinds only.
+// Generic kinds are REFUSED: a kind Wardyn has no code for (artifactory,
+// postgres) cannot be written with its own egress + proxy-header delivery.
+// Connections are the four Settings cards, over closed kinds only.
 //
-// The two properties that still matter are pinned below instead: the refusal
-// itself, and the fact that a row stored under an EARLIER release is not
-// destroyed by it (the read-time fold is a passthrough, so site config keeps it
-// and integrations_run.go keeps injecting it — it just can't be edited here).
+// The two properties that matter are pinned below: the refusal itself, and the
+// fact that a row stored before the refusal existed is not destroyed by it (the
+// read-time fold is a passthrough, so site config keeps it and
+// integrations_run.go keeps injecting it — it just can't be edited here).
 func TestHandlePutIntegration_GenericKindIsRefused(t *testing.T) {
 	srv, fake, _ := integrationWriteHarness(t, nil)
 	body := `{"name":"Corp Artifactory","kind":"artifactory",` +
@@ -423,12 +419,11 @@ func TestHandleDeleteIntegration_UnknownIDIs404(t *testing.T) {
 	}
 }
 
-// TestPutIntegration_ColonIDRoundTrips keeps the colon-id invariant alive now
-// that adoption is gone. A colon-qualified id ("anthropic_subscription:managed")
-// must survive a PUT: the URL carries the percent-encoded colon a real browser
-// fetch() sends (encodeURIComponent), so this exercises integrationIDParam's
-// unescape AND validateIntegrationWrite's id gate, which used to 400 on it.
-// The adopt half of the original test went with the endpoint.
+// TestPutIntegration_ColonIDRoundTrips keeps the colon-id invariant alive. A
+// colon-qualified id ("anthropic_subscription:managed") must survive a PUT: the
+// URL carries the percent-encoded colon a real browser fetch() sends
+// (encodeURIComponent), so this exercises integrationIDParam's unescape AND
+// validateIntegrationWrite's id gate, which must not 400 on it.
 func TestPutIntegration_ColonIDRoundTrips(t *testing.T) {
 	srv, fake, _ := integrationWriteHarness(t, nil)
 	srv.cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "sk-ant-oat01-managed"}}

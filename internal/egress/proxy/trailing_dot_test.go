@@ -12,10 +12,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestSplitHostPortStripsAllTrailingDots pins the D1 fix at the parser funnel:
-// every FQDN-root spelling of a host reduces to the SAME canonical dot-free
-// host. Before the fix "evil.com..:443" survived as "evil.com." (one TrimSuffix)
-// and missed a dot-free deny key.
+// TestSplitHostPortStripsAllTrailingDots pins the parser funnel: every FQDN-root
+// spelling of a host reduces to the SAME canonical dot-free host. A single
+// TrimSuffix would leave "evil.com..:443" as "evil.com." and miss a dot-free
+// deny key.
 func TestSplitHostPortStripsAllTrailingDots(t *testing.T) {
 	cases := []struct {
 		in       string
@@ -38,10 +38,9 @@ func TestSplitHostPortStripsAllTrailingDots(t *testing.T) {
 	}
 }
 
-// TestTrailingDotDenyBypass is the end-to-end proof of D1: under allow_all_egress
-// with "evil.com" on denied_domains, every trailing-dot spelling of the host is
-// DENIED (403, upstream never reached). RED before the fix: the multi-dot forms
-// evaded the deny key and were allowed through to the upstream.
+// TestTrailingDotDenyBypass is the end-to-end proof: under allow_all_egress with
+// "evil.com" on denied_domains, every trailing-dot spelling of the host is DENIED
+// (403, upstream never reached), the multi-dot forms included.
 func TestTrailingDotDenyBypass(t *testing.T) {
 	for _, hostport := range []string{"evil.com..:80", "evil.com.", "evil.com...:80"} {
 		t.Run(hostport, func(t *testing.T) {

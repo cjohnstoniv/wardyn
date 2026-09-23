@@ -56,9 +56,9 @@ func (s *setupStatusCostStore) GetCapabilityEnforcement(context.Context) (map[st
 }
 
 // TestSetupStatus_HasRunsReadsOneRow pins that the has_runs existence check is
-// bounded. It used to call ListRuns, whose SQL is `SELECT <every column> FROM
-// agent_runs ORDER BY created_at DESC` with no LIMIT — every run the install
-// ever launched, fully decoded, on every poll, to compute len(runs) > 0.
+// bounded. ListRuns' SQL is `SELECT <every column> FROM agent_runs ORDER BY
+// created_at DESC` with no LIMIT — every run the install ever launched, fully
+// decoded, on every poll — so it must not be how len(runs) > 0 is computed.
 func TestSetupStatus_HasRunsReadsOneRow(t *testing.T) {
 	st := &setupStatusCostStore{}
 	if _, ok := store.Store(st).(store.Pager); !ok {
@@ -185,7 +185,7 @@ func TestSetupStatus_HostSweepNeverBlocksThePoll(t *testing.T) {
 // Everything below is about a sweep that does NOT simply answer: one abandoned
 // mid-flight by a reset, one that never returns, one that panics, and the one an
 // operator asked for on purpose. Each is a state the memo can be left in, and
-// each of them used to leave it blind for the life of the process.
+// none of them may leave it blind for the life of the process.
 
 // blockingHostProxyDetect installs a detector that counts its calls and blocks
 // until the returned release func is called (or the test ends). It returns the
@@ -289,12 +289,11 @@ func TestHostProxy_HangingSweepIsAbandonedAndRetried(t *testing.T) {
 }
 
 // TestHostProxy_SweepPanicIsContainedAndReleasesTheFlag: the sweep is a DETACHED
-// goroutine now, so an unrecovered panic under it takes wardynd with it — where
-// before the fix the very same panic ran on the request goroutine and net/http
-// recovered it. DetectHostProxy parses whatever a host .exe printed, which is
-// exactly the shape sshGo's and the run watcher's recovers exist for. And the
-// release must be on the panic path too, or one panic strands the flag and the
-// memo is blind for the life of the process.
+// goroutine, so an unrecovered panic under it takes wardynd with it — net/http
+// recovers only panics on the request goroutine. DetectHostProxy parses whatever
+// a host .exe printed, which is exactly the shape sshGo's and the run watcher's
+// recovers exist for. And the release must be on the panic path too, or one
+// panic strands the flag and the memo is blind for the life of the process.
 func TestHostProxy_SweepPanicIsContainedAndReleasesTheFlag(t *testing.T) {
 	var calls atomic.Int64
 	real := hostProxyDetect

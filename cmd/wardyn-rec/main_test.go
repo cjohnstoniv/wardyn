@@ -31,8 +31,9 @@ func TestQuoteArgs(t *testing.T) {
 	}
 }
 
-// TestBuildAsciinemaArgv_PreventsShellInjection is the regression test for the
-// command-injection fix. The agent argv (untrusted run-task/command data) is
+// TestBuildAsciinemaArgv_PreventsShellInjection pins that the agent argv
+// cannot inject shell commands. The agent argv (untrusted run-task/command
+// data) is
 // joined into asciinema's `-c` string, which is evaluated by `$SHELL -c`. A
 // crafted arg containing quotes, $(...), backticks, ;, |, &, redirections, or
 // $VAR references MUST be treated as literal data — never executed or expanded.
@@ -225,10 +226,9 @@ func TestRun_UploadURL(t *testing.T) {
 	}
 }
 
-// TestRun_UploadURL_ServerError is the regression guard for the
-// exit-code-on-success bug: a failed recording UPLOAD must be NON-FATAL. The
-// agent already ran, so wardyn-rec must NOT turn a delivery error into a
-// non-zero exit (which the runner would mis-map to RunFailed).
+// TestRun_UploadURL_ServerError pins that a failed recording UPLOAD is
+// NON-FATAL. The agent already ran, so wardyn-rec must NOT turn a delivery
+// error into a non-zero exit (which the runner would mis-map to RunFailed).
 func TestRun_UploadURL_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -248,12 +248,12 @@ func TestRun_UploadURL_ServerError(t *testing.T) {
 	}
 }
 
-// TestUploadCast_BoundedTimeout is the regression guard for the 0.6.6 recorder
-// upload hang: a server that accepts the connection but never responds (the
-// shape of a control plane that is unreachable behind a mesh sidecar that
-// still completes the TCP handshake) must not be able to hold uploadCast open
-// anywhere near the old bare-60s bound. Shrinks the package's upload timeouts
-// so the test runs fast rather than taking the full real bound.
+// TestUploadCast_BoundedTimeout pins the recorder's upload bound: a server
+// that accepts the connection but never responds (the shape of a control plane
+// that is unreachable behind a mesh sidecar that still completes the TCP
+// handshake) must not be able to hold uploadCast open for anything like a bare
+// 60s. Shrinks the package's upload timeouts so the test runs fast rather than
+// taking the full real bound.
 func TestUploadCast_BoundedTimeout(t *testing.T) {
 	origDial, origClient := uploadDialTimeout, uploadClientTimeout
 	uploadDialTimeout = 200 * time.Millisecond

@@ -109,12 +109,11 @@ func TestSources_UpsertByCanonicalIdentity(t *testing.T) {
 	}
 }
 
-// TestSources_ReAddAppliesRenameOnIdentityHit is the bug-ops-1 regression
-// (applied to the sibling Sources tier): re-POSTing an existing
+// TestSources_ReAddAppliesRenameOnIdentityHit: re-POSTing an existing
 // source's identity with a NEW name is the library's only re-add/rename
 // route (no PUT /sources/{id} — see mountLibraryRoutes' DEADCODE-1 comment),
 // so the operator's explicitly-typed name must actually apply, not get
-// silently discarded because the identity-hit branch only fired for a
+// silently discarded because the identity-hit branch only fires for a
 // requirements edit.
 func TestSources_ReAddAppliesRenameOnIdentityHit(t *testing.T) {
 	h := newHarness(t)

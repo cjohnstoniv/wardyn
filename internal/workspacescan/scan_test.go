@@ -308,11 +308,11 @@ func TestScan_ManifestCapTruncatesToLowConfidence(t *testing.T) {
 	}
 }
 
-// TestScan_SourceFileBudgetTruncatesToLowConfidence is: past the
-// per-scan source-file budget (maxSourceFilesScanned), extra files used to
-// be silently skipped — the scan then reported confidence=high over a tree
-// it never fully walked, contradicting the package's own bound-lowers-
-// confidence promise (scan.go's lowConfidence := facts.Truncated || ...).
+// TestScan_SourceFileBudgetTruncatesToLowConfidence: past the per-scan
+// source-file budget (maxSourceFilesScanned), extra files are skipped, so the
+// scan must report low confidence rather than high over a tree it never fully
+// walked — the package's own bound-lowers-confidence promise (scan.go's
+// lowConfidence := facts.Truncated || ...).
 func TestScan_SourceFileBudgetTruncatesToLowConfidence(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module x\n\ngo 1.22\n") // gives Scan something to detect at all

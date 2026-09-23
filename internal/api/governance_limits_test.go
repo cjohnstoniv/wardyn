@@ -415,8 +415,8 @@ func TestSeededImageCapabilityBypass(t *testing.T) {
 	}
 
 	t.Run("enforced + no grant: 403 byoi_member (the bug)", func(t *testing.T) {
-		// RED on today's tree: before the fix this is a 201 and the member is
-		// running an arbitrary image they hold no grant for.
+		// Without the gate this is a 201 and the member is running an
+		// arbitrary image they hold no grant for.
 		ws := baseImageWorkspace(memberSub, ref)
 		srv, _ := seedImageFixture(t, &capStore{enf: map[string]bool{capImage: true}}, ws)
 		w := launch(t, srv, ws)

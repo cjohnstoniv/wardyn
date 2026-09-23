@@ -677,7 +677,7 @@ func TestResolveAWSSSOInjection_ConcurrentResolversRaiseOneRequest(t *testing.T)
 	if n != 1 {
 		t.Fatalf("pending credential_reauth rows = %d, want exactly 1 for 16 concurrent resolvers", n)
 	}
-	// …AND ONE TRAIL ENTRY, AND ONE COUNT (W6-S F4). RequestApproval's dedup
+	// …and one trail entry, and one count. RequestApproval's dedup
 	// answers the loser with the WINNER'S row, silently, so a caller that cannot
 	// tell them apart audits and counts a request it did not raise — 16 rows
 	// naming one approval id on a hash-chained log, and a `requested` counter
@@ -746,11 +746,11 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		t.Fatalf("first resolve: code = %d, want 423", w.Code)
 	}
 	ap := onlyReauthRow(t, f.srv)
-	// BOTH TIERS (security NIT-5). The admin token is the security tier; the
-	// run's own member token is the other. The plan's promise is 409 on EVERY
-	// tier, and behind the member gate a member used to get that gate's refusal
-	// instead — refused either way, but for the wrong reason: "you may not use
-	// this verb" rather than "this verb does not exist for this kind".
+	// BOTH TIERS. The admin token is the security tier; the run's own member
+	// token is the other. The plan's promise is 409 on EVERY tier, so a member
+	// must get the 409 and not the member gate's refusal — refused either way,
+	// but "you may not use this verb" is the wrong reason where "this verb does
+	// not exist for this kind" is the right one.
 	for _, verb := range []string{"approve", "deny"} {
 		w := do(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/"+verb, adminToken, "")
 		if w.Code != http.StatusConflict {
@@ -888,7 +888,7 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 	t.Fatal("no credential.reauth.requested row")
 }
 
-// legacy open mode: no roster (W6-S F1)
+// legacy open mode: no roster
 
 // The two halves, JOINED. Dispatch and resolve each had thorough tests and they
 // disagreed about the same deployment, because no test ever ran both: every
@@ -987,7 +987,7 @@ func (d *dedupApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalReq
 	return types.ApprovalRequest{}, errStoreNotFound
 }
 
-// The loser audits nothing and counts nothing (W6-S F4).
+// The loser audits nothing and counts nothing.
 //
 // It still gets its 423 naming the winner's approval id — the row is real, it is
 // PENDING, and the sidecar's hold joins the same workflow by that id — but

@@ -9,16 +9,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestBuildRunMountsDropsSubscriptionForNonModelRun is the regression proof for
-// A task-mode=exec (or non-interactive scan) run gets NO LLM
-// credential by contract (resolveLLMTransport's modelRun gate), yet
-// buildRunMounts used to copy policy.WorkspaceMounts verbatim regardless of
-// modelRun — so a resolved policy that happened to carry the resident
-// ~/.claude subscription mount (e.g. an operator's subscription-blessed
-// default/named policy reused for a plain exec task, with no per-run
-// integration consent) landed real OAuth credential files in a sandbox that
-// had no model-call reason to see them, contradicting THREAT-MODEL.md 5.1a's
-// stated "lands only for a resident_host anthropic_subscription run" bound.
+// TestBuildRunMountsDropsSubscriptionForNonModelRun: a task-mode=exec (or
+// non-interactive scan) run gets NO LLM credential by contract
+// (resolveLLMTransport's modelRun gate), so buildRunMounts must not copy
+// policy.WorkspaceMounts verbatim regardless of modelRun — a resolved policy
+// that happens to carry the resident ~/.claude subscription mount (e.g. an
+// operator's subscription-blessed default/named policy reused for a plain exec
+// task, with no per-run integration consent) would land real OAuth credential
+// files in a sandbox that has no model-call reason to see them, contradicting
+// THREAT-MODEL.md 5.1a's stated "lands only for a resident_host
+// anthropic_subscription run" bound.
 func TestBuildRunMountsDropsSubscriptionForNonModelRun(t *testing.T) {
 	policy := types.RunPolicySpec{
 		WorkspaceMounts: []types.WorkspaceMount{

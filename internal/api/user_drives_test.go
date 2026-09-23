@@ -383,10 +383,10 @@ func TestCreateUserDriveWritesAndAudits(t *testing.T) {
 // TestUserDriveWriteAuditIsTheWholeRow is the drive.write payload asserted BY
 // VALUE on a host_path drive — the shape where the row actually carries a claim.
 //
-// WHAT KEY-PRESENCE COULD NOT SEE. The assertion above this one used to check
-// only that eight keys EXISTED, over a docker_volume fixture whose host_root is
-// "" even on a pass. So `"host_root": "REDACTED"`, a hard-coded `"backend"`, an
-// always-true `"writable"` and a target of uuid.Nil all survived it — and
+// WHAT KEY-PRESENCE CANNOT SEE. Checking only that eight keys EXIST, over a
+// docker_volume fixture whose host_root is "" even on a pass, lets `"host_root":
+// "REDACTED"`, a hard-coded `"backend"`, an always-true `"writable"` and a target
+// of uuid.Nil all survive — and
 // host_root is the single most audit-worthy field on the row, since it is the
 // host tree this write authorized binding into other people's sandboxes. A
 // redacted or invented one makes the row a record of something that did not
@@ -502,8 +502,7 @@ func TestUserDriveWriteRefusals(t *testing.T) {
 			// generic bind refusal uses: an admin authoring a drive typed a
 			// host_root, and "mount source" is vocabulary from a layer they are
 			// not looking at. The prefix in parentheses is the actionable half
-			// — WHICH tree bit — so it is pinned too, which is strictly more
-			// than the single substring this row used to assert.
+			// — WHICH tree bit — so it is pinned too, not just one substring.
 			name:  "a host_path drive under a denied prefix is a 422",
 			roots: []string{"/"},
 			body:  `{"name":"share","backend":"host_path","home_template":"email_local","host_root":"/etc/homes"}`,
@@ -952,7 +951,7 @@ func TestDeleteUnallocatedUserDriveSucceeds(t *testing.T) {
 
 // grants
 
-// TestUserDriveGrantDefaultsEnabled is THE regression this whole *bool exists
+// TestUserDriveGrantDefaultsEnabled is THE case this whole *bool exists
 // for. UpsertUserDriveGrant writes Enabled verbatim, so a plain bool would make
 // every allocation written by a client that omits the field arrive PAUSED — an
 // admin allocates a drive, sees it listed, and the member gets nothing, with no
@@ -1240,7 +1239,8 @@ func TestDriveTargetIsReservedFromAuthoring(t *testing.T) {
 	}
 
 	// The row that was stored before the reservation existed. Everything above
-	// is the write boundary, and it only ever ran on rows written since. A
+	// is the write boundary, and it only ever runs on rows written after it.
+	// A
 	// stored policy is handed to dispatch verbatim — resolvePolicy does not
 	// re-run validatePolicySpec, which runs for INLINE specs only — so a
 	// workspace_repos row pointing into the drive reaches buildRepoRecords, and
@@ -1522,7 +1522,7 @@ func TestGetUserDrivesBoundsTheAllocationList(t *testing.T) {
 				"an unbounded ask makes PostgreSQL sort every allocation in the deployment before the trim", pager.asked)
 		}
 		// A DEFAULT request is bounded too: absent ?limit is maxListLimit, never
-		// "unbounded", which is the whole regression this closes.
+		// "unbounded".
 		w = driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives", "", nil)
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET /drives = %d: %s", w.Code, w.Body.String())
@@ -1675,7 +1675,7 @@ func TestGrantRepointCannotSilentlyClearAPinnedHomeOverride(t *testing.T) {
 		t.Fatalf("allocate = %d, want 201: %s", w.Code, w.Body.String())
 	}
 
-	// THE REGRESSION: a repoint that never mentions the field.
+	// The case that matters: a repoint that never mentions the field.
 	w := post(`{"subject_type":"user","subject":"sub-bob","drive_id":"` + other.ID.String() + `","priority":5}`)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("a repoint that never mentioned home_override = %d, want 409: %s", w.Code, w.Body.String())
@@ -1720,12 +1720,12 @@ func TestGrantRepointCannotSilentlyClearAPinnedHomeOverride(t *testing.T) {
 // TestDriveHostRootNestingSeesThroughASymlink pins the half of the nesting gate
 // that no other check can perform.
 //
-// The gate used to compare the two STORED STRINGS only, and delegated the
-// symlink half to UserDriveHostRootCheck — which resolves ONE root against the
-// deployment's env ceiling and has no second drive in scope, so it never
-// compared two drives' roots at all. The literal nested path was refused and a
-// SYMLINK to the same directory was accepted, with the deployment's own ceiling
-// honoured throughout.
+// The gate compares resolved paths, not just the two STORED STRINGS:
+// UserDriveHostRootCheck resolves ONE root against the deployment's env ceiling
+// and has no second drive in scope, so it never compares two drives' roots at
+// all. Comparing strings alone refuses the literal nested path and accepts a
+// SYMLINK to the same directory, with the deployment's own ceiling honoured
+// throughout.
 //
 // What the accepted pair costs: drive A's members have writable homes inside
 // A's tree, so any of them can replace a segment under it with a link and
@@ -1830,18 +1830,17 @@ func TestHostRootsConfiguredMeansUsable(t *testing.T) {
 // turn a STORED workspace's sources into a run policy.
 //
 // The counterfactual is what makes this worth writing. Reverting BOTH seams'
-// runner.ValidateAuthoredTarget to runner.ValidateTarget — which is the SAME
-// call minus the reserved-drive rule, i.e. exactly the regression a merge or a
-// refactor would produce — left ./internal/api fully green. The authoring
-// tests above cover validatePolicySpec, validateWorkspaceSource and
-// buildRepoRecords; neither seedRequestWorkspace (the create path) nor
-// wireWorkspaceSource (the record/verify path) had a case, and both compose a
+// runner.ValidateAuthoredTarget to runner.ValidateTarget — the SAME call minus
+// the reserved-drive rule, exactly what a merge or a refactor could produce —
+// is invisible to the authoring tests above, which cover validatePolicySpec,
+// validateWorkspaceSource and buildRepoRecords; seedRequestWorkspace (the
+// create path) and wireWorkspaceSource (the record/verify path) each compose a
 // stored row that never passed the authoring gate.
 //
 // And the dispatch SEAM below THEM, which cannot 422 because the run row
-// already exists: a stored policy that names the reserved target reached the
-// driver and failed the whole CreateSandbox, so every run under that policy
-// died at STARTING with an internal reservation as its failure_hint.
+// already exists: a stored policy that names the reserved target must not
+// reach the driver and fail the whole CreateSandbox, killing every run under
+// that policy at STARTING with an internal reservation as its failure_hint.
 func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 	h := newHarness(t)
 	for _, target := range []string{runner.DriveTarget, runner.DriveTarget + "/shared"} {

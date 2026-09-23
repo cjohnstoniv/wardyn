@@ -401,16 +401,16 @@ func TestRecordWorkspaceIsSuperAdminOnly(t *testing.T) {
 	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+uuid.NewString()+"/record", sess, `{"name":"exfil"}`); w.Code != http.StatusForbidden {
 		t.Errorf("security_admin POST record on a MISSING workspace = %d, want the same 403", w.Code)
 	}
-	// The corroborating LEG is gone, AND THE TIER STILL HOLDS — re-argued here
-	// rather than assumed, as this comment's earlier revision asked.
+	// The corroborating LEG is gone, AND THE TIER STILL HOLDS — argued here
+	// rather than assumed.
 	//
-	// This used to assert that the same tier gets 404 on GET /workspaces/{id},
-	// offered as a corroborating inconsistency. That read was WIDENED
-	// deliberately (F015, ownsWorkspaceOrSecurityAdmin in helpers.go): a
-	// security admin already listed every workspace and already rewrote any
+	// The same tier does not get 404 on GET /workspaces/{id}: that read is
+	// WIDENED deliberately (ownsWorkspaceOrSecurityAdmin in helpers.go). A
+	// security admin already lists every workspace and already rewrites any
 	// workspace's approved/denied egress, so refusing it the row — and
 	// especially /observed-egress, the traffic that is the INPUT to the egress
-	// decision it makes — left the tier acting blind on its own stated purpose.
+	// decision it makes — would leave the tier acting blind on its own stated
+	// purpose.
 	//
 	// The record tier does not depend on that leg and never did. It rests on
 	// what the ROUTE does: POST .../record launches a credentialed,

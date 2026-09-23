@@ -337,8 +337,8 @@ func TestSeedClaudeOnboarding_NeverSeedsASecurityKey(t *testing.T) {
 }
 
 // TestManagedMode_StillSeedsOnboarding — NEGATIVE CONTROL for the hoist. The
-// managed-subscription path used to write the onboarding marker itself, inside
-// materialize_managed_claude_config. Hoisting it out must not cost the managed
+// onboarding marker is written outside materialize_managed_claude_config, which
+// must not cost the managed
 // lane the marker (the sentinel credentials alone leave an interactive managed
 // session on the onboarding screens), and must not clobber the config
 // prepare_claude_config_dir may already have copied in from the read-only mount.
@@ -718,8 +718,8 @@ func TestClaudeAgentRun_BootSeedWaitIsBoundedByPrepNotAClock(t *testing.T) {
 	}
 	defer f.Close() //nolint:errcheck // test fixture
 
-	// The cap that used to live here was 120s; `timeout 15s` is far past it, so a
-	// clock-bounded wait would have started the agent inside this window.
+	// `timeout 15s` bounds this window, and a clock-bounded wait (a fixed cap such
+	// as 120s) would start the agent inside it.
 	cmd := exec.Command("timeout", "15s", "bash", ccRunnableAgentRun(t), "--boot-seed")
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,

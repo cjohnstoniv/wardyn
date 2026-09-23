@@ -14,13 +14,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestCreateRun_TextFieldsAreCappedAndControlCharFree is B1-F6.
+// TestCreateRun_TextFieldsAreCappedAndControlCharFree.
 //
-// title/description were rune-capped but never control-char-checked, and repo,
-// devcontainer_repo, task and agent had no cap at all — only the 1 MiB body.
-// A NUL in a title reached Postgres, which rejects it, so the caller got a 500
-// instead of a 400 naming the field; a 1 MiB repo landed in the run row, in
-// every list payload and in the hash-chained audit row.
+// title and description are rune-capped AND control-char-checked, and repo,
+// devcontainer_repo, task and agent are capped too — the 1 MiB body limit is
+// not a field bound. A NUL in a title would reach Postgres, which rejects it,
+// so the caller would get a 500 instead of a 400 naming the field; a 1 MiB
+// repo would land in the run row, in every list payload and in the
+// hash-chained audit row.
 func TestCreateRun_TextFieldsAreCappedAndControlCharFree(t *testing.T) {
 	for name, tc := range map[string]struct {
 		body  string

@@ -68,12 +68,12 @@ func TestParseUserDriveHostRoots(t *testing.T) {
 		}
 	})
 
-	// A root under a DENIED BIND PREFIX is dead exactly as "/" is, and used to
-	// be the silent one (F13 H2): UserDriveHostRootCheck runs ValidateMountSource
-	// before it ever compares against the roots, so /dev/shm, a share mounted
-	// under /var/run, or a relocated Docker data-root under /var/lib/docker
-	// parses clean and then refuses every drive authored inside it. The
-	// operator's first signal was a 422 on a form they believed was right.
+	// A root under a DENIED BIND PREFIX is dead exactly as "/" is, and must be
+	// refused as loudly: UserDriveHostRootCheck runs ValidateMountSource before
+	// it ever compares against the roots, so /dev/shm, a share mounted under
+	// /var/run, or a relocated Docker data-root under /var/lib/docker would
+	// otherwise parse clean and then refuse every drive authored inside it —
+	// the operator's first signal a 422 on a form they believed was right.
 	t.Run("a root under a denied bind prefix WARNs that it matches nothing", func(t *testing.T) {
 		for _, dead := range []string{"/dev/shm", "/var/run/shares", "/var/lib/docker/homes"} {
 			roots, warns, err := ParseUserDriveHostRoots(dead + ",/srv/homes")
@@ -523,8 +523,8 @@ func TestUserDriveHomeWithinItsRoot(t *testing.T) {
 		t.Errorf("%q was treated as inside %q — the prefix match must be separator-anchored", rootA+"2", rootA)
 	}
 	// FAIL CLOSED on an absent root: "" means the mount was built by something
-	// that does not carry the field, and falling through would be the pre-fix
-	// behaviour reappearing where nobody would look for it.
+	// that does not carry the field, and falling through would skip the root
+	// check where nobody would look for it.
 	for _, missing := range []string{"", "   "} {
 		if err := within(missing, filepath.Join(rootA, "alice")); err == nil {
 			t.Errorf("an empty host_root (%q) was accepted — an absent per-drive bound must refuse, never skip", missing)

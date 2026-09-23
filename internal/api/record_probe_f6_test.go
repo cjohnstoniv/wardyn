@@ -1,30 +1,14 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F6 PROBE — record → promote → confined verify (lane F6-record-promote-verify).
+// Record → promote → confined verify. These reuse record_test.go's recordStore /
+// importStateFake / egressAllowEvent / newTestSrv helpers and need no Postgres: every store
+// touch is the record_test.go fake.
 //
-// INTENDED DESTINATION: internal/api/record_probe_f6_test.go
-// (package api — it reuses record_test.go's recordStore / importStateFake /
-// egressAllowEvent / newTestSrv helpers, so it MUST live in that directory).
+// Two families, both pinning invariants the code enforces:
 //
-// RUN (no Postgres needed — every store touch is the record_test.go fake):
-//
-//	cd <repo root> && \
-//	cp local/review-0.7/deep/F6-record-promote-verify/record_probe_f6_test.go internal/api/ && \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'TestF6' -count=1 -v ; \
-//	rm -f internal/api/record_probe_f6_test.go
-//
-// Two families:
-//
-//	TestF6Probe_*  pin invariants the code ENFORCES today — expected GREEN on
-//	               fa910735 (base 80538b10); a RED here is a regression.
-//	TestF6Gap_*    pin invariants the trace doc says the code does NOT enforce
-//	               (hypotheses H1..H6 in F6-record-promote-verify.md) — expected
-//	               RED on fa910735; a GREEN here means the hypothesis is wrong
-//	               (or the gap was closed) and the doc must be corrected.
-//
-// Run them separately (-run 'TestF6Probe' / -run 'TestF6Gap') if a mixed
-// verdict is confusing.
+//   - TestF6Probe_*: what a capture and its verdict may claim.
+//   - TestF6Gap_*: what promote must refuse to make durable.
 package api
 
 import (
@@ -60,7 +44,7 @@ func f6PromoteURL(wsID uuid.UUID, task string) string {
 	return "/api/v1/workspaces/" + wsID.String() + "/record/" + task + "/promote-egress"
 }
 
-// PROBE family — expected GREEN.
+// Probe family: what a capture and its verdict may claim.
 
 // TestF6Probe_ControlPlaneHostNeverPromotable: the control plane's own host is
 // never promotable — neither wholesale nor by explicit {"hosts":[...]} — even
@@ -188,12 +172,12 @@ func TestF6Probe_TruncatedCaptureIsNeverClean(t *testing.T) {
 	})
 }
 
-// GAP family — expected RED on fa910735. Each names the hypothesis it probes.
+// Gap family: what promote must refuse to make durable.
 
-// TestF6Gap_TruncatedOpenCapturePromotesNothing — H1. handlePromoteRecordEgress
-// never reads the truncation caveat; a truncated OPEN recording promotes its
-// (incomplete) allowed set wholesale. The coordinator's stated invariant is
-// "a truncated observation set promotes NO host"; the code has no such gate.
+// TestF6Gap_TruncatedOpenCapturePromotesNothing: a truncated OPEN recording's
+// (incomplete) allowed set must not be promoted wholesale —
+// handlePromoteRecordEgress reads the truncation caveat, and a truncated
+// observation set promotes NO host.
 func TestF6Gap_TruncatedOpenCapturePromotesNothing(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{{Host: "api.stripe.com", AllowCount: 1}}}
@@ -209,11 +193,12 @@ func TestF6Gap_TruncatedOpenCapturePromotesNothing(t *testing.T) {
 	}
 }
 
-// TestF6Gap_ConfinedVerifyEntryIsNotPromotable — H5. The promote route accepts
-// the "verify:<key>" entry of a CONFINED replay; an allow released there by a
-// live first-use approval (rule_source approval:<id> → ApprovalCount>0) is
-// promotable, even though learnVerifyEgress deliberately refuses to durably
-// learn a once/until-scoped approval.
+// TestF6Gap_ConfinedVerifyEntryIsNotPromotable: the promote route must not
+// accept the "verify:<key>" entry of a CONFINED replay — an allow released
+// there by a live first-use approval (rule_source approval:<id> →
+// ApprovalCount>0) would otherwise become durable, even though
+// learnVerifyEgress deliberately refuses to durably learn a once/until-scoped
+// approval.
 func TestF6Gap_ConfinedVerifyEntryIsNotPromotable(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
@@ -233,10 +218,10 @@ func TestF6Gap_ConfinedVerifyEntryIsNotPromotable(t *testing.T) {
 	}
 }
 
-// TestF6Gap_WildcardCeilingPlumbingIsSkipped — H3. promoteSkipHosts keys on the
-// ceiling's entries VERBATIM; a "*.anthropic.com" ceiling (the canonical
-// spelling llmcred.go documents) does not skip api.anthropic.com, and the
-// "*.githubusercontent.com" broker entry does not skip raw.githubusercontent.com.
+// TestF6Gap_WildcardCeilingPlumbingIsSkipped: promoteSkipHosts must honour the
+// ceiling's wildcard entries, not match them VERBATIM — a "*.anthropic.com"
+// ceiling (the canonical spelling llmcred.go documents) skips api.anthropic.com,
+// and the "*.githubusercontent.com" broker entry skips raw.githubusercontent.com.
 func TestF6Gap_WildcardCeilingPlumbingIsSkipped(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
@@ -265,11 +250,11 @@ func TestF6Gap_WildcardCeilingPlumbingIsSkipped(t *testing.T) {
 	}
 }
 
-// TestF6Gap_DeniedEgressHostIsNotPromotable — H6. A host the operator has
-// since put on deny·always (ws.DeniedEgress) is still promotable from an
-// older recording, producing a contract that declares egress:X required while
-// X is permanently denied — the exact contradiction denyAlwaysReject's M1 rule
-// refuses in the other direction.
+// TestF6Gap_DeniedEgressHostIsNotPromotable: a host the operator has since put
+// on deny·always (ws.DeniedEgress) must not be promotable from an older
+// recording — that would produce a contract that declares egress:X required
+// while X is permanently denied, the exact contradiction denyAlwaysReject's M1
+// rule refuses in the other direction.
 func TestF6Gap_DeniedEgressHostIsNotPromotable(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{{Host: "api.stripe.com", AllowCount: 1}}}
@@ -285,11 +270,11 @@ func TestF6Gap_DeniedEgressHostIsNotPromotable(t *testing.T) {
 	}
 }
 
-// TestF6Gap_EmptyControlPlaneURLStillExcludesSelf — H2. controlPlaneHost("")
-// is "", and promotableHosts' guard is `selfHost != "" && host == selfHost`, so
-// an unset/unparseable ControlPlaneURL disables the control-plane exclusion
-// entirely (zero-value fails open). Only the undotted default "wardynd" is
-// saved by the host-shape rule; a dotted control-plane name is not.
+// TestF6Gap_EmptyControlPlaneURLStillExcludesSelf: an unset/unparseable
+// ControlPlaneURL (controlPlaneHost("") is "") must not disable the
+// control-plane exclusion — a guard shaped `selfHost != "" && host == selfHost`
+// fails open on the zero value, and only the undotted default "wardynd" would
+// then be saved by the host-shape rule; a dotted control-plane name would not.
 func TestF6Gap_EmptyControlPlaneURLStillExcludesSelf(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	const cp = "wardynd.wardyn.svc.cluster.local"
@@ -306,11 +291,11 @@ func TestF6Gap_EmptyControlPlaneURLStillExcludesSelf(t *testing.T) {
 	}
 }
 
-// TestF6Gap_PublicIPLiteralIsNotPromotable — H4. record.go's comment says an
-// IP literal fails the approve-lane shape; hostrules.ValidApprovedHost's regex
-// accepts dotted digits, so a PUBLIC IP literal reached under allow-all is
-// promotable (private/metadata literals are deny-only by the builtin guard and
-// so are excluded by AllowCount, not by shape).
+// TestF6Gap_PublicIPLiteralIsNotPromotable: record.go's comment says an IP
+// literal fails the approve-lane shape, but hostrules.ValidApprovedHost's
+// regex accepts dotted digits, so a PUBLIC IP literal reached under allow-all
+// must be refused explicitly (private/metadata literals are deny-only by the
+// builtin guard and so are excluded by AllowCount, not by shape).
 func TestF6Gap_PublicIPLiteralIsNotPromotable(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{{Host: "93.184.216.34", AllowCount: 1}}}

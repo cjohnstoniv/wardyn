@@ -56,9 +56,9 @@ func spoolSize(t *testing.T, path string) int64 {
 }
 
 // TestAuditSpoolDrainWriteVolumeIsLinearInBacklog pins the cost of the recovery
-// the spool exists to perform. Drain used to re-read the whole file and rewrite
-// and fsync every surviving line on EVERY pass while replaying only `batch`
-// events, so clearing a backlog of N cost O(N^2/batch): measured 159x write
+// the spool exists to perform. A Drain that re-reads the whole file and
+// rewrites and fsyncs every surviving line on EVERY pass while replaying only
+// `batch` events costs O(N^2/batch) to clear a backlog of N — about 159x write
 // amplification at 64,000 spooled events, growing 4x per doubling, with the
 // fsyncs landing on the same volume as the database that has just come back.
 //
@@ -85,8 +85,8 @@ func TestAuditSpoolDrainWriteVolumeIsLinearInBacklog(t *testing.T) {
 				"fsync hundreds of times its own size onto the volume the database is recovering on", c.n, c.amp)
 		}
 	}
-	// The real defect is the TREND: at 16x the backlog the old code amplified
-	// 16x harder. A constant-factor cost must not.
+	// The real signal is the TREND: a quadratic drain amplifies 16x harder at
+	// 16x the backlog. A constant-factor cost must not.
 	if large > small*2 {
 		t.Errorf("write amplification GREW with the backlog (%.2fx at 2000 -> %.2fx at 32000); "+
 			"the cost of a drain must not scale with how long the outage was", small, large)
@@ -133,13 +133,13 @@ func spoolDrainAmplification(t *testing.T, n, batch int) float64 {
 }
 
 // TestAuditSpoolLinesDoesNotWaitOnADrainPass pins the /metrics arm. Drain holds
-// a.mu across every rec.Record, bounded only by spoolDrainDeadline, and Lines()
-// used to take that same mutex. When the store is unreachable in the way the
+// a.mu across every rec.Record, bounded only by spoolDrainDeadline, so Lines()
+// must not take that same mutex. When the store is unreachable in the way the
 // code itself names — an external session holding the audit chain advisory lock,
-// so Record never answers — a scrape blocked for essentially the whole 15s pass,
-// past Prometheus' 10s default scrape_timeout, and the ENTIRE /metrics response
-// was lost: wardyn_store_up and the run counters with it, once per tick, during
-// exactly the outage those gauges exist to report.
+// so Record never answers — a scrape waiting on it blocks for essentially the
+// whole 15s pass, past Prometheus' 10s default scrape_timeout, and the ENTIRE
+// /metrics response is lost: wardyn_store_up and the run counters with it, once
+// per tick, during exactly the outage those gauges exist to report.
 func TestAuditSpoolLinesDoesNotWaitOnADrainPass(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
 	sp, err := NewAuditSpool(path)
@@ -185,18 +185,18 @@ func TestAuditSpoolLinesDoesNotWaitOnADrainPass(t *testing.T) {
 // throughput one: what it catches is a LOST EVENT, and no assertion about bytes
 // written can see that.
 //
-// Drain replaces the spool inode by rename. It used to reopen the path
-// AFTERWARDS with O_WRONLY, which had two consequences. The one an operator
-// could hit every day: endsUnterminated probes the spool's last byte with
-// ReadAt, which a write-only fd refuses, so from the first compaction onward the
-// torn-tail separator silently stopped being applied — and a good event appended
-// after a torn fragment was then read by the next Drain as ONE unparseable line
+// Drain replaces the spool inode by rename, and the new fd is opened on the temp
+// file BEFORE the rename, with O_RDWR, and swapped in after it. Reopening the
+// path AFTERWARDS with O_WRONLY has two consequences. The one an operator could
+// hit every day: endsUnterminated probes the spool's last byte with ReadAt,
+// which a write-only fd refuses, so from the first compaction onward the
+// torn-tail separator silently stops being applied — and a good event appended
+// after a torn fragment is then read by the next Drain as ONE unparseable line
 // and DROPPED, destroying an event whose primary-store write had already failed.
 // That is C1 inverted: the invariant this file exists to hold, turned into
-// silent loss. The other, on the error path, left a.f on the renamed-away inode
-// so every later Append fsynced into a file with no directory entry and returned
-// nil. Both are gone because the new fd is now opened on the temp file BEFORE
-// the rename, with O_RDWR, and swapped in after it.
+// silent loss. The other, on the error path, leaves a.f on the renamed-away
+// inode, so every later Append fsyncs into a file with no directory entry and
+// returns nil.
 func TestAuditSpoolAppendAfterCompactionKeepsTheTornTailSeparator(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
 	sp, err := NewAuditSpool(path)
@@ -349,10 +349,10 @@ func TestAuditSpoolDrainsALineLongerThanTheReadWindow(t *testing.T) {
 	rec := &fakeRecorder{}
 	ctx := context.Background()
 
-	// FIRST, the fact that broke the caller's contract. One pass replays only
+	// FIRST, the fact the caller's contract rests on. One pass replays only
 	// what its window held, so it returns fewer than a full batch while the
-	// backlog is still there. StartDrain used to read "fewer than a batch" as
-	// "backlog cleared" and end the tick here.
+	// backlog is still there. StartDrain must not read "fewer than a batch"
+	// as "backlog cleared" and end the tick here.
 	n, derr := sp.Drain(ctx, rec, 200)
 	if derr != nil {
 		t.Fatalf("first drain pass: %v", derr)
@@ -392,17 +392,17 @@ func TestAuditSpoolDrainsALineLongerThanTheReadWindow(t *testing.T) {
 // whether one pass works.
 //
 // A pass stops at whichever comes first: `batch` events replayed, or the end of
-// its read window. StartDrain used to end the tick on `n < batch`, commented
-// "backlog cleared" — true only while a pass read the WHOLE file, where a short
-// pass could only mean nothing was left. With a bounded window a short pass
-// usually means the window ended, so that test ended the tick with most of the
-// backlog still on disk and drained a window per 30-second interval instead of
-// continuously. Nothing was lost; recovery just stopped being prompt on exactly
-// the backlogs paging exists to make fast.
+// its read window. Ending the tick on `n < batch` ("backlog cleared") is right
+// only while a pass reads the WHOLE file, where a short pass can only mean
+// nothing is left. With a bounded window a short pass usually means the window
+// ended, so that test would end the tick with most of the backlog still on disk
+// and drain a window per 30-second interval instead of continuously. Nothing is
+// lost; recovery just stops being prompt on exactly the backlogs paging exists
+// to make fast.
 //
 // The events are deliberately LARGE so the window, not the batch, is what ends
-// a pass — with small events a window holds far more than a batch and the old
-// test looks correct. That is why the defect survived the rest of this suite.
+// a pass — with small events a window holds far more than a batch and the `n <
+// batch` test looks correct.
 func TestAuditSpoolDrainClearsABacklogSpanningManyWindowsInOneTick(t *testing.T) {
 	const (
 		perEvent = 100 << 10 // ~100 KiB each: ~10 per 1 MiB window

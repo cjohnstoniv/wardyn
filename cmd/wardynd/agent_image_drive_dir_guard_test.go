@@ -52,16 +52,16 @@ type dockerStage struct {
 // time would mean chowning volume state, which the control plane must never do
 // (deploy/images/base/Dockerfile states the full argument).
 //
-// This originally held for `base` and `oracle` only; `claude-code`, `codex-cli`
-// and `aws-sso` each created `/home/agent/work` alone, which is the drift this
-// test exists to make loud. deploy/images/README.md's image contract §5 and
-// "Adding a new agent image" step 5 are the prose half.
+// Every agent image needs it, not only `base` and `oracle`: an image that
+// creates `/home/agent/work` alone is the drift this test exists to make loud.
+// deploy/images/README.md's image contract §5 and "Adding a new agent image"
+// step 5 are the prose half.
 //
 // It is the final stage that ships, so the walk starts there and follows only
 // that stage's own ancestry. A multi-stage Dockerfile's builder stages are
 // thrown away: a `mkdir /home/agent/drive` in one of them creates a directory
 // in a layer no container ever runs, and reading every stage's instructions as
-// one bag (which this guard used to do) let such a line satisfy a runtime stage
+// one bag would let such a line satisfy a runtime stage
 // that has none. The same applies to the FROM chain — an earlier
 // `FROM wardyn/agent-base:local AS tools` says nothing about a final stage
 // built on debian, so the parent hop is taken from the FINAL stage's base only,
@@ -367,7 +367,8 @@ func sortedKeys(m map[string][]dockerStage) []string {
 
 // TestDockerfileStages_ABuilderStageDoesNotCountForTheRuntimeStage is the
 // counterfactual for the walk above, on a Dockerfile no image in the tree has —
-// and the exact shape that used to pass wrongly. Reading every instruction as
+// and the exact shape a one-bag reading passes wrongly. Reading every
+// instruction as
 // one bag found the builder's mkdir; taking the LAST `FROM wardyn/agent-…`
 // found the builder's parent. Both answers describe a layer that is thrown
 // away, while the image that actually ships has a root-owned /home/agent/drive.
@@ -407,7 +408,7 @@ RUN mkdir -p /home/agent/work && chown -R agent:agent /home/agent
 }
 
 // TestDriveDirGuard_RefusesLookalikes is the counterfactual for the two
-// predicates the walk above is built on — the shapes that used to satisfy a
+// predicates the walk above is built on — the shapes that satisfy a
 // substring test while shipping an image whose /home/agent/drive is root-owned
 // or absent. Every "want false" row here is an image that would have graded
 // green.

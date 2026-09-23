@@ -41,11 +41,11 @@ func TestValidateSiteConfig(t *testing.T) {
 			types.SiteConfig{UpstreamProxyURL: "http://user:pass@proxy.corp:3128"}, false},
 		{"upstream proxy plain URL malformed", types.SiteConfig{UpstreamProxyURL: "not a url"}, false},
 		{
-			// regression: https:// used to pass validSiteURL (it accepts
-			// both http/https for its OTHER callers) and save clean, then display
-			// as the live chain while resolveUpstreamProxyURL silently dropped it
-			// at dispatch (the sidecar's plaintext-CONNECT hop cannot carry
-			// https). Must be rejected at the SAME gate dispatch applies.
+			// https:// passes validSiteURL (it accepts both http/https for its
+			// OTHER callers), but resolveUpstreamProxyURL drops it at dispatch
+			// (the sidecar's plaintext-CONNECT hop cannot carry https), so saving
+			// it would display a live chain no run uses. It must be rejected at
+			// the SAME gate dispatch applies.
 			"upstream proxy plain URL https is REJECTED (dispatch cannot use it — W13-S1-4)",
 			types.SiteConfig{UpstreamProxyURL: "https://proxy.corp:8443"}, false,
 		},
@@ -101,9 +101,9 @@ func TestValidateSiteConfig(t *testing.T) {
 			}}, true,
 		},
 		{
-			// F3-F5 (server half): two rows sharing a From used to save fine —
+			// Server half: two rows sharing a From must not save —
 			// findEgressRedirect resolves the first match only, so the second
-			// row was a silent dead entry.
+			// row would be a silent dead entry.
 			"duplicate from is rejected", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 				{From: "ghcr.io", To: "registry.corp.internal/ghcr-remote"},
 				{From: "ghcr.io", To: "registry.corp.internal/ghcr-mirror-2"},
@@ -245,8 +245,8 @@ func TestValidateSiteConfig_InternalHosts_Rejects(t *testing.T) {
 // v6-mapped spelling of 10.0.0.0/8, and it is REFUSED. netip.Prefix.Contains
 // never matches a v4-mapped v6 address against a v4 prefix, so a v4-mapped
 // declaration falls outside Liftable and the validator fails CLOSED — the safe
-// direction, but previously unasserted, i.e. a normalization "fix" could
-// silently start widening the guard with nothing to catch it.
+// direction, asserted so a normalization "fix" cannot silently start widening
+// the guard.
 func TestValidateSiteConfig_InternalHosts_Accepts(t *testing.T) {
 	good := [][]string{
 		nil,               // no CIDRs: lifts the full Liftable set
@@ -429,7 +429,7 @@ func TestHandlePutSiteConfig_RoundTripAndAudit(t *testing.T) {
 	}
 }
 
-// TestHandlePutSiteConfig_ReportsDanglingSecretRefs pins: PUT
+// TestHandlePutSiteConfig_ReportsDanglingSecretRefs pins that PUT
 // /site-config must surface, never silently accept, a secret ref the store
 // doesn't currently hold (e.g. `wardyn site-config apply corp-baseline.json`
 // run before the referenced secrets were restored). The write itself still
@@ -529,15 +529,15 @@ func TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects(t *t
 	}
 }
 
-// TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem is B7-F9:
-// an unknown ecosystem key used to resolve to ecosystemPublicURL[eco] == "",
-// which the fold happily emitted as an EgressRedirect with From="" —
-// validateSiteConfig's NEXT pass then 400ed it as `egress_redirects[0]:
-// invalid from ""`, never naming the actual offending artifact_overrides key,
-// and never reaching the "unknown ecosystem" message that exists for exactly
-// this case two guards further down (it validates EgressRedirects, which by
-// then never carries the raw legacy key). The fold itself must refuse it,
-// naming `artifact_overrides.<key>`.
+// TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem: an unknown
+// ecosystem key resolves to ecosystemPublicURL[eco] == "", which the fold
+// must not emit as an EgressRedirect with From="" — validateSiteConfig's NEXT
+// pass would then 400 it as `egress_redirects[0]: invalid from ""`, never
+// naming the actual offending artifact_overrides key, and never reaching the
+// "unknown ecosystem" message that exists for exactly this case two guards
+// further down (it validates EgressRedirects, which by then never carries the
+// raw legacy key). The fold itself must refuse it, naming
+// `artifact_overrides.<key>`.
 func TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem(t *testing.T) {
 	fake := &fakeSiteConfigStore{}
 	srv, audit := newSiteConfigHarness(t, fake)
@@ -550,7 +550,7 @@ func TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem(t *testing.
 	if want := fmt.Sprintf(legacyArtifactOverridesUnknownEcosystemRefusal, "rubygems"); !strings.Contains(w.Body.String(), want) {
 		t.Errorf("body = %s, want it to contain the DRAFT constant %q", w.Body.String(), want)
 	}
-	// Not the empty-From message the same unknown key used to 400 as instead.
+	// Not the empty-From message a fold that emitted the key would 400 with.
 	if strings.Contains(w.Body.String(), `invalid from ""`) {
 		t.Errorf("body = %s, still surfaces the useless empty-From message instead of naming the key", w.Body.String())
 	}
@@ -788,14 +788,14 @@ func TestValidateSiteConfig_RedirectEndpointPort(t *testing.T) {
 	}
 }
 
-// TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm is B7-F8:
-// ScmHosts/EgressRedirects[].{From,To}/UpstreamProxyURL used to save whatever
-// case/whitespace the operator typed — validSiteHost/HostOf only trim+lower a
-// THROWAWAY copy to check it, never the stored string — so findEgressRedirect's
-// read-time EqualFold masked the effect for that one lookup while the document
-// itself, and everything that echoes it (GET, `wardyn site-config get`, the
-// audit datum), stayed uncanonicalized. Interior whitespace is a 400, not a
-// silent collapse — see normalizeSiteConfigTopology's doc.
+// TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm:
+// ScmHosts/EgressRedirects[].{From,To}/UpstreamProxyURL are stored in canonical
+// case and whitespace, not as typed — validSiteHost/HostOf only trim+lower a
+// THROWAWAY copy to check it, so findEgressRedirect's read-time EqualFold would
+// mask the effect for that one lookup while the document itself, and everything
+// that echoes it (GET, `wardyn site-config get`, the audit datum), stayed
+// uncanonicalized. Interior whitespace is a 400, not a silent collapse — see
+// normalizeSiteConfigTopology's doc.
 func TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm(t *testing.T) {
 	fake := &fakeSiteConfigStore{}
 	srv, _ := newSiteConfigHarness(t, fake)
@@ -848,17 +848,17 @@ func TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm(t *testing.T) {
 	}
 }
 
-// TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets is B7-F4: the
-// datum used to answer ONLY upstream_proxy_configured (a bool) — two PUTs
-// naming two DIFFERENT proxy URLs produced the IDENTICAL audit row, so a
-// review could tell THAT the proxy changed but never TO WHAT, nor what the
-// org's egress redirects or internal-host allowlist actually route (an
-// MDM-applied narrowing/opening was unreviewable from the log alone, the
-// same gap workspace_provider.write's base_urls already closed for git
-// providers). Fixed by recording the topology in the clear — precedent:
+// TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets: the datum
+// must carry more than upstream_proxy_configured (a bool) — with only that,
+// two PUTs naming two DIFFERENT proxy URLs produce the IDENTICAL audit row,
+// so a review can tell THAT the proxy changed but never TO WHAT, nor what
+// the org's egress redirects or internal-host allowlist actually route (an
+// MDM-applied narrowing/opening would be unreviewable from the log alone,
+// the same gap workspace_provider.write's base_urls closes for git
+// providers). The topology is recorded in the clear — precedent:
 // workspace_provider.write's own base_urls doc, "topology, not a
-// credential" — while keeping every actual secret VALUE out of the row:
-// only ref NAMES (upstream_proxy_secret_ref) ever appear.
+// credential" — while every actual secret VALUE stays out of the row: only
+// ref NAMES (upstream_proxy_secret_ref) ever appear.
 func TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets(t *testing.T) {
 	const secretValue = "corp-proxy-basic-auth-password-must-never-leak"
 	fake := &fakeSiteConfigStore{}

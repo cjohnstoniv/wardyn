@@ -61,10 +61,10 @@ func (c *countingCapStore) ListCapabilityGrants(context.Context) ([]types.Capabi
 }
 
 // ListGroupDenyGrants is the read capUnresolvableGroupDeny makes on the stale
-// path. It replaced the whole-table ListCapabilityGrants above, which used to
-// cost O(grant table) per checked value on the path EVERY pre-0.7 API token
-// takes; the predicate here mirrors the SQL exactly (group + deny + this kind)
-// so this double cannot be the reason the two agree.
+// path, in place of the whole-table ListCapabilityGrants above, which costs
+// O(grant table) per checked value on the path EVERY pre-0.7 API token takes;
+// the predicate here mirrors the SQL exactly (group + deny + this kind) so
+// this double cannot be the reason the two agree.
 //
 // Counted, and counted into total(): the stale path's third read is still a
 // read, and leaving it out would let a per-VALUE resolution of it slip past the
@@ -92,21 +92,20 @@ func (c *countingCapStore) total() int64 {
 
 // TestCapBatch_StoreReadsAreFlatInCallerInput is the pin for the growth law.
 //
-// narrowMemberInlinePolicy called capSeamAllowed once per allowed_domains entry,
-// and capSeamAllowed makes two uncached Postgres round trips (three when the
-// caller's group snapshot is unanswerable). spec.AllowedDomains is the REQUEST
-// BODY's list and nothing on this path caps or de-duplicates it before the loop:
+// spec.AllowedDomains is the REQUEST BODY's list, and nothing on this path caps
+// or de-duplicates it before narrowMemberInlinePolicy's loop:
 // validatePolicySpec's count caps have no allowed_domains arm AND run after
 // boundMemberSpec, and composer.Clamp's intersection preserves duplicates of a
 // permitted entry and is skipped entirely under a ceiling with allow_all_egress.
-//
-// MEASURED before the fix, against a real store.PG over loopback with an empty
-// grants table: ~505µs per entry, linear. One member request carrying the most
-// entries that fit under maxJSONBody (52,425 x "api.anthropic.com" = 1,048,572
-// bytes) made 104,850 sequential round trips and spent 27.0s inside this one
-// function — 157,275 and 45.3s on a stale snapshot. POST /runs/preflight is on
-// the member router group and persists nothing, so it was repeatable for free
-// against a pool whose default MaxConns is max(4, NumCPU).
+// capSeamAllowed makes two uncached Postgres round trips (three when the
+// caller's group snapshot is unanswerable), so calling it once per entry is
+// linear in caller input: against a real store.PG over loopback with an empty
+// grants table that is ~505µs per entry, and one member request carrying the
+// most entries that fit under maxJSONBody (52,425 x "api.anthropic.com" =
+// 1,048,572 bytes) makes 104,850 sequential round trips and spends 27.0s inside
+// that one function — 157,275 and 45.3s on a stale snapshot. POST
+// /runs/preflight is on the member router group and persists nothing, so it is
+// repeatable for free against a pool whose default MaxConns is max(4, NumCPU).
 //
 // The assertion is CONSTANCY, not a budget: the count must not depend on
 // len(AllowedDomains) at all. A per-value resolution of any kind fails it.

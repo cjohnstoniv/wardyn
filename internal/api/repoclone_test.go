@@ -50,7 +50,7 @@ func TestRepoFieldSafe(t *testing.T) {
 	}
 }
 
-// TestRepoCloneURL verifies the v0.1 GitHub-only derivation: a bare org/name
+// TestRepoCloneURL verifies the GitHub-only derivation: a bare org/name
 // becomes an https GitHub clone URL, an explicit URL passes through unchanged,
 // and anything else yields "" (slug-only, no clone).
 func TestRepoCloneURL(t *testing.T) {
@@ -216,18 +216,17 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 		}
 	}
 
-	// Brokered means single-LANE — this assertion is the INVERSE of what it pinned
-	// before: it used to require ssh.github.com:443 to SURVIVE the confinement, on
-	// the reasoning that an ssh_key grant is operator-supplied and operator-bounded.
-	// That left a brokered run with github.com:443 denied and ssh.github.com:443
-	// allowed — a second push path the receive-pack branch-namespace parser cannot
-	// read, because SSH is opaque to it. The lane is now closed here (and refused at
-	// policy-write by validateGrantLaneExclusivity), so the brokered route is the
-	// only route to the forge BY NAME — a name-based deny never binds an IP
-	// literal, the standing caveat the four HTTPS denies already carry. The deny
-	// here is the BARE host, which covers every port. If this
-	// assertion ever flips BACK, docs/POLICIES.md and threatmodel/THREAT-MODEL.md
-	// are wrong and must change with it.
+	// Brokered means single-LANE: ssh.github.com:443 must NOT survive the
+	// confinement. Letting it through, on the reasoning that an ssh_key grant is
+	// operator-supplied and operator-bounded, would leave a brokered run with
+	// github.com:443 denied and ssh.github.com:443 allowed — a second push path the
+	// receive-pack branch-namespace parser cannot read, because SSH is opaque to it.
+	// The lane is closed here (and refused at policy-write by
+	// validateGrantLaneExclusivity), so the brokered route is the only route to the
+	// forge BY NAME — a name-based deny never binds an IP literal, the standing
+	// caveat the four HTTPS denies already carry. The deny here is the BARE host,
+	// which covers every port. If this assertion ever flips, docs/POLICIES.md and
+	// threatmodel/THREAT-MODEL.md are wrong and must change with it.
 	sshLane := types.RunPolicySpec{AllowedDomains: []string{"github.com", "ssh.github.com:443"}}
 	confineGitBrokerEgress(&sshLane, grants)
 	if slices.Contains(sshLane.AllowedDomains, "ssh.github.com:443") {
@@ -237,7 +236,7 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 		t.Errorf("ssh.github.com must be denied by the git-broker confinement, got denied=%v", sshLane.DeniedDomains)
 	}
 
-	// The regression that matters: the SSH confinement fires ONLY for a brokered
+	// The case that matters: the SSH confinement fires ONLY for a brokered
 	// run. An ssh_key run with no broker map keeps its lane untouched — nothing is
 	// subtracted and nothing is denied.
 	sshOnly := types.RunPolicySpec{AllowedDomains: []string{"ssh.github.com:443", "api.anthropic.com"}}
@@ -300,14 +299,14 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 	}
 }
 
-// TestBuildRepoRecordsCanonicalisesGitHubURLs pins the D2 half the Sec review
-// found incomplete. agent-run registers url.<broker>.insteadOf against
+// TestBuildRepoRecordsCanonicalisesGitHubURLs pins the canonical clone URL.
+// agent-run registers url.<broker>.insteadOf against
 // "https://github.com/<org>/<repo>" and git PREFIX-matches the record's clone URL
 // against it, so a full github URL must reach the sandbox in exactly that shape.
-// A trailing slash used to survive into the slug (the shell's bare-slug regex
-// then dropped the record entirely) and an http:// clone URL never prefix-matched
-// the https insteadOf — both left the clone dialing github.com directly, a route
-// a brokered run no longer has. A BARE slug is already canonical and must come
+// A trailing slash surviving into the slug (the shell's bare-slug regex then
+// drops the record entirely) or an http:// clone URL (which never prefix-matches
+// the https insteadOf) would leave the clone dialing github.com directly, a route
+// a brokered run does not have. A BARE slug is already canonical and must come
 // through byte-identical, casing included.
 func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
@@ -342,7 +341,7 @@ func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 	}
 }
 
-// TestBuildRepoRecordsCarriesRef is the regression: a WorkspaceRepo's
+// TestBuildRepoRecordsCarriesRef: a WorkspaceRepo's
 // Ref must ride as the record's 4th tab-separated field — clone_one
 // (agent-run-lib.sh) is the only remaining consumer that can actually check it
 // out, but it can't if buildRepoRecords never emits it in the first place.

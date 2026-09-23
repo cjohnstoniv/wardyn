@@ -1,8 +1,6 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F11 PROBE — destination: internal/store/auditchain_f11_probe_pg_test.go
-//
 // Live probes for the audit hash chain (migration 0047) and the append-only
 // claim behind it. Guarded by WARDYN_TEST_PG like every *_pg_test.go here, and
 // reusing this package's helpers (runsPGPool, appendChained, auditSeq).
@@ -16,14 +14,14 @@
 // Every probe restores the table before it returns: audit_events is shared by
 // every test in the package and "a break is permanent" (docs/OPERATIONS.md).
 //
-// All four are green pins now. Two were red on feat/v0.7-profiles @ fa910735,
-// which is what they were written to prove; both fixes have landed and the
-// assertions are unchanged, so a red here is a REGRESSION, not a finding:
+// All four are pins; a red here is a broken invariant:
 //
-//	TestPG_ProbeF11_RewrittenRowReportsExactSeq        pins the tamper claim
-//	TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq   pins the splice claim
-//	TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean was H1 (unchained post-genesis rows verified clean); auditChainWalk rule 3
-//	TestPG_ProbeF11_UnlockedWriterDoesNotForkChain     was H5 (a lock-skipping writer forked the chain); migration 0056 + 0057
+//   - TestPG_ProbeF11_RewrittenRowReportsExactSeq: the tamper claim.
+//   - TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq: the splice claim.
+//   - TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean: auditChainWalk
+//     rule 3 (legacy rows are a prefix).
+//   - TestPG_ProbeF11_UnlockedWriterDoesNotForkChain: the in-trigger lock
+//     (migrations 0056 + 0057).
 package store_test
 
 import (
@@ -275,17 +273,15 @@ func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 	}
 }
 
-// TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean — hypothesis H1.
+// TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean.
 //
 // A DB admin who disables/drops the 0047 trigger (or inserts in replica mode)
-// appends a row with NULL prev_hash/row_hash AFTER the chain's genesis. The
-// sweep treats every NULL-hash row as "legacy" with no positional constraint
-// (auditchain.go: `WHERE row_hash IS NOT NULL` + the Legacy count), and the
-// trigger's head lookup skips NULL rows, so the chain simply steps over the
-// forged row and verifies clean. The desired property asserted here — legacy
-// rows are a PREFIX; a NULL-hash row with seq > first_seq is a finding — does
-// did not hold on the RC; rule 3 in auditChainWalk delivers it now, so this is
-// a GREEN regression pin.
+// appends a row with NULL prev_hash/row_hash AFTER the chain's genesis. If
+// the sweep treated every NULL-hash row as "legacy" with no positional
+// constraint (a bare `WHERE row_hash IS NOT NULL` + the Legacy count), then,
+// since the trigger's head lookup skips NULL rows, the chain would simply
+// step over the forged row and verify clean. Legacy rows are a PREFIX; a
+// NULL-hash row with seq > first_seq is a finding — rule 3 in auditChainWalk.
 func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool)
@@ -320,15 +316,15 @@ func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 	}
 }
 
-// TestPG_ProbeF11_UnlockedWriterDoesNotForkChain — hypothesis H5.
+// TestPG_ProbeF11_UnlockedWriterDoesNotForkChain.
 //
 // Any writer that is not one of the two in-tree ones (store.InsertAuditEvent,
 // the broker's insertAuditEventTx) — psql, scripts/e2e-backend.sh's seed
-// INSERT, the db package's own insertAuditEvent test helper, a future code path
-// — used to read the same chain head as a concurrent locked writer, so both
-// rows chained to it: a fork. The sweep then reported TAMPERING (rule 2) at the
-// LOCKED writer's row although no row was ever altered, and per
-// docs/OPERATIONS.md that verdict is permanent.
+// INSERT, the db package's own insertAuditEvent test helper, a future code
+// path — could read the same chain head as a concurrent locked writer, so
+// both rows would chain to it: a fork. The sweep would then report TAMPERING
+// (rule 2) at the LOCKED writer's row although no row was ever altered, and
+// per docs/OPERATIONS.md that verdict is permanent.
 //
 // The invariant is that an un-serialized writer cannot fork the chain — which
 // is only deliverable by SERIALIZING it: the chain link and the seq must be
@@ -338,8 +334,8 @@ func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 // ONTO the unlocked row and the sweep is clean.
 //
 // It cannot be written the other way round. Holding the unlocked writer's
-// transaction open ACROSS a synchronous store.InsertAuditEvent call — the shape
-// this probe had while it was red — self-deadlocks under any implementation
+// transaction open ACROSS a synchronous store.InsertAuditEvent call
+// self-deadlocks under any implementation
 // that actually serializes: the locked writer waits for a transaction that only
 // commits after it returns. Measured, not assumed: with the lock in the trigger
 // that shape hangs in store.InsertAuditEvent until the go test timeout kills it.
