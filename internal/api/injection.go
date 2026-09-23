@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -63,6 +64,30 @@ func (s *Server) subscriptionInjectionHostDesc() string {
 		return subscriptionInjectionHost + " or the configured gateway " + h
 	}
 	return subscriptionInjectionHost
+}
+
+// DRAFT (M2 canon pending).
+const (
+	legacySentinelUnderProviders = "this deployment's model providers credential its runs, each from its run owner's own " +
+		"sign-in; the shared subscription credential is not injected"
+	legacySentinelBlockUnreadable = "Wardyn couldn't read its model providers just now, so the subscription credential is not injected"
+)
+
+// legacySubscriptionSentinelRefusal is the record pin on the two legacy
+// subscription sentinels: status 0 while no provider block is set, else the
+// refusal. An unreadable block refuses, since it may be set.
+func (s *Server) legacySubscriptionSentinelRefusal(ctx context.Context) (int, string, string) {
+	if s.cfg.Store == nil {
+		return 0, "", ""
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	switch {
+	case err != nil:
+		return http.StatusServiceUnavailable, "providers_unreadable", legacySentinelBlockUnreadable
+	case sc.ModelProviders != nil:
+		return http.StatusForbidden, "model_providers_configured", legacySentinelUnderProviders
+	}
+	return 0, "", ""
 }
 
 // oauthProviderForSentinel maps a grant's secret name to the OAuth token
@@ -134,6 +159,20 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// proxy memory (masked from streams); the sandbox holds an inert sentinel.
 	if provider, source, isSentinel := s.oauthProviderForSentinel(minted.Injection.SecretName); isSentinel {
 		sentinel := minted.Injection.SecretName
+		// Record pin: once model providers are configured, a subscription
+		// token reaches a run only through its provider's record, as that run
+		// owner's own sign-in. These two sentinels name no record and back the
+		// operator's token, so they resolve only while no provider block is
+		// set — never under one, and never when it cannot be read. Precedes
+		// the host pin, whose second host is the boot gateway
+		// (Config.LLMGateways), not a record.
+		if status, reason, body := s.legacySubscriptionSentinelRefusal(r.Context()); status != 0 {
+			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+				"secret.read", sentinel, "failure",
+				mustJSON(map[string]any{"reason": reason, "grant_id": grantID, "source": source})))
+			writeError(w, status, body)
+			return
+		}
 		// Host pin: fail closed unless the grant targets Anthropic. An
 		// authored/inline/recorded grant could set this sentinel's host to any
 		// egress-allowlisted host; because we force Authorization: Bearer <token>

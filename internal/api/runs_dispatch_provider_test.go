@@ -347,7 +347,11 @@ func TestProviderKeySink_RefusesAnythingButTheOwnersRecordedGrant(t *testing.T) 
 		{"the owner's recorded grant", providerKeySnapshot{OwnerSubject: mpOwner, ProviderUID: "uid-a"}, true, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			st := &bearerGuardStore{run: types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: mpOwner}}
+			p := mpKeyProvider("anthropic", "uid-a", types.ModelProviderAnthropicAPIKey, types.ProviderHarness{Harness: "claude-code"})
+			st := &bearerGuardStore{
+				run:  types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: mpOwner, ModelProviderID: p.ID},
+				site: types.SiteConfig{ModelProviders: providerBlock(p)},
+			}
 			h, sec := bearerGuardHarness(t, st)
 			sec.m[name] = []byte(mpOperatorValue)
 			if tc.ownerKey {
