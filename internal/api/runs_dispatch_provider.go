@@ -109,19 +109,22 @@ func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p 
 }
 
 // providerGovernsDispatch reports whether this dispatch takes the provider path
-// rather than the legacy lane chain: the run chose a provider, or the block is
-// set and this is a model run of an agent Wardyn credentials. A run that chose
-// a provider always does, whether or not the block could be read now — the
-// provider arm refuses an unreadable one rather than fall back.
+// rather than the legacy lane chain: the run chose a provider, or this is a
+// model run of an agent Wardyn credentials and the block is set — or could not
+// be read. Nothing on the row records that a run was created under a block
+// that serves no provider for it, so an unreadable block governs and the
+// provider arm refuses the run, as the create door does, rather than hand it
+// to a chain that serves the operator's credentials.
 func providerGovernsDispatch(run types.AgentRun, p dispatchParams, siteCfg types.SiteConfig, siteCfgOK bool) bool {
 	if run.ModelProviderID != "" {
 		return true
 	}
-	if !siteCfgOK || siteCfg.ModelProviders == nil || run.Task == harnessLoginTask {
+	if run.Task == harnessLoginTask {
 		return false
 	}
 	_, needsModel := agentLLMProvider(run.Agent)
-	return needsModel && isModelRun(p.TaskMode, run.WorkspaceID, run.SourceID, p.Interactive)
+	return needsModel && isModelRun(p.TaskMode, run.WorkspaceID, run.SourceID, p.Interactive) &&
+		(!siteCfgOK || siteCfg.ModelProviders != nil)
 }
 
 // providerDispatch is what the provider path hands the rest of dispatch.
@@ -137,7 +140,8 @@ type providerDispatch struct {
 // hosts) — then, for a run that chose a key or endpoint provider, authors the
 // ONE grant that credentials it: the run owner's own key, on the provider's
 // host, with that host exactly allowlisted. A run no provider serves is left
-// with no model credential at all.
+// with no model credential at all. A block that could not be read refuses the
+// run before anything is stripped or authored.
 //
 // ok=false means the run was refused and is already marked FAILED.
 func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec,
@@ -145,6 +149,10 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, po
 	siteCfg types.SiteConfig, siteCfgOK bool,
 ) (llmTransport, []runner.InjectionGrant, providerDispatch, bool) {
 	llm := llmTransport{modelRun: true}
+	if !siteCfgOK {
+		s.refuseProviderDispatch(ctx, run, mpRunUnreadable)
+		return llm, injections, providerDispatch{}, false
+	}
 	// The host-mount subscription path: a policy blessed with the operator's
 	// resident ~/.claude must not hand it to a provider run.
 	policy.WorkspaceMounts = slices.DeleteFunc(slices.Clone(policy.WorkspaceMounts), func(wm types.WorkspaceMount) bool {
@@ -153,7 +161,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, po
 	var lane providerKeyLane
 	if run.ModelProviderID != "" {
 		var refusal string
-		if lane, refusal = s.providerLaneForRun(ctx, run, siteCfg, siteCfgOK); refusal != "" {
+		if lane, refusal = s.providerLaneForRun(ctx, run, siteCfg); refusal != "" {
 			s.refuseProviderDispatch(ctx, run, refusal)
 			return llm, injections, providerDispatch{}, false
 		}
@@ -179,11 +187,8 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, po
 // providerLaneForRun re-reads the provider the run chose at create and refuses,
 // naming it, if it is gone, off, no longer serves the agent, is of a kind this
 // arm does not dispatch, or its owner's credential is not stored (§2.4 step 5).
-func (s *Server) providerLaneForRun(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig, siteCfgOK bool) (providerKeyLane, string) {
+func (s *Server) providerLaneForRun(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig) (providerKeyLane, string) {
 	id := run.ModelProviderID
-	if !siteCfgOK {
-		return providerKeyLane{}, mpRunUnreadable
-	}
 	p, found := modelProviderByID(siteCfg.ModelProviders, id)
 	switch {
 	case !found:

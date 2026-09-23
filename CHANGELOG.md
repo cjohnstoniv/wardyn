@@ -49,8 +49,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sidecar that run's own upstream (`BaseURL`+`Path` for the harness's dialect) instead of the boot
   gateways. The injection sink resolves the key only from a grant recording the run's own subject,
   and only from that namespace. Create, Review and dispatch refuse, naming the provider, when the
-  caller's own key or token is not stored, and dispatch also when the provider is gone, off, no
-  longer serves the agent or the block cannot be read. Once a provider block is set, a model run
+  caller's own key or token is not stored, and dispatch also when the provider is gone, off or no
+  longer serves the agent. A dispatch that cannot read the site config refuses every model run, as
+  create does, whether or not it chose a provider: it cannot tell whether a block governs the run,
+  and the legacy lanes serve the operator's credentials. Once a provider block is set, a model run
   never reaches the legacy lanes: no AI integration folds (`integration_id` is refused), no
   declared-mechanism check, no managed or host-mounted subscription, and every other model
   credential in its policy is dropped and audited; a run no provider serves launches with no model

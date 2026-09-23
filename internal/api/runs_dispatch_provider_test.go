@@ -225,19 +225,23 @@ func TestProviderDispatch_RefusesNamingTheProvider(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name     string
+		provider string
 		site     types.SiteConfig
 		siteOK   bool
 		ownerKey bool
 		want     string
 	}{
-		{"deleted", types.SiteConfig{ModelProviders: providerBlock()}, true, true, providerRefusal("anthropic", mpRunStateMissing).refusal},
-		{"turned off", with(func(q *types.ModelProvider) { q.Disabled = true }), true, true, providerRefusal("anthropic", mpRunStateOff).refusal},
-		{"no longer serves the agent", with(func(q *types.ModelProvider) { q.Harnesses = nil }), true, true,
+		{"deleted", "anthropic", types.SiteConfig{ModelProviders: providerBlock()}, true, true, providerRefusal("anthropic", mpRunStateMissing).refusal},
+		{"turned off", "anthropic", with(func(q *types.ModelProvider) { q.Disabled = true }), true, true, providerRefusal("anthropic", mpRunStateOff).refusal},
+		{"no longer serves the agent", "anthropic", with(func(q *types.ModelProvider) { q.Harnesses = nil }), true, true,
 			providerRefusal("anthropic", "it is not available to claude-code").refusal},
-		{"re-kinded to one with no arm", with(func(q *types.ModelProvider) { q.Kind = types.ModelProviderBedrockBearer }), true, true,
+		{"re-kinded to one with no arm", "anthropic", with(func(q *types.ModelProvider) { q.Kind = types.ModelProviderBedrockBearer }), true, true,
 			"This run's model provider is anthropic, and provider dispatch for that kind is not yet available on this build — nothing was started."},
-		{"the block cannot be read", types.SiteConfig{}, false, true, mpRunUnreadable},
-		{"the owner's own key is absent", with(func(*types.ModelProvider) {}), true, false,
+		{"the block cannot be read", "anthropic", types.SiteConfig{}, false, true, mpRunUnreadable},
+		// Created under a block that serves no provider for claude-code: nothing
+		// on the row says so, and the legacy chain would serve the operator's key.
+		{"no provider chosen and the block cannot be read", "", types.SiteConfig{}, false, true, mpRunUnreadable},
+		{"the owner's own key is absent", "anthropic", with(func(*types.ModelProvider) {}), true, false,
 			"This run's model provider is anthropic, and " + mpRunNoKey + " — " + mpRunConnectRemedy + " Wardyn does not substitute a different model provider."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,14 +255,15 @@ func TestProviderDispatch_RefusesNamingTheProvider(t *testing.T) {
 			}
 			ctx := context.Background()
 			run, err := srv.cfg.Store.CreateRun(ctx, types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: mpOwner,
-				ModelProviderID: "anthropic", State: types.RunStarting})
+				ModelProviderID: tc.provider, State: types.RunStarting})
 			if err != nil {
 				t.Fatal(err)
 			}
 			policy := types.RunPolicySpec{}
-			if _, ok := srv.resolveLLMInjections(ctx, run, dispatchParams{}, &policy, map[string]string{}, nil, "",
-				artifactRedirectPlan{}, false, tc.site, tc.siteOK, false); ok {
-				t.Fatal("dispatch admitted the run")
+			legacy := []runner.InjectionGrant{mpInjection("api.anthropic.com", "anthropic-api-key")}
+			if plan, ok := srv.resolveLLMInjections(ctx, run, dispatchParams{}, &policy, map[string]string{}, legacy, "",
+				artifactRedirectPlan{}, false, tc.site, tc.siteOK, false); ok || len(plan.injections) != 0 {
+				t.Fatalf("dispatch admitted the run (ok=%v) or handed over %v", ok, plan.injections)
 			}
 			got, _ := srv.cfg.Store.GetRun(ctx, run.ID)
 			if got.State != types.RunFailed || st.hint != tc.want {

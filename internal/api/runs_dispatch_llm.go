@@ -733,8 +733,9 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 ) (dispatchLLMPlan, bool) {
 	// A model-provider block, once set, owns this run's model credential: the
 	// provider it chose, from its owner's own credential, or none — never the
-	// legacy lane chain below (resolveProviderLane). Every flag on its llm is
-	// false but modelRun, so the legacy authoring blocks below stay silent.
+	// legacy lane chain below (resolveProviderLane). A block that could not be
+	// read may be set, so it refuses the model run there too. Every flag on its
+	// llm is false but modelRun, so the legacy authoring blocks below stay silent.
 	var llm llmTransport
 	var sso awsSSOScope
 	var prov *providerDispatch

@@ -381,6 +381,9 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 // code's own predicate (bedrockLaneSelectable, runs_bedrock.go): a deployment
 // with no Bedrock region/model, a non-model run, a login box, a subscription
 // run and every non-claude-code agent dispatch exactly as before, blip or no.
+// A model run of an agent Wardyn credentials never gets here on an unreadable
+// roster: providerGovernsDispatch cannot rule out a model-provider block, so
+// the provider arm refuses it first.
 func (s *Server) enforceReadableRosterForCredential(ctx context.Context, run types.AgentRun,
 	p dispatchParams, policy *types.RunPolicySpec, siteCfgOK bool,
 ) bool {
