@@ -709,13 +709,19 @@ jobs:
   #     ACTUAL shipped builds (-tags docker: runner/docker + envbuild; -tags
   #     k8s: the k8s confinement substrate) are covered, not just the tagless
   #     subset that a default build sees.
-  #   gitleaks — scans the FULL git history (hence fetch-depth: 0, which the
+  #   gitleaks — scans HEAD's FULL history (hence fetch-depth: 0, which the
   #     other gates simply ignore). `make gitleaks` runs the gitleaks CLI, NOT
   #     gitleaks-action: the action's default scan range is only the triggering
   #     push/PR diff even with fetch-depth: 0, which silently made the "full
   #     history" claim false. Do not swap back without fixing its scan range.
-  #     Accepted test/dev-fixture secrets are allowlisted by commit fingerprint
-  #     in .gitleaksignore (gitleaks' native mechanism), not by path/regex.
+  #     `--log-opts="HEAD --full-history"` (Makefile's GITLEAKS_LOG_OPTS) scopes
+  #     gitleaks' own default of `--all` to HEAD only — with fetch-depth: 0
+  #     fetching every remote branch, `--all` meant one open branch's accepted
+  #     finding reds every OTHER branch's gate too (T-05). One-off accepted
+  #     test/dev-fixture secrets are allowlisted by commit fingerprint in
+  #     .gitleaksignore; a fixture that recurs across commits (a mask test
+  #     fixture, a constant) is allowlisted by path/regex in .gitleaks.toml
+  #     instead, which matches it regardless of which commit introduces it.
   #   licenses — asciinema is a subprocess tool, not a Go dep, so it is not
   #     checked here.
   # THIRD-PARTY-NOTICES.md + licenses/texts/ must match what regeneration produces.

@@ -1,9 +1,14 @@
 # Gitleaks config: default rules plus path/regex allowlists for broad
-# prose/doc false positives and the leaked-value detector's own test
-# fixtures. CI (gitleaks job) and any local `gitleaks git` scan pick this up
-# automatically from the repo root. Individual accepted findings (exact
-# commit/file/line) are allowlisted by fingerprint instead, in the sibling
-# .gitleaksignore file — see that file for why each one is safe.
+# prose/doc false positives, the leaked-value detector's own test fixtures,
+# and any OTHER fixture that recurs across commits (a mask test that mints a
+# fresh fake token per test run, a source constant, …) — those churn a new
+# per-commit fingerprint on every touching commit under the .gitleaksignore
+# mechanism, where a path/regex entry here covers it regardless of commit.
+# CI (gitleaks job) and any local `gitleaks git` scan pick this up
+# automatically from the repo root. One-off accepted findings (exact
+# commit/file/line, not expected to recur) are allowlisted by fingerprint
+# instead, in the sibling .gitleaksignore file — see that file for why each
+# one is safe.
 
 [extend]
 useDefault = true
@@ -24,6 +29,11 @@ regexes = [
     # STRIPS it before the request reaches the sandbox. Its whole job is to be
     # a value that must never come back — never a credential.
     '''MUST-NOT-LEAK''',
+    # internal/secretstore's on-disk envelope AAD label — a fixed string
+    # constant (`secretAADLabel`), not a key, that generic-api-key parses as
+    # one. It has churned a new .gitleaksignore fingerprint on every commit
+    # that touches its line; the value itself never changes.
+    '''wardyn/secret/v1''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped
@@ -36,4 +46,10 @@ paths = [
     '''ui/src/app/components/screens/workspace-wizard/wizard-types\.test\.ts''',
     '''ui/src/app/components/screens/workspace-wizard/step-base-image\.test\.tsx''',
     '''ui/e2e/workspace-wizard\.spec\.ts''',
+    # The PAT-masking test mints a fresh fake GitLab PAT fixture per test run
+    # (so a -count=2 re-run doesn't collide in the global mask registry),
+    # which changes the fingerprinted line's content on every touching
+    # commit. Same category as the detector tests above: this file's whole
+    # job is to hold a token-shaped fixture.
+    '''internal/egress/proxy/pat_broker_mask_test\.go''',
 ]

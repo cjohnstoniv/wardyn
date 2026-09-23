@@ -25,6 +25,9 @@
 #   8. docker-compose.yaml's WARDYN_OIDC_ROLE_MAP stays a plain passthrough,
 #      and deploy/compose/.env.example still seeds the demo/member pair for a
 #      fresh install (R-03).
+#   9. .gitleaksignore never lets the same (path, rule, line) recur a fourth
+#      time — a fingerprint that churns that often is a recurring fixture,
+#      which belongs in .gitleaks.toml's path/regex allowlist instead (T-05).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -247,6 +250,23 @@ if grep -qE '^WARDYN_OIDC_ROLE_MAP=demo@wardyn\.local=admin,member@wardyn\.local
     ok "deploy/compose/.env.example still seeds the demo/member role-map pair for a fresh .env"
 else
     bad "deploy/compose/.env.example no longer carries an UNCOMMENTED WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=member row — a fresh compose stack would lose the second identity the member-mode rider added, and this is the ONLY safe place for it (R-03: a docker-compose.yaml runtime default would apply to upgrades too)"
+fi
+
+# ── 10. .gitleaksignore fingerprint churn cap — T-05 ─────────────────────────
+# Each fingerprint line is `commit:path:rule:line`. A one-off accepted finding
+# gets one entry; a fixture that keeps re-triggering (a mask test that mints a
+# fresh fake token per commit, a constant whose line moves) churns a NEW
+# fingerprint every time its commit changes, for the SAME (path, rule, line).
+# Three is the line: a fourth means it belongs in .gitleaks.toml's path/regex
+# allowlist instead, which matches regardless of commit (see the pat_broker_
+# mask_test.go / secretAADLabel entries already moved there).
+gitleaksignore_churn="$(grep -oE '^[0-9a-f]{40}:[^:]+:[^:]+:[0-9]+' .gitleaksignore | \
+    awk -F: '{print $2":"$3":"$4}' | sort | uniq -c | awk '$1 > 3')"
+if [ -z "$gitleaksignore_churn" ]; then
+    ok ".gitleaksignore has no (path, rule, line) fingerprint recurring more than 3 times"
+else
+    bad ".gitleaksignore has a (path, rule, line) recurring 4+ times — move it to .gitleaks.toml's path/regex allowlist instead of adding another per-commit fingerprint:
+$gitleaksignore_churn"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

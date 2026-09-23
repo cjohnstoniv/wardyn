@@ -35,6 +35,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   every door stores one spelling of the address, and approvals name the repository the same
   way on the REST and git paths. When two repositories in one run would clone into the same
   directory, the run's response now says which one was not cloned (#485).
+- The `gates (gitleaks)` CI check was not hermetic: with `fetch-depth: 0` fetching every remote
+  branch, gitleaks' default scan range (`--all`) meant an accepted finding on someone else's open
+  branch could red every other PR's gate too. `make gitleaks` now scans only the commit under
+  test's own history (`--log-opts="HEAD --full-history"`). The two test-fixture false positives
+  that used to need a fresh `.gitleaksignore` fingerprint on every touching commit
+  (`pat_broker_mask_test.go`'s minted PAT, the secret-store's AAD label constant) are now a
+  path/regex allowlist in `.gitleaks.toml` instead, which matches regardless of commit; a repo
+  guard refuses any other fingerprint that recurs a fourth time for the same finding (#665).
 
 ### Changed
 
