@@ -12,6 +12,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
+- **The Runs board declared a still-live `tool_call`/`credential_reauth` hold dead after a
+  60-minute client-side ceiling, while `wardyn-toolgate` keeps the agent parked on it for up to
+  `WARDYN_APPROVAL_EXPIRY_AFTER` (24h default).** An operator back from lunch saw the group chip
+  say "1 was held", the card swap Review for Open, and the cockpit drop "sandbox held" — for a run
+  whose agent was still frozen waiting for exactly that decision (#509). A PENDING row is now live
+  until the server's own state says otherwise; a hold the server has expired or cancelled simply
+  stops showing as held.
 
 ### Added
 
@@ -450,6 +457,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **The Getting Started demo episodes can now be served from an air-gapped mirror.** `WARDYN_DEMO_VIDEO_BASE_URL`
+  re-points where the console downloads them from — `https://` only, no userinfo, query or fragment,
+  validated at boot the same way an internal model gateway base URL is. Unset (the default) is
+  byte-identical to today: the two hardcoded GitHub hosts. The console reads the configured base off
+  `/healthz` and the CSP's `media-src` is built from it (through the same host-sanitizing filter the
+  per-request `connect-src` uses) rather than being a fixed constant. An episode with no recorded tag
+  still resolves to no URL either way. A blocked/redirecting mirror now reads as the deployment's
+  media policy blocking the episode, not as a missing file.
+
 - **The configured Anthropic gateway (`WARDYN_ANTHROPIC_BASE_URL`) now also carries subscription
   and Wardyn-managed runs, not just the api-key lane.** Dispatch points those two lanes'
   `ANTHROPIC_BASE_URL` at the gateway when one is configured; the in-image `agent-run` launcher no
@@ -489,6 +505,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   either.
 
 ### Fixed
+
+
 
 - **On Kubernetes, a run's Go and npm caches now count against `disk_mib`.** A third `emptyDir`
   (`wardyn-cache` at `/home/agent/.cache`) joins the existing `/tmp` and workdir scratch volumes
@@ -532,7 +550,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the error with method and path and answer the caller with the action alone; a source-walking guard
   test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
   which are already caller-facing by design, are unchanged.
-
 - **A read-only terminal observer is now promoted in place when the writer leaves, instead of
   having to reconnect.** The registry keeps one writer and the observers queued behind it in
   arrival order; an ordinary release promotes the oldest of them on the socket it already has,

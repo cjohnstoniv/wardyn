@@ -124,24 +124,15 @@ export function decisionArgs(scope: ApprovalScope, until?: string): [] | [Decisi
 
 const HOLD_TIMEOUT_MS = 30_000;
 
-// #160 — the ceiling for the two UNCONDITIONAL arms below (tool_call,
-// credential_reauth), a different arm from HOLD_TIMEOUT_MS above: that one
-// bounds an egress wait_for_review connection that fails closed in seconds.
-// A tool call a human answers can legitimately sit for a long time, so a
-// short ceiling would hide a genuine hold — which matters more here than
-// forgiving a truly abandoned one. 60 minutes, per the issue's own call.
-const STALE_HOLD_CEILING_MS = 60 * 60 * 1000;
+// internal/egress/proxy/approvals.go's maxHoldTimeout — the proxy's own
+// absolute ceiling on push_rules.hold_seconds (any larger configured value is
+// clamped to it server-side). Used as isHeld's push_content window when the
+// caller has no run policy in hand to read the real hold_seconds from — see
+// isHeld's own push_content doc below.
+const PUSH_HOLD_CEILING_MS = 600_000;
 
-// True once `requestedAt` is old enough to cross `ceilingMs` — and only once:
-// an unparseable timestamp fails TOWARD showing the hold (not stale), the same
-// direction isHeld's own unparseable case below takes.
-function isStale(requestedAt: string, ceilingMs: number): boolean {
-  const t = Date.parse(requestedAt);
-  return !Number.isNaN(t) && Date.now() - t >= ceilingMs;
-}
-
-// A held request is one the sandbox is still parked on. TWO shapes reach that
-// state and only one of them carries a mode:
+// A held request is one the sandbox is still parked on. THREE shapes reach
+// that state, and only one of them carries a mode:
 //
 //  - tool_call — wardyn-toolgate blocks the agent's tool call on the PENDING
 //    row itself and polls until it is decided (cmd/wardyn-toolgate/main.go's
@@ -149,14 +140,24 @@ function isStale(requestedAt: string, ceilingMs: number): boolean {
 //    not a hold timeout), and the scope it raises is {tool,cmd,env} with no
 //    mode at all (internal/egress/proxy/local_routes.go). PENDING alone IS the
 //    hold here, so nothing client-side bounds it the way HOLD_TIMEOUT_MS
-//    bounds the egress case — the row's own server-side expiry ends it. It
-//    IS bounded by STALE_HOLD_CEILING_MS below, a much longer window: a row
-//    a human hasn't answered in an hour reads as abandoned, not live.
+//    bounds the egress case — the row's own server-side expiry ends it, and
+//    only that ends it: #509 — a client-side stale-hold ceiling (60 minutes,
+//    #160) was declaring a row dead while the server kept the agent parked on
+//    it for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h default,
+//    cmd/wardynd/boot_flags.go), which a returning operator's own inbox never
+//    agreed with. A PENDING row is live and still decidable until the
+//    approval.ExpireStale sweeper actually moves it to EXPIRED — no client
+//    constant can know better than the row's own state.
 //  - egress wait_for_review — the proxy carries the mode in the approval's
 //    requested_scope so the UI can flag it, but PENDING alone doesn't mean
 //    "still holding the sandbox": the connection fails closed at
 //    HOLD_TIMEOUT_MS while the approval row itself stays PENDING for up to 24h
 //    afterward.
+//  - push_content — the SAME shape as egress wait_for_review, not tool_call:
+//    the proxy parks git for a BOUNDED window (push_rules.hold_seconds, at
+//    most maxHoldTimeout) and then refuses with a timeout, leaving the row
+//    PENDING for the sweeper's own 24h window — see isHeld's own arm below
+//    for the retry-re-hold caveat.
 //
 // Exported because the run cockpit's command bar and the board's card state
 // the same fact ("N waiting · sandbox held"). Two copies of this test would be
@@ -259,30 +260,40 @@ export function canDecideAdoCapability(securityOperator: boolean, isRunOwner: bo
   return securityOperator || isRunOwner;
 }
 
-export function isHeld(a: ApprovalRequest): boolean {
-  if (a.kind === "tool_call") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
+export function isHeld(a: ApprovalRequest, pushHoldSeconds?: number): boolean {
+  // #509 — PENDING alone is live for both of these, at any age: see the
+  // tool_call bullet above for why no client ceiling belongs here.
+  if (a.kind === "tool_call") return a.state === "PENDING";
   // A credential_reauth row is raised BECAUSE the proxy is holding a request.
   // It carries no first_use mode of its own — the mode vocabulary belongs to
   // the egress lane — so without this it would read as a passive pending and
   // the run would show no hold while a model call was parked.
-  if (a.kind === "credential_reauth") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
-  // A push_content row is the SAME shape: git is parked on the open
-  // connection for as long as the row stays PENDING (push_hold.go), and it
-  // carries no first_use mode either — PENDING alone IS the hold.
-  if (a.kind === "push_content") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
+  if (a.kind === "credential_reauth") return a.state === "PENDING";
+  // push_content is DIFFERENT from both of the above (review finding, #181):
+  // the proxy parks git for at most push_rules.hold_seconds
+  // (internal/egress/proxy/push_hold.go's defaultPushHold, 120s unset, or the
+  // caller's own value clamped to maxHoldTimeout, 600s) and then REFUSES with
+  // a timeout — the row stays PENDING (holdPush's own doc: "a hold that times
+  // out leaves its row PENDING, and a retry waits on that same row instead of
+  // raising a second one"). So past the hold window a PENDING push_content
+  // row is a PASSIVE pending, exactly like an egress wait_for_review past its
+  // own HOLD_TIMEOUT_MS — the sandbox is NOT parked on it, though a retry of
+  // the same push (identical commits) rejoins the SAME row and re-enters the
+  // hold. `pushHoldSeconds` is the run's own push_rules.hold_seconds when the
+  // caller has it in hand (no caller does today — no client surface reads a
+  // run's resolved policy); 600s (the proxy's own absolute ceiling,
+  // maxHoldTimeout) is the conservative bound otherwise, so this never
+  // reports "not held" while the proxy could still legitimately be holding
+  // it.
+  if (a.kind === "push_content") {
+    if (a.state !== "PENDING") return false;
+    const windowMs = pushHoldSeconds && pushHoldSeconds > 0 ? pushHoldSeconds * 1000 : PUSH_HOLD_CEILING_MS;
+    const requestedAt = Date.parse(a.requested_at);
+    if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
+    return Date.now() - requestedAt < windowMs;
+  }
   if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
   const requestedAt = Date.parse(a.requested_at);
   if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
   return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
-}
-
-// A tool_call/credential_reauth row old enough that isHeld no longer counts
-// it live — distinguishes "was held, now stale" from "never held at all" for
-// a caller that has to say something different for the two (the runs board's
-// group chip and card, #160). Egress wait_for_review is not this arm: past its
-// own HOLD_TIMEOUT_MS it is a passive pending, not a stale hold, because
-// nothing ever promised the connection would still be parked.
-export function isStaleHold(a: ApprovalRequest): boolean {
-  if (a.kind !== "tool_call" && a.kind !== "credential_reauth" && a.kind !== "push_content") return false;
-  return isStale(a.requested_at, STALE_HOLD_CEILING_MS);
 }

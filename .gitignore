@@ -142,6 +142,10 @@ ds-bundle/
 # answers, cited by the push_content approval card — ships like any other
 # frozen copy table above.
 !/docs/design/held-push-canon.md
+# demo-video-source-canon.md is the frozen strings table for #145's two source
+# twins (episodes.ts) — a permanent doc, not a mock round, same shape as
+# CONSOLE-RULES.md above.
+!/docs/design/demo-video-source-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
