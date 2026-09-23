@@ -38,14 +38,27 @@ type addSSHKeyRequest struct {
 }
 
 // handleListSSHKeys is GET /api/v1/me/ssh-keys: the caller's own registered
-// keys. There is no admin/operator view of another principal's keys.
+// keys, paginated by ?limit=&offset= (see parseListPage). There is no
+// admin/operator view of another principal's keys.
 func (s *Server) handleListSSHKeys(w http.ResponseWriter, r *http.Request) {
-	keys, err := s.cfg.Store.ListSSHKeysByPrincipal(r.Context(), principalFromRequest(r))
-	if err != nil {
-		writeServerError(w, r, "list ssh keys", err)
+	ctx := r.Context()
+	principal := principalFromRequest(r)
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, keys)
+	// SSHKeysByPrincipalPager, not the plain Pager: the query is already
+	// scoped WHERE principal=$1 (ListSSHKeysByPrincipal), so an absent
+	// implementation falls back safely to the full fetch + in-Go window.
+	var pageFn func(store.Page) ([]types.SSHPublicKey, error)
+	if pg, ok := s.cfg.Store.(store.SSHKeysByPrincipalPager); ok {
+		pageFn = func(p store.Page) ([]types.SSHPublicKey, error) {
+			return pg.ListSSHKeysByPrincipalPage(ctx, principal, p)
+		}
+	}
+	servePage(w, r, page, pageFn, func() ([]types.SSHPublicKey, error) {
+		return s.cfg.Store.ListSSHKeysByPrincipal(ctx, principal)
+	})
 }
 
 // handleAddSSHKey is POST /api/v1/me/ssh-keys: register a public key against

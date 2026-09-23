@@ -60,21 +60,21 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles"},
+		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles"},
 		"runs.list":   {"ListRuns", "ListRunsPage"},
 		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
 		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
 		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents"},
-		"secrets":     {"ListSecrets", "SetSecret", "DeleteSecret"},
+		"secrets":     {"ListSecrets", "ListSecretsPage", "SetSecret", "DeleteSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig"},
 		"drives":      {"GetDrives", "ApplyDrives"},
 		"setup":       {"SetupStatus", "ConnectManagedSubscription", "DisconnectManagedSubscription"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},
-		"ssh-keys":    {"ListSSHKeys", "AddSSHKey"},
+		"ssh-keys":    {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey"},
 		"devices":     {"MintDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
 	}
 }

@@ -310,13 +310,22 @@ func (c *Client) RevokeDevice(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/admin/devices/"+id.String(), nil, nil)
 }
 
+// ListSSHKeysPage is ListSSHKeys plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists and this one is not the whole
+// list. See client.go's package doc's "# Pagination".
+func (c *Client) ListSSHKeysPage(ctx context.Context, opts ...ListOpts) (keys []types.SSHPublicKey, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/me/ssh-keys", opts), nil, &keys, &hdr)
+	return keys, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
 // ListSSHKeys returns the caller's own registered SSH gateway keys — the
 // gateway's entire trust root (docs/SSH.md §1). There is no admin view of
-// another principal's keys. GET /api/v1/me/ssh-keys.
-func (c *Client) ListSSHKeys(ctx context.Context) ([]types.SSHPublicKey, error) {
-	var out []types.SSHPublicKey
-	err := c.do(ctx, http.MethodGet, "/api/v1/me/ssh-keys", nil, &out)
-	return out, err
+// another principal's keys. Pass a ListOpts to page; prefer ListSSHKeysPage,
+// which also returns the server's truncation signal. GET /api/v1/me/ssh-keys.
+func (c *Client) ListSSHKeys(ctx context.Context, opts ...ListOpts) ([]types.SSHPublicKey, error) {
+	keys, _, err := c.ListSSHKeysPage(ctx, opts...)
+	return keys, err
 }
 
 // AddSSHKey registers one authorized_keys line under the caller's own

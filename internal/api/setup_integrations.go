@@ -274,7 +274,8 @@ func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 }
 
 // handleListIntegrations returns the effective integration set (stored ∪
-// legacy-derived) with each row's live capabilities. Read-only, humanOrAdmin.
+// legacy-derived) with each row's live capabilities, paginated by
+// ?limit=&offset= (see parseListPage). Read-only, humanOrAdmin.
 //
 // Projected for a non-operator (memberSafeIntegration): a secret name IS a
 // credential ref, the same reason GET /site-config is operatorOnly, so a
@@ -286,14 +287,29 @@ func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 //
 // No audit — this is a read, like GET /site-config.
 //
+// The set is admin-authored (SiteConfig's own stored rows plus a
+// legacy-derived union), not a growing per-request table the way runs or
+// audit are, so pagedItems' fetch-all + in-Go window (nil pageFn — there is no
+// DB list query here to push LIMIT/OFFSET into) is the whole story, same
+// uniform ?limit=&offset=/X-Wardyn-Truncated contract as every other list
+// route.
+//
 //	GET /api/v1/integrations
 func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) {
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
+		return
+	}
 	present := s.presentSecretNamesFor(r.Context(), s.secretOwnerFromRequest(r))
 	rows := s.integrationsWithCapabilities(r.Context(), present)
 	if !s.isOperator(r.Context()) {
 		rows = memberSafeIntegrations(rows)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"integrations": rows})
+	windowed, truncated, _ := pagedItems(page, nil, func() ([]SetupIntegration, error) { return rows, nil })
+	if truncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"integrations": windowed})
 }
 
 // integrationByID recomputes the live capability matrix for exactly one row of

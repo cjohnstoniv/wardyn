@@ -106,6 +106,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The six list routes that still returned an unbounded body now page like every other list
+  route (#657): `GET /secrets`, `/integrations`, `/me/ssh-keys`, `/me/tokens`,
+  `/runs/{id}/grants` and `/me/capabilities` all accept `?limit=&offset=` and set
+  `X-Wardyn-Truncated` when a further page exists, the same contract `/runs`, `/approvals`,
+  `/policies`, `/workspaces` and `/audit` already carry. `/secrets`, `/integrations` and
+  `/me/capabilities` keep their existing wrapped response shape (`{"names":...,"mine":...}`,
+  `{"integrations":...}`, the grants list inside `meCapabilitiesResponse`) — only the list
+  inside is windowed. The Go SDK gains `ListGrantsPage`, `ListSSHKeysPage` and
+  `ListSecretsPage`, each surfacing the truncation signal the same way `ListRunsPage` does;
+  `ListGrants`, `ListSSHKeys` and `ListSecrets` now also accept a `ListOpts` to page.
 - **Migration-numbering collision gates (#667).** `make lint` now runs
   `scripts/check-migration-numbers.sh`: a new migration file must use a numeric
   prefix greater than every prefix already on the branch it targets

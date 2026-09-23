@@ -422,6 +422,86 @@ func (s PG) ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page
 	return s.hydrateAll(ctx, wss)
 }
 
+// GrantsByRunPager is the scoped analogue of Pager for GET /runs/{id}/grants
+// (#657): the existing ListGrantsByRun is already WHERE run_id=$1, so unlike
+// RunsByCreatorPager an absent implementation is SAFE, not fail-closed — the
+// api-layer fallback fetches the same (already-scoped) rows and windows them
+// in Go, matching WorkspacesByOwnerPager's posture, not RunsByCreatorPager's.
+type GrantsByRunPager interface {
+	ListGrantsByRunPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.CredentialGrant, error)
+}
+
+// Compile-time assertion: PG satisfies GrantsByRunPager.
+var _ GrantsByRunPager = PG{}
+
+// ListGrantsByRunPage is ListGrantsByRun bounded by p.
+func (s PG) ListGrantsByRunPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.CredentialGrant, error) {
+	q, args := p.appendTo(`SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at`, []any{runID})
+	return collect(ctx, s.Pool, "list", "grants", q, args, scanGrant)
+}
+
+// SSHKeysByPrincipalPager is the scoped analogue of Pager for GET
+// /me/ssh-keys (#657). Same safe-fallback posture as GrantsByRunPager: the
+// existing ListSSHKeysByPrincipal is already WHERE principal=$1.
+type SSHKeysByPrincipalPager interface {
+	ListSSHKeysByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.SSHPublicKey, error)
+}
+
+// Compile-time assertion: PG satisfies SSHKeysByPrincipalPager.
+var _ SSHKeysByPrincipalPager = PG{}
+
+// ListSSHKeysByPrincipalPage is ListSSHKeysByPrincipal bounded by p.
+func (s PG) ListSSHKeysByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.SSHPublicKey, error) {
+	q, args := p.appendTo(`SELECT `+sshKeyCols+` FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC`, []any{principal})
+	return collect(ctx, s.Pool, "list", "ssh keys", q, args, scanSSHKey)
+}
+
+// APITokensByPrincipalPager is the scoped analogue of Pager for GET
+// /me/tokens (#657). Same safe-fallback posture as GrantsByRunPager: the
+// existing ListAPITokensByPrincipal is already WHERE principal=$1.
+type APITokensByPrincipalPager interface {
+	ListAPITokensByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.APIToken, error)
+}
+
+// Compile-time assertion: PG satisfies APITokensByPrincipalPager.
+var _ APITokensByPrincipalPager = PG{}
+
+// ListAPITokensByPrincipalPage is ListAPITokensByPrincipal bounded by p.
+func (s PG) ListAPITokensByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.APIToken, error) {
+	q, args := p.appendTo(`SELECT `+apiTokenCols+` FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC`, []any{principal})
+	return queryAPITokens(ctx, s, q, args...)
+}
+
+// CapabilityGrantsForPager is the scoped analogue of Pager for GET
+// /me/capabilities (#657). Same safe-fallback posture as GrantsByRunPager: the
+// existing ListCapabilityGrantsFor is already scoped to users/groups — its own
+// doc explains a deployment's grant list is normally small enough that one
+// round trip beats two queries, so this exists for the uniform contract (every
+// list route answers ?limit=&offset= and X-Wardyn-Truncated) rather than
+// because production grant lists are expected to routinely truncate.
+type CapabilityGrantsForPager interface {
+	ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, p Page) ([]types.CapabilityGrant, error)
+}
+
+// Compile-time assertion: PG satisfies CapabilityGrantsForPager.
+var _ CapabilityGrantsForPager = PG{}
+
+// ListCapabilityGrantsForPage is ListCapabilityGrantsFor bounded by p.
+func (s PG) ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, p Page) ([]types.CapabilityGrant, error) {
+	if users == nil {
+		users = []string{}
+	}
+	if groups == nil {
+		groups = []string{}
+	}
+	q, args := p.appendTo(`SELECT `+capabilityGrantCols+` FROM capability_grants
+		WHERE subject_type = 'all'
+		   OR (subject_type = 'user'  AND subject = ANY($1::text[]))
+		   OR (subject_type = 'group' AND subject = ANY($2::text[]))
+		ORDER BY capability, subject_type, subject, value`, []any{users, groups})
+	return collect(ctx, s.Pool, "list", "capability grants for subject", q, args, scanCapabilityGrant)
+}
+
 // ListApprovalsPage returns approvals filtered by state (empty = all) in reverse
 // request order, bounded by p. The all-state feed rides approvals_requested_at_idx
 // (0020); a single-state filter rides approvals_state_requested_at_idx (0023),
