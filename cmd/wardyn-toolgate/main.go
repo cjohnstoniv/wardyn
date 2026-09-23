@@ -243,10 +243,14 @@ func (g *gate) decide(params json.RawMessage) any {
 	// row moves to EXPIRED now, not up to one sweep interval later (#811): a
 	// row left PENDING here is still approvable in the console for that whole
 	// window, after this gate has already returned deny to Claude Code for it.
-	// Best-effort: id is already committed to a denial either way, and a
-	// failure to reach the control plane here is no different from any other
-	// poll failure already logged above.
-	g.expire(id)
+	// The answer is the row's final state: an operator approval that landed
+	// after the last PENDING poll wins the CAS and is honoured here. EXPIRED,
+	// or no answer at all, falls through to the deny below.
+	if state := g.expire(id); state != "EXPIRED" {
+		if res, terminal := g.resultForTerminal(state, a, "the Wardyn operator"); terminal {
+			return res
+		}
+	}
 	if consecutivePollFailures > 0 {
 		return permissionResult(deny(fmt.Sprintf(
 			"approval gate could not reach the control plane (%d consecutive poll failures) — denied", consecutivePollFailures)))
@@ -256,20 +260,23 @@ func (g *gate) decide(params json.RawMessage) any {
 
 // expire tells the control plane this gate is done waiting on id, so the row
 // moves straight to EXPIRED instead of sitting PENDING until the periodic
-// sweep catches up to it (#811). Fire-and-forget: the deny this gate is about
-// to return is already decided regardless of the outcome here, so a failure
-// only gets one stderr line, the same treatment a poll failure gets above.
-func (g *gate) expire(id string) {
-	req, err := http.NewRequest(http.MethodPost, g.base+"/wardyn/v1/approvals/"+id+"/expire", nil)
-	if err != nil {
-		return
-	}
-	resp, err := g.client.Do(req)
+// sweep catches up to it (#811). It returns the row's final state, or "" when
+// the control plane gave no readable answer — a failure only gets one stderr
+// line, the same treatment a poll failure gets above.
+func (g *gate) expire(id string) string {
+	resp, err := g.client.Post(g.base+"/wardyn/v1/approvals/"+id+"/expire", "application/json", nil)
 	if err != nil {
 		fmt.Fprintf(g.errOut(), "wardyn-toolgate: expire approval %s: %v\n", id, err)
-		return
+		return ""
 	}
-	_ = resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
+	var ap struct {
+		State string `json:"state"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&ap) != nil {
+		return ""
+	}
+	return ap.State
 }
 
 // create POSTs the tool_call approval through the brokered route and returns

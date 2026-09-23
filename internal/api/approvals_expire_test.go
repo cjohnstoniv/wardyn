@@ -34,8 +34,11 @@ func TestHandleInternalExpireApproval_OwnToolCallExpires(t *testing.T) {
 	tok := h.mintRunToken(t, runID)
 
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals/"+id.String()+"/expire", tok, "")
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("code = %d, want 204; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := decodeState(t, w.Body.Bytes()); got != types.ApprovalExpired {
+		t.Fatalf("answered state = %s, want EXPIRED", got)
 	}
 	calls := h.approvals.expiredCalls()
 	if len(calls) != 1 || calls[0] != id {
@@ -94,10 +97,49 @@ func TestHandleInternalExpireApproval_AlreadyDecidedIsIdempotent(t *testing.T) {
 	tok := h.mintRunToken(t, runID)
 
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals/"+id.String()+"/expire", tok, "")
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("code = %d, want 204 (idempotent no-op); body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (idempotent no-op); body=%s", w.Code, w.Body.String())
 	}
 	if got := h.approvals.byID[id].State; got != types.ApprovalApproved {
 		t.Fatalf("state = %s, want APPROVED left untouched", got)
 	}
+	// The answer carries the row's FINAL state, so a gate whose expire lost the
+	// race to a human approval honours that approval instead of denying a call
+	// the console now shows as APPROVED.
+	if got := decodeState(t, w.Body.Bytes()); got != types.ApprovalApproved {
+		t.Fatalf("answered state = %s, want APPROVED", got)
+	}
+}
+
+// TestHandleInternalExpireApproval_ControlPlaneEscalationIs404 pins that a
+// tool_call row the CONTROL PLANE raised (an Azure DevOps capability
+// escalation: grant_id set, which the sandbox route cannot do) is not the
+// sandbox's to withdraw — only rows the toolgate itself raised are.
+func TestHandleInternalExpireApproval_ControlPlaneEscalationIs404(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	id := seedApproval(h, runID, types.ApprovalToolCall)
+	grantID := uuid.New()
+	ap := h.approvals.byID[id]
+	ap.GrantID = &grantID
+	ap.RequestedScope = json.RawMessage(`{"lane":"` + adoApprovalLane + `","grant_id":"` + grantID.String() + `"}`)
+	h.approvals.byID[id] = ap
+	tok := h.mintRunToken(t, runID)
+
+	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals/"+id.String()+"/expire", tok, "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("code = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+	if calls := h.approvals.expiredCalls(); len(calls) != 0 {
+		t.Fatalf("expiredCalls = %v, want none — a control-plane escalation must never move via this route", calls)
+	}
+}
+
+func decodeState(t *testing.T, body []byte) types.ApprovalState {
+	t.Helper()
+	var ap types.ApprovalRequest
+	if err := json.Unmarshal(body, &ap); err != nil {
+		t.Fatalf("decode answer: %v; body=%s", err, body)
+	}
+	return ap.State
 }

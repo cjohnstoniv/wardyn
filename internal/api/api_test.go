@@ -202,7 +202,7 @@ func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason 
 // ExpireOne mirrors approval.ExpireOne over the map: PENDING moves to EXPIRED
 // and is recorded; anything else (already decided, or absent) is a silent
 // no-op, matching the real FSM's idempotent treatment of the race.
-func (f *fakeApprovals) ExpireOne(_ context.Context, id uuid.UUID, _ string) error {
+func (f *fakeApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.expireErr != nil {

@@ -253,6 +253,38 @@ func TestDeadlineReachedExpiresTheApprovalRow(t *testing.T) {
 	}
 }
 
+// TestExpireLosingToAnApprovalHonoursIt pins the race #811's expire leaves
+// open: an operator approval that lands between the gate's last PENDING poll
+// and its expire POST wins the CAS, the expire answers the row's final state,
+// and the gate must honour that APPROVED rather than deny a call the console
+// shows as approved.
+func TestExpireLosingToAnApprovalHonoursIt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/wardyn/v1/approvals":
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "11111111-2222-3333-4444-555555555555"})
+		case r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]string{"state": "PENDING"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/expire"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"state": "APPROVED"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	g := &gate{base: srv.URL, poll: 10 * time.Millisecond, deadline: 50 * time.Millisecond,
+		client: &http.Client{Timeout: 2 * time.Second}}
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{"command":"ls"},"tool_use_id":"t"}}}` + "\n")
+	var out strings.Builder
+	if err := g.serve(in, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if !strings.Contains(out.String(), `\"behavior\":\"allow\"`) {
+		t.Fatalf("want the approval that won the race honoured, got %q", out.String())
+	}
+}
+
 func TestSummarizeCapsAndFallsBack(t *testing.T) {
 	if s := summarize("Bash", json.RawMessage(`{"command":"ls -la"}`)); s != "ls -la" {
 		t.Fatalf("bash command not extracted: %q", s)

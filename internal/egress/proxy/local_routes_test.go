@@ -100,7 +100,8 @@ func TestLocalRouteForwardsRunTokenAndBody(t *testing.T) {
 			method:         http.MethodPost,
 			route:          routeApprovals + apID.String() + routeApprovalsExpireSuffix,
 			wantCPPath:     "/api/v1/internal/approvals/" + apID.String() + "/expire",
-			wantStatus:     http.StatusNoContent,
+			wantStatus:     http.StatusOK,
+			respBody:       `{"state":"EXPIRED"}`,
 			wantRuleSource: ruleSourceApprovals,
 		},
 		{

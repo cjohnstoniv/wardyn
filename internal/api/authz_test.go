@@ -1896,7 +1896,7 @@ func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason
 	return n, nil
 }
 
-func (a *authzApprovals) ExpireOne(_ context.Context, id uuid.UUID, _ string) error {
+func (a *authzApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	ap, ok := a.byID[id]

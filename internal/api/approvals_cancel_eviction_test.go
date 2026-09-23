@@ -146,8 +146,8 @@ func (a evictionApprovals) CancelForRun(ctx context.Context, runID uuid.UUID, re
 	return approval.CancelForRun(ctx, a.st, runID, reason)
 }
 
-func (a evictionApprovals) ExpireOne(ctx context.Context, id uuid.UUID, reason string) error {
-	return approval.ExpireOne(ctx, a.st, id, reason)
+func (a evictionApprovals) ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error {
+	return approval.ExpireOne(ctx, a.st, id, actor, reason)
 }
 
 func (a evictionApprovals) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {

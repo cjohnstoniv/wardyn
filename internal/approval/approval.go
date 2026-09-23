@@ -287,7 +287,10 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 // Idempotent: a row already decided, by a human or by a concurrent sweep, is
 // left untouched — ErrAlreadyDecided is swallowed as the race it is, exactly
 // as ExpireStaleByKind and CancelForRun already treat it.
-func ExpireOne(ctx context.Context, st Store, id uuid.UUID, reason string) error {
+//
+// The audit row is attributed to the run's agent (actor), not the system: the
+// sandbox can call this at any time, so nothing ties it to a deadline.
+func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string) error {
 	result, err := st.DecideApproval(ctx, id, types.ApprovalDecision{
 		State: types.ApprovalExpired, DecidedBy: "system", Reason: reason,
 	})
@@ -302,8 +305,8 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, reason string) error
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),
 		RunID:     &result.RunID,
-		ActorType: types.ActorSystem,
-		Actor:     "wardyn/toolgate",
+		ActorType: types.ActorAgent,
+		Actor:     actor,
 		Action:    "approval.expire",
 		Target:    id.String(),
 		Outcome:   "success",

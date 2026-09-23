@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -389,8 +390,9 @@ func TestExpireStale_AlreadyDecidedRace(t *testing.T) {
 
 // TestExpireOne_MovesPendingToExpired is the happy path: a PENDING row is
 // EXPIRED immediately, with no age check (unlike ExpireStale), and the same
-// approval.expire audit action the periodic sweep emits, attributed to
-// wardyn-toolgate as the caller rather than the sweep.
+// approval.expire audit action the periodic sweep emits, attributed to the
+// run's agent that withdrew it — nothing ties the call to a deadline, so it
+// must not read as a system event.
 func TestExpireOne_MovesPendingToExpired(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}
@@ -399,7 +401,7 @@ func TestExpireOne_MovesPendingToExpired(t *testing.T) {
 	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash"}`)))
 	// Freshly raised — proves the transition is NOT age-gated the way
 	// ExpireStale's is.
-	if err := approval.ExpireOne(ctx, st, ap.ID, "toolgate_deadline"); err != nil {
+	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != nil {
 		t.Fatalf("expire one: %v", err)
 	}
 
@@ -418,8 +420,11 @@ func TestExpireOne_MovesPendingToExpired(t *testing.T) {
 	for _, ev := range st.audit {
 		if ev.Action == "approval.expire" {
 			expireEvents++
-			if ev.ActorType != types.ActorSystem {
-				t.Errorf("want actor_type=system, got %s", ev.ActorType)
+			if ev.ActorType != types.ActorAgent || ev.Actor != "spiffe://wardyn/run/x" {
+				t.Errorf("want actor agent spiffe://wardyn/run/x, got %s %s", ev.ActorType, ev.Actor)
+			}
+			if !strings.Contains(string(ev.Data), `"reason":"client_withdrawn"`) {
+				t.Errorf("want reason client_withdrawn in data, got %s", ev.Data)
 			}
 		}
 	}
@@ -444,7 +449,7 @@ func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
 	}
 	before := len(st.audit)
 
-	if err := approval.ExpireOne(ctx, st, ap.ID, "toolgate_deadline"); err != nil {
+	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != nil {
 		t.Fatalf("expire one on an already-decided row must be a silent no-op, got: %v", err)
 	}
 	got, _ := st.GetApproval(ctx, ap.ID)

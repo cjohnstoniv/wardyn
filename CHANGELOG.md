@@ -17,7 +17,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   returned deny for it. In that window an operator could still approve a call the agent had
   already abandoned. The gate now tells the control plane (`POST
   /wardyn/v1/approvals/{id}/expire`) the moment it gives up, moving the row straight to
-  `EXPIRED`.
+  `EXPIRED`; an approval that beats that call is honoured rather than denied. Only a
+  `tool_call` row the sandbox itself raised can be withdrawn this way — an Azure DevOps
+  escalation stays the operator's — and the audit row names the run's agent.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
