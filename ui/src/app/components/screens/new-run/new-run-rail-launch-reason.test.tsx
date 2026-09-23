@@ -85,12 +85,12 @@ describe("RunRail — Launch's no-barrier reason and route (#214)", () => {
 // verbatim" pin covers that path end to end); this file only proves the rail
 // picks the right one of the two and announces both.
 describe("RunRail — the launch failure card (#214)", () => {
-  it("names the stage, says where the reason is, and routes to it — announced", () => {
+  it("says Wardyn did not answer, without claiming a run exists, and routes to the Runs board — announced", () => {
     renderRail({ launchError: "Failed to launch run.", genericFailure: true });
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(RUN.LAUNCH_FAILED_TITLE);
     expect(alert).toHaveTextContent(RUN.LAUNCH_FAILED_BODY);
-    expect(within(alert).getByRole("link", { name: /Open the run/ })).toHaveAttribute("href", "/runs");
+    expect(within(alert).getByRole("link", { name: /Open Runs/ })).toHaveAttribute("href", "/runs");
     // Today's bare line is gone.
     expect(screen.queryByText("Failed to launch run.")).toBeNull();
   });

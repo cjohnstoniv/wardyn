@@ -40,13 +40,20 @@ export const RUN = {
   // confinement_class at all, so the server's own read decides.
   BARRIER_UNKNOWN:
     "Couldn't check which barriers this host has — leave this alone and Wardyn will use the strongest one it can, or pick one yourself.",
-  // #214 — a launch that fired and failed for a reason no preflight ruled out
-  // (an unbuildable image, a daemon that dies mid-dispatch). Replaces the old
-  // bare "Failed to launch run." line, which named no stage, no reason and no
-  // route, and which nothing announced.
-  LAUNCH_FAILED_TITLE: "The run was created, but its sandbox did not start.",
-  LAUNCH_FAILED_BODY: "Wardyn recorded why on the run's page, with anything it managed to do first.",
-  LAUNCH_FAILED_OPEN_RUN: "Open the run",
+  // #214 — a launch that fired and failed for a reason no preflight ruled out.
+  // Replaces the old bare "Failed to launch run." line, which named no stage,
+  // no reason and no route, and which nothing announced.
+  //
+  // SF-26: `genericFailure` is set whenever getErrorMessage(e) comes back
+  // empty — a network error, a timeout, or a bodiless 5xx — which includes the
+  // request never reaching the server at all (createRun's fetch itself
+  // throwing). "The run was created" was true for none of those, and false
+  // for the commonest one: it told a member a sandbox exists to go check on
+  // when POST /api/v1/runs may never have been answered. This wording claims
+  // only what every one of those cases actually shares.
+  LAUNCH_FAILED_TITLE: "Wardyn didn't answer the launch.",
+  LAUNCH_FAILED_BODY: "A run may or may not have started — check the Runs board before trying again.",
+  LAUNCH_FAILED_OPEN_RUN: "Open Runs",
   LAUNCH_FAILED_DISMISS: "Dismiss",
 } as const;
 
