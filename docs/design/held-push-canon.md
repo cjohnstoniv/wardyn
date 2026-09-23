@@ -28,25 +28,26 @@ decide's rule 4 refuses one on this kind, so the console never builds one.
 
 ## Frozen strings
 
-| key | string |
-|---|---|
-| `PUSH.KIND_LABEL` | Push |
-| `PUSH.CARD_TITLE` | A push is held for review |
-| `PUSH.FIELD_REPOSITORY` | Repository |
-| `PUSH.FIELD_BRANCH` | Branch |
-| `PUSH.FIELD_ACTS_AS` | Acts as |
-| `PUSH.PATHS_TITLE` | Files under review |
-| `PUSH.PATHS_MORE(n)` | +{n} more |
-| `PUSH.PATHS_NOTE` | These are the paths your push rules hold for review. The push carries other files too. |
-| `PUSH.WHAT(repo, person)` | the run pushes this branch to {repo}, as {person}. (after `APPROVAL_BANNER_LABEL.what`) |
-| `PUSH.BLAST` | the whole push reaches the branch, including files not listed here. Approving does not narrow it to the paths under review. (after `APPROVAL_BANNER_LABEL.blast`) |
-| `PUSH.HELD_NOTE` | The push is waiting at the proxy for a short time. Approving lets it through now, or the next time the run pushes. |
-| `PUSH.APPROVE_NOTE` | Approving lets this push through. The next push asks again. |
-| `PUSH.TIMEOUT_BODY` | Nobody answered in time, so the push was refused and the run was told. It can push again. |
-| `PUSH.DENIED_PATH_BODY` | This push touched a path your rules deny, so it was refused and the run was told. Nobody was asked. |
-| `PUSH.RAIL_TITLE` | Push rules |
-| `PUSH.RAIL_BODY(d, r)` | {d} paths denied · {r} paths held for review (singular "path" for exactly 1) |
-| `PUSH.RAIL_UNATTENDED` | Nobody is here to answer, so a push that would be held is refused instead. |
+| key | string | note |
+|---|---|---|
+| `PUSH.KIND_LABEL` | Push | |
+| `PUSH.CARD_TITLE` | A push is held for review | |
+| `PUSH.FIELD_REPOSITORY` | Repository | |
+| `PUSH.FIELD_BRANCH` | Branch | |
+| `PUSH.FIELD_ACTS_AS` | Acts as | |
+| `PUSH.PATHS_TITLE` | Files under review | |
+| `PUSH.PATHS_MORE(n)` | +{n} more | |
+| `PUSH.PATHS_NOTE` | These are the paths your push rules hold for review. The push carries other files too. | |
+| `PUSH.WHAT(repo, person)` | the run pushes this branch to {repo}, as {person}. | after `APPROVAL_BANNER_LABEL.what` |
+| `PUSH.BLAST` | the whole push reaches the branch, including files not listed here. Approving does not narrow it to the paths under review. | after `APPROVAL_BANNER_LABEL.blast` |
+| `PUSH.HELD_NOTE` | The push is waiting at the proxy for a short time. Approving lets it through now, or the next time the run pushes. | |
+| `PUSH.HELD_OPEN` | The push has stopped waiting, but the request stays open. Approving lets the run's next push of these same commits through — the run has to push again. | once the hold window passes; approved, packet 7b, 2026-09-22 |
+| `PUSH.APPROVE_NOTE` | Approving lets this push through. The next push asks again. | |
+| `PUSH.TIMEOUT_BODY` | Nobody answered in time, so the push was refused and the run was told. It can push again. | |
+| `PUSH.DENIED_PATH_BODY` | This push touched a path your rules deny, so it was refused and the run was told. Nobody was asked. | |
+| `PUSH.RAIL_TITLE` | Push rules | |
+| `PUSH.RAIL_BODY(d, r)` | {d} paths denied · {r} paths held for review | singular "path" for exactly 1 |
+| `PUSH.RAIL_UNATTENDED` | Nobody is here to answer, so a push that would be held is refused instead. | |
 
 Reused, not reinvented: `APPROVAL.CANCELLED_BODY`, `VIEWER_APPROVAL_BLOCKS_NOTE`,
 `APPROVAL_BANNER_LABEL.what`/`.blast`, `SECURITY_ONLY_REASON`. State ("Pending"/
@@ -61,8 +62,7 @@ Not yet frozen. Marked `DRAFT` at each definition site (`copy/push.ts`,
 
 | key | string |
 |---|---|
-| `PUSH.HELD_EXPIRED` | No longer waiting — approving lets the next push of these same commits through. |
-| `PUSH.LIST_TITLE(repo)` | Push to {repository} |
+| `PUSH.LIST_TITLE(repo)` | Push to {repo} |
 | rule_source `brokered:git:push-rules` | Push refused — a denied path |
 | rule_source `brokered:git:push-uninspectable` | Push refused — couldn't be inspected |
 | rule_source `brokered:git:push-too-large` | Push refused — too large to inspect |
@@ -99,9 +99,9 @@ same fields this card's own header carries.
   times the connection out — a retry of the SAME commits rejoins this row and
   re-enters the hold, but the sandbox is not parked on it in between. The
   card carries its own timer (not just the next poll tick) so `PUSH.HELD_NOTE`
-  flips to the DRAFT `PUSH.HELD_EXPIRED` right at the window's end, still
+  flips to `PUSH.HELD_OPEN` right at the window's end, still
   admin/security-admin decidable either way (no ReasonDialog, no scope menu).
-- **deciding** — both buttons disabled, one busy flag shared between them.
+- **deciding** — both buttons disabled; only the pressed one spins (#458).
 - **timed out** — EXPIRED (the sweeper's ~24h ceiling, not the hold window
   above); rendered in the decided list with `PUSH.TIMEOUT_BODY`.
 - **cancelled** — the run ended; reuses `APPROVAL.CANCELLED_BODY`.

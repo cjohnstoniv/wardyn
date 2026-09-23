@@ -7,6 +7,8 @@
 // path: copy/approvals.ts hand-copies "Push" (eager-bundle reasons — see its
 // own comment) rather than importing PUSH.KIND_LABEL, so the two strings can
 // only ever be proven equal by a test, not the type system.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { PUSH } from "./push";
 import { APPROVAL_KIND_LABEL } from "./approvals";
@@ -25,5 +27,42 @@ describe("PUSH copy (#181)", () => {
 
   it("never drifts from copy/approvals.ts's hand-copied kind label", () => {
     expect(APPROVAL_KIND_LABEL.push).toBe(PUSH.KIND_LABEL);
+  });
+});
+
+// The canon doc's PUSH rows (frozen and DRAFT), parsed back and compared row
+// for row: a reworded clause, a swapped dash or a row added on one side only
+// fails here. A key's argument names are the doc's own placeholders, so
+// `PUSH.WHAT(repo, person)` is checked as PUSH.WHAT("{repo}", "{person}").
+const DOC = resolve(process.cwd(), "../docs/design/held-push-canon.md");
+
+function docRows(): Record<string, string> {
+  const rows: Record<string, string> = {};
+  for (const line of readFileSync(DOC, "utf8").split("\n")) {
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    const key = cells[0]?.replace(/`/g, "");
+    if (cells.length >= 2 && key?.startsWith("PUSH.")) rows[key] = cells[1];
+  }
+  return rows;
+}
+
+function moduleRows(): Record<string, string> {
+  const doc = Object.keys(docRows());
+  const rows: Record<string, string> = {};
+  for (const [name, value] of Object.entries(PUSH)) {
+    if (typeof value === "string") {
+      rows[`PUSH.${name}`] = value;
+      continue;
+    }
+    const key = doc.find((k) => k.startsWith(`PUSH.${name}(`)) ?? `PUSH.${name}(?)`;
+    const args = key.slice(key.indexOf("(") + 1, -1).split(",").map((a) => `{${a.trim()}}`);
+    rows[key] = (value as (...a: string[]) => string)(...args);
+  }
+  return rows;
+}
+
+describe("copy/push.ts matches docs/design/held-push-canon.md", () => {
+  it("every PUSH row, byte for byte, and nothing extra on either side", () => {
+    expect(moduleRows()).toEqual(docRows());
   });
 });
