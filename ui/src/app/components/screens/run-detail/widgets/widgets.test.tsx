@@ -17,6 +17,7 @@ vi.mock("../../../../lib/api/runs", () => ({
 }));
 
 import { HttpError } from "../../../../lib/api/core";
+import { fmtBytes } from "../../../../lib/format";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { EgressWidget } from "./egress";
 import { FilesChangedWidget } from "./files-changed";
@@ -79,6 +80,17 @@ describe("SandboxWidget", () => {
     });
     render(<SandboxWidget runId="r1" live={true} />);
     await screen.findByText("Disk");
+    expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
+  });
+
+  it("falls back to disk_written_bytes, labeled written, when disk_used_bytes is absent", async () => {
+    getResourcesMock.mockResolvedValue({
+      disk_written_bytes: 2_000_000_000,
+      disk_cap_bytes: 1000, // never a denominator without a used reading
+    });
+    render(<SandboxWidget runId="r1" live={true} />);
+    await screen.findByText("Disk");
+    expect(screen.getByText(`${fmtBytes(2_000_000_000)} ${RUN_COCKPIT.diskWrittenSuffix}`)).toBeInTheDocument();
     expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
   });
 });

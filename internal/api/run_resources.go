@@ -52,8 +52,8 @@ const runResourcesMaxOutput = 64 << 10
 // honesty comment on runResourcesResponse) simply produces no line for that
 // key, never a line claiming a zero it isn't in a position to attest to.
 //
-// Tooling kept to awk/grep/cat/ls/wc/sleep — present on both coreutils
-// (node:*-bookworm-slim, the shipped agent images) and busybox (the
+// Tooling kept to awk/grep/cat/ls/wc/sleep/df/du/timeout — present on both
+// coreutils (node:*-bookworm-slim, the shipped agent images) and busybox (the
 // conformance-agent image, and any BYOI image). Deliberately NOT used:
 // `nproc` (absent on some minimal images; /proc/cpuinfo's `processor` lines
 // are the same count via a tool every image has) and `date +%s%N`
@@ -99,29 +99,51 @@ mt=$(awk '$1=="MemTotal:"{print $2}' /proc/meminfo 2>/dev/null)
 wb=$(awk '{for(i=1;i<=NF;i++) if($i ~ /^wbytes=/){split($i,a,"="); s+=a[2]; n++}} END{if(n)print s}' /sys/fs/cgroup/io.stat 2>/dev/null)
 [ -n "$wb" ] && echo "disk_wbytes=$wb"
 
-# disk_used_kb (RL-13, long-holds design rev 4 §8) is a DIFFERENT question from
-# disk_wbytes above: wbytes is cumulative bytes ever WRITTEN (an edit/overwrite
-# cycle inflates it far past what is actually occupying disk), where "disk
-# used" on the run page means space CURRENTLY occupied. cgroup v2 has no space-
-# accounting controller (io.stat only meters bandwidth), so this reads it the
-# only way available inside the sandbox: du -x from / — real file sizes, on
-# ONE device. -x is load-bearing, not a nice-to-have: it keeps the walk off
-# /proc, /sys, tmpfs and any bind-mounted workspace/drive (each its own
-# device), so this counts the sandbox's OWN image + writable-layer footprint —
-# exactly what disk_mib's ephemeral cap bounds — never a host-mounted
-# workspace's size. Slower than every other read above (a real tree walk, not
-# one small file), which is why it is guarded the same as any other line here
-# rather than given its own budget: a pathologically large writable layer
-# blows the whole handler's runResourcesExecTimeout, same failure shape a stuck
-# shell would already produce, and the field simply comes back absent.
-du_kb=$(du -skx / 2>/dev/null | awk '{print $1}')
-[ -n "$du_kb" ] && echo "disk_used_kb=$du_kb"
-
 pc=$(ls -d /proc/[0-9]* 2>/dev/null | wc -l)
 # Guarded like every other read, and >0 rather than -n: wc -l on a glob that
 # matched nothing prints "0", and a sandbox reporting zero processes is not a
 # reading — it cannot be true of a container running this very script.
 [ -n "$pc" ] && [ "$pc" -gt 0 ] && echo "proc_count=$pc"
+
+# Disk used (RL-13, long-holds design rev 4 §8) is a DIFFERENT question from
+# disk_wbytes above: wbytes is every byte ever WRITTEN, where "disk used" is
+# space occupied NOW. It is LAST because two of its three arms walk a tree, and
+# each walk runs under its own "timeout 2" (skipped when the image has no
+# timeout): a slow walk costs this one reading, never the lines above it or the
+# handler's whole runResourcesExecTimeout.
+#
+# $1 names what this run's disk cap COUNTS (handleRunResources picks it from the
+# driver's enforcement word) and each arm measures exactly that; diskReading
+# decides what the lines mean.
+case "$1" in
+filesystem)
+	# Docker's size storage-opt (overlay2 on xfs mounted pquota) caps the
+	# WRITABLE LAYER with an XFS project quota, and statfs on the overlay root
+	# answers for that layer's project: df's Size is the quota and its Used is
+	# what the layer holds, image excluded. One statfs, no walk.
+	df -kP / 2>/dev/null | awk 'NR==2 && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {print "disk_fs_size_kb=" $2; print "disk_fs_used_kb=" $3}'
+	;;
+eviction)
+	# The kubelet counts the scratch emptyDirs named in $2.. (runner.Scratch*),
+	# each its own mount, so "du -x /" would skip exactly them. Exit-checked: a
+	# partial walk is an undercount, and an undercount holds the warning off.
+	shift
+	if command -v timeout >/dev/null 2>&1 && du_out=$(timeout 2 du -skx "$@" 2>/dev/null); then
+		echo "$du_out" | awk -v want=$# '$1 ~ /^[0-9]+$/ {s+=$1; n++} END{if(n==want) print "disk_scratch_used_kb=" s}'
+	fi
+	;;
+*)
+	# No cap binds this run: the sandbox's root filesystem, the image's own
+	# files included. -x keeps the walk off /proc, /sys and every mounted
+	# workspace or drive. A walk cut short by the agent user's unreadable
+	# directories still prints its total; one cut short by the timeout prints
+	# nothing.
+	if command -v timeout >/dev/null 2>&1; then
+		du_kb=$(timeout 2 du -skx / 2>/dev/null | awk '{print $1}')
+		[ -n "$du_kb" ] && echo "disk_root_used_kb=$du_kb"
+	fi
+	;;
+esac
 `
 
 // runResourcesResponse is the Sandbox widget's payload.
@@ -141,17 +163,17 @@ type runResourcesResponse struct {
 	MemoryUsedBytes  *int64   `json:"memory_used_bytes,omitempty"`
 	MemoryLimitBytes *int64   `json:"memory_limit_bytes,omitempty"`
 	DiskWrittenBytes *int64   `json:"disk_written_bytes,omitempty"`
-	// DiskUsedBytes is space currently occupied (du -x from /, RL-13) — see the
-	// script's own comment on why this is not DiskWrittenBytes.
+	// DiskUsedBytes is space occupied now (RL-13), not DiskWrittenBytes' running
+	// write total. With DiskCapBytes beside it, it is the bytes that cap counts;
+	// without, the sandbox's root filesystem, image included. See diskReading.
 	DiskUsedBytes *int64 `json:"disk_used_bytes,omitempty"`
 	// DiskCapBytes is the run's resolved ephemeral disk cap (AgentRun.DiskMiB),
-	// present ONLY when the driver's EphemeralDiskEnforcement is something other
-	// than `none` — an unenforced cap is not a denominator, it is a number
-	// nothing binds, and rendering a bar against it would be the exact lie
-	// StorageEnforcement's own doc forbids ("never claim a cap [nothing]
-	// enforces"). The 80% warning (long-holds design rev 4 §8) is this field's
-	// only consumer: absent it, the UI shows DiskUsedBytes with no bar, same as
-	// before RL-13.
+	// present ONLY when a driver enforces it AND DiskUsedBytes was measured the
+	// way that enforcement counts — an unenforced cap is a number nothing binds,
+	// and a cap beside a number that counts other bytes draws a bar that lies
+	// in one direction or the other. The 80% warning (long-holds design rev 4
+	// §8) is this field's only consumer: absent it, the UI shows DiskUsedBytes
+	// with no bar.
 	DiskCapBytes *int64 `json:"disk_cap_bytes,omitempty"`
 	ProcessCount *int   `json:"process_count,omitempty"`
 }
@@ -209,7 +231,8 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), runResourcesExecTimeout)
 	defer cancel()
 
-	kv, err := s.execRunResourcesScript(ctx, run)
+	enforced := enforcedDiskWord(ctx, s.cfg.Runner, run.DiskMiB)
+	kv, err := s.execRunResourcesScript(ctx, run, enforced)
 	if err != nil {
 		// Audit on FAILURE only — the console polls this endpoint, so an audit
 		// row per tick (the success path) would flood the trail. A failure is
@@ -236,33 +259,83 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := parseRunResourcesKV(kv)
-	if b, ok := diskCapBytes(ctx, s.cfg.Runner, run.DiskMiB); ok {
-		resp.DiskCapBytes = &b
-	}
+	resp.DiskUsedBytes, resp.DiskCapBytes = diskReading(kv, enforced, run.DiskMiB)
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// diskCapBytes is RL-13's "80% warning where the cap is enforced" gate: run's
-// resolved disk_mib is a genuine denominator ONLY when the driver actually
-// binds SOMETHING to it (EphemeralDiskEnforcement != none/absent) — an
-// unenforced number is not a cap, it is a request nothing holds, and showing a
-// bar against it would be exactly the lie types.StorageEnforcement's own doc
-// forbids. A Capabilities() error (or no cap resolved at all, run.DiskMiB==0,
-// every legacy/unbounded run) answers false rather than guessing — the UI
-// falls back to DiskUsedBytes alone, same as before this field existed.
-func diskCapBytes(ctx context.Context, rn runner.Runner, diskMiB int) (int64, bool) {
+// enforcedDiskWord is the word that binds this run's disk cap, `filesystem` or
+// `eviction`, or "" when nothing does: no cap resolved (DiskMiB 0, every
+// legacy/unbounded run), a Capabilities() error (never guessed), or a driver
+// word that binds nothing. It picks what runResourcesScript measures, because
+// the two enforcements count different bytes.
+//
+// THE DEPLOYMENT'S WORD, NOT THIS RUN'S: the orchestrator reports the WEAKEST
+// word across its substrates. Today a deployment wires exactly one substrate
+// (cmd/wardynd buildRunnerFromFlags: orchestrator.New(sub)), so the two are the
+// same. A deployment mixing substrates would need the word of the substrate
+// this run is on: with a `none` substrate in the mix every run reads "" (no
+// bar, the safe way round), but docker-`filesystem` beside k8s-`eviction` would
+// measure docker runs by the k8s scratch walk. The read itself is cheap: the
+// orchestrator serves Capabilities from its short-TTL cache, not a daemon
+// round-trip per 4s poll.
+func enforcedDiskWord(ctx context.Context, rn runner.Runner, diskMiB int) types.StorageEnforcement {
 	if diskMiB <= 0 || rn == nil {
-		return 0, false
+		return ""
 	}
 	caps, err := rn.Capabilities(ctx)
 	if err != nil {
-		return 0, false
+		return ""
 	}
 	switch caps.EphemeralDiskEnforcement {
 	case types.StorageEnforcementFilesystem, types.StorageEnforcementEviction:
-		return int64(diskMiB) << 20, true
+		return caps.EphemeralDiskEnforcement
 	default:
-		return 0, false
+		return ""
+	}
+}
+
+// diskReading turns the script's disk lines into DiskUsedBytes and
+// DiskCapBytes. The cap is returned ONLY beside a used number measured the way
+// that cap counts bytes, so the console never draws a bar, or its 80% warning,
+// from two numbers about different things:
+//
+//   - filesystem: df's Used, and only when df's Size IS the cap. XFS answers
+//     statfs under a project quota with min(filesystem size, quota limit), and
+//     disk_mib is whole MiB, so a quota-backed Size is exactly disk_mib*1024
+//     KB. Any other Size means statfs answered for something else (btrfs and
+//     zfs quotas, which statfs does not report this way; a filesystem smaller
+//     than the cap), and the reading is dropped rather than drawn against it.
+//   - eviction: the scratch emptyDirs' total. There is no Size to check it
+//     against; the script's exit-checked walk is the guard.
+//   - otherwise: the root filesystem walk, image included, with no cap.
+//
+// Any line missing leaves both absent, and the console falls back to
+// DiskWrittenBytes.
+func diskReading(kv map[string]string, enforced types.StorageEnforcement, diskMiB int) (used, capBytes *int64) {
+	c := int64(diskMiB) << 20
+	switch enforced {
+	case types.StorageEnforcementFilesystem:
+		size, okSize := kvInt64(kv, "disk_fs_size_kb")
+		u, okUsed := kvInt64(kv, "disk_fs_used_kb")
+		if !okSize || !okUsed || size<<10 != c {
+			return nil, nil
+		}
+		u <<= 10
+		return &u, &c
+	case types.StorageEnforcementEviction:
+		u, ok := kvInt64(kv, "disk_scratch_used_kb")
+		if !ok {
+			return nil, nil
+		}
+		u <<= 10
+		return &u, &c
+	default:
+		u, ok := kvInt64(kv, "disk_root_used_kb")
+		if !ok {
+			return nil, nil
+		}
+		u <<= 10
+		return &u, nil
 	}
 }
 
@@ -271,10 +344,15 @@ func diskCapBytes(ctx context.Context, rn runner.Runner, diskMiB int) (int64, bo
 // ExecStream launch failure (possibly runner.ErrExecStreamUnsupported) or a
 // Stdout read failure (e.g. ctx's deadline killing the exec mid-read) —
 // never a script exit code, see the Wait comment below.
-func (s *Server) execRunResourcesScript(ctx context.Context, run types.AgentRun) (map[string]string, error) {
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"/bin/sh", "-c", runResourcesScript},
-	})
+//
+// enforced becomes the script's $1 (and, for `eviction`, the scratch mount
+// points its $2..): see the script's disk section.
+func (s *Server) execRunResourcesScript(ctx context.Context, run types.AgentRun, enforced types.StorageEnforcement) (map[string]string, error) {
+	argv := []string{"/bin/sh", "-c", runResourcesScript, "wardyn-resources", string(enforced)}
+	if enforced == types.StorageEnforcementEviction {
+		argv = append(argv, runner.ScratchTmpPath, runner.ScratchWorkPath, runner.ScratchCachePath)
+	}
+	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: argv})
 	if err != nil {
 		return nil, err
 	}
@@ -400,11 +478,6 @@ func parseRunResourcesKV(kv map[string]string) runResourcesResponse {
 
 	if v, ok := kvInt64(kv, "disk_wbytes"); ok {
 		resp.DiskWrittenBytes = &v
-	}
-
-	if kb, ok := kvInt64(kv, "disk_used_kb"); ok {
-		v := kb * 1024
-		resp.DiskUsedBytes = &v
 	}
 
 	if v, ok := kvInt64(kv, "proc_count"); ok {

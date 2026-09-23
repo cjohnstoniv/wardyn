@@ -97,6 +97,9 @@ export const RUN_COCKPIT = {
   // ONLY when the deployment's driver actually enforces a disk cap, so this
   // string is never shown against a number nothing binds.
   diskNearCap: "Nearing its disk cap",
+  // Follows disk_written_bytes when the Sandbox widget has no disk-used reading
+  // to show: that number is every byte ever written, not space occupied now.
+  diskWrittenSuffix: "written",
   // The workspace has no git work tree, so there is no diff to state. NAMES the
   // directory that was inspected when the daemon reports one: the mount target
   // is configurable per workspace source, so a bare "not a git repository"

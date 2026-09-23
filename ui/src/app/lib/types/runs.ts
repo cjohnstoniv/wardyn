@@ -257,12 +257,14 @@ export interface RunResources {
    *  back to MemTotal, and stays absent if that was unreadable too. */
   memory_limit_bytes?: number;
   disk_written_bytes?: number;
-  /** Space currently occupied (du -x from /), not disk_written_bytes' running
-   *  write total — see the backend's own comment on why those differ. */
+  /** Space occupied now, not disk_written_bytes' running write total. Beside
+   *  disk_cap_bytes it is the bytes that cap counts; without one, the
+   *  sandbox's root filesystem, image included (run_resources.go diskReading). */
   disk_used_bytes?: number;
-  /** The run's ephemeral disk cap, present ONLY when the deployment's driver
-   *  actually binds something to it — an unenforced number is not a
-   *  denominator. Absent means: render disk_used_bytes with no bar. */
+  /** The run's ephemeral disk cap, present ONLY when a driver enforces it AND
+   *  disk_used_bytes was measured the way that enforcement counts — never a
+   *  denominator for a number about other bytes. Absent means: render
+   *  disk_used_bytes with no bar. */
   disk_cap_bytes?: number;
   process_count?: number;
 }

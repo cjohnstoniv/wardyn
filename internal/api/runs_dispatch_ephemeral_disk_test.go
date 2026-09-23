@@ -176,6 +176,40 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 	}
 }
 
+// TestDispatchEphemeralDisk_PersistsTheEffectiveCap pins what dispatch writes to
+// the run row for the run page's disk bar (RL-13): the EFFECTIVE size after the
+// fill and the clamp, never the request. Persisting the request would store 0
+// for an org-default run (no bar at all) and 8192 for a run clamped to 4096 (a
+// bar at half the real fill as the pod nears eviction).
+func TestDispatchEphemeralDisk_PersistsTheEffectiveCap(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		requested int
+		site      types.SiteConfig
+		want      int
+	}{
+		{"a zero request filled from the org default", 0, ephemeralSite(2048, 0), 2048},
+		{"a request clamped to the provider maximum", 8192, ephemeralSite(0, 4096), 4096},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
+			srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st, site: tc.site}
+			run.Task = ""
+			policy := types.RunPolicySpec{}
+			if tc.requested > 0 {
+				policy.Resources = &types.ResourceLimits{DiskMiB: tc.requested}
+			}
+			srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+				RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy,
+			})
+			got, _ := st.GetRun(context.Background(), run.ID)
+			if got.DiskMiB != tc.want {
+				t.Errorf("persisted disk_mib = %d, want %d", got.DiskMiB, tc.want)
+			}
+		})
+	}
+}
+
 // TestDispatchEphemeralDisk_NeverWritesThroughTheCallersResources is the aliasing
 // pin. dispatchRun's `policy` is a SHALLOW copy of the caller's spec, so its
 // Resources POINTER is still the caller's — and for a run that authored no policy

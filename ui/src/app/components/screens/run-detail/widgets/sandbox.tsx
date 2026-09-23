@@ -18,9 +18,10 @@
 // forbids, just for a different metric.
 //
 // Disk (RL-13, long-holds design rev 4 §8) gets a bar ONLY when disk_cap_bytes
-// is present — which the backend sends ONLY when the deployment's driver
-// actually enforces a disk cap (types.StorageEnforcement != none). Same rule,
-// same reason: an unenforced number is not a denominator.
+// is present — which the backend sends ONLY when a driver enforces the cap AND
+// disk_used_bytes counts the bytes that cap counts. Same rule, same reason: an
+// unenforced number is not a denominator. With no disk_used_bytes at all, the
+// row falls back to disk_written_bytes, labeled as written.
 import * as React from "react";
 import { Box } from "lucide-react";
 import { runs as runsApi } from "../../../../lib/api/runs";
@@ -100,7 +101,7 @@ function renderBody(state: SandboxState, live: boolean): React.ReactNode {
 function Metrics({ data }: { data: RunResources }) {
   const cpu = cpuMetric(data.cpu_percent);
   const memory = memoryMetric(data.memory_used_bytes, data.memory_limit_bytes);
-  const disk = diskMetric(data.disk_used_bytes, data.disk_cap_bytes);
+  const disk = diskMetric(data.disk_used_bytes, data.disk_cap_bytes, data.disk_written_bytes);
   return (
     <div className="grid grid-cols-2 gap-x-3 gap-y-2">
       <Metric label="CPU" value={cpu.value} barPercent={cpu.barPercent} />
@@ -130,12 +131,21 @@ function memoryMetric(used?: number, limit?: number): { value: string; barPercen
 }
 
 // diskMetric is memoryMetric's shape plus RL-13's warn flag. `cap` absent
-// means the backend found no driver-enforced cap for this run (either
-// EphemeralDiskEnforcement is `none`, or this run resolved no disk_mib at
-// all) — same "no bar" fallback memoryMetric already uses for its own
-// degenerate limit, not a new rule.
-function diskMetric(used?: number, cap?: number): { value: string; barPercent?: number; warn?: boolean } {
-  if (used === undefined) return { value: RUN_COCKPIT.metricUnavailable };
+// means the backend has no enforced cap it could measure this run against —
+// same "no bar" fallback memoryMetric already uses for its own degenerate
+// limit, not a new rule. `used` absent (a walk that timed out, an image
+// without du, a df the backend could not match to the cap) falls back to the
+// running write total, labeled so it is never read as space used.
+function diskMetric(
+  used?: number,
+  cap?: number,
+  written?: number,
+): { value: string; barPercent?: number; warn?: boolean } {
+  if (used === undefined) {
+    return written === undefined
+      ? { value: RUN_COCKPIT.metricUnavailable }
+      : { value: `${fmtBytes(written)} ${RUN_COCKPIT.diskWrittenSuffix}` };
+  }
   if (cap === undefined || cap <= 0) return { value: fmtBytes(used) };
   const pct = Math.max(0, Math.min(100, (used / cap) * 100));
   return { value: `${fmtBytes(used)} / ${fmtBytes(cap)}`, barPercent: pct, warn: pct >= DISK_WARN_PERCENT };

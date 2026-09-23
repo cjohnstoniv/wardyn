@@ -73,7 +73,7 @@ func (s *recordLLMModeStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref 
 	return nil
 }
 func (s *recordLLMModeStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error { return nil }
-func (s *recordLLMModeStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error         { return nil }
+func (s *recordLLMModeStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error        { return nil }
 func (s *recordLLMModeStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, imageRef, hash string) (types.Workspace, error) {
 	ws := s.ws
 	ws.ImageRef, ws.BuiltProfileHash = imageRef, hash

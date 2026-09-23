@@ -62,6 +62,19 @@ var allowedTargetPrefixes = []string{"/home/agent", "/work", "/workspace"}
 // a refusal anybody could act on.
 const DriveTarget = "/home/agent/drive"
 
+// ScratchTmpPath, ScratchWorkPath and ScratchCachePath are where the Kubernetes
+// substrate mounts its three disk_mib-sized emptyDirs (k8s naming.go's
+// ephemeralScratchVolumes): the bytes that substrate's `eviction` enforcement
+// counts against a run's disk cap. They live here, not private to that driver,
+// because the run page's disk-used reading (internal/api run_resources.go) has
+// to walk exactly the paths the kubelet meters, and the driver's own constants
+// are defined from these so the two cannot drift.
+const (
+	ScratchTmpPath   = "/tmp"
+	ScratchWorkPath  = "/home/agent/work"
+	ScratchCachePath = "/home/agent/.cache"
+)
+
 // ValidateAuthoredTarget is ValidateTarget PLUS the reserved-target rule, and
 // it is what every AUTHORED in-container target goes through — a policy's
 // workspace_mounts/workspace_repos entry, a workspace source's target, and the

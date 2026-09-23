@@ -35,7 +35,7 @@ func newResourcesHarness(t *testing.T, execFn func(runner.ExecSpec) (*runner.Exe
 }
 
 // newResourcesHarnessWithDisk is newResourcesHarness plus a driver
-// EphemeralDiskEnforcement word — RL-13's diskCapBytes gate reads it via
+// EphemeralDiskEnforcement word — RL-13's enforcedDiskWord reads it via
 // Runner.Capabilities.
 func newResourcesHarnessWithDisk(t *testing.T, execFn func(runner.ExecSpec) (*runner.ExecSession, error), enforcement types.StorageEnforcement) (*Server, *authzStore, *harness) {
 	t.Helper()
@@ -56,8 +56,8 @@ func seedResourcesRun(ast *authzStore, createdBy string) uuid.UUID {
 }
 
 // seedResourcesRunWithDisk is seedResourcesRun plus a resolved disk_mib
-// (RL-13's diskCapBytes reads AgentRun.DiskMiB, which the plain helper above
-// leaves at its zero "no cap resolved" value).
+// (RL-13's enforcedDiskWord reads AgentRun.DiskMiB, which the plain helper
+// above leaves at its zero "no cap resolved" value).
 func seedResourcesRunWithDisk(ast *authzStore, createdBy string, diskMiB int) uuid.UUID {
 	id := uuid.New()
 	ast.mu.Lock()
@@ -309,15 +309,9 @@ func TestRunResources_StderrDrainedBeforeStdout(t *testing.T) {
 	}
 }
 
-// TestRunResources_DiskUsedBytes_FromDU pins disk_used_kb -> DiskUsedBytes
-// (RL-13): a DIFFERENT number from disk_wbytes in the same key set, carried
-// through unconverted-to-converted (KB -> bytes) without disturbing the
-// existing metric beside it.
-func TestRunResources_DiskUsedBytes_FromDU(t *testing.T) {
-	kv := "nproc=1\ndisk_wbytes=99\ndisk_used_kb=2048\n"
-	srv, ast, _ := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession(kv), nil })
-	id := seedResourcesRun(ast, "alice")
-
+// getResourcesOK GETs run id's resources as the admin and decodes the 200 body.
+func getResourcesOK(t *testing.T, srv *Server, id uuid.UUID) (runResourcesResponse, string) {
+	t.Helper()
 	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", adminToken, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -326,61 +320,54 @@ func TestRunResources_DiskUsedBytes_FromDU(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
 	}
-	if got.DiskUsedBytes == nil || *got.DiskUsedBytes != 2048*1024 {
-		t.Errorf("DiskUsedBytes = %v, want %d", got.DiskUsedBytes, 2048*1024)
-	}
-	if got.DiskWrittenBytes == nil || *got.DiskWrittenBytes != 99 {
-		t.Errorf("DiskWrittenBytes = %v, want 99 (disk_used_kb must not disturb the existing metric)", got.DiskWrittenBytes)
-	}
+	return got, w.Body.String()
 }
 
-// TestRunResources_DiskUsedBytes_Absent pins the honesty case beside the one
-// above: du failing (a hung/unreadable tree) leaves disk_used_kb out of the
-// script's own output, and that must read as ABSENT, never a fabricated 0 —
-// the same rule every other metric in this file follows.
-func TestRunResources_DiskUsedBytes_Absent(t *testing.T) {
-	srv, ast, _ := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
-		return kvExecSession("nproc=1\n"), nil
-	})
-	id := seedResourcesRun(ast, "alice")
-
-	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", adminToken, "")
-	if strings.Contains(w.Body.String(), `"disk_used_bytes"`) {
-		t.Errorf("disk_used_bytes present with nothing reported; body=%s", w.Body.String())
-	}
-}
-
-// TestRunResources_DiskCapBytes_OnlyWhenEnforced pins RL-13's "80% warning
-// where the cap is enforced" gate: DiskCapBytes appears ONLY when BOTH the
-// run has a resolved disk_mib AND the driver actually binds something to it
-// (EphemeralDiskEnforcement != none) — either alone is not a cap.
-func TestRunResources_DiskCapBytes_OnlyWhenEnforced(t *testing.T) {
-	execFn := func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession("nproc=1\n"), nil }
-
+// TestRunResources_DiskReading_PerEnforcement pins RL-13's measurement choice:
+// the enforcement word picks what the script is asked to measure ($1, plus the
+// k8s scratch mount points for `eviction`), and the handler reads only that
+// arm's line. The canned output carries every arm's line at once, so reading
+// the wrong one is visible as the wrong number. The cap appears only beside a
+// cap-counting reading; the root walk (image included) never gets one.
+func TestRunResources_DiskReading_PerEnforcement(t *testing.T) {
+	kv := "disk_wbytes=99\n" +
+		"disk_fs_size_kb=4194304\ndisk_fs_used_kb=100\n" + // df under a 4096 MiB project quota
+		"disk_scratch_used_kb=200\n" +
+		"disk_root_used_kb=300\n"
 	cases := []struct {
 		name        string
 		diskMiB     int
 		enforcement types.StorageEnforcement
+		wantArgs    []string
+		wantUsedKB  int64
 		wantCap     bool
 	}{
-		{"filesystem enforcement + a resolved cap: present", 4096, types.StorageEnforcementFilesystem, true},
-		{"eviction enforcement (k8s) + a resolved cap: present", 4096, types.StorageEnforcementEviction, true},
-		{"none enforced: absent even with a resolved cap", 4096, types.StorageEnforcementNone, false},
-		{"no driver word at all: absent even with a resolved cap", 4096, "", false},
-		{"enforced but no cap resolved (0, every legacy run): absent", 0, types.StorageEnforcementFilesystem, false},
+		{"filesystem: df's Used, against the cap", 4096, types.StorageEnforcementFilesystem,
+			[]string{"filesystem"}, 100, true},
+		{"eviction: the scratch mounts' walk, against the cap", 4096, types.StorageEnforcementEviction,
+			[]string{"eviction", runner.ScratchTmpPath, runner.ScratchWorkPath, runner.ScratchCachePath}, 200, true},
+		{"none enforced: the root walk, no cap", 4096, types.StorageEnforcementNone, []string{""}, 300, false},
+		{"no driver word: the root walk, no cap", 4096, "", []string{""}, 300, false},
+		{"enforced but no cap resolved (every legacy run): the root walk, no cap", 0, types.StorageEnforcementFilesystem,
+			[]string{""}, 300, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			var gotArgs []string
+			execFn := func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+				// /bin/sh -c <script> wardyn-resources <args...>
+				gotArgs = spec.Argv[4:]
+				return kvExecSession(kv), nil
+			}
 			srv, ast, _ := newResourcesHarnessWithDisk(t, execFn, tc.enforcement)
 			id := seedResourcesRunWithDisk(ast, "alice", tc.diskMiB)
 
-			w := do(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", adminToken, "")
-			if w.Code != http.StatusOK {
-				t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+			got, _ := getResourcesOK(t, srv, id)
+			if strings.Join(gotArgs, "|") != strings.Join(tc.wantArgs, "|") {
+				t.Errorf("script args = %q, want %q", gotArgs, tc.wantArgs)
 			}
-			var got runResourcesResponse
-			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-				t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+			if got.DiskUsedBytes == nil || *got.DiskUsedBytes != tc.wantUsedKB<<10 {
+				t.Errorf("DiskUsedBytes = %v, want %d", got.DiskUsedBytes, tc.wantUsedKB<<10)
 			}
 			if tc.wantCap {
 				want := int64(tc.diskMiB) << 20
@@ -388,7 +375,76 @@ func TestRunResources_DiskCapBytes_OnlyWhenEnforced(t *testing.T) {
 					t.Errorf("DiskCapBytes = %v, want %d", got.DiskCapBytes, want)
 				}
 			} else if got.DiskCapBytes != nil {
-				t.Errorf("DiskCapBytes = %v, want absent", *got.DiskCapBytes)
+				t.Errorf("DiskCapBytes = %d, want absent", *got.DiskCapBytes)
+			}
+			if got.DiskWrittenBytes == nil || *got.DiskWrittenBytes != 99 {
+				t.Errorf("DiskWrittenBytes = %v, want 99 (the disk lines must not disturb it)", got.DiskWrittenBytes)
+			}
+		})
+	}
+}
+
+// TestRunResources_DiskFilesystem_FreshContainerDoesNotWarn is the review's
+// baseline case. The numbers are a real fresh container under
+// --storage-opt size=1024m on overlay2 over xfs mounted pquota: df -kP / said
+// Size 1048576 and Used 8, while du -skx / in the agent image counts ~717 MiB of
+// image files, 70% of the cap before the agent writes a byte. The reading must
+// be the quota's 8 KB, well under the console's 80% line.
+func TestRunResources_DiskFilesystem_FreshContainerDoesNotWarn(t *testing.T) {
+	kv := "disk_fs_size_kb=1048576\ndisk_fs_used_kb=8\ndisk_root_used_kb=734576\n"
+	srv, ast, _ := newResourcesHarnessWithDisk(t,
+		func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession(kv), nil },
+		types.StorageEnforcementFilesystem)
+	id := seedResourcesRunWithDisk(ast, "alice", 1024)
+
+	got, body := getResourcesOK(t, srv, id)
+	if got.DiskUsedBytes == nil || got.DiskCapBytes == nil {
+		t.Fatalf("want both disk fields; body=%s", body)
+	}
+	if *got.DiskUsedBytes != 8<<10 || *got.DiskCapBytes != 1<<30 {
+		t.Errorf("disk = %d / %d, want %d / %d", *got.DiskUsedBytes, *got.DiskCapBytes, 8<<10, 1<<30)
+	}
+	if pct := float64(*got.DiskUsedBytes) / float64(*got.DiskCapBytes) * 100; pct >= 80 {
+		t.Errorf("a fresh container reads %.1f%% of its cap; the console would warn", pct)
+	}
+}
+
+// TestRunResources_DiskFilesystem_SizeNotTheCapIsDropped: a df Size that is not
+// the cap means statfs answered for something other than the run's quota. The
+// numbers are overlay2 over ext4, where statfs reports the whole host
+// filesystem; drawn against a 1024 MiB cap that Used would pin the bar at 100%.
+// Both fields must be absent so the console falls back to disk written.
+func TestRunResources_DiskFilesystem_SizeNotTheCapIsDropped(t *testing.T) {
+	kv := "disk_wbytes=99\ndisk_fs_size_kb=1055762868\ndisk_fs_used_kb=533637780\n"
+	srv, ast, _ := newResourcesHarnessWithDisk(t,
+		func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession(kv), nil },
+		types.StorageEnforcementFilesystem)
+	id := seedResourcesRunWithDisk(ast, "alice", 1024)
+
+	_, body := getResourcesOK(t, srv, id)
+	if strings.Contains(body, `"disk_used_bytes"`) || strings.Contains(body, `"disk_cap_bytes"`) {
+		t.Errorf("a df Size that is not the cap was drawn against it; body=%s", body)
+	}
+}
+
+// TestRunResources_DiskUsedBytes_Absent pins the honesty case for every arm: no
+// disk line (a timed-out or partial walk, an image without du, df unreadable)
+// reads as ABSENT, never a fabricated 0, and a cap never appears without a
+// reading beside it.
+func TestRunResources_DiskUsedBytes_Absent(t *testing.T) {
+	for _, word := range []types.StorageEnforcement{types.StorageEnforcementFilesystem, types.StorageEnforcementEviction, ""} {
+		name := string(word)
+		if name == "" {
+			name = "no word"
+		}
+		t.Run(name, func(t *testing.T) {
+			srv, ast, _ := newResourcesHarnessWithDisk(t,
+				func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession("nproc=1\n"), nil }, word)
+			id := seedResourcesRunWithDisk(ast, "alice", 4096)
+
+			_, body := getResourcesOK(t, srv, id)
+			if strings.Contains(body, `"disk_used_bytes"`) || strings.Contains(body, `"disk_cap_bytes"`) {
+				t.Errorf("disk fields present with nothing reported; body=%s", body)
 			}
 		})
 	}
