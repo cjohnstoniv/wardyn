@@ -998,28 +998,64 @@ func TestPackTree_MaxChangesIsEnforced(t *testing.T) {
 	}
 }
 
-// highestMeasuredEntriesPerPath is the largest entries-per-path ratio found
-// measuring five real repository trees for #254 (see maxTreeNodes' comment in
-// pack.go: this repository, the Linux kernel, googleapis/googleapis,
-// spring-projects/spring-framework and kubernetes/kubernetes's vendor/). It is
-// a fact about real directory layouts, not a value this package derives, so
-// it is pinned here rather than computed.
-const highestMeasuredEntriesPerPath = 1.24
-
-// TestMaxTreeNodesHeadroomAgainstMeasuredRatio pins the #254 conclusion: at
-// the highest entries-per-path ratio measured across those five real
-// repositories, maxChanges refuses before maxTreeNodes does, with room to
-// spare. It exists so a future change to either ceiling has to reckon with
-// the measurement rather than silently eroding the margin the comment cites.
-func TestMaxTreeNodesHeadroomAgainstMeasuredRatio(t *testing.T) {
-	nodesAtMaxChanges := highestMeasuredEntriesPerPath * float64(maxChanges)
-	if nodesAtMaxChanges >= float64(maxTreeNodes) {
-		t.Fatalf("at the measured ratio %.2f, maxChanges (%d) would walk %.0f tree entries — at or past maxTreeNodes (%d)",
-			highestMeasuredEntriesPerPath, maxChanges, nodesAtMaxChanges, maxTreeNodes)
+// TestPackTree_MergeIsChargedOnlyForItsOwnComparisons pins the cost model
+// maxTreeNodes is set on (#254). A merge compared against one parent walks into
+// every directory the other side changed, which is the same comparison — same
+// path, same two trees — that side's own commit already made. It can report
+// nothing new, and charging it again made a long-lived branch's every merge
+// pay the width of those directories once more. So the merge here is charged
+// for its own two root comparisons and nothing else, however wide the
+// directory the other side changed.
+func TestPackTree_MergeIsChargedOnlyForItsOwnComparisons(t *testing.T) {
+	const width = 256
+	r := newRepo(t)
+	for i := range width {
+		name := filepath.Join(r.work, "wide", fmt.Sprintf("f%03d", i))
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(fmt.Sprintf("%d\n", i)), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if margin := float64(maxTreeNodes) / nodesAtMaxChanges; margin < 2 {
-		t.Errorf("maxTreeNodes gives only a %.1fx margin over the measured ratio at maxChanges, want at least 2x",
-			margin)
+	r.git("add", "wide")
+	r.write("other/x", "1\n", 0o644)
+	base := r.commit("base")
+	r.write("wide/f000", "changed\n", 0o644)
+	a := r.commit("edit wide/")
+	r.git("checkout", "-q", "-b", "side", base)
+	r.write("other/x", "2\n", 0o644)
+	b := r.commit("edit other/")
+	r.git("merge", "-q", "--no-edit", a)
+	merge := r.git("rev-parse", "HEAD")
+	res, err := Inspect(r.push("HEAD:refs/heads/main"))
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+
+	w := newWalker(res.idx)
+	introduce := func(oid string) {
+		t.Helper()
+		c, err := parseCommit(res.idx.byOID[oid].data, res.idx.format.size)
+		if err == nil {
+			err = w.introduced(c)
+		}
+		if err != nil {
+			t.Fatalf("introduce %s: %v", oid, err)
+		}
+	}
+	for _, oid := range []string{base, a, b} {
+		introduce(oid)
+	}
+	nodes, changes := w.nodes, len(w.out)
+	introduce(merge)
+	// The root holds "other" and "wide": 2+2 entries, once against each parent.
+	if got, want := w.nodes-nodes, 2*(2+2); got != want {
+		t.Errorf("the merge was charged %d entries, want %d — its root comparisons alone", got, want)
+	}
+	if len(w.out) != changes || len(res.Changes) != changes {
+		t.Errorf("changes: %d before the merge, %d after it, %d from Inspect; want all equal",
+			changes, len(w.out), len(res.Changes))
 	}
 }
 

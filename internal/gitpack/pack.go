@@ -116,33 +116,21 @@ const (
 	// maxTreeDepth does not: trees are a DAG, so d levels that each name the
 	// level below b times describe b^d paths in a few kilobytes of objects.
 	// Entries rather than expansions, so that a wide tree costs what its width
-	// says. What reaches this ceiling is a shape spending many entries per
-	// path — long, largely unshared single-child chains — rather than a dense
-	// one, where maxChanges refuses first.
+	// says.
 	//
-	// The headroom over maxChanges was set from the dense case's arithmetic
-	// alone: git cannot store an empty directory, so a binary fan-out with one
-	// file per leaf directory spends "near three" entries per reported path.
-	// No real repository had been measured against it (#254). Measured
-	// instead — entries-per-path as `git ls-tree -r -t HEAD | wc -l` over
-	// `git ls-tree -r HEAD | wc -l`, on --filter=blob:none clones, 2026-09-23
-	// — across five real trees chosen to include the deep, largely-unshared
-	// layouts the dense arithmetic does not cover: this repository 1.17, the
-	// Linux kernel 1.07, googleapis/googleapis's generated proto bindings
-	// 1.12, spring-projects/spring-framework's one-class-per-directory Java
-	// package tree 1.24, and kubernetes/kubernetes's vendor/ (Go import-path
-	// chains up to 12 levels deep under vendor/, mostly unshared past the
-	// first two) 1.23. Every one sits under the dense estimate, nowhere near
-	// the maxTreeDepth+1 = 65 a single fully unshared chain would cost — a
-	// shape a hostile pack can build in a few kilobytes but no measured
-	// directory layout resembles. At the highest ratio measured (1.24),
-	// maxChanges refuses at roughly 248,000 tree entries, a quarter of this
-	// ceiling, so every shape measured hits maxChanges first and by a wide
-	// margin. The factor stays 5: nothing measured argues for moving it, and
-	// TestMaxTreeNodesHeadroomAgainstMeasuredRatio in pack_test.go fails if a
-	// future change to either constant erodes that margin below what was
-	// actually observed.
-	maxTreeNodes = 5 * maxChanges
+	// An honest push's charge follows its commits, not the paths it reports.
+	// Each commit is compared against every parent the pack carries, and each
+	// comparison charges the full width of both trees at every directory on a
+	// changed path; a comparison repeated under the same path is charged once
+	// (walker.diffed). That comes to about two to four entries for every tree
+	// entry the pack carries, and maxInflatedBytes bounds those, so this
+	// ceiling is set against that one. Replaying real history (#254, recorded
+	// in docs/design/0.8/PLAN.md), the densest trees reach the two at about the
+	// same push size and trees of larger files reach maxInflatedBytes first. It
+	// is not set higher because the walk's memos hold a key for every entry it
+	// charges. An honest push refused here goes through as fewer commits at a
+	// time.
+	maxTreeNodes = 1_000_000
 	// maxPeel bounds tag-to-tag chasing when a push updates a tag ref.
 	maxPeel = 8
 	// maxVarintBytes bounds the length of a pack's variable-length integers.
