@@ -3,10 +3,10 @@
 
 // F2-sso-to-ceiling PROBE 3 — destination: internal/auth/oidc/groups_overage_probe_test.go
 //
-// *** GREEN PIN. This started as the probe for hypothesis H1 of
-// *** local/review-0.7/deep/F2-sso-to-ceiling.md, red on the RC; the fix landed
-// *** and it is now a REGRESSION pin, unchanged. A failure here means the
-// *** overage marker stopped reaching sessionGroups.
+// *** GREEN PIN. This started as the probe for hypothesis H1 of the
+// *** F2-sso-to-ceiling review lane, red on the RC; the fix landed and it is
+// *** now a REGRESSION pin, unchanged. A failure here means the overage
+// *** marker stopped reaching sessionGroups.
 //
 // INVARIANT UNDER TEST: a login whose ID token carries an IdP-side GROUPS
 // OVERAGE marker instead of the groups themselves (Entra ID emits
@@ -24,10 +24,7 @@
 //
 // Run:
 //
-//	cd <repo root> && \
-//	cp local/review-0.7/deep/F2-sso-to-ceiling/groups_overage_probe_test.go internal/auth/oidc/ && \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/auth/oidc/ -run 'TestF2_GroupsOverage' -count=1 -p 4 -v ; \
-//	rm -f internal/auth/oidc/groups_overage_probe_test.go
+//	cd <repo root> && nice -n 10 GOMAXPROCS=8 go test ./internal/auth/oidc/ -run 'TestF2_GroupsOverage' -count=1 -p 4 -v
 package oidc_test
 
 import (

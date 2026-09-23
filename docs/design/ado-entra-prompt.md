@@ -2,9 +2,9 @@
 
 This is the mock round for the Azure DevOps surfaces of 0.7.10 — the design gate before any console
 code (owner law: the mock is UI source of truth; canon strings are app strings). The model is decided
-in `~/.claude/plans/bubbly-stargazing-duckling.md` (workstream A, §§1–10) and corrected by live
-measurement against a real Microsoft Entra tenant (`FINDINGS.md`, F-LIVE-1 to F-LIVE-4). Nothing here
-is open for re-design, only for drawing. **§7.2–§7.8 are FROZEN** (2026-09-22); the
+by the workstream A design plan (§§1–10) and corrected by live measurement against a real Microsoft
+Entra tenant (`FINDINGS.md`, F-LIVE-1 to F-LIVE-4). Nothing here is open for re-design, only for
+drawing. **§7.2–§7.8 are FROZEN** (2026-09-22); the
 drawing-level calls Q1–Q11 are resolved in §9, with the owner's answers in Adjudication.
 
 One round covers five surfaces:

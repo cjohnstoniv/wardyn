@@ -9,9 +9,7 @@
 //
 // Run (no Postgres needed — every test here is pure or loopback-only):
 //
-//   cp local/review-0.7/deep/F7-redirect-probe-sni-literal-ip/site_config_probe_f7_probe_test.go internal/api/
 //   nice -n 10 GOMAXPROCS=8 go test -p 4 ./internal/api -run 'TestF7_' -count=1 -v
-//   rm internal/api/site_config_probe_f7_probe_test.go
 //
 // INVARIANT UNDER TEST (see ../F7-redirect-probe-sni-literal-ip.md §0):
 // probe 1 of the redirect probe dials ONLY the stored To (host, port AND

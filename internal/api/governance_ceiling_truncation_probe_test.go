@@ -14,12 +14,9 @@
 // USER-tier row settles their ceiling — never silently served the deployment
 // ceiling, and never served a surviving group's row either.
 //
-// Run (read-only lane: copy in, run, remove — never commit):
+// Run:
 //
-//	cd <repo root> && \
-//	cp local/review-0.7/deep/F2-sso-to-ceiling/governance_ceiling_truncation_probe_test.go internal/api/ && \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'TestF2_' -count=1 -p 4 -v ; \
-//	rm -f internal/api/governance_ceiling_truncation_probe_test.go
+//	cd <repo root> && nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'TestF2_' -count=1 -p 4 -v
 package api
 
 import (

@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The published tree no longer cites the author's private machine or gitignored review
+  directories.** `CHANGELOG.md`'s R1–R7 hardening-pass ledger, `ROADMAP.md`'s punt list, the
+  Azure DevOps / user-drives / Workspace Providers design prompts, several probe tests' "copy this
+  file in" run instructions, and two demo e2e specs' script citations all pointed a reader at
+  `~/.claude/plans|verify-runs` or `local/review-…` paths that exist only on one machine. The
+  citation guard (`cmd/wardynd/citation_guard_test.go`) now reds on any new one, over tracked
+  Markdown and non-test Go comments (#461).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
@@ -4245,50 +4252,28 @@ arithmetic out of those ledgers, the contract changes an operator will notice, a
 is still open. **The bullets in the sections below this one are the individual fixes
 those runs produced.**
 
-Read the table with two qualifications, both load-bearing:
+Across the six completed runs: 1140 findings total (14 Critical, 117 High, 453 Medium,
+421 Low, 135 Info), 566 fixed, 7 disputed, 10 deferred, 557 open. **"Fixed" mostly means
+fix-claimed, not reviewer-verified** — six of the seven runs ended `INCONCLUSIVE
+(budget)`: the fix wave landed, the gates were re-run green on the release candidate
+(`make ci` 24/24 plus the PostgreSQL lane, `gate exit=0 tree 776c1065` and `gate exit=0
+tree 0e8a751d`), but a second blind reviewer round to confirm the fixes was not funded.
+Only R1 (authz + governance, 351 findings) carries reviewer-verified fixes (101 of them),
+and even there the 62 final-wave fixes are "fixed-unverified, gate-green". **"Open" is
+almost entirely Low/Info residue** deliberately left for 0.7.1. Only one open finding is
+above Low (a single R7 Medium). The ten `deferred` findings are the ones to read: two of
+them are **High** (R3 F055, R4 F107) and both are named under Residuals below.
 
-- **"Fixed" mostly means fix-claimed, not reviewer-verified.** Six of the seven runs
-  ended `INCONCLUSIVE (budget)`: the fix wave landed, the gates were re-run green on
-  the release candidate (`make ci` 24/24 plus the PostgreSQL lane, `gate exit=0 tree
-  776c1065` and `gate exit=0 tree 0e8a751d`), but a second blind reviewer round to
-  confirm the fixes was not funded. Only R1 carries reviewer-verified fixes (101 of
-  them), and even there the 62 final-wave fixes are "fixed-unverified, gate-green".
-- **"Open" is almost entirely Low/Info residue** deliberately left for 0.7.1, listed
-  in `local/review-0.7/FOLLOW-UPS-0.7.1.md`. Only one open finding is above Low (a
-  single R7 Medium). The ten `deferred` findings are the ones to read: two of them are
-  **High** (R3 F055, R4 F107) and both are named under Residuals below.
+R2 (run plane) is the one subject area 0.7 did not verify: its abandoned round banked 18
+lens files with 75 untriaged candidate rows (4 High, 36 Medium, 26 Low, 9 Info), which
+are 0.7.1's first triage. Nothing in this release claims to have reviewed the run plane.
 
-| Run | Subject | Critical | High | Medium | Low | Info | Total | Fixed | Disputed | Deferred | Open | Verdict | Source |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **R1** | authz + governance | 11 | 41 | 117 | 124 | 58 | **351** | 163 (101 verified-fixed + 62 fix-claimed) | 3 rejected | 3 | 182 | INCONCLUSIVE (budget) — 65 unverified | `local/review-0.7/runs/R1-REPORT.md` §0 — 351 = 284 on the re-init ledger + 67 carried from the deep ledger |
-| **R2** | run plane | 0 | 0 | 0 | 0 | 0 | **0** | 0 | 0 | 0 | 0 | not reviewed — the round was abandoned before ingest and the ledger is empty (its report's verdict string reads APPROVED over zero findings) | `~/.claude/verify-runs/wardyn-0.7-r2-20260904-161449/report.md` |
-| **R3** | egress + credentials | 2 | 32 | 62 | 45 | 23 | **164** | 95 fix-claimed | 0 | 1 | 68 | INCONCLUSIVE (budget) — 56 unverified | `~/.claude/verify-runs/wardyn-0.7-r3-20260904-161453/report.md` |
-| **R4** | UI console | 0 | 17 | 46 | 67 | 16 | **146** | 57 fix-claimed | 0 | 6 | 83 | INCONCLUSIVE (budget) — 51 unverified | `~/.claude/verify-runs/wardyn-0.7-r4-20260904-160926/report.md` |
-| **R5** | ops / install / CLI | 0 | 12 | 125 | 84 | 17 | **238** | 137 fix-claimed | 0 | 0 | 101 | INCONCLUSIVE (budget) — 96 unverified | `~/.claude/verify-runs/wardyn-0.7-r5-20260903-202842/report.md` |
-| **R6** | docs + threat model | 0 | 8 | 62 | 57 | 7 | **134** | 70 fix-claimed | 0 | 0 | 64 | INCONCLUSIVE (budget) — 45 unverified | `~/.claude/verify-runs/wardyn-0.7-r6-20260903-202659/report.md` |
-| **R7** | user drives | 1 | 7 | 41 | 44 | 14 | **107** | 44 fix-claimed | 4 disputed | 0 | 59 | INCONCLUSIVE (budget) — 27 unverified | `~/.claude/verify-runs/wardyn-0.7-r7-20260903-160043/report.md` |
-| | **Total** (arithmetic over the rows above; not read from any single file) | **14** | **117** | **453** | **421** | **135** | **1140** | **566** | **7** | **10** | **557** | | |
+### Known gaps
 
-R2 is the one subject area 0.7 did not verify: its abandoned round banked 18 lens files with 75 untriaged candidate rows (4 High, 36 Medium, 26 Low, 9 Info), which are 0.7.1's first triage (`local/review-0.7/FOLLOW-UPS-0.7.1.md`). Nothing in this release claims to have reviewed the run plane.
-
-Full verdict strings, verbatim from each report's `## Final Verdict`:
-
-- R1 — `VERIFY wardyn-0.7-r1-std-20260905-214053 INCONCLUSIVE (budget) — 65 unverified (mode: repo) (tools changed r1: ledger.py, references/convergence.md) 386dc19`
-  · source: `local/review-0.7/runs/R1-REPORT.md:5`, also `~/.claude/verify-runs/wardyn-0.7-r1-std-20260905-214053/report.md:3428`
-- R2 — `VERIFY wardyn-0.7-r2-20260904-161449 APPROVED (mode: repo) 3a46853`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r2-20260904-161449/report.md:46`
-- R3 — `VERIFY wardyn-0.7-r3-20260904-161453 INCONCLUSIVE (budget) — 56 unverified (mode: repo) (tools changed r1: ledger.py) 3a46853`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r3-20260904-161453/report.md:2239`
-- R4 — `VERIFY wardyn-0.7-r4-20260904-160926 INCONCLUSIVE (budget) — 51 unverified (mode: repo) (tools changed r1: ledger.py, references/convergence.md) 3a46853`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r4-20260904-160926/report.md:1994`
-- R5 — `VERIFY wardyn-0.7-r5-20260903-202842 INCONCLUSIVE (budget) — 96 unverified (mode: repo) (tools changed r1: ledger.py, review_round.js) 020b09d`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r5-20260903-202842/report.md:3232`
-- R6 — `VERIFY wardyn-0.7-r6-20260903-202659 INCONCLUSIVE (budget) — 45 unverified (mode: repo) (tools changed r1: ledger.py, review_round.js) 020b09d`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r6-20260903-202659/report.md:1964`
-- R7 — `VERIFY wardyn-0.7-r7-20260903-160043 INCONCLUSIVE (budget) — 27 unverified 386dc19`
-  · source: `~/.claude/verify-runs/wardyn-0.7-r7-20260903-160043/report.md:1521`
-
-
+- The R2 (run plane) subject area carries no reviewer verification for 0.7; its 75
+  untriaged candidate rows (4 High, 36 Medium, 26 Low, 9 Info) are 0.7.1's first triage.
+- Six of seven runs ended `INCONCLUSIVE (budget)` — fixes are gate-green but not
+  reviewer-confirmed by a second round. R3 F055 and R4 F107 (both High) are deferred.
 
 
 #### Contract and compatibility changes
@@ -4716,9 +4701,9 @@ Six episodes of the walkthrough series were re-recorded on this release and ship
 - **The ssh cockpit widget predicate.** `local/HANDOFF-0.7-RELEASE.md:142-146` says the widget is owner-only while `ConnectSSHCard`'s `mayAttach` is owner-or-admin. That is no longer true in the tree: `widget-registry.ts:189-192` now reads `ctx.run.state === "RUNNING" && ((!!ctx.principal && ctx.run.created_by === ctx.principal) || ctx.operator)` with the comment "run-detail-ssh.tsx:50 verbatim, plus the RUNNING check: owner OR admin", and `run-detail.tsx:580-584` asserts "all three must agree". What survives is a **test** gap — R4 F129, "The SSH widget's owner-only availability gate has no test, and the canvas suite is constructed to avoid it", status `fix-claimed`, verification `unverified-budget`. 
 **Verification debt owed before 0.7.1 can claim "reviewed".**
 
-Quoted from `local/review-0.7/FOLLOW-UPS-0.7.1.md:19` (P1) and :28 (P4), and §"Deferred review work" (30-45):
+Quoted from the 0.7.1 follow-ups triage, §"Deferred review work":
 
-- **R2 (run plane) — NO review in 0.7.** The one subject area with no verification at all. 75 candidate rows (4 High, 36 Medium, 26 Low, 9 Info) sit untriaged in `~/.claude/verify-runs/wardyn-0.7-r2-20260904-161449/inbox/round-1`.
+- **R2 (run plane) — NO review in 0.7.** The one subject area with no verification at all. 75 candidate rows (4 High, 36 Medium, 26 Low, 9 Info) sit untriaged.
 - **R5 — 137 fix claims unverified by reviewer**; **R6 — 70**; **R3 — no blind round 2** (a Critical/High-only adversarial pass was the 0.7 substitute); **R4 — no round 2**, 51 unverified; **R7 — round 2 dropped** by owner decision ("treat R7 like R5/R6"), 27 claims unverified; **R1 — 62 wave fixes "fixed-unverified, gate-green"**.
 - **Low/Info residue, all runs, deliberately unfixed**: R1 182 · R3 68 · R4 83 · R5 101 · R6 64 · R7 59.
 

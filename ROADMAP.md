@@ -755,10 +755,10 @@ filesystem and a cluster sandbox. Researched in 0.7.2 and written up in
 [docs/design/hybrid-0.8.md](docs/design/hybrid-0.8.md); not built in it.
 
 **Punted from 0.7.x, by id.** Every deferral 0.7.0/0.7.1/0.7.2 took a disposition
-on and did not build. The ledger is public here rather than only in a plan file;
-each id is searchable in the source it came from
-(`local/review-0.7/FOLLOW-UPS-0.7.1.md`, the drives `DESIGN.md`/`FOLLOWUPS.md`,
-and `threatmodel/THREAT-MODEL.md`'s residual numbers).
+on and did not build. The ledger is public here rather than only in the review
+triage that produced it; each id is searchable in the source it came from
+(the drives `DESIGN.md`/`FOLLOWUPS.md` and `threatmodel/THREAT-MODEL.md`'s
+residual numbers).
 
 - **Drives.** `wardyn drive get|apply` CLI (UD-cli) · in-product reclaim + a PVC
   delete verb + a `drive.reclaim` audit row (UD-reclaim) · member self-service
