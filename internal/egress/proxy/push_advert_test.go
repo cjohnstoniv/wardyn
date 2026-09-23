@@ -271,10 +271,12 @@ func TestPushAdvertLeavesTheReceivePackPostAlone(t *testing.T) {
 			PushRules:        &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}},
 		})
 
+	// A real push that the run's content rules pass, so the POST reaches the
+	// forge and its response is the thing under test.
 	rec := httptest.NewRecorder()
-	body := pkt("aa bb refs/heads/main\x00report-status\n") + "0000"
+	body := recordedPush(t, "refs/heads/main", map[string]string{"README.md": "hello\n"})
 	req := mustLocalReq(t, http.MethodPost, "/wardyn/gh/octocat/hello-world/git-receive-pack",
-		strings.NewReader(body))
+		bytes.NewReader(body))
 	p.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -286,24 +288,48 @@ func TestPushAdvertLeavesTheReceivePackPostAlone(t *testing.T) {
 }
 
 // gitForge is a real git server standing in for the forge: one TLS endpoint
-// answering the control-plane mint route and `git {upload,receive}-pack` over
-// smart HTTP, keeping the body of every receive-pack POST so a test can read
-// the pack the client actually sent.
+// answering the control-plane mint route, `git {upload,receive}-pack` over
+// smart HTTP, and the GitHub REST reads the broker makes (api), keeping the
+// body of every receive-pack POST so a test can read the pack the client
+// actually sent.
 type gitForge struct {
 	srv  *httptest.Server
 	root string
 	mu   sync.Mutex
 	push []byte
+	// mints counts control-plane mints; apiReads and apiAuth count the REST
+	// reads and keep the last credential they carried.
+	mints    int
+	apiReads int
+	apiAuth  string
+	// apiHook, when set, may answer a REST read itself (return true), so a
+	// test can make the forge fail, stall or truncate.
+	apiHook func(http.ResponseWriter, *http.Request) bool
 }
 
 func newGitForge(t *testing.T) *gitForge {
 	t.Helper()
+	return forgeOn(t, httptest.NewTLSServer)
+}
+
+// forgeOn builds that server on the transport the caller needs: TLS for the
+// broker (which re-originates over HTTPS), plain HTTP for a test that drives a
+// real `git` client straight at the forge to record the bytes it sends.
+func forgeOn(t *testing.T, start func(http.Handler) *httptest.Server) *gitForge {
+	t.Helper()
 	f := &gitForge{root: t.TempDir()}
-	f.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv = start(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/internal/credentials/mint" {
+			f.mu.Lock()
+			f.mints++
+			f.mu.Unlock()
 			exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"kind":"github_token","token":"gh-tok","jti":"j","expires_at":"`+exp+`"}`)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/repos/") {
+			f.api(w, r)
 			return
 		}
 		dir, service, isAdvert, ok := f.route(r)

@@ -50,6 +50,16 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 			"push_rules.deny_paths[0]: control character"},
 		{"deny_paths entry carries a control character", spec(&types.PushRulesSpec{DenyPaths: []string{"deploy/\x01"}}),
 			"push_rules.deny_paths[0]: control character"},
+		// Each of these would match nothing, and a deny rule that silently
+		// matches nothing reads as enforcement that is not there.
+		{"deny_paths entry with a leading ./", spec(&types.PushRulesSpec{DenyPaths: []string{"./infra/**"}}),
+			"push_rules.deny_paths[0]: \"./infra/**\" has an empty"},
+		{"deny_paths entry with an empty segment", spec(&types.PushRulesSpec{DenyPaths: []string{"infra//**"}}),
+			"push_rules.deny_paths[0]: \"infra//**\" has an empty"},
+		{"deny_paths entry with a .. segment", spec(&types.PushRulesSpec{DenyPaths: []string{"ok/**", "infra/../x"}}),
+			"push_rules.deny_paths[1]: \"infra/../x\" has an empty"},
+		{"deny_paths entry that is only a separator", spec(&types.PushRulesSpec{DenyPaths: []string{"/"}}),
+			"push_rules.deny_paths[0]: \"/\" has an empty"},
 		{"max_inspect_pack_mib negative", spec(&types.PushRulesSpec{MaxInspectPackMiB: -1}),
 			"push_rules.max_inspect_pack_mib must be between"},
 		{"max_inspect_pack_mib above the cap", spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB + 1}),
@@ -72,6 +82,7 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 		spec(nil),
 		spec(&types.PushRulesSpec{}),
 		spec(&types.PushRulesSpec{DenyPaths: []string{".github/workflows/**", "infra/**"}, MaxInspectPackMiB: 8}),
+		spec(&types.PushRulesSpec{DenyPaths: []string{"infra/", "/infra/**"}}), // trailing and leading separators read, not refused
 		spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB}),
 	} {
 		if err := validatePolicySpec(ok); err != nil {

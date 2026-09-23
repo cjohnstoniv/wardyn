@@ -323,8 +323,8 @@ func validateUIAppPath(p string) error {
 //
 // maxPushRulesInspectPackMiB bounds max_inspect_pack_mib; the range (not a
 // bare non-negative check) mirrors how llm_inspection's other size knobs are
-// bounded, and keeps a hand-authored policy from asking the future pack
-// inspector (#179) to read an unbounded pack. Clamp only ever LOWERS this
+// bounded, and keeps a hand-authored policy from asking the broker's pack
+// inspector to read an unbounded pack. Clamp only ever LOWERS this
 // scalar (never a union), so it cannot suffer the same post-clamp overshoot.
 const (
 	maxPushRulesPathBytes      = 256
@@ -332,12 +332,12 @@ const (
 )
 
 // validatePushRules enforces push_rules' structural invariants at write time.
-// PHASE ONE ONLY, matching types.PushRulesSpec's own doc: this stores and
-// validates the strings #176 owns and never matches them — no glob library
-// ships in go.mod and filepath.Match cannot express "**", so the matcher and
-// the enforcement that reads these fields land with #179. nil is legal and
-// validates as a no-op, keeping the field's wire-identical-to-nothing contract
-// for every policy that predates it.
+// It bounds the STRINGS and refuses an entry types.DenyPathSegments cannot
+// read — one that would match nothing; what they match is the broker's
+// (internal/egress/proxy/push_rules.go), which is also where the list's own
+// evaluation cost is bounded — deliberately not here, for the no-count-cap
+// reason above. nil is legal and validates as a no-op, keeping the field's
+// wire-identical-to-nothing contract for every policy that predates it.
 func validatePushRules(pr *types.PushRulesSpec) error {
 	if pr == nil {
 		return nil
@@ -351,6 +351,9 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 		}
 		if !controlCharFree(p) {
 			return fmt.Errorf("push_rules.deny_paths[%d]: control character not allowed", i)
+		}
+		if _, err := types.DenyPathSegments(p); err != nil {
+			return fmt.Errorf("push_rules.deny_paths[%d]: %w", i, err)
 		}
 	}
 	if pr.MaxInspectPackMiB < 0 || pr.MaxInspectPackMiB > maxPushRulesInspectPackMiB {

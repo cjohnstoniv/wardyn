@@ -191,7 +191,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// section, validate every ref against this run's branch namespace, then forward
 	// the buffered bytes followed by the still-streaming pack. Fetch/clone
 	// (info/refs, upload-pack) never enter this branch: pure streaming, zero added
-	// latency. A denial happens BEFORE gitToken, so a refused push never mints.
+	// latency. A denial happens BEFORE gitToken, so the refused request mints
+	// nothing itself — but the push's own discovery (GET info/refs) came first
+	// and already did (push_rules.go), and a content-rules verdict that has to
+	// read the forge looks the credential up before it is reached.
 	//
 	// allowSrc is the rule_source the ALLOW row below carries. A push forwarded
 	// with the parser opted out gets its own value (ruleSourceGitNSOff) so the
@@ -209,6 +212,23 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	} else if isPush {
 		body, ok := p.confinePush(w, r, slog.String("repo", orgRepo),
 			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) })
+		if !ok {
+			return
+		}
+		reqBody = body
+	}
+	// CONTENT rules, entered independently of the block above rather than
+	// inside its else. git_push_any_branch opts out of WHERE a push may land;
+	// wiring this inside that block would let a WHERE opt-out silently switch
+	// off a WHAT control (push_rules.go). A refused push is never forwarded.
+	// What the pack does not carry is compared with the repository's own trees,
+	// read with this lane's credential (push_forge.go).
+	if isPush {
+		forge := &forgeRepo{p: p, repo: orgRepo,
+			token: func(ctx context.Context) (string, error) { return p.gitToken(ctx, grantID) }}
+		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("repo", orgRepo),
+			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) }, forge)
+		defer release()
 		if !ok {
 			return
 		}
@@ -705,11 +725,10 @@ func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog
 	// git does not gzip receive-pack bodies (remote-curl only sets
 	// gzip_request for fetch), but a compressed body must never be waved
 	// through unparsed — that would be a silent bypass.
-	if encs := r.Header.Values("Content-Encoding"); len(encs) > 1 ||
-		(len(encs) == 1 && encs[0] != "" && !strings.EqualFold(encs[0], "identity")) {
+	if enc, bad := nonIdentityEncoding(r.Header); bad {
 		deny(ruleSourceGitEnc)
 		http.Error(w, "wardyn: cannot enforce branch-namespace confinement on a "+
-			strings.Join(encs, ",")+"-encoded push body", http.StatusUnsupportedMediaType)
+			enc+"-encoded push body", http.StatusUnsupportedMediaType)
 		return nil, false
 	}
 	prefix := BranchNSPrefix(p.runID)
