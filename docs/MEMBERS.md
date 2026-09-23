@@ -30,18 +30,26 @@ exactly what you are looking at.
 **Autonomy levels (0.8).** If your admin has set an autonomy rubric on your
 profile, it caps what a run may do unattended, graded on what your run actually
 reaches and holds — not on you personally. Four levels: `L0` (attended —
-interactive only), `L1` (gated — non-interactive runs are allowed, but tool
-approvals are silently switched from `auto` to `hold`, so an agent still stops
-for you at every gated call), `L2` (unattended — auto-approval and seeded auto
-tools are allowed), `L3` (adds `task_mode=exec`, unsupervised execution). The
-level is graded on your run's egress reach, whether it holds a secret and how
-powerful one, and its confinement class — never on which agent you picked. A run
-whose shape exceeds what your resolved level permits is refused
-`governance_profile`, the same refusal a denied `task_mode` or interactive flag
-already gives you — see
+interactive only), `L1` (gated — non-interactive runs are allowed, but a
+claude-code run's tool approvals are switched from `auto` to `hold`, so the
+agent still stops for you at every gated call), `L2` (unattended — auto-approval
+and seeded auto tools are allowed), `L3` (adds `task_mode=exec`, unsupervised
+execution). Below `L3`, an interactive run with a task must use
+`interactive_start=agent`; the shell startup form (`interactive_start` unset or
+`shell`) runs your task at sandbox boot before anyone attaches, and is refused
+(`runs.interactive_start`). The level is graded on your run's egress reach,
+whether it holds a secret and how powerful one, and its confinement class — the
+agent you picked does not change the level, though at `L1` it can get a
+non-interactive run refused (below). A run whose shape exceeds what your
+resolved level permits is refused `governance_profile`, the same refusal a
+denied `task_mode` or interactive flag already gives you — see
 [OPERATIONS.md § Every denial that isn't a 404](OPERATIONS.md#every-denial-that-isnt-a-404).
-An `L1` run is not refused for lacking supervision; it launches with its tool
-approvals derived to `hold` and the create response carries a warning saying so.
+A non-interactive claude-code run at `L1` is not refused for lacking
+supervision; it launches with its tool approvals derived to `hold` and the
+create response carries a warning saying so. Any other agent (codex-cli, or a
+bring-your-own image) has no tool-approval lane to derive a hold into, so the
+same run is refused instead (`runs.agent`) — launch claude-code, or launch
+interactively.
 
 Three things worth naming here, because they read as bugs otherwise:
 

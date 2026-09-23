@@ -2139,7 +2139,10 @@ nine closed fields — three egress postures (`egress_open`, `egress_reviewed`,
 `L0` attended (interactive only, supervised seeding), `L1` gated (adds
 non-interactive runs, but `tool_approvals` is derived to `hold`), `L2` unattended
 (adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the
-door that routes around every other gate, so it is the top rung). `resolveRunAutonomy`
+door that routes around every other gate, so it is the top rung). Below `L3`, an
+interactive run with a task must use `interactive_start=agent`: the shell startup
+form (`interactive_start` unset or `shell`) runs the task at sandbox boot the way
+exec does, and is refused (`runs.interactive_start`). `resolveRunAutonomy`
 (`internal/api/runs_autonomy.go`) grades the run's real posture — egress reach
 graded on the same union `unionRunEgress` builds, secret power, and the
 already-enforced confinement class — against the assigned profile's rubric and
@@ -2147,9 +2150,13 @@ folds every field the posture matches to its **minimum** level; a nil rubric, or
 posture none of the nine fields caps, binds nothing (today's behaviour, unchanged).
 The same function backs both `POST /runs` and `POST /runs/preflight`, so the level
 Review shows is the level launch enforces. A run whose declared shape exceeds its
-resolved level is refused `governance_profile` (see the `target` list above); a
-non-interactive run resolved to exactly `L1` is not refused, it launches with its
-tool approvals silently derived to `hold`, and the 201 carries a warning saying so.
+resolved level is refused `governance_profile` (see
+[§ Every denial that isn't a 404](#every-denial-that-isnt-a-404) for its `target`s). A
+non-interactive run resolved to exactly `L1` is not refused when its agent has a
+tool-approval lane (claude-code): it launches with its tool approvals derived to
+`hold`, and the 201 carries a warning saying so. Any other agent — codex-cli, a
+BYOA image — has no lane to derive a hold into, so the same run is refused with
+target `runs.agent`.
 The resolution — level, posture, and every rubric field that tied at that level
 (`bound_by`) — rides the create audit row's `autonomy` field and is frozen on
 `agent_runs.autonomy_level`. **Not in the posture:** the model-provider hosts
