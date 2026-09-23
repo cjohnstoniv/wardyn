@@ -36,6 +36,20 @@ go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "
   > "$OUT/test-output.json"
 GO_EXIT=$?
 
+# ── name the failure ─────────────────────────────────────────────────────────
+# A red lane used to print nothing but "Process completed with exit code 1" in
+# the job log (#511/F6): go test -json still wrote every event to
+# test-output.json, but nothing on this path ever read it back, so finding out
+# WHICH test failed meant downloading the JSON artifact by hand. grep/sed, no
+# jq — same reason the skip-floor extraction below avoids it: this runs on
+# every lane, not just the ones with jq installed.
+if [ "$GO_EXIT" -ne 0 ] && [ -s "$OUT/test-output.json" ]; then
+  echo ">> suite '$SUITE' FAILED — failing tests:" >&2
+  grep -o '"Action":"fail","Package":"[^"]*","Test":"[^"]*"' "$OUT/test-output.json" \
+    | sed -E 's/.*"Package":"([^"]*)","Test":"([^"]*)"/\1 \2/' \
+    | sort -u | sed 's/^/>>   /' >&2
+fi
+
 # Coverage artifacts (best-effort; cover.out may be absent if build failed).
 if [ -s "$OUT/cover.out" ]; then
   go tool cover -func="$OUT/cover.out" > "$OUT/coverage-func.txt" 2>/dev/null
