@@ -246,13 +246,16 @@ func TestNoAuthzGuardExceptionRot(t *testing.T) {
 // to capSub. A grant pinned that way can only ever land in scan's exact-match
 // branch, so the DENY half is checked only by "an exact-value user DENY
 // denies", and a wildcard, different-value or group grant (the paths that
-// actually need deny-wins/widen-narrow ordering to hold) is never added. Some
-// iterations also mark the caller's own group snapshot stale (via
-// withOIDCGroupsTruncated), so scan's ListGroupDenyGrants path — which
-// monotoneStore implements but a never-stale caller never reaches — runs too.
+// actually need deny-wins/widen-narrow ordering to hold) is never added. Group
+// rows are drawn from grantGroups, which includes "ops" — a group the caller's
+// snapshot does not hold. Some iterations mark that snapshot stale (via
+// withOIDCGroupsTruncated), so an "ops" DENY reaches scan's ListGroupDenyGrants
+// path and is the only thing that decides the answer there: a stale branch that
+// grants instead of refusing turns an added DENY into an ALLOW here.
 func TestCapabilityResolutionIsMonotone(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	groups := []string{"eng"}
+	grantGroups := []string{"eng", "ops"}
 	values := []string{"a.example", "b.example", "*.example", "*"}
 
 	decide := func(grants []types.CapabilityGrant, enf map[string]bool, kind, value string, stale bool) bool {
@@ -268,7 +271,7 @@ func TestCapabilityResolutionIsMonotone(t *testing.T) {
 
 	randSubject := func() (types.CapabilitySubjectType, string) {
 		if rng.Intn(2) == 0 {
-			return types.CapabilitySubjectGroup, groups[0]
+			return types.CapabilitySubjectGroup, grantGroups[rng.Intn(len(grantGroups))]
 		}
 		return types.CapabilitySubjectUser, capSub
 	}
@@ -277,7 +280,7 @@ func TestCapabilityResolutionIsMonotone(t *testing.T) {
 		kind := capabilityKinds[rng.Intn(len(capabilityKinds))]
 		value := values[rng.Intn(len(values))]
 		stale := rng.Intn(4) == 0
-		base := randomGrants(rng, kind, groups, values)
+		base := randomGrants(rng, kind, grantGroups, values)
 		enf := map[string]bool{}
 		for _, k := range capabilityKinds {
 			enf[k] = rng.Intn(2) == 1
@@ -313,7 +316,7 @@ func randomGrants(rng *rand.Rand, kind string, groups, values []string) []types.
 		}
 		subjType, subject := types.CapabilitySubjectUser, capSub
 		if rng.Intn(2) == 0 {
-			subjType, subject = types.CapabilitySubjectGroup, groups[0]
+			subjType, subject = types.CapabilitySubjectGroup, groups[rng.Intn(len(groups))]
 		}
 		out = append(out, grant(subjType, subject, kind, values[rng.Intn(len(values))], effect))
 	}
