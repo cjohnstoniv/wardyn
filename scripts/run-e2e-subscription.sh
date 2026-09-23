@@ -71,13 +71,17 @@ if [[ "${WARDYN_E2E_REAL_MODEL:-}" == "1" ]]; then
 fi
 
 # ── wardynd lifecycle (this driver owns it for the duration) ─────────────────
-# ponytail: teardown is PATTERN-based, not PID-based, on purpose — it must also
+# ponytail: teardown is PORT-based, not PID-based, on purpose — it must also
 # reap a wardynd this script did not start (see start_wardynd below). Do not
 # "improve" it by remembering the nohup'd PID; that reintroduces the false-green
 # this guards against. (run-e2e-live.sh reads its own PID because it has the
 # opposite policy: kill only what it started.)
+# `pkill -f 'bin/wardynd'` used to kill every wardynd on the HOST, including a
+# developer's own daemon on another port — this script only owns ${BASE}'s
+# port, so it only kills whatever is bound there.
 stop_wardynd() {
-  pkill -f 'bin/wardynd' >/dev/null 2>&1 || true
+  local port="${BASE##*:}"; port="${port%%/*}"
+  fuser -k "${port}/tcp" >/dev/null 2>&1 || true
   wait_down "${BASE}" || warn "a wardynd is still answering ${BASE} after stop"
 }
 

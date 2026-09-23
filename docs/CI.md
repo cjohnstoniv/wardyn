@@ -349,8 +349,13 @@ The after runner-minutes are the same 26 runs without the three
 remains is unchanged, so its measured time carries over. No run is shorter than
 its longest job, so 19 minutes is the floor while `build` is the critical path.
 
-**Where `build`'s time goes**, in one green run (35555137810): `make test-race`
-537 s, `make cover-check` 395 s, `make lint` 120 s.
+**Where `build`'s time goes**, in one green run (35555137810, pre-#467): `make test-race`
+537 s, `make cover-check` 395 s, `make lint` 120 s — two full passes over the same three tag sets
+(coverage, then race). #467 merged them: `cover-check`'s three `test-report` suites now run under
+`-race -covermode=atomic` in one pass each, and the `build` job no longer runs `make test-race` or
+`make build-docker` as separate steps (`cover-check` already compiles and races those tag sets).
+Re-measure `cover-check`'s new time once green runs accumulate on this workflow; it should land
+below the old 537+395=932 s combined, not above it.
 
 **Why `ui-e2e` is one job.** In the same run its Playwright step took 492 s:
 Playwright itself 418 s, the backend and UI build plus the first seed 32 s, and

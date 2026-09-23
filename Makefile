@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -161,13 +161,12 @@ test: ## Run all Go tests
 # wait-for-gone poll and its orphan sweep all run concurrently with a live
 # apiserver and none of it was ever under the detector. Daemon-free too: every
 # test there drives a fake clientset.
-test-race: ## Race-detector sweep over ALL tag sets (tagless + -tags docker + -tags k8s)
-	@echo "Running Go tests under the race detector (tagless)..."
-	WARDYN_TEST_PG= go test -race ./...
-	@echo "Running Go tests under the race detector (-tags docker)..."
-	WARDYN_TEST_PG= go test -race -tags docker ./...
-	@echo "Running Go tests under the race detector (-tags k8s)..."
-	WARDYN_TEST_PG= go test -race -tags k8s ./...
+# ALIAS, not a fourth pass: -race now rides along INSIDE the three
+# test-report-* suites below (see cover-check), so this target no longer runs
+# its own separate tagless/docker/k8s sweep — that was six full Go passes
+# (three for coverage, three more for race) where three, each doing both,
+# suffice. Kept as a name developers already type.
+test-race: cover-check ## Alias: race coverage now rides along inside the test-report suites (see cover-check)
 
 # THE PG LANE UNDER -race. `test-race` above deliberately strips the DSN
 # (WARDYN_TEST_PG=), so every WARDYN_TEST_PG-gated test is SKIPPED there — and
@@ -201,14 +200,16 @@ test-gaps: ## Regenerate docs/TEST-GAPS.md from test/reports/go coverage output
 
 # Emits per-suite artifacts under test/reports/go/<suite>/. See
 # scripts/test-report.sh.
-test-report: ## Go unit suite with per-suite JSON + coverage artifacts
+test-report: ## Go unit suite with per-suite JSON + coverage artifacts, under the race detector
 # WARDYN_TEST_PG stripped: pg-gated tests belong to test-report-pg (which
 # serializes packages — see its -p 1 note). Inheriting the DSN here (e.g. from
 # `WARDYN_TEST_PG=… make release-check`) re-runs them in PARALLEL packages
 # against the one shared DB, resurrecting the site_config race. CI matches:
 # only the pg job sets the DSN (ci.yml).
-	@echo "Running Go unit suite with detailed reports..."
-	WARDYN_TEST_PG= ./scripts/test-report.sh unit ./...
+# -race: this suite is also test-race's tagless pass now — one pass, not two
+# (see the test-race alias above).
+	@echo "Running Go unit suite with detailed reports (-race)..."
+	WARDYN_TEST_PG= ./scripts/test-report.sh unit -race ./...
 
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
@@ -227,9 +228,9 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # them — none of which the tagless build can even compile — are actually tested
 # and measured. No daemon needed: the real-Docker cases self-skip unless
 # WARDYN_TEST_DOCKER=1, leaving the fakeDocker-backed tests to run anywhere.
-test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon needed)
-	@echo "Running docker-tagged suite with reports (fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
-	WARDYN_TEST_PG= ./scripts/test-report.sh docker -tags docker ./...
+test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon needed), under the race detector
+	@echo "Running docker-tagged suite with reports (-race; fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
+	WARDYN_TEST_PG= ./scripts/test-report.sh docker -race -tags docker ./...
 
 # The whole tree under -tags k8s, so the k8s confinement substrate
 # (internal/runner/k8s) and the wardynd wiring that calls it — none of which
@@ -237,9 +238,9 @@ test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon ne
 # cluster needed: the real-cluster case (test/conformance's TestConformanceK8s)
 # self-skips unless WARDYN_TEST_K8S=1, leaving the fake-clientset-backed unit
 # tests (internal/runner/k8s/*_test.go) to run anywhere.
-test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed)
-	@echo "Running k8s-tagged suite with reports (fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
-	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -tags k8s ./...
+test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed), under the race detector
+	@echo "Running k8s-tagged suite with reports (-race; fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
+	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -race -tags k8s ./...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
 # Enforced over the UNION of all three shipped builds (tagless + -tags docker +
@@ -1046,7 +1047,12 @@ npm-audit-dev: ## Non-blocking: full (dev+prod) advisory scan, to catch a pinned
 # the table is printed on failure too. No two of these share a prerequisite, so
 # nothing runs twice. The cost: `make -j ci` runs them one at a time, and
 # `make -k ci` stops at the first failing target.
-CI_TARGETS := build build-docker build-k8s tidy-check lint test-scripts cover-check test-race staticcheck govulncheck license-headers licenses notices gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub
+# build-docker/build-k8s dropped: cover-check's test-report-docker/test-report-k8s
+# already compile (and run) those tag sets, so a bare `go build` of the same
+# tag set here was a compile with no test coverage riding along. test-race
+# dropped too: it is now an alias for cover-check (see its target), and listing
+# both here would run the same three test-report suites twice.
+CI_TARGETS := build tidy-check lint test-scripts cover-check staticcheck govulncheck license-headers licenses notices gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub
 ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@t0=$$(date +%s); times=""; \
 	for t in $(CI_TARGETS); do \
