@@ -8,7 +8,7 @@
 // Overview / Approvals / Audit / Recording, all driven by REAL data (getRun,
 // getGrants, getEgress, listApprovals, listAudit, getRecording).
 import * as React from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowRight,
   Check,
@@ -104,17 +104,6 @@ type Tab = "overview" | "approvals" | "audit" | "recording";
 export function RunDetailScreen() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
-  const location = useLocation();
-
-  // #125: a launch that answers 2xx navigates here in the same tick, carrying
-  // any advisory warnings as router state (use-launch.ts) — read ONCE, at
-  // mount, since this state is only ever set by that one navigation. A
-  // reload has no state to read (React Router's own contract), which is the
-  // honest "this note doesn't survive a reload" behavior the rail's replaced
-  // held screen used to promise implicitly.
-  const [launchWarnings, setLaunchWarnings] = React.useState<string[]>(
-    () => (location.state as { launchWarnings?: string[] } | null)?.launchWarnings ?? [],
-  );
 
   const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
   const [grants, setGrants] = React.useState<CredentialGrant[]>([]);
@@ -438,11 +427,7 @@ export function RunDetailScreen() {
             onClone={onClone}
           />
 
-          {launchWarnings.length > 0 && (
-            <div className="px-4 pt-2">
-              <LaunchWarningsNote warnings={launchWarnings} onDismiss={() => setLaunchWarnings([])} />
-            </div>
-          )}
+          <LaunchWarningsNote />
 
           <RunDetailCommandBar
             tabs={

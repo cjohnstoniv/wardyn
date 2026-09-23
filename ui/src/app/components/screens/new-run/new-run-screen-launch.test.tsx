@@ -363,29 +363,33 @@ describe("NewRunScreen — a 2xx launch always navigates, in the same tick", () 
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
   }
 
-  it("navigates immediately when the 201 carries no warnings, with empty launchWarnings state", async () => {
+  // review defect 2: a `waitFor` here would pass even for a setTimeout-delayed
+  // or a doubled navigate — it just polls until it sees a matching call,
+  // however that call eventually landed. Asserting synchronously, right after
+  // the awaited click (createRunMock already resolves, so its continuation is
+  // flushed by the time `user.click` returns), is what actually pins "the
+  // same tick" and "exactly once" rather than merely "eventually, once or more".
+  it("navigates immediately when the 201 carries no warnings, with empty launchWarnings state — same tick, exactly once", async () => {
     await launchWith();
-    await waitFor(() =>
-      expect(navigateMock).toHaveBeenCalledWith("/runs/run_9", { state: { launchWarnings: [] } }),
-    );
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith("/runs/run_9", { state: { launchWarnings: [] } });
   });
 
-  it("navigates immediately WITH the 201's warnings, as router state — no held screen", async () => {
+  it("navigates immediately WITH the 201's warnings, as router state — no held screen, same tick, exactly once", async () => {
     await launchWith([
       "egress_host: internal.example.com was dropped — not granted to you",
       "secret: DEPLOY_KEY was dropped — not granted to you",
     ]);
 
-    await waitFor(() =>
-      expect(navigateMock).toHaveBeenCalledWith("/runs/run_9", {
-        state: {
-          launchWarnings: [
-            "egress_host: internal.example.com was dropped — not granted to you",
-            "secret: DEPLOY_KEY was dropped — not granted to you",
-          ],
-        },
-      }),
-    );
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith("/runs/run_9", {
+      state: {
+        launchWarnings: [
+          "egress_host: internal.example.com was dropped — not granted to you",
+          "secret: DEPLOY_KEY was dropped — not granted to you",
+        ],
+      },
+    });
     // Nothing named "Open run" exists any more — the form is gone with the
     // navigation, not held behind it.
     expect(screen.queryByRole("button", { name: "Open run" })).toBeNull();

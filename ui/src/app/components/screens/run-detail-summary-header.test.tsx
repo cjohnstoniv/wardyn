@@ -491,6 +491,25 @@ describe("SummaryHeader — PENDING's own queued sentence (#125)", () => {
     expect(screen.queryByText(PENDING_NO_DETAIL)).toBeNull();
     expect(screen.getByText(CHIP_WAITING_FOR_MACHINE)).toBeInTheDocument();
   });
+
+  // review defect 3: PENDING_NO_DETAIL is a PENDING-only fact — STARTING's own
+  // empty-detail case was already correctly silent before #125 (no ordinary
+  // wait worth naming before the pod is even scheduled) and must stay that
+  // way; the widened `run.state === "STARTING" || "PENDING"` gate must not
+  // have smuggled the queued sentence into the STARTING arm too.
+  it("never shows the queued sentence for a STARTING run with no status_detail — that stays silent", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={{ ...runningInteractive, state: "STARTING", interactive: false, status_detail: "" }}
+          terminal={false}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(PENDING_NO_DETAIL)).toBeNull();
+    expect(screen.getByTestId("run-summary-header")).not.toHaveTextContent(PENDING_NO_DETAIL);
+  });
 });
 
 // #93/#96 — the run header's autonomy chip, beside ConfinementChip.

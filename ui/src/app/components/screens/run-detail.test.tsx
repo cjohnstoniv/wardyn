@@ -84,8 +84,6 @@ vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: v
 
 import { RunDetailScreen } from "./run-detail";
 import { RUN_COCKPIT, SECURITY_ONLY_REASON } from "../wardyn/copy";
-import { RUN_DETAIL } from "../wardyn/copy/run-cockpit";
-import { AGENTS } from "../../lib/workspace-providers-copy";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { sessionOptionLabel } from "./run-detail/recording-tab-copy";
 import { toast } from "sonner";
@@ -196,44 +194,6 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
     expect(
       await screen.findByRole("heading", { name: "audit the egress proxy", level: 1 }),
     ).toBeInTheDocument();
-  });
-});
-
-// #125 — a launch that answers 2xx navigates here in the same tick, carrying
-// any advisory `warnings[]` as router state (use-launch.ts). This is where
-// they land: the rail's own advisory-block shape, dismissible, gone on reload
-// because router state itself is gone on reload — nothing here needs to know
-// that on purpose, it just never receives the state a second time.
-describe("RunDetailScreen — the launch advisory from router state (#125)", () => {
-  function renderWithLaunchState(run: Record<string, unknown>, warnings: string[]) {
-    getRunMock.mockResolvedValue(run);
-    return render(
-      <MemoryRouter initialEntries={[{ pathname: "/runs/run-1", state: { launchWarnings: warnings } }]}>
-        <Routes>
-          <Route path="/runs/:id" element={<RunDetailScreen />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-  }
-
-  it("renders the warnings and the ephemeral note, and Dismiss removes them", async () => {
-    renderWithLaunchState({ ...RUN, state: "RUNNING" }, [
-      "Egress narrowed to api.anthropic.com by member policy.",
-    ]);
-
-    expect(await screen.findByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeInTheDocument();
-    expect(screen.getByText("Egress narrowed to api.anthropic.com by member policy.")).toBeInTheDocument();
-    expect(screen.getByText(RUN_DETAIL.LAUNCH_WARNING_EPHEMERAL)).toBeInTheDocument();
-
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(screen.getByRole("button", { name: RUN_DETAIL.LAUNCH_WARNING_DISMISS }));
-    expect(screen.queryByText(AGENTS.LAUNCH_WARNING_TITLE)).not.toBeInTheDocument();
-  });
-
-  it("renders nothing when the route carries no launch state — the reload case", async () => {
-    renderRun({ ...RUN, state: "RUNNING" });
-    await screen.findAllByText(RUN.task);
-    expect(screen.queryByText(AGENTS.LAUNCH_WARNING_TITLE)).not.toBeInTheDocument();
   });
 });
 

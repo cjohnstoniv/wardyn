@@ -114,8 +114,10 @@ export function SummaryHeader({
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "");
   // "" whenever there is nothing to say. The SERVER has already blanked
-  // status_detail for every run that is not STARTING/PENDING (except a FAILED
-  // one whose reason IS the failure) — and the header gates on those two
+  // status_detail for every run that is not STARTING (PENDING included —
+  // projectStatusDetail's `default` branch in runs_status_detail.go blanks it
+  // for PENDING exactly like every other non-STARTING state) except a FAILED
+  // one whose reason IS the failure — and the header gates on STARTING/PENDING
   // anyway, because a FAILED run's header already says why in the failure_hint
   // chip below, and two chips narrating one ending is how a bar this crowded
   // loses the one that matters.
@@ -123,8 +125,9 @@ export function SummaryHeader({
   // #125: PENDING's own first tick carries no status_detail at all — the
   // ordinary derivation below would render nothing — so that ONE case reaches
   // for PENDING_NO_DETAIL instead. The moment status_detail carries a real
-  // stage line this falls through to the ordinary STARTING/PENDING derivation,
-  // which supersedes it.
+  // stage line (today, only ever once the run has moved to STARTING) this
+  // falls through to the ordinary STARTING/PENDING derivation, which
+  // supersedes it.
   const pendingQueued = run.state === "PENDING" && !run.status_detail?.trim();
   const statusChip = pendingQueued
     ? PENDING_NO_DETAIL
