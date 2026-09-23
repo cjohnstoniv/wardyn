@@ -43,7 +43,7 @@ function push(over: Partial<ApprovalRequest> = {}): ApprovalRequest & { requeste
 
 describe("PushContentCard — held (#181)", () => {
   it("shows the frozen title, the repository, branch and acts_as_label — never the raw acts_as", () => {
-    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />);
     const card = screen.getByTestId("push-content-card");
     expect(within(card).getByText(PUSH.CARD_TITLE)).toBeInTheDocument();
     expect(within(card).getByText("github.com/acme/payments")).toBeInTheDocument();
@@ -60,7 +60,7 @@ describe("PushContentCard — held (#181)", () => {
         item={push({ requested_scope: { paths, paths_total: 14 } as Partial<PushContentScope> })}
         securityOperator
         run={RUNNING}
-        busy={false}
+        busy={null}
         onApprove={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -80,7 +80,7 @@ describe("PushContentCard — held (#181)", () => {
         item={push({ requested_scope: { paths: ["a.txt"], paths_total: 1 } as Partial<PushContentScope> })}
         securityOperator
         run={RUNNING}
-        busy={false}
+        busy={null}
         onApprove={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -99,7 +99,7 @@ describe("PushContentCard — held (#181)", () => {
         })}
         securityOperator
         run={RUNNING}
-        busy={false}
+        busy={null}
         onApprove={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -115,7 +115,7 @@ describe("PushContentCard — held (#181)", () => {
   // every attribute along with text content, so one substring check covers
   // both.
   it("never leaks the raw acts_as through any attribute (title/aria-label) anywhere in the card", () => {
-    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />);
     const card = screen.getByTestId("push-content-card");
     expect(card.innerHTML).not.toContain("github_token:11111111-1111-1111-1111-111111111111");
   });
@@ -134,7 +134,7 @@ describe("PushContentCard — held (#181)", () => {
         })}
         securityOperator
         run={RUNNING}
-        busy={false}
+        busy={null}
         onApprove={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -144,14 +144,14 @@ describe("PushContentCard — held (#181)", () => {
   });
 
   it("reuses the approval banner labels for What/Blast, with PUSH.WHAT/BLAST", () => {
-    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />);
     const card = screen.getByTestId("push-content-card");
     expect(within(card).getByText(PUSH.WHAT("github.com/acme/payments", "dana@acme.example"))).toBeInTheDocument();
     expect(within(card).getByText(PUSH.BLAST)).toBeInTheDocument();
   });
 
   it("carries the held note and, for a decider, the approve note", () => {
-    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />);
     expect(screen.getByText(PUSH.HELD_NOTE)).toBeInTheDocument();
     expect(screen.getByText(PUSH.APPROVE_NOTE)).toBeInTheDocument();
   });
@@ -170,7 +170,7 @@ describe("PushContentCard — the held note flips to HELD_OPEN at the window end
   });
 
   it("shows HELD_NOTE for a fresh row and HELD_OPEN once the 600s ceiling passes, with no poll/re-render forced from outside", () => {
-    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />);
     expect(screen.getByText(PUSH.HELD_NOTE)).toBeInTheDocument();
     expect(screen.queryByText(PUSH.HELD_OPEN)).not.toBeInTheDocument();
 
@@ -189,7 +189,7 @@ describe("PushContentCard — the held note flips to HELD_OPEN at the window end
         item={push({ requested_at: past })}
         securityOperator
         run={RUNNING}
-        busy={false}
+        busy={null}
         onApprove={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -199,7 +199,7 @@ describe("PushContentCard — the held note flips to HELD_OPEN at the window end
 
   it("clears its timer on unmount (no act() warning, no leaked timer)", () => {
     const { unmount } = render(
-      <PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,
+      <PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />,
     );
     unmount();
     expect(() => vi.advanceTimersByTime(600_001)).not.toThrow();
@@ -207,16 +207,26 @@ describe("PushContentCard — the held note flips to HELD_OPEN at the window end
 });
 
 describe("PushContentCard — deciding", () => {
-  it("disables both buttons and shows a spinner on each while busy", () => {
-    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy onApprove={vi.fn()} onDeny={vi.fn()} />);
-    expect(screen.getByRole("button", { name: /Approve/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Deny/ })).toBeDisabled();
+  it("disables both buttons while deciding, and only Approve spins", () => {
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy="approve" onApprove={vi.fn()} onDeny={vi.fn()} />);
+    const approve = screen.getByRole("button", { name: /Approve/ });
+    const deny = screen.getByRole("button", { name: /Deny/ });
+    expect(approve).toBeDisabled();
+    expect(deny).toBeDisabled();
+    expect(approve.querySelector(".animate-spin")).not.toBeNull();
+    expect(deny.querySelector(".animate-spin")).toBeNull();
+  });
+
+  it("only Deny spins while a deny is in flight", () => {
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy="deny" onApprove={vi.fn()} onDeny={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /Approve/ }).querySelector(".animate-spin")).toBeNull();
+    expect(screen.getByRole("button", { name: /Deny/ }).querySelector(".animate-spin")).not.toBeNull();
   });
 
   it("Approve/Deny call straight through with no dialog", async () => {
     const onApprove = vi.fn();
     const onDeny = vi.fn();
-    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={false} onApprove={onApprove} onDeny={onDeny} />);
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={onApprove} onDeny={onDeny} />);
     screen.getByRole("button", { name: /Approve/ }).click();
     expect(onApprove).toHaveBeenCalledTimes(1);
     screen.getByRole("button", { name: /Deny/ }).click();
@@ -229,7 +239,7 @@ describe("PushContentCard — deciding", () => {
 
 describe("PushContentCard — cancelled (run ended)", () => {
   it("withdraws the decision pair and shows the reused APPROVAL.CANCELLED_BODY", () => {
-    render(<PushContentCard item={push()} securityOperator run={ENDED} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    render(<PushContentCard item={push()} securityOperator run={ENDED} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /Approve/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Deny/ })).not.toBeInTheDocument();
     expect(screen.getByText(APPROVAL.CANCELLED_BODY)).toBeInTheDocument();
@@ -238,7 +248,7 @@ describe("PushContentCard — cancelled (run ended)", () => {
 
 describe("PushContentCard — member watching, decides nothing", () => {
   it("shows the admin-only reason instead of Approve/Deny for a non-security-operator", () => {
-    render(<PushContentCard item={push()} securityOperator={false} run={RUNNING} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    render(<PushContentCard item={push()} securityOperator={false} run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /Approve/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Deny/ })).not.toBeInTheDocument();
     expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
