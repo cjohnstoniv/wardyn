@@ -87,6 +87,7 @@ declare -A ALLOWLIST=(
   ["internal/egress/egress_test.go"]=1
   ["internal/egress/proxy/llm_unavailable_detail_test.go"]=3
   ["internal/runner/k8s/drives_test.go"]=2
+  ["internal/secretstore/vaultkv/fakevault_test.go"]=1
   ["internal/types/types_test.go"]=1
   ["pkg/client/client_more_test.go"]=2
   ["test/adofake/adofake_test.go"]=3
