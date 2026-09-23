@@ -4508,8 +4508,8 @@ fresh per launch, the pin is trusted and a missing image surfaces at the login
 run itself, naming it). Until both hold, `PUT /model-providers` and
 `PUT /site-config` refuse a write that adds an `anthropic_subscription` provider
 that is on (E4): *"Claude subscriptions need the Claude Code sign-in image, which
-this install hasn't built yet."* A provider that is off, and one already stored,
-are never refused: if the image goes missing later (a prune, a daemon swap),
+this install hasn't built yet."* Turning a stored subscription back on counts
+as adding it. A provider that is off, and one already stored on, are never refused: if the image goes missing later (a prune, a daemon swap),
 turning the provider off, editing other providers and re-applying the site
 config all keep working.
 

@@ -33,8 +33,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   substrate), the pinned ref must actually be present — a pin alone was not proof of a build, since
   the compose/run-host defaults already bake one in unconditionally. `PUT /model-providers` and
   `PUT /site-config` refuse a write that adds an `anthropic_subscription` provider that is on until
-  both hold — one that is off, or already stored, is never refused, so the off switch and every other
-  save keep working if the image later goes missing — and `GET /setup/status` carries the state as
+  both hold (turning a stored one back on counts as adding it) — one that is off, or already stored
+  on, is never refused, so the off switch and every other save keep working if the image later goes
+  missing — and `GET /setup/status` carries the state as
   its own `claude_signin_image` row (never blocking — the kind is optional). See `docs/OPERATIONS.md`
   § Claude sign-in image.
 

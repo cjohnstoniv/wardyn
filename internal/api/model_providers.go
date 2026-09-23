@@ -245,9 +245,10 @@ func validateModelProviderImagePrereqs(block, stored *types.ModelProviders, imag
 }
 
 // introducedSubscription names the first anthropic_subscription provider in
-// block that is on and was not already stored with that kind; "" when there is
-// none. A provider that is off, and one already stored, are never E4's: turning
-// one off is the incident switch, and a stored one must not wedge every later
+// block that is on and was not already stored on with that kind; "" when there
+// is none. Turning a stored-off one back on adds it. A provider that is off, and
+// one already stored on, are never E4's: turning one off is the incident switch,
+// and a stored one must not wedge every later
 // save of this document (an edit to another provider, a console save, the MDM
 // file deploy/desktop re-applies on every boot) once the image goes missing.
 func introducedSubscription(block, stored *types.ModelProviders) string {
@@ -258,7 +259,7 @@ func introducedSubscription(block, stored *types.ModelProviders) string {
 		if p.Kind != types.ModelProviderAnthropicSubscription || p.Disabled {
 			continue
 		}
-		if prior, ok := modelProviderByID(stored, p.ID); !ok || prior.Kind != p.Kind {
+		if prior, ok := modelProviderByID(stored, p.ID); !ok || prior.Kind != p.Kind || prior.Disabled {
 			return p.ID
 		}
 	}

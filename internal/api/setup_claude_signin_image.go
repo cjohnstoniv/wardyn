@@ -34,6 +34,7 @@ type claudeSignInImageState struct {
 	ref      string // the pinned ref, "" when unpinned
 	resolved bool   // ref is set AND (unverifiable-so-trusted OR confirmed present)
 	verified bool   // true when `resolved` came from an actual ImagePresent check
+	checkErr error  // the ImagePresent error when the check was inconclusive
 }
 
 // resolveClaudeSignInImage is the one place that decides whether the Claude
@@ -54,7 +55,7 @@ func resolveClaudeSignInImage(ctx context.Context, images map[string]string, rnr
 		// cachedImageStillPresent already takes for the same reason: an
 		// unreachable daemon must not manufacture a refusal for every
 		// anthropic_subscription write.
-		return claudeSignInImageState{ref: ref, resolved: true}
+		return claudeSignInImageState{ref: ref, resolved: true, checkErr: err}
 	}
 	return claudeSignInImageState{ref: ref, resolved: present, verified: true}
 }
@@ -92,7 +93,11 @@ func claudeSignInImageCheck(ctx context.Context, images map[string]string, rnr r
 	}
 	if st.resolved {
 		detail := "Claude sign-in image resolves: " + st.ref + "."
-		if !st.verified {
+		switch {
+		case st.checkErr != nil:
+			detail += " (Pin only — the image presence check could not answer: " + st.checkErr.Error() +
+				"; a missing image surfaces at the login run instead.)"
+		case !st.verified:
 			detail += " (Pin only — this runner cannot confirm the image is present locally; a missing " +
 				"image surfaces at the login run instead.)"
 		}

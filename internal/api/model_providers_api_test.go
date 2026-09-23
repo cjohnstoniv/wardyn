@@ -286,6 +286,19 @@ func TestModelProvidersPutSubscriptionNeedsSignInImage(t *testing.T) {
 		}
 	})
 
+	t.Run("turning a stored-off subscription back on adds one: refused", func(t *testing.T) {
+		off := subscriptionProvider("claude-sub")
+		off.Disabled = true
+		srv, fake := signInImageSrv(t, types.SiteConfig{ModelProviders: providerBlock(off)}, signInImageMissing())
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "sign-in image") {
+			t.Fatalf("PUT = %d, want 400 with the E4 sentence; body=%s", w.Code, w.Body.String())
+		}
+		if fake.putSeen != nil {
+			t.Fatal("a refused PUT must not write")
+		}
+	})
+
 	t.Run("a stored id changing kind to a subscription adds one: refused", func(t *testing.T) {
 		stored := types.SiteConfig{ModelProviders: providerBlock(keyProvider("claude-sub", "claude-code"))}
 		srv, _ := signInImageSrv(t, stored, signInImageMissing())
@@ -317,6 +330,16 @@ func TestSiteConfigPutSubscriptionNeedsSignInImage(t *testing.T) {
 			&imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{signInRef: true}})
 		if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body); w.Code != http.StatusOK {
 			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("turning a stored-off subscription back on, pinned but absent: refused", func(t *testing.T) {
+		off := subscriptionProvider("claude-sub")
+		off.Disabled = true
+		srv, _ := signInImageSrv(t, types.SiteConfig{ModelProviders: providerBlock(off)}, signInImageMissing())
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "sign-in image") {
+			t.Fatalf("PUT = %d, want 400 with the E4 sentence; body=%s", w.Code, w.Body.String())
 		}
 	})
 
