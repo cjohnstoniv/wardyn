@@ -10,14 +10,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- **`wardyn-proxy`'s egress sidecar could start unpinned (or crash at boot) when handed a nil
-  HTTP client.** `NewServer`'s corp-proxy pin (`Proxy: nil`, corp-CA trust) only applied when a
-  caller-supplied `*http.Client` had no `Transport` set; a nil client skipped it entirely. Three
-  of the four control-plane callers built their own client in that case, unpinned and honoring
-  `HTTP_PROXY`/`HTTPS_PROXY`; the fourth, the run-token renewer, had no fallback at all and
-  panicked on the nil client. The nil client is now defaulted before the pin check, so every
-  caller gets the same pinned, proxyless, corp-CA-trusting client a caller-supplied one does
-  (#712).
+- `NewServer` in the egress proxy now pins a nil control-plane client (`Proxy: nil`, corp-CA
+  trust) the same way it pins a caller-supplied one, instead of letting it fall back to an
+  unpinned client or reach the run-token renewer as nil. Latent hardening: no shipped caller
+  passes nil, so no released binary was affected (#712).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

@@ -6,8 +6,10 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -104,6 +106,18 @@ func TestNewServerWiresEveryConfiguredControl(t *testing.T) {
 	}
 	if srv.proxy.transport == nil || srv.proxy.transport.TLSClientConfig == nil || srv.proxy.transport.TLSClientConfig.RootCAs == nil {
 		t.Error("trusted_ca_pem configured but the forward transport does not trust it")
+	} else {
+		block, _ := pem.Decode(corpCertPEM)
+		corpCert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parse corp CA: %v", err)
+		}
+		if _, err := corpCert.Verify(x509.VerifyOptions{Roots: srv.proxy.transport.TLSClientConfig.RootCAs}); err != nil {
+			t.Errorf("trusted_ca_pem configured but the forward transport's RootCAs do not trust the corp CA: %v", err)
+		}
+	}
+	if len(srv.proxy.noProxy) == 0 {
+		t.Error("upstream_proxy_no_proxy configured but Proxy.noProxy is empty")
 	}
 
 	// The mask registry: every rendering maskValues() registers for the
@@ -136,21 +150,15 @@ func TestNewServerWiresEveryConfiguredControl(t *testing.T) {
 // constructors (decision sink, injector, approval client) have their own
 // "client == nil" fallback, but each builds a BARE &http.Client{} with no
 // Transport override — riding http.DefaultTransport, which honours
-// HTTP_PROXY/HTTPS_PROXY via ProxyFromEnvironment. A sidecar started with a
-// nil client on an estate that sets those env vars would then route the run
-// token, injection resolves, approvals and decision logs through whatever
-// HTTP_PROXY names, silently reintroducing the exact leak #359/#360's pinning
-// exists to close. The fourth, the token renewer, has NO such fallback at all:
-// it calls client.Do on whatever it was handed, so a nil client reaching it
-// is a startup goroutine panic, not merely an unpinned transport.
+// HTTP_PROXY/HTTPS_PROXY via ProxyFromEnvironment. The fourth, the token
+// renewer, has NO such fallback at all: it calls client.Do on whatever it was
+// handed, so a nil client reaching it is a startup goroutine panic.
 //
-// Proven end to end, not by inspecting a field: an injection grant forces a
-// real startup resolve against the control plane, and HTTP_PROXY is pointed at
-// an address nothing listens on. Pinned (fixed): the resolve reaches the
-// control plane directly, NewServer succeeds, and the renewer never sees a nil
-// client. Unpinned (the defect): the resolve is routed at the bogus proxy
-// address instead and NewServer fails closed with a wrapped "build injector"
-// error — or the renewer goroutine panics on the nil client outright.
+// The pin is asserted on the clients actually handed downstream, not by routing
+// a request: the fake control plane is on loopback, which ProxyFromEnvironment
+// never proxies, so an unpinned client would reach it just the same. NewServer
+// succeeding (the startup injection resolve plus the renewer running without a
+// panic) covers the renewer, which keeps no client field to inspect.
 func TestNewServer_NilClientStillPinnedAndProxyless(t *testing.T) {
 	grant := uuid.New()
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -161,11 +169,6 @@ func TestNewServer_NilClientStillPinnedAndProxyless(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{Header: "Authorization", Value: "Bearer tok"})
 	}))
 	defer cp.Close()
-
-	// A bogus address nothing listens on: an unpinned client routed through it
-	// gets an immediate connection-refused, never a hang.
-	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
-	t.Setenv("http_proxy", "http://127.0.0.1:1")
 
 	cfg := &Config{
 		RunID:           uuid.New(),
@@ -184,12 +187,27 @@ func TestNewServer_NilClientStillPinnedAndProxyless(t *testing.T) {
 	// or future) would make.
 	srv, err := NewServer(context.Background(), cfg, nil, &bytes.Buffer{})
 	if err != nil {
-		t.Fatalf("NewServer with a nil client: %v (want the startup injection resolve to reach "+
-			"the control plane directly, pinned Proxy:nil, not routed through HTTP_PROXY)", err)
+		t.Fatalf("NewServer with a nil client: %v", err)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	})
+
+	for name, c := range map[string]*http.Client{
+		"decision sink":   srv.sink.client,
+		"injector":        srv.proxy.inject.client,
+		"approval client": srv.proxy.approval.client,
+		"approval reader": srv.proxy.inject.approvals.(httpApprovalReader).client,
+	} {
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok {
+			t.Errorf("%s: Transport is %T, want the pinned *http.Transport NewServer builds", name, c.Transport)
+			continue
+		}
+		if tr.Proxy != nil {
+			t.Errorf("%s: Transport.Proxy is set, want nil (pinned, never HTTP_PROXY/HTTPS_PROXY)", name)
+		}
+	}
 }
