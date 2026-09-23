@@ -958,6 +958,56 @@ func TestAuthzMatrix(t *testing.T) {
 			}
 		})
 	}
+
+	// ── the query-param id row class (authz_query_id_test.go) ──
+	//
+	// The path probes above never put an id in the QUERY string, so a member
+	// naming someone else's run in `?run_id=` on a classMember route was never
+	// asked. Each row seeds an owned and a foreign entity and probes both.
+	for key, row := range queryIDMatrix {
+		if row.foreign == 0 {
+			continue // pinnedBy carries it; TestQueryParamIDsAreClassified holds it to that
+		}
+		route, param, _ := strings.Cut(key, "?")
+		method, pattern, _ := strings.Cut(route, " ")
+		t.Run(key, func(t *testing.T) {
+			var own, foreign string
+			var leaks []string
+			switch row.entity {
+			case entityRun:
+				ownRun, foreignRun := seedRun(memberSub), seedRun(otherSub)
+				aap.seed(ownRun)
+				leaks = []string{foreignRun.String(), aap.seed(foreignRun).String()}
+				own, foreign = ownRun.String(), foreignRun.String()
+			case entityPrincipal:
+				own, foreign = memberSub, otherSub
+				leaks = []string{otherSub}
+			default:
+				t.Fatalf("query-param row %q has no seedable entity %q", key, row.entity)
+			}
+			at := func(id string) string { return buildPath(pattern, "x1") + "?" + param + "=" + id }
+			body := bodyFor(method, routeMatrix[route])
+
+			w := doSSO(t, srv, method, at(foreign), memberSess, body)
+			if w.Code != row.foreign {
+				t.Errorf("member naming a FOREIGN %s: status = %d, want %d; body=%s", param, w.Code, row.foreign, w.Body.String())
+			}
+			for _, leak := range leaks {
+				if strings.Contains(w.Body.String(), leak) {
+					t.Errorf("member naming a FOREIGN %s got a body carrying %s: %s", param, leak, w.Body.String())
+				}
+			}
+			if row.ownAdmitted {
+				if w := doSSO(t, srv, method, at(own), memberSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+					t.Errorf("member naming their OWN %s: status = %d, want admitted; body=%s", param, w.Code, w.Body.String())
+				}
+			}
+			assertNotBlocked(t, "admin naming a FOREIGN "+param, doSSO(t, srv, method, at(foreign), adminSess, body))
+			if w := doSSO(t, srv, method, at(own), nil, body); w.Code != http.StatusUnauthorized {
+				t.Errorf("unauthenticated: status = %d, want 401; body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
 }
 
 // TestSecurityAdminRouteTier is the security-admin twin of

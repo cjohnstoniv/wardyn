@@ -559,3 +559,26 @@ func testRepoOf(path string) string {
 	repo, _, _ := strings.Cut(rest, "/")
 	return repo
 }
+
+// ?approval= is a query-param id (authz_query_id_test.go): it is looked up
+// among the CALLING run's approvals only. An approved-once row that belongs to
+// another run — same grant, same capability, so only the run differs — is a
+// mismatch, and it is not spent.
+func TestADOCapability_AnotherRunsApprovalIsRefused(t *testing.T) {
+	f := newADOCapFixture(t)
+	a := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath), adoCapabilityPendingState)
+	f.decide(t, a, types.ApprovalApproved, types.ScopeOnce)
+	f.approvals.mu.Lock()
+	ap := f.approvals.byID[a]
+	ap.RunID = uuid.New()
+	f.approvals.byID[a] = ap
+	f.approvals.mu.Unlock()
+
+	w := f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath)
+	if w.Code != http.StatusForbidden || f.failureReasonOf(t)["reason"] != "approval_mismatch" {
+		t.Fatalf("status %d body %s, want 403 approval_mismatch", w.Code, w.Body.String())
+	}
+	if f.row(a).MintedJTI != "" {
+		t.Fatal("another run's approval was spent")
+	}
+}
