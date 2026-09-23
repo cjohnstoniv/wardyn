@@ -403,10 +403,19 @@ func (s *Server) enforceReadableRosterForCredential(ctx context.Context, run typ
 // asked of a run REQUEST instead of a resolved transport, so create and Review
 // refuse exactly the runs dispatch would. See that function for each term.
 func llmMechanismGateApplies(req createRunRequest) bool {
-	// Source id is nil by construction: a source-bound run (record/verify/build)
-	// is launched by newStepRun, never decoded from this door's body.
+	// Workspace id AND source id are nil by construction on this door:
+	// seedRequestWorkspace (runs_create.go) never sets run.WorkspaceID from
+	// req.WorkspaceID — that column is the TRUSTED scan/verify/record linkage a
+	// user-facing create must never claim — and a source-bound run
+	// (record/verify/build) is launched by newStepRun, never decoded from this
+	// door's body. So this door can never produce the (workspace_id/source_id +
+	// non-interactive) shape isModelRun reads as a scan; passing req.WorkspaceID
+	// through told this gate an ordinary `--workspace` launch (docs/OPERATIONS.md,
+	// the console's workspace_id) was a scan and skipped it, while dispatch —
+	// reading the run's own, never-set WorkspaceID — decided the opposite and
+	// dispatched it as a model run anyway (#767).
 	if req.Task == harnessLoginTask ||
-		!isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive) {
+		!isModelRun(req.TaskMode, nil, nil, req.Interactive) {
 		return false
 	}
 	_, needsModel := agentLLMProvider(req.Agent)
@@ -458,14 +467,16 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	//
 	// modelRun is THIS RUN's own answer, hoisted so the Bedrock probe and the
 	// managed lane below cannot disagree. Hard-coding it true here would make a
-	// scan run (workspace_id + non-interactive) or a task_mode=exec
-	// run — the two shapes isModelRun exists to exclude — read as a ready Bedrock
-	// lane at create and at Review, with the 201 saying "Amazon Bedrock … this run
-	// uses it automatically" about a run dispatch hands no model credential at
-	// all. Source id is nil by construction on this door (a source-bound run is
-	// launched by newStepRun, never decoded from a create body) — the same term
-	// llmMechanismGateApplies passes.
-	modelRun := isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive)
+	// task_mode=exec run — the one shape isModelRun exists to exclude ON THIS
+	// DOOR — read as a ready Bedrock lane at create and at Review, with the 201
+	// saying "Amazon Bedrock … this run uses it automatically" about a run
+	// dispatch hands no model credential at all. Workspace id AND source id are
+	// nil by construction here (seedRequestWorkspace never sets run.WorkspaceID
+	// from req.WorkspaceID, and a source-bound run is launched by newStepRun,
+	// never decoded from a create body) — the same terms llmMechanismGateApplies
+	// passes, and the reason this door has no scan shape of its own to exclude
+	// (#767).
+	modelRun := isModelRun(req.TaskMode, nil, nil, req.Interactive)
 	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
 	// The SAME predicate dispatch applies, with the same terms — including the
 	// posture term, whose absence here made every SSO deployment's managed run

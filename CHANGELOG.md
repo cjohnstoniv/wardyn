@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A non-interactive `--workspace` launch under a declared mechanism is refused at create and
+  Review, not after it boots (#767).** `POST /runs`/`/runs/preflight` never set `run.WorkspaceID`
+  from a launch's `workspace_id` — that column is the trusted scan/verify/record linkage. But the
+  create-time mechanism gate and its model-access advisory read the request's own `workspace_id` as
+  that same scan signal, so a non-interactive `wardyn run --workspace <id>` skipped the gate: a
+  launch whose lane did not satisfy the org's declared mechanism got a 201, booted, and only then
+  failed — dispatch already checked it and failed it closed. Review showed no refusal, and its
+  advisory and residency grade described the run as getting no model credential when it is a model
+  run. Both create-time checks now ask the same question dispatch does for this door.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

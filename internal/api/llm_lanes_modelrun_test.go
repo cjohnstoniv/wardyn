@@ -16,14 +16,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestResolveRunLLMLanes_HonoursTheRunsOwnModelRunAnswer is B2-F7.
-//
-// resolveRunLLMLanes probed Bedrock with modelRun hard-coded true while the
-// managed lane one line below used the REAL isModelRun. So a scan run
-// (workspace_id + non-interactive — the shape isModelRun exists to exclude) got
-// a ready Bedrock lane at create/Review and none at dispatch: the 201 and the
-// preflight checklist told the caller "Amazon Bedrock … this run uses it
-// automatically" for a run that gets no model credential at all.
+// TestResolveRunLLMLanes_HonoursTheRunsOwnModelRunAnswer is B2-F7, later
+// corrected by #767: the workspace_id term this door once passed to isModelRun
+// was itself the bug. This create door (POST /runs, /runs/preflight) can never
+// produce a scan run — seedRequestWorkspace (runs_create.go) never sets
+// run.WorkspaceID from req.WorkspaceID, so a non-interactive `--workspace`
+// launch (the ordinary CLI/console shape) reads as a scan HERE while dispatch,
+// reading the run's own never-set WorkspaceID, credentials it as a model run
+// anyway. So a create-time request carrying workspace_id must answer the SAME
+// as one that does not: only task_mode=exec is excluded at this door.
 func TestResolveRunLLMLanes_HonoursTheRunsOwnModelRunAnswer(t *testing.T) {
 	h := newHarness(t)
 	cfg := bedrockBearerCfg()
@@ -37,9 +38,9 @@ func TestResolveRunLLMLanes_HonoursTheRunsOwnModelRunAnswer(t *testing.T) {
 		wantReady bool
 	}{
 		{
-			name:      "a scan run signs no model request",
+			name:      "a non-interactive workspace launch IS a model run at this door (#767)",
 			req:       createRunRequest{Agent: "claude-code", WorkspaceID: &wsID, Interactive: false},
-			wantReady: false,
+			wantReady: true,
 		},
 		{
 			name:      "an exec run runs a plain shell command",
@@ -68,22 +69,25 @@ func TestResolveRunLLMLanes_HonoursTheRunsOwnModelRunAnswer(t *testing.T) {
 	}
 }
 
-// TestPreflight_ScanRunDoesNotClaimBedrock is the user-visible half: the
+// TestPreflight_ExecRunDoesNotClaimBedrock is the user-visible half: the
 // checklist row a Review renders for a non-model run must not promise a
-// credential dispatch will not hand it.
-func TestPreflight_ScanRunDoesNotClaimBedrock(t *testing.T) {
+// credential dispatch will not hand it. task_mode=exec is the only non-model
+// shape this create door can actually receive (#767: a workspace_id request
+// here is an ordinary launch, never a scan — seedRequestWorkspace never sets
+// run.WorkspaceID from it, so there is no create-request shape that reads as a
+// scan at dispatch).
+func TestPreflight_ExecRunDoesNotClaimBedrock(t *testing.T) {
 	h := newHarness(t)
 	cfg := bedrockBearerCfg()
 	cfg.Identity, cfg.Audit, cfg.AdminToken = h.idp, h.audit, adminToken
 	cfg.TrustDomain, cfg.ControlPlaneURL = "wardyn.local", "http://wardynd:8080"
 	srv := New(cfg)
-	wsID := uuid.New()
 
 	access := srv.resolveRunLLMAccess(context.Background(),
-		createRunRequest{Agent: "claude-code", WorkspaceID: &wsID, Interactive: false},
+		createRunRequest{Agent: "claude-code", TaskMode: "exec", Task: "ls"},
 		types.RunPolicySpec{}, map[string]bool{}, nil, "")
 	if access != nil && access.Provisioned && strings.Contains(access.Note, "Bedrock") {
-		t.Errorf("model-access note = %q; a scan run gets no Bedrock credential at dispatch", access.Note)
+		t.Errorf("model-access note = %q; an exec run gets no Bedrock credential at dispatch", access.Note)
 	}
 }
 

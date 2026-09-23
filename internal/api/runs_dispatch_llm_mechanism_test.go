@@ -402,6 +402,7 @@ func TestLLMMechanismRefusal_NamesBothLanes(t *testing.T) {
 // half: the same declaration, the same sentence, answered as a 422 — and, in
 // legacy open mode, nothing refused at all.
 func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
+	wsID := uuid.New()
 	cases := map[string]struct {
 		req         createRunRequest
 		sc          types.SiteConfig
@@ -429,6 +430,25 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 		"exec run": {
 			req: createRunRequest{Agent: "claude-code", TaskMode: "exec"},
 			sc:  agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}),
+		},
+		// #767 parity: a non-interactive `--workspace` launch is the ordinary
+		// CLI/console shape (docs/OPERATIONS.md), never a scan — the create door
+		// never sets run.WorkspaceID from req.WorkspaceID (seedRequestWorkspace),
+		// so dispatch decides this exact shape IS a model run. Before the fix,
+		// llmMechanismGateApplies read workspace_id + non-interactive as a scan
+		// and skipped the gate entirely, admitting a run dispatch would have
+		// refused for the wrong lane.
+		"declared api key, bedrock would dispatch, workspace_id + non-interactive": {
+			req:         createRunRequest{Agent: "claude-code", Task: "ship it", WorkspaceID: &wsID, Interactive: false},
+			sc:          agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}),
+			wantRefused: true,
+		},
+		// The parity's other half: the SAME shape under a mechanism the resolved
+		// transport actually satisfies must be admitted, exactly like its no-workspace
+		// twin above — workspace_id must never turn an admit into a refusal either.
+		"declared bedrock, bedrock dispatches, workspace_id + non-interactive": {
+			req: createRunRequest{Agent: "claude-code", Task: "ship it", WorkspaceID: &wsID, Interactive: false},
+			sc:  agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer}),
 		},
 	}
 	for name, c := range cases {
