@@ -433,3 +433,56 @@ func TestStoreMode_EraseAndSweepLeaveNothingInVault(t *testing.T) {
 		t.Fatalf("Vault holds %d paths, want only bob's pat", len(f.kv))
 	}
 }
+
+// drift is what -reconcile finds wrong: values no row points to, and rows
+// whose value is gone.
+func drift(t *testing.T, s *secretstorepg.Store) int {
+	t.Helper()
+	rep, err := s.Reconcile(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	return len(rep.Orphans) + len(rep.Dangling)
+}
+
+// T-18: rule 8's purge by provider UID and CS-5's erase by owner remove the
+// value from Vault, not just the row.
+func TestVaultKV_PurgeConformance(t *testing.T) {
+	s := storeMode(t, throwawayDB(t), newFakeStore(t, newFakeVault(t)), nil)
+	secretstoretest.RunPurgeConformance(t, func(*testing.T) secretstore.Store { return s }, func(t *testing.T) int { return drift(t, s) })
+}
+
+// A purge Vault refuses for one row keeps that row, and the credential with
+// it, and says so; the other rows still go. Nothing is left orphaned either
+// way, and a retry finishes the purge.
+func TestStoreMode_DeleteEverywhereKeepsTheRowVaultRefused(t *testing.T) {
+	f := newFakeVault(t)
+	s := storeMode(t, throwawayDB(t), newFakeStore(t, f), nil)
+	ctx := t.Context()
+	for _, owner := range []string{"", "alice"} {
+		if err := s.For(owner).Put(ctx, "wardyn-provider-u1-key", []byte("v-"+owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.mu.Lock()
+	f.force = []int{403, 403}
+	f.mu.Unlock()
+	n, err := s.DeleteEverywhere(ctx, []string{"wardyn-provider-u1-key"})
+	if err == nil || n != 1 {
+		t.Fatalf("DeleteEverywhere with Vault refusing one row = (%d, %v), want 1 removed and an error", n, err)
+	}
+	if v, err := s.Get(ctx, "wardyn-provider-u1-key"); err != nil || string(v) != "v-" {
+		t.Fatalf("the refused row after the purge = (%q, %v), want it intact", v, err)
+	}
+	if got := drift(t, s); got != 0 {
+		t.Fatalf("-reconcile drift after a refused purge = %d, want 0", got)
+	}
+	if n, err := s.DeleteEverywhere(ctx, []string{"wardyn-provider-u1-key"}); err != nil || n != 1 {
+		t.Fatalf("retried DeleteEverywhere = (%d, %v), want the kept row removed", n, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.kv) != 0 {
+		t.Fatalf("Vault holds %d paths after the purge, want none", len(f.kv))
+	}
+}

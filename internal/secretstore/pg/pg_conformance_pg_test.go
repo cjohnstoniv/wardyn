@@ -20,3 +20,10 @@ func TestPG_Conformance(t *testing.T) {
 		return s
 	})
 }
+
+func TestPG_PurgeConformance(t *testing.T) {
+	secretstoretest.RunPurgeConformance(t, func(t *testing.T) secretstore.Store {
+		s, _, _ := newPGStore(t)
+		return s
+	}, nil)
+}

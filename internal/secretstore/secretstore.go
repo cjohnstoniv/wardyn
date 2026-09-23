@@ -67,7 +67,8 @@ type Store interface {
 	// returns how many rows it removed. It is the one cross-owner write: a
 	// model provider whose address changes must take every person's
 	// credential for it with it, and no caller knows every owner to Delete
-	// them one by one.
+	// them one by one. Each row is removed as Delete removes it, the external
+	// value first; a row that could not be is kept and named in the error.
 	DeleteEverywhere(ctx context.Context, names []string) (int, error)
 	// For returns a view of the store scoped to owner, the per-principal
 	// namespace introduced by migration 0050 (member BYOK). owner "" is the

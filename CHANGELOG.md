@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- In Vault or Key Vault store mode, changing a model provider's address or kind, or deleting it,
+  now removes every person's credential for it from the organisation's store as well as from
+  Wardyn's own rows; before, the values stayed in the store with nothing pointing at them. A
+  value the store refuses to remove keeps its row and fails the write, so `wardynd -reconcile`
+  never finds one orphaned (#678).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

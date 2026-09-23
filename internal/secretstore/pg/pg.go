@@ -276,12 +276,33 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 
 // DeleteEverywhere removes every owner's row of each name — see
 // secretstore.Store.DeleteEverywhere. Deliberately NOT scoped to s.owner.
+// Each row goes through Delete, so a pointer row's value leaves the external
+// store before the row does: a bare DELETE of the rows would leave every value
+// in the organisation's Vault or Key Vault with nothing pointing at it. A row
+// whose value could not be removed is kept and named in the error.
 func (s *Store) DeleteEverywhere(ctx context.Context, names []string) (int, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM secrets WHERE name = ANY($1)`, names)
+	rows, err := s.pool.Query(ctx, `SELECT owned_by, name FROM secrets WHERE name = ANY($1) ORDER BY owned_by, name`, names)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: delete everywhere: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (envelope, error) {
+		var e envelope
+		err := r.Scan(&e.ownedBy, &e.name)
+		return e, err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("pg secretstore: delete everywhere: %w", err)
+	}
+	n := 0
+	var errs []error
+	for _, e := range all {
+		if err := s.For(e.ownedBy).Delete(ctx, e.name); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
 }
 
 // List returns this view's OWN secret names only, in lexical order — never
