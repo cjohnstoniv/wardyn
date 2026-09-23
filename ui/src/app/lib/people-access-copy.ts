@@ -85,6 +85,9 @@ export const PEOPLE = {
   VALUE_HINT:
     "An Entra App Role or groups-claim value exactly as your identity provider sends it in the token, or an email address. Matched case-insensitively.",
   FIELD_ROLE: "Role",
+  // 0.8 (user-types design, UT-7a): offered only at role "user", and only
+  // once there's more than Standard user to pick from.
+  FIELD_USER_TYPE: "User type",
   DELETE: "Delete",
   DELETE_CONFIRM: (value: string) =>
     `Delete the mapping for "${value}"? At their next sign-in, they fall through to whatever the rest of your map resolves to.`,

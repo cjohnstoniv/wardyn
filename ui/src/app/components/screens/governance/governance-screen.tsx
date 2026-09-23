@@ -35,8 +35,7 @@ import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api, type GovernanceProfile, type GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import { foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP } from "../../../lib/governance-copy";
-import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
+import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
   AlertDialog,
@@ -53,12 +52,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Mono } from "../../wardyn/code-block";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
-import { Chip } from "../../wardyn/primitives";
 import { SafetyMeter } from "../../wardyn/safety-meter";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { AssignmentsBlock } from "./assignments";
 import { Note, noteClass, question, withMono } from "./display";
+import { limitChips } from "./limit-chips";
 import { ProfileEditor } from "./profile-editor";
 
 const EMPTY: GovernanceSnapshot = { profiles: [], assignments: [] };
@@ -237,7 +236,7 @@ export function GovernanceScreen() {
                   <TableBody>
                     {snap.profiles.map((p) => {
                       const n = assignedCount(p);
-                      const autonomyLowest = foldAutonomyRubric(p.limits.autonomy_rubric).lowest;
+                      const chips = limitChips(p.limits);
                       return (
                         <TableRow key={p.id}>
                           {/* A profile name is a human-chosen label, never mono. */}
@@ -246,36 +245,13 @@ export function GovernanceScreen() {
                           <TableCell>
                             <span className="flex flex-wrap items-center gap-1.5">
                               {/* "None" is a claim that this profile bounds
-                                  nothing, so it is derived from EVERY field of
-                                  GovernanceLimits — not from the boolean doors
-                                  alone. max_concurrent_runs is enforced
+                                  nothing, so it is derived from every chip
+                                  limitChips can draw — not from the boolean
+                                  doors alone. max_concurrent_runs is enforced
                                   (denyMemberRunQuota's 422), and a quota-only
                                   profile used to read "None". autonomy_rubric
-                                  joined the same rule the day this chip did. */}
-                              {!p.limits.deny_task_mode_exec &&
-                                !p.limits.deny_interactive &&
-                                !p.limits.deny_user_drive &&
-                                !((p.limits.max_concurrent_runs ?? 0) > 0) &&
-                                !autonomyLowest &&
-                                GOV.LIMITS_NONE}
-                              {p.limits.deny_task_mode_exec && <Chip tone="neutral">{GOV.LIMIT_EXEC_LABEL}</Chip>}
-                              {p.limits.deny_interactive && (
-                                <Chip tone="neutral">{GOV.LIMIT_INTERACTIVE_LABEL}</Chip>
-                              )}
-                              {/* The user-drive door's chip, beside the other
-                                  two (user-drives mock, state 6). */}
-                              {p.limits.deny_user_drive && <Chip tone="neutral">{GOV.LIMIT_DRIVE_LABEL}</Chip>}
-                              {(p.limits.max_concurrent_runs ?? 0) > 0 && (
-                                <Chip tone="neutral">{GOV.LIMIT_QUOTA_LABEL(p.limits.max_concurrent_runs!)}</Chip>
-                              )}
-                              {/* Ruling 2 (#96 review): names the STRICTEST
-                                  cap, not merely that a rubric exists — the
-                                  fact that matters is on screen, not behind a
-                                  tooltip a phone or a keyboard user cannot
-                                  reach. */}
-                              {autonomyLowest && (
-                                <Chip tone="neutral">{LIMITS_CHIP.AUTONOMY(AUTONOMY_META[autonomyLowest].label)}</Chip>
-                              )}
+                                  joined the same rule the day its chip did. */}
+                              {chips.length > 0 ? chips : GOV.LIMITS_NONE}
                             </span>
                           </TableCell>
                           <TableCell>

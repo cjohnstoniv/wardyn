@@ -167,6 +167,13 @@ export interface AgentRun {
   // (#99 is types/storage/mirrors only); this field exists so the console has
   // somewhere to read it the day #93 renders it.
   autonomy_level?: AutonomyLevel;
+  // internal/types/types.go's AgentRun.UserType (0.8, migration 0072, UT-13) —
+  // the user type the run's creator resolved as at create time: the chosen
+  // type in the user view, the stamped one otherwise. Empty for a run with no
+  // human creator (admin token, local mode) or created before the migration.
+  // The run page names the type through RunDetail.user_type_name, never this
+  // raw id.
+  user_type?: string;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
@@ -180,8 +187,14 @@ export interface AgentRun {
 // LIST consumer (GET /runs, the board/table) is typed for a field it never
 // receives, and a card built from list data must not silently type-check as
 // having answered "no apps declared" for one it was never asked about.
+//
+// user_type_name is the display name of AgentRun.user_type, resolved by the
+// same handler (runUserTypeName) because GET /user-types is securityOps and a
+// user-tier owner could not resolve the id themselves. Absent for a run with no
+// type or a type since deleted — the Identity widget then shows no "Ran as".
 export interface RunDetail extends AgentRun {
   ui_apps?: UIApp[];
+  user_type_name?: string;
 }
 
 // Live-run evidence reads (the run-detail cockpit's widgets). These mirror

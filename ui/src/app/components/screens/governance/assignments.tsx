@@ -59,7 +59,14 @@ import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
-import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText, type PickableSubjectType } from "../permissions";
+import {
+  SUBJECTS,
+  SUBJECT_LABEL,
+  Segmented,
+  UserTypeSubjectSelect,
+  subjectText,
+  type PickableSubjectType,
+} from "../permissions";
 import { Note, question } from "./display";
 
 // What PREVIEW_RESULT's {matched} says — the matching row named in the table's
@@ -262,22 +269,34 @@ function AddAssignmentForm({
           <div className="space-y-2">
             <Segmented
               value={subjectType}
-              onChange={(v) => setSubjectType(v)}
+              onChange={(v) => {
+                // A typed subject is no type id, and the reverse — see
+                // permissions.tsx's AddGrantForm.
+                if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
+                setSubjectType(v);
+              }}
               disabled={disabled}
               options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
             />
             {/* Free text with suggestions ON TOP, never instead of: the kind
                 the segmented control already names is the kind the search asks
                 for, and with no directory configured this is the same plain
-                input it has always been (§I). */}
-            {subjectType !== "all" && (
-              <DirectoryCombobox
-                label={PERM.FIELD_WHO}
-                value={subject}
-                onChange={setSubject}
-                kind={subjectType}
-                disabled={disabled}
-              />
+                input it has always been (§I). A user type is the one kind
+                this is NOT true for (permissions.tsx's UserTypeSubjectSelect
+                doc comment) — it is a bounded, admin-authored set, so it gets
+                a closed picker instead. */}
+            {subjectType === "user_type" ? (
+              <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
+            ) : (
+              subjectType !== "all" && (
+                <DirectoryCombobox
+                  label={PERM.FIELD_WHO}
+                  value={subject}
+                  onChange={setSubject}
+                  kind={subjectType}
+                  disabled={disabled}
+                />
+              )
             )}
           </div>
         </Field>

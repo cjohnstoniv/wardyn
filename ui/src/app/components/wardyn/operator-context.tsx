@@ -96,6 +96,19 @@ export interface UserDriveMeta {
 const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByProfile: "", unavailable: "" };
 const UserDriveContext = React.createContext<UserDriveMeta>(NO_USER_DRIVE);
 
+// 0.8 (UT-7a) — the caller's OWN user type, from GET /me's `user_type`. Rides
+// the shell's ONE /me read for the same reason MemberLocalDirRootContext does
+// (the member Getting Started page is again the consumer that would otherwise
+// need a second round trip). null for a caller with none — the admin token,
+// local mode, an API token, or a pre-0.8 daemon — which every consumer treats
+// as "no type to introduce", never a guess at Standard user.
+export interface UserTypeMeta {
+  id: string;
+  name: string;
+  description?: string;
+}
+const UserTypeContext = React.createContext<UserTypeMeta | null>(null);
+
 // Whether the signed-in caller holds the SECURITY-governance tier — admin OR
 // security_admin (GET /api/v1/me's `security_operator`, sourced from the same
 // isSecurityOperator predicate the server gates the securityOps routes with).
@@ -143,6 +156,7 @@ export function OperatorProvider({
   userDrive = null,
   userDriveDeniedByProfile = "",
   userDriveUnavailable = "",
+  userType = null,
   confinementPosture = "",
   children,
 }: {
@@ -163,6 +177,9 @@ export function OperatorProvider({
    *  Defaults to "" ("nothing is wrong") so every existing caller that passes
    *  only the first two keeps today's behaviour. */
   userDriveUnavailable?: string;
+  /** GET /me's `user_type` — see UserTypeContext above. Optional, defaulting
+   *  null, so every existing caller keeps today's behaviour. */
+  userType?: UserTypeMeta | null;
   /** #162 — see ConfinementPostureContext above. Optional, defaulting "" (no
    *  posture reported), so every existing caller keeps today's silent
    *  behaviour. */
@@ -187,9 +204,11 @@ export function OperatorProvider({
         <PrincipalContext.Provider value={principal}>
           <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>
             <UserDriveContext.Provider value={drive}>
-              <ConfinementPostureContext.Provider value={confinementPosture}>
-                {children}
-              </ConfinementPostureContext.Provider>
+              <UserTypeContext.Provider value={userType}>
+                <ConfinementPostureContext.Provider value={confinementPosture}>
+                  {children}
+                </ConfinementPostureContext.Provider>
+              </UserTypeContext.Provider>
             </UserDriveContext.Provider>
           </MemberLocalDirRootContext.Provider>
         </PrincipalContext.Provider>
@@ -202,6 +221,11 @@ export function OperatorProvider({
 // The member's local_dir root constraint label — see MemberLocalDirRootContext above.
 export function useMemberLocalDirRoot(): string | null {
   return React.useContext(MemberLocalDirRootContext);
+}
+
+// The caller's own user type — see UserTypeContext above.
+export function useUserType(): UserTypeMeta | null {
+  return React.useContext(UserTypeContext);
 }
 
 // This caller's own drive and the profile door beside it — see

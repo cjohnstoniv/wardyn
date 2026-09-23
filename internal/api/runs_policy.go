@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -211,8 +212,28 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, struct {
 		types.AgentRun
-		UIApps []types.UIApp `json:"ui_apps,omitempty"`
-	}{AgentRun: run, UIApps: apps})
+		UIApps       []types.UIApp `json:"ui_apps,omitempty"`
+		UserTypeName string        `json:"user_type_name,omitempty"`
+	}{AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType)})
+}
+
+// runUserTypeName is the display name of the type a run was launched as, for
+// the run page's "Ran as {type}". It rides the run read because GET /user-types
+// is securityOps: a user-tier caller (or an admin in the user view) reading
+// their own run could not resolve the id themselves. Empty for a run with no
+// type, or a type since deleted — the page then shows nothing, never the id.
+func (s *Server) runUserTypeName(r *http.Request, id string) string {
+	if id == "" || s.cfg.Store == nil {
+		return ""
+	}
+	t, err := s.cfg.Store.GetUserType(r.Context(), id)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(r.Context(), "api: could not read the run's user type", "user_type", id, "error", err)
+		}
+		return ""
+	}
+	return t.Name
 }
 
 // effectivePolicyAuditScan bounds how many of a run's earliest audit events are

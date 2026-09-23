@@ -226,4 +226,35 @@ describe("IdentityWidget", () => {
     expect(screen.queryByText("Task")).not.toBeInTheDocument();
     expect(screen.queryByText("Why")).not.toBeInTheDocument();
   });
+
+  // UT-7a — "Ran as {type}", named by GET /runs/{id}'s user_type_name.
+  it("shows Ran as with the type's name when the run carries one", () => {
+    render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} />);
+    expect(screen.getByText("Portfolio manager")).toBeInTheDocument();
+    expect(screen.getByText("Ran as")).toBeInTheDocument();
+  });
+
+  it("renders no row for a run with no stamped type", () => {
+    render(<IdentityWidget run={run} />);
+    expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
+  });
+
+  it("renders no row for a type the server could not name (deleted) — never the raw id", () => {
+    render(<IdentityWidget run={{ ...run, user_type: "deleted-type" }} />);
+    expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
+    expect(screen.queryByText("deleted-type")).not.toBeInTheDocument();
+  });
+
+  // GET /user-types is securityOps: a user-tier owner's run page asking for it
+  // is a 403 and an authz.denied audit row on every visit.
+  it("issues no /user-types request", () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} />);
+      expect(fetchSpy.mock.calls.filter(([u]) => String(u).includes("/user-types"))).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

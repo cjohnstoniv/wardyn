@@ -124,6 +124,7 @@ function renderPage(me: Me = baseMe()) {
         securityOperator={false}
         userDrive={me.user_drive}
         userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+        userType={me.user_type ?? null}
       >
         <MemberGettingStarted />
       </OperatorProvider>
@@ -162,6 +163,24 @@ describe("MemberGettingStarted", () => {
     renderPage();
     expect(await screen.findByText(MEMBER.GS_CHIP("walled"))).toBeInTheDocument();
     expect(screen.getByText(MEMBER.GS_BODY("walled"))).toBeInTheDocument();
+  });
+
+  // UT-7a: the subtitle introduces the caller's own type off /me.user_type.
+  it("introduces the caller's user type with its description", async () => {
+    renderPage(baseMe({ user_type: { id: "pm", name: "Portfolio manager", description: "Runs an agent over one portfolio." } }));
+    expect(
+      await screen.findByText(
+        "You're set up as Portfolio manager: Runs an agent over one portfolio. Your admin set the ceiling; you run inside it.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("introduces a type with no description by its name alone", async () => {
+    renderPage(baseMe({ user_type: { id: "standard", name: "Standard user" } }));
+    expect(
+      await screen.findByText("You're set up as Standard user. Your admin set the ceiling; you run inside it."),
+    ).toBeInTheDocument();
+    expect(screen.getByText(T.SUBTITLE("Standard user"))).toBeInTheDocument();
   });
 
   it("an unassigned member gets neither", async () => {

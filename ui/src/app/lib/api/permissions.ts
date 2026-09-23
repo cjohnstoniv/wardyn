@@ -10,10 +10,30 @@
 import type {
   CapabilityGrant,
   CapabilityGrantInput,
+  CapabilitySubjectType,
   MeCapabilities,
   PermissionsSnapshot,
 } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+
+// The Explain grid (K4/AK-5, #739) — GET /permissions/explain's body. Each row
+// is one (kind, value) cell of the type editor's "What this type gets" grid
+// (user-types-design.md rev 4 §2.6). Mirrors internal/api/
+// capabilities_explain.go's explainResponse/capExplainRow exactly.
+export type ExplainState = "everyone" | "this_type" | "blocked" | "admins_only" | "not_available";
+
+export interface ExplainRow {
+  kind: string;
+  value: string;
+  state: ExplainState;
+}
+
+export interface ExplainResponse {
+  subject_type: CapabilitySubjectType;
+  subject: string;
+  kinds_version: number;
+  rows: ExplainRow[];
+}
 
 // What an upsert actually did. The server distinguishes a genuinely new row
 // (201) from a re-grant that flipped an existing row's effect in place (200) —
@@ -81,6 +101,28 @@ export const permissions = {
       enforcement: body.enforcement ?? {},
       session_groups: unwrapList<string>(body.session_groups),
       groups_snapshot_stale: !!body.groups_snapshot_stale,
+    };
+  },
+
+  // GET /api/v1/permissions/explain?subject_type=&subject=&kinds= -> the
+  // Explain grid (#739) for one named subject — the User types screen asks
+  // for subject_type=user_type. securityOps, same tier as the rest of
+  // /permissions. `kinds` defaults to every kind in CAPABILITY_KINDS' order
+  // when omitted.
+  async explainCapabilities(
+    subjectType: CapabilitySubjectType,
+    subject: string,
+    kinds?: string[],
+  ): Promise<ExplainResponse> {
+    const params = new URLSearchParams({ subject_type: subjectType, subject });
+    if (kinds?.length) params.set("kinds", kinds.join(","));
+    const res = await wfetch(`/permissions/explain?${params.toString()}`, { method: "GET" });
+    const body = await asJson<Partial<ExplainResponse>>(res);
+    return {
+      subject_type: body.subject_type ?? subjectType,
+      subject: body.subject ?? subject,
+      kinds_version: body.kinds_version ?? 0,
+      rows: unwrapList<ExplainRow>(body.rows),
     };
   },
 };

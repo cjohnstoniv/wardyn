@@ -106,6 +106,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **User types screen: list, editor, and "What this type gets" (#618).** A new admin-only
+  `/user-types` screen lists every org-defined user type and edits its name, description and
+  sign-in priority. Each type's editor shows the ceiling and run limits (read-only) of the
+  governance profile assigned to it, and a "What this type gets" grid answering every resource
+  family for that type (everyone / this type / blocked / admins only / not available), backed by
+  `GET /permissions/explain`. The Permissions, Governance and Drive-allocation "Who" pickers now
+  offer "User type" alongside User/Group/Everyone, with a closed picker of the org's types rather
+  than free text; adding a deny for a user type asks to confirm first, since no person or group
+  allow overrides it. The People step's add-mapping form offers a type picker once more than the
+  built-in Standard user exists. `/me`'s `user_type` now carries a `description`; the user's own
+  Getting started page reads "You're set up as {type}" with the type's description. `GET
+  /runs/{id}` carries `user_type_name`, so a run's Identity panel shows "Ran as {type}" to its
+  owner as well as to admins.
 - **"Available to": one resource can be limited to the people listed for it (#612).** Migration
   `0073_capability_restrictions` adds a restricted bit per value of the `workspace`, `image`, `agent`,
   `integration` and `workspace_provider` kinds, set with `PUT /permissions/availability/{kind}/{value}`

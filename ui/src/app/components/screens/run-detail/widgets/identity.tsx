@@ -15,12 +15,17 @@
 // it is the answer to "what was this agent actually allowed to do", and the
 // rest of the page never states it.
 import { Fingerprint } from "lucide-react";
-import type { AgentRun } from "../../../../lib/types";
+import type { RunDetail } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
 import { CopyButton } from "../../../wardyn/copy-button";
 import { WidgetCard } from "../../../wardyn/primitives";
 
-export function IdentityWidget({ run }: { run: AgentRun }) {
+export function IdentityWidget({ run }: { run: RunDetail }) {
+  // UT-7a: "Ran as {type}" reads the name GET /runs/{id} resolved server-side
+  // (RunDetail.user_type_name). Nothing renders for a run with no type or a
+  // type since deleted — never the raw id.
+  const ranAs = run.user_type_name;
+
   return (
     <WidgetCard title="Identity" Icon={Fingerprint} grow>
       {/* The command bar's h1 is the run's TITLE now, and it truncates to one
@@ -101,6 +106,13 @@ export function IdentityWidget({ run }: { run: AgentRun }) {
         <dd className="min-w-0 truncate text-right text-foreground">
           {absoluteTime(run.created_at)} · {run.created_by}
         </dd>
+
+        {ranAs && (
+          <>
+            <dt className="text-muted-foreground">Ran as</dt>
+            <dd className="min-w-0 truncate text-right text-foreground">{ranAs}</dd>
+          </>
+        )}
       </dl>
     </WidgetCard>
   );

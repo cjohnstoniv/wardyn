@@ -414,6 +414,41 @@ describe("AccessPanel — add mapping, posture guard (§2.1/§7.3)", () => {
   });
 });
 
+// UT-7a: the type picker is offered only at role "user", and only once the
+// org has a real choice beyond Standard user (a plain toggle otherwise).
+describe("AccessPanel — add mapping, user type picker (UT-7a)", () => {
+  it("is absent at role admin, present once role flips to user", async () => {
+    renderPanel(baseAccess({ user_types: orgTypes }));
+    expect(screen.queryByLabelText(PEOPLE.FIELD_USER_TYPE)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ROLE_USER }));
+    expect(await screen.findByLabelText(PEOPLE.FIELD_USER_TYPE)).toBeInTheDocument();
+  });
+
+  it("stays absent at role user with only Standard user to offer — the plain-toggle case", async () => {
+    renderPanel(baseAccess({ user_types: [orgTypes[0]] }));
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ROLE_USER }));
+    expect(screen.queryByLabelText(PEOPLE.FIELD_USER_TYPE)).toBeNull();
+  });
+
+  it("sends the picked type's id, and nothing when left on the default", async () => {
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "pm-group", role: "user" }, created: true });
+    renderPanel(baseAccess({ user_types: orgTypes, posture: { map_empty: false, before: "", after: "", changes: false } }));
+
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ROLE_USER }));
+    await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "pm-group");
+    await userEvent.click(screen.getByRole("combobox", { name: PEOPLE.FIELD_USER_TYPE }));
+    await userEvent.click(await screen.findByRole("option", { name: "Portfolio manager" }));
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
+
+    expect(upsertMappingMock).toHaveBeenCalledWith({
+      value: "pm-group",
+      role: "user",
+      user_type: "portfolio-manager",
+      acknowledge_access_change: undefined,
+    });
+  });
+});
+
 describe("AccessPanel — add mapping error classification", () => {
   const chartAndConsole = baseAccess({
     mappings: [

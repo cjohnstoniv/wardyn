@@ -705,7 +705,13 @@ test("V04d act 3 — the member writes a note, and ends the run", async () => {
   await dexSignIn(page, MEMBER);
   await page.waitForURL(/\/(runs|setup)/, { timeout: 60_000 });
 
-  await expect(page.getByText(GS.SUBTITLE)).toBeVisible({ timeout: 30_000 });
+  // Every SSO sign-in stamps a user type (Standard user at the least), so the
+  // subtitle names it. Read off this session's own /me rather than assumed.
+  const me = await (await page.request.get("/api/v1/me")).json();
+  expect(me.user_type?.name, "/me carries no user_type for an SSO session").toBeTruthy();
+  await expect(page.getByText(GS.SUBTITLE(me.user_type.name, me.user_type.description))).toBeVisible({
+    timeout: 30_000,
+  });
   // The chip beside the barrier and the sign-in: which drive is allocated to
   // you is a fact about this deployment, in BARRIER_CHIP's own `Label · value`
   // shape.
