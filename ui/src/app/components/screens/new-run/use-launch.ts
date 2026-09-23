@@ -38,8 +38,6 @@ export interface UseLaunchResult {
   launchSpinning: boolean;
   error: string | null;
   credentialRefused: boolean;
-  launchWarnings: string[];
-  launchedRunId: string | null;
   launch: () => Promise<void>;
   preflighting: boolean;
   preflightResult: PreflightResult | null;
@@ -63,11 +61,6 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
-  // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
-  const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
-  // Set ONLY while a launched run's advisories are on screen — the rail's
-  // "Open run" is what carries the member there, at their own pace.
-  const [launchedRunId, setLaunchedRunId] = React.useState<string | null>(null);
   // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
   // below. Independent loading/result/error state from Launch's: the two
   // actions can be in flight or have failed independently of one another.
@@ -113,25 +106,17 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     setError(null);
     setCredentialRefused(false);
     setLaunching(true);
-    setLaunchWarnings([]);
-    setLaunchedRunId(null);
     try {
       const created: CreateRunResult = await runsApi.createRun(buildRunInput());
-      const warnings = created.warnings ?? [];
-      // §5c.8: a run that launched WITH advisories is never navigated away from
-      // on a clock. A 1.6s timer both raced every other way off this screen
-      // (Esc and the ghost "Runs" button each landed on /runs, then the timer
-      // yanked the member to /runs/:id) and gave a multi-line advisory a fixed
-      // beat nobody can finish reading. The screen HOLDS instead: the warnings
-      // stay listed in the rail and Launch becomes OPEN_RUN_CTA, which is the
-      // only thing that navigates. No timer.
-      if (warnings.length > 0) {
-        setLaunchWarnings(warnings);
-        setLaunchedRunId(created.id);
-        setLaunching(false); // nothing reads it once onOpenRun is set.
-      } else {
-        navigate(`/runs/${encodeURIComponent(created.id)}`);
-      }
+      // #125: a launch that answers 2xx always navigates, in the same tick —
+      // no held screen, no timer (a timer both raced every other way off this
+      // screen — Esc and the ghost "Runs" button each land on /runs — and gave
+      // a multi-line advisory a fixed beat nobody can finish reading). Any
+      // advisory `warnings[]` ride along as router state for the run page to
+      // render; they are NOT persisted (the durable record is the run.create
+      // audit row's own clamp warnings), so they are gone the moment the
+      // member reloads that page.
+      navigate(`/runs/${encodeURIComponent(created.id)}`, { state: { launchWarnings: created.warnings ?? [] } });
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");
       setCredentialRefused(isCredentialRefusal(e));
@@ -187,8 +172,6 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     launchSpinning,
     error,
     credentialRefused,
-    launchWarnings,
-    launchedRunId,
     launch,
     preflighting,
     preflightResult,

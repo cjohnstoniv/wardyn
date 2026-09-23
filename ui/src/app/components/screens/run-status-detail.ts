@@ -73,6 +73,16 @@ export const STUCK_CRASH_LOOP = "The sandbox container keeps exiting as it start
 // saying that the rest is the platform talking.
 export const STARTING_RAW_PREFIX = "Waiting: ";
 
+// #125 (Q125-2, canon) — PENDING's own first tick: the substrate has not sent
+// anything yet, so the ordinary derivation above (keyed on status_reason)
+// would render nothing at all. STARTING's own empty-detail case is correctly
+// silent — there is no ordinary wait worth naming before the pod is even
+// scheduled — but PENDING is earlier still, and an all-blank header there
+// reads as "nothing is happening" rather than "the request is in flight".
+// Superseded the instant a real stage line lands: run-detail-summary-header.tsx
+// only reaches for this sentence while status_detail is still empty.
+export const PENDING_NO_DETAIL = "Queued — Wardyn is getting this run ready.";
+
 // The short register. The header chip is `max-w-[160px]`, so the
 // sentences above truncate to a restatement of the starting badge — "Starting
 // the sandbo…" — and the registry's words, the whole point of a terminal

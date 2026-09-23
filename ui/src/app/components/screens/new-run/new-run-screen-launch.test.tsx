@@ -349,15 +349,13 @@ describe("NewRunScreen — the unparseable barrier-class hint", () => {
   });
 });
 
-// §5c.8 — a run that launched WITH advisories.
-//
-// The screen must hold, not navigate on a timer: a timer would race every
-// other way off the screen (Esc and the ghost "Runs" button both land on
-// /runs, and a timer would then yank the member to the run), and it would
-// give a multi-line advisory a fixed beat nobody finishes reading. The
-// warnings stay listed and the primary button becomes "Open run", which is
-// the only thing that navigates.
-describe("NewRunScreen — the 201's warnings hold the screen, no timer", () => {
+// #125 — a launch that answers 2xx always navigates, in the same tick. The
+// held "Open run" screen this replaced raced every other way off the screen
+// (Esc and the ghost "Runs" button both land on /runs, and a timer would then
+// yank the member to the run) and gave a multi-line advisory a fixed beat
+// nobody finishes reading. Any advisory `warnings[]` now ride the navigation
+// itself, as router state, for the run page to render (run-detail.test.tsx).
+describe("NewRunScreen — a 2xx launch always navigates, in the same tick", () => {
   async function launchWith(warnings?: string[]) {
     createRunMock.mockResolvedValue({ id: "run_9", warnings });
     renderScreen();
@@ -365,52 +363,33 @@ describe("NewRunScreen — the 201's warnings hold the screen, no timer", () => 
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
   }
 
-  it("navigates immediately when the 201 carries no warnings", async () => {
+  it("navigates immediately when the 201 carries no warnings, with empty launchWarnings state", async () => {
     await launchWith();
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/runs/run_9"));
-    expect(screen.queryByRole("button", { name: AGENTS.OPEN_RUN_CTA })).toBeNull();
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith("/runs/run_9", { state: { launchWarnings: [] } }),
+    );
   });
 
-  it("lists the warnings and navigates NOWHERE until Open run is clicked", async () => {
+  it("navigates immediately WITH the 201's warnings, as router state — no held screen", async () => {
     await launchWith([
       "egress_host: internal.example.com was dropped — not granted to you",
       "secret: DEPLOY_KEY was dropped — not granted to you",
     ]);
 
-    expect(await screen.findByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeInTheDocument();
-    expect(
-      screen.getByText("egress_host: internal.example.com was dropped — not granted to you"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("secret: DEPLOY_KEY was dropped — not granted to you")).toBeInTheDocument();
-    // Launch is gone: the run is launched, and re-firing it is not the next move.
-    expect(screen.queryByRole("button", { name: /Launch run/ })).toBeNull();
-    expect(navigateMock).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: AGENTS.OPEN_RUN_CTA }));
-    expect(navigateMock).toHaveBeenCalledWith("/runs/run_9");
-  });
-
-  // The load-bearing check: NOTHING is pending. Real timers here would only
-  // prove nothing fired within an arbitrary window, not that nothing was
-  // scheduled.
-  it("leaves no pending navigation behind — the member backs out and stays out", async () => {
-    await launchWith(["secret: DEPLOY_KEY was dropped — not granted to you"]);
-    await screen.findByText(AGENTS.LAUNCH_WARNING_TITLE);
-
-    vi.useFakeTimers();
-    try {
-      // The ghost "Runs" button is a way out; nothing schedules a competing
-      // navigation.
-      fireEvent.click(screen.getByRole("button", { name: "Runs" }));
-      expect(navigateMock).toHaveBeenCalledWith("/runs");
-      navigateMock.mockReset();
-      // Ten seconds — long enough that any stray scheduled navigation would
-      // have fired.
-      vi.advanceTimersByTime(10_000);
-      expect(navigateMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith("/runs/run_9", {
+        state: {
+          launchWarnings: [
+            "egress_host: internal.example.com was dropped — not granted to you",
+            "secret: DEPLOY_KEY was dropped — not granted to you",
+          ],
+        },
+      }),
+    );
+    // Nothing named "Open run" exists any more — the form is gone with the
+    // navigation, not held behind it.
+    expect(screen.queryByRole("button", { name: "Open run" })).toBeNull();
+    expect(screen.queryByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeNull();
   });
 });
 
@@ -433,7 +412,9 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
 
     createRunMock.mockResolvedValueOnce({ id: "run_2" });
     await user.click(launch);
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/runs/run_2"));
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith("/runs/run_2", { state: { launchWarnings: [] } }),
+    );
     expect(lastRail().launch.credentialRefused).toBe(false);
   });
 

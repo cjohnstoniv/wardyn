@@ -147,8 +147,6 @@ function railTree(props: {
         problem: null,
         error: props.launchError ?? null,
         credentialRefused: props.credentialRefused ?? false,
-        warnings: [],
-        onOpenRun: null,
       }}
       preflight={{
         error: null,

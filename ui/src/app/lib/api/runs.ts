@@ -222,14 +222,14 @@ export const runs = {
   // active run) — the run still launched; callers surface warnings without
   // blocking. CreateRunResult is structurally an AgentRun, so existing onCreated
   // callbacks keep working.
+  //
+  // #125/#121: the default deadline, not LAUNCH_DEADLINE_MS — POST /runs is
+  // async now (dispatch happens after this call answers), so this no longer
+  // blocks through CreateSandbox server-side the way the constant's own note
+  // describes. preflightRun below still runs that resolution synchronously and
+  // keeps the longer deadline.
   async createRun(input: RunWireInput): Promise<CreateRunResult> {
-    // LAUNCH_DEADLINE_MS, not the default: this call blocks through
-    // CreateSandbox server-side (see the constant's own note).
-    const res = await wfetch(
-      "/runs",
-      { method: "POST", body: JSON.stringify(runWireBody(input)) },
-      LAUNCH_DEADLINE_MS,
-    );
+    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(runWireBody(input)) });
     return asJson<CreateRunResult>(res);
   },
 
@@ -241,9 +241,12 @@ export const runs = {
   // XOR, invalid spec) are the real launch verdicts. Advisory: callers render an
   // error as a quiet "preflight unavailable" and never block Review.
   async preflightRun(input: RunWireInput): Promise<PreflightResult> {
-    // Same deadline as createRun: preflight runs the same resolution (mounts,
-    // grants, the blast-radius raise) against the same store, so a deployment
-    // slow enough to need it on the launch needs it on the dry run too.
+    // LAUNCH_DEADLINE_MS, not the default: this runs the SAME resolution
+    // (mounts, grants, the blast-radius raise) against the same store that
+    // createRun's own dispatch does — createRun itself dropped this deadline
+    // once POST /runs became async (#125/#121), but preflight's own work here
+    // is still synchronous, so a deployment slow enough to need the longer
+    // bound on a real launch needs it on the dry run too.
     const res = await wfetch(
       "/runs/preflight",
       { method: "POST", body: JSON.stringify(runWireBody(input)) },

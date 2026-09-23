@@ -24,6 +24,7 @@ import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import {
   CHIP_SETTING_UP,
   CHIP_WAITING_FOR_MACHINE,
+  PENDING_NO_DETAIL,
   STARTING_CONTAINER_CREATING,
 } from "./run-status-detail";
 
@@ -454,6 +455,41 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
     );
     expect(screen.queryByText(CHIP_SETTING_UP)).toBeNull();
     expect(screen.queryByText(STARTING_CONTAINER_CREATING)).toBeNull();
+  });
+});
+
+// #125 — PENDING's own first tick, before the substrate has sent anything:
+// statusChip widened from STARTING-only to STARTING || PENDING, and an empty
+// status_detail on PENDING gets its own sentence rather than rendering nothing.
+describe("SummaryHeader — PENDING's own queued sentence (#125)", () => {
+  const pending = (extra: Partial<AgentRun>): AgentRun => ({
+    ...runningInteractive,
+    state: "PENDING",
+    interactive: false,
+    ...extra,
+  });
+
+  it("shows the queued sentence for a PENDING run with no status_detail yet", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={pending({ status_detail: "" })} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(PENDING_NO_DETAIL)).toBeInTheDocument();
+  });
+
+  it("a real stage line replaces the queued sentence the moment one lands", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={pending({ status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" })}
+          terminal={false}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(PENDING_NO_DETAIL)).toBeNull();
+    expect(screen.getByText(CHIP_WAITING_FOR_MACHINE)).toBeInTheDocument();
   });
 });
 

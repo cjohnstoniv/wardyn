@@ -313,7 +313,7 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
 // F2-F7/F3-F1: a minimal rail runs ~490-520px (fits easily at 650px tall);
 // with a governance ceiling + a saved policy's tool_rules + 3 launch warnings
 // all showing at once (the member/warnings path) it runs ~700-730px — below
-// the fold at 1280x650 with no way to reach Launch/Open run. Spliced onto the
+// the fold at 1280x650 with no way to reach Launch. Spliced onto the
 // real GET /policies/default, GET /policies and POST /runs responses (the
 // same splice technique agents.spec.ts's own "201 carrying warnings" test
 // uses, for the same reason: this harness's admin-token caller is never
@@ -321,9 +321,10 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
 // the RAIL'S rendering of the combination, not the server-side clamping
 // itself (Go-tested). ui/new-run-rail.tsx's primitive-level
 // lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto (this lane) is what keeps
-// Launch/Open run reachable here.
+// Launch reachable here; #125 dropped the post-launch "Open run" hold this
+// used to also pin — a launch now navigates away in the same tick.
 test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F2-F7/F3-F1)", () => {
-  test("Launch, then Open run, stay in viewport with every rail section showing at once", async ({ page }) => {
+  test("Launch stays reachable with every rail section showing at once, and navigates straight to the run with its warnings", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 650 });
 
     const baseSpec = {
@@ -410,16 +411,18 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
 
     await launch.click();
 
-    // Now all three warnings render too, and Open run replaces Launch — still
-    // reachable, which is the actual defect this lane's fix addresses.
+    // #125: a 2xx launch navigates straight to the run, in the same tick — no
+    // held rail to stay reachable in any more. All three warnings ride along
+    // as router state and render on the run page itself.
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeVisible();
-    const openRun = page.getByRole("button", { name: AGENTS.OPEN_RUN_CTA });
-    await expect(openRun).toBeVisible();
-    await openRun.scrollIntoViewIfNeeded();
-    box = await openRun.boundingBox();
-    expect(box, "Open run boundingBox").not.toBeNull();
-    expect(box!.y, "Open run top edge").toBeGreaterThanOrEqual(0);
-    expect(box!.y + box!.height, "Open run bottom edge").toBeLessThanOrEqual(650);
+    for (const w of [
+      "Egress narrowed to api.anthropic.com by member policy.",
+      "Confinement floor raised to CC2 by member policy.",
+      "Grant kind git_pat removed by member policy.",
+    ]) {
+      await expect(page.getByText(w)).toBeVisible();
+    }
   });
 });
 

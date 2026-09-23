@@ -22,7 +22,7 @@ import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy"
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
-import { isTerminalStatusReason, statusDetailChip, statusDetailSentence } from "./run-status-detail";
+import { isTerminalStatusReason, PENDING_NO_DETAIL, statusDetailChip, statusDetailSentence } from "./run-status-detail";
 
 
 // Exported for the failure block (run-detail/failure-block.tsx), which states
@@ -114,12 +114,23 @@ export function SummaryHeader({
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "");
   // "" whenever there is nothing to say. The SERVER has already blanked
-  // status_detail for every run that is not STARTING (except a FAILED one whose
-  // reason IS the failure) — and the header gates on STARTING anyway, because a
-  // FAILED run's header already says why in the failure_hint chip below, and two
-  // chips narrating one ending is how a bar this crowded loses the one that
-  // matters.
-  const statusChip = run.state === "STARTING" ? statusDetailChip(run.status_detail, run.status_reason) : "";
+  // status_detail for every run that is not STARTING/PENDING (except a FAILED
+  // one whose reason IS the failure) — and the header gates on those two
+  // anyway, because a FAILED run's header already says why in the failure_hint
+  // chip below, and two chips narrating one ending is how a bar this crowded
+  // loses the one that matters.
+  //
+  // #125: PENDING's own first tick carries no status_detail at all — the
+  // ordinary derivation below would render nothing — so that ONE case reaches
+  // for PENDING_NO_DETAIL instead. The moment status_detail carries a real
+  // stage line this falls through to the ordinary STARTING/PENDING derivation,
+  // which supersedes it.
+  const pendingQueued = run.state === "PENDING" && !run.status_detail?.trim();
+  const statusChip = pendingQueued
+    ? PENDING_NO_DETAIL
+    : run.state === "STARTING" || run.state === "PENDING"
+      ? statusDetailChip(run.status_detail, run.status_reason)
+      : "";
 
   // This is a stable e2e hook, scoping "Interactive"/"Fence" text
   // assertions to this bar rather than the whole page (both strings are
@@ -258,7 +269,7 @@ export function SummaryHeader({
         <Chip
           tone={isTerminalStatusReason(run.status_reason) ? "warning" : "info"}
           className="min-w-0 max-w-[160px] shrink"
-          title={statusDetailSentence(run.status_detail, run.status_reason)}
+          title={pendingQueued ? PENDING_NO_DETAIL : statusDetailSentence(run.status_detail, run.status_reason)}
         >
           <span className="block min-w-0 truncate">{statusChip}</span>
         </Chip>

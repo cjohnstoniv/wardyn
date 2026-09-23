@@ -138,6 +138,9 @@ ds-bundle/
 # link to the design document, so it has to be in the repo they link from.
 !/docs/design/0.8/
 !/docs/design/first-contact-prototype/
+# launch-navigates-canon.md (#125) is the same shape as model-access-prompt.md:
+# it records the frozen strings and owner decisions as shipped, no mock/ dir.
+!/docs/design/launch-navigates-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
