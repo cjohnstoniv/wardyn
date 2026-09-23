@@ -28,10 +28,14 @@ import { SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { SidebarSettingsLink } from "./sidebar-settings-link";
-// GOVERNANCE.TITLE is ONE string for two places — this nav label and the
-// screen's own heading — the way every other nav entry already works. There is
-// no second "Governance profiles" label (governance-prompt.md §7.2).
-import { GOVERNANCE } from "../../lib/governance-copy";
+// GOVERNANCE_NAV_TITLE is ONE string for two places — this nav label and the
+// governance screen's own heading (governance-copy.ts's GOVERNANCE.TITLE reads
+// the same constant) — the way every other nav entry already works. There is
+// no second "Governance profiles" label (governance-prompt.md §7.2). Imported
+// from nav-copy.ts rather than governance-copy.ts itself so the eager sidebar
+// doesn't drag the whole §7.2-§7.9 screen-only canon table into the entry
+// chunk (#498) for one string.
+import { GOVERNANCE_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -281,7 +285,7 @@ const NAV_ITEMS: NavItem[] = [
   // it, then the grants layered inside one (mock Q1). Not in MEMBER_NAV_PATHS —
   // a member never sees it, and there is no member governance route; its own
   // routes are securityOps server-side.
-  { to: "/governance", label: GOVERNANCE.TITLE, icon: Scale },
+  { to: "/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
   // Permissioning (0.6 pillar 2) sits beside Policies: both answer "what is
   // allowed here", one for runs and one for the humans launching them. It is
   // admin-only — deliberately NOT in MEMBER_NAV_PATHS below, and every route
