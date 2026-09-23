@@ -15,9 +15,10 @@ import { errText, HttpError, wfetch } from "./core";
 export const modelProviderCredentials = {
   // PUT /api/v1/model-providers/{id}/credential  {"value": "..."} -> 204.
   // Stores or overwrites the caller's own key or token for provider `id`.
-  // Refused (422) for a sign-in kind (bedrock_sso, anthropic_subscription —
-  // use model-provider-signin.ts instead), or a value shorter than the
-  // secret-masking floor; the body's `error` names it verbatim.
+  // Refused 422 for a sign-in kind (bedrock_sso, anthropic_subscription —
+  // use model-provider-signin.ts instead) or the admin token under OIDC;
+  // 400 for an empty, malformed or too-short value; 404 for a provider not
+  // available to the caller. The body's `error` names it verbatim.
   async putCredential(id: string, value: string): Promise<void> {
     const res = await wfetch(`/model-providers/${encodeURIComponent(id)}/credential`, {
       method: "PUT",
