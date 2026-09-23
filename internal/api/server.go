@@ -140,6 +140,11 @@ type Config struct {
 	Identity identity.Provider
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
+	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
+	// ceiling on how long any request waits for a decision. A run's captured
+	// wait (captureRunLimits) never exceeds it. 0 means unknown here. Dispatch
+	// also mirrors it onto a hold-mode run's sandbox (approval_expiry.go, RL-1).
+	ApprovalExpiryAfter time.Duration
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
 	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the
@@ -684,23 +689,7 @@ type Config struct {
 	// boundary as TrustedCAPEM/LLMGateways above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
-	// ApprovalExpiryAfter is WARDYN_APPROVAL_EXPIRY_AFTER (cmd/wardynd's own
-	// approval-expiry-after sweeper flag, threaded through so dispatch can
-	// mirror it): the ceiling a PENDING approval — including a tool_call hold —
-	// actually lives to before the sweeper expires it. A hold-mode run's
-	// sandbox env carries it (applyDispatchModeEnv) as the SAME ceiling
-	// wardyn-toolgate defaults its own -deadline to (RL-1), so an operator who
-	// raises this past its 24h default gets a toolgate that actually waits the
-	// raised budget instead of giving up at the old literal. Zero defaults to
-	// 24h in New, matching the sweeper's own default.
-	ApprovalExpiryAfter time.Duration
 }
-
-// defaultApprovalExpiryAfter is Config.ApprovalExpiryAfter's fallback when
-// unset (New) — mirrors cmd/wardynd's own approval-expiry-after sweeper
-// default (boot_flags.go) so a Config built without going through wardynd's
-// flags (every test harness, notably) agrees with production.
-const defaultApprovalExpiryAfter = 24 * time.Hour
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
 // facts only: Selected is ALWAYS the actual running implementation. The
@@ -910,9 +899,6 @@ func New(cfg Config) *Server {
 	}
 	if cfg.UISessionTTL <= 0 {
 		cfg.UISessionTTL = defaultUISessionTTL
-	}
-	if cfg.ApprovalExpiryAfter <= 0 {
-		cfg.ApprovalExpiryAfter = defaultApprovalExpiryAfter
 	}
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()

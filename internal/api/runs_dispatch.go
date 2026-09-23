@@ -239,7 +239,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// approval at, mirrored to a hold-mode run's own sandbox (see the field
 	// doc above) — set here rather than by each caller, for the same "one
 	// authoritative write" reason PATBroker is.
-	p.ApprovalExpiryAfter = s.cfg.ApprovalExpiryAfter
+	p.ApprovalExpiryAfter = approvalExpiryCeiling(s.cfg.ApprovalExpiryAfter)
 	// And the same stamp for the grants themselves, for the same reason. A
 	// git_pat grant for a BROKERED forge is withheld from the sandbox and audited
 	// as withheld (dropBrokeredGrants, below) — but ProxyConfig.PATGrants was

@@ -375,6 +375,10 @@ func run() error {
 		Identity:  idp,
 		Approvals: approvals,
 		Broker:    brk,
+		// The wait ceiling a run's captured wait folds under; the approval
+		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
+		// mirrors it onto a hold-mode run's sandbox (RL-1).
+		ApprovalExpiryAfter: *f.approvalExpiryAfter,
 		// Same minter, second use: the setup checklist asks it whether GitHub
 		// confines the App to the run branch namespace. nil when no App is
 		// configured, which omits the row.
@@ -468,11 +472,6 @@ func run() error {
 		UIOriginTemplate: *f.uiOriginTemplate,
 		UISessionTTL:     *f.uiSessionTTL,
 		UISessionKey:     feats.uiSessionKey,
-		// RL-1: the same ceiling the approval-expiry sweeper (below) actually
-		// expires a PENDING approval at, mirrored onto a hold-mode run's own
-		// sandbox env so wardyn-toolgate's -deadline and MCP_TOOL_TIMEOUT track
-		// it instead of their own hardcoded literal.
-		ApprovalExpiryAfter: *f.approvalExpiryAfter,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.

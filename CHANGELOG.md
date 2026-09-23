@@ -67,6 +67,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Run limits on governance profiles (#567).** A profile's `limits` gains seven fields:
+  `max_end_ahead_sec`, `default_end_sec`, `allow_no_end`, `max_wait_sec`, `default_wait_sec`,
+  `user_changes_limits` and `pause_idle_after_sec`. A profile write now answers 400 for a negative
+  value, one past 2147483647 seconds (about 68 years, the 32-bit `wait_budget_sec` column), or a
+  default past its own max. Every new run captures its owner's run
+  limits, that profile's id, an end (`ends_at`, from the default end or else the max; `null` = no
+  end) and a wait (`wait_budget_sec`, never past `WARDYN_APPROVAL_EXPIRY_AFTER`) — a security
+  admin's run included; only a super admin's is bounded by the deployment alone. Approvals carry
+  `expires_at` = min(requested_at + the run's wait, the run's end), and the approval sweep expires a
+  request at that time as well as at the deployment cutoff. Migration
+  `0072_agent_runs_run_limits` adds the four `agent_runs` columns; zero limits keep today's
+  behaviour. Nothing yet stops a run at its end or lets a user change it (#568, #569).
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

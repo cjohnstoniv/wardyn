@@ -186,7 +186,7 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 			return "limits.autonomy_rubric." + err.Error()
 		}
 	}
-	return ""
+	return runLimitsRefusal(l.RunLimits)
 }
 
 // writeGovernanceProfile is the shared body of POST and PUT: bound the eligible
