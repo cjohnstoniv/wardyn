@@ -58,6 +58,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   credential in its policy is dropped and audited; a run no provider serves launches with no model
   credential and says so. Record sessions choose a provider the same way.
 
+- **Model-provider refusals and audit rows name the provider and its kind (#532).** The create and
+  Review 422 for a model-provider refusal (`enforceRunModelProvider`) now carries `provider` and
+  `kind` in the wire body, plus `reason: "model_credential"` whenever a provider is named — the
+  same machine-readable class the declared-mechanism gate's 422 already carries — so the console
+  can open that provider's own door instead of guessing from the roster. The `run.create` failure
+  row dispatch writes for a model-provider refusal gains the same `kind`, plus the legacy
+  `mechanism` field written as that kind (kept until MP-24 moves the console's audit reader off
+  it). Both the create door and dispatch now refuse a model run the same way, with the same
+  sentence, when the site config itself cannot be read, rather than one of them admitting the run
+  or leaking driver text in a 500.
+
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0069_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to
   at create time, so every `scanRun`-bound reader — `GetRun`, `ListRuns`, the run detail and list

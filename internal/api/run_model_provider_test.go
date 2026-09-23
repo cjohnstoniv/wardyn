@@ -145,15 +145,17 @@ func TestRunModelProviderDoors(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name     string
-		site     types.SiteConfig
-		cs       *capStore
-		ws       *types.Workspace
-		operator bool
-		body     string
-		want     int
-		wantBody string
-		denied   bool // an authz.denied capability_model_provider row
+		name         string
+		site         types.SiteConfig
+		cs           *capStore
+		ws           *types.Workspace
+		operator     bool
+		body         string
+		want         int
+		wantBody     string
+		denied       bool   // an authz.denied capability_model_provider row
+		wantProvider string // #532: the 422's provider/kind/reason fields; "" when the refusal names no provider (or isn't a model_credential 422 at all)
+		wantKind     types.ModelProviderKind
 	}{
 		{name: "a requested provider the member is not granted", site: twoKeys, cs: &capStore{enf: enforced},
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
@@ -169,13 +171,16 @@ func TestRunModelProviderDoors(t *testing.T) {
 		{name: "workspace_id: two candidates and no choice", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
 			body: byID(plain, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
 		{name: "workspace_id: a chosen provider whose kind has no dispatch arm yet", site: keyAndBearer, ws: plain, cs: &capStore{}, operator: true,
-			body: byID(plain, `,"model_provider":"corp"`), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp")},
+			body: byID(plain, `,"model_provider":"corp"`), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp"),
+			wantProvider: "corp", wantKind: types.ModelProviderBedrockBearer},
 		{name: "a chosen provider whose kind has no dispatch arm yet", site: keyAndBearer, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
-			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp")},
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp"),
+			wantProvider: "corp", wantKind: types.ModelProviderBedrockBearer},
 		{name: "a chosen key provider the caller has not added their own key for", site: twoKeys, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
-			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunNoKey, mpRunConnectRemedy)},
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunNoKey, mpRunConnectRemedy),
+			wantProvider: "corp", wantKind: types.ModelProviderAnthropicAPIKey},
 		{name: "integration_id under a provider block", site: withIntegration, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","integration_id":"corp-anthropic","model_provider":"corp"}`,
 			want: http.StatusUnprocessableEntity, wantBody: mpRunNoIntegration},
@@ -189,7 +194,8 @@ func TestRunModelProviderDoors(t *testing.T) {
 				AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", DefaultProvider: "corp"}),
 			},
 			body: `{"agent":"claude-code","task":"t"}`,
-			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateOff, mpRunRemedy)},
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateOff, mpRunRemedy),
+			wantProvider: "corp", wantKind: types.ModelProviderAnthropicAPIKey},
 		{name: "two candidates and no choice", site: twoKeys, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t"}`,
 			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
@@ -217,6 +223,20 @@ func TestRunModelProviderDoors(t *testing.T) {
 				_ = json.Unmarshal(w.Body.Bytes(), &body)
 				if w.Code != tc.want || body.Error != tc.wantBody {
 					t.Errorf("%s = %d %s\nwant %d carrying %q", path, w.Code, w.Body.String(), tc.want, tc.wantBody)
+				}
+				// #532: every 422 refusing a NAMED provider carries `reason`,
+				// `provider` and `kind`, so the console can open that
+				// provider's door without re-deriving it from the roster.
+				// Absent on the 403s (denyMemberField), the field-validation
+				// 4xxs (mpRunNoIntegration/mpRunNoBlock/mpRunNoModel/mpRunBadID)
+				// and the no-provider-named refusals (mpRunChoose).
+				wantReason := ""
+				if tc.wantProvider != "" {
+					wantReason = llmRefusalAuditReason
+				}
+				if body.Reason != wantReason || body.Provider != tc.wantProvider || body.Kind != string(tc.wantKind) {
+					t.Errorf("%s: reason/provider/kind = %q/%q/%q, want %q/%q/%q",
+						path, body.Reason, body.Provider, body.Kind, wantReason, tc.wantProvider, tc.wantKind)
 				}
 				if got := slices.Contains(auditReasons(t, srv, "authz.denied"), "capability_model_provider"); got != tc.denied {
 					t.Errorf("%s: authz.denied capability_model_provider written = %v, want %v", path, got, tc.denied)

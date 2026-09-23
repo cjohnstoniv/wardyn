@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 
@@ -55,6 +56,13 @@ type runProviderChoice struct {
 	// notGranted marks a refusal the caller's capability decided — a 403
 	// authz.denied row, not an org-configuration 422.
 	notGranted bool
+	// providerID and kind (#532) name the provider a refusal is ABOUT, even
+	// when it was never chosen (providerID is set by providerRefusal for
+	// every state refusal; kind is "" when the named provider does not exist,
+	// state=mpRunStateMissing). The 422 and the run.create audit row read
+	// these, never choice.provider, which is the zero value on every refusal.
+	providerID string
+	kind       types.ModelProviderKind
 }
 
 // chooseModelProvider is the design's resolution order (multi-provider §2.4):
@@ -87,7 +95,7 @@ func chooseModelProvider(sc types.SiteConfig, agent, requested, pin string, gran
 	if row, ok := agentProviderFor(sc, agent); ok && row.DefaultProvider != "" {
 		d, _ := modelProviderByID(sc.ModelProviders, row.DefaultProvider)
 		if d.Disabled {
-			return providerRefusal(d.ID, mpRunStateOff), nil
+			return providerRefusal(d.ID, d.Kind, mpRunStateOff), nil
 		}
 		if isCandidate(d.ID) {
 			return runProviderChoice{provider: d, chosen: true}, nil
@@ -101,7 +109,7 @@ func chooseModelProvider(sc types.SiteConfig, agent, requested, pin string, gran
 	case len(serving) == 0:
 		return runProviderChoice{}, nil
 	case len(serving) == 1:
-		c := providerRefusal(serving[0].ID, mpRunStateNotGranted)
+		c := providerRefusal(serving[0].ID, serving[0].Kind, mpRunStateNotGranted)
 		c.notGranted = true
 		return c, nil
 	}
@@ -114,21 +122,40 @@ func judgeNamedProvider(sc types.SiteConfig, agent, id string, isCandidate func(
 	p, ok := modelProviderByID(sc.ModelProviders, id)
 	switch {
 	case !ok:
-		return providerRefusal(id, mpRunStateMissing)
+		return providerRefusal(id, "", mpRunStateMissing)
 	case p.Disabled:
-		return providerRefusal(id, mpRunStateOff)
+		return providerRefusal(id, p.Kind, mpRunStateOff)
 	case !p.Serves(agent):
-		return providerRefusal(id, fmt.Sprintf(mpRunStateNotServing, agent))
+		return providerRefusal(id, p.Kind, fmt.Sprintf(mpRunStateNotServing, agent))
 	case !isCandidate(id):
-		c := providerRefusal(id, mpRunStateNotGranted)
+		c := providerRefusal(id, p.Kind, mpRunStateNotGranted)
 		c.notGranted = true
 		return c
 	}
 	return runProviderChoice{provider: p, chosen: true}
 }
 
-func providerRefusal(id, state string) runProviderChoice {
-	return runProviderChoice{refusal: fmt.Sprintf(mpRunRefusal, id, state, mpRunRemedy)}
+// providerRefusal is a state refusal naming id (multi-provider §2.6's one
+// sentence). kind is "" when id does not name a real provider
+// (mpRunStateMissing) — the only state refusal without one.
+func providerRefusal(id string, kind types.ModelProviderKind, state string) runProviderChoice {
+	return runProviderChoice{refusal: fmt.Sprintf(mpRunRefusal, id, state, mpRunRemedy), providerID: id, kind: kind}
+}
+
+// writeProviderRefusal is enforceRunModelProvider's 422: `provider` and
+// `kind` (#532) name the provider the refusal is about, so the console can
+// open THAT provider's door instead of guessing from the roster. id is ""
+// only when the refusal names no provider at all — mpRunChoose, an ambiguous
+// CHOICE rather than a dead credential, whose remedy is "choose another", not
+// a sign-in — and `reason` (the legacy declared-mechanism gate's
+// llmRefusalAuditReason, "model_credential": one class, one console reader)
+// rides only WITH a named provider, for the same reason.
+func writeProviderRefusal(w http.ResponseWriter, id string, kind types.ModelProviderKind, msg string) {
+	body := errorBody{Error: msg, Provider: id, Kind: string(kind)}
+	if id != "" {
+		body.Reason = llmRefusalAuditReason
+	}
+	writeJSON(w, http.StatusUnprocessableEntity, body)
 }
 
 // enforceRunModelProvider is the model-provider choice at BOTH doors, create
@@ -173,7 +200,12 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	if s.cfg.Store != nil {
 		var err error
 		if sc, err = s.cfg.Store.GetSiteConfig(ctx); err != nil {
-			writeServerError(w, r, "get site config", err)
+			// The same refusal dispatch makes on the identical read
+			// (resolveProviderLane's mpRunUnreadable, runs_dispatch_provider.go):
+			// both doors refuse an unreadable provider block (#532) rather than
+			// have one 500 with driver text while the other names the cause.
+			slog.ErrorContext(ctx, "api: get site config for model-provider choice", slog.Any("err", err))
+			writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: mpRunUnreadable})
 			return runProviderChoice{}, false
 		}
 	}
@@ -205,10 +237,10 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		s.denyMemberField(w, r, "runs.model_provider", "capability_model_provider", choice.refusal)
 		return runProviderChoice{}, false
 	case choice.refusal != "":
-		writeError(w, http.StatusUnprocessableEntity, choice.refusal)
+		writeProviderRefusal(w, choice.providerID, choice.kind, choice.refusal)
 		return runProviderChoice{}, false
 	case choice.chosen && !providerKindDispatched[choice.provider.Kind]:
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpRunNotYet, choice.provider.ID))
+		writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunNotYet, choice.provider.ID))
 		return runProviderChoice{}, false
 	case choice.chosen:
 		// Liveness, the check dispatch repeats: the caller's OWN credential for
@@ -216,11 +248,14 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		// dispatch reads for this run).
 		msg, err := s.providerCredentialRefusal(ctx, runIdentitySubject(ctx, principalFromRequest(r)), choice.provider)
 		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf(mpRunCredUnreadable, choice.provider.ID))
+			writeJSON(w, http.StatusServiceUnavailable, errorBody{
+				Error:    fmt.Sprintf(mpRunCredUnreadable, choice.provider.ID),
+				Provider: choice.provider.ID, Kind: string(choice.provider.Kind),
+			})
 			return runProviderChoice{}, false
 		}
 		if msg != "" {
-			writeError(w, http.StatusUnprocessableEntity, msg)
+			writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, msg)
 			return runProviderChoice{}, false
 		}
 	}
