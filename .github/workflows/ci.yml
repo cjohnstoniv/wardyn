@@ -249,31 +249,60 @@ jobs:
       - name: helm lint + template (must render load-bearing objects)
         run: make helm-lint
 
-  # ── deploy: kind Helm install-test (proves the chart actually boots) ──────
+  # ── deploy: kind Helm install-test + desktop envelope (merged — #472) ─────
   # `helm` above only proves the chart RENDERS (`helm template`); it has
   # never proven an install actually CONVERGES to a running, healthy control
-  # plane. Builds the image locally (no registry — ghcr publishing is
+  # plane. Builds wardynd, AND (for the desktop-envelope proof below)
+  # wardyn-proxy, locally ONCE (no registry — ghcr publishing is
   # publish-image.yml, a separate push-triggered workflow with no PR
-  # trigger), loads it straight into a throwaway kind cluster (`kind load
-  # docker-image` — no pull), then `make helm-install-test` does the
-  # in-cluster kubectl/helm work: a plain-manifest Postgres, `helm install`
-  # against the loaded image, a bounded rollout wait, and a real /healthz
-  # assertion through the Service via `kubectl port-forward` (see the
-  # Makefile target for two install-time overrides real validation forced,
-  # and why — neither is a chart DEFAULTS change). The kind cluster's
-  # create + automatic post-job delete (helm/kind-action) is the only piece
-  # that stays in the workflow — repo convention keeps the actual gate logic
-  # single-sourced in `make`.
+  # trigger). wardynd is tagged twice off that single build — :kind-test
+  # loads straight into a throwaway kind cluster (`kind load docker-image` —
+  # no pull) for this proof, :local is what the desktop-envelope proof
+  # further down expects on this runner's own daemon — so the two proofs
+  # that used to each build wardynd from scratch (#472) now share one build.
+  # `make helm-install-test` does the in-cluster kubectl/helm work: a
+  # plain-manifest Postgres, `helm install` against the loaded image, a
+  # bounded rollout wait, and a real /healthz assertion through the Service
+  # via `kubectl port-forward` (see the Makefile target for two install-time
+  # overrides real validation forced, and why — neither is a chart DEFAULTS
+  # change). The kind cluster's create + automatic post-job delete
+  # (helm/kind-action) is the only piece that stays in the workflow — repo
+  # convention keeps the actual gate logic single-sourced in `make`.
+  #
+  # ── desktop envelope, second half of this job ─────────────────────────────
+  # Runs after the kind proof above, against the SAME wardynd (+
+  # wardyn-proxy) build tagged :local — a plain `docker compose` stack on
+  # this runner's own daemon needs no cluster of its own and is unaffected
+  # by the kind cluster staying up alongside it until the job ends. Boots
+  # the SAME compose stack every other single-host deployment uses
+  # (deploy/desktop/docker-compose.yaml `include:`s
+  # deploy/compose/docker-compose.yaml unmodified, adding only the
+  # MDM-managed-directory mount) with this commit's
+  # deploy/desktop/wardyn.env.example as the envelope, then proves three
+  # things docs/DESKTOP.md claims: the control plane actually serves the
+  # managed policy as its default, a run that names no policy resolves to
+  # that ceiling (not something wider), and Recording Mode's synthesized
+  # profile is clamped to it too (composer.Clamp's the same call whichever
+  # caller reaches it — see internal/api/profile.go). CI-side only: nothing
+  # here runs against a real device, and nothing in the install lane
+  # (install.sh, the plist) executes — those are macOS/launchd-only and stay
+  # covered by scripts/test-desktop-profile.sh's static checks above.
   helm-install-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
-      - name: Build wardynd image (local only — publishing is publish-image.yml)
-        run: docker build -f deploy/compose/Dockerfile.wardynd -t wardyn/wardynd:kind-test .
+      - name: Build wardynd ONCE, tagged for both proofs below (local only — publishing is publish-image.yml)
+        run: |
+          docker build -f deploy/compose/Dockerfile.wardynd \
+            -t wardyn/wardynd:kind-test \
+            -t wardyn/wardynd:local \
+            .
+      - name: Build wardyn-proxy (desktop-envelope's sidecar below; local only)
+        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: wardyn-test
@@ -282,6 +311,78 @@ jobs:
         run: kind load docker-image wardyn/wardynd:kind-test --name wardyn-test
       - name: helm install + boot proof (make target — postgres, install, rollout wait, /healthz)
         run: make helm-install-test
+      - name: Lay down a CI-local managed envelope at /etc/wardyn
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0755 /etc/wardyn
+          KEY="$(docker run --rm wardyn/wardynd:local -gen-age-key | grep -E '^AGE-SECRET-KEY-' | head -1)"
+          [ -n "${KEY}" ] || { echo "::error::-gen-age-key produced no key"; exit 1; }
+          printf '%s\n' "${KEY}" | sudo tee /etc/wardyn/age.key >/dev/null
+          sudo chmod 0600 /etc/wardyn/age.key
+          # examples/policies/demo.json is the SAME ceiling the base compose
+          # file falls back to on its own (CC1, works with no gVisor) — using
+          # it here means "managed ceiling" and "what a plain runner enforces"
+          # are the same file, so a real difference is a real bug, not a
+          # CI-environment artifact.
+          sudo cp examples/policies/demo.json /etc/wardyn/policy.json
+          # The envelope ships BOTH image pins uncommented, as a real fleet must
+          # (an unset WARDYN_PROXY_IMAGE makes every run's egress sidecar
+          # unresolvable on a laptop). Their @sha256:REPLACE_ME placeholders are
+          # unresolvable here, and the env file WINS over the compose default —
+          # so rewrite both to the images the steps above just built, or this
+          # job dies on an image pull before any assertion runs, looking like a
+          # registry problem rather than an envelope edit.
+          sed -e 's/\$UPN/ci-operator@example.com/' -e 's/\$SERIALNUMBER/CI0000/' \
+              -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=wardyn/wardynd:local|' \
+              -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=wardyn/wardyn-proxy:local|' \
+            deploy/desktop/wardyn.env.example | sudo tee /etc/wardyn/wardyn.env >/dev/null
+      - name: Boot the desktop compose profile
+        # WARDYN_MANAGED_DIR is what wardyn-desktop.sh exports on a real laptop;
+        # the included stack mounts it read-only at /etc/wardyn in the container.
+        env:
+          WARDYN_MANAGED_DIR: /etc/wardyn
+        run: |
+          docker compose --env-file /etc/wardyn/wardyn.env \
+            -f deploy/desktop/docker-compose.yaml \
+            -p wardyn-desk-ci up -d --no-build postgres registry wardynd
+      - name: Wait for healthz
+        run: |
+          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 2; done
+          docker compose -p wardyn-desk-ci logs wardynd
+          echo "::error::wardynd did not become healthy"; exit 1
+      - name: Assert /policies/default equals the managed file
+        run: |
+          # handleGetDefaultPolicy re-marshals types.RunPolicySpec, whose
+          # `omitempty` tags drop denied_domains/allowed_methods when [] and
+          # auto_stop_after_sec when 0 even though demo.json spells them out —
+          # so a byte-for-byte diff is red on a healthy stack. Strip those three
+          # keys from BOTH sides when they carry their zero value before
+          # comparing; a real content difference (including a non-empty value
+          # for any of the three) still fails the diff.
+          NORMALIZE='del(.denied_domains | select(. == [])) | del(.allowed_methods | select(. == [])) | del(.auto_stop_after_sec | select(. == 0))'
+          diff <(jq -S "${NORMALIZE}" /etc/wardyn/policy.json) <(curl -fsS http://127.0.0.1:8080/api/v1/policies/default | jq -S "${NORMALIZE}")
+      - name: Assert a no-policy run resolves to the ceiling (dry-run preflight)
+        run: |
+          out=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \
+            /usr/local/bin/wardyn run --agent byoa --image ubuntu:24.04 --task "echo desktop-envelope-ci" \
+            --task-mode exec --dry-run --json)
+          echo "${out}" | jq -e '.enforced_confinement_class == "CC1"' >/dev/null \
+            || { echo "::error::preflight enforced_confinement_class != the managed ceiling's CC1: ${out}"; exit 1; }
+      - name: Launch a run and assert its synthesized profile is clamped (warnings non-empty)
+        run: |
+          run_json=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \
+            /usr/local/bin/wardyn run --agent byoa --image ubuntu:24.04 --task "echo desktop-envelope-ci" \
+            --task-mode exec --wait --timeout 3m --json)
+          run_id=$(echo "${run_json}" | jq -r .id)
+          [ -n "${run_id}" ] && [ "${run_id}" != "null" ] || { echo "::error::no run id in: ${run_json}"; exit 1; }
+          prof=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \
+            /usr/local/bin/wardyn record synthesize "${run_id}" --json)
+          echo "${prof}" | jq -e '(.warnings // []) | length > 0' >/dev/null \
+            || { echo "::error::synthesized profile carried no clamp/coverage warnings: ${prof}"; exit 1; }
+      - name: Teardown
+        if: always()
+        run: |
+          docker compose -p wardyn-desk-ci -f deploy/desktop/docker-compose.yaml down -v || true
 
   # ── deploy: kind Kubernetes conformance (k8s runner substrate) ────────────
   # EXTENDS helm-install-test's pattern just above (same pinned helm/kind-action
@@ -398,102 +499,6 @@ jobs:
       # for exactly this kind of static/config check.
       - name: Shell regression tests (scripts/test-*.sh)
         run: make test-scripts
-
-  # ── desktop tier: envelope boots, and the ceiling actually holds ───────────
-  # Boots the SAME compose stack every other single-host deployment uses
-  # (deploy/desktop/docker-compose.yaml `include:`s
-  # deploy/compose/docker-compose.yaml unmodified, adding only the
-  # MDM-managed-directory mount) with this commit's
-  # deploy/desktop/wardyn.env.example as the envelope, then proves three
-  # things docs/DESKTOP.md claims: the control plane actually serves the
-  # managed policy as its default, a run that names no policy resolves to
-  # that ceiling (not something wider), and Recording Mode's synthesized
-  # profile is clamped to it too (composer.Clamp's the same call whichever
-  # caller reaches it — see internal/api/profile.go). CI-side only: nothing
-  # here runs against a real device, and nothing in the install lane
-  # (install.sh, the plist) executes — those are macOS/launchd-only and stay
-  # covered by scripts/test-desktop-profile.sh's static checks above.
-  desktop-envelope:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Build wardynd (this commit)
-        run: docker compose -f deploy/compose/docker-compose.yaml build wardynd
-      - name: Build wardyn-proxy (every launched run's sidecar; driver.go assumes it locally present, never pulls it)
-        run: docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image
-      - name: Lay down a CI-local managed envelope at /etc/wardyn
-        run: |
-          set -euo pipefail
-          sudo install -d -m 0755 /etc/wardyn
-          KEY="$(docker run --rm wardyn/wardynd:local -gen-age-key | grep -E '^AGE-SECRET-KEY-' | head -1)"
-          [ -n "${KEY}" ] || { echo "::error::-gen-age-key produced no key"; exit 1; }
-          printf '%s\n' "${KEY}" | sudo tee /etc/wardyn/age.key >/dev/null
-          sudo chmod 0600 /etc/wardyn/age.key
-          # examples/policies/demo.json is the SAME ceiling the base compose
-          # file falls back to on its own (CC1, works with no gVisor) — using
-          # it here means "managed ceiling" and "what a plain runner enforces"
-          # are the same file, so a real difference is a real bug, not a
-          # CI-environment artifact.
-          sudo cp examples/policies/demo.json /etc/wardyn/policy.json
-          # The envelope ships BOTH image pins uncommented, as a real fleet must
-          # (an unset WARDYN_PROXY_IMAGE makes every run's egress sidecar
-          # unresolvable on a laptop). Their @sha256:REPLACE_ME placeholders are
-          # unresolvable here, and the env file WINS over the compose default —
-          # so rewrite both to the images the steps above just built, or this
-          # job dies on an image pull before any assertion runs, looking like a
-          # registry problem rather than an envelope edit.
-          sed -e 's/\$UPN/ci-operator@example.com/' -e 's/\$SERIALNUMBER/CI0000/' \
-              -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=wardyn/wardynd:local|' \
-              -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=wardyn/wardyn-proxy:local|' \
-            deploy/desktop/wardyn.env.example | sudo tee /etc/wardyn/wardyn.env >/dev/null
-      - name: Boot the desktop compose profile
-        # WARDYN_MANAGED_DIR is what wardyn-desktop.sh exports on a real laptop;
-        # the included stack mounts it read-only at /etc/wardyn in the container.
-        env:
-          WARDYN_MANAGED_DIR: /etc/wardyn
-        run: |
-          docker compose --env-file /etc/wardyn/wardyn.env \
-            -f deploy/desktop/docker-compose.yaml \
-            -p wardyn-desk-ci up -d --no-build postgres registry wardynd
-      - name: Wait for healthz
-        run: |
-          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 2; done
-          docker compose -p wardyn-desk-ci logs wardynd
-          echo "::error::wardynd did not become healthy"; exit 1
-      - name: Assert /policies/default equals the managed file
-        run: |
-          # handleGetDefaultPolicy re-marshals types.RunPolicySpec, whose
-          # `omitempty` tags drop denied_domains/allowed_methods when [] and
-          # auto_stop_after_sec when 0 even though demo.json spells them out —
-          # so a byte-for-byte diff is red on a healthy stack. Strip those three
-          # keys from BOTH sides when they carry their zero value before
-          # comparing; a real content difference (including a non-empty value
-          # for any of the three) still fails the diff.
-          NORMALIZE='del(.denied_domains | select(. == [])) | del(.allowed_methods | select(. == [])) | del(.auto_stop_after_sec | select(. == 0))'
-          diff <(jq -S "${NORMALIZE}" /etc/wardyn/policy.json) <(curl -fsS http://127.0.0.1:8080/api/v1/policies/default | jq -S "${NORMALIZE}")
-      - name: Assert a no-policy run resolves to the ceiling (dry-run preflight)
-        run: |
-          out=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \
-            /usr/local/bin/wardyn run --agent byoa --image ubuntu:24.04 --task "echo desktop-envelope-ci" \
-            --task-mode exec --dry-run --json)
-          echo "${out}" | jq -e '.enforced_confinement_class == "CC1"' >/dev/null \
-            || { echo "::error::preflight enforced_confinement_class != the managed ceiling's CC1: ${out}"; exit 1; }
-      - name: Launch a run and assert its synthesized profile is clamped (warnings non-empty)
-        run: |
-          run_json=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \
-            /usr/local/bin/wardyn run --agent byoa --image ubuntu:24.04 --task "echo desktop-envelope-ci" \
-            --task-mode exec --wait --timeout 3m --json)
-          run_id=$(echo "${run_json}" | jq -r .id)
-          [ -n "${run_id}" ] && [ "${run_id}" != "null" ] || { echo "::error::no run id in: ${run_json}"; exit 1; }
-          prof=$(docker compose -p wardyn-desk-ci exec -T -e WARDYN_URL=http://localhost:8080 wardynd \
-            /usr/local/bin/wardyn record synthesize "${run_id}" --json)
-          echo "${prof}" | jq -e '(.warnings // []) | length > 0' >/dev/null \
-            || { echo "::error::synthesized profile carried no clamp/coverage warnings: ${prof}"; exit 1; }
-      - name: Teardown
-        if: always()
-        run: |
-          docker compose -p wardyn-desk-ci -f deploy/desktop/docker-compose.yaml down -v || true
 
   # Docker conformance against the live daemon (WARDYN_TEST_DOCKER=1). The
   # driver-agnostic honesty stub (`make test-conformance-stub` → the untagged
