@@ -23,9 +23,10 @@ document is that process, written down.
   maintainer following this list literally was waiting on a phantom job while
   skipping the one that catches a GPL regression. Two more publish
   workflows are not part of this job list at all (see "Container images"
-  below): `publish-image` (`.github/workflows/publish-image.yml`, push to
-  `main` only) and `release` (`.github/workflows/release.yml`, triggered by
-  step 5's tag push itself, so it cannot be a prerequisite of tagging).
+  below): `publish-image` (`.github/workflows/publish-image.yml`, after CI
+  passes on a push to `main`) and `release` (`.github/workflows/release.yml`,
+  triggered by step 5's tag push itself, so it cannot be a prerequisite of
+  tagging).
 - The multi-arch build is green on that commit too. It is `nightly.yml`'s
   `buildx-smoke` (checks named `multi-arch build (…)`), not a `ci.yml` job, so
   a pull request never runs it: read the latest nightly, or run it on the
@@ -363,7 +364,7 @@ job.
 Two workflows publish images, on two different triggers — neither overlaps
 the other:
 
-- **Continuous (every push to `main`).**
+- **Continuous (every push to `main` that passes CI).**
   `.github/workflows/publish-image.yml` builds and pushes `wardynd` only, to
   `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). **Signed
   (keyless, by digest) but not SBOM- or provenance-attested**, and under the

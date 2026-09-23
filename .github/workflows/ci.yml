@@ -253,9 +253,9 @@ jobs:
   # `helm` above only proves the chart RENDERS (`helm template`); it has
   # never proven an install actually CONVERGES to a running, healthy control
   # plane. Builds the image locally (no registry — ghcr publishing is
-  # publish-image.yml, a separate push-triggered workflow with no PR
-  # trigger), loads it straight into a throwaway kind cluster (`kind load
-  # docker-image` — no pull), then `make helm-install-test` does the
+  # publish-image.yml, a separate workflow that runs after this one passes
+  # on main and never for a PR), loads it straight into a throwaway kind
+  # cluster (`kind load docker-image` — no pull), then `make helm-install-test` does the
   # in-cluster kubectl/helm work: a plain-manifest Postgres, `helm install`
   # against the loaded image, a bounded rollout wait, and a real /healthz
   # assertion through the Service via `kubectl port-forward` (see the
