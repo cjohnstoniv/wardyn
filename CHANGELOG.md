@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`scripts/up.sh` no longer just warns when the Claude sign-in image fails to build (#802).**
+  `agent-claude-code` is the checked prerequisite for Claude subscriptions (`claude_signin_image`
+  on `/setup/status`, the E4 refusal, #524); a failed build now stops `up.sh` with the rebuild
+  command instead of leaving a silent warning behind. Other agent images stay warn-only. Setting
+  `WARDYN_UP_SKIP_RUN_IMAGES=1` now says explicitly that Claude subscriptions stay refused until
+  the sign-in image is built.
+
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
