@@ -21,7 +21,7 @@ import (
 //
 // F269 gave GET /me the launch door's own bind DECISION so the console would
 // stop offering a mount the create path refuses. What came with it is that a
-// DISPLAY READ ON A TIMER now performs the share probe: up to two uncancellable
+// Display read on A timer now performs the share probe: up to two uncancellable
 // filesystem syscalls, each bounded at five seconds, on a path the operator
 // mounted. The syscall takes no context, so every probe the bound gives up on
 // leaves a thread in the kernel until the mount answers — and on a hard mount
@@ -229,7 +229,7 @@ func TestMeAnswersFromMemoryWhileAShareProbeIsStranded(t *testing.T) {
 		t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile is involved", denied)
 	}
 
-	// AND THE TWO DOORS STILL AGREE, asserted rather than assumed: /me withheld
+	// And the two doors still agree, asserted rather than assumed: /me withheld
 	// it because the launch would refuse it, not instead of the launch refusing.
 	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
 	if ok || mount != nil {
@@ -256,7 +256,7 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 	root := t.TempDir()
 	body := `{"name":"Shares","backend":"host_path","home_template":"sub","host_root":"` + root + `"}`
 
-	// THE CONTROL FIRST: a live root is usable and a drive rooted at it is
+	// The control first: a live root is usable and a drive rooted at it is
 	// created. A test that only asserted the withheld case would pass on doors
 	// that withhold everything.
 	srv, _ := driveAdminServer(newDriveCRUDStore(), []string{root})
@@ -300,7 +300,7 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 			"this field exists to prevent")
 	}
 
-	// AND THE WRITE DOOR DECIDES, rather than hanging: 503, because nothing is
+	// And the write door decides, rather than hanging: 503, because nothing is
 	// wrong with the request and the remedy is the operator's mount.
 	start = time.Now()
 	w = driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body, nil)
@@ -327,7 +327,7 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 // run under one context deadline, and driveShareProbe already selects on
 // ctx.Done, so every probe after the first strand returns at once.
 //
-// HONEST ABOUT WHAT THIS PINS: no unit test can make EvalSymlinks/stat actually
+// Honest about what this pins: no unit test can make EvalSymlinks/stat actually
 // block (that needs a real hung NFS mount), so the elapsed assertion below is a
 // FORWARD regression pin over the strand short-circuit and the deadline
 // together, not a reproduction of the multi-root wait. It is green on both

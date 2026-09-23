@@ -24,7 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ── the per_user credential scope ────────────────────────────────────────────
+// the per_user credential scope
 
 // scopedSecrets is memSecrets plus a READ LOG KEYED BY OWNER, which is the only
 // way to assert the property that matters here: a per_user resolve must make NO
@@ -310,7 +310,7 @@ func TestResolveRunLLMAccess_AdminsOwnPerUserCaptureResolvesAtCreate(t *testing.
 	}
 }
 
-// ── the five lifecycle states ────────────────────────────────────────────────
+// the five lifecycle states
 
 // TestAWSSSOCredentialState_TheFiveStates walks the vocabulary, REGISTRATION
 // first. The ordering is the point: the access token lives an hour on the
@@ -774,7 +774,7 @@ func TestRedactSetupStatusForMember_KeepsModelAccess(t *testing.T) {
 	}
 }
 
-// ── the member's sign-in door ────────────────────────────────────────────────
+// the member's sign-in door
 
 const perUserPortal = "https://org-portal.awsapps.com/start"
 

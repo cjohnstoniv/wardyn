@@ -541,7 +541,7 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 }
 
 // TestPG_ExpiredApproval_ReRaisesPending is the REAL-SQL regression for
-// W19-W19c-2 (the fake-DB twin in broker_test.go exercises the fake's own
+// (the fake-DB twin in broker_test.go exercises the fake's own
 // branch, not the query). The sweeper (approval.ExpireStale) EXPIREs a stale
 // PENDING credential approval; the next mint must raise a FRESH PENDING row a
 // human can still decide — not re-find the swept row forever and map it to

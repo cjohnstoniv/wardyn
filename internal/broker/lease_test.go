@@ -101,7 +101,7 @@ func TestLease_BoundedByScopeKindAndState(t *testing.T) {
 		t.Fatalf("once-scoped decision: err=%v, want ErrAlreadyMinted", err)
 	}
 
-	// A DIFFERENT KIND with the same run-scoped decision: the lease is git_pat
+	// A different KIND with the same run-scoped decision: the lease is git_pat
 	// only. github_token is brokered proxy-side and re-minting it from a sandbox
 	// is exactly what single-use exists to stop.
 	b2, db2, _, _ := newTestBroker(t)

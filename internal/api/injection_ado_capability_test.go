@@ -368,7 +368,7 @@ func (f *adoCapFixture) failureReasonOf(t *testing.T) map[string]any {
 	return map[string]any{}
 }
 
-// ─── the decide matrix ──────────────────────────────────────────────────────
+// the decide matrix
 
 // seedADO puts an escalation row on the fixture's run. sandboxShaped drops the
 // grant id, which is what the sandbox's own route produces whatever its scope

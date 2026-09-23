@@ -13,13 +13,13 @@
 //   nice -n 10 GOMAXPROCS=8 go test -p 4 ./internal/api -run 'TestF7_' -count=1 -v
 //   rm internal/api/site_config_probe_f7_probe_test.go
 //
-// INVARIANT UNDER TEST (see ../F7-redirect-probe-sni-literal-ip.md §0):
+// Invariant under test (see ../F7-redirect-probe-sni-literal-ip.md §0):
 // probe 1 of the redirect probe dials ONLY the stored To (host, port AND
 // scheme), and its verdict about "the mirror" is never derived from a dial
 // that actually landed on the public From host; probe 2's verdict "From is
 // correctly blocked" is never emitted when the public host answered.
 //
-// EXPECTED STATE AT fa910735 (this is a finding-seeding probe, not a green
+// Expected state at fa910735 (this is a finding-seeding probe, not a green
 // gate): the subtests tagged wantRedToday FAIL on the unmodified tree — each
 // one is a numbered hypothesis in the trace doc (H-1, H-2, H-4). Everything
 // else must pass; a new failure elsewhere is a regression.

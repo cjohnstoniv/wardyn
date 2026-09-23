@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── FIX #10: X-Wardyn-Principal cannot forge human attribution ───────────────
+// FIX #10: X-Wardyn-Principal cannot forge human attribution
 //
 // principalFromRequest/actorFromRequest resolve the audit actor for admin-gated
 // actions (decided_by on approvals, sub/sponsor + run.create/run.kill actor).

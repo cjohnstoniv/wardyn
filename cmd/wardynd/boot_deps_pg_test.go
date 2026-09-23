@@ -3,7 +3,7 @@
 
 package main
 
-// TestConnectAndMigrate_SeparateBudgets is the W28-S1-4 regression: connect
+// TestConnectAndMigrate_SeparateBudgets is the regression: connect
 // and migrate get INDEPENDENT timeout budgets, not one shared deadline. Before
 // this fix, connectAndMigrate took a single ctx bounding BOTH db.Connect and
 // db.Migrate — a slow migration (e.g. an index build on the unbounded audit

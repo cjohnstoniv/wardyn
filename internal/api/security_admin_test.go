@@ -34,7 +34,7 @@ const (
 	secAdminMail = "sec@corp.example"
 )
 
-// ─── the predicate ─────────────────────────────────────────────────────────
+// the predicate
 
 // TestIsSecurityOperator is isSecurityOperator's twin of TestIsOperator
 // (rbac_test.go). The two predicates agree on everything EXCEPT the
@@ -136,7 +136,7 @@ func TestRequireSecurityOperator(t *testing.T) {
 	}
 }
 
-// ─── the role-snapshot split (PF-7 / PF-19) ────────────────────────────────
+// the role-snapshot split (PF-7 / PF-19)
 
 // TestAPITokenStampsRealSecurityAdminRole: the API token carries the human's
 // WHOLE session identity, so it stamps security_admin verbatim (PF-19).
@@ -297,7 +297,7 @@ func TestAttachTicketOwnRunStampsMemberForSecurityAdmin(t *testing.T) {
 	}
 }
 
-// ─── the no-capability-reaches-admin invariant (PF-8) ──────────────────────
+// the no-capability-reaches-admin invariant (PF-8)
 
 // TestCapabilityGrantsNeverReachTheAdminTier: capAllowed/capGranted short-
 // circuit ONLY for a super admin. A security admin is capability-bounded like
@@ -401,7 +401,7 @@ func TestRecordWorkspaceIsSuperAdminOnly(t *testing.T) {
 	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+uuid.NewString()+"/record", sess, `{"name":"exfil"}`); w.Code != http.StatusForbidden {
 		t.Errorf("security_admin POST record on a MISSING workspace = %d, want the same 403", w.Code)
 	}
-	// THE CORROBORATING LEG IS GONE, AND THE TIER STILL HOLDS — re-argued here
+	// The corroborating LEG is gone, AND THE TIER STILL HOLDS — re-argued here
 	// rather than assumed, as this comment's earlier revision asked.
 	//
 	// This used to assert that the same tier gets 404 on GET /workspaces/{id},

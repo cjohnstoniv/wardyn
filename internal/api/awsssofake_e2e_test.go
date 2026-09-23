@@ -143,7 +143,7 @@ func parseRawSSOTime(v string) (time.Time, error) {
 // TestAWSSSOConfigAcceptedByRealBotocore_MultiAccountPinned is the
 // multi-account half: a blob carrying the PINNED account/role — the one at
 // index 1, never index 0 — generates an ~/.aws that real botocore resolves
-// AGAINST THAT ACCOUNT.
+// Against that account.
 //
 // This used to say it REPLACED a live walk, on the grounds that the login
 // sandbox had no AWS_ENDPOINT_URL_SSO* passthrough and that adding one "would

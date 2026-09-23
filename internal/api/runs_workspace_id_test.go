@@ -567,7 +567,7 @@ func (r *imageRemoverRunner) ImageRemove(_ context.Context, ref string) error {
 }
 
 // TestResolveWorkspaceImage_StaleCacheFallsThroughToRebuild is
-// W20-W20-record-image-5: a cached image_ref the daemon no longer has used to
+// A cached image_ref the daemon no longer has used to
 // be a permanent dead end — resolveWorkspaceImage trusted BuiltProfileHash
 // alone and never verified the ref was still real. With an ImageChecker
 // Runner wired, a cache "hit" whose ref the runner reports ABSENT must fall
@@ -636,7 +636,7 @@ func TestResolveBuildView_AgreesWithBuiltHash(t *testing.T) {
 }
 
 // TestResolveWorkspaceImage_ByoiCachesAcrossSessions is
-// W20-W20-record-image-3: the byoi lane used to tag EVERY wrap with the run
+// The byoi lane used to tag EVERY wrap with the run
 // id (`wardyn-byoi/<runid>:latest`), so two record/replay sessions against
 // the identical base image always rebuilt — a multi-minute FinalizeBase call
 // on every single launch. A cache hit must reuse the workspace's stored
@@ -713,7 +713,7 @@ func (b *capturingByoiImageBuilder) FinalizeBase(_ context.Context, baseRef, _ s
 }
 
 // TestResolveWorkspaceImage_RepoDevcontainerCachesAcrossSessions is
-// W20-W20-record-image-3's repo-own-devcontainer half: this lane built the
+// repo-own-devcontainer half: this lane built the
 // repo's OWN devcontainer unconditionally on every session (a fixed tag, but
 // no cache-hit check before calling BuildDevcontainer again).
 func TestResolveWorkspaceImage_RepoDevcontainerCachesAcrossSessions(t *testing.T) {

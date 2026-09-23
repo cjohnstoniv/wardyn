@@ -185,7 +185,7 @@ func TestResolveWaitHold(t *testing.T) {
 	})
 
 	t.Run("concurrent first-touch does not skip the hold", func(t *testing.T) {
-		// W20-hold-fsm-4: concurrent first-touch connections to the SAME new
+		// Concurrent first-touch connections to the SAME new
 		// host. Only ONE goroutine's Resolve wins the raise race and blocks
 		// on the (slow, widened-window) raise() network call; every OTHER
 		// goroutine must observe apPending with the RAISER'S host claimed but

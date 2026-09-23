@@ -196,7 +196,7 @@ func TestNewestSSOToken_NoneFound(t *testing.T) {
 
 // TestParseRealAWSCLICacheFile validates this package's OWN parser
 // (newestSSOToken + toBlob, including parseSSOTime) against a cache file the
-// REAL AWS CLI v2 wrote — not a hand-written fixture — closing risk #1 from
+// Real AWS CLI v2 wrote — not a hand-written fixture — closing risk #1 from
 // the aws-sso-fake work: a wrong cache-filename/shape assumption here is a
 // SILENT failure (botocore just says "not logged in"), so this must run
 // against the actual CLI's output, not our guess at its shape.
@@ -275,7 +275,7 @@ func TestSuccessMarker_UIParity(t *testing.T) {
 	}
 }
 
-// ── finding 1: the account/role a sign-in captures is chosen, never [0] ──────
+// finding 1: the account/role a sign-in captures is chosen, never [0]
 
 // multiAccountPortal is the operator's reported shape: index 0 is an unrelated
 // dev account whose roles cannot invoke the configured model, index 1 is the

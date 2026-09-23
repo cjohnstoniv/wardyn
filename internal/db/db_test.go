@@ -192,7 +192,7 @@ func TestMigration0003AddsCompletedState(t *testing.T) {
 
 // TestMigration0004AddsBeforeTruncateTrigger is the regression for the
 // append-only TRUNCATE gap. The 0001 trigger fires BEFORE UPDATE OR DELETE
-// FOR EACH ROW, which does NOT block `TRUNCATE audit_events` (a statement-level
+// For each row, which does NOT block `TRUNCATE audit_events` (a statement-level
 // DDL that bypasses row triggers). 0004 must add a statement-level
 // BEFORE TRUNCATE trigger on audit_events.
 func TestMigration0004AddsBeforeTruncateTrigger(t *testing.T) {

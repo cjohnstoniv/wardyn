@@ -47,7 +47,7 @@ auto_stop_after_sec: 900
 	}
 }
 
-// TestReadPolicyFile_RejectsUnknownSpecField is the W14-S1-2 regression:
+// TestReadPolicyFile_RejectsUnknownSpecField is the regression:
 // readPolicyFile (backing `policy create -f` / `policy update -f`) used to
 // json.Unmarshal the spec leniently, so a misspelled field silently vanished
 // instead of failing at authoring time. Covers both the bare-spec shape and

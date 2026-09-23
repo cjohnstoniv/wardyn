@@ -436,7 +436,7 @@ func TestPATBrokerCachesAShortTTLMintAcrossOneClone(t *testing.T) {
 // F120: a PENDING credential approval must be waited out, not returned as a 502.
 //
 // The broker mints server-side with no caller able to retry, so the GitHub lane
-// polls the same approval itself (W23-S1-1 / W19-W19a-1). patToken returned an
+// polls the same approval itself. patToken returned an
 // error on any non-200, which made the FIRST clone against an approval-gated
 // git_pat grant fail before a human could possibly have approved it.
 func TestPATBrokerWaitsOutAPendingApproval(t *testing.T) {

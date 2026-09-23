@@ -149,7 +149,7 @@ func TestTlsCookiePostureCheck(t *testing.T) {
 // success) and "" (indeterminate — an old daemon build, or in principle any
 // unproven state; see the field's doc for why a genuinely indeterminate LIVE
 // canary can never reach here). Never confuses Indeterminate with Enforcing.
-// TestSiteConfigCheck_DanglingSecretRef pins W26-S1-2: on base 763beb5,
+// TestSiteConfigCheck_DanglingSecretRef pins: on base 763beb5,
 // siteConfigCheck graded "info" ("every run inherits it") purely off whether
 // UpstreamProxySecretRef/EgressRedirects/ScmHosts were SET — never whether the
 // secret they name is actually present. After the documented reset+apply
@@ -373,7 +373,7 @@ func TestK8sEgressContainmentCheck_Acknowledged(t *testing.T) {
 	}
 }
 
-// TestRunnerCheckCC1OnlyFixIsDriverAware (W4-S1-5/W27-S1-4): a CC1-only host's
+// TestRunnerCheckCC1OnlyFixIsDriverAware: a CC1-only host's
 // Fix used to unconditionally read "run `wardyn setup wall` (or `wardyn setup
 // vault`)" — a DOCKER host command that means nothing on a k8s runner, where
 // the actual lever is pinning a cluster-registered RuntimeClass via Helm
@@ -573,7 +573,7 @@ func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	}
 }
 
-// ── finding 3: bedrock_provider / llm_provider under a per-principal caller ──
+// finding 3: bedrock_provider / llm_provider under a per-principal caller
 
 // bedrockRowVia is bedrockProviderCheck fed the SAME setupBedrock a real
 // request would compute for scope — real per_user zeroing included — so

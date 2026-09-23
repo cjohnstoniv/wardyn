@@ -19,7 +19,7 @@ import (
 // A MITM-eligibility entry is ANY-PORT when it carries no ":port" suffix:
 // proxy.parseMITMHostPort returns port 0 for a bare host, and handleConnect
 // then matches with `cport == 0 || cport == port`. planArtifactRedirect has
-// authored net.JoinHostPort(host, port) since W13-S1-5 for exactly that reason
+// authored net.JoinHostPort(host, port) since for exactly that reason
 // (and internal/egress/proxy/mitm_test.go's
 // TestMITMCorpHost_PortMismatchFallsThroughOpaque proves a port-scoped entry
 // falls through opaque on any other port). The Bedrock bearer lane, a LIVE

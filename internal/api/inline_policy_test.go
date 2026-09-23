@@ -273,7 +273,7 @@ func TestFilterMemberGrants(t *testing.T) {
 	}
 }
 
-// TestFilterMemberGrants_SSHKeyKnownHostsPairing is the W12-B-2 regression: an
+// TestFilterMemberGrants_SSHKeyKnownHostsPairing is the regression: an
 // ssh_key grant's known_hosts_secret_ref must match the ceiling's OWN
 // known_hosts_secret_ref for that exact (host, key_secret_ref) pairing — a
 // member must not be able to reuse an operator-approved key pairing while
@@ -303,7 +303,7 @@ func TestFilterMemberGrants_SSHKeyKnownHostsPairing(t *testing.T) {
 		t.Fatalf("exact ssh_key pairing incl. known_hosts: kept=%d, want 1", len(kept))
 	}
 	// Same host+key, but a DIFFERENT known_hosts_secret_ref of the member's own
-	// choosing: dropped. This is the W12-B-2 bypass case.
+	// choosing: dropped. This is the bypass case.
 	if kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{sshKey("github.com", "gh-ssh-key", "attacker-secret")}); len(kept) != 0 || len(warns) != 1 || code != 0 || err != nil {
 		t.Fatalf("mismatched known_hosts_secret_ref: kept=%d warns=%d code=%d err=%v, want (0,1,0,nil) - member must not smuggle a different known_hosts ref", len(kept), len(warns), code, err)
 	}
@@ -597,7 +597,7 @@ func TestPolicy_RejectsBedrockResidentSecretAtSinks(t *testing.T) {
 	}
 }
 
-// ─── H1 regression: the stored/default policy branch now runs the SAME
+// H1 regression: the stored/default policy branch now runs the SAME
 // validateInlineSecretRefs check as the inline branch (previously it only ran
 // for inline_policy) — a stored or default policy naming a missing secret now
 // 422s at create, naming the secret, instead of only failing later at first
@@ -748,7 +748,7 @@ func TestStoredSecretGrantPairing_UnknownKindIsRefused(t *testing.T) {
 	}
 }
 
-// ─── 6c: own-key exemptions ───────────────────────────────────────────────────
+// 6c: own-key exemptions
 
 // memberAPIKeyGrant builds an api_key grant scoped to (host, secret) — the
 // same shape apiKey() in TestFilterMemberGrants builds, factored out for the
@@ -954,7 +954,7 @@ func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 		t.Fatalf("expected model access provisioned with no operator row, got note=%q", note)
 	}
 
-	// THROUGH THE HANDLER: a member's real create-run request, hand-authoring
+	// Through the handler: a member's real create-run request, hand-authoring
 	// their own inline api_key grant naming their own secret (the
 	// filterMemberGrants own-key lane) — the request body is IDENTICAL in the
 	// positive and negative cases below; only whether "bob" owns the secret

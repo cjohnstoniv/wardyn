@@ -10,7 +10,7 @@ import (
 )
 
 // TestBuildRunMountsDropsSubscriptionForNonModelRun is the regression proof for
-// W5-S1-5: a task-mode=exec (or non-interactive scan) run gets NO LLM
+// A task-mode=exec (or non-interactive scan) run gets NO LLM
 // credential by contract (resolveLLMTransport's modelRun gate), yet
 // buildRunMounts used to copy policy.WorkspaceMounts verbatim regardless of
 // modelRun — so a resolved policy that happened to carry the resident

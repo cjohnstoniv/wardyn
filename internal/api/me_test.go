@@ -101,7 +101,7 @@ func TestHandleMe_MemberPollPerformsNoSiteConfigRead(t *testing.T) {
 	})
 }
 
-// W31-S1-7: /me used to say nothing about when an SSO session would die, so
+// /me used to say nothing about when an SSO session would die, so
 // the console had no way to warn ahead of the silent 401 the expiry causes.
 // handleMe now includes session_expires_at when (and only when) a verified
 // OIDC session is on the context.

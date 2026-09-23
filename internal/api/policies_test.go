@@ -104,7 +104,7 @@ func TestUpdatePolicyValidation(t *testing.T) {
 	}
 }
 
-// TestRedactPolicyForRead is W12-S1-1's read-path belt-and-braces: a policy
+// TestRedactPolicyForRead is the read-path belt-and-braces: a policy
 // read must never echo a raw llm_inspection secret VALUE back to a caller,
 // even though validatePolicySpec already refuses to persist one (defense in
 // depth against a migration/direct-DB-edit violating that invariant). Names
@@ -145,7 +145,7 @@ func TestRedactPolicyForRead(t *testing.T) {
 	}
 }
 
-// TestGetDefaultPolicy pins W14-S1-6: the control plane's ceiling policy
+// TestGetDefaultPolicy pins: the control plane's ceiling policy
 // (Config.DefaultPolicy — the same value composer.Clamp bounds a member's
 // inline policy against) is now readable, redacted the same way a stored
 // policy's read path is. "default" is a static route registered ahead of
@@ -253,7 +253,7 @@ func (duplicateNamePolicyStore) CreatePolicy(context.Context, types.RunPolicy) (
 	return types.RunPolicy{}, store.ErrConflict
 }
 
-// TestCreatePolicyDuplicateName pins W20-S1-3: a duplicate policy name must
+// TestCreatePolicyDuplicateName pins: a duplicate policy name must
 // surface as a caller-actionable 409, never handleCreatePolicy's former
 // blanket 500 (raw driver error text).
 func TestCreatePolicyDuplicateName(t *testing.T) {

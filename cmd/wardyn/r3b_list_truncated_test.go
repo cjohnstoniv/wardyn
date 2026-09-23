@@ -59,7 +59,7 @@ func r3bCaptureStdout(t *testing.T, fn func()) string {
 // TestR3BListCmdsWarnOnTruncation is F265's CLI half: a list command against a
 // page the server flagged truncated printed the rows, exited 0, wrote nothing to
 // stderr and left no marker in --json — indistinguishable from a complete list.
-// `wardyn audit` has warned on exactly this signal since W16-S1-2; the four list
+// `wardyn audit` has warned on exactly this signal since; the four list
 // families named in the finding now do the same.
 //
 // ALL FOUR, because the first pass covered two. `policy list` and `workspace

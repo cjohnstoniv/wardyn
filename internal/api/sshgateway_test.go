@@ -31,7 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ─────────────────────────────────────────────────────────────────
+// fakes
 
 // sshMemStore is a minimal in-memory store.Store for this test: only the
 // methods the gateway's auth/channel path touches are implemented; every
@@ -268,7 +268,7 @@ func (s *fakeShellSession) Close() error                                 { _ = s
 
 var _ runner.Session = (*fakeShellSession)(nil)
 
-// ─── harness ───────────────────────────────────────────────────────────────
+// harness
 
 // sshTestHarness starts a real SSH gateway (ServeSSHGateway) on a loopback
 // port backed by st/fr, and returns everything a test needs to dial it.
@@ -450,7 +450,7 @@ func sshDial(t *testing.T, h *sshTestHarness, username string, clientPriv ed2551
 	})
 }
 
-// ─── tests ─────────────────────────────────────────────────────────────────
+// tests
 
 // TestSSHGateway_AuthRejectAccept covers auth reject/accept: an unregistered
 // key is rejected, a registered key authenticating for a run it does NOT own
@@ -1277,7 +1277,7 @@ func TestSSHGateway_HandshakeTimeoutFires(t *testing.T) {
 	}
 }
 
-// ─── small helpers ─────────────────────────────────────────────────────────
+// small helpers
 
 // sshOwnedRunningRun seeds a store with one RUNNING, owned run and returns it
 // alongside the principal, for the tests that don't need to exercise auth

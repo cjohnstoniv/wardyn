@@ -308,7 +308,7 @@ func TestScan_ManifestCapTruncatesToLowConfidence(t *testing.T) {
 	}
 }
 
-// TestScan_SourceFileBudgetTruncatesToLowConfidence is W9-S1-4: past the
+// TestScan_SourceFileBudgetTruncatesToLowConfidence is: past the
 // per-scan source-file budget (maxSourceFilesScanned), extra files used to
 // be silently skipped — the scan then reported confidence=high over a tree
 // it never fully walked, contradicting the package's own bound-lowers-
@@ -326,7 +326,7 @@ func TestScan_SourceFileBudgetTruncatesToLowConfidence(t *testing.T) {
 	}
 }
 
-// TestScan_OverlongLineTruncatesToLowConfidence is W9-S1-4's other half: a
+// TestScan_OverlongLineTruncatesToLowConfidence is other half: a
 // line over eachLine's 64 KiB Buffer cap makes bufio.Scanner.Scan() stop with
 // ErrTooLong — silently, exactly like a clean EOF, unless the caller checks
 // Err(). A minified bundle or a base64 blob past the cutoff must not scan as

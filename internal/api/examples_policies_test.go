@@ -62,7 +62,7 @@ func TestExamplePoliciesValidate(t *testing.T) {
 	}
 }
 
-// TestCIClaudeLLMExample_MeetsCINonNegotiables pins W16-S1-6: docs/CI.md's
+// TestCIClaudeLLMExample_MeetsCINonNegotiables pins: docs/CI.md's
 // "Model access for harness mode" section points readers at a model-access
 // example for CI. The old pointer (examples/policies/claude-llm.json) is a DEV
 // policy that violates every one of the SAME doc's own CI non-negotiables one

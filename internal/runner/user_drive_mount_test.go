@@ -195,7 +195,7 @@ func TestUserDriveHostRootCheck(t *testing.T) {
 		t.Error("a symlink out of the ceiling was accepted — a lexical match would have missed it")
 	}
 
-	// THE SPELLING TABLE. withinAnyRoot resolves BOTH sides, so a ceiling and a
+	// The spelling table. withinAnyRoot resolves BOTH sides, so a ceiling and a
 	// drive row may name one tree by two different paths — which is the ordinary
 	// operator shape rather than an edge case: /srv/homes is a symlink to the
 	// mount point on plenty of hosts, and an admin fills the form in from
@@ -353,7 +353,7 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 		t.Errorf("resolved path = %q, want the link's target %q", got, wantElsewhere)
 	}
 
-	// THE SAME SPELLING TABLE AS THE AUTHORING CHECK, plus the rule only a BIND
+	// The same spelling table as the authoring check, plus the rule only a BIND
 	// has: the root is resolved before the comparison, so a ceiling naming the
 	// link and a source naming the real tree (or the other way round) agree —
 	// and the strict-subdirectory rule survives that resolution, which is the
@@ -399,7 +399,7 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 		})
 	}
 
-	// THE DENY LIST RUNS ON THE RESOLVED PATH, so listing a denied tree as a
+	// The DENY LIST RUNS on the resolved PATH, so listing a denied tree as a
 	// root buys nothing: ValidateMountSource resolves the source and re-runs
 	// deniedSource on what it found, which is why ParseUserDriveHostRoots warns
 	// that such a root matches NOTHING rather than treating it as an escape
@@ -483,7 +483,7 @@ func TestUserDriveHomeWithinItsRoot(t *testing.T) {
 	if crossDrive == nil {
 		t.Fatal("a home resolving into ANOTHER drive's root was accepted — that binds the other drive's directory")
 	}
-	// AND THE REFUSAL IS MEMBER-SAFE. Every driver refusal on this path becomes
+	// And the refusal is member-SAFE. Every driver refusal on this path becomes
 	// the run's failure_hint, read by the run's CREATOR — so the message names
 	// the drive and the directory (driveVolumeAdoptable's shape) and neither the
 	// drive's root nor the resolved real path. The operator reads those from the

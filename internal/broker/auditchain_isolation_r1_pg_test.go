@@ -92,7 +92,7 @@ func brokerProbeSchema(t *testing.T) (base, repeatableRead *pgxpool.Pool, schema
 	if err != nil {
 		t.Fatalf("parse config: %v", err)
 	}
-	// THE ONE THING THAT DIFFERS. It is a USERSET GUC, so this is exactly what
+	// The one thing that differs. It is a USERSET GUC, so this is exactly what
 	// `ALTER ROLE app SET default_transaction_isolation = 'repeatable read'` on
 	// a real deployment does to every connection wardynd opens.
 	cfg.ConnConfig.RuntimeParams["default_transaction_isolation"] = "repeatable read"
@@ -146,7 +146,7 @@ func TestPG_BrokerMintDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 		t.Fatalf("blocker takes the chain lock: %v", err)
 	}
 
-	// THE PRODUCTION ADAPTER, not a copy of it.
+	// The production adapter, not a copy of it.
 	st := NewPgxStore(rr)
 	mintErr := make(chan error, 1)
 	go func() {

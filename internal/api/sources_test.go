@@ -110,7 +110,7 @@ func TestSources_UpsertByCanonicalIdentity(t *testing.T) {
 }
 
 // TestSources_ReAddAppliesRenameOnIdentityHit is the bug-ops-1 regression
-// (W7-S1-3 applied to the sibling Sources tier): re-POSTing an existing
+// (applied to the sibling Sources tier): re-POSTing an existing
 // source's identity with a NEW name is the library's only re-add/rename
 // route (no PUT /sources/{id} — see mountLibraryRoutes' DEADCODE-1 comment),
 // so the operator's explicitly-typed name must actually apply, not get
@@ -157,7 +157,7 @@ func TestSources_ReAddAppliesRenameOnIdentityHit(t *testing.T) {
 	}
 }
 
-// W6-S1-6: a missing --locator must report the LOCATOR error, not the
+// A missing --locator must report the LOCATOR error, not the
 // derived-name symptom — Name is empty only because it derives from an empty
 // locator, so the locator-specific message has to win.
 func TestSources_MissingLocatorReportsLocatorError(t *testing.T) {
@@ -205,7 +205,7 @@ func TestSources_DeleteInUseIsLoud(t *testing.T) {
 		t.Error("a refused delete must not delete")
 	}
 
-	// W6-S1-2: a forced delete's response body NAMES the workspaces it just
+	// A forced delete's response body NAMES the workspaces it just
 	// detached — the operator's only visibility, since nothing 422s downstream
 	// (force silently narrows those workspaces to their remaining sources).
 	forced := do(t, srv, http.MethodDelete, "/api/v1/sources/"+id.String()+"?force=1", adminToken, "")
@@ -263,7 +263,7 @@ func TestSources_RepoLocatorCanonicalizesHostOnly(t *testing.T) {
 	}
 }
 
-// W6-S1-4: a bare GitHub slug's case and a trailing ".git" are aliases of the
+// A bare GitHub slug's case and a trailing ".git" are aliases of the
 // same repo (repoCloneURL/gitBrokerKeyFromSlug already treat them as one
 // clone target) — the library must dedupe them to one entry, not mint a
 // second row per spelling.

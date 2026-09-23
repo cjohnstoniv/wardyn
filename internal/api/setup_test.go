@@ -76,7 +76,7 @@ func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
 	}
 	// NOT redacted: ConfinementClasses feeds barrierReady (deriveReadiness),
 	// which gates a member's own demo Start button — zeroing it disabled
-	// demos for every member (W3-S1-2).
+	// demos for every member.
 	if len(memberSt.Runner.ConfinementClasses) == 0 {
 		t.Errorf("member: runner.confinement_classes = %v, want the real classes (drives demo barrierReady)", memberSt.Runner.ConfinementClasses)
 	}

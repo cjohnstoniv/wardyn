@@ -33,7 +33,7 @@ import (
 // auditing there would mean one emit per seam and a seam that hands the code
 // upward emitting nothing.
 //
-// THAT ARGUMENT IS ONLY TRUE WHILE THE DECIDING SITES ARE THE ONLY SOURCE. A
+// That argument is only true while the deciding sites are the only source. A
 // seam that raised errGroupsSnapshotStale itself — a new resolver, a copy of the
 // unusable-groups arm, a shortcut that skips effectiveCeiling — would refuse a
 // member with the documented sentence and record nothing, which is F227 again at

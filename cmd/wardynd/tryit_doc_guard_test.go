@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestTRYITDoc_NoStaleReplayTab is the W21-S1-8 regression: docs/TRY-IT.md used
+// TestTRYITDoc_NoStaleReplayTab is the regression: docs/TRY-IT.md used
 // to send the first-run user to a "Replay tab" that has never existed — the run
 // detail screen's tab is named "Recording" (run-detail.tsx's Tab type union).
 // Live viewing is `wardyn attach <id>` / the run's attach terminal, not a

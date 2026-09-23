@@ -17,7 +17,7 @@ import (
 // resolution pattern agent_run_lib_test.go uses for agent-run-lib.sh.
 const oracleAgentRunPath = "../../../deploy/images/oracle/agent-run"
 
-// TestOracleAgentRun_IdleHoldsOpen pins W15-W15d-interactive-attach-3: both
+// TestOracleAgentRun_IdleHoldsOpen pins: both
 // runners (driver.go, k8s/sandbox.go) launch `agent-run --idle` as the ENTIRE
 // main process for every interactive run — never Exec'ing a task into it — so
 // an image's agent-run MUST hold that process open, not exit. Before this fix

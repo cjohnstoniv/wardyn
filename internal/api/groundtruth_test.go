@@ -404,7 +404,7 @@ func TestHealthzEbpfHealthyWhenAllKindsArrive(t *testing.T) {
 }
 
 // TestHealthzEbpfHealthyWithoutFileWrite is the bug-audit-1 regression: the
-// P1 fix for W20-W20-groundtruth-mapper-4 (commit b7ad12fd) required ALL
+// P1 fix for (commit b7ad12fd) required ALL
 // THREE kernel event kinds — including kernel.file.write — before reporting
 // "healthy". But sensitive.go's own allowlist filter means file.write fires
 // only on a write to a narrow credential-shaped path (~/.ssh, ~/.aws, ...),
@@ -431,7 +431,7 @@ func TestHealthzEbpfHealthyWithoutFileWrite(t *testing.T) {
 	}
 }
 
-// TestEbpfGroundtruthCaveat_OneLinePerState is W20-W20-groundtruth-mapper-4's
+// TestEbpfGroundtruthCaveat_OneLinePerState is
 // other half: before this, the per-kind coverage state ebpfGroundtruthStatus
 // computes existed ONLY on the admin-only /healthz endpoint — nowhere a
 // Record Mode capture or a synthesized profile (the surfaces an operator

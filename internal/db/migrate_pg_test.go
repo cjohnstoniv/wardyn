@@ -552,7 +552,7 @@ func TestMigrateDoesNotHardenATriggerNobodyHardened(t *testing.T) {
 	}
 }
 
-// ─── the 0048-0054 upgrade set, applied over NON-EMPTY data ──────────────────
+// the 0048-0054 upgrade set, applied over NON-EMPTY data
 
 // partialSchemaPool migrates a throwaway schema up to (but NOT including)
 // upTo, and returns a pool pointed at it. It is probeSchemaPool's other half:
@@ -668,7 +668,7 @@ func TestPG_MigrateAppliesTheUpgradeSetOverNonEmptyData(t *testing.T) {
 			upgradeFloor, err)
 	}
 
-	// THE ROWS SURVIVED, with the new columns taking their defaults.
+	// The rows survived, with the new columns taking their defaults.
 	var wsOwner, secretOwner, tokenRole string
 	if err := pool.QueryRow(ctx, `SELECT owned_by FROM workspaces WHERE id = $1`, wsID).Scan(&wsOwner); err != nil {
 		t.Fatalf("0048 over an existing workspace row: %v", err)

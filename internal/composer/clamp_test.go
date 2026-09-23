@@ -447,7 +447,7 @@ func domainsContain(domains []string, want string) bool {
 	return false
 }
 
-// TestClamp_LLMInspectionDroppedUnderNilCeiling is W12-A-1 (CRIT) / W14-S1-1:
+// TestClamp_LLMInspectionDroppedUnderNilCeiling is (CRIT):
 // a member's hand-authored inline_policy.llm_inspection used to pass through
 // COMPLETELY unclamped whenever the ceiling set none — exactly the shipped
 // default.json posture (it sets no llm_inspection at all). That let a member
@@ -471,7 +471,7 @@ func TestClamp_LLMInspectionDroppedUnderNilCeiling(t *testing.T) {
 	}
 }
 
-// TestClamp_LLMInspectionCopyRedactsSecretValues is W12-A-3: the ceiling's
+// TestClamp_LLMInspectionCopyRedactsSecretValues is: the ceiling's
 // llm_inspection is unconditionally inherited (see above), but a compose/
 // profile PROPOSAL is advisory output returned straight to the caller in an
 // HTTP response (and, before the fix, embedded in the run.compose audit event
@@ -502,7 +502,7 @@ func TestClamp_LLMInspectionCopyRedactsSecretValues(t *testing.T) {
 	}
 }
 
-// TestClamp_GitHubEmptyCeilingRepoListDeniesAll is W23-S1-3: a member's
+// TestClamp_GitHubEmptyCeilingRepoListDeniesAll is: a member's
 // hand-authored inline_policy github_token grant must not survive Clamp when
 // the ceiling's OWN grant sets no repo allowlist. The SHIPPED default.json
 // ceiling — resolveRunPolicy's real DefaultPolicy on exactly this path
@@ -687,7 +687,7 @@ func TestClamp_Resources(t *testing.T) {
 		t.Errorf("MemoryMiB = %d, want the proposal's own 1024 (already under the cap)", got.Resources.MemoryMiB)
 	}
 
-	// No ceiling opinion (W14-S1-3): falls back to the platform defaults —
+	// No ceiling opinion: falls back to the platform defaults —
 	// the SAME conservative caps CreateSandbox itself applies when a
 	// Resources field is zero — never left uncapped.
 	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t), 0)
@@ -741,7 +741,7 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 	if hasWarn(warns, "auto_stop_after_sec") {
 		t.Errorf("unexpected auto_stop_after_sec warning with no ceiling opinion: %v", warns)
 	}
-	// F062, replacing the W14-S1-3 assertion that used to stand here. That one
+	// F062, replacing the assertion that used to stand here. That one
 	// pinned "-1 is rewritten to 0, with a warning" — a rewrite that changed the
 	// NUMBER and not the OUTCOME: internal/lifecycle's reaper skips every run
 	// whose policy value is <= 0, so 0 and -1 are the same never-reaped run. It

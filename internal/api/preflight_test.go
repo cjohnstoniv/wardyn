@@ -51,7 +51,7 @@ func TestPreflight_HappyPath(t *testing.T) {
 	}
 }
 
-// TestPreflight_ExecTaskModeSkipsLLMAccess is W16-S1-3: task_mode=exec runs a
+// TestPreflight_ExecTaskModeSkipsLLMAccess is: task_mode=exec runs a
 // plain shell command, not a model, so a --dry-run preflight for one must not
 // preview a false "missing model access" blocker (no secret is seeded here —
 // if llm_access were computed the same way the happy-path test asserts
@@ -180,7 +180,7 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 	}
 }
 
-// TestPreflight_AlreadyReflectsWorkspaceScannedEgress is W15-S1-3: launch-time
+// TestPreflight_AlreadyReflectsWorkspaceScannedEgress is: launch-time
 // unionRunEgress (runs.go) widens the enforced spec's egress from a
 // referenced workspace's scanned-profile hosts, but preflight used to grade
 // and checklist the UN-widened spec — a NARROWER envelope than the run would

@@ -112,7 +112,7 @@ func mitmPost(t *testing.T, proxyURL string, caPEM []byte, host, path, body stri
 // TestMITMPortClampHoldsOnTheLLMBranchToo pins F009: MITM eligibility must not
 // be decidable without the port.
 //
-// The W13-S1-5 clamp lived inside handleConnect's isCorpMITMHost branch alone,
+// The clamp lived inside handleConnect's isCorpMITMHost branch alone,
 // so a port MISMATCH fell through to `if p.isLLMHost(host)` -> mitmLLMHost,
 // which consulted no port at all. Any operator-configured MITM host that ALSO
 // satisfies isLLMHost — a bedrock/vpce host, which dispatch itself authors onto

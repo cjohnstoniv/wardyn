@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── Fakes ───────────────────────────────────────────────────────────────────
+// Fakes
 
 // fakeStore holds RunSummary rows; satisfies lifecycle.Store.
 type fakeStore struct {
@@ -160,7 +160,7 @@ func (f *fakeTickLock) releaseCount() int {
 	return f.releases
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// Helpers
 
 // makeReaper creates a Reaper wired to the provided fakes with a deliberately
 // short interval (never fires during unit tests — we call tick directly).
@@ -171,7 +171,7 @@ func makeReaper(store *fakeStore, stopper *fakeStopper, rec *fakeRecorder, now t
 	})
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// Tests
 
 // TestIdleRunIsStopped: a run whose updated_at is older than the default
 // threshold must be stopped and an audit event emitted.

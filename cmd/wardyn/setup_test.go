@@ -67,7 +67,7 @@ func linuxNative() dockerEnv {
 	return dockerEnv{goos: "linux", hasDocker: true, infoOK: true, osType: "linux", initSys: "systemd", family: "debian"}
 }
 
-// TestSetupCmd_BareInvocationPrintsHelpNotStartsDaemon documents WHY W4-S1-7's
+// TestSetupCmd_BareInvocationPrintsHelpNotStartsDaemon documents WHY
 // fix removed `wardyn setup` from dialHint's recovery text: the bare command is
 // a subcommand group with no RunE, so it exits 0 having started nothing — never
 // a working "start wardynd" recovery step.
@@ -93,7 +93,7 @@ func TestPlanWall(t *testing.T) {
 		{"rootless", func() dockerEnv { e := linuxNative(); e.rootless = true; return e }(), actUnsupported, "rootless"},
 		{"windows-containers", func() dockerEnv { e := linuxNative(); e.osType = "windows"; return e }(), actUnsupported, "Windows containers"},
 		{"no-docker", dockerEnv{goos: "linux"}, actUnsupported, "Docker isn't installed"},
-		// W4-S1-1 regression: `docker info` failing (permission/daemon) must
+		// regression: `docker info` failing (permission/daemon) must
 		// refuse to guess, not silently fall through to the native-install plan
 		// (family/initSys zero-valued here would otherwise reach planWallNativeLinux's
 		// actPrint branch — offering a gVisor install on a host that, for all we
@@ -126,7 +126,7 @@ func TestPlanVault(t *testing.T) {
 	}{
 		{"kvm-native-print", kvm(), actPrint},
 		{"no-kvm-unsupported", linuxNative(), actUnsupported},
-		// W4-S1-1 regression, Vault side: same info-failed guard ahead of the
+		// regression, Vault side: same info-failed guard ahead of the
 		// desktop/rootless/kvm checks below it.
 		{"docker-info-failed", dockerEnv{goos: "linux", hasDocker: true, kvm: true}, actUnsupported},
 		{"desktop-unsupported", func() dockerEnv { e := kvm(); e.desktop = true; return e }(), actUnsupported},
@@ -195,7 +195,7 @@ func TestPlanVault_KataVersionFloor(t *testing.T) {
 	}
 }
 
-// TestKataScript_ZstdBootstrapIsFamilyAware is the W4-S1-3 regression:
+// TestKataScript_ZstdBootstrapIsFamilyAware is the regression:
 // kataScript's zstd bootstrap used to be a bare apt-get line even though
 // planVault offers Kata on every native-Linux family, so a fedora/arch/suse
 // operator hit "apt-get: command not found" instead of an install. Each known
@@ -304,7 +304,7 @@ func TestDetectDockerUsesSharedPlatformDetector(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// executePlan exit-code honesty (W4-S1-8): a tier command must exit non-zero
+// executePlan exit-code honesty: a tier command must exit non-zero
 // on every path where the tier ended up NOT enabled — unsupported host,
 // plan-only (no --run), a declined/non-TTY confirm, and a script that ran
 // but left the runtime unregistered — instead of the old blanket exit 0.

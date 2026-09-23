@@ -164,7 +164,7 @@ func TestCredentialReauth_StateMachineReplay(t *testing.T) {
 				// a usable credential, and the row still does not move: an older
 				// sign-in cannot be a response to a newer question.
 				evCapture(-time.Hour, "alice@example.com"), evRowState(types.ApprovalPending),
-				// THE ACCEPTED COST, stated rather than hidden: the hold waits on
+				// The accepted COST, stated rather than hidden: the hold waits on
 				// the ROW, so it runs to its budget even though the credential is
 				// live again — and then the SDK's own retry re-resolves and gets
 				// it (the resolve below is that retry). The credential is never

@@ -13,7 +13,7 @@ import (
 
 // asciiOnlyPredicates are the homes of the "is this string pure ASCII" rule.
 //
-// ONE LINE PER HOME, deliberately: the rule is duplicated, and the point of this
+// One LINE per HOME, deliberately: the rule is duplicated, and the point of this
 // guard is that a new copy costs one line to enrol and cannot then answer
 // differently from the others. types.ASCIIOnlySubject is the second home and is
 // commented out because it does not exist on this branch — it lands with lane
@@ -52,7 +52,7 @@ func TestASCIIOnlyPredicatesHaveOneAnswer(t *testing.T) {
 		{"", true},
 		{"bob@corp.example", true},
 		{"Kim@Korp.com", true},
-		// CONTROL CHARACTERS ARE ASCII, and this predicate says so. It answers
+		// Control characters are ascii, and this predicate says so. It answers
 		// exactly one question — "can ToLower move a rune across the ASCII
 		// boundary" — and a copy that also refused control characters would be
 		// enforcing printableASCII's rule under this one's name, silently
@@ -60,7 +60,7 @@ func TestASCIIOnlyPredicatesHaveOneAnswer(t *testing.T) {
 		{"\x00nul", true},
 		{"\x7fdel", true},
 		{"eng\tteam", true},
-		// THE ESCALATION ITSELF: each of these folds to a pure-ASCII string
+		// The escalation itself: each of these folds to a pure-ASCII string
 		// under strings.ToLower, which is why the guard has to run first.
 		// Written as escapes rather than literals so the bytes under test are
 		// not at the mercy of an editor's normalization.

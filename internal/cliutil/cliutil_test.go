@@ -62,7 +62,7 @@ func assertLoud(t *testing.T, out *bytes.Buffer, code *int, env, val string) {
 	}
 }
 
-// ─── FlagEnv ──
+// FlagEnv
 //
 // FlagEnv has no parse step, so there is no loud/fatal contract to assert here
 // (every string is a valid value) — only the default/env/flag precedence.
@@ -112,7 +112,7 @@ func TestFlagEnv_Precedence(t *testing.T) {
 	// every other helper in this file), and `-name=` is the explicit blank.
 }
 
-// ─── FlagBool ──
+// FlagBool
 
 func TestFlagBool_UnsetKeepsDefaultQuietly(t *testing.T) {
 	for _, def := range []bool{false, true} {
@@ -203,7 +203,7 @@ func TestFlagBool_FlagOverridesEnv(t *testing.T) {
 	}
 }
 
-// ─── FlagDuration ──
+// FlagDuration
 
 func TestFlagDuration_UnsetKeepsDefaultQuietly(t *testing.T) {
 	out := resetFlags(t)
@@ -261,7 +261,7 @@ func TestFlagDuration_FlagOverridesEnv(t *testing.T) {
 	}
 }
 
-// ─── FlagIntEnv ──
+// FlagIntEnv
 
 func TestFlagIntEnv_UnsetKeepsDefaultQuietly(t *testing.T) {
 	out := resetFlags(t)
@@ -305,7 +305,7 @@ func TestFlagIntEnv_InvalidIsLoud(t *testing.T) {
 	}
 }
 
-// ─── EnvBool / EnvDuration (non-flag twins) ──
+// EnvBool / EnvDuration (non-flag twins)
 //
 // These register no flag, so there is no flag.Parse() step — the return value
 // is read directly. The loudness contract is identical to FlagBool/FlagDuration.

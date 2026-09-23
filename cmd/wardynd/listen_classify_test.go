@@ -151,7 +151,7 @@ func testLocalModeFlags(listen string, trustFwd bool) *bootFlags {
 // refuses outright with a 503 per decision), and an operator who set both would
 // otherwise discover it when their first approval hangs.
 //
-// THE SILENT ROWS ARE THE TEST. A boot warning that fires on a merely unusual
+// The silent rows are the test. A boot warning that fires on a merely unusual
 // configuration gets filtered out of the logs within a week, and is then missing
 // for the deployment that needed it — so this asserts the two half-configurations
 // stay quiet as hard as it asserts the broken one speaks.

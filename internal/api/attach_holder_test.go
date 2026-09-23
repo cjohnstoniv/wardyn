@@ -26,7 +26,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ─────────────────────────────────────────────────────────────────
+// fakes
 
 // countingShellSession is a runner.Session that RECORDS what was written to it
 // (keystrokes) and how often it was resized, and never echoes. That is the
@@ -213,7 +213,7 @@ func (e *fakeSSHChannelErr) Read(p []byte) (int, error) {
 
 var _ ssh.Channel = (*fakeSSHChannel)(nil)
 
-// ─── harness ───────────────────────────────────────────────────────────────
+// harness
 
 // holderTestServer builds a Server wired for attach: a RUNNING run owned by
 // alice, a runner that hands out inspectable sessions, SSO cookie auth (so
@@ -326,7 +326,7 @@ func getHolder(t *testing.T, srv *Server, runID uuid.UUID, cookie *http.Cookie) 
 	return v
 }
 
-// ─── registry unit tests ───────────────────────────────────────────────────
+// registry unit tests
 
 // TestAttachHolderRegistry_RoundTrip is the core contract: one writer at a
 // time, a second registration is admitted READ-ONLY (and registers nothing), an
@@ -519,7 +519,7 @@ func TestAttachTakeoverReason(t *testing.T) {
 	}
 }
 
-// ─── endpoint tests ────────────────────────────────────────────────────────
+// endpoint tests
 
 // TestAttachHolderEndpoints_ForeignRun404: both endpoints are owner-or-admin,
 // and a non-owning member gets the byte-identical 404 a missing run would — no
@@ -573,7 +573,7 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
 
-	// ── first client: the holder ──
+	// first client: the holder
 	c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "&cols=80&rows=24")
 	mode1 := readAttachMode(t, c1)
 	if mode1.ReadOnly {
@@ -607,7 +607,7 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	}
 	waitFor(t, "the holder's keystrokes to reach the session", func() bool { return fr.session(0).written() > 0 })
 
-	// ── second client: read-only ──
+	// second client: read-only
 	c2 := dialAttach(t, ts, srv, run.ID, holderSecond, "")
 	mode2 := readAttachMode(t, c2)
 	if !mode2.ReadOnly {
@@ -673,7 +673,7 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 		t.Fatal("the observer never received the streamed PTY output")
 	}
 
-	// ── take-over ──
+	// take-over
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach/takeover", admin, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("takeover: code = %d, body = %s", w.Code, w.Body.String())
@@ -728,7 +728,7 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	}
 }
 
-// ─── SSH lane ──────────────────────────────────────────────────────────────
+// SSH lane
 
 // TestSSHAttachHolder_RegistersAndIsDisplaced: an SSH-gateway PTY is the SAME
 // shared tmux session, so it registers in the SAME registry with source "ssh".
@@ -964,7 +964,7 @@ func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 	}
 }
 
-// ─── D1: a holder that outlives its socket ─────────────────────────────────
+// D1: a holder that outlives its socket
 
 // TestAttachWS_DeadPeerHolderIsFreed is the regression test for D1's liveness
 // probe (attachPingInterval).
@@ -1011,7 +1011,7 @@ func TestAttachWS_DeadPeerHolderIsFreed(t *testing.T) {
 	})
 }
 
-// ─── D2: release before the recording/audit tail ───────────────────────────
+// D2: release before the recording/audit tail
 
 // blockingDetachAudit delays ONLY the "session.detach" audit write until the
 // test signals unblock, so a test can hold open the exact window D2's fix
@@ -1064,7 +1064,7 @@ func TestAttachWS_RemountReleasesHolderBeforeAuditTail(t *testing.T) {
 	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
-	// ── the departing session: the OLD terminal instance ──
+	// the departing session: the OLD terminal instance
 	c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "")
 	mode1 := readAttachMode(t, c1)
 	if mode1.ReadOnly {
@@ -1090,7 +1090,7 @@ func TestAttachWS_RemountReleasesHolderBeforeAuditTail(t *testing.T) {
 		t.Fatal("session.detach already recorded — this test's premise (it is held open) is not exercising the window at all")
 	}
 
-	// ── the remount's new instance, same principal, same run ──
+	// the remount's new instance, same principal, same run
 	c2 := dialAttach(t, ts, srv, run.ID, holderOwner, "")
 	mode2 := readAttachMode(t, c2)
 	if mode2.ReadOnly {
@@ -1098,7 +1098,7 @@ func TestAttachWS_RemountReleasesHolderBeforeAuditTail(t *testing.T) {
 	}
 	waitFor(t, "the second session to open", func() bool { return fr.session(1) != nil })
 
-	// PIN THE ORDER: the successor's session.attach is already durably
+	// Pin the order: the successor's session.attach is already durably
 	// recorded while the departing session's session.detach is STILL absent —
 	// the accepted inversion the fix's comment documents.
 	events := audit.snapshot()

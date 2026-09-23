@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── clone-grant FK ordering (verify/record) ─────────────────────────────────
+// clone-grant FK ordering (verify/record)
 
 // fkGrantStore is the fake this regression needs: unlike the other api fakes
 // (whose CreateGrant has NO referential integrity — which is why an always-
@@ -50,7 +50,7 @@ func (s *fkGrantStore) ClaimWorkspaceActiveRun(_ context.Context, _ uuid.UUID, r
 }
 
 // GetSiteConfig is a no-op stub: launchRecordRun now folds the run's model
-// access unconditionally (W20-W20-llm-transport-matrix-1), reaching
+// access unconditionally, reaching
 // defaultAgentRunsIntegration's GetSiteConfig read on every call — the
 // embedded nil store.Store would otherwise panic here.
 func (s *fkGrantStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
@@ -153,7 +153,7 @@ func TestLaunchRecordRun_CloneGrantCreatedAfterRunRow(t *testing.T) {
 	}
 }
 
-// TestLaunchRecordRun_RequiredSecretRowRidesAlong is the W8-S1-2 regression: a
+// TestLaunchRecordRun_RequiredSecretRowRidesAlong is the regression: a
 // workspace's REQUIRED secret: contract row must ride a record/verify session
 // the same way it rides a real run — the Verify carry card (step-requirements.tsx)
 // promises "N required secrets ride proxy-side", but launchRecordRun used to
@@ -283,7 +283,7 @@ func TestMaybeGitHubReadGrant_ScopeMatchesBrokerKey(t *testing.T) {
 	}
 }
 
-// ─── ephemeral workspace targets (WARDYN_EPHEMERAL_DIRS) ─────────────────────
+// ephemeral workspace targets (WARDYN_EPHEMERAL_DIRS)
 
 // TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch pins audit row
 // 56's fix at its source: an ephemeral workspace source has no mount/clone —

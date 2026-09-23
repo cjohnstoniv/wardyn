@@ -45,7 +45,7 @@ func TestEvaluate_BlockedLiteralIPBeatsFirstUseApproval(t *testing.T) {
 	}
 }
 
-// Regression (W13-S1-3): an operator-declared egress-redirect target that is
+// Regression: an operator-declared egress-redirect target that is
 // itself a private/reserved IP literal (a realistic "To" for an on-prem
 // registry — see docs/OPERATIONS.md "network only" redirects and
 // site_config.go's validSiteURLOrHost, which happily persists one) must

@@ -96,7 +96,7 @@ func TestApproveDecision_NoDurableWriteOffTheVerifyPath(t *testing.T) {
 		{name: "junk host shape", task: "workspace record", host: "localhost", verb: "approve"},
 		// The branch four lines ABOVE the junk-host guard. Valid JSON, not an
 		// object: json.Unmarshal into the scope struct fails and this used to
-		// `return` bare — producing the exact symptom W19-W19b-5 was written to
+		// `return` bare — producing the exact symptom was written to
 		// eliminate (200, empty contract, silent audit), through the neighbouring
 		// branch. Both shapes, because an array and a scalar fail differently in
 		// encoding/json and only one of them was ever likely to be tried by hand.
@@ -126,12 +126,12 @@ func TestApproveDecision_NoDurableWriteOffTheVerifyPath(t *testing.T) {
 			if len(fake.ws.Requirements) != 0 {
 				t.Fatalf("requirements = %+v, want NOTHING written", fake.ws.Requirements)
 			}
-			// W19-W19b-5: the junk-host-shape gate used to fail silent, unlike
+			// The junk-host-shape gate used to fail silent, unlike
 			// every other give-up path in learnVerifyEgress — it must now audit
 			// the miss too, so an operator can see why the contract wasn't
 			// updated instead of wondering why the next replay still holds.
 			// EVERY give-up path in learnVerifyEgress must audit its miss — the
-			// junk host shape (W19-W19b-5) and, since R1, the non-object scope
+			// junk host shape and, since R1, the non-object scope
 			// beside it. They are indistinguishable to the operator: a green UI
 			// and a contract that never learned the host.
 			if tc.name == "junk host shape" || tc.rawScope != "" {

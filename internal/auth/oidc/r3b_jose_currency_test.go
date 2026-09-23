@@ -21,7 +21,7 @@ import (
 // v4.1.5 (2026-09-03) shipped seven upstream-labelled security fixes on the two
 // paths this package parses tokens Wardyn did not mint — jwt/claims.go,
 // json/scanner.go, jws.go, jwk.go, asymmetric.go, cipher/cbc_hmac.go. NO
-// ADVISORY WAS FILED for any of them, which is the structural half of the
+// Advisory was filed for any of them, which is the structural half of the
 // finding: govulncheck is advisory-ID driven, so it was green on v4.1.4 and
 // would have stayed green forever. Nothing else in CI reads upstream release
 // notes, so this test is what holds the floor.

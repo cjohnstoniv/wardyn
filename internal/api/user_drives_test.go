@@ -25,7 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the CRUD store double ────────────────────────────────────────────────────
+// the CRUD store double
 
 // driveCRUDStore is an in-memory user_drives + user_drive_grants pair with the
 // two behaviours the HANDLERS branch on and nothing else: UNIQUE(name) answers
@@ -52,7 +52,7 @@ type driveCRUDStore struct {
 	// listErrOnce makes listErr a TRANSIENT blip on ListUserDrives: it fails
 	// once and the store is healthy again.
 	//
-	// WHY A ONE-SHOT EXISTS AT ALL. The drive-write path takes TWO
+	// Why A one-SHOT EXISTS AT ALL. The drive-write path takes TWO
 	// ListUserDrives reads — driveHostRootNesting's, then driveRehomeGuard's —
 	// and each answers 500 on its own. A permanently failing list therefore
 	// cannot tell them apart: the nesting gate's 500 arm could be deleted
@@ -250,7 +250,7 @@ func driveTierRank(t types.CapabilitySubjectType) int {
 	}
 }
 
-// ─── the handler harness ──────────────────────────────────────────────────────
+// the handler harness
 
 // driveAdminServer builds the SUPER-admin server the /drives handlers run
 // behind, with an audit recorder so every write's row can be asserted.
@@ -324,7 +324,7 @@ func driveAuditData(t *testing.T, rec *recRecorder, action string) map[string]an
 
 const driveCreateBody = `{"name":"Corp NAS","backend":"docker_volume","size_mib":10240}`
 
-// ─── writes ───────────────────────────────────────────────────────────────────
+// writes
 
 // TestCreateUserDriveWritesAndAudits pins the happy path AND the audit row's
 // field set — the row is the only durable record that an admin authorized
@@ -519,7 +519,7 @@ func TestUserDriveWriteRefusals(t *testing.T) {
 			want:  http.StatusBadRequest, msg: "is not allowed on a share backend",
 		},
 		{
-			// THE MIRROR IMAGE, and the security half of the pair. A MANAGED
+			// The mirror image, and the security half of the pair. A MANAGED
 			// object is named by the HOME alone, so two people whose addresses
 			// share the part before the "@" are allocated ONE volume — invisible
 			// from this surface, since both allocations preview a perfectly
@@ -797,13 +797,13 @@ func TestUpdateAllocatedUserDriveGuardsTheRehome(t *testing.T) {
 		if st.drives[id].Name != "Corp NAS archive" {
 			t.Errorf("stored name = %q, want the confirmed rename to have landed", st.drives[id].Name)
 		}
-		// THE POINT OF THE FIELD: one `drive.write` action covers both kinds of
+		// The point OF the field: one `drive.write` action covers both kinds of
 		// edit, so without this the orphaning is invisible to an auditor.
 		data := driveAuditData(t, rec, "drive.write")
 		if data["rehomed"] != true {
 			t.Errorf("drive.write rehomed = %v, want true", data["rehomed"])
 		}
-		// AND WHICH OBJECTS IT ORPHANED (B5-F6): `rehomed:true` alone cannot
+		// And which objects it orphaned (B5-F6): `rehomed:true` alone cannot
 		// answer the only question a re-home raises afterwards. The refusal this
 		// confirmation overrode named both facts and the row discarded them.
 		if got, want := data["rehomed_fields"], []any{`name "Corp NAS" → "Corp NAS archive"`}; !reflect.DeepEqual(got, want) {
@@ -950,7 +950,7 @@ func TestDeleteUnallocatedUserDriveSucceeds(t *testing.T) {
 	driveAuditData(t, rec, "drive.delete")
 }
 
-// ─── grants ───────────────────────────────────────────────────────────────────
+// grants
 
 // TestUserDriveGrantDefaultsEnabled is THE regression this whole *bool exists
 // for. UpsertUserDriveGrant writes Enabled verbatim, so a plain bool would make
@@ -1126,7 +1126,7 @@ func TestDeleteUserDriveGrantAuditsTheReclaimIntent(t *testing.T) {
 	}
 }
 
-// ─── the read ─────────────────────────────────────────────────────────────────
+// the read
 
 // TestGetUserDrivesIsTheWholePicture pins the one-read contract AND the two
 // deployment scalars the console cannot derive: without host_roots_configured
@@ -1181,7 +1181,7 @@ func TestGetUserDrivesIsTheWholePicture(t *testing.T) {
 	}
 }
 
-// ─── the reserved target ──────────────────────────────────────────────────────
+// the reserved target
 
 // TestDriveTargetIsReservedFromAuthoring pins the refusal at BOTH authoring
 // seams the reserved path can be named from. Without it a policy mount or a
@@ -1239,7 +1239,7 @@ func TestDriveTargetIsReservedFromAuthoring(t *testing.T) {
 		t.Errorf("neighbouring target refused: %q — the reservation must be the subtree, not a prefix match", msg)
 	}
 
-	// THE ROW THAT WAS STORED BEFORE THE RESERVATION EXISTED. Everything above
+	// The row that was stored before the reservation existed. Everything above
 	// is the write boundary, and it only ever ran on rows written since. A
 	// stored policy is handed to dispatch verbatim — resolvePolicy does not
 	// re-run validatePolicySpec, which runs for INLINE specs only — so a
@@ -1363,7 +1363,7 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 			if !strings.Contains(body, "2 subjects") {
 				t.Errorf("body = %q, want it to count the allocations it would re-home", body)
 			}
-			// THE REMEDY HAS TO BE ONE ITS READER CAN CARRY OUT. The console
+			// The remedy has to be one its reader can carry OUT. The console
 			// PUTs /drives/{id} with no query and renders this body under
 			// SAVE_REFUSED_TITLE, so "re-send with ?confirm=rehome" read as a
 			// button an admin could not find. Byte-exact, because the whole
@@ -1467,7 +1467,7 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 // 50,000 allocations as a 5.5 MB on-disk external merge; bounded, a 301 kB
 // top-N heapsort).
 //
-// THE DEFAULT IS THE PART THAT MUST NOT TAKE ROWS AWAY. It is maxListLimit, not
+// The default is the PART that must not take rows AWAY. It is maxListLimit, not
 // defaultListLimit, so a deployment the console can actually render gets the
 // answer it always got; past the cap the page says so on the wire twice — the
 // X-Wardyn-Truncated header every paged list already sets, and grant_total,
@@ -1500,7 +1500,7 @@ func TestGetUserDrivesBoundsTheAllocationList(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { runDriveListBoundsCase(t, tc.build) })
 	}
 
-	// AND THE BOUND REACHES THE STORE. Everything above is about the response,
+	// And the bound reaches the store. Everything above is about the response,
 	// which the Go-side trim makes identical whether the query was bounded or
 	// not — so none of it can see the defect, which is that the DATABASE sorted
 	// every allocation. This asserts the Page the handler handed the store.
@@ -1598,7 +1598,7 @@ func runDriveListBoundsCase(t *testing.T, build func() (*Server, *driveCRUDStore
 		return body
 	}
 
-	// THE TOTAL IS ALWAYS THE TRUE COUNT, page or no page: it is summed from the
+	// The total is always the true count, page or no page: it is summed from the
 	// per-drive counts, not from the rows this response happens to carry.
 	whole := get("", 0)
 	if whole.GrantTotal != seeded || len(whole.Grants) != seeded {
@@ -1645,7 +1645,7 @@ func runDriveListBoundsCase(t *testing.T, build func() (*Server, *driveCRUDStore
 // mounted wardyn-drive-<hash> and the object holding their work was left behind
 // with nothing in Wardyn naming it.
 //
-// STATING THE FIELD IS THE CONFIRMATION, which is why there is no ?confirm=
+// Stating the field is the confirmation, which is why there is no ?confirm=
 // here and one on the drive PUT: a drive PUT cannot express "leave these four
 // columns alone", while this write can express the one column exactly.
 func TestGrantRepointCannotSilentlyClearAPinnedHomeOverride(t *testing.T) {
@@ -1838,7 +1838,7 @@ func TestHostRootsConfiguredMeansUsable(t *testing.T) {
 // wireWorkspaceSource (the record/verify path) had a case, and both compose a
 // stored row that never passed the authoring gate.
 //
-// AND THE DISPATCH SEAM BELOW THEM, which cannot 422 because the run row
+// And the dispatch SEAM below THEM, which cannot 422 because the run row
 // already exists: a stored policy that names the reserved target reached the
 // driver and failed the whole CreateSandbox, so every run under that policy
 // died at STARTING with an internal reservation as its failure_hint.
@@ -1872,7 +1872,7 @@ func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 		}
 	}
 
-	// THE POSITIVE CONTROL: a neighbouring target under the same allowed prefix
+	// The positive control: a neighbouring target under the same allowed prefix
 	// still composes, so the seam refuses the reserved subtree and not the
 	// stored-source path in general.
 	t.Run("a neighbouring target still composes", func(t *testing.T) {
@@ -1922,7 +1922,7 @@ func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 // a known row. docs/AUDIT-ACTIONS.md declares the key set for both; nothing
 // held the code to it.
 //
-// BY VALUE AND BY THE WHOLE MAP, the same treatment drive.write already gets: a
+// By value and by the whole MAP, the same treatment drive.write already gets: a
 // key-set check alone would pass on a row whose every value came from the wrong
 // allocation, and a value check alone would pass on a row that had quietly
 // grown a field carrying the directory NAME — which is the one thing this
@@ -1962,7 +1962,7 @@ func TestUserDriveGrantAuditIsTheWholeRow(t *testing.T) {
 		"priority":          float64(7),
 		"size_mib_override": float64(2048),
 		"writable_override": false,
-		// A BOOLEAN AND NEVER THE VALUE: a directory name is a person's
+		// A boolean and never the value: a directory name is a person's
 		// username as often as not, and whether an admin pinned one is the
 		// governance fact. If this key ever becomes a string, this assertion is
 		// where that has to be argued for.

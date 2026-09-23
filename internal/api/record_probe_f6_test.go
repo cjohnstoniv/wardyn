@@ -60,9 +60,7 @@ func f6PromoteURL(wsID uuid.UUID, task string) string {
 	return "/api/v1/workspaces/" + wsID.String() + "/record/" + task + "/promote-egress"
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // PROBE family — expected GREEN.
-// ─────────────────────────────────────────────────────────────────────────────
 
 // TestF6Probe_ControlPlaneHostNeverPromotable: the control plane's own host is
 // never promotable — neither wholesale nor by explicit {"hosts":[...]} — even
@@ -190,9 +188,7 @@ func TestF6Probe_TruncatedCaptureIsNeverClean(t *testing.T) {
 	})
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // GAP family — expected RED on fa910735. Each names the hypothesis it probes.
-// ─────────────────────────────────────────────────────────────────────────────
 
 // TestF6Gap_TruncatedOpenCapturePromotesNothing — H1. handlePromoteRecordEgress
 // never reads the truncation caveat; a truncated OPEN recording promotes its

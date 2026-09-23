@@ -761,7 +761,7 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		}
 	}
 
-	// THE MEMBER TIER, through a real OIDC session — and the two halves of it
+	// The member TIER, through a real OIDC session — and the two halves of it
 	// (security round-2 SHOULD-1). The run's OWNER is told the same thing the
 	// security operator is: the verb does not exist for this kind. A member who
 	// does NOT own the run is told nothing at all, because a 409 there would
@@ -834,7 +834,7 @@ func onlyPendingReauthRow(t *testing.T, srv *Server) types.ApprovalRequest {
 	return types.ApprovalRequest{}
 }
 
-// THE RAISE REASON IS THE SPENT ONE when the session's refresh token is gone —
+// The raise reason is the spent one when the session's refresh token is gone —
 // and this case exists because a MERGE broke it silently.
 //
 // The run-credential-door lane turned awsSSORefreshSpentSentence into a FORMAT
@@ -888,9 +888,9 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 	t.Fatal("no credential.reauth.requested row")
 }
 
-// ─── legacy open mode: no roster (W6-S F1) ───────────────────────────────────
+// legacy open mode: no roster (W6-S F1)
 
-// THE TWO HALVES, JOINED. Dispatch and resolve each had thorough tests and they
+// The two halves, JOINED. Dispatch and resolve each had thorough tests and they
 // disagreed about the same deployment, because no test ever ran both: every
 // resolver case seeds a roster row (reauthRosterRow) and every no-roster case
 // stops at dispatch.
@@ -987,7 +987,7 @@ func (d *dedupApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalReq
 	return types.ApprovalRequest{}, errStoreNotFound
 }
 
-// THE LOSER AUDITS NOTHING AND COUNTS NOTHING (W6-S F4).
+// The loser audits nothing and counts nothing (W6-S F4).
 //
 // It still gets its 423 naming the winner's approval id — the row is real, it is
 // PENDING, and the sidecar's hold joins the same workflow by that id — but

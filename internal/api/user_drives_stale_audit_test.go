@@ -139,11 +139,11 @@ func TestMePollsAreNotDenials(t *testing.T) {
 			"for a run", n, driveDenialReasons(t, rec))
 	}
 
-	// AND THE ENFORCEMENT PATH IS UNTOUCHED, on the same server, the same store
+	// And the enforcement PATH is untouched, on the same server, the same store
 	// and the same member — which is what makes the suppression a SCOPING rather
 	// than a hole. The launch really is refused, so it really is recorded.
 	//
-	// ONE ROW PER REFUSED REQUEST, not two, and that is a property of the order
+	// One row per refused request, not two, and that is a property of the order
 	// rather than of the mark: handleCreateRun resolves the ceiling (resolveRunPolicy, in handleCreateRun)
 	// BEFORE it reaches the drive seam (seedRequestDrive, later in the same handler), so on a deployment where
 	// both group-tier reads are true the ceiling refuses first and the drive

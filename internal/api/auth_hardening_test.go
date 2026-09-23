@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── FIX #6: sign-out actually terminates the OIDC session ───────────────────────
+// FIX #6: sign-out actually terminates the OIDC session
 
 // TestLogoutRouteMountedClearsSession is the regression for FIX #6. The UI POSTs
 // /api/v1/auth/logout, but the OIDC logout used to be mounted ONLY as a root
@@ -65,7 +65,7 @@ func TestLogoutTokenModeNoOp(t *testing.T) {
 	}
 }
 
-// ─── FIX #8: local-mode Host allowlist (DNS-rebinding defense) ────────────────────
+// FIX #8: local-mode Host allowlist (DNS-rebinding defense)
 
 // TestLocalModeRejectsNonLoopbackHost is the regression for FIX #8. In local
 // no-auth mode humanOrAdminAuth bypasses all auth, so a DNS-rebinding page
@@ -201,7 +201,7 @@ func TestIsLoopbackRemoteAddr(t *testing.T) {
 	}
 }
 
-// ─── #19a: auth.failed audit event ─────────────────────────────────────────
+// #19a: auth.failed audit event
 
 // TestAdminAuth401EmitsAuthFailed is the regression for #19a: adminAuth's
 // three 401 branches used to fail silently. Each must now emit auth.failed

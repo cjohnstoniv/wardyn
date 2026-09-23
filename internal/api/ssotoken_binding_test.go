@@ -164,7 +164,7 @@ func TestUploadSSOToken_SecondCaptureRefused(t *testing.T) {
 	}
 }
 
-// ── finding 1: the capture must name the account it was AUTHORIZED to name ───
+// finding 1: the capture must name the account it was AUTHORIZED to name
 //
 // The reported failure was a capture that named a CONFIDENTLY WRONG AWS
 // account: structurally perfect, every guard above satisfied, stored, and then

@@ -251,7 +251,7 @@ func TestPG_Devices_IngestForARevokedDeviceIsErrDeviceRevoked(t *testing.T) {
 	}
 }
 
-// ─── every accepted row re-checks; everything else is refused ────────────────
+// every accepted row re-checks; everything else is refused
 
 // storedFederation is one stored federated row as a verifier sees it: the
 // device's claim recomputed with store.FederatedClaimHashSQL, and the

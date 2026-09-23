@@ -56,7 +56,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ─────────────────────────────────────────────────────────────────
+// fakes
 
 // gatedSession is a runner.Session whose Write PARKS (after signalling
 // `entered`) until the test closes `release`, and records a chunk as
@@ -168,7 +168,7 @@ func (c *blockingStderrChannel) Stderr() io.ReadWriter { return blockingStderr{c
 
 var _ ssh.Channel = (*blockingStderrChannel)(nil)
 
-// ─── harness ───────────────────────────────────────────────────────────────
+// harness
 
 // f5Server mirrors holderTestServer (attach_holder_test.go) with the gated
 // runner swapped in.
@@ -234,7 +234,7 @@ func wsPing(t *testing.T, c *websocket.Conn) {
 	}
 }
 
-// ─── web lane ──────────────────────────────────────────────────────────────
+// web lane
 
 // TestF5_WebPump_FrameOnTheWireBeforeEvictionIsDropped: a keystroke frame the
 // displaced client DISPATCHED before the take-over was decided — already on the
@@ -304,7 +304,7 @@ func TestF5_WebPump_FrameOnTheWireBeforeEvictionIsDropped(t *testing.T) {
 	}
 }
 
-// ─── SSH lane ──────────────────────────────────────────────────────────────
+// SSH lane
 
 // startSSHShell drives bridgeSSHShell directly (the pattern
 // TestSSHAttachHolder_RegistersAndIsDisplaced uses) and returns the bridge's
@@ -442,7 +442,7 @@ func TestF5_SSHDisplace_BlockedStderrDoesNotStrandEvictedPump(t *testing.T) {
 	}
 }
 
-// ─── takeover authorization ────────────────────────────────────────────────
+// takeover authorization
 
 // TestF5_Takeover_SecurityAdminCannotEvictForeignHolder (POLICY probe, expected
 // RED on fa910735 = H4): handleAttachTakeover gates on getRunAuthorized ->

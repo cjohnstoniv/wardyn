@@ -34,7 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the store double ───────────────────────────────────────────────────────
+// the store double
 
 // roleMapStore holds role_mappings rows in memory, mirroring permStore's
 // shape for capability grants: UpsertRoleMapping flips an existing (value)
@@ -104,8 +104,8 @@ func (b accessOIDCBridge) ListRoleMappings(ctx context.Context) ([]oidc.RoleMapp
 	return out, nil
 }
 
-// ─── a REAL *oidc.Authenticator, not the zero-value stub every other API
-// test uses ───────────────────────────────────────────────────────────────
+// a REAL *oidc.Authenticator, not the zero-value stub every other API
+// test uses
 //
 // Every other internal/api test authenticates through a session cookie whose
 // ROLE the router trusts directly (ssoSession) — it never needs the
@@ -205,7 +205,7 @@ func accessServer(t *testing.T, auth *oidc.Authenticator, st *roleMapStore) *Ser
 	return New(cfg)
 }
 
-// ─── 503 when OIDC is not configured ───────────────────────────────────────
+// 503 when OIDC is not configured
 
 func TestAccess_Unconfigured503(t *testing.T) {
 	cfg := baseTestConfig(newHarness(t), &roleMapStore{})
@@ -235,7 +235,7 @@ func TestAccess_Unconfigured503(t *testing.T) {
 	}
 }
 
-// ─── canonicalization + collision ──────────────────────────────────────────
+// canonicalization + collision
 
 func TestAccess_CanonicalizesValueOnWrite(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
@@ -325,7 +325,7 @@ func TestAccess_CollisionWithOperatorAllowlist400(t *testing.T) {
 	}
 }
 
-// ─── Q7 adjudication: email-shaped console mappings ────────────────────────
+// Q7 adjudication: email-shaped console mappings
 
 // TestAccess_EmailMappingRefusedByDefault pins EMAIL_KEY_REFUSED
 // byte-for-byte (docs/design/people-access-prompt.md's Adjudication §Q7) —
@@ -502,7 +502,7 @@ func TestAccess_GetReflectsEmailDomainsConfigured(t *testing.T) {
 	}
 }
 
-// ─── A-5: guard matrix over a SHADOWED row (merged map, not raw counts) ────
+// A-5: guard matrix over a SHADOWED row (merged map, not raw counts)
 
 // TestAccess_ShadowedRowGuards: chart is EMPTY; the console's ONLY row
 // collides with the OPERATOR ALLOWLIST and is shadowed (mergeRoleMaps drops
@@ -617,7 +617,7 @@ func TestAccess_InvalidShapeRejected(t *testing.T) {
 	}
 }
 
-// ─── posture-flip guard: pure-function matrix over accessRolePosture ───────
+// posture-flip guard: pure-function matrix over accessRolePosture
 
 func TestAccessRolePosture_Matrix(t *testing.T) {
 	cases := []struct {
@@ -747,7 +747,7 @@ func TestAccess_ReversePostureFlipGuard(t *testing.T) {
 	}
 }
 
-// ─── lockout guard ──────────────────────────────────────────────────────────
+// lockout guard
 
 // TestAccess_LockoutGuard_SSOAdminBlockedFromDemotingSelf: an SSO admin
 // deleting the console row that is their ONLY source of admin — with a
@@ -821,7 +821,7 @@ func TestAccess_LockoutGuard_POST(t *testing.T) {
 	}
 }
 
-// ─── A-1: stale-snapshot guard, distinct from a genuine lockout ────────────
+// A-1: stale-snapshot guard, distinct from a genuine lockout
 
 // TestAccess_StaleSnapshot_NilGroupsNeverReadsAsLockout: an admin session
 // whose groups snapshot is nil (a pre-0.6 cookie, or a group that fell off
@@ -926,7 +926,7 @@ func TestAccess_LockoutGuard_GenuineLockoutStillRefused(t *testing.T) {
 	}
 }
 
-// ─── GET /access shape ──────────────────────────────────────────────────────
+// GET /access shape
 
 func TestAccess_GetShapeIncludesShadowedRow(t *testing.T) {
 	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, oidc.RoleMember, []string{"ops@corp.example"}, nil)
@@ -1100,7 +1100,7 @@ func TestAccess_MappingsAreSortedByValueThenSource(t *testing.T) {
 	}
 }
 
-// ─── preview ────────────────────────────────────────────────────────────────
+// preview
 
 func TestAccess_PreviewExplicitClaims(t *testing.T) {
 	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, "", nil, nil)
@@ -1228,7 +1228,7 @@ func TestAccess_PreviewStoreErrorIsOutcomeNot500(t *testing.T) {
 	}
 }
 
-// ─── DELETE unknown id ──────────────────────────────────────────────────────
+// DELETE unknown id
 
 func TestAccess_DeleteUnknownID404(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
@@ -1240,7 +1240,7 @@ func TestAccess_DeleteUnknownID404(t *testing.T) {
 	}
 }
 
-// ─── A-6: delete audit records WHICH mapping was removed ──────────────────
+// A-6: delete audit records WHICH mapping was removed
 
 // TestAccess_DeleteRecordsValueAndRoleInAudit: once a row is gone, the store
 // can no longer say what it named — the audit event must carry the matched
@@ -1287,7 +1287,7 @@ func TestAccess_DeleteRecordsValueAndRoleInAudit(t *testing.T) {
 	}
 }
 
-// ─── A-10: acknowledge_access_change via strconv.ParseBool ────────────────
+// A-10: acknowledge_access_change via strconv.ParseBool
 
 // TestAccess_DeleteAcknowledgeAcceptsParseBoolForms: the query param used to
 // accept only the literal "true" — strconv.ParseBool also takes "1"/"T"/
@@ -1324,7 +1324,7 @@ func TestAccess_DeleteAcknowledgeAcceptsParseBoolForms(t *testing.T) {
 	}
 }
 
-// ─── the third tier: security_admin (0.7 §B, migration 0053) ──────────────
+// the third tier: security_admin (0.7 §B, migration 0053)
 
 // TestAccess_SecurityAdminMappingPersists_PGBacked is the ONE test in this
 // file that cannot use roleMapStore, and that is the entire point: the bug it

@@ -86,7 +86,7 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 }
 
 func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
-	// W6-05: strip comments first — a bare substring match is satisfied by a
+	// Strip comments first — a bare substring match is satisfied by a
 	// field mentioned only in a comment, which would let a row read "bounded"
 	// for a field the source only talks about. See stripGoComments below.
 	policySrc := stripGoComments(t, readRepoFile(t, "internal", "api", "policy.go"))
@@ -187,7 +187,7 @@ func stripGoComments(t *testing.T, src string) string {
 	return out.String()
 }
 
-// W6-05 negative control: a field named only inside a comment must NOT count
+// negative control: a field named only inside a comment must NOT count
 // as bounded once stripGoComments runs — proving the strip actually closes
 // the loophole the guard's own doc comment declares ("It reads the SOURCE
 // rather than exercising behaviour deliberately").

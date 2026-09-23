@@ -65,7 +65,7 @@ func ccCount(s, want string) int {
 	return n
 }
 
-// ── the agent's own boot traffic ─────────────────────────────────────────────
+// the agent's own boot traffic
 
 // ccSelfFetchVars are the three things claude-code fetches on its OWN behalf,
 // each of which parked a first-use approval before the operator had asked the
@@ -171,7 +171,7 @@ func TestClaudeImage_DisablesAutoUpdater(t *testing.T) {
 	})
 }
 
-// ── the onboarding seed ──────────────────────────────────────────────────────
+// the onboarding seed
 
 // ccSeededFile is the WHOLE file the image may write, byte for byte.
 const ccSeededFile = "{\"hasCompletedOnboarding\":true}\n"
@@ -370,7 +370,7 @@ func TestManagedMode_StillSeedsOnboarding(t *testing.T) {
 	}
 }
 
-// ── the boot session, and the race it has to win ─────────────────────────────
+// the boot session, and the race it has to win
 
 // ccRunnableAgentRun copies the REAL claude-code agent-run and redirects its one
 // absolute `source` at the real library. Nothing is stubbed — /usr/local/bin

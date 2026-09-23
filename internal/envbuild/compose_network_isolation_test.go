@@ -13,7 +13,7 @@ import (
 )
 
 // TestComposeEnvbuildBuildNetworkIsolatedFromControlPlane is the regression for
-// W10-S1-2: deploy/compose/docker-compose.yaml used to default
+// Deploy/compose/docker-compose.yaml used to default
 // WARDYN_ENVBUILD_BUILD_NETWORK to the SAME `wardyn-internal` bridge that
 // postgres and wardynd's admin API sit on. The envbuild build container runs
 // attacker-controlled code (devcontainer RUN/feature/onCreate steps —

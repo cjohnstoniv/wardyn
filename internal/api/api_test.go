@@ -29,7 +29,7 @@ import (
 
 const adminToken = "test-admin-token"
 
-// ─── fakes ─────────────────────────────────────────────────────────────────
+// fakes
 
 // recRecorder's mutex exists for the detached create-run launch: it records
 // audit rows after the 201, while the test is already reading.
@@ -256,7 +256,7 @@ func (b *fakeBroker) RevokeRun(_ context.Context, runID uuid.UUID) error {
 	return nil
 }
 
-// ─── test harness ────────────────────────────────────────────────────────────
+// test harness
 
 type harness struct {
 	srv       *Server
@@ -441,7 +441,7 @@ func lastAuditEvent(t *testing.T, events []types.AuditEvent, action string) type
 	return types.AuditEvent{}
 }
 
-// ─── tests ─────────────────────────────────────────────────────────────────
+// tests
 
 func TestHealthz(t *testing.T) {
 	h := newHarness(t)
@@ -872,7 +872,7 @@ func TestInternalMintScopeMismatchFailsClosed(t *testing.T) {
 	}
 }
 
-// TestInternalMintAlreadyMintedCarriesDiscriminatingCode is W19-W19a-2: three
+// TestInternalMintAlreadyMintedCarriesDiscriminatingCode is: three
 // distinct fail-closed conditions used to share the bare 409 status with no
 // discriminator — the "already minted" (single-use) case decoded in
 // cmd/wardyn-git-helper's callMint as an approval-pending 409 with no

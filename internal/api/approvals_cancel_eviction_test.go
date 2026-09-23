@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// THE EVICTION SEAM, END TO END (plan §coordination, patch-review A / R076-010).
+// The eviction SEAM, END TO END (plan §coordination, patch-review A / R076-010).
 //
 // Everything in this chain was pinned in pieces and nowhere together. The runner
 // package proves a k8s pod evicted out from under a run reads TERMINAL

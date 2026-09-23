@@ -237,7 +237,7 @@ func TestRevokeSessions_AuditEmitted(t *testing.T) {
 	}
 }
 
-// ─── the SEC-over-SUPER direction (Requirement 3) ────────────────────────────
+// the SEC-over-SUPER direction (Requirement 3)
 
 // TestSecurityAdminRevokesSuperAdmin pins the answer to "may a security_admin
 // revoke a SUPER admin's sessions and tokens". YES — deliberately, and this
@@ -336,7 +336,7 @@ func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
 	})
 }
 
-// ─── an email names the same human as their sub (F002) ───────────────────────
+// an email names the same human as their sub (F002)
 
 // TestRevokeSessions_EmailFormRevokesTheSameHuman: "revoke a human now" is the
 // time-critical half of incident response, and it used to be keyed on the OIDC

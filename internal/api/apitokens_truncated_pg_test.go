@@ -19,7 +19,7 @@
 // wardyn_inj_* database per test and drops it on cleanup, so nothing here
 // touches shared rows).
 //
-// WHAT IT PINS (the traced invariant, see ../F3-api-token-truncated-snapshot.md):
+// What it pins (the traced invariant, see ../F3-api-token-truncated-snapshot.md):
 // a wdn_ token replays the minting session's group snapshot TOGETHER WITH that
 // snapshot's completeness, and an UNKNOWN completeness (SQL NULL, a 0.6-era row)
 // reads as INCOMPLETE. Concretely, through the real Postgres store and the real
@@ -161,7 +161,7 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 	srv, pg, pool := truncProbeServer(t)
 	ctx := context.Background()
 
-	// ── phase 1: the stamp ──────────────────────────────────────────────────
+	// phase 1: the stamp
 	truncSess := govSession(t, truncProbeSub, []string{truncProbeGroupKept}, true)
 	truncRaw, created := mintToken(t, srv, truncSess, "ci-truncated")
 	if created.GroupsTruncated == nil || !*created.GroupsTruncated {
@@ -175,14 +175,14 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 		t.Fatalf("api_tokens.groups_truncated = %v, want TRUE — the store (PG.CreateAPIToken in store_apitokens.go) lost the marker", col)
 	}
 
-	// ── phase 2: PF-21 scoping — no group-tier row, truncated is served ─────
+	// phase 2: PF-21 scoping — no group-tier row, truncated is served
 	// Must run BEFORE the assignment exists. A 403 here would mean the refusal
 	// fires on deployments that never adopted group profiles.
 	if code, body, name := truncProbeCeiling(t, srv, truncRaw); code != http.StatusOK || name != "" {
 		t.Fatalf("truncated token, NO group-tier rows: code=%d profile=%q body=%s; want 200 and the deployment ceiling (PF-21)", code, name, body)
 	}
 
-	// ── phase 3: the refusal ────────────────────────────────────────────────
+	// phase 3: the refusal
 	profile := truncProbeSeedGroupProfile(t, pg)
 	code, body, _ := truncProbeCeiling(t, srv, truncRaw)
 	if code != http.StatusForbidden {
@@ -200,7 +200,7 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 		t.Errorf("POST /runs with the truncated token: code=%d body=%s; want 403 groups_snapshot_stale", w.Code, w.Body.String())
 	}
 
-	// ── phase 4: the 0.6-era row (NULL marker) ──────────────────────────────
+	// phase 4: the 0.6-era row (NULL marker)
 	legacyRaw := truncProbeInsertLegacyRow(t, pool, []string{truncProbeGroupKept})
 	legacy, err := pg.GetAPITokenByRaw(ctx, legacyRaw)
 	if err != nil {
@@ -219,7 +219,7 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 		t.Errorf("legacy NULL-marker token carrying the walled group: code=%d body=%s; want 403 (completeness unknown)", code, body)
 	}
 
-	// ── phase 5: controls ───────────────────────────────────────────────────
+	// phase 5: controls
 	// 5a. a COMPLETE snapshot that carries the group resolves the profile.
 	fullSess := govSession(t, truncProbeSub+"-full", []string{truncProbeGroupKept, truncProbeGroupWalled}, false)
 	fullRaw, fullCreated := mintToken(t, srv, fullSess, "ci-complete")

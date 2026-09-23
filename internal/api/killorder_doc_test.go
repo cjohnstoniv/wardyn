@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestKillOrderDocs_MatchC002CASFirst is the W22-S1-6 regression:
+// TestKillOrderDocs_MatchC002CASFirst is the regression:
 // threatmodel/THREAT-MODEL.md and pkg/client/client.go's KillRun doc comment
 // used to describe the PRE-C002 kill order (sandbox teardown before the state
 // CAS) for the explicit-kill path — the exact order C002

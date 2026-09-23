@@ -171,7 +171,7 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	if spec.ProxyConfig.UpstreamProxyURL != "http://proxy.corp:3128" {
 		t.Errorf("ProxyConfig.UpstreamProxyURL = %q, want http://proxy.corp:3128", spec.ProxyConfig.UpstreamProxyURL)
 	}
-	// PORT-QUALIFIED, not bare: 4d8f48e1 (W13-S1-5) made planArtifactRedirect
+	// PORT-QUALIFIED, not bare: 4d8f48e1 made planArtifactRedirect
 	// author net.JoinHostPort(host, redirectPort(r.To)), so the proxy's MITM dial
 	// lands on the port the operator configured instead of assuming 443. The
 	// redirect above has no explicit port, so 443 is the derived one. The proxy

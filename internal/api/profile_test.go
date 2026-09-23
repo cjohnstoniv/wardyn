@@ -17,7 +17,7 @@ import (
 )
 
 // TestSynthesizeProfile_StampsEbpfGroundtruthCaveat is
-// W20-W20-groundtruth-mapper-4's other call site: a synthesized profile
+// other call site: a synthesized profile
 // (POST /api/v1/runs/{id}/profile) must carry the SAME one-line eBPF sensor
 // coverage note reconcileRecordRun stamps onto RecordTaskResult.Caveats —
 // before this fix, ebpf_groundtruth's per-kind state existed only on the

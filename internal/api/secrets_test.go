@@ -523,7 +523,7 @@ func TestReservedSecret_HarnessBlobSealedByPattern(t *testing.T) {
 	}
 }
 
-// ─── group C: the member seam's two ends ─────────────────────────────────────
+// group C: the member seam's two ends
 
 // TestListSecrets_CrossUserReadIsAudited pins the ASYMMETRY, which is the
 // finding rather than "a read was unlogged". `?owner=` is admin-only, and every

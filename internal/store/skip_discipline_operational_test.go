@@ -3,7 +3,7 @@
 
 package store_test
 
-// THE PIN FOR "AN UNREACHABLE SERVER IS A FAILURE, NOT A SKIP".
+// The pin for "AN UNREACHABLE SERVER IS A FAILURE, NOT A SKIP".
 //
 // The audit-chain isolation pin used to call t.Skipf when it could not connect
 // or ping, so a lane whose Postgres was simply down reported `--- SKIP` -> `ok`

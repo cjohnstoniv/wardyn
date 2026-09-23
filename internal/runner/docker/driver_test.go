@@ -531,7 +531,7 @@ func TestTeardown_UnresolvableRunReportsError(t *testing.T) {
 }
 
 // TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork is
-// W15-W15c-terminal-lifecycle-2: when the agent container is ALREADY GONE
+// When the agent container is ALREADY GONE
 // (crashed, OOM-killed, or a concurrent teardown beat this one to it),
 // ContainerInspect returns not-found and the label/name recovery on the
 // err==nil branch never runs at all — teardown used to report success

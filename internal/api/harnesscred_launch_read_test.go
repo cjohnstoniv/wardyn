@@ -26,7 +26,7 @@ import (
 // CreateSandbox held open, the launching member reads their own run over and
 // over, and gets it.
 //
-// IF THIS EVER GOES RED the cause is in-tree and the console fix is treating a
+// If this ever goes RED the cause is in-tree and the console fix is treating a
 // real server bug as a wording problem — stop and report rather than adjusting
 // the test.
 func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {

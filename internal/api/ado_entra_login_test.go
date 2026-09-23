@@ -21,7 +21,7 @@ import (
 // Length is what oidc.New enforces; the value is irrelevant.
 var testLoginHMACKey = []byte("0123456789abcdef0123456789abcdef")
 
-// ── the request half ────────────────────────────────────────────────────────
+// the request half
 
 // TestLoginScopesAreEmptyWithoutAConfiguredRow IS THE NO-OP GUARANTEE on this
 // side of the seam: a deployment with no Azure DevOps row asks the login for
@@ -107,7 +107,7 @@ func TestLoginScopesAreEmptyForAnotherTenantOrApplication(t *testing.T) {
 	}
 }
 
-// ── the capture half, in isolation ──────────────────────────────────────────
+// the capture half, in isolation
 
 // TestCaptureLoginGrant_StoresUnderTheSubject: the credential the login earned
 // lands in that person's own namespace, carries the granted scopes, and is
@@ -208,7 +208,7 @@ func TestCaptureLoginGrant_IgnoresAnotherApplicationsRow(t *testing.T) {
 	}
 }
 
-// ── the whole login, end to end ─────────────────────────────────────────────
+// the whole login, end to end
 
 // loginFixture is a REAL Authenticator pointed at the Entra fake, with the
 // server attached as its login-grant sink — the wiring cmd/wardynd does at
@@ -383,7 +383,7 @@ func TestConsoleLoginCapturesAzureDevOpsAccess(t *testing.T) {
 }
 
 // TestConsoleLoginSucceedsWhenAzureDevOpsConsentIsDeclined IS THE ONE THAT
-// WOULD LOCK AN ORGANISATION OUT.
+// Would lock an organisation OUT.
 //
 // The tenant refuses the Azure DevOps scopes — a declined consent, a policy, a
 // tenant that will not issue them. The login MUST still succeed: the person

@@ -288,7 +288,7 @@ func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
 // TestMemberPreview_SignInRefusalPrecedesTheSupersede pins the ORDER of the two
 // guards on this route, which nothing else does.
 //
-// GREEN ON THE UNFIXED TREE — a regression pin, not a defect fix. The
+// Green on the unfixed TREE — a regression pin, not a defect fix. The
 // no-credential preview's 409 sits in handleHarnessLogin, before
 // launchHarnessLoginRun and therefore before the supersede; the existing preview
 // case asserts only "no run row, no harness.login.started" on a fixture with no
@@ -361,7 +361,7 @@ func TestHarnessLogin_SupersedePrecedesTheQuota(t *testing.T) {
 // lands after the winner's. The second pass is what closes it, and it has to do
 // so WITHOUT an in-process mutex, which is not a lock on the second replica.
 //
-// WHAT IS PINNED, EXACTLY: the interleaving where a pass SEES BOTH ROWS — both
+// What is pinned, EXACTLY: the interleaving where a pass SEES BOTH ROWS — both
 // are in the store before either second pass runs. That is the ordinary
 // double-click, and the passes are run in each order because the property is
 // that the answer does not depend on which finishes first. It is NOT a universal

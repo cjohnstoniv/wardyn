@@ -623,7 +623,7 @@ func TestPG_ResolveUserDrive_TieHasATotalOrder(t *testing.T) {
 // plan's contract: the same order as the whole list, a window that honours limit
 // and offset, and a limit of 0 meaning unbounded (Page's own rule).
 //
-// WHY IT IS BOUNDED AT ALL. user_drive_grants holds one row per SUBJECT and
+// Why it is bounded at all. user_drive_grants holds one row per SUBJECT and
 // capabilitySubjects yields two per person, so this table's size is the
 // deployment's headcount — and its ORDER BY has no index. Unbounded on this
 // deployment's own PostgreSQL at 50,000 allocations that is `external merge
@@ -966,7 +966,7 @@ func TestPG_ResolveUserDrive(t *testing.T) {
 		}
 	})
 
-	// THE CALL SHAPE driveWithUnusableGroups makes: user subjects only, groups
+	// The CALL shape driveWithUnusableGroups makes: user subjects only, groups
 	// nil, on a deployment that HAS group-tier rows. The store answers the
 	// everyone row and reports the tier honestly — it does not, and must not,
 	// pretend the caller matched nothing, because "no groups were supplied" and

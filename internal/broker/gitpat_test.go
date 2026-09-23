@@ -144,7 +144,7 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 	secrets.m["wardyn-signing-key"] = []byte("super-secret-signing-key")
 	// Seeded so the reserved-name check (not missing-secret) is what fails closed.
 	secrets.m["wardyn-harness-anthropic-oauth"] = []byte("resident-oauth-blob")
-	// W12-B-1: the GitHub App credentials, SSH host key, and Bedrock bearer token
+	// The GitHub App credentials, SSH host key, and Bedrock bearer token
 	// must also be refused by the git_pat mint path even though they are NOT
 	// reserved at the api_key/injection sink (sinkReservedSecret) — see
 	// reservedBrokerSecretNames' doc comment.
@@ -163,7 +163,7 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 		{"empty-secret-name", types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"gitlab.com"}`)}},
 		{"reserved-secret", gitPATSpec("gitlab.com", "wardyn-signing-key", "")},
 		{"reserved-harness-oauth", gitPATSpec("gitlab.com", "wardyn-harness-anthropic-oauth", "")},
-		// W12-B-1 regression: a git_pat grant must not resolve the GitHub App PEM
+		// regression: a git_pat grant must not resolve the GitHub App PEM
 		// private key (or its sibling platform-internal value-returning secrets)
 		// into the sandbox. Fails on base 6d76911 (reservedBrokerSecretNames
 		// omitted these names); passes once the map is widened.

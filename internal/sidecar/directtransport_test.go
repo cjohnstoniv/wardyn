@@ -23,7 +23,7 @@ import (
 // helper already set Proxy: nil for exactly this reason; sidecar and toolgate
 // did not.
 //
-// WHY THIS IS NOT AN END-TO-END PROXY TEST. It cannot be, in process:
+// Why this is not an end-TO-END PROXY TEST. It cannot be, in process:
 // httpproxy's matcher exempts every LOOPBACK destination from proxying, and an
 // httptest server is always 127.0.0.1, so no client configuration makes a local
 // request proxied. A "does it reach the server" test therefore cannot tell

@@ -28,7 +28,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── classify* pure state-mapping tables ─────────────────────────────────────
+// classify* pure state-mapping tables
 
 // testControlPlaneURL stands in for s.cfg.ControlPlaneURL across classify*
 // tests that don't care about its exact value, and is asserted verbatim by
@@ -204,7 +204,7 @@ func TestClassifyRedirectProbe_TimedOut(t *testing.T) {
 	}
 }
 
-// TestRedirectProbeScript_HTTPErrorIsNotReached is the W13-S1-2 regression:
+// TestRedirectProbeScript_HTTPErrorIsNotReached is the regression:
 // runs the ACTUAL redirectProbeScript text (not just classifyRedirectProbe's
 // exit-code table) through a real shell+curl against a local server that
 // answers the To probe with a plain HTTP 403 -- exactly what wardyn-proxy's
@@ -336,7 +336,7 @@ func TestFindEgressRedirect(t *testing.T) {
 	}
 }
 
-// ─── fakes: a runner + a store that actually drive dispatchRun to completion ─
+// fakes: a runner + a store that actually drive dispatchRun to completion
 //
 // Every other test fake in this package is a bespoke, minimal per-file type
 // (fakeRunner in interactive_test.go, fkGrantStore/raceStore/bootReconcileStore
@@ -598,7 +598,7 @@ func decodeProbeResponse(t *testing.T, body string) siteConfigProbeResponse {
 	return got
 }
 
-// ─── test-proxy ───────────────────────────────────────────────────────────────
+// test-proxy
 
 func TestHandleTestSiteConfigProxy_Reached(t *testing.T) {
 	fr := &probeFakeRunner{exitCode: 0}
@@ -654,7 +654,7 @@ func TestHandleTestSiteConfigProxy_BlockedWithRealError(t *testing.T) {
 }
 
 // TestHandleTestSiteConfigProxy_UnresolvableUpstreamReportsDirect is the
-// W13-S1-4 / W12-W12-C-2 regression: an https:// upstream_proxy_url (a row
+// regression: an https:// upstream_proxy_url (a row
 // written before validateSiteConfig's http-only gate existed — the store
 // fixture below bypasses that gate on purpose, to model exactly that) cannot
 // be used by resolveRunUpstreamProxy at real dispatch (the sidecar's
@@ -683,7 +683,7 @@ func TestHandleTestSiteConfigProxy_UnresolvableUpstreamReportsDirect(t *testing.
 }
 
 // TestHandleTestSiteConfigProxy_UnresolvableSecretRefReportsDirect is the
-// W12-W12-C-2 regression, the sibling case to the https:// one above: a
+// regression, the sibling case to the https:// one above: a
 // configured upstream_proxy_secret_ref that names no ACTUALLY stored secret
 // (no secret store wired at all here -- the simplest way to make it
 // unresolvable) must not report via=proxy / state=reached either. The probe
@@ -1070,7 +1070,7 @@ func TestHandleTestSiteConfigProxy_NeverLogsCredentialedUpstreamURL(t *testing.T
 	}
 }
 
-// ─── test-redirect ────────────────────────────────────────────────────────────
+// test-redirect
 
 func TestHandleTestSiteConfigRedirect_Reached(t *testing.T) {
 	fr := &probeFakeRunner{exitCode: 0}
@@ -1174,7 +1174,7 @@ func TestHandleTestSiteConfigRedirect_NoRunner(t *testing.T) {
 	}
 }
 
-// ─── timeout / cleanup ────────────────────────────────────────────────────────
+// timeout / cleanup
 
 // TestSiteConfigProbe_TimeoutReclaimsSandbox pins the hard bound: a probe
 // whose task never finishes must not hold a live sandbox forever. It shrinks
@@ -1287,7 +1287,7 @@ func TestHandleTestSiteConfigRedirect_TimeoutAfterExecIsTimedOut(t *testing.T) {
 	}
 }
 
-// ─── lost-recording warning ───────────────────────────────────────────────────
+// lost-recording warning
 
 // probeRecordingStore is a minimal recording.Store fake for the
 // probeRecordingWarning tests: OpenCast is scriptable (found / a scriptable
@@ -1406,7 +1406,7 @@ func TestHandleTestSiteConfigProxy_ReachedWithRecordingPresentNoWarning(t *testi
 	}
 }
 
-// ─── operator-only ────────────────────────────────────────────────────────────
+// operator-only
 
 // TestHandleTestSiteConfig_OperatorOnly reuses rbac_test.go's SSO-session
 // harness (rbacServer/ssoSession/doSSO, same package) to prove both new

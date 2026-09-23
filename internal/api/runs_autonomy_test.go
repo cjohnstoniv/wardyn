@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the autonomy fixture ─────────────────────────────────────────────────────
+// the autonomy fixture
 
 // autonomyRubric returns a rubric that resolves to level WHATEVER the posture
 // is: all nine fields set to the same value.
@@ -87,7 +87,7 @@ func autonomyCreateAudit(t *testing.T, st *govEscapeStore, audit *recRecorder) m
 	return data
 }
 
-// ─── the ladder table ─────────────────────────────────────────────────────────
+// the ladder table
 
 // TestRunAutonomyLadder is the gate's behaviour table: four levels against the
 // request shapes the rungs are defined in terms of, driven end to end through
@@ -246,7 +246,7 @@ func TestRunAutonomyFreezesTheLevelOnTheRun(t *testing.T) {
 	}
 }
 
-// ─── Review and launch answer with the same object ────────────────────────────
+// Review and launch answer with the same object
 
 // TestAutonomyReviewMatchesLaunch is the property the whole design is shaped
 // around: POST /runs/preflight returns the SAME autonomy object POST /runs
@@ -334,7 +334,7 @@ func autonomyBoundBy(t *testing.T, resolution map[string]any) []string {
 	return out
 }
 
-// ─── every tied cause is named ────────────────────────────────────────────────
+// every tied cause is named
 
 // TestAutonomyBoundByNamesEveryTiedCause is the #96 wire ruling, asserted
 // where it is load-bearing: bound_by is a LIST, and a member capped by a
@@ -691,7 +691,7 @@ func TestAutonomyPostureIncludesGrantLanesAtBothDoors(t *testing.T) {
 	}
 }
 
-// ─── the absent-row rule ──────────────────────────────────────────────────────
+// the absent-row rule
 
 // TestAutonomyAbsentRowChangesNothing pins the promise every GovernanceLimits
 // field makes and this one has the most to lose by breaking: a member with no
@@ -789,7 +789,7 @@ func bytesContainsKey(body []byte, key string) bool {
 	return ok
 }
 
-// ─── the two sentences on the 201 ─────────────────────────────────────────────
+// the two sentences on the 201
 
 // TestAutonomyWarningsOnTheCreatedRun pins the gate's advisory half, which the
 // audit row cannot speak for: the run was CREATED, so the only thing that
@@ -928,7 +928,7 @@ func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
 	}
 }
 
-// ─── the per-person Azure DevOps lane (#474) ──────────────────────────────────
+// the per-person Azure DevOps lane (#474)
 
 // TestAutonomyPostureGradesTheADOEntraCredentialAtCreate is the security
 // review's probe, kept: the posture graded at create for a run on the

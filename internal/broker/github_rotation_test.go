@@ -29,7 +29,7 @@ func genPEM(t *testing.T) []byte {
 }
 
 // TestGitHubMinter_CredentialRotationPickedUpWithoutRestart is the
-// W12-W12-B-5 regression: on base 763beb5, githubMinter.client() caches the
+// regression: on base 763beb5, githubMinter.client caches the
 // app-authenticated client after the FIRST mint and never looks at the
 // secret store again, so rotating (or replacing) github-app-key never takes
 // effect without a wardynd restart. The fixed client() re-reads both secrets
@@ -158,7 +158,7 @@ func TestGitHubMinter_CredentialRotationInvalidatesInstallationCache(t *testing.
 }
 
 // TestGitHubMinter_StaleInstallationIDDroppedOn401 is the second half of
-// W12-W12-B-5: a cached installation id can go stale even without a
+// A cached installation id can go stale even without a
 // credential rotation (the App was uninstalled and reinstalled on the org),
 // and GitHub answers 401/404 for a dead id. On base 763beb5 that stale id
 // stays cached forever (installByOrg is never invalidated), so every

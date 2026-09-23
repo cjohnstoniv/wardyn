@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── CSRF: the same-origin guard on a COOKIE-authenticated mutating request ──
+// CSRF: the same-origin guard on a COOKIE-authenticated mutating request
 //
 // Two guards, one rule, pinned together. LocalMode has refused a cross-origin
 // mutating request since FIX #8's sibling (http.go's local arm) but nothing
@@ -176,7 +176,7 @@ func TestCSRFGuard(t *testing.T) {
 			wantOIDCRefused:  true,
 		},
 		{
-			// ACCEPTED BEHAVIOUR CHANGE (0.7.3), pinned so it is a decision and
+			// Accepted behaviour change (0.7.3), pinned so it is a decision and
 			// not a surprise: browsers treat localhost and 127.0.0.1 as two
 			// different SITES, so a page at http://localhost:<port> posting to
 			// http://127.0.0.1:<port> now carries Sec-Fetch-Site: cross-site

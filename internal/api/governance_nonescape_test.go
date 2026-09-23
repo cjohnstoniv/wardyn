@@ -28,7 +28,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the escape harness ───────────────────────────────────────────────────────
+// the escape harness
 
 // govEscapeStore is the store surface ONE member create-and-dispatch drives:
 // capStore's grants + governance answers, plus the run/policy/token rows the
@@ -224,7 +224,7 @@ const (
 	govWorkspaceRepo = "https://github.com/octocat/Hello-World.git"
 )
 
-// ─── the escape table ─────────────────────────────────────────────────────────
+// the escape table
 
 // TestGovernanceProfileNonEscape is the escape table's create-time half (rows
 // 1-10) plus row 16, asserted on the decoded run.policy.effective envelope —
@@ -500,7 +500,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		}
 	})
 
-	// ─── row 16, BOTH legs ────────────────────────────────────────────────────
+	// row 16, BOTH legs
 	//
 	// The group tier can EVAPORATE. sessionGroups truncates the snapshot at the
 	// cookie byte cap, so the group whose assignment walls a member can simply
@@ -563,7 +563,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		}
 	})
 
-	// ─── rows 19-21, the AUTONOMY doors (0.8 #97) ─────────────────────────────
+	// rows 19-21, the AUTONOMY doors (0.8 #97)
 	//
 	// A rubric bounds what a run may do UNATTENDED, so its escapes are neither
 	// egress nor grants and none of them appears in the envelope the rows above
@@ -811,7 +811,7 @@ func TestGovernanceProfileNonEscape_Dispatch(t *testing.T) {
 	})
 }
 
-// ─── the stored-policy clamp, red then green ──────────────────────────────────
+// the stored-policy clamp, red then green
 
 // TestStoredPolicyClampCounterfactual is PF-1's before/after in one test: the
 // SAME member selects the SAME wide stored policy, and the only thing that

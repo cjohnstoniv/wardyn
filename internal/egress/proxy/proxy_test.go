@@ -321,7 +321,7 @@ func TestFirstUseApprovedThenAllowed(t *testing.T) {
 	}
 }
 
-// TestFirstUseApprovedAttributesRuleSourceToApproval is the W20-hold-fsm-1
+// TestFirstUseApprovedAttributesRuleSourceToApproval is the
 // regression: an approval-RELEASED request's ALLOW decision must attribute to
 // the releasing approval — rule_source "approval:<id>", ApprovalID set — not
 // "policy:allowed" with no approval_id, which is indistinguishable from a

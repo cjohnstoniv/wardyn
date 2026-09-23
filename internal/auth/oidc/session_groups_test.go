@@ -229,7 +229,7 @@ func TestSessionGroupsCapKeepsTheCookieUsable(t *testing.T) {
 	}
 }
 
-// ─── the cookie round trip ────────────────────────────────────────────────────
+// the cookie round trip
 
 // sessionThroughMiddleware runs cookie back through Middleware and returns what
 // the request context carried — the only view of a session the rest of the
@@ -377,7 +377,7 @@ func TestEmptyGroupsSurviveTheCookieAsNonNil(t *testing.T) {
 	}
 }
 
-// ─── the callback stamp ───────────────────────────────────────────────────────
+// the callback stamp
 
 // TestCallbackStampsSessionGroups: the snapshot is taken at login, from the
 // same two claims deriveRole consumes, and reaches the request context intact.

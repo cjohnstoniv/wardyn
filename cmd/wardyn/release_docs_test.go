@@ -20,7 +20,7 @@ func readRepoDoc(t *testing.T, path string) string {
 	return string(raw)
 }
 
-// TestReleasingDocumentsVersionBump is the regression proof for W30-S1-1:
+// TestReleasingDocumentsVersionBump is the regression proof for:
 // RELEASING.md's release steps must actually instruct bumping the four
 // shipped version strings cmd/wardyn/version_test.go's
 // TestShippedVersionStringsAgree enforces agree — that test only checks the
@@ -41,7 +41,7 @@ func TestReleasingDocumentsVersionBump(t *testing.T) {
 }
 
 // TestReleasingAndMakefileNameConformanceK8s is the regression proof for
-// W30-S1-3: the pre-tag gate's "cannot run locally" job list (RELEASING.md
+// The pre-tag gate's "cannot run locally" job list (RELEASING.md
 // and the matching release-check summary in the Makefile) must name
 // conformance-k8s and helm-install-test, not just the pre-k8s-runner three.
 func TestReleasingAndMakefileNameConformanceK8s(t *testing.T) {
@@ -59,7 +59,7 @@ func TestReleasingAndMakefileNameConformanceK8s(t *testing.T) {
 }
 
 // TestContributingConformanceGateNotStale is the regression proof for the
-// CONTRIBUTING.md half of W30-S1-3: the Kubernetes conformance target shipped
+// CONTRIBUTING.md half of: the Kubernetes conformance target shipped
 // in v0.5 (test/conformance/conformance_k8s_test.go, the ci.yml
 // conformance-k8s job) — CONTRIBUTING.md must not still call it
 // "[v0.5+ — planned]" / "has no conformance target yet".
@@ -111,7 +111,7 @@ func TestReleaseNotesMatchSBOMReality(t *testing.T) {
 	}
 }
 
-// TestThreatModelSSOSessionNotStale is the regression proof for W31-S1-3:
+// TestThreatModelSSOSessionNotStale is the regression proof for:
 // SSO-session auth shipped in v0.5 (internal/auth/oidc, ui/.../sign-in.tsx) —
 // THREAT-MODEL.md must not still call it "not yet built, unscheduled".
 func TestThreatModelSSOSessionNotStale(t *testing.T) {
@@ -125,7 +125,7 @@ func TestThreatModelSSOSessionNotStale(t *testing.T) {
 }
 
 // TestReleaseWorkflowPublishesAgentAWSSSO is the regression proof for
-// W5-S1-3: harnesscred.go's launchHarnessLoginRun resolves the AWS SSO
+// Harnesscred.go's launchHarnessLoginRun resolves the AWS SSO
 // login sandbox's image through agentImage("aws-sso", ...) — the SAME
 // ghcr.io/cjohnstoniv/agent-<key>:latest fallback convention the two coding
 // harnesses use — so release.yml must build+push agent-aws-sso exactly like
@@ -148,7 +148,7 @@ func TestReleaseWorkflowPublishesAgentAWSSSO(t *testing.T) {
 	}
 }
 
-// TestRunHostMapsAwsSsoImage is the regression proof for W5-S1-3's host-mode
+// TestRunHostMapsAwsSsoImage is the regression proof for host-mode
 // half: `make agent-images` builds wardyn/agent-aws-sso:local, but
 // run-host.sh's WARDYN_AGENT_IMAGES default never routed the "aws-sso" agent
 // id to it, so a host-mode guided AWS SSO login fell back to the unpublished

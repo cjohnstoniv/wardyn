@@ -174,7 +174,7 @@ func TestWorkspaceReadRedaction(t *testing.T) {
 		})
 	}
 
-	// THE OWNER AND THE SUPER ADMIN STILL SEE EVERYTHING. Without this arm the
+	// The owner and the super admin still SEE everything. Without this arm the
 	// test above is satisfied by simply deleting the fields.
 	t.Run("the owner and a super admin see the whole document", func(t *testing.T) {
 		for _, c := range []struct {

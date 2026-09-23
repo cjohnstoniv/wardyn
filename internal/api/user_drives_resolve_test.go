@@ -24,7 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the store double ─────────────────────────────────────────────────────────
+// the store double
 
 // driveStore answers the two user-drive resolver reads over an otherwise
 // empty deployment. It EMBEDS rather than sitting beside store.Store for
@@ -167,7 +167,7 @@ func (s *driveStore) HasGroupTierDriveGrants(context.Context) (bool, error) {
 	return s.hasGroupTier, nil
 }
 
-// ─── fixtures ─────────────────────────────────────────────────────────────────
+// fixtures
 
 // driveFixture is a MANAGED drive: read-only by default, hashed home, 10 GiB
 // allocated. Read-only is the product default and the fixture keeps it, so a
@@ -254,7 +254,7 @@ func driveMemberCtx(groups []string, truncated bool) context.Context {
 		truncated)
 }
 
-// ─── the resolver ─────────────────────────────────────────────────────────────
+// the resolver
 
 // TestResolveUserDrive walks the resolver's order. Each case is a decision that
 // could have gone the other way, and the counterfactual is named.
@@ -309,7 +309,7 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
-	// THE SECOND READ'S FAIL-CLOSED ARM, which had no fixture at all.
+	// The second READ'S FAIL-CLOSED ARM, which had no fixture at all.
 	//
 	// driveWithUnusableGroups asks the store twice and must fail closed on BOTH:
 	// once for the caller's own drive, once for "does ANY group-tier allocation
@@ -319,7 +319,7 @@ func TestResolveUserDrive(t *testing.T) {
 	// first branch. The counterfactual the finding ran is the proof: turning the
 	// second branch into `hasGroupTier, _ :=` left the whole package green.
 	//
-	// IT MATTERS BECAUSE THE SWALLOWED ANSWER IS THE PERMISSIVE ONE. `false`
+	// It matters because the swallowed answer is the permissive one. `false`
 	// from that read means "no group-tier allocation exists, so the empty answer
 	// above is the whole truth" — and the caller then mounts nothing for a
 	// member who may well have a drive through a group the snapshot could not
@@ -421,7 +421,7 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
-	// ─── the stale/truncated 403 and its scoping ──────────────────────────────
+	// the stale/truncated 403 and its scoping
 
 	t.Run("stale snapshot + a group-tier grant + no user match = 403", func(t *testing.T) {
 		// nil groups is a pre-0.6 cookie: the group identity is unanswerable, a
@@ -526,7 +526,7 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
-	// ─── the folds ────────────────────────────────────────────────────────────
+	// the folds
 
 	t.Run("the grant's overrides win over the drive's defaults", func(t *testing.T) {
 		yes := true
@@ -548,7 +548,7 @@ func TestResolveUserDrive(t *testing.T) {
 		if !got.Writable {
 			t.Error("writable = false; an explicit writable_override on a read-only drive must win")
 		}
-		// THE CASE THE SLUG EXISTS FOR. An override is written on the GRANT, so
+		// The CASE the SLUG exists for. An override is written on the GRANT, so
 		// it does not move when the grant is re-pointed at another drive; the
 		// drive's slug is the only thing keeping the two volumes apart.
 		if got.HomeName != "bsmith" || got.ObjectName != "wardyn-drive-corp-nas-bsmith" {
@@ -738,7 +738,7 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
-	// ─── a paused allocation is TOLD, not resolved to nothing ─────────────────
+	// a paused allocation is TOLD, not resolved to nothing
 
 	t.Run("a DISABLED winner resolves to PAUSED, not to nothing", func(t *testing.T) {
 		// Before this arm the store's WHERE excluded the row, so a member whose
@@ -746,7 +746,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// you" — sent to their admin for what that admin had just turned off —
 		// and the frozen NR_PAUSED / REFUSED_PAUSED copy was unreachable.
 		//
-		// NOTHING IS DERIVED, and that is the fold worth naming: a paused drive
+		// Nothing is derived, and that is the fold worth naming: a paused drive
 		// mounts nothing, so a home name (and the object name built from it)
 		// would be a directory no consumer ever asks for — and a derivation
 		// that FAILED would answer a paused member with the wrong refusal
@@ -878,7 +878,7 @@ func TestDriveHomeSubject(t *testing.T) {
 	}
 }
 
-// ─── POST /drives/preview ─────────────────────────────────────────────────────
+// POST /drives/preview
 
 // previewDriveHTTP posts one preview straight at the handler. The route is D2's
 // (SUPER-only, beside the /drives CRUD), so this drives the handler directly —
@@ -901,7 +901,7 @@ func previewDriveHTTP(t *testing.T, srv *Server, users, groups []string) *httpte
 // offboarding command rather than compute from a hash by hand.
 func TestPreviewUserDrive(t *testing.T) {
 	t.Run("a match is answered with the object name", func(t *testing.T) {
-		// A STATIC PVC ON `sub` (R1 F294, lane core's handoff). The pair this
+		// A static PVC on `sub` (R1 F294, lane core's handoff). The pair this
 		// previously used — k8s_pvc_static + `email_local` — is the shape F294
 		// refuses: Wardyn MINTS the claim name for a static PVC, so an
 		// email-local home folds two addresses that share a local part onto one
@@ -951,7 +951,7 @@ func TestPreviewUserDrive(t *testing.T) {
 			t.Errorf("home/object = %q/%q, want the derivation's %q/%q",
 				got.HomeName, got.ObjectName, wantHome, types.DriveObjectName(*d, wantHome))
 		}
-		// A STATIC PVC's size is bound by whatever provisioned it, never by
+		// A static PVC's size is bound by whatever provisioned it, never by
 		// Wardyn — the field is carried through the preview verbatim so the
 		// number beside it is not read as a cap Wardyn enforces.
 		if got.Enforcement != types.StorageEnforcementExternal {
@@ -1006,7 +1006,7 @@ func TestPreviewUserDrive(t *testing.T) {
 		}
 	})
 
-	// A PROVISIONING PVC's size IS a request the cluster acts on, and it is the
+	// A provisioning PVC's size IS a request the cluster acts on, and it is the
 	// one enforcement value that differs from what the object holding it does —
 	// so it is previewed on its own drive rather than folded into the row above,
 	// where `email_local` is now refused.
@@ -1127,7 +1127,7 @@ func TestPreviewUserDrive(t *testing.T) {
 		}
 	})
 
-	// ─── which claim the answer keys on ──────────────────────────────────────
+	// which claim the answer keys on
 
 	t.Run("home_subject names the claim the home was derived from", func(t *testing.T) {
 		// The endpoint's request cannot LABEL a claim — the console sends one
@@ -1178,7 +1178,7 @@ func TestPreviewUserDrive(t *testing.T) {
 	})
 
 	t.Run("an email-first preview of a subject-keyed drive is warned about", func(t *testing.T) {
-		// THE DEFECT THIS CLOSES, and `hash` is the shape that carries it: an
+		// The defect this closes, and `hash` is the shape that carries it: an
 		// admin pastes only the address they know, sha256 hashes it happily, and
 		// a perfectly well-formed object name comes back that NO RUN WILL EVER
 		// MOUNT — the run derives from the sign-in subject. The answer stays
@@ -1328,7 +1328,7 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 		}
 	})
 
-	// THE SHARE THAT IS NOT THERE — the input TOP RISK 5 was written around: a
+	// The share that is not there — the input TOP RISK 5 was written around: a
 	// host_path drive whose /srv/homes/bob does not exist previewed as
 	// "\"nas\" via the user allocation" with an object name an admin could copy,
 	// and Bob's tick answered REFUSED_HOME_MISSING.
@@ -1357,7 +1357,7 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 		}
 	})
 
-	// THE BACKEND THIS DEPLOYMENT CANNOT MOUNT. A row valid when it was written
+	// The backend this deployment cannot mount. A row valid when it was written
 	// and not now (the deployment re-pointed WARDYN_RUNNER) is the same 422 at
 	// launch, and previewing it green would send an admin looking at the
 	// allocation instead of at the deployment.
@@ -1375,7 +1375,7 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 		}
 	})
 
-	// THE UNANSWERABLE GROUP TIER. A request carrying no `groups` has not
+	// The unanswerable group TIER. A request carrying no `groups` has not
 	// evaluated the group tier, which is the condition a nil snapshot creates at
 	// launch — and answering it from the `all` row is how an admin gets a
 	// confident preview of a drive no run will mount. The console always sends
@@ -1403,7 +1403,7 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 	})
 }
 
-// ─── preview IS enforcement, in the answer as well as in the refusal ──────────
+// preview IS enforcement, in the answer as well as in the refusal
 
 // drivePreviewAnswer is the derived answer, comparable by value, in the shape
 // BOTH surfaces produce it: what the run resolver decided (types.ResolvedDrive)
@@ -1772,7 +1772,7 @@ func TestPreviewUnmountableDriveCountsNoRefusal(t *testing.T) {
 		t.Errorf("an admin preview logged a RUN refusal for a run that never existed:\n%s", buf.String())
 	}
 
-	// THE NEGATIVE CONTROL, and it is two halves in one: the launch door still
+	// The negative control, and it is two halves in one: the launch door still
 	// counts exactly once, and its body is byte-identical to the preview's.
 	srv2, _ := driveShareServer(newStore(), []string{root})
 	before2 := driveRefusedMetric(t, srv2)

@@ -216,7 +216,7 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 		}
 	}
 
-	// BROKERED MEANS SINGLE-LANE — this assertion is the INVERSE of what it pinned
+	// Brokered means single-LANE — this assertion is the INVERSE of what it pinned
 	// before: it used to require ssh.github.com:443 to SURVIVE the confinement, on
 	// the reasoning that an ssh_key grant is operator-supplied and operator-bounded.
 	// That left a brokered run with github.com:443 denied and ssh.github.com:443
@@ -237,7 +237,7 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 		t.Errorf("ssh.github.com must be denied by the git-broker confinement, got denied=%v", sshLane.DeniedDomains)
 	}
 
-	// THE REGRESSION THAT MATTERS: the SSH confinement fires ONLY for a brokered
+	// The regression that matters: the SSH confinement fires ONLY for a brokered
 	// run. An ssh_key run with no broker map keeps its lane untouched — nothing is
 	// subtracted and nothing is denied.
 	sshOnly := types.RunPolicySpec{AllowedDomains: []string{"ssh.github.com:443", "api.anthropic.com"}}
@@ -257,7 +257,7 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 		t.Errorf("non-brokered run mutated: allowed=%v denied=%v", plain.AllowedDomains, plain.DeniedDomains)
 	}
 
-	// THE DEDUP KEY IS THE RAW ENTRY, and this case is the only thing that says so.
+	// The dedup key is the RAW entry, and this case is the only thing that says so.
 	// A policy that already denies "github.com:443" must STILL get the bare-host
 	// deny: keying the dedup map on egressEntryHost(d) instead looks like tidy-up
 	// now that the helper exists, passes every other test in the repo, and leaves
@@ -313,7 +313,7 @@ func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		// bare slug: untouched, original casing preserved (git's insteadOf match is
 		// case-SENSITIVE even though github itself is not). Trailing \t: the 4th
-		// (ref) field, empty for the legacy no-ref single-repo path (W9-S1-3).
+		// (ref) field, empty for the legacy no-ref single-repo path.
 		{"octocat/Hello-World", "https://github.com/octocat/Hello-World.git\t/home/agent/work/Hello-World\toctocat/Hello-World\t"},
 		// the two spellings the review found mismatching gitBrokerKeyFromSlug:
 		{"https://github.com/octocat/hello-world/", "https://github.com/octocat/hello-world.git\t/home/agent/work/hello-world\toctocat/hello-world\t"},
@@ -342,7 +342,7 @@ func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 	}
 }
 
-// TestBuildRepoRecordsCarriesRef is the W9-S1-3 regression: a WorkspaceRepo's
+// TestBuildRepoRecordsCarriesRef is the regression: a WorkspaceRepo's
 // Ref must ride as the record's 4th tab-separated field — clone_one
 // (agent-run-lib.sh) is the only remaining consumer that can actually check it
 // out, but it can't if buildRepoRecords never emits it in the first place.

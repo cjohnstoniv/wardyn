@@ -88,7 +88,7 @@ func TestMeUnavailableReasonPrecedence(t *testing.T) {
 			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile was read", denied)
 		}
 
-		// AND THE LAUNCH REALLY DOES SAY THAT, asserted rather than assumed:
+		// And the launch really does SAY that, asserted rather than assumed:
 		// the whole finding is the two doors disagreeing, so a test that only
 		// read /me could not see it.
 		if _, err := srv.effectiveCeiling(ctx); !errors.Is(err, errGroupsSnapshotStale) {

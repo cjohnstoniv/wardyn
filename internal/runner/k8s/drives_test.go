@@ -161,7 +161,7 @@ func TestEnsureDrivePVC_ManagedCreatesTheClaim(t *testing.T) {
 	if got := pvc.Labels[labelDriveHome]; got != drive.HomeName {
 		t.Errorf("%s = %q, want %q", labelDriveHome, got, drive.HomeName)
 	}
-	// THE THIRD IDENTITY LABEL, on the claim this code path CREATED. Every other
+	// The third identity label, on the claim this code path CREATED. Every other
 	// assertion on wardyn.subject in this file runs against existingDriveClaim,
 	// a fixture stamped by the same rule the code uses — so the create path was
 	// the one place the label could go missing unobserved, and
@@ -939,7 +939,7 @@ func TestEnsureDrivePVC_RefusesAClaimThatIsNotThisMembers(t *testing.T) {
 			if !errors.Is(err, errDriveClaimForeign) {
 				t.Fatalf("err = %v, want errors.Is(err, errDriveClaimForeign)", err)
 			}
-			// THE MEMBER READS THIS VERBATIM (dispatchRun's failAndRevoke), so the
+			// The member reads this verbatim (dispatchRun's failAndRevoke), so the
 			// evidence is the OPERATOR's: refuseForeignDriveClaim WARNs the claim,
 			// the namespace, the label and both values, and the hint carries the
 			// frozen sentence and a remedy. The wrapped form named the deciding
@@ -1144,7 +1144,7 @@ func TestEnsureDrivePVC_RefusesAClaimStampedForAnotherPerson(t *testing.T) {
 		if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
 			t.Errorf("claim verbs = %v, want no create over somebody else's claim", verbs)
 		}
-		// THE DIGEST IS THE ONE VALUE THAT MUST NEVER REACH THE MEMBER: it is a
+		// The digest is the one value that must never reach the member: it is a
 		// fingerprint of the OTHER principal, handed out on the one screen a failed
 		// run shows. The deciding label and both digests are in the WARN instead.
 		got := err.Error()

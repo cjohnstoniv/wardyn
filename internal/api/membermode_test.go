@@ -512,7 +512,7 @@ func sessionCookieFrom(t *testing.T, cookies []*http.Cookie) *http.Cookie {
 	return nil
 }
 
-// TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker is W6-1, the two
+// TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker is, the two
 // admin-tier refusals the marker was missing.
 //
 // TestMemberMode_AuditRowsNameTheAdmin above pins FOUR sites and the doc
@@ -602,7 +602,7 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 	})
 }
 
-// TestMemberMode_RealMemberTogglingOnChangesNothing is W6-4's other half, at
+// TestMemberMode_RealMemberTogglingOnChangesNothing is other half, at
 // the layer the defect is actually felt: the mint doors and /me.
 //
 // handleSetMemberMode's only guard is "is there an SSO human", and its comment

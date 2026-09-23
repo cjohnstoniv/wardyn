@@ -28,7 +28,7 @@ import (
 // test here was written RED against the unfixed tree and names the finding it
 // pins, so a later reader can tell a deliberate rule from an accident.
 
-// ─── B4-F1: the failed build's raw builder error is the operator's ──────────
+// B4-F1: the failed build's raw builder error is the operator's
 
 // TestB4F1_FailedBuildDetailIsTieredLikeTheLog pins that the ONE non-static
 // Detail resolveBuildView can answer — the builder's own error text, which
@@ -57,7 +57,7 @@ func TestB4F1_FailedBuildDetailIsTieredLikeTheLog(t *testing.T) {
 	}
 }
 
-// ─── B4-F2: the in-memory tracker outranked the row it was caching ─────────
+// B4-F2: the in-memory tracker outranked the row it was caching
 
 // b4BuildStore serves one workspace for the /build handlers and is safe for the
 // detached build goroutine to write while the test reads.
@@ -225,7 +225,7 @@ func TestB4F2_TheTrackerIsSubordinateToTheRow(t *testing.T) {
 	t.Fatal("the detached build never finished")
 }
 
-// ─── B4-F3: a respelling of the same source wiped every reviewed field ─────
+// B4-F3: a respelling of the same source wiped every reviewed field
 
 // TestB4F3_ARespellingOfTheSameSourceKeepsEveryReviewedField is the data-loss
 // regression: sourcesChanged compared the request's RAW source against the
@@ -276,7 +276,7 @@ func TestB4F3_ARespellingOfTheSameSourceKeepsEveryReviewedField(t *testing.T) {
 	}
 }
 
-// ─── B4-F4: an uncapped source list ────────────────────────────────────────
+// B4-F4: an uncapped source list
 
 // TestB4F4_SourceCountIsCapped pins the missing sibling of
 // maxWorkspaceRequirements/maxApprovedEgress: every source in the body costs an
@@ -307,7 +307,7 @@ func TestB4F4_SourceCountIsCapped(t *testing.T) {
 	}
 }
 
-// ─── B4-F6 + B4-F9: observed egress offered candidates that can never work ──
+// B4-F6 + B4-F9: observed egress offered candidates that can never work
 
 // TestB4F6_ObservedEgressWithholdsWhatApprovingCannotHelp pins the two classes
 // of candidate a promotion can never make work: a host the git broker or the
@@ -404,7 +404,7 @@ func TestB4F9_ObservedEgressReadsABoundedPage(t *testing.T) {
 	}
 }
 
-// ─── B4-F7: DELETE stranded a live sandbox ─────────────────────────────────
+// B4-F7: DELETE stranded a live sandbox
 
 // b4DeleteStore serves one workspace and records whether the delete happened.
 type b4DeleteStore struct {
@@ -474,7 +474,7 @@ func TestB4F7_DeleteRefusesWhileARunHoldsTheWorkspace(t *testing.T) {
 	}
 }
 
-// ─── B4-F8: the repo ref was validated at neither door ─────────────────────
+// B4-F8: the repo ref was validated at neither door
 
 // TestB4F8_RefIsValidatedAtBothDoors: buildRepoRecords (runs_scm.go) DROPS a
 // repo whose ref is not repoFieldSafe by a bare return — the agent then starts
@@ -524,7 +524,7 @@ func TestB4F8_RefIsValidatedAtBothDoors(t *testing.T) {
 	}
 }
 
-// ─── F-1: the custom-base lane had no row-backed answer at all ─────────────
+// F-1: the custom-base lane had no row-backed answer at all
 
 // TestB4F2_CustomBaseImageReadsDoneFromTheRow closes the hole the row-decides
 // rule opened: resolveBuildView's "nothing_to_build" early return deliberately
@@ -568,7 +568,7 @@ func TestB4F2_CustomBaseImageReadsDoneFromTheRow(t *testing.T) {
 	}
 }
 
-// ─── F-2: drop must not release a live single-flight slot ──────────────────
+// F-2: drop must not release a live single-flight slot
 
 // TestB4F2_DropNeverReleasesALiveBuildSlot: the invalidators drop the tracker
 // entry, and an edit DURING a build would otherwise hand the single-flight slot
@@ -636,7 +636,7 @@ func TestB4F2_DropNeverReleasesALiveBuildSlot(t *testing.T) {
 	t.Fatal("the detached build never finished")
 }
 
-// ─── F-3: a failed build outlived the composition it failed against ────────
+// F-3: a failed build outlived the composition it failed against
 
 // TestB4F2_ARescanRetiresThePreviousBuildFailure: the tracker's `failed` arm is
 // consulted BEFORE the row, so a build failure survived every invalidation the

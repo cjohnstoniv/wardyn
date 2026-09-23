@@ -141,7 +141,7 @@ func TestBuildLogWriter_ClampsOversizedLine(t *testing.T) {
 	}
 }
 
-// TestResolveBuildView_ExplicitImageNeedsBuilder is the W7-S1-2 regression: a
+// TestResolveBuildView_ExplicitImageNeedsBuilder is the regression: a
 // registry/byo base image is NOT "boots as-is" on a builder-less host —
 // resolveWorkspaceImage wraps it with the agent runtime via FinalizeBase, the
 // same wrap a devcontainer build needs, and runs_create.go's wsRefs door

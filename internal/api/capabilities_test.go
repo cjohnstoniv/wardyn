@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the store double ─────────────────────────────────────────────────────────
+// the store double
 
 // noGovernanceStore is store.Store with the two governance-resolver reads AND
 // the two user-drive-resolver reads answered as "this deployment has adopted
@@ -284,7 +284,7 @@ func (s *capStore) GetCapabilityEnforcement(context.Context) (map[string]bool, e
 	return s.enf, nil
 }
 
-// ─── fixtures ─────────────────────────────────────────────────────────────────
+// fixtures
 
 const (
 	capSub   = "sub-bob"
@@ -306,7 +306,7 @@ func grant(st types.CapabilitySubjectType, subject, kind, value string, effect t
 
 func capServer(st store.Store) *Server { return &Server{cfg: Config{Store: st}} }
 
-// ─── the matrix ───────────────────────────────────────────────────────────────
+// the matrix
 
 // TestCapAllowedMatrix walks the precedence rules capAllowed documents. Each
 // row names the real-world outcome, because every one of them is either a
@@ -564,7 +564,7 @@ func TestCapAllowedEnforcementReadIsSkippedOnAllow(t *testing.T) {
 	}
 }
 
-// ─── subjects ─────────────────────────────────────────────────────────────────
+// subjects
 
 // TestCapabilitySubjects: both identities are offered, lowercased, and never
 // duplicated — an admin who wrote the grant against the email must get the same
@@ -606,7 +606,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 	}
 }
 
-// ─── the closed kind set ──────────────────────────────────────────────────────
+// the closed kind set
 
 // TestCapabilityKindsAreTheClosedSet: with no CHECK in the schema, this slice
 // IS the validation, so it has to stay in step with the console's own list

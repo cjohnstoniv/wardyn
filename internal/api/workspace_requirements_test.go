@@ -20,7 +20,7 @@ import (
 // key-grammar helpers (splitRequirementKey, validateWorkspaceRequirement) the
 // endpoint and the fold in runs_create.go both consult.
 
-// ─── splitRequirementKey / validateWorkspaceRequirement (pure helpers) ──────
+// splitRequirementKey / validateWorkspaceRequirement (pure helpers)
 
 func TestSplitRequirementKey(t *testing.T) {
 	cases := []struct {
@@ -88,7 +88,7 @@ func TestValidateWorkspaceRequirement(t *testing.T) {
 	}
 }
 
-// ─── HTTP-level: auth gating ─────────────────────────────────────────────────
+// HTTP-level: auth gating
 
 func TestWorkspaceRequirementsRouteRequiresAdminAuth(t *testing.T) {
 	h := newHarness(t)
@@ -102,8 +102,8 @@ func TestWorkspaceRequirementsRouteRequiresAdminAuth(t *testing.T) {
 	}
 }
 
-// ─── HTTP-level: validation (fails BEFORE any store call, so a no-Store
-// harness is sufficient — parseIDParam only needs a well-formed UUID). ───────
+// HTTP-level: validation (fails BEFORE any store call, so a no-Store
+// harness is sufficient — parseIDParam only needs a well-formed UUID).
 
 func TestSetWorkspaceRequirements_Validation(t *testing.T) {
 	h := newHarness(t)
@@ -158,7 +158,7 @@ func TestSetWorkspaceRequirements_BadID(t *testing.T) {
 	}
 }
 
-// ─── HTTP-level: happy path ──────────────────────────────────────────────────
+// HTTP-level: happy path
 
 // requirementsStoreFake serves one workspace and captures what
 // SetWorkspaceRequirements was called with — a narrower sibling of

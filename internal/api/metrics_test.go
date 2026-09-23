@@ -124,7 +124,7 @@ func TestMetricsSinkDrops(t *testing.T) {
 	}
 }
 
-// ─── the auth lane's silent failures (group B) ───────────────────────────────
+// the auth lane's silent failures (group B)
 
 // TestAuthFailedSuppressionIsCounted is the whole point of the rate limiter
 // being safe to have. auditAuthFailed caps auth.failed audit rows at ~1/sec

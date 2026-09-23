@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 )
 
-// ONLY THE BODY ROUTES ARE PEEKED. A 1 MiB wiki attachment and an npm publish
+// Only the BODY routes are peeked. A 1 MiB wiki attachment and an npm publish
 // classify on their path and stream through whole; the 256 KiB peek bound
 // applies only where the body decides the capability.
 func TestADOGate_LargeBodyOnAPathOnlyRouteStreamsThrough(t *testing.T) {
@@ -76,7 +76,7 @@ func TestADOGate_DuplicateKeyOnABodyRouteIsRefused(t *testing.T) {
 		`{"completionOptions":{"bypassPolicy":false,"bypassPolicy":true}}`, nil), "could not tell")
 }
 
-// ONE REF RULE ACROSS BOTH DOORS: a REST push whose ref walks out of the run
+// One ref RULE across both doors: a REST push whose ref walks out of the run
 // namespace is refused, not read as a run-namespace code_write.
 func TestADOGate_RESTRefTraversalOutOfTheRunNamespaceIsRefused(t *testing.T) {
 	h := newADOHarness(t, adoscope.CapRead, adoscope.CapCodeWrite)

@@ -85,7 +85,7 @@ func findItem(items []SetupItem, id string) (SetupItem, bool) {
 	return SetupItem{}, false
 }
 
-// ── llm_access ──────────────────────────────────────────────────────────────
+// llm_access
 
 func TestDeriveSetupItems_LLMAccessReusesVerdict(t *testing.T) {
 	srv := newSetupTestServer()
@@ -120,7 +120,7 @@ func TestDeriveSetupItems_LLMAccessReusesVerdict(t *testing.T) {
 }
 
 // TestDeriveSetupItems_LLMAccessFixNamesTheRunsActualGrantSecret is
-// W15-W15b-composer-pipeline-6: an integration-bound run's api_key grant can
+// An integration-bound run's api_key grant can
 // carry a NON-convention secret name (applyIntegrationCreds grants the
 // integration's own secret, e.g. via its DisplayName), not the provider
 // convention default. The "add_secret" fix used to always name the
@@ -151,7 +151,7 @@ func TestDeriveSetupItems_LLMAccessFixNamesTheRunsActualGrantSecret(t *testing.T
 	}
 }
 
-// ── secret ──────────────────────────────────────────────────────────────────
+// secret
 
 func TestDeriveSetupItems_SecretPresentAbsent(t *testing.T) {
 	srv := newSetupTestServer()
@@ -194,7 +194,7 @@ func TestDeriveSetupItems_SecretDedupsByName(t *testing.T) {
 	}
 }
 
-// ── workspace ───────────────────────────────────────────────────────────────
+// workspace
 
 func TestDeriveSetupItems_WorkspaceStatuses(t *testing.T) {
 	readyPath, pendingPath, erroredPath := "/home/me/ready", "/home/me/pending", "/home/me/errored"
@@ -272,7 +272,7 @@ func TestDeriveSetupItems_WorkspaceRowsComeOnlyFromSpec(t *testing.T) {
 	}
 }
 
-// ── repo_credential ─────────────────────────────────────────────────────────
+// repo_credential
 
 func TestDeriveSetupItems_RepoCredentialGitHubTokenUnverified(t *testing.T) {
 	srv := newSetupTestServer()
@@ -376,7 +376,7 @@ func TestDeriveSetupItems_EgressWorkspaceInfoAbsentWithNoWorkspaces(t *testing.T
 	}
 }
 
-// ── backend (F1) ─────────────────────────────────────────────────────────────
+// backend (F1)
 
 // No explicit class anywhere (empty run class, empty policy floor): nothing to
 // check, no row — mirrors every OTHER test in this file (none set a
@@ -567,7 +567,7 @@ func TestDeriveSetupItems_Residency(t *testing.T) {
 	}
 }
 
-// ── workspace_secret ────────────────────────────────────────────────────────
+// workspace_secret
 
 func needsWorkspace(name, source string, p workspacescan.WorkspaceProfile) types.Workspace {
 	return types.Workspace{

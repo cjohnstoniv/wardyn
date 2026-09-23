@@ -353,7 +353,7 @@ func TestControlPlaneBypassesUpstream(t *testing.T) {
 	}
 }
 
-// TestGitBrokerDialsGithubByNameThroughUpstream is the W23-S1-4 / W19-W19d-3
+// TestGitBrokerDialsGithubByNameThroughUpstream is the
 // regression for the git broker: before egressTarget existed, handleGitBroker
 // called vetURL UNCONDITIONALLY, ignoring p.upstream entirely — requiring
 // local DNS resolution the sandbox host frequently cannot do at all under a
@@ -406,7 +406,7 @@ func TestGitBrokerDialsGithubByNameThroughUpstream(t *testing.T) {
 	}
 }
 
-// TestLLMRouteDialsByNameThroughUpstream is W23-S1-4 / W19-W19d-3's other
+// TestLLMRouteDialsByNameThroughUpstream is other
 // half: proxyLLMRequest (the /wardyn/llm/anthropic and /wardyn/llm/openai
 // brokered routes) had the SAME unconditional vetURL call as the git broker.
 func TestLLMRouteDialsByNameThroughUpstream(t *testing.T) {

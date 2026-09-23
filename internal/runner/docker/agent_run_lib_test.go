@@ -70,7 +70,7 @@ func TestAgentRunLib_MakeToolchainDirsNoopWhenUnset(t *testing.T) {
 }
 
 // TestAgentRunLib_MaybeExecTaskModePreservesPATH is the shell-level regression
-// for W15-W15f-exec-lane-runtime-1: maybe_exec_task_mode used to `exec /bin/sh
+// for: maybe_exec_task_mode used to `exec /bin/sh
 // -lc "$1"` — the `-l` makes it a LOGIN shell, which sources /etc/profile and
 // reassembles PATH from scratch, destroying every BYOI/devcontainer image's
 // own Dockerfile ENV PATH toolchain before the task command ever runs. Plain
@@ -96,7 +96,7 @@ func TestAgentRunLib_MaybeExecTaskModePreservesPATH(t *testing.T) {
 }
 
 // TestAgentRunLib_SelftestReportRepoAndGitFailsClosedWithoutHelper is the
-// regression for W15-W15f-exec-lane-runtime-2: selftest_report_repo_and_git
+// regression for: selftest_report_repo_and_git
 // used to be pure report-only, so a BYOI-wrapped image (which COPYs the
 // wardyn-git-helper binary onto PATH but never wires `git config --system
 // credential.helper` — only the prebuilt claude-code/codex-cli images bake

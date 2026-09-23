@@ -50,7 +50,7 @@ func (s *topologyStore) GetSource(_ context.Context, id uuid.UUID) (types.Source
 // refs included"): upstream_proxy_secret_ref, every
 // integrations[].secrets[].secret_name, and the internal proxy / SCM /
 // artifact-override / redirect hostnames. A Source row carries Locator — the
-// HOST FILESYSTEM PATH of a local_dir source — and requirement keys spelled
+// Host filesystem PATH of a local_dir source — and requirement keys spelled
 // `secret:<name>` / `egress:<host>`. A BaseImageEntry carries the internal
 // registry ref and the bootstrap URLs in Steps. No secret VALUES (those are
 // write-only), so this is a lateral-movement target list rather than a key —

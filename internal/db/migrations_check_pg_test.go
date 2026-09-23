@@ -20,7 +20,7 @@ package db
 // hand-altered, dropped, or written in a form the text parser reads differently
 // from the server shows up here.
 //
-// IT CARRIES ITS OWN COUNTERFACTUAL. A parity guard that cannot fail is the
+// It carries its own counterfactual. A parity guard that cannot fail is the
 // original defect wearing a different hat, so the last subtest widens a real
 // constraint in the throwaway schema — the way a hand-applied ALTER would, with
 // no migration to show for it — and asserts this guard reports it.

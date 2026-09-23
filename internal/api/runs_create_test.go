@@ -69,7 +69,7 @@ func TestCreateRun_LegitimateTasksStillPass(t *testing.T) {
 	}
 }
 
-// TestDecodeAndValidateCreateRun_NoTaskCoercesInteractive is the W15-S1-2
+// TestDecodeAndValidateCreateRun_NoTaskCoercesInteractive is the
 // regression: a non-interactive request with no task used to sail through
 // decodeAndValidateCreateRun untouched, dispatching a sandbox that execs
 // nothing and never reaches a terminal state. The shared chokepoint now

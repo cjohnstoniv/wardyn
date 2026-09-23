@@ -22,7 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// THE MITM'S UPSTREAM LEG SPEAKS THE SCHEME ITS ENTRY NAMES (walk-3).
+// The MITM'S upstream LEG speaks the scheme its entry names (walk-3).
 //
 // Terminating the tunnel is not optional for Phase B: the sandbox holds a
 // placeholder, not a credential, so the real token can only be substituted into
@@ -152,7 +152,7 @@ const plainMITMHost = "wardyn-awsssofake.wardyn.svc.cluster.local"
 // MITM is "supposed" to see — and that assumption is what let walk-5 stay red
 // after the upstream leg was fixed.
 
-// THE CLIENT LEG, MEASURED. The test above drives the tunnel the
+// The client LEG, MEASURED. The test above drives the tunnel the
 // way a TLS client does. The agent's SDK does NOT: with a proxy configured it
 // reaches an `http://` endpoint by CONNECT and then sends PLAINTEXT inside the
 // tunnel — first byte 0x47, `G`, never 0x16. Reproduced offline against the real
@@ -341,9 +341,9 @@ func TestCompileMITMHosts_PlaintextIsPortScoped(t *testing.T) {
 	}
 }
 
-// ─── the path/query pin (W6-S F3) ────────────────────────────────────────────
+// the path/query pin (W6-S F3)
 
-// THE INJECTED SESSION RIDES ONE REQUEST SHAPE, NOT ONE HOST.
+// The injected session rides one request shape, NOT ONE HOST.
 //
 // Before this, the resolved header went on whatever the sandbox sent to the
 // portal host. That includes `POST /logout`, which AWS documents as invalidating
@@ -380,7 +380,7 @@ func TestMITMInjection_IsPinnedToTheDispatchedRoleCredentialsCall(t *testing.T) 
 		{"the right path, the wrong verb", true, http.MethodPost, "/federation/credentials",
 			"account_id=" + account + "&role_name=" + role, ""},
 		{"listing the session's accounts", true, http.MethodGet, "/assignment/accounts", "", ""},
-		// THE AMBIGUOUS QUERIES (security re-round SHOULD-1). Each carries the
+		// The ambiguous queries (security re-round SHOULD-1). Each carries the
 		// pinned pair AND a second account or role. Matching on url.Values.Get
 		// accepted all four, with the credential attached and RawQuery forwarded
 		// verbatim — so whether a second account was honoured was the ORIGIN's
@@ -455,7 +455,7 @@ func TestMITMInjection_IsPinnedToTheDispatchedRoleCredentialsCall(t *testing.T) 
 	}
 }
 
-// THE PLAIN LANE HONOURS THE PIN TOO (docs REVIEW-3 coverage note).
+// The plain lane honours the pin TOO (docs REVIEW-3 coverage note).
 //
 // injector.apply is the cleartext path — an ordinary absolute-URI request that
 // never enters a tunnel — and it reaches the very same portal host. A pin

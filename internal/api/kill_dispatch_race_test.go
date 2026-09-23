@@ -211,7 +211,7 @@ func TestKillRun_FailAndRevokeRace_SingleRevocation(t *testing.T) {
 	}
 }
 
-// ─── real-dispatch-seam kill race ────────────────────────────────
+// real-dispatch-seam kill race
 //
 // The two tests above race a kill against a raw state-cell CAS — they prove the
 // CAS arbitration but not the DISPATCH SEAM: CreateSandbox provisions a real

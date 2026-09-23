@@ -69,7 +69,7 @@ func admitClaimedLegacySite() types.SiteConfig {
 	return providersConfig([]types.GitProvider{githubRow(admitRowID, false, admitBaseURL)}, "github.com")
 }
 
-// ─── assertions ───────────────────────────────────────────────────────────────
+// assertions
 
 // assertOperatorRefused is the operator half of the DISCLOSURE rule: 422, and the
 // allowed addresses are named, because the operator is the person who can widen
@@ -124,7 +124,7 @@ func assertNotAdmissionRefused(t *testing.T, w *httptest.ResponseRecorder, why s
 	}
 }
 
-// ─── the doors ────────────────────────────────────────────────────────────────
+// the doors
 
 // admitDoor is one way a repository reaches a clone. fire drives ONE request
 // through it with the given provider policy, naming the given repo, as an
@@ -315,7 +315,7 @@ func TestAdmissionAtEveryRequestDoor(t *testing.T) {
 				assertNotAdmissionRefused(t, w, "an unclaimed legacy host stays launchable for one release")
 			})
 
-			// THE UPGRADE PIN.
+			// The upgrade pin.
 			t.Run("no provider rows: admission is a no-op", func(t *testing.T) {
 				_, w := door.fire(t, types.SiteConfig{}, admitOffRow, true)
 				assertNotAdmissionRefused(t, w, "legacy open mode must behave exactly as 0.7.1 did")
@@ -384,7 +384,7 @@ func TestAdmissionRefusalStringsAreTheDraftConstants(t *testing.T) {
 	}
 }
 
-// ─── the two launchers ────────────────────────────────────────────────────────
+// the two launchers
 
 // TestAdmissionAtTheScanLauncher: launchSourceScanRun creates a run without
 // passing decodeAndValidateCreateRun or validateWorkspaceSources, so the request
@@ -407,7 +407,7 @@ func TestAdmissionAtTheScanLauncher(t *testing.T) {
 	if !strings.Contains(err.Error(), "outside every enabled provider") {
 		t.Errorf("err = %v, want the operator refusal sentence", err)
 	}
-	// THE UPGRADE PIN at the launcher too: legacy open mode gets past admission
+	// The upgrade pin at the launcher too: legacy open mode gets past admission
 	// and reaches the fence claim, which is exactly how we know admission did not
 	// refuse it — and, read the other way, that the refusal above happened BEFORE
 	// the claim, so it cost no state and needed no release().
@@ -527,7 +527,7 @@ func TestStoreCreateRunCallerCensus(t *testing.T) {
 	}
 }
 
-// ─── the lane veto ────────────────────────────────────────────────────────────
+// the lane veto
 
 // laneVetoSite returns a policy whose row admits the host but permits only the
 // ONE lane named — so every other lane is vetoed.
@@ -976,7 +976,7 @@ func assertLegacyHostWarned(t *testing.T, w *httptest.ResponseRecorder, wantFlat
 	}
 }
 
-// ─── the `admitted` projection ────────────────────────────────────────────────
+// the `admitted` projection
 
 func admittedFlags(t *testing.T, body string) []*bool {
 	t.Helper()

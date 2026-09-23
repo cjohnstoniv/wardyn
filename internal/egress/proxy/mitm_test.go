@@ -247,7 +247,7 @@ func TestMITMBlockRefusesOverTunnel(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_DialsConfiguredPort is the W13-S1-5 regression. A corp
+// TestMITMCorpHost_DialsConfiguredPort is the regression. A corp
 // artifact MITM host is matched by HOSTNAME (mitmHosts), so before this fix
 // serveMITMRequest hardcoded the dial target to port 443 regardless of which
 // port the sandbox actually CONNECTed to. An operator's mirror living on a
@@ -343,7 +343,7 @@ func TestMITMCorpHost_DialsConfiguredPort(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_PortMismatchFallsThroughOpaque is W13-S1-5's other half:
+// TestMITMCorpHost_PortMismatchFallsThroughOpaque is other half:
 // an EXPLICITLY port-scoped mitmHosts entry ("host:port", what
 // planArtifactRedirect now authors) is MITM/injection-eligible ONLY at that
 // port. A CONNECT to the same host on a DIFFERENT, unconfigured port must NOT
@@ -388,7 +388,7 @@ func TestMITMCorpHost_PortMismatchFallsThroughOpaque(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_ForwardEgressScanCoversBody is the W19-W19d-1 regression.
+// TestMITMCorpHost_ForwardEgressScanCoversBody is the regression.
 // channelForHost maps every corp artifact MITM host to ChannelGeneric, which
 // classifyLLM unconditionally treats as scanNone (not prompt-bearing) — so
 // inspectLLM alone streamed an artifact-MITM body through completely
@@ -488,7 +488,7 @@ func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_DecisionCarriesRealPort is the audit half of W13-S1-5.
+// TestMITMCorpHost_DecisionCarriesRealPort is the audit half of.
 // TestMITMCorpHost_DialsConfiguredPort already pins that the real CONNECT port
 // reaches the DIAL; this pins that it also reaches the DECISION LOG. The two are
 // separate plumbing — mitmConnect threads port into serveMITMRequest, which
@@ -576,7 +576,7 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 	holdPollInterval = 5 * time.Millisecond
 	defer func() { holdPollInterval = prevPoll }()
 
-	// THE DECISION ROW IS NARROWER THAN THE 401 (security NIT-B). Every case
+	// The decision row is narrower than the 401 (security NIT-B). Every case
 	// below ends without a credential and every one of them earns the modelled
 	// 401 — the sandbox has to be told. Only ONE of them expired, and only that
 	// one may write credential:reauth-timeout, because that row is what an
@@ -670,7 +670,7 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 	}
 }
 
-// A CLIENT THAT HUNG UP IS WRITTEN NOTHING — no 401, no deny row (security
+// A client that HUNG UP is written nothing — no 401, no deny row (security
 // SHOULD-1). The first shape ended the workflow with an expiry whenever its
 // first caller's ctx died, so a disconnect was recorded as "nobody signed in
 // before the hold expired" for a hold that still had minutes left, and every

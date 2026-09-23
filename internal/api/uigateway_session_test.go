@@ -33,7 +33,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// helpers
 
 // uiRevocations is an oidc.SessionRevocations double whose answer a test flips
 // mid-flight, which is what a real revoke looks like to the gateway: nothing
@@ -155,7 +155,7 @@ func uiGet(h *uiHarness, path string, c *http.Cookie) *httptest.ResponseRecorder
 	return rec
 }
 
-// ─── B3-F1 + B3-F8: one cookie per app, and a canonical run id ───────────────
+// B3-F1 + B3-F8: one cookie per app, and a canonical run id
 
 // TestUIGateway_SecondAppDoesNotHijackTheFirstApp pins B3-F1. The relay cookie
 // was keyed per RUN (one name, Path=/r/<run>/) but pinned ONE app and port, so
@@ -259,7 +259,7 @@ func TestUIGateway_NonCanonicalRunIDIsNotARelayPath(t *testing.T) {
 	}
 }
 
-// ─── B3-F5: the cookie is not a frozen 8h bearer ─────────────────────────────
+// B3-F5: the cookie is not a frozen 8h bearer
 
 // signUISessionPayload signs a RAW payload the way encodeUISession does, so a
 // test can mint a cookie in a format the current code does not write — here,
@@ -415,7 +415,7 @@ func TestUIGateway_EstablishedConnectionOutlivesTheRevoke(t *testing.T) {
 	}
 }
 
-// ─── the TTL knob ────────────────────────────────────────────────────────────
+// the TTL knob
 
 // TestUIGateway_SessionTTLIsAnOperatorBound: WARDYN_UI_SANDBOX_SESSION_TTL is
 // the relay's sibling of WARDYN_SSH_ROLE_TTL — the operator's bound on how
@@ -453,7 +453,7 @@ func TestUIGateway_DefaultSessionTTLIsTheShippedBound(t *testing.T) {
 	}
 }
 
-// ─── parse ───────────────────────────────────────────────────────────────────
+// parse
 
 // TestParseUIRunPath is the table for the one function that decides what a
 // relay path even is — and therefore the one place the canonical-id and
@@ -483,7 +483,7 @@ func TestParseUIRunPath(t *testing.T) {
 	}
 }
 
-// ─── UG-1: a reused pooled connection is re-checked too ─────────────────────
+// UG-1: a reused pooled connection is re-checked too
 
 // countingSocat wraps the harness's fake runner so a test can see how many
 // relay DIALS actually happened. net/http pools the relay connection, so the
@@ -614,7 +614,7 @@ func TestUIGateway_ReassertRefusesWhenTheRunCannotBeLoaded(t *testing.T) {
 	}
 }
 
-// ─── UG-2: a refused re-check is in the audit trail ──────────────────────────
+// UG-2: a refused re-check is in the audit trail
 
 // TestUIGateway_RefusedReassertIsAuditedWithItsReason: "someone is driving a
 // revoked relay credential" has to be visible. Each refusal arm writes one

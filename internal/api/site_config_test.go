@@ -24,7 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── validateSiteConfig ──────────────────────────────────────────────────────
+// validateSiteConfig
 
 func TestValidateSiteConfig(t *testing.T) {
 	cases := []struct {
@@ -41,7 +41,7 @@ func TestValidateSiteConfig(t *testing.T) {
 			types.SiteConfig{UpstreamProxyURL: "http://user:pass@proxy.corp:3128"}, false},
 		{"upstream proxy plain URL malformed", types.SiteConfig{UpstreamProxyURL: "not a url"}, false},
 		{
-			// W13-S1-4 regression: https:// used to pass validSiteURL (it accepts
+			// regression: https:// used to pass validSiteURL (it accepts
 			// both http/https for its OTHER callers) and save clean, then display
 			// as the live chain while resolveUpstreamProxyURL silently dropped it
 			// at dispatch (the sidecar's plaintext-CONNECT hop cannot carry
@@ -269,7 +269,7 @@ func TestValidateSiteConfig_InternalHosts_Accepts(t *testing.T) {
 	})
 }
 
-// ─── handler tests ───────────────────────────────────────────────────────────
+// handler tests
 
 // fakeSiteConfigStore is a minimal store.Store for the site-config handlers.
 type fakeSiteConfigStore struct {
@@ -429,7 +429,7 @@ func TestHandlePutSiteConfig_RoundTripAndAudit(t *testing.T) {
 	}
 }
 
-// TestHandlePutSiteConfig_ReportsDanglingSecretRefs pins W26-S1-2: PUT
+// TestHandlePutSiteConfig_ReportsDanglingSecretRefs pins: PUT
 // /site-config must surface, never silently accept, a secret ref the store
 // doesn't currently hold (e.g. `wardyn site-config apply corp-baseline.json`
 // run before the referenced secrets were restored). The write itself still
@@ -602,7 +602,7 @@ func TestHandleGetSiteConfig_StoreError(t *testing.T) {
 	}
 }
 
-// ─── the integrations clobber guard ──────────────────────────────────────────
+// the integrations clobber guard
 //
 // PUT /site-config replaces the whole document. An older client that GETs a
 // config written before `integrations` existed, then PUTs it back, would

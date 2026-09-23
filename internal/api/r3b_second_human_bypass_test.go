@@ -154,7 +154,7 @@ func TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
 					"four-eyes gate, and docs/ENV.md says each one writes a row; a break-glass that leaves nothing "+
 					"behind when the store errors is a hole in the count an operator audits", len(rows))
 			}
-			// THE ORIGINAL ASSERTION, kept exactly: no row may say a four-eyes
+			// The original assertion, kept exactly: no row may say a four-eyes
 			// rule was bypassed on a decision that WAS made, because none was.
 			if rows[0].Outcome == "success" {
 				t.Errorf("the bypass row for a FAILED decision has outcome=success — it names a break-glass on a " +

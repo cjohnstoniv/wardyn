@@ -102,7 +102,7 @@ func TestDriveHomeName(t *testing.T) {
 		// resolve for a claim that was not an address. email_local above is the
 		// corporate-home case it looked like it served.
 		{name: "an unknown template is refused, never guessed", tmpl: HomeTemplate("email"), subject: "alice", wantErr: true},
-		// A LEADING DOT is the dotfile class the member-mount rules refuse by
+		// A leading DOT is the dotfile class the member-mount rules refuse by
 		// segment; ".." is the traversal, excluded by the same clause.
 		{name: "a leading dot is refused", tmpl: HomeTemplateSub, subject: ".ssh", wantErr: true},
 		{name: "a traversal is refused", tmpl: HomeTemplateSub, subject: "..", wantErr: true},
@@ -143,7 +143,7 @@ func TestDriveHomeName(t *testing.T) {
 // subdomain, a Docker home is a volume-name component, and they are NOT the
 // same alphabet.
 //
-// THE MOTIVATING CASE IS THE FIRST ROW. An Entra `sub` is base64url and
+// The motivating CASE is the first row. An Entra `sub` is base64url and
 // routinely carries `_`, which is legal in a Docker volume name and illegal in
 // a DNS-1123 name. Before the split, a `k8s_pvc` + `sub` drive validated at the
 // write boundary, was stored, and then failed at BIND time — on somebody's run,
@@ -395,7 +395,7 @@ func TestDriveSubjectHash(t *testing.T) {
 	if other := DriveSubjectHash("alice@acquired.example"); other == alice {
 		t.Error("two principals sharing an email local part hashed the same — the label could not tell them apart")
 	}
-	// A LABEL IS PUBLIC: `docker volume inspect` echoes it to anyone who can
+	// A label is public: `docker volume inspect` echoes it to anyone who can
 	// reach the daemon, so no part of the claim may survive into it.
 	if strings.Contains(alice, "alice") || strings.Contains(alice, "@") {
 		t.Errorf("hash %q carries the claim — a Docker label is echoed verbatim by `docker volume inspect`", alice)
@@ -405,7 +405,7 @@ func TestDriveSubjectHash(t *testing.T) {
 	if DriveSubjectHash("  ALICE@CORP.EXAMPLE ") != alice {
 		t.Error("the subject is not trimmed and lowercased the way DriveHomeName folds it")
 	}
-	// EMPTY MEANS NO LABEL, not the digest of "": that value would be one
+	// Empty means no label, not the digest of "": that value would be one
 	// fingerprint shared by every caller with no identity — the single answer
 	// that could make two principals look like one.
 	if got := DriveSubjectHash("   "); got != "" {
@@ -526,7 +526,7 @@ func TestValidateUserDrive(t *testing.T) {
 				d.Backend, d.StorageClass, d.SizeMiB = DriveBackendK8sPVC, "fast", 10240
 			}),
 			target: "k8s"},
-		// THE ONE BACKEND WHERE SIZE IS NOT A DISPLAY VALUE. A k8s_pvc drive's
+		// The one backend where SIZE is not A display value. A k8s_pvc drive's
 		// size becomes resources.requests.storage, and a claim requesting zero
 		// bytes is rejected by the apiserver — so the value every other backend
 		// reads as "no allocation shown" is, here, a row whose every member's run
@@ -555,7 +555,7 @@ func TestValidateUserDrive(t *testing.T) {
 				d.Backend, d.HomeTemplate, d.HostRoot = DriveBackendHostPath, HomeTemplateSub, "/srv/homes"
 			}),
 			target: "docker"},
-		// THE MIRROR OF "a share cannot be hashed", and the security half of the
+		// The mirror OF "a share cannot be hashed", and the security half of the
 		// pair. A MANAGED object is named by the HOME alone, so two people whose
 		// addresses share the part before the "@" — the ordinary merged-tenant
 		// shape — would be allocated ONE volume or PVC, with write access to each

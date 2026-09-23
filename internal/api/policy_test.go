@@ -121,7 +121,7 @@ func TestValidateLLMInspection(t *testing.T) {
 		{"entropy ok", &types.LLMInspectionSpec{Mode: "alert", DetectEntropy: true}, nil, true},
 		{"pii ok", &types.LLMInspectionSpec{Mode: "alert", DetectPII: true}, nil, true},
 		{"sidecar url is a detector, host allowlisted", &types.LLMInspectionSpec{Mode: "alert", DetectorSidecarURL: "http://presidio:8080/scan"}, presidio, true},
-		// W12-A-1 belt-and-braces: a well-formed http(s) sidecar URL is STILL
+		// belt-and-braces: a well-formed http(s) sidecar URL is STILL
 		// refused when its host is not in the SAME policy's own egress
 		// allowlist — the operator must explicitly bless it, exactly like a
 		// brokered api_key injection requires an exact allowlist entry
@@ -136,7 +136,7 @@ func TestValidateLLMInspection(t *testing.T) {
 		{"require_inspectable needs intercept_tls", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true}, nil, false},
 		{"require_inspectable with intercept_tls ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, RequireInspectableLLM: true, InterceptTLS: true}, nil, true},
 		{"intercept_tls alone ok", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, InterceptTLS: true}, nil, true},
-		// W12-A-2/W12-S1-1: a raw VALUE can never be authored — only NAMES.
+		// A raw VALUE can never be authored — only NAMES.
 		{"workspace_secret_values rejected on write; author workspace_secret_names instead", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretValues: []string{"super-secret-value"}}, nil, false},
 		{"workspace_secret_names ok (the field an operator actually authors)", &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretNames: []string{"prod-db-password"}}, nil, true},
 	}

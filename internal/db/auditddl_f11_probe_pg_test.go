@@ -41,7 +41,7 @@ func sqlState(err error) string {
 	return ""
 }
 
-// ─── skips that would hide a failure ─────────────────────────────────────────
+// skips that would hide a failure
 
 // probeSkipMarker lets an operator ASSERT that this lane is fully provisioned,
 // turning every precondition guard below into a failure instead of a skip. CI's
@@ -52,7 +52,7 @@ const probeSkipMarker = "WARDYN_TEST_PG_SUPERUSER"
 // probeMustNotSkip reports whether a skip from here on would be HIDING a
 // failure rather than reporting an unmet precondition.
 //
-// WHY IT IS DERIVED AND NOT ONLY DECLARED. Every guard in this file produces
+// Why it is derived and not only declared. Every guard in this file produces
 // `--- SKIP` -> `ok` -> exit 0, scripts/test-report.sh grades on the exit code,
 // and nothing inspects the JSON stream for skips — so a probe that quietly
 // stopped running looked exactly like a probe that passed, and the invariant it

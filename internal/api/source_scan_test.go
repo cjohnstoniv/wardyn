@@ -56,7 +56,7 @@ func TestSeedSourceRequirements_EveryRowValidates(t *testing.T) {
 }
 
 // TestSeedSourceRequirements_SuggestedEgressNeverSeeded is the end-to-end half
-// of the W6-S1-3 fix, at the exact boundary the finding's acceptance
+// of the fix, at the exact boundary the finding's acceptance
 // criterion names: "an AI-suggested host is NOT auto-unioned into a run's
 // allowlist without operator approval". workspacescan.AdviseProfile (ai.go)
 // now lands an AI-suggested host in SuggestedEgress, never EgressDomains (see
@@ -90,7 +90,7 @@ func (s *localDirScanStore) SetSourceScanResultUnfenced(_ context.Context, _ uui
 	return types.Source{Status: status}, nil
 }
 
-// TestScanLocalDirSource_ConsultsAIAdvisor is the W9-S1-6 regression:
+// TestScanLocalDirSource_ConsultsAIAdvisor is the regression:
 // WARDYN_SCAN_AI_ADVISOR used to run ONLY for the sandboxed repo-scan upload
 // lane (uploadSourceScanResult) — a local_dir source's host-side scan called
 // workspacescan.Scan directly and never consulted s.cfg.ScanAIAdvisor at all,

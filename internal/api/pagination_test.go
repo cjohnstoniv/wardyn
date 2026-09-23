@@ -23,7 +23,7 @@ import (
 // store.Pager over canned slices, honouring Limit/Offset exactly as the SQL
 // LIMIT/OFFSET does, so the handlers take their production pager path.
 //
-// THE ASSERTION BELOW IS LOAD-BEARING, not decoration. Handlers reach this fake
+// The assertion below is LOAD-BEARING, not decoration. Handlers reach this fake
 // through a runtime type assertion to store.Pager, so a method ADDED to that
 // interface and not added here does not fail the build — it silently makes this
 // fake stop being a Pager, and every test in this file quietly starts exercising

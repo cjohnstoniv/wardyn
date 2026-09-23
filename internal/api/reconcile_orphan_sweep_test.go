@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// P1 W15-W15c-terminal-lifecycle-4: a terminal run's SandboxRef only survives
+// P1: a terminal run's SandboxRef only survives
 // finalizeRunTail non-empty when its StopSandbox call FAILED — and
 // ReconcileOnBoot's `isTerminalRunState(run.State) { continue }` guard means
 // that run is never looked at again. The abandoned container (and its proxy
@@ -90,7 +90,7 @@ func (r *orphanSweepRunner) stopCount(ref string) int {
 }
 
 // TestReconcileOnBoot_SweepsOrphanedTerminalSandbox is the counterfactual for
-// W15-W15c-terminal-lifecycle-4: on base 763beb5, ReconcileOnBoot's terminal
+// On base 763beb5, ReconcileOnBoot's terminal
 // guard skips this run outright and StopSandbox is never called for it — the
 // container leaks forever. After the fix, the sweep tears it down and clears
 // the ref so the run drops out of future sweeps.

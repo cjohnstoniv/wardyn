@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the minimal viewer/operator role gate (requireOperator) ─────────────────
+// the minimal viewer/operator role gate (requireOperator)
 
 const (
 	rbacOperator = "Ops@Corp.Example" // as configured: mixed case, on purpose

@@ -56,7 +56,7 @@ type mountSummary struct {
 // assertMountSet asserts the agent's applied mounts are EXACTLY want — the whole
 // slice, compared as a sorted set, never a member of it.
 //
-// WHY THE SET AND NOT A LOOKUP. Every mount assertion in this package finds its
+// Why the set and not A lookup. Every mount assertion in this package finds its
 // mount by target (findMount, or an inline loop) and checks that one, which says
 // nothing at all about what ELSE the driver attached. A `mount.Mount{Type:
 // mount.TypeBind, Source: "/", Target: "/work/host"}` appended in agentMounts —
@@ -238,7 +238,7 @@ func TestCreateSandbox_DeniedMountsRejected(t *testing.T) {
 		{"empty-source", runner.Mount{Source: "", Target: "/work/x"}},
 		{"bad-target-prefix", runner.Mount{Source: "/home/u/repo", Target: "/etc"}},
 		{"bad-target-usr", runner.Mount{Source: "/home/u/repo", Target: "/usr/local"}},
-		// THE RESERVED TARGET, arriving from a STORED POLICY ROW. validatePolicySpec
+		// The reserved target, arriving from a STORED POLICY ROW. validatePolicySpec
 		// refuses it at authoring — but only since the reservation existed, and a
 		// row written before that is exactly what this defense-in-depth re-check
 		// is for. The driver's half used to be runner.ValidateMount, whose
@@ -264,7 +264,7 @@ func TestCreateSandbox_DeniedMountsRejected(t *testing.T) {
 	}
 }
 
-// ─── USER DRIVES (host_path): the same deny matrix, one object up ─────────────
+// USER DRIVES (host_path): the same deny matrix, one object up
 
 // driveHostRoot makes a real, symlink-resolved root with this person's home
 // directory under it — the shape a host_path drive actually has (the OPERATOR
@@ -482,7 +482,7 @@ func TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot(t *testing.T) {
 		if !strings.Contains(err.Error(), "denied user drive") {
 			t.Errorf("error should identify the denied drive, got: %v", err)
 		}
-		// NAMES THE DRIVE AND THE DIRECTORY, NEVER THE PATHS. Every driver
+		// Names the drive and the directory, NEVER THE PATHS. Every driver
 		// refusal becomes the run's failure_hint, which the run's CREATOR reads,
 		// and both roots plus the bind source are the operator's filesystem
 		// layout — the same disclosure driveAuditTarget masks off the audit row

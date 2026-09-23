@@ -113,7 +113,7 @@ func TestTrustedCADialsPassingCorpCA(t *testing.T) {
 	corpSrv.StartTLS()
 	defer corpSrv.Close()
 
-	// A SEPARATE CA for the AGENT-facing leg — this is the proxy's own MITM CA
+	// A separate CA for the AGENT-facing leg — this is the proxy's own MITM CA
 	// (WARDYN_MITM_CA_PEM the sandbox trusts), unrelated to the corp CA under
 	// test; every MITM test in this package mints one the same way.
 	mitmCertPEM, mitmKeyPEM := genTestCA(t)

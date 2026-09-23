@@ -46,7 +46,7 @@ func (r *execLessCapsRunner) Wait(context.Context, string) (int, error) { return
 var _ runner.Runner = (*execLessCapsRunner)(nil)
 
 // TestStartAgentOrIdle_BYOIOnExecLessRuntime_RefusedWithoutWastingTheSlot is
-// the W15-W15f-exec-lane-runtime-4 regression: on base 763beb5, byoiSelftest
+// the regression: on base 763beb5, byoiSelftest
 // runs unconditionally for a BYOI image — on an exec-less (krun/CC3) runtime
 // that consumes the sandbox's ONE process, so the immediately-following task
 // Exec is guaranteed to fail against an already-exited container (Exec is

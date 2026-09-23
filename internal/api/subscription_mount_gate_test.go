@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestIsModelRun_ExcludesExecTaskMode is the W5-S1-5 regression: a
+// TestIsModelRun_ExcludesExecTaskMode is the regression: a
 // task_mode=exec run (the BYOA/CI plain-command lane) execs a bare shell
 // command and never invokes the agent CLI, so it must NOT be treated as a
 // model run — same as an existing non-interactive scan run. (The signature
@@ -50,7 +50,7 @@ func TestIsModelRun_ExcludesExecTaskMode(t *testing.T) {
 func ptr[T any](v T) *T { return &v }
 
 // TestBuildRunMounts_DropsResidentClaudeCredsOnNonModelRun is the other half
-// of the W5-S1-5 regression: even when the POLICY declares a workspace_mount
+// of the regression: even when the POLICY declares a workspace_mount
 // onto claudeCredTarget/claudeCredJSONTarget (the normal way an operator
 // stages a host ~/.claude subscription), buildRunMounts must drop it for a
 // non-model-run dispatch — the resident host OAuth session has no business in

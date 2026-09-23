@@ -66,7 +66,7 @@ func newTestEvent(action string) types.AuditEvent {
 	}
 }
 
-// TestNewAuditSpool_CreatesMissingParentDir pins the W28-S1-2 fix: the flag
+// TestNewAuditSpool_CreatesMissingParentDir pins the fix: the flag
 // default (cmd/wardynd/boot_flags.go) is the RELATIVE "./data/audit-spool.jsonl",
 // and the chart's own defaults point it at a directory nothing has created yet
 // (an emptyDir or a fresh PVC). Before the MkdirAll in NewAuditSpool, opening a
@@ -406,7 +406,7 @@ func (r *blockingRecorder) Record(ctx context.Context, ev types.AuditEvent) erro
 // caller's own if it is shorter — which is the path this test drives, so the
 // suite does not wait out the real 15s).
 //
-// AND NOT A STRIKE: a store that never ANSWERED has proved nothing about the
+// And not A strike: a store that never ANSWERED has proved nothing about the
 // line it was given, so a timeout must not count toward quarantine. The fixture
 // makes that discriminating — the blocked line has a perfectly good line behind
 // it, so if a timeout earned strikes, the third pass would promote the blocked

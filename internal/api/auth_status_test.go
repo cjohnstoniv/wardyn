@@ -25,7 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── B6-F2 + B6-F5: a rejected session gets its OWN answer ───────────────────
+// B6-F2 + B6-F5: a rejected session gets its OWN answer
 
 // TestSessionRejectionResponse is the reason→answer table B6-F2 and B6-F5 are
 // both one edit of. The 503 is the load-bearing row: a revocation-store outage
@@ -218,7 +218,7 @@ func TestAPITokenRevocationOutageIs503(t *testing.T) {
 	}
 }
 
-// ─── B6-F4: driver text stays in the log, never in the body ──────────────────
+// B6-F4: driver text stays in the log, never in the body
 
 // errRunStore fails GetRun with a wrapped pgx-shaped error: the real ones carry
 // the DB host, port, user and database name plus the SQLSTATE and the table or

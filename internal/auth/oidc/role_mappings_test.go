@@ -62,7 +62,7 @@ func (e *idpEnv) newRoleMappingAuth(t *testing.T, roleMap map[string]string, def
 	return auth
 }
 
-// ─── mergeRoleMaps: pure-function table tests ─────────────────────────────────
+// mergeRoleMaps: pure-function table tests
 
 func TestMergeRoleMapsDisjointUnion(t *testing.T) {
 	chart := map[string]string{"wardyn.admin": writoidc.RoleAdmin}
@@ -282,7 +282,7 @@ func TestMergeRoleMapsChartNonEmptyNeverEmpty(t *testing.T) {
 	}
 }
 
-// ─── CallbackHandler: Config.RoleMappings wired ───────────────────────────────
+// CallbackHandler: Config.RoleMappings wired
 
 // TestCallbackRoleMappingsStoreErrorDeniesLogin: a wired store that errors
 // must deny the login with the distinct role_check_unavailable code and clear
@@ -338,7 +338,7 @@ func TestCallbackRoleMappingsChartWinsCollision(t *testing.T) {
 	}
 }
 
-// ─── PreviewRole ───────────────────────────────────────────────────────────────
+// PreviewRole
 
 // TestPreviewRoleParityWithCallback: PreviewRole must derive the SAME role a
 // real login with identical claims would, including a real store read.
@@ -454,7 +454,7 @@ func containsAuthError(location, code string) bool {
 	return u.Query().Get("auth_error") == code
 }
 
-// ─── read-only accessors ────────────────────────────────────────────────────
+// read-only accessors
 
 // TestChartRoleMapCopiesNotTheLiveMap: the returned map is a copy — mutating
 // it must not affect a subsequent call, since it is read straight off boot
@@ -475,7 +475,7 @@ func TestChartRoleMapCopiesNotTheLiveMap(t *testing.T) {
 	}
 }
 
-// ─── IsOperatorEmail ─────────────────────────────────────────────────────────
+// IsOperatorEmail
 
 // TestIsOperatorEmail pins the case-insensitive allowlist membership check
 // the console write boundary uses to name a collision — same match rule
@@ -504,7 +504,7 @@ func TestIsOperatorEmail(t *testing.T) {
 	}
 }
 
-// ─── PreviewRoleAgainst ──────────────────────────────────────────────────────
+// PreviewRoleAgainst
 
 // TestPreviewRoleAgainstParityWithPreviewRole: PreviewRoleAgainst, handed the
 // exact rows a real Config.RoleMappings read would have returned, must derive

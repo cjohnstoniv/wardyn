@@ -116,7 +116,7 @@ func TestParseLabels(t *testing.T) {
 	}
 }
 
-// ── W24-S1-1 regression: unmapped host-wide events must not leak ───────────
+// regression: unmapped host-wide events must not leak
 
 // fakeGTCorrelator implements groundtruth.Correlator with a single known
 // mapping, so a synthetic exec line can be made to resolve (or not) without
@@ -133,7 +133,7 @@ func (f fakeGTCorrelator) RunForContainer(id string) (uuid.UUID, bool) {
 	return uuid.Nil, false
 }
 
-// TestUnmappedHostEventNotForwardedByDefault is the W24-S1-1 regression:
+// TestUnmappedHostEventNotForwardedByDefault is the regression:
 // Tetragon is a HOST sensor and observes every process on the box, not only
 // Wardyn's. Before this fix, an exec event from a container the docker
 // correlator does not recognise (a non-Wardyn container, or a bare host
@@ -216,7 +216,7 @@ func TestGatedMapper_ForwardsUnmappedWhenOptedIn(t *testing.T) {
 	}
 }
 
-// ── E1/E2 regression: the frozen counter (short-lived containers) ───────────
+// E1/E2 regression: the frozen counter (short-lived containers)
 
 // TestDockerCorrelator_ResolvesAfterContainerExits is half of the frozen-counter
 // regression. Refresh used to REPLACE the index with the current `docker ps`

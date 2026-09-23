@@ -394,7 +394,7 @@ func TestRunCmd_PolicyFileParseError(t *testing.T) {
 	}
 }
 
-// TestRunCmd_PolicyFileRejectsUnknownField is the W14-S1-2 regression: a
+// TestRunCmd_PolicyFileRejectsUnknownField is the regression: a
 // misspelled/unknown spec field in --policy-file used to be silently dropped
 // (json.Unmarshal ignores what it doesn't recognize), so the run launched
 // under a policy the operator believed enforced a setting it never carried.
@@ -715,7 +715,7 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 }
 
 // TestApprovalsListCmd_RunFlagReachesServer pins that `approvals list --run`
-// actually uses the server's ?run_id= filter (W19-S1-4 / W20-hold-fsm-7)
+// actually uses the server's ?run_id= filter
 // instead of silently discarding it.
 func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{})
@@ -949,7 +949,7 @@ func TestAuditCmd_RequiresRun(t *testing.T) {
 	}
 }
 
-// TestAuditCmd_LimitOffsetFlagsPage pins W16-S1-2's core fix: before this,
+// TestAuditCmd_LimitOffsetFlagsPage pins core fix: before this,
 // `wardyn audit` had no way to page past the per-run 1000-event cap, so a run
 // with more events than that silently dropped its newest ones (including
 // run.complete) with no flag to ask for the rest.
@@ -966,7 +966,7 @@ func TestAuditCmd_LimitOffsetFlagsPage(t *testing.T) {
 }
 
 // TestAuditCmd_FilterFlagsReachServer pins the "documented filter flags" half
-// of W16-S1-2's fix: docs/sdk.md already claimed the CLI mirrors the server's
+// of fix: docs/sdk.md already claimed the CLI mirrors the server's
 // since/until/action_prefix/actor_type/outcome predicates, but auditCmd had no
 // such flags at all — the doc overclaimed. This locks the flags to the wire.
 func TestAuditCmd_FilterFlagsReachServer(t *testing.T) {
@@ -995,7 +995,7 @@ func TestAuditCmd_FilterFlagsReachServer(t *testing.T) {
 
 // TestAuditCmd_TruncatedPageWarnsOnStderr pins that a truncated page (server
 // sets X-Wardyn-Truncated) is surfaced, not silently indistinguishable from a
-// complete trail — the exact harm W16-S1-2 named. The warning goes to
+// complete trail — the exact harm named. The warning goes to
 // cmd.ErrOrStderr(), never mixed into the events themselves: emitJSON encodes
 // straight from the server-decoded slice, so there is no string path by which
 // this text could land inside the --json array.
@@ -1028,7 +1028,7 @@ func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// logTail (W22-S1-4: `wardyn logs`)
+// logTail (: `wardyn logs`)
 // --------------------------------------------------------------------------
 
 // TestLogTail_Filter_DedupesSameSecondBoundary is the real bug this type
@@ -1227,7 +1227,7 @@ func TestRunRecordingCmd_DefaultsToBareRunID(t *testing.T) {
 	}
 }
 
-// W21-S1-6: --session fetches an interactive run's OTHER recordings — an
+// --session fetches an interactive run's OTHER recordings — an
 // attach session's cast is stored server-side under the composite key
 // "<run-id>~<session>" (recording.CastKey), which the server has always
 // served, but nothing on the CLI/SDK side could ever request one before this.
@@ -1451,7 +1451,7 @@ func TestURL_FlagOverridesEnv(t *testing.T) {
 
 // With no WARDYN_ADMIN_TOKEN and no --token, do() proceeds WITHOUT an
 // Authorization header rather than erroring client-side — a loopback wardynd in
-// LOCAL HOST MODE accepts unauthenticated requests; an auth-gated server returns
+// Local host MODE accepts unauthenticated requests; an auth-gated server returns
 // a clear 401 instead.
 func TestToken_MissingProceedsUnauthenticated(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AgentRun{})

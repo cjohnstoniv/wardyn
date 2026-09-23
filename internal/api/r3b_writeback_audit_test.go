@@ -66,7 +66,7 @@ func r3bAuditDetail(t *testing.T, ev types.AuditEvent) string {
 //     exactly like an ordinary dev-task approval;
 //   - the nil Store, folded in with the kind check at the top.
 //
-// The control is the junk-host arm, which has audited its miss since W19-W19b-5
+// The control is the junk-host arm, which has audited its miss since
 // and is what makes this a contract rather than one branch's taste. The
 // not-applicable conditions must STILL stay silent — a failure row on every
 // plain-run approval would drown the two that mean something — so this pins

@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── B6-F6: the anonymous /healthz stops publishing fleet volumes ────────────
+// B6-F6: the anonymous /healthz stops publishing fleet volumes
 
 // TestHealthzEbpfPublishesNoCounters pins B6-F6. /metrics is operator-gated
 // precisely because "a member … would learn operational volumes", and the
@@ -61,7 +61,7 @@ func TestHealthzEbpfPublishesNoCounters(t *testing.T) {
 	}
 }
 
-// ─── B6-F8: authenticated API responses are not cacheable ────────────────────
+// B6-F8: authenticated API responses are not cacheable
 
 // TestAPIResponsesAreNoStore pins B6-F8. The OIDC lane authenticates by COOKIE,
 // not by Authorization, so a 200 `GET /runs` carried no validator and no
@@ -107,7 +107,7 @@ func TestHashedAssetsStayImmutable(t *testing.T) {
 	}
 }
 
-// ─── B6-F7: a handler's doc comment may not misstate its tier ────────────────
+// B6-F7: a handler's doc comment may not misstate its tier
 
 // handlerDocRE finds one handler's doc comment block plus its func line.
 var handlerDocRE = regexp.MustCompile(`(?s)((?://[^\n]*\n)+)func \(s \*Server\) (handle\w+)\(`)
@@ -143,7 +143,7 @@ func TestHandlerDocsMatchTheRegisteredTier(t *testing.T) {
 			t.Fatalf("read %s: %v", e.Name(), rerr)
 		}
 		for _, m := range handlerDocRE.FindAllStringSubmatch(string(b), -1) {
-			// FIRST PARAGRAPH ONLY. A handler's tier claim belongs in its opening
+			// First paragraph only. A handler's tier claim belongs in its opening
 			// sentences; later paragraphs legitimately mention OTHER routes' tiers
 			// ("the same disclosure that keeps the scrape surface gated"), and a
 			// whole-comment scan reads those as claims about this handler.
@@ -197,7 +197,7 @@ func TestHandlerDocsMatchTheRegisteredTier(t *testing.T) {
 	}
 }
 
-// ─── R-02: the by-kind label is a CLOSED set ─────────────────────────────────
+// R-02: the by-kind label is a CLOSED set
 
 // metricsHeartbeatStore is stubHeartbeatStore plus the Ping /metrics makes for
 // wardyn_store_up (the /healthz tests never reach it).
@@ -239,7 +239,7 @@ func TestGroundtruthByKindLabelsAreAClosedSet(t *testing.T) {
 	}
 }
 
-// ─── R-03: the scrape's store reads are bounded ──────────────────────────────
+// R-03: the scrape's store reads are bounded
 
 // blockingHeartbeatStore stalls the ground-truth query while answering Ping —
 // the exact asymmetry wardyn_auth_store_errors_total exists to describe: a pool

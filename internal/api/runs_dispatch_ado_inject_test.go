@@ -184,7 +184,7 @@ func adoTestRun(t *testing.T) adoEntraRun {
 	return run
 }
 
-// THE DISPATCH GOLDEN: one api_key grant per exact host, each carrying the
+// The dispatch golden: one api_key grant per exact host, each carrying the
 // immutable snapshot and require_tls; egress and MITM entries port-qualified;
 // the sandbox holding only an inert placeholder.
 func TestAuthorADOEntraInjection_Golden(t *testing.T) {
@@ -250,7 +250,7 @@ func TestAuthorADOEntraInjection_Golden(t *testing.T) {
 	}
 }
 
-// A MISSING PER-RUN CA IS A REFUSAL, not a blind tunnel.
+// A missing per-RUN CA IS A REFUSAL, not a blind tunnel.
 func TestAuthorADOEntraInjection_RefusesWithoutCertificateAuthority(t *testing.T) {
 	for name, ca := range map[string][2]string{"no cert": {"", "KEY"}, "no key": {"CERT", ""}} {
 		st := &adoTestStore{}
@@ -291,7 +291,7 @@ func TestAuthorADOEntraInjection_RefusesUnissuableConfigurations(t *testing.T) {
 	}
 }
 
-// AN UNCONFIGURED DEPLOYMENT IS BYTE-FOR-BYTE UNCHANGED: the lane resolves to
+// An unconfigured deployment is byte-FOR-BYTE UNCHANGED: the lane resolves to
 // nothing, and the dispatch call with the lane off returns every input as it
 // was and writes no grant.
 func TestADOEntraLane_UnconfiguredDeploymentIsUnchanged(t *testing.T) {
@@ -322,7 +322,7 @@ func TestADOEntraLane_UnconfiguredDeploymentIsUnchanged(t *testing.T) {
 	}
 }
 
-// CLEARTEXT THROUGH THE PLAIN LANE IS REFUSED WITH NO CREDENTIAL ON THE WIRE,
+// Cleartext through the plain lane is refused with no credential on the WIRE,
 // driven through the REAL sidecar booted from this lane's own authored output:
 // dispatch -> runner.BuildProxyConfig -> proxy.LoadConfigBytes -> NewServer.
 // It also proves the sidecar BOOTS with a dozen bare injection rules bound to
@@ -441,7 +441,7 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	assertADOPlainLaneRefused(t, cfg.Listen, seen)
 }
 
-// THE WIRED SOURCE ON A DEPLOYMENT WITH NO ENTRA ROW IS INDISTINGUISHABLE FROM
+// The wired source on A deployment with no ENTRA row is indistinguishable from
 // NO SOURCE: same sign-in answer, and the console login is not widened.
 func TestADOSignIn_UnconfiguredSourceAnswersLikeNoSource(t *testing.T) {
 	answer := func(src ADOEntraSource) (int, string, bool) {

@@ -265,7 +265,7 @@ func TestScan_RequiredWinsOverOptionalDuplicate(t *testing.T) {
 	}
 }
 
-// ── deferral closures: new detectors ────────────────────────────────────────
+// deferral closures: new detectors
 
 func TestScan_EnvAccessFromSourceIsAdvisory(t *testing.T) {
 	dir := t.TempDir()
@@ -459,7 +459,7 @@ func TestDeriveProfile_HostileNewFieldsCapped(t *testing.T) {
 	}
 }
 
-// ── setup-command detection (fixed templates, never file content) ────────────
+// setup-command detection (fixed templates, never file content)
 
 func cmdFor(cmds []SetupCommand, stage string) []string {
 	var out []string

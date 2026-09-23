@@ -78,7 +78,7 @@ func TestWireWorkspaceSource_WritableOptInIsHonored(t *testing.T) {
 	}
 }
 
-// TestWireWorkspaceSource_RefIsHonored is the W9-S1-3 regression: a repo
+// TestWireWorkspaceSource_RefIsHonored is the regression: a repo
 // source's Ref (git branch/tag/sha — part of the source's identity, same as
 // Path/Source itself) used to be dropped the instant a repo source became a
 // run's types.WorkspaceRepo, so it never reached buildRepoRecords/WARDYN_REPOS

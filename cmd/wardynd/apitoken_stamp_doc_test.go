@@ -30,7 +30,7 @@ import (
 // thing standing between a demoted security admin who never signs in again and
 // the profile/grant/approval surface is an operator remembering to revoke.
 //
-// WHAT THIS GUARD READS (its scope IS part of its correctness): the migration
+// What this guard reads (its scope IS part of its correctness): the migration
 // that creates api_tokens, internal/store/store_apitokens.go, this package's
 // boot_deps.go, docs/OPERATIONS.md and threatmodel/THREAT-MODEL.md. What it does
 // NOT read: the CLI's help strings, the console's token screen, docs/MEMBERS.md
@@ -83,7 +83,7 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// (3) The contrast the docs draw is real: SSH keys DO get re-stamped on
 	// login, which is why the token stamp is the worse of the two.
 	//
-	// READ AS STRUCTURE, NOT AS A STRING. This was
+	// Read as structure, NOT AS A STRING. This was
 	// strings.Contains(boot_deps.go, "RefreshAPITokenRoles"), and the refactor
 	// that fixed the transposition half of this finding DEFEATED it — in the one
 	// direction it was the only cover for. At the time, that name occurred in

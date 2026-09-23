@@ -405,7 +405,7 @@ func TestRequireTLSRefusalPreemptsInspection(t *testing.T) {
 	}
 }
 
-// NO HOLD AT BOOT. buildInjector runs under the proxy's 30s startupCtx, seconds
+// No HOLD at BOOT. buildInjector runs under the proxy's 30s startupCtx, seconds
 // after dispatch refreshed the credential synchronously — a dead credential
 // THERE is a race measured in seconds, not a person who needs to sign in, and a
 // hold would fight the startup canary. A 423 at boot must fail closed exactly

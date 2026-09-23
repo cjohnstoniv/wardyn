@@ -55,7 +55,7 @@ func TestOverageWidensRole(t *testing.T) {
 		// just as completely — both claims feed the same role map.
 		{"roles overage + default admin fallthrough", overageNames("roles"), writoidc.RoleAdmin, defaultMatch(writoidc.RoleAdmin), true},
 
-		// NOT AN ESCALATION, and each of these must keep signing in.
+		// Not an escalation, and each of these must keep signing in.
 		//
 		// A real match is authoritative: hiding a claim can only REMOVE matches
 		// from a highest-wins fold, so an overage can only narrow a matched

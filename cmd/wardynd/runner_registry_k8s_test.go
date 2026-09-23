@@ -46,7 +46,7 @@ func TestSubstrateRegistry_K8sResolvesUnderK8sTag(t *testing.T) {
 	}
 }
 
-// TestBuildRunnerFromFlags_K8sConstructFailureNotMislabeled is the W27-S1-3
+// TestBuildRunnerFromFlags_K8sConstructFailureNotMislabeled is the
 // regression: a REGISTERED substrate (k8s) that fails to CONSTRUCT — the
 // canary's flagship refuse-to-construct chief among such failures — must not
 // be printed under the "unknown -runner ... requires -tags docker" headline

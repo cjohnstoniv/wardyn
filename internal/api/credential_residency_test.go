@@ -55,7 +55,7 @@ func TestGradeModelCredential(t *testing.T) {
 		want     modelCredentialResidency
 		staged   bool
 	}{{
-		// THE ONE ROW-FIXED CASE. Under per_user the only admissible lane is the
+		// The one row-FIXED CASE. Under per_user the only admissible lane is the
 		// principal's own captured SSO session (mechanismSatisfied), and that lane
 		// is resident — so the answer does not depend on whether they have signed
 		// in yet, which is exactly the state the rail has to be honest about.
@@ -174,7 +174,7 @@ func TestGradeModelCredentialNeverDefaultsToProxy(t *testing.T) {
 	}
 }
 
-// ── the two surfaces that publish the grade ─────────────────────────────────
+// the two surfaces that publish the grade
 
 // harnessRow reads ONE agent's row out of a /setup/status body.
 func harnessRow(t *testing.T, w *httptest.ResponseRecorder, agent string) SetupHarnessTool {

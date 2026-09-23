@@ -77,7 +77,7 @@ func TestCreateWorkspaceValidation(t *testing.T) {
 }
 
 // TestDecodeWorkspaceRequest_DuplicateExplicitTargetsRejected is the
-// W8-S1-3 regression: two sources sharing an explicit target both resolve to
+// regression: two sources sharing an explicit target both resolve to
 // the SAME in-sandbox mount/clone path — validatePolicyWorkspaces (policy.go)
 // then 422s that composition on every subsequent run. Rejecting it here, at
 // onboarding time, catches it before it's even possible to run — and before a
@@ -160,7 +160,7 @@ func TestGetDeleteScanWorkspaceBadID(t *testing.T) {
 	}
 }
 
-// ─── single-workspace store fake ─────────────────────────────────────────────
+// single-workspace store fake
 
 // workspaceStoreFake serves one workspace and captures the row written back.
 // GetSiteConfig must be implemented: the env-as-code generator folds in the
@@ -360,7 +360,7 @@ func TestUpdateWorkspace_ContentChangeStampsTheEgressEdit(t *testing.T) {
 	if got.EgressEditedAt == nil || !got.EgressEditedAt.After(before) {
 		t.Errorf("EgressEditedAt = %v, want a stamp newer than the pre-edit %v — without it the boot heal re-applies every `always` approval onto the list this edit just cleared", got.EgressEditedAt, before)
 	}
-	// AND THE STAMP IS THE STORE'S, not this handler's clock (B8-F3). The value
+	// And the stamp is the STORE'S, not this handler's clock (B8-F3). The value
 	// is compared against approvals.decided_at, which Postgres stamps, so a
 	// handler-side time.Now() put the daemon/DB skew inside the boot heal's only
 	// newer-action guard — fail-OPEN when wardynd runs behind. The handler asks;
@@ -428,7 +428,7 @@ func TestDeleteWorkspace_ReclaimsBuiltImage(t *testing.T) {
 	}
 }
 
-// ─── env-as-code re-fetch ────────────────────────────────────────────────────
+// env-as-code re-fetch
 
 // TestGetEnvAsCode_RegeneratesFromProfile pins the re-fetch path: finalize hands
 // a repo workspace's committable files back exactly once and writes them
@@ -463,7 +463,7 @@ func TestGetEnvAsCode_RegeneratesFromProfile(t *testing.T) {
 	}
 }
 
-// ─── writeEnvAsCode containment ──────────────────────────────────────────────
+// writeEnvAsCode containment
 
 // TestWriteEnvAsCode_RefusesSymlinkEscape pins the containment guarantee the
 // finalize step's env-as-code emit depends on. The tree it writes into is

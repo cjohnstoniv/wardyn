@@ -230,7 +230,7 @@ func TestBrokeredRunSSHLaneEvaluatesDeny(t *testing.T) {
 	probe(t, brokered, "ssh.github.com", 443, egress.VerdictDeny)
 	probe(t, brokered, "api.anthropic.com", 443, egress.VerdictAllow)
 
-	// THE PROBE THE BARE-HOST DENY EXISTS FOR — and the only one that fails if the
+	// The probe the BARE-HOST DENY EXISTS FOR — and the only one that fails if the
 	// deny is spelled ":443". Two things have to be true at once: allow_all_egress
 	// (so the allowlist subtraction is worth nothing — everything not denied is
 	// allowed, and the deny is the ONLY remaining half) and port 22 (plain

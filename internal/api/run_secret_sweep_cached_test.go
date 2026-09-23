@@ -16,7 +16,7 @@ import (
 // per-run secrets at all (a scan run, a grantless run), whose corpus is just
 // the process globals. RunIDs() iterated the per-run map only, so the sweep
 // never saw those ids and their cached entries lived for the process lifetime:
-// the W12-S1-2 leak, reintroduced one field over.
+// the leak, reintroduced one field over.
 func TestSweepRunSecrets_EvictsCacheOnlyRuns(t *testing.T) {
 	h := newHarness(t)
 	cold := agedRun(types.RunCompleted, 2*RunSecretGrace)

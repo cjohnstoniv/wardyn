@@ -168,7 +168,7 @@ func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 	}
 }
 
-// TestUploadSSOToken_HalfResolvedCaptureRejected is the W5-S1-4 regression:
+// TestUploadSSOToken_HalfResolvedCaptureRejected is the regression:
 // wardyn-aws-sso's account/role resolution (`aws sso list-accounts` /
 // list-account-roles) is best-effort and can come up empty (no accounts, a
 // timeout, a malformed response) while every OTHER field is well-formed. Before

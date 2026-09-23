@@ -164,7 +164,7 @@ func TestBuild_PullsBaseItselfSoTheDaemonCannotRePullPastThePreflight(t *testing
 		t.Fatalf("Build: %v", err)
 	}
 	// The pushed base is still fetched fresh, from THIS build's own per-build
-	// push ref (W20-record-image-2: a bare/shared ref would let a concurrent
+	// push ref (: a bare/shared ref would let a concurrent
 	// build's push resolve here instead — see TestBuild_ConcurrentBuildsUsePerBuildPushRef).
 	if len(f.pulledRefs) == 0 {
 		t.Fatal("finalize did not pull the freshly pushed base")
@@ -193,7 +193,7 @@ func TestFinalizeBase_FailsWhenToolsDirMissing(t *testing.T) {
 	}
 }
 
-// TestFinalizeBase_AppliesOwnDeadline is W20-W20-record-image-4:
+// TestFinalizeBase_AppliesOwnDeadline is:
 // runBuildAndFinalize (the devcontainer-build path) always bounds its work
 // with BuildTimeout/defaultBuildTimeout; FinalizeBase (the BYOI-wrap path)
 // used to run under whatever the caller's ctx carried — nothing at all for a

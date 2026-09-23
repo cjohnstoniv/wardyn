@@ -140,7 +140,7 @@ func TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector(t *testing.T) {
 	}
 }
 
-// ─── R-06: the masking recorder's half of B6-F1 ──────────────────────────────
+// R-06: the masking recorder's half of B6-F1
 
 // capturingRecorder keeps whatever the chain hands it.
 type capturingRecorder struct {
@@ -196,7 +196,7 @@ func TestMaskingRecorderCapsTheTarget(t *testing.T) {
 	}
 }
 
-// ─── R-05: the serve-error exit drains the sinks too ─────────────────────────
+// R-05: the serve-error exit drains the sinks too
 
 // TestServeAndShutdownDrainsSinksOnAServeError pins the half of B6-F3 that
 // Appendix A added by name ("add the `errCh` serve-error `fan.Close()` gap").

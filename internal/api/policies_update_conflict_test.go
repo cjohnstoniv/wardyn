@@ -30,7 +30,7 @@ func (s renameConflictPolicyStore) UpdatePolicy(context.Context, uuid.UUID, stri
 }
 
 // TestUpdatePolicyDuplicateName is B1-F5. Creating a policy under a name that
-// is taken has answered 409 since W20-S1-3; RENAMING one onto a taken name fell
+// is taken has answered 409 since; RENAMING one onto a taken name fell
 // through to handleUpdatePolicy's blanket 500, which leaks the raw Postgres
 // constraint text and tells the admin nothing they can act on.
 func TestUpdatePolicyDuplicateName(t *testing.T) {

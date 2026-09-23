@@ -81,7 +81,7 @@ func TestValidateInlineSecretRefs_GitPAT(t *testing.T) {
 	}
 
 	// Same omission, same class: the SSH gateway's ed25519 host key. The broker
-	// has refused it since W12-B-1, but this side did not — so GET /secrets
+	// has refused it since, but this side did not — so GET /secrets
 	// listed it and PUT/DELETE clobbered it, which regenerates the gateway host
 	// key at next boot and breaks every pinned fingerprint.
 	if !secretsAPIReserved("wardyn-ssh-host-key") || !sinkReservedSecret("wardyn-ssh-host-key") {

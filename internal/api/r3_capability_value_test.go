@@ -52,7 +52,7 @@ func TestCapabilityWorkspaceValueIsCanonicalized(t *testing.T) {
 			if g.Value != canonical {
 				t.Errorf("%q stored as %q, want the canonical %q", form, g.Value, canonical)
 			}
-			// THE PROPERTY THAT MATTERS, asserted rather than inferred from the
+			// The property that matters, asserted rather than inferred from the
 			// stored string: the deny actually bites a request naming this
 			// workspace. A row that validates and does not fire is exactly the
 			// defect.
@@ -113,7 +113,7 @@ func TestCapabilityWorkspaceValueIsCanonicalized(t *testing.T) {
 		}
 	})
 
-	// SECRET AND INTEGRATION are the sibling kinds F142's title names, and this
+	// Secret and integration are the sibling kinds F142's title names, and this
 	// subtest used to pin the defect: it asserted "Acme-Prod-DB" was stored
 	// verbatim for capSecret, on a rationale that was inverted. secretNameRE
 	// forbids uppercase in every stored secret name and integrationRefRE does

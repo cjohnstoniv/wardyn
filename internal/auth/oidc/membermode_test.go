@@ -242,7 +242,7 @@ func (f *memberModeRevocations) IsSessionRevoked(context.Context, string, string
 func (f *memberModeRevocations) RevokeSub(context.Context, string) error { return nil }
 func (f *memberModeRevocations) RevokeAll(context.Context) error         { return nil }
 
-// TestMemberMode_RealMemberTurningItOnWritesNoCookie is W6-4. The handler's own
+// TestMemberMode_RealMemberTurningItOnWritesNoCookie is. The handler's own
 // comment calls a real member toggling ON "a no-op 200 … they are already what
 // they asked to be". It was not a no-op: it stamped mm:1 onto the member's
 // cookie, after which /me answers member_mode:true, the console paints a banner

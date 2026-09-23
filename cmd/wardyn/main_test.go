@@ -94,7 +94,7 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	if hint := dialHint(err); !strings.Contains(hint, "is wardynd running?") {
 		t.Errorf("dialHint(refused) = %q, want it to carry the recovery hint", hint)
 	}
-	// W4-S1-7 regression: `wardyn setup` is a subcommand group, so a bare
+	// regression: `wardyn setup` is a subcommand group, so a bare
 	// invocation prints help and exits 0 — it never starts wardynd, so the
 	// recovery hint must not send an operator there. `make setup` is a live
 	// alternative. (F009 gave every group a help-only RunE so a MISTYPED
@@ -205,7 +205,7 @@ func TestExitCodeFor_EveryStatusClass(t *testing.T) {
 	}
 }
 
-// ─── the admin bearer must never reach --help or a usage dump (F221) ─────────
+// the admin bearer must never reach --help or a usage dump (F221)
 //
 // cobra prints `(default "<value>")` for every non-empty string flag default,
 // so seeding --token's DEFAULT from WARDYN_ADMIN_TOKEN/WARDYN_TOKEN put the

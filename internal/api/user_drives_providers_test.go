@@ -30,7 +30,7 @@ func providerSiteConfig(disabled bool, maxSizeMiB int) types.SiteConfig {
 // TestDriveWritesMeetTheOrgSwitchAndTheCeiling walks the two admin write doors
 // against storage.user_drive.
 //
-// BOTH REFUSALS ARE 422 AND NEITHER IS A 403, which is the whole classification:
+// Both refusals are 422 AND NEITHER IS A 403, which is the whole classification:
 // nobody was denied by a profile. The org switch says this install offers no
 // drives at all, and the ceiling says the deployment will not hold a drive that
 // big — in decodeUserDriveRequest's own words, "a 400 says you wrote this wrong,
@@ -180,7 +180,7 @@ func TestSeedRequestDriveRefusesWhenDrivesAreDisabled(t *testing.T) {
 // member cannot be shown 10 GiB on the card, previewed at 10 GiB by their admin,
 // and given 2 GiB by the run.
 //
-// BOTH CEILINGS ARE IN PLAY and the smaller one wins: the deployment allows
+// Both ceilings are in PLAY and the smaller one wins: the deployment allows
 // 4 GiB, this principal's profile allows 2 GiB, and the allocation is 10 GiB.
 func TestDriveSizeIsClampedTheSameAtEveryDoor(t *testing.T) {
 	const deploymentMiB, profileMiB = 4096, 2048

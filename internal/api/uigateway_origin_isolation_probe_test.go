@@ -19,7 +19,7 @@
 //   nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'F12Probe' -race -count=1 -v
 //   # (no WARDYN_TEST_PG DSN needed: this surface's tests run against the fake store)
 //
-// WHAT IT PINS (the traced invariant, both halves):
+// What it pins (the traced invariant, both halves):
 //   1. Origin isolation across runs: a VALID relay cookie minted for run A is
 //      REFUSED (403) on run B's live relay path — even though run B exists, is
 //      RUNNING, and declares the same app. This is the server-side backstop for

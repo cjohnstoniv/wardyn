@@ -31,7 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// ─── the seam harness ─────────────────────────────────────────────────────────
+// the seam harness
 
 // driveRunServer builds the create-path server seedRequestDrive runs inside:
 // the drive store double, an audit recorder (so the door's authz.denied row can
@@ -48,7 +48,7 @@ func driveRunServer(st *driveStore, runnerTarget string) (*Server, *recRecorder)
 // Nil roots is the deployment that has un-set the variable since the drive was
 // authored.
 //
-// IT CARRIES AN AdminToken (R1 F321) purely so /metrics can be READ. The
+// It carries an AdminToken (R1 F321) purely so /metrics can be READ. The
 // refusal-metric assertions in this family scrape the same Server the refusal
 // happened on, and /metrics is operator-gated: without a token the scrape
 // answered 401 and every counter read back as 0, which is a pin that cannot
@@ -85,7 +85,7 @@ func deniedCeiling() governanceCeiling {
 	}
 }
 
-// ─── the matrix ───────────────────────────────────────────────────────────────
+// the matrix
 
 // TestSeedRequestDriveNoFlagIsANoOp pins the shape every run on every
 // deployment takes: no drive asked for, nothing resolved, NO STORE READ. The
@@ -141,7 +141,7 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 			// profile whose name happens to be empty as NO DOOR AT ALL and
 			// mounts the drive — with no 403 and no authz.denied row.
 			//
-			// AND THE ROW IS REACHABLE. governance_profiles.name is TEXT NOT
+			// And the row is reachable. governance_profiles.name is TEXT NOT
 			// NULL UNIQUE with no non-empty CHECK, so the HTTP API's own refusal
 			// of a blank name is not the last word: an out-of-band write, a
 			// restore, or an older binary produces exactly this row. A guard
@@ -280,7 +280,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			want: "drive: your allocation is paused by an admin",
 		},
 		{
-			// PAUSED IS STILL THE ANSWER when the deployment ALSO allocates by
+			// Paused is still the answer when the deployment ALSO allocates by
 			// group. The stale-snapshot refusal keys on the same
 			// HasGroupTierDriveGrants read, so a resolver that consulted it
 			// before the paused fold would answer this member 403 "sign in
@@ -351,7 +351,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			// is APPENDED after it (types.DriveHomeStricterRuleClause), which is
 			// why this row is byte-exact on the canon sentence AND on the suffix.
 			//
-			// A STATIC PVC, not a managed one: `sub` on a MANAGED backend is now
+			// A static PVC, not a managed one: `sub` on a MANAGED backend is now
 			// refused outright (types.ManagedBackendRejectsTemplate — the object
 			// is NAMED by the home, and an object name is printed without an
 			// inspect), so a managed fixture would never reach the derivation
@@ -388,7 +388,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			// the override. The sentence is byte-exact ONLY because §7.7 is
 			// frozen and no row covers an admin-set value; the corrected
 			// sentence is filed (local/FILED-COPY.md), and when it lands THIS
-			// ROW MUST CHANGE — which is the point of asserting it byte-exact
+			// Row must change — which is the point of asserting it byte-exact
 			// rather than by prefix.
 			//
 			// What IS durable and asserted by the loop: a 422, not a 403 or a
@@ -586,7 +586,7 @@ func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
 		if !strings.HasPrefix(got, "drive: this deployment cannot mount your drive (") {
 			t.Errorf("body = %q, want the REFUSED_BACKEND shape", got)
 		}
-		// AND THE DIAGNOSIS IS NOT IN IT. UserDriveHostRootCheck's error spells
+		// And the diagnosis is not in it. UserDriveHostRootCheck's error spells
 		// the drive's host_root and the whole ceiling list, and this body goes to
 		// a MEMBER — the same reader the missing-home arm, applyUserDriveEnv and
 		// driveAuditTarget all keep the operator's filesystem layout from. The
@@ -781,7 +781,7 @@ func TestSeedRequestDriveTruncatedGroupsIs403(t *testing.T) {
 			if !strings.Contains(w.Body.String(), "groups_snapshot_stale") {
 				t.Errorf("body = %s, want the stale-snapshot refusal naming its remedy", w.Body.String())
 			}
-			// IT IS AN authz.denied, and it did not used to be. The comment
+			// It is an authz.denied, and it did not used to be. The comment
 			// here read "this is 'we cannot tell', not 'you may not'" and
 			// asserted an empty audit stream — while the GOVERNANCE resolver's
 			// mirror-image branch, for the same member on the same request,
@@ -915,7 +915,7 @@ func TestRevokingAGrantStopsTheNextRunMounting(t *testing.T) {
 	}
 }
 
-// ─── /me ──────────────────────────────────────────────────────────────────────
+// /me
 
 // meDriveBody drives GET /me through the real handler and returns the
 // user_drive value (nil when the key is null) alongside the SIBLING door field.
@@ -1043,7 +1043,7 @@ func TestMeUserDrive(t *testing.T) {
 	})
 
 	t.Run("DENIED WITH NO ALLOCATION is its own state", func(t *testing.T) {
-		// THE STATE ONE KEY COULD NOT EXPRESS, and the reason the door is a
+		// The state one key could not express, and the reason the door is a
 		// sibling: this member's answer is not "ask an admin for an allocation"
 		// — an allocation would not help them until the profile changes.
 		cs := &capStore{
@@ -1079,7 +1079,7 @@ func TestMeUserDrive(t *testing.T) {
 		}
 	})
 
-	// THE THREE STATES THAT USED TO BE ONE. Each is a distinct server state the
+	// The three states that USED to be one. Each is a distinct server state the
 	// LAUNCH path refuses with its own status and its own remedy — 403 sign in
 	// again, 422 ask an admin, 500 try again — and each arrived here as the same
 	// `user_drive: null` a genuinely unallocated member gets. The console
@@ -1142,7 +1142,7 @@ func TestMeUserDrive(t *testing.T) {
 		}
 	})
 
-	// THE DOOR'S HALF OF THE SAME DEFECT, one layer up. "" on the door key is an
+	// The DOOR'S HALF OF the same defect, one layer up. "" on the door key is an
 	// affirmative promise that no profile denies the mount, and it was ALSO what
 	// a caller got when the ceiling could not be resolved — the permissive
 	// answer to an unknown question. Worse than the null above, because it
@@ -1185,7 +1185,7 @@ func TestMeUserDrive(t *testing.T) {
 	})
 }
 
-// ─── create ↔ preflight parity ────────────────────────────────────────────────
+// create ↔ preflight parity
 
 // TestPreflightAnswersTheSameDriveRefusalAsCreate is the parity pin, and it is
 // the whole reason seedRequestDrive is called from two places. Preflight is the
@@ -1232,7 +1232,7 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 			t.Errorf("preflight body = %q\ncreate body    = %q\nwant them identical", got, want)
 		}
 
-		// AND WHAT THE DRY RUN LEAVES BEHIND, which nothing pinned in either
+		// And what the DRY run leaves behind, which nothing pinned in either
 		// direction. The recorder was returned and thrown away here, so
 		// preflight could have audited every dry run, or none, and this test —
 		// the one test about preflight and the drive door — would not have
@@ -1439,7 +1439,7 @@ func TestUnusableGroupSnapshotRefusesTheLaunchWhileMeStaysQuiet(t *testing.T) {
 	}
 }
 
-// ─── the runner-capability gate ───────────────────────────────────────────────
+// the runner-capability gate
 
 // driveCapsRunner is fakeRunner with ONE thing replaced: what Capabilities
 // declares about drives, and whether the call works at all.
@@ -1461,7 +1461,7 @@ func (r driveCapsRunner) Capabilities(ctx context.Context) (runner.Capabilities,
 // TestSeedRequestDriveGatesOnRunnerCapability pins the gate that makes the
 // control plane and the runner agree about drives.
 //
-// WHICH SIDE WAS LYING. Both drivers refuse a spec carrying a drive, and both
+// Which SIDE was lying. Both drivers refuse a spec carrying a drive, and both
 // say why in the same words the control plane uses — "a member who asked for
 // storage must never silently get a run without it". They are truthfully
 // reporting a capability they do not have; dispatch was right. The control
@@ -1529,7 +1529,7 @@ func TestSeedRequestDriveGatesOnRunnerCapability(t *testing.T) {
 		}
 	})
 
-	// SCOPED TO A WIRED RUNNER, as the confinement gate is: with no runner
+	// Scoped to A wired runner, as the confinement gate is: with no runner
 	// there is no dispatch to disagree with, so there is no promise to break.
 	t.Run("no runner wired leaves the seam alone", func(t *testing.T) {
 		srv, _ := driveRunServer(st, "docker")
@@ -1606,7 +1606,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 			reason: driveRefusalBackendElsewhere,
 		},
 		{name: "the home directory is missing from the share", build: shareStore, reason: driveRefusalHomeMissing},
-		// THE FOUR ARMS THE TABLE NEVER EXERCISED (R1 F310). Every one of them
+		// The four ARMS the table never exercised (R1 F310). Every one of them
 		// is a reachable deployment failure whose whole point is that an
 		// operator sees it, and not one of them had ever emitted its own series
 		// in a test — so the reason constant, the WARN and the counter could
@@ -1695,7 +1695,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 				t.Errorf("wardyn_drive_refusals_total{reason=%q} = %d, want 1 (counters: %v)",
 					tc.reason, got, srv.metrics.driveRefusals)
 			}
-			// THE LOG LINE, carrying the reason so the two agree.
+			// The LOG LINE, carrying the reason so the two agree.
 			if !strings.Contains(buf.String(), `reason=`+tc.reason) {
 				t.Errorf("slog = %q, want a WARN naming reason=%s", buf.String(), tc.reason)
 			}
@@ -1711,7 +1711,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 	// every reason this file emits is printed: a label set that drifts is a
 	// dashboard that silently stops counting an arm.
 	//
-	// ANCHORED IN THE CONSTANT DECLARATIONS, not in driveRefusalReasons (R1
+	// Anchored in the constant declarations, not in driveRefusalReasons (R1
 	// F310). This loop used to walk driveRefusalReasons and look for each entry
 	// in /metrics — while metrics.go builds that output by walking the SAME
 	// slice. Deleting an entry deleted it from both sides at once, so the guard
@@ -1810,7 +1810,7 @@ func TestDriveShareProbeIsBounded(t *testing.T) {
 		t.Fatalf("probe = (%v, %v), want the check's error and ok", err, ok)
 	}
 
-	// DOES NOT ANSWER: a cancelled caller returns immediately and reports that
+	// Does not answer: a cancelled caller returns immediately and reports that
 	// nothing was decided — never an error the caller could mistake for "the
 	// directory is not there", which has a completely different remedy.
 	ctx, cancel := context.WithCancel(context.Background())

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestTRYITDoc_LLMPrecedenceMatchesResolveLLMTransport is the W5-S1-6
+// TestTRYITDoc_LLMPrecedenceMatchesResolveLLMTransport is the
 // regression: docs/TRY-IT.md used to claim a three-way "subscription → Bedrock
 // → api-key" precedence, omitting the managed-subscription step AND the
 // api-key-opt-in-suppresses-managed exception resolveLLMTransport actually

@@ -57,7 +57,7 @@ func TestPG_APITokens_LookupTouchRevoke(t *testing.T) {
 		t.Errorf("created = %+v, want last_used_at and revoked_at NULL", created)
 	}
 
-	// HASH AT REST. Read the column back raw, because a Create/Get round trip
+	// HASH at REST. Read the column back raw, because a Create/Get round trip
 	// stays green even if hashToken (store_ephemeral.go) becomes the identity
 	// function and the table starts holding usable bearer credentials. This is
 	// the only assertion that looks at the stored bytes, and it pins the helper

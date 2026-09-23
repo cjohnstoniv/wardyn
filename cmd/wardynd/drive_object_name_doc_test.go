@@ -294,7 +294,7 @@ func trackedMarkdown(t *testing.T, root string) []string {
 // specification; one of them claimed a managed object is named by the home "and
 // by nothing else", which is a claim about the very exposure that refusal bounds.
 //
-// SCOPED TO THAT ONE FILE, DELIBERATELY, and the reason is what a repo-wide
+// Scoped to that one FILE, DELIBERATELY, and the reason is what a repo-wide
 // version could not do. Run over all of cmd/ and internal/, this flags four more
 // sites, and only two are defects: internal/api/user_drives.go's rename gate
 // says the shape is `wardyn-drive-<drive-slug>-<home>` and then correctly

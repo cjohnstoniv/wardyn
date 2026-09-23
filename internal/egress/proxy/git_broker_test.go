@@ -269,7 +269,7 @@ func TestGitBrokerRejectsBadRequests(t *testing.T) {
 	}
 }
 
-// ── push branch-namespace confinement ────────────────────────────────────────
+// push branch-namespace confinement
 
 // pkt frames one git pkt-line: 4 hex length digits that count themselves.
 func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
@@ -772,9 +772,9 @@ func newGitBrokerApprovalUpstream(t *testing.T, token string, approvalID uuid.UU
 	return u
 }
 
-// TestGitBrokerPollsPendingApproval is the regression for W23-S1-1 /
-// W19-W19a-1: the FIRST clone against an approval-gated github_token grant
-// used to 502 outright on the control plane's 409 (no wait, no retry) — the
+// TestGitBrokerPollsPendingApproval: the FIRST clone against an
+// approval-gated github_token grant used to 502 outright on the control
+// plane's 409 (no wait, no retry) — the
 // documented quickstart's first clone always failed before a human could
 // possibly have approved it. The broker must now poll the SAME approval
 // server-side and re-mint once it clears, succeeding the original request.

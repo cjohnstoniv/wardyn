@@ -16,7 +16,7 @@
 // Every probe restores the table before it returns: audit_events is shared by
 // every test in the package and "a break is permanent" (docs/OPERATIONS.md).
 //
-// ALL FOUR ARE GREEN PINS NOW. Two were red on feat/v0.7-profiles @ fa910735,
+// All four are green pins now. Two were red on feat/v0.7-profiles @ fa910735,
 // which is what they were written to prove; both fixes have landed and the
 // assertions are unchanged, so a red here is a REGRESSION, not a finding:
 //

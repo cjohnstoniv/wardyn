@@ -70,7 +70,7 @@ type recordStore struct {
 	claimedRun    *uuid.UUID      // last ClaimWorkspaceActiveRun run id
 	clearedActive bool            // ClearWorkspaceActiveRun called
 	// heartbeat backs LatestAuditEventByAction — reconcileRecordRun's
-	// ebpfGroundtruthCaveat call (W20-W20-groundtruth-mapper-4) reads this to
+	// ebpfGroundtruthCaveat call reads this to
 	// stamp the sensor's coverage state onto the capture. nil (the default)
 	// means "no heartbeat ever" (ErrNotFound), same as a host with no sensor.
 	heartbeat *types.AuditEvent
@@ -272,7 +272,7 @@ func TestReconcileRecordRun_EmptyCaptureIsFailureNeverNoEgress(t *testing.T) {
 }
 
 // TestReconcileRecordRun_NeverStartedGetsDispatchHintNotNetworkingGuess is
-// W20-W20-capture-store-4: a record run whose SandboxRef is EMPTY never
+// A record run whose SandboxRef is EMPTY never
 // reached CreateSandbox at all — it failed on the dispatch side (image build,
 // resource limits, a concurrent kill racing dispatch), never got a chance to
 // observe egress. Blaming the operator's proxy/WSL2 networking
@@ -464,7 +464,7 @@ func TestReconcileRecordRun_OpenEntryGetsNoCleanStamp(t *testing.T) {
 }
 
 // TestReconcileRecordRun_StampsEbpfGroundtruthCaveat is
-// W20-W20-groundtruth-mapper-4: before this, a capture's Caveats never said
+// Before this, a capture's Caveats never said
 // anything about the host eBPF sensor's own coverage — that state lived only
 // on the admin-only /healthz endpoint, nowhere an operator reviewing a
 // recording would see it. reconcileRecordRun must stamp the SAME state
@@ -864,7 +864,7 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 	}
 }
 
-// TestPromoteRecordEgress_ZeroPromotedDoesNotSetEgressPromoted is W20-S1-1:
+// TestPromoteRecordEgress_ZeroPromotedDoesNotSetEgressPromoted is:
 // EgressPromoted used to be an unconditional `true` on every promote-egress
 // call, even one whose entire observed-allowed set is plumbing (never a
 // promotable candidate — see promotableHosts) or already covered, so

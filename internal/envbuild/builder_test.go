@@ -119,7 +119,7 @@ func TestBuildEnv_NoCacheVarsWhenCacheRepoEmpty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// pushedBaseRef / newPushRef: per-build push-ref composition (W20-record-image-2)
+// pushedBaseRef newPushRef: per-build push-ref composition
 // ---------------------------------------------------------------------------
 
 func TestPushedBaseRef_NoOverrideUsesCacheRepoPlusTag(t *testing.T) {
@@ -136,8 +136,8 @@ func TestPushedBaseRef_NoOverrideUsesCacheRepoPlusTag(t *testing.T) {
 // The override names a REPOSITORY ADDRESS (e.g. compose's host-loopback path
 // to the same registry the build container reaches by service name), not a
 // fixed ref — the per-build tag must still compose on top, or every build
-// would collapse back onto the override's one shared ref (W20-record-image-2
-// again, just relocated to the override instead of CacheRepo).
+// would collapse back onto the override's one shared ref (again, just
+// relocated to the override instead of CacheRepo).
 func TestPushedBaseRef_EnvOverrideComposesWithPerBuildTag(t *testing.T) {
 	b := newWithClient(newFakeEnvbuilderDocker(), "envbuilder:test", "registry.example.com/wardyn-cache")
 	t.Setenv(envPushedRef, "127.0.0.1:5010/wardyn/devcontainers")
@@ -157,7 +157,7 @@ func TestNewPushRef_EmptyCacheRepoReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestBuild_ConcurrentBuildsUsePerBuildPushRef pins W20-record-image-2 (HIGH,
+// TestBuild_ConcurrentBuildsUsePerBuildPushRef pins (HIGH,
 // confinement bypass): two builds sharing a Builder — and therefore its one
 // CacheRepo — must never resolve the SAME registry ref for envbuilder's push
 // and finalize's pull-back. Before the fix, pushedBaseRef() was a pure

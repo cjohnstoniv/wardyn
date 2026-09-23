@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the permissioning CRUD surface ──────────────────────────────────────────
+// the permissioning CRUD surface
 //
 // permissions.go is the ONLY write boundary for capability_grants +
 // capability_enforcement, and until this file nothing pinned it: the resolver
@@ -102,7 +102,7 @@ func permMember(t *testing.T) *http.Cookie {
 	return ssoSession(t, "sub-perm-member", "dev@corp.example", oidc.RoleMember)
 }
 
-// ─── validateCapabilityGrant ─────────────────────────────────────────────────
+// validateCapabilityGrant
 
 // TestValidateCapabilityGrant is the write-boundary matrix. Each rejected row
 // is a grant that would otherwise be STORED INERT — a deny that protects
@@ -228,7 +228,7 @@ func TestValidateCapabilityGrantNormalizes(t *testing.T) {
 	}
 }
 
-// ─── the handlers, through the router ────────────────────────────────────────
+// the handlers, through the router
 
 // TestUpsertCapabilityGrantCreatedThenUpdated: a new natural key is 201, the
 // SAME key again is 200 with the original row's id — the distinction the

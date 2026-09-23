@@ -79,7 +79,7 @@ func r3bJWKS(t *testing.T, extra ...string) (jwksURL, token string) {
 // every SSO login down, caused by one key Wardyn never needed. v3.21.0 skips
 // the entry it cannot represent and keeps working on the keys it can.
 //
-// WHAT THAT DOES AND DOES NOT BUY. go-oidc v3.21.0 quotes RFC 7517 section 5 —
+// What that does and does not BUY. go-oidc v3.21.0 quotes RFC 7517 section 5 —
 // "Implementations SHOULD ignore JWKs within a JWK Set that use `kty` values
 // that are not understood by them, that are missing required members, or for
 // which values are out of the supported ranges" — and implements the FIRST
@@ -163,7 +163,7 @@ func TestR3BJWKSSurvivesAnUnrepresentableKey(t *testing.T) {
 	})
 
 	// ARM E: the same clause, on the two shapes that were broken IDENTICALLY
-	// BEFORE AND AFTER the dependency wave.
+	// Before and after the dependency wave.
 	//
 	// Arm D's Ed25519 case is a regression — go-jose v4.1.4 accepted that entry
 	// (silently zero-padding it) and v4.1.5 rejects it, correctly. A malformed

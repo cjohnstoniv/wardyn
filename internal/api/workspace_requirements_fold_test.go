@@ -21,7 +21,7 @@ import (
 // applyWorkspaceRequirements is the load-bearing function under test
 // throughout (defined in runs_create.go, beside applyWorkspaceCreds).
 
-// ─── the fallback golden: empty Requirements is a byte-identical no-op ──────
+// the fallback golden: empty Requirements is a byte-identical no-op
 
 // TestApplyWorkspaceRequirements_EmptyRequirementsIsNoOp is the back-compat
 // proof for every existing (pre-contract, or simply unconfigured) workspace:
@@ -79,7 +79,7 @@ func TestApplyWorkspaceRequirements_EmptyRequirementsIsNoOp(t *testing.T) {
 	}
 }
 
-// ─── folding matrix: egress ──────────────────────────────────────────────────
+// folding matrix: egress
 
 func TestApplyWorkspaceRequirements_Egress(t *testing.T) {
 	srv := New(Config{})
@@ -156,7 +156,7 @@ func TestApplyWorkspaceRequirements_EgressTrustBoundary(t *testing.T) {
 	})
 }
 
-// ─── folding matrix + trust boundary: secret ────────────────────────────────
+// folding matrix + trust boundary: secret
 
 func TestApplyWorkspaceRequirements_Secret(t *testing.T) {
 	wsID := uuid.New()
@@ -269,7 +269,7 @@ func TestApplyWorkspaceRequirements_TrustBoundary(t *testing.T) {
 	})
 }
 
-// ─── folding matrix + narrow-only: write ────────────────────────────────────
+// folding matrix + narrow-only: write
 
 // TestApplyWorkspaceRequirements_WriteNarrowing covers the write:<path> rules
 // end to end, including the two explicit narrow-only invariants: a run may
@@ -344,7 +344,7 @@ func TestApplyWorkspaceRequirements_WriteNarrowing(t *testing.T) {
 	})
 }
 
-// ─── preflight/launch agreement ──────────────────────────────────────────────
+// preflight/launch agreement
 
 // TestWorkspaceRequirements_PreflightLaunchAgreement proves preflight cannot
 // predict a rosier (or stricter) outcome than launch: the SAME workspace_id +
@@ -405,7 +405,7 @@ func TestWorkspaceRequirements_PreflightLaunchAgreement(t *testing.T) {
 	}
 }
 
-// ─── Task 4: compose_setup.go checklist escalation ──────────────────────────
+// Task 4: compose_setup.go checklist escalation
 
 // TestSetupWorkspaceSecretItems_ContractRequiredAbsentEscalatesToBlockingKind
 // pins the specific fix: a secret the requirements contract marks Required

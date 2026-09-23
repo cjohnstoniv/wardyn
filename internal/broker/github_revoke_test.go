@@ -190,7 +190,7 @@ func TestGitHubMinter_MintReturnsInsideClientBudget(t *testing.T) {
 // The server here is the shape that separates the two: hop 1 answers just under
 // the budget, hop 2 never answers. Per-hop-only = ~1.8x; one ceiling = ~1x.
 //
-// W6-04: a raw hop-hit COUNT cannot discriminate the two shapes — hop 2's HTTP
+// A raw hop-hit COUNT cannot discriminate the two shapes — hop 2's HTTP
 // request reaches this fake either way (measured both shapes directly,
 // reverting the ctx-sharing fix locally: hop1Hits/hop2Hits are 1/1 under BOTH
 // the fixed and the pre-fix code, since hop 1 succeeding at all means some of
@@ -283,7 +283,7 @@ func TestGitHubMinter_SlowGitHubStillMints(t *testing.T) {
 }
 
 // The production Revoke really issues DELETE /installation/token authenticated
-// AS THE DISCARDED TOKEN — the same call ruleset.go makes for its probe token.
+// As the discarded token — the same call ruleset.go makes for its probe token.
 func TestGitHubMinter_Revoke_DeletesInstallationToken(t *testing.T) {
 	var gotMethod, gotPath, gotAuth atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── runMarker: deterministic per-run revocation sentinel jti ────────────────────
+// runMarker: deterministic per-run revocation sentinel jti
 
 // TestRunMarker pins the run-level revocation key shape. identity_revocations.jti
 // is the PRIMARY KEY, so the run-marker must be unique per run (not a shared
@@ -44,7 +44,7 @@ func TestRunMarker(t *testing.T) {
 	}
 }
 
-// ─── FIX #5: approval recorder is the masked + fanout recorder ───────────────────
+// FIX #5: approval recorder is the masked + fanout recorder
 
 // TestApprovalRecorderIsMaskedFanout is the regression guard for FIX #5: the
 // approval FSM + sweeper were constructed with the PLAIN store.Recorder (Postgres
@@ -98,7 +98,7 @@ func TestApprovalRecorderIsMaskedFanout(t *testing.T) {
 	}
 }
 
-// ─── role mappings: boot wiring (Phase 2 lane A) ──────────────────────────────
+// role mappings: boot wiring (Phase 2 lane A)
 
 // TestRoleMappingsFor_WiredWheneverPoolConfigured is the deps-builder wiring
 // assertion the task calls for: buildOptionalFeatures itself needs a live
@@ -127,7 +127,7 @@ func TestRoleMappingsFor_WiredWheneverPoolConfigured(t *testing.T) {
 	}
 }
 
-// ─── maskingRecorder: verbatim secret masking + delegation ──────────────────────
+// maskingRecorder: verbatim secret masking + delegation
 
 // fakeAuditRecorder is a hand-rolled audit.Recorder capturing the (possibly
 // masked) event the maskingRecorder forwards, plus an optional error to assert
@@ -249,7 +249,7 @@ func TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak(t *testing.T) {
 }
 
 // TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies is
-// W20-groundtruth-mapper-2: a run-less audit row (ev.RunID == nil —
+// A run-less audit row (ev.RunID == nil —
 // policy.inline, secret.*, an admin action) used to bypass masking ENTIRELY,
 // because the old guard (`m.reg != nil && ev.RunID != nil`) short-circuited
 // the whole block whenever RunID was nil. It must still be masked against the

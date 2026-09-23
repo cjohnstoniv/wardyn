@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// EDGE WHITESPACE AND TRAILING DOTS. The service trims a segment's trailing
+// EDGE whitespace and trailing DOTS. The service trims a segment's trailing
 // spaces and dots before routing it — Windows path canonicalisation — so ".. "
 // is ".." to Azure DevOps and "hooks." is "hooks". The dot-segment refusal
 // compared the untrimmed text and missed both. Each spelling has its encoded

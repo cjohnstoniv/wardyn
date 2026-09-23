@@ -256,7 +256,7 @@ func columnCheckValues(expr, column string) (map[string]bool, error) {
 // agent_runs.state to the closed enums below. Reuses readMigrationNames
 // (db_test.go).
 //
-// IT PARSES THE WHOLE EXPRESSION, not the first IN-list. Reading only the list
+// It parses the whole expression, not the first IN-list. Reading only the list
 // made this guard blind in the direction its own test states explicitly ("the
 // CHECK must not allow values the code does not define"): a disjunct outside the
 // list was never seen, and approvals.decision_scope already carries one. A

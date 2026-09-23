@@ -154,7 +154,7 @@ func TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode(t *testing.T) {
 }
 
 // TestLaunchRecordRun_HonorsSiteWideDefaultIntegration is
-// W20-W20-llm-transport-matrix-1: model access resolves in three tiers
+// Model access resolves in three tiers
 // (docs/OPERATIONS.md "Model access resolves") — run-explicit integration_id,
 // then the workspace's own LLMCred.IntegrationRef binding, then the
 // operator's site-wide DefaultFor:agent_runs integration. launchRecordRun
@@ -215,7 +215,7 @@ func TestLaunchRecordRun_HonorsSiteWideDefaultIntegration(t *testing.T) {
 }
 
 // TestLaunchRecordRun_RepoDevcontainerImageWarnsMissingCLI is
-// W20-W20-record-image-6: a workspace whose primary source is a repo
+// A workspace whose primary source is a repo
 // carrying its OWN devcontainer builds that devcontainer AS-IS
 // (resolveWorkspaceImage's repo-own-devcontainer lane) — which never bakes
 // claude-code. The Record pane tells the operator to drive the agent in this

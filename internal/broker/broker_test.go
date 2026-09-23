@@ -536,7 +536,7 @@ func TestMintForGrant_NoApprovalYet_CreatesPending(t *testing.T) {
 	}
 }
 
-// W19-W19c-2: the approval sweeper EXPIREs a stale PENDING approval. The next
+// The approval sweeper EXPIREs a stale PENDING approval. The next
 // mint attempt must raise a FRESH PENDING request (a human can still decide it)
 // — not re-find the swept row forever and return ErrApprovalDenied, which
 // wedged the run permanently with nothing left in the queue to approve.

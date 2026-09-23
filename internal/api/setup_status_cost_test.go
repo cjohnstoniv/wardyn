@@ -180,7 +180,7 @@ func TestSetupStatus_HostSweepNeverBlocksThePoll(t *testing.T) {
 	}
 }
 
-// ── the sweep's failure modes ───────────────────────────────────────────────
+// the sweep's failure modes
 //
 // Everything below is about a sweep that does NOT simply answer: one abandoned
 // mid-flight by a reset, one that never returns, one that panics, and the one an

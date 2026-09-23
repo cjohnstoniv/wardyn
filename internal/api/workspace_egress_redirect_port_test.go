@@ -18,7 +18,7 @@ import (
 // egressTarget trusted (and dialled) the mirror's address on 22, 5432 and every
 // other port the operator never named — inside the private space the
 // unconditional private-IP guard exists to protect. The MITM/token half of the
-// same redirect has been port-exact since W13-S1-5 (planArtifactRedirect's
+// same redirect has been port-exact since (planArtifactRedirect's
 // mitmHosts are net.JoinHostPort(host, redirectPort(r.To))), so the credential
 // was scoped to one port while the SSRF trust was not.
 func TestSubstituteArtifactEgress_LiteralIPToIsPortScoped(t *testing.T) {

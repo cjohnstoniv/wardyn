@@ -548,7 +548,7 @@ func TestPG_DeleteBaseImageInUse(t *testing.T) {
 }
 
 // TestPG_UpsertBaseImage_IdentityHitNeverTouchesName pins the OTHER half of
-// W7-S1-3 — the safety property a first attempt at this finding got wrong by
+// — the safety property a first attempt at this finding got wrong by
 // folding `name = EXCLUDED.name` straight into UpsertBaseImage's own ON
 // CONFLICT clause: this upsert is not only the Add dialog's create path, it
 // is also the PASSTHROUGH a workspace/run resolves its declared base-image
@@ -599,7 +599,7 @@ func TestPG_UpsertBaseImage_IdentityHitNeverTouchesName(t *testing.T) {
 	}
 }
 
-// TestPG_UpdateBaseImageName_Renames pins the ACTUAL W7-S1-3 fix: the
+// TestPG_UpdateBaseImageName_Renames pins the ACTUAL fix: the
 // scoped rename path handleCreateBaseImage calls on an identity hit where
 // the request carried an explicit name (the Add dialog's re-POST-to-rename
 // shape) — the only route (UI, API, CLI, SDK) to rename a catalog row at

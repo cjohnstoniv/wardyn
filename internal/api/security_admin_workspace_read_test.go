@@ -173,7 +173,7 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 		})
 	}
 
-	// THE GETTER'S FOURTH CONSUMER, on its own terms (F287). GET
+	// The GETTER'S fourth consumer, on its own terms (F287). GET
 	// .../env-as-code left classMember because its emitted files render the
 	// operator's authored environment whole — the FROM line naming the internal
 	// registry coordinate the workspace reads blank, the site-config artifact
@@ -195,7 +195,7 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 		}
 	})
 
-	// THE WRITE PREDICATE, in the same test and deliberately so.
+	// The write predicate, in the same test and deliberately so.
 	t.Run("the write tier did NOT widen with the read", func(t *testing.T) {
 		srv, st := newWorkspaceReadServer(t, memberSub)
 		p := fmt.Sprintf("/api/v1/workspaces/%s", st.ws.ID)
@@ -241,7 +241,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 	srv, st := newTopologyWorkspaceServer(t, "sub-ws-owner")
 	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
 
-	// THE ASYMMETRY IS REAL, and this is the half that makes the rule load-
+	// The asymmetry is real, and this is the half that makes the rule load-
 	// bearing rather than decorative: the same session, the same datum, two
 	// answers.
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/sources", sec, ""); w.Code != http.StatusForbidden {
@@ -258,7 +258,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
 	}
 
-	// ── the HOST axis, field by field ──
+	// the HOST axis, field by field
 	for i, src := range got.Sources {
 		if src.Type == types.WorkspaceSourceTypeLocalDir && src.Path != "" {
 			t.Errorf("sources[%d].path = %q, want blank — this is the exact datum /sources answers this tier 403 for",
@@ -279,8 +279,8 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 		}
 	}
 
-	// ── what the tier KEEPS, because withholding it would break the decision
-	// this tier is widened to make ──
+	// what the tier KEEPS, because withholding it would break the decision
+	// this tier is widened to make
 	if got.Name != "payments" {
 		t.Errorf("name = %q, want the workspace to remain identifiable", got.Name)
 	}
@@ -298,7 +298,7 @@ func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
 			"and it cannot decide blind (requirements=%v)", got.Requirements)
 	}
 
-	// ── the scanned profile republishes both axes under its own keys ──
+	// the scanned profile republishes both axes under its own keys
 	var profile map[string]json.RawMessage
 	if len(got.Profile) > 0 {
 		if err := json.Unmarshal(got.Profile, &profile); err != nil {

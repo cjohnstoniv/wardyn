@@ -28,7 +28,7 @@ import (
 // today. Re-keying the four maps on "host:port" is deferred until a second
 // producer exists.
 //
-// SCOPE OF THIS TEST, stated so the deferral does not rest on more than it
+// Scope OF this test, stated so the deferral does not rest on more than it
 // proves: it builds its own Proxy from a literal MITMHosts slice, so it turns red
 // when the RE-KEYING lands — not when a second producer appears. The
 // producer-side half of the deferral is pinned where the producer lives:

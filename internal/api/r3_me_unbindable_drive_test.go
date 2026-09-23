@@ -67,7 +67,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile is involved", denied)
 		}
 
-		// AND THE LAUNCH REALLY DOES REFUSE IT, asserted here rather than
+		// And the launch really does refuse it, asserted here rather than
 		// assumed: a test where /me withheld a drive the launch would have
 		// mounted is the opposite defect.
 		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
@@ -79,7 +79,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 		}
 	})
 
-	// THE POSITIVE CONTROL: a bindable share is still offered, or this "fix"
+	// The positive control: a bindable share is still offered, or this "fix"
 	// would be /me withholding every drive.
 	t.Run("a bindable drive is still offered", func(t *testing.T) {
 		root, st := newShare(t)
@@ -129,7 +129,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 // regression injected: adding s.metrics.driveRefused(...) to the top of
 // resolveMeUserDrive left it green.
 //
-// THE FATALS ARE THE FIX, not the prefix. A metric helper that silently returns
+// The fatals are the fix, not the prefix. A metric helper that silently returns
 // 0 when it read nothing is a helper that turns every assertion built on it into
 // a tautology, and the two defects above were each individually enough to do
 // that. So a non-200 and an empty match are now failures in their own right, and
