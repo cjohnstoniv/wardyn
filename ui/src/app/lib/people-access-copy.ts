@@ -7,9 +7,13 @@
 // table from docs/design/people-access-prompt.md §7, plus its Adjudication
 // section, transcribed verbatim. The People step's role-mappings editor
 // (setup/access-panel.tsx, step-bodies.tsx's DeploymentStep multi-user branch)
-// and the sign-in screen's reworded auth_error arms (sign-in.tsx) read these
-// instead of retyping the copy, so the shipped wording can't drift from the
-// reviewed mock (docs/design/people-access-mock/index.html).
+// reads these instead of retyping the copy, so the shipped wording can't
+// drift from the reviewed mock (docs/design/people-access-mock/index.html).
+//
+// The sign-in screen's own copy (including its three reworded auth_error
+// arms, formerly a SIGNIN export here under §7.7) moved to
+// ui/src/app/lib/sign-in-copy.ts in #457 (docs/design/
+// signin-first-contact-canon.md) — one screen's strings, one home.
 //
 // Pure TS — no React, no fetch, no DOM. Same discipline as permissions-copy.ts
 // (permissions.tsx:11-13): the component that consumes this adds NO copy of
@@ -172,8 +176,3 @@ export const ACCESS_STATE = {
     "Something went wrong reaching the server. Your chart's mappings still apply even though this list can't confirm them right now.",
   FETCH_FAILED_RETRY: "Retry",
 } as const;
-
-// §7.7 — SIGNIN, the reworded auth_error arms sign-in.tsx's authErrorMessage
-// renders. Moved to sign-in-copy.ts (#498) — see that file's comment — and
-// re-exported here so `from "./people-access-copy"` still works.
-export { SIGNIN } from "./sign-in-copy";

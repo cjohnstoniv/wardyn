@@ -10,6 +10,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Sign-in first contact: honest loading state, no jargon (#457).** Before the console has ever
+  heard back from `/healthz`, the sign-in screen used to guess — rendering a token field and a
+  disabled "Sign in with SSO" stub that might be wrong for a moment. It now shows only "Checking
+  sign-in options…" (adding "Still checking — Wardyn hasn't answered yet." after three unanswered
+  reads) until a real answer names which doors exist. The disabled SSO stub and its
+  `WARDYN_OIDC_*` title are gone entirely — the button renders only when SSO is actually
+  configured. Every refusal sentence (`NO_ROLE`, `CLAIMS_OVERAGE`, `EMAIL_VERIFIED_ABSENT`,
+  `EMAIL_DOMAIN`, `ROLE_CHECK_UNAVAILABLE`, `OIDC_CONFIG`, `AUTH_FAILED`, and the shared
+  `ErrorState` default) dropped every env var name and "operator" in favor of "your Wardyn
+  admin" — a reader here, sometimes not even signed in, cannot reach a chart value. The
+  SSO-role-source caveat ("comes from your SSO role assignment") is removed entirely, with its
+  tests. Frozen strings: docs/design/signin-first-contact-canon.md.
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
 
@@ -394,6 +406,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **The Getting Started demo episodes can now be served from an air-gapped mirror.** `WARDYN_DEMO_VIDEO_BASE_URL`
+  re-points where the console downloads them from — `https://` only, no userinfo, query or fragment,
+  validated at boot the same way an internal model gateway base URL is. Unset (the default) is
+  byte-identical to today: the two hardcoded GitHub hosts. The console reads the configured base off
+  `/healthz` and the CSP's `media-src` is built from it (through the same host-sanitizing filter the
+  per-request `connect-src` uses) rather than being a fixed constant. An episode with no recorded tag
+  still resolves to no URL either way. A blocked/redirecting mirror now reads as the deployment's
+  media policy blocking the episode, not as a missing file.
+
 - **The configured Anthropic gateway (`WARDYN_ANTHROPIC_BASE_URL`) now also carries subscription
   and Wardyn-managed runs, not just the api-key lane.** Dispatch points those two lanes'
   `ANTHROPIC_BASE_URL` at the gateway when one is configured; the in-image `agent-run` launcher no
@@ -433,6 +454,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   either.
 
 ### Fixed
+
+
 
 - **On Kubernetes, a run's Go and npm caches now count against `disk_mib`.** A third `emptyDir`
   (`wardyn-cache` at `/home/agent/.cache`) joins the existing `/tmp` and workdir scratch volumes
@@ -476,7 +499,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the error with method and path and answer the caller with the action alone; a source-walking guard
   test (`TestNoDriverTextInServerErrorBody`) fails the build on a reintroduced one. 4xx bodies,
   which are already caller-facing by design, are unchanged.
-
 - **A read-only terminal observer is now promoted in place when the writer leaves, instead of
   having to reconnect.** The registry keeps one writer and the observers queued behind it in
   arrival order; an ordinary release promotes the oldest of them on the socket it already has,

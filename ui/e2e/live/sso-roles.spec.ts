@@ -28,8 +28,8 @@
 
 import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
-import { SIGNIN } from "../../src/app/lib/people-access-copy";
 import { GOVERNANCE } from "../../src/app/lib/governance-copy";
+import { SIGNIN } from "../../src/app/lib/sign-in-copy";
 import { ADMIN_EMAIL, ADMIN_TOKEN, MEMBER_EMAIL, dexSignIn, me } from "./helpers";
 
 test.skip(
@@ -96,7 +96,6 @@ test(`[${RENDER}] the render is the one this invocation claims, and the sign-in 
   await page.goto("/");
   await expect(ssoControl(page)).toBeVisible({ timeout: 60_000 });
   await expect(page.locator("#token")).toHaveCount(TOKEN_LOGIN ? 1 : 0);
-  await expect(page.getByText(SIGNIN.ROLE_SOURCE)).toHaveCount(SSO_ONLY ? 0 : 1);
 });
 
 test(`[${RENDER}] the admin-token principal exists only where a token is configured`, async ({ request }) => {
