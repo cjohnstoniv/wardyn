@@ -128,6 +128,13 @@ func TestRunModelProviderDoors(t *testing.T) {
 	}
 	onPinned := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",` +
 		`"allowed_domains":["api.anthropic.com"],"workspace_repos":[{"repo":"` + govWorkspaceRepo + `"}]}}`
+	// workspace_id without interactive is how the CLI (--workspace) and the
+	// console attach a workspace. It is a model run at dispatch — a create body
+	// never sets run.WorkspaceID — so it must choose like any other.
+	plain := &types.Workspace{ID: uuid.New(), Name: "plain", Status: types.WorkspaceScanned, Sources: pinned.Sources}
+	byID := func(ws *types.Workspace, extra string) string {
+		return fmt.Sprintf(`{"agent":"claude-code","task":"t","workspace_id":%q%s}`, ws.ID, extra)
+	}
 
 	for _, tc := range []struct {
 		name     string
@@ -147,6 +154,14 @@ func TestRunModelProviderDoors(t *testing.T) {
 			cs: &capStore{enf: enforced, grants: []types.CapabilityGrant{
 				grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}},
 			body: onPinned, want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
+		{name: "workspace_id: the pin names a provider the member is not granted", site: twoKeys, ws: pinned,
+			cs: &capStore{enf: enforced, grants: []types.CapabilityGrant{
+				grant(types.CapabilitySubjectAll, "", capModelProvider, "anthropic", types.CapabilityAllow)}},
+			body: byID(pinned, ""), want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
+		{name: "workspace_id: two candidates and no choice", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
+			body: byID(plain, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
+		{name: "workspace_id: a chosen provider whose kind has no dispatch arm yet", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
+			body: byID(plain, `,"model_provider":"corp"`), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp")},
 		{name: "a chosen provider whose kind has no dispatch arm yet", site: twoKeys, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
 			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp")},

@@ -39,7 +39,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   with no block, or on a run that calls no model, is refused rather than ignored. New capability
   kind `model_provider` bounds the request, the pin and the default alike (reason
   `capability_model_provider`, target `runs.model_provider`); unlike `integration`, a workspace
-  pin is not exempt.
+  pin is not exempt. A run launched on a workspace by id (`workspace_id`, the CLI's `--workspace`)
+  chooses like any other.
 
 - **Each person's own model-provider credential, strictly namespaced (#525).** `PUT` and
   `DELETE /model-providers/{id}/credential` store and remove the caller's own key or token for a

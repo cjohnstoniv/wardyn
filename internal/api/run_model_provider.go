@@ -26,7 +26,7 @@ const (
 	mpRunChoose          = "Choose a model provider for this run: more than one serves %s, and none is its default."
 	mpRunNotYet          = "This run's model provider is %s, and provider dispatch for that kind is not yet available on this build — nothing was started."
 	mpRunNoBlock         = "model_provider names %q, but this deployment has no model providers — launch without model_provider."
-	mpRunNoModel         = "model_provider applies only to a run that calls a model — a task_mode=exec run, a scan, or an agent that takes no model provider chooses none."
+	mpRunNoModel         = "model_provider applies only to a run that calls a model — a task_mode=exec run or an agent that takes no model provider chooses none."
 	mpRunBadID           = "model_provider: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters"
 )
 
@@ -139,7 +139,13 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(mpRunBadID, req.ModelProvider))
 		return false
 	}
-	if !llmMechanismGateApplies(req) {
+	// Not llmMechanismGateApplies: that reads workspace_id without interactive
+	// as a scan, but this door never sets run.WorkspaceID (seedRequestWorkspace),
+	// so dispatch runs such a body as a model run — exactly what the CLI's
+	// --workspace and the console send. Both ids are nil for every run this
+	// door creates.
+	_, needsModel := agentLLMProvider(req.Agent)
+	if !needsModel || req.Task == harnessLoginTask || !isModelRun(req.TaskMode, nil, nil, req.Interactive) {
 		if req.ModelProvider != "" {
 			writeError(w, http.StatusBadRequest, mpRunNoModel)
 			return false
