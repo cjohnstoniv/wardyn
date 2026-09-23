@@ -4247,7 +4247,7 @@ threat model, and user drives. This section is the arithmetic out of that review
 changes an operator will notice, and what is still open. **The bullets in the sections below this
 one are the individual fixes it produced.**
 
-Across the six areas whose review completed: 1140 findings total (14 Critical, 117 High, 453
+Across the six areas whose review produced a ledger: 1140 findings total (14 Critical, 117 High, 453
 Medium, 421 Low, 135 Info), 566 fixed, 7 disputed, 10 deferred, 557 open. The gates were re-run
 green on the release candidate (`make ci` 24/24 plus the PostgreSQL lane). "Open" is almost
 entirely Low/Info residue; only one open finding is above Low (a single R7 Medium). What "fixed"
@@ -4670,7 +4670,7 @@ Six episodes of the walkthrough series were re-recorded on this release and ship
   reviewed the run plane.
 - **"Fixed" mostly means fix-claimed, not reviewer-verified.** Every fix is gate-green on the
   release candidate, but only R1 carries reviewer-verified fixes (101 of them), and its 62
-  final-wave fixes are gate-green only. Unverified fix claims: R3 56, R4 51, R5 137, R6 70, R7 27;
+  final-wave fixes are gate-green only. Unverified fix claims: R3 56, R4 51, R5 96, R6 45, R7 27;
   R3's re-check covered Critical and High findings only.
 - **Low/Info residue is deliberately unfixed**: R1 182 · R3 68 · R4 83 · R5 101 · R6 64 · R7 59.
 - **Two High findings are deferred** — R3 F055 and R4 F107, both named under Known residuals

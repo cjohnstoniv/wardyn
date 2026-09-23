@@ -644,7 +644,8 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		// REFUSED_HOME_INVALID says "your {claim}", which is the wrong subject,
 		// and REFUSED_BACKEND is the deployment-capability sentence, which
 		// carries no remedy for a case that has one. That is new member copy, so
-		// it is FILED (local/FILED-COPY.md) rather than invented at a call site.
+		// it is filed for the owner's canon sitting rather than invented at a
+		// call site.
 		//
 		// The FROZEN sentence first, byte-for-byte, then the substrate's own
 		// clause when the substrate is stricter than the sentence describes.
