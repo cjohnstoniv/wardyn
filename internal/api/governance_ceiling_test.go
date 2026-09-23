@@ -442,6 +442,60 @@ func TestEffectiveCeilingReintersectsGrants(t *testing.T) {
 	}
 }
 
+// TestEffectiveCeilingWarnsOnDroppedPushRules pins #272: a profile narrower
+// than the deployment default on push_rules must say so at resolve time, not
+// drop the deployment's content rules in silence.
+func TestEffectiveCeilingWarnsOnDroppedPushRules(t *testing.T) {
+	profile := govProfile("no-push-rules")
+	st := &capStore{govProfile: profile, govTier: types.CapabilitySubjectGroup}
+
+	t.Run("deployment carries push_rules, profile does not: warns", func(t *testing.T) {
+		srv := govServer(st)
+		srv.cfg.DefaultPolicy.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}
+		got, err := srv.effectiveCeiling(govMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("effectiveCeiling: %v", err)
+		}
+		if got.Spec.PushRules.IsSet() {
+			t.Fatalf("profile ceiling unexpectedly carries push_rules: %+v", got.Spec.PushRules)
+		}
+		// BYTE-EXACT frozen copy (docs/design/governance-prompt.md §7.7,
+		// WARN_PUSH_RULES_DROPPED).
+		const want = `governance profile "no-push-rules": push_rules dropped — this profile's ceiling sets none, ` +
+			`so the deployment default's content rules do not apply to members of it`
+		if !slices.Contains(got.Warnings, want) {
+			t.Errorf("warnings = %v\nwant §7.7 BYTE-EXACT: %s", got.Warnings, want)
+		}
+	})
+
+	t.Run("deployment carries none either: no warning", func(t *testing.T) {
+		srv := govServer(st)
+		srv.cfg.DefaultPolicy.PushRules = nil
+		got, err := srv.effectiveCeiling(govMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("effectiveCeiling: %v", err)
+		}
+		if len(got.Warnings) != 0 {
+			t.Errorf("warnings = %v, want none — the deployment had no push_rules to drop", got.Warnings)
+		}
+	})
+
+	t.Run("profile carries its own push_rules: no warning", func(t *testing.T) {
+		profileWithRules := govProfile("has-push-rules")
+		profileWithRules.Ceiling.PushRules = &types.PushRulesSpec{DenyPaths: []string{"secrets/**"}}
+		st := &capStore{govProfile: profileWithRules, govTier: types.CapabilitySubjectGroup}
+		srv := govServer(st)
+		srv.cfg.DefaultPolicy.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}
+		got, err := srv.effectiveCeiling(govMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("effectiveCeiling: %v", err)
+		}
+		if len(got.Warnings) != 0 {
+			t.Errorf("warnings = %v, want none — the profile sets its own push_rules", got.Warnings)
+		}
+	})
+}
+
 // ─── the routed read surfaces ─────────────────────────────────────────────────
 
 // TestGovernanceRoutedReadSites covers the two routed sites the escape table

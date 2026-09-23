@@ -301,6 +301,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// nothing reads back.
 		AutonomyLevel: autonomy.Level,
 	}
+	s.captureRunLimits(&run, ceiling)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		writeServerError(w, r, "create run", err)
