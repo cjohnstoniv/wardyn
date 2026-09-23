@@ -5,6 +5,10 @@ on:
     branches: [main, master, 'release/**', 'feature/**']
   pull_request:
     branches: [main, master, 'release/**', 'feature/**']
+  # The merge queue tests each queued PR against the queue's head before it
+  # lands; the required checks must run on that event or the queue never moves.
+  merge_group:
+    types: [checks_requested]
 
 # Least-privilege default: CI only needs to read the repo — nothing here writes
 # back. Mirrors nightly.yml, which already sets this.
@@ -773,7 +777,7 @@ jobs:
       # per-commit Signed-off-by check lives in `make dco`, single-sourced.
       - name: Check DCO sign-off (Signed-off-by on all commits)
         run: |
-          BASE=${{ github.event.pull_request.base.sha }}
+          BASE=${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           if [ -z "$BASE" ]; then
             # On push, check every commit the push introduced — `-1 HEAD`
             # checked only the tip, so a multi-commit direct push could land
@@ -790,8 +794,8 @@ jobs:
               make dco DCO_RANGE="-1 HEAD"
             fi
           else
-            # checkout@v4 on pull_request lands on the ephemeral auto-generated
-            # merge commit, whose message has no Signed-off-by. `make dco` uses
+            # checkout@v4 on pull_request (and on a merge_group, the queue's own
+            # merge commits) lands on an auto-generated merge commit, whose message has no Signed-off-by. `make dco` uses
             # --no-merges to exclude that synthetic commit so only real
             # contributor commits are checked (otherwise DCO fails on every PR).
             make dco DCO_RANGE="$BASE..HEAD"
