@@ -30,6 +30,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   way on the REST and git paths. When two repositories in one run would clone into the same
   directory, the run's response now says which one was not cloned (#485).
 
+### Changed
+
+- **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
+  `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
+  `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
+  `killTeardownTail` (`KillSandbox`, both credential revocations, and the `run.kill` audit row).
+  `supersedeOneLoginRun` claims the transition synchronously, so its three-attempt CAS re-read loop
+  is unchanged and the superseded run reads `KILLED` before the launch POST answers, then hands the
+  teardown to a goroutine detached with `context.WithoutCancel`. `killRunCascade` itself still runs
+  claim then tail back to back under one shared `killCascadeTimeout` deadline, so `handleKillRun`'s
+  own synchronous cascade keeps the exact 30s budget it always had. The detached teardown (and the
+  sign-in launch's own detached dispatch) is now tracked by a new `Server.goBackground`/
+  `WaitBackground`: `wardynd`'s shutdown waits for it, bounded, after `http.Server.Shutdown` — before
+  this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
+  revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
+  already detached from itself.
+
 ### Added
 
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
