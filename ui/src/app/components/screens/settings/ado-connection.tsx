@@ -15,6 +15,15 @@
 // here follows. The card shell (a bordered <section>, title + lede) matches
 // connection-cards.tsx's own un-exported Card, rather than importing a
 // shadcn Card this codebase does not have.
+//
+// id="azure-devops" + the hash-focus effect (#458): the capability card's
+// consent CTA and the mid-run sign-in door (ado-capability-card.tsx) both
+// land here via `/settings#azure-devops` — a five-card page with no anchor
+// otherwise strands the reader at the top. tabIndex=-1 makes the section
+// programmatically focusable without joining the page's Tab order; the
+// browser's own focus-triggered scroll is the only scroll this does.
+import * as React from "react";
+import { useLocation } from "react-router-dom";
 import { Button } from "../../ui/button";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -25,6 +34,13 @@ import type { SetupStatus } from "../../../lib/types";
 export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus; onChanged: () => void }) {
   const { connecting, connect, connectFallback, blockedUrl } = useAdoConnect();
   const access = status?.scm_access;
+  const location = useLocation();
+  const sectionRef = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    if (location.hash === "#azure-devops" && access && access.state !== "") {
+      sectionRef.current?.focus();
+    }
+  }, [location.hash, access]);
   const handleConnect = async () => {
     if (await connect()) onChanged();
   };
@@ -40,9 +56,18 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
   const chip = scmAccessChip(access.state, access.source, access.cause);
 
   return (
-    <section className="rounded-xl border border-border bg-card p-4">
+    <section
+      id="azure-devops"
+      ref={sectionRef}
+      tabIndex={-1}
+      className="rounded-xl border border-border bg-card p-4 outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]"
+    >
       <h3 className="text-sm font-medium text-foreground">{PROVIDERS.KIND_AZURE_DEVOPS}</h3>
       <div className="mt-3 space-y-2 text-body">
+        {/* Q458-1: an admin-token/local-mode caller has no per-person Azure
+            DevOps connection at all — one line, no chip, no button, unlike
+            every other state below. */}
+        {access.state === "not_applicable" && <p className="text-muted-foreground">{ADO.NOT_APPLICABLE_BODY}</p>}
         {chip && <p className={chip.tone === "success" ? "text-success" : "text-warning"}>{chip.label}</p>}
         {/* review finding F3: `live` branches on `source` — a SHARED row's
             `live` (no source) makes no per-person claim (§7.5's

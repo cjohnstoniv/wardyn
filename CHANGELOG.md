@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
+  that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
+  explaining there is no per-person connection to show. The capability card's consent door now
+  reads "Connect Azure DevOps" (matching its destination) and lands on the Settings card's own
+  anchor, which takes focus on arrival; a decide's `busy` state now tracks which button was
+  pressed, so Approve and Deny no longer spin together on a single click (#458).
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
 

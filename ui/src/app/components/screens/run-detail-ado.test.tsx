@@ -229,7 +229,7 @@ describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab (N1
 
     await screen.findByText(/Decided by/);
     expect(screen.queryByTestId("ado-consent-card")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Allow and continue" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Connect Azure DevOps" })).not.toBeInTheDocument();
   });
 
   it("an ended run with an APPROVED escalation never says 'nothing to allow'", async () => {

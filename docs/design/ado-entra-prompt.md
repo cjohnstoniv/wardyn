@@ -665,7 +665,7 @@ already done (§5 #10).
 | `REQ_CONSENT_CHIP` | Needs your Microsoft consent |
 | `REQ_CONSENT_SOURCE(ts)` | Azure DevOps · you allowed this at {ts} · still held |
 | `REQ_CONSENT_BODY` | Microsoft needs your consent before Azure DevOps lets this run use this access. Reconnecting asks Microsoft for it — you'll see a consent screen, and nothing else changes. The run's request stays held meanwhile. |
-| `REQ_CONSENT_CTA` | Allow and continue |
+| `REQ_CONSENT_CTA` | Connect Azure DevOps |
 | `REQ_CONSENT_OTHER_BODY(person)` | You allowed it, but only {person} can give Microsoft the extra permission it needs — the run acts as {person}, and consent is theirs to give. They've been shown this on their Getting started page. |
 | `REQ_NOT_YOURS_CHIP` | Not yours to decide |
 | `REQ_NOT_YOURS_BODY(person)` | Only {person}, who started this run, or an admin can answer this. |
@@ -713,6 +713,11 @@ already done (§5 #10).
   true in both cases. It DROPS the `{capability}` parameter (no capability name reaches the wire scope
   either way — see this card's own doc comment), so this is a plain string as of round 2, not a
   function.
+- `REQ_CONSENT_CTA` said "Allow and continue", which named a different act than the page it lands
+  on (issue #458): the destination is `ado-connection.tsx`'s Settings card, whose own CTA has always
+  read `CONNECT_ADO`, "Connect Azure DevOps". Reworded to match, and the destination gained an anchor
+  (`#azure-devops`) so the two consent-chain doors (this row and the mid-run sign-in row) land ON the
+  card rather than at the top of a five-card page — see §10.7.
 
 ### 7.7 `ADO` — the launch door and the after view
 
@@ -1002,3 +1007,23 @@ sign-in" and are true for this row as they stand.
 |---|---|
 | `REQ_REAUTH_HELD_BODY` | This run's Azure DevOps request is held while you sign in again. Sign in and it goes through on its own — the run doesn't have to start over. If the hold runs out first, its next request goes through once you have. |
 | `REQ_REAUTH_OTHER_BODY(person)` | Only {person} can sign in again — the run acts as {person}. Its Azure DevOps requests go through once they have. |
+
+### 10.7 `ADO` — the not-applicable Settings card and the owner fallback (issue #458, owner-approved mock packet 6a, 2026-09-22)
+
+Go grades an admin-token or local-mode caller `not_applicable` (`scmaccess.go:137-139`,
+`isMechanism := subject == ""`) — reachable, not the theoretical case §7.5's original comment assumed:
+an admin who configures a per-user Azure DevOps row while signed in with the admin token sees exactly
+this state in their own Settings. `ado-connection.tsx`'s card returned early only for the absent-row
+case (`state === ""`); every other unrecognised state, `not_applicable` included, fell through every
+branch and rendered a title over an empty body. `NOT_APPLICABLE_BODY` is the one line that state gets
+(Q458-1: a sentence, not a second chip vocabulary) — the Connected / Not connected / admin's-token-
+expired states above are unchanged.
+
+`REQ_OWNER_FALLBACK` promotes the capability card's own hardcoded `"the run's owner"` — the text
+`REQ_NOT_YOURS_BODY(person)` falls back to when a run's `created_by` hasn't loaded — to a frozen row,
+per §5's rule that no literal outside this module speaks for the design.
+
+| Key | String |
+|---|---|
+| `NOT_APPLICABLE_BODY` | This sign-in is an admin token, not a person, so it has no Azure DevOps connection of its own. Each person's own connection carries their runs. |
+| `REQ_OWNER_FALLBACK` | the run's owner |
