@@ -55,6 +55,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Console view routing: the Admin view lives under `/admin/*` (#632).** Every admin screen is
+  also mounted at `/admin/…`, and `/account` opens today's Settings. A user who opens an
+  Admin-view page gets a refusal page instead of the screen; an SSO admin in the User view is
+  asked before entering the Admin view, and in the Admin view is redirected from `/runs`,
+  `/runs/:id`, `/approvals`, `/workspaces` and `/secrets` to the same page there, and asked
+  before `/runs/new`, `/account` or `/setup`. The admin token on an SSO install is told
+  User-view pages belong to a person. `/` lands by view: an SSO admin in the Admin view, and a
+  single-operator install in the Admin view's setup until onboarding is done. The setup gate
+  now sends an admin to `/admin/setup`. The old paths still work until they move.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just
