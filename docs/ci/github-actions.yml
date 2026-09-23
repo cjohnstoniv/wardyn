@@ -29,8 +29,8 @@ jobs:
         with:
           repository: cjohnstoniv/wardyn
           # PINNED, and it must stay pinned. The next step EXECUTES this
-          # checkout's scripts/ci-run.sh in a job you seed with your own
-          # secrets (the ANTHROPIC_API_KEY line below). Without `ref` this
+          # checkout's scripts/ci-run.sh in a job you hand your own secrets
+          # (the WARDYN_CI_TOKEN line below). Without `ref` this
           # resolves to Wardyn's default branch at job time, so every push to
           # that branch would run arbitrary shell in front of your secrets.
           # Bump it deliberately, to a release you verified (docs/VERIFY.md);
@@ -48,23 +48,17 @@ jobs:
           WARDYN_CI_TASK: "echo hello from a governed sandbox && uname -a"
           WARDYN_CI_OUT: ${{ github.workspace }}/ci-artifacts
           #
-          # Variant — run a real agent (claude-code) instead: drop the two
-          # WARDYN_CI_IMAGE/TASK_MODE lines and set:
+          # Variant — run a real agent (claude-code) on the control plane you
+          # already run, as a dedicated CI principal that stored its own
+          # model-provider credential once (docs/CI.md "CI's identity"). Drop
+          # the two WARDYN_CI_IMAGE/TASK_MODE lines, put the wardyn CLI on PATH
+          # (a release asset), and set:
+          # WARDYN_URL: https://wardyn.example.com
+          # WARDYN_CI_TOKEN: ${{ secrets.WARDYN_CI_TOKEN }}
+          # WARDYN_CI_MODEL_PROVIDER: your-provider-id
           # WARDYN_CI_TASK: "fix the failing unit test in pkg/foo"
           # WARDYN_CI_REPO: your-org/your-repo
           # WARDYN_CI_POLICY_FILE: ${{ github.workspace }}/wardyn-ci-policy.json
-          #
-          # Model access, on a deployment with model providers configured
-          # (docs/CI.md "CI's identity" — the CI principal stores its own key
-          # once, out of band, through PUT /model-providers/{id}/credential):
-          # WARDYN_CI_TOKEN: ${{ secrets.WARDYN_CI_TOKEN }}
-          # WARDYN_CI_MODEL_PROVIDER: your-provider-id
-          #
-          # Or, on ci-run.sh's own from-nothing stack with none configured
-          # (a policy that grants model access — see
-          # wardyn/examples/policies/claude-llm.json — and the key seeded from
-          # your repo secrets):
-          # WARDYN_CI_SECRETS: anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}
         run: wardyn/scripts/ci-run.sh
 
       - name: Upload run artifacts (state + audit trail)

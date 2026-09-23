@@ -2,15 +2,22 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Wardyn CI one-shot: bring up a fresh control plane from nothing, launch ONE
-# governed sandboxed run, wait for its outcome, collect artifacts, tear down,
-# and exit with the run's exit code. Designed for CI runners (GitHub Actions,
-# Azure DevOps) — no UI, no human, no pre-running wardyn. See docs/CI.md.
+# Wardyn CI one-shot: launch ONE governed sandboxed run (on a control plane it
+# brings up from nothing, or on an existing one — see below), wait for its
+# outcome, collect artifacts, tear down, and exit with the run's exit code. Designed for CI runners (GitHub Actions,
+# Azure DevOps) — no UI, no human. See docs/CI.md.
 #
 # BYOA (bring your own agent/container): set WARDYN_CI_IMAGE to any OCI image;
 # Wardyn wraps it with the runner tools and governs it (egress allowlist,
 # brokered creds, confinement, audit). WARDYN_CI_TASK_MODE=exec runs the task
 # as a plain shell command in that image — no agent, no LLM credentials.
+#
+# Two modes. By default it brings up a THROWAWAY stack from nothing; that stack
+# has no person on it and so no model credential, which makes it exec-mode only.
+# With WARDYN_URL set it drives that existing control plane instead, as a
+# dedicated CI principal (WARDYN_CI_TOKEN, that person's own wdn_ token) whose
+# model-provider credential was stored once, out of band. Harness mode runs
+# there. CI seeds nothing into the operator's namespace in either mode (D8).
 #
 # Usage:  scripts/ci-run.sh          # env-driven, see the table below
 #
@@ -21,17 +28,17 @@
 #   WARDYN_CI_AGENT          agent name for harness mode / tools source [claude-code]
 #   WARDYN_CI_REPO           org/name to clone into the workspace       [optional]
 #   WARDYN_CI_POLICY_FILE    RunPolicySpec JSON path                    [examples/policies/ci.json]
-#   WARDYN_CI_SECRETS        name=value[,name=value...] seeded pre-run  [optional]
-#   WARDYN_CI_MODEL_PROVIDER model provider id to verify (harness mode) [unset — skipped]
 #   WARDYN_CI_TIMEOUT        wardyn run --wait timeout                  [30m]
 #   WARDYN_CI_OUT            artifact dir (run.json, audit.json, .cast) [./ci-artifacts]
-#   WARDYN_CI_KEEP           1 = leave the stack up for debugging       [unset]
-#   WARDYN_CI_SKIP_BUILD     1 = reuse existing local images            [unset]
-#   WARDYN_CI_TOKEN          the identity every `wardyn` call in this   [WARDYN_ADMIN_TOKEN]
-#                            job authenticates as — see "CI's identity"
-#                            in docs/CI.md. Defaults to this ephemeral
-#                            stack's own bootstrap bearer.
-#   WARDYN_ADMIN_TOKEN       this stack's bootstrap admin bearer        [demo-admin-token]
+#   WARDYN_URL               an existing control plane to drive         [unset = throwaway stack]
+#   WARDYN_CI_TOKEN          with WARDYN_URL: the CI principal's own    [required with WARDYN_URL]
+#                            wdn_ token, the identity every call uses
+#   WARDYN_CI_MODEL_PROVIDER with WARDYN_URL, harness mode: the model   [required there]
+#                            provider the run uses, checked before launch
+#   WARDYN_CI_KEEP           throwaway stack: 1 = leave it up           [unset]
+#   WARDYN_CI_SKIP_BUILD     throwaway stack: 1 = reuse local images    [unset]
+#   WARDYN_ADMIN_TOKEN       throwaway stack: its own bootstrap bearer; [demo-admin-token]
+#                            never sent to WARDYN_URL
 #
 # Exit code: the run's outcome from `wardyn run --wait` — 0 COMPLETED,
 # agent/command exit code on FAILED, 2 KILLED/STOPPED, 124 timeout.
@@ -81,198 +88,10 @@ POLICY_FILE="${WARDYN_CI_POLICY_FILE:-${REPO_ROOT}/examples/policies/ci.json}"
 TIMEOUT="${WARDYN_CI_TIMEOUT:-30m}"
 OUT_DIR="${WARDYN_CI_OUT:-./ci-artifacts}"
 MODEL_PROVIDER="${WARDYN_CI_MODEL_PROVIDER:-}"
-# WARDYN_ADMIN_TOKEN is this EPHEMERAL stack's own bootstrap admin bearer —
-# compose interpolates it into wardynd's own environment, so the daemon
-# always needs one to exist, ephemeral or not. It is NOT the identity CI's own
-# actions run as; see wardyn() below and docs/CI.md "CI's identity" (D8).
-export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
-# WARDYN_CI_TOKEN is that identity: every `wardyn` CLI call this job makes
-# authenticates as it, never implicitly as the daemon's own admin bearer.
-# Defaults to the same bootstrap bearer, because a from-nothing stack with no
-# OIDC configured has exactly one valid credential and no distinguishable
-# people — point it at a named CI principal's own `wdn_` API token once this
-# job talks to a deployment that has one (docs/CI.md "Driving an existing
-# control plane instead").
-export WARDYN_CI_TOKEN="${WARDYN_CI_TOKEN:-${WARDYN_ADMIN_TOKEN}}"
+REMOTE_URL="${WARDYN_URL:-}"
 
 [[ -n "${TASK}" ]] || die "WARDYN_CI_TASK is required (the task / command to run)"
 [[ -f "${POLICY_FILE}" ]] || die "policy file not found: ${POLICY_FILE}"
-command -v docker >/dev/null 2>&1 || die "docker not found on PATH"
-docker compose version >/dev/null 2>&1 || die "docker compose v2 required"
-
-# Same daemon for image builds AND the compose wardynd (dual-daemon boxes):
-# honor DOCKER_HOST / the native-dockerd preference, and point the wardynd
-# container's bind-mounted socket at it. wardyn_pick_docker_host derives both
-# DOCKER_HOST and WARDYN_DOCKER_SOCK.
-wardyn_pick_docker_host
-
-# A project name only isolates this job if nothing else is USING it. The
-# `down --volumes` further down is unconditional and ephemerality is
-# load-bearing (see its comment), so a name already in use would be torn out
-# from under whoever holds it — a concurrent job, or an operator's
-# WARDYN_CI_KEEP=1 stack. Refuse instead. The query is by compose's own project
-# label rather than `compose ps`, because ${COMPOSE[@]} carries the CI overlay
-# and that file cannot even be loaded until WARDYN_CI_TOOLS_DIR exists (set
-# below). Only RUNNING containers count, so an ordinary retry of a pinned
-# WARDYN_CI_PROJECT whose stack already exited still proceeds.
-_live="$(docker ps -q --filter "label=com.docker.compose.project=${CI_PROJECT}" 2>/dev/null || true)"
-if [[ -n "${_live}" ]]; then
-  die "compose project '${CI_PROJECT}' already has running containers — this job's 'down --volumes' would destroy them. Wait for that job, pick another WARDYN_CI_PROJECT, or tear it down: docker compose -p '${CI_PROJECT}' down --volumes"
-fi
-unset _live
-
-# wardyn runs the shipped CLI inside the wardynd container (same shim as
-# scripts/demo.sh — no host Go/binary needed at run time).
-#
-# It authenticates as WARDYN_CI_TOKEN, never the daemon's own admin bearer:
-# docker-compose.ci.yaml bakes WARDYN_CI_TOKEN into the CONTAINER's own env as
-# WARDYN_TOKEN, so `exec` inherits it the same way it always inherited
-# WARDYN_ADMIN_TOKEN — passing the real bearer via `-e` here instead would put
-# it on the HOST `docker` process argv, world-readable in `ps` and
-# /proc/<pid>/cmdline to every other user on a shared runner, on every single
-# CLI call this job makes. WARDYN_ADMIN_TOKEN is explicitly CLEARED for this
-# exec (empty, never sensitive) because the CLI's own precedence tries it
-# FIRST (cmd/wardyn/main.go) — left ambient, it would silently win over
-# WARDYN_TOKEN and every write this job makes would still land as the shared
-# admin instead of the identity CI's own actions should be attributed to (D8,
-# docs/design mock-08/multi-provider-design.md). WARDYN_URL stays: it is an
-# endpoint, not a credential, and the container has no reason to know it
-# otherwise.
-wardyn() {
-  "${COMPOSE[@]}" exec -T \
-    -e WARDYN_URL="http://localhost:8080" \
-    -e WARDYN_ADMIN_TOKEN= \
-    wardynd /usr/local/bin/wardyn "$@"
-}
-
-# Tools dir: created up front (the compose overlay interpolates it on every
-# compose invocation, including builds); populated after the agent image build.
-TOOLS_DIR="$(mktemp -d)"
-export WARDYN_CI_TOOLS_DIR="${TOOLS_DIR}"
-
-# ── build (skippable; CI caches docker layers) ───────────────────────────────
-AGENT_IMAGE="wardyn/agent-${AGENT}:local"
-if [[ "${WARDYN_CI_SKIP_BUILD:-}" != "1" ]]; then
-  log "Building wardynd + wardyn-proxy images"
-  "${COMPOSE[@]}" build wardynd || die "build wardynd (check disk space/network; retry, or set WARDYN_CI_SKIP_BUILD=1 to reuse existing local images)"
-  "${COMPOSE[@]}" --profile build-only build proxy-image || die "build proxy image (check disk space/network; retry, or set WARDYN_CI_SKIP_BUILD=1 to reuse existing local images)"
-  # The agent image is needed even for pure BYOA runs: it is the source of the
-  # runner tools the BYOI wrap COPYs into the user image.
-  agent_dockerfile="${REPO_ROOT}/deploy/images/${AGENT}/Dockerfile"
-  [[ -f "${agent_dockerfile}" ]] || die "no Dockerfile for agent '${AGENT}' at ${agent_dockerfile}"
-  log "Building agent image ${AGENT_IMAGE}"
-  docker build -f "${agent_dockerfile}" -t "${AGENT_IMAGE}" "${REPO_ROOT}" || die "build agent image"
-fi
-
-# ── assemble the runner-tools dir for the BYOI wrap ──────────────────────────
-# FinalizeBase COPYs everything in this dir into the wrapped image; extract the
-# tools from the agent image so there is one source of truth.
-log "Assembling runner tools from ${AGENT_IMAGE} -> ${TOOLS_DIR}"
-# The agent image has no default CMD (the driver always supplies argv), so
-# docker create needs a dummy command; the container is never started.
-tools_ctr="$(docker create "${AGENT_IMAGE}" true)" || die "docker create ${AGENT_IMAGE} (build it or unset WARDYN_CI_SKIP_BUILD)"
-for tool in agent-run agent-run-lib.sh wardyn-rec wardyn-git-helper wardyn-scan; do
-  docker cp -q "${tools_ctr}:/usr/local/bin/${tool}" "${TOOLS_DIR}/" 2>/dev/null \
-    || warn "tool ${tool} not present in ${AGENT_IMAGE} (continuing)"
-done
-docker rm -f "${tools_ctr}" >/dev/null
-for required in agent-run agent-run-lib.sh wardyn-rec wardyn-git-helper; do
-  [[ -f "${TOOLS_DIR}/${required}" ]] || die "required runner tool ${required} missing from ${AGENT_IMAGE}"
-done
-export WARDYN_CI_TOOLS_DIR="${TOOLS_DIR}"
-
-# ── bring up the core stack (postgres + wardynd only; no dex, admin token) ───
-cleanup() {
-  local code=$?
-  if [[ "${WARDYN_CI_KEEP:-}" == "1" ]]; then
-    # Print a teardown line the operator can actually paste into a fresh shell.
-    # THREE env vars are load-bearing and none of them survives this process: the
-    # CI overlay binds ${WARDYN_CI_TOOLS_DIR:?...}, so compose refuses to load the
-    # project at all without it; WARDYN_NS is what the recordings volume and the
-    # control-plane network are NAMED after, so a `down --volumes` without it
-    # reaps the default-named objects and leaves this job's behind; and
-    # DOCKER_HOST names the daemon the stack actually lives on —
-    # wardyn_pick_docker_host derives it (a dual-daemon box lands on the native
-    # dockerd, not the default context), so a paste without it addresses the WRONG
-    # daemon, finds no such project, and exits 0 having removed nothing while the
-    # trailing rm still deletes the tools dir the still-live wardynd is bind-
-    # mounting. Emitted only when set, so a single-daemon host gets no noise.
-    # Keeping the stack also skips the rm -rf below, so the tools dir outlives the
-    # job with its path visible only in scrollback — hence the trailing rm, in the
-    # same command, on the same line.
-    warn "WARDYN_CI_KEEP=1 — leaving the stack up, and the runner-tools dir ${TOOLS_DIR} with it. Tear both down with:"
-    warn "  ${DOCKER_HOST:+DOCKER_HOST='${DOCKER_HOST}' }WARDYN_NS='${WARDYN_NS}' WARDYN_CI_TOOLS_DIR='${TOOLS_DIR}' ${COMPOSE[*]} down --volumes && rm -rf '${TOOLS_DIR}'"
-  else
-    log "Tearing down the compose stack (volumes included — the stack is ephemeral)"
-    # compose down only reaps objects compose itself created. The docker runner
-    # mints the agent + proxy containers and the per-run internal network
-    # directly via the Docker API (internal/runner/docker/naming.go), so they
-    # are invisible to compose and survive `down` untouched. Remove them before
-    # the network they share endpoints on goes away, or every CI run leaks a
-    # sandbox.
-    # A cancel that lands while `run --wait` is still blocked leaves run_id
-    # unset (it is parsed only after the wait returns), so a name-only removal
-    # misses exactly the sandbox a cancel is most likely to hit. Reap by label
-    # instead, scoped to THIS job's control-plane network: the proxy is the only
-    # Wardyn-minted container attached to it and carries the run-id label every
-    # sibling object is named after, so a concurrent job's sandbox — on its own
-    # ${WARDYN_NS}-internal — is never touched. run_id is still appended for the
-    # one case the selector misses (proxy already gone, agent lingering).
-    for _rid in $(docker ps -a --filter "label=wardyn.managed=true" \
-      --filter "network=${WARDYN_NS}-internal" \
-      --format '{{.Label "wardyn.run-id"}}' 2>/dev/null) "${run_id:-}"; do
-      [[ -n "${_rid}" ]] || continue
-      docker rm -f "wardyn-proxy-${_rid}" "wardyn-agent-${_rid}" >/dev/null 2>&1 || true
-      docker network rm "wardyn-int-${_rid}" >/dev/null 2>&1 || true
-    done
-    "${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
-    rm -rf "${TOOLS_DIR}"
-  fi
-  exit "${code}"
-}
-# W16-S1-5: EXIT alone never fires on a hard job-cancel (SIGTERM, the signal a
-# CI runner sends to abort a job) — the sandbox + control-plane network it
-# started leaks past the job. `exit` inside a signal handler still fires the
-# EXIT trap (bash re-enters it exactly once with the handler's own exit code),
-# so TERM/INT just need to exit — cleanup itself stays registered only on
-# EXIT, never running twice. SIGKILL still cannot be trapped by any process;
-# nothing short of a reaper outside this shell recovers from that one.
-trap cleanup EXIT
-trap 'exit 143' TERM
-trap 'exit 130' INT
-
-# Ephemerality is load-bearing, not hygiene: a reused postgres volume holds
-# secrets age-encrypted to a PREVIOUS boot's ephemeral key, and wardynd fails
-# closed (by design) on the decrypt mismatch. Every invocation starts clean.
-"${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
-
-log "Starting postgres + wardynd (WARDYN_ENVBUILD on for the BYOA wrap; project ${CI_PROJECT})"
-"${COMPOSE[@]}" up -d postgres wardynd || die "compose up (check '${COMPOSE[*]} logs postgres wardynd')"
-# Health from the CONTAINER, not a host port: CI publishes wardynd on an ephemeral
-# host port (WARDYN_UP_PORT=0), so localhost:PORT is unknown here — but the
-# container's own healthcheck runs `wardyn runs list` inside it. This is also
-# topology-independent (works under Docker Desktop + WSL2 NAT).
-log "Waiting for wardynd (container health, project ${CI_PROJECT})"
-_cid="$("${COMPOSE[@]}" ps -q wardynd 2>/dev/null || true)"
-_tries=0
-until [ -n "${_cid}" ] && [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${_cid}" 2>/dev/null)" = "healthy" ]; do
-  _tries=$((_tries + 1))
-  if [ "${_tries}" -gt 45 ]; then "${COMPOSE[@]}" logs --tail 50 wardynd; die "wardynd did not become healthy"; fi
-  sleep 2
-  _cid="$("${COMPOSE[@]}" ps -q wardynd 2>/dev/null || true)"
-done
-log "wardynd healthy"
-
-# ── seed secrets (values via stdin, never argv) ──────────────────────────────
-if [[ -n "${WARDYN_CI_SECRETS:-}" ]]; then
-  IFS=',' read -ra pairs <<<"${WARDYN_CI_SECRETS}"
-  for pair in "${pairs[@]}"; do
-    name="${pair%%=*}"; value="${pair#*=}"
-    [[ -n "${name}" && "${pair}" == *"="* ]] || die "WARDYN_CI_SECRETS entry '${pair}' is not name=value"
-    log "Seeding secret ${name}"
-    printf '%s' "${value}" | wardyn secret set "${name}" || die "seed secret ${name} (check wardynd health: '${COMPOSE[*]} ps wardynd' / '${COMPOSE[*]} logs wardynd', and that WARDYN_CI_TOKEN is correct)"
-  done
-fi
 
 # A subscription credential belongs to one human; CI runs on behalf of everyone
 # who can trigger the pipeline. Connecting one here makes that person's Claude
@@ -281,49 +100,221 @@ fi
 # refuses it structurally now (single-user posture only), so fail here with the
 # reason rather than connecting something that will not resolve at run time.
 if [[ -n "${WARDYN_SUBSCRIPTION_TOKEN:-}" ]]; then
-  die "WARDYN_SUBSCRIPTION_TOKEN is not supported in CI: a subscription credential belongs to one person, and a pipeline runs on behalf of everyone who can trigger it. Use an API key (WARDYN_CI_SECRETS=anthropic-api-key=sk-...) or Bedrock — see docs/CI.md."
+  die "WARDYN_SUBSCRIPTION_TOKEN is not supported in CI: a subscription credential belongs to one person, and a pipeline runs on behalf of everyone who can trigger it. Use an API-key or Bedrock model provider the CI principal holds its own credential for — see docs/CI.md."
 fi
 
-# ── model provider credential check (harness mode only) ──────────────────────
-# WARDYN_CI_MODEL_PROVIDER names a model provider (SiteConfig.ModelProviders)
-# this job's WARDYN_CI_TOKEN identity is expected to already have a credential
-# for — stored ONCE, out of band, through PUT /model-providers/{id}/credential
-# or the console (docs/CI.md "CI's identity"). This never STORES one: a person
-# who has not connected the provider gets a clear, provider-named failure here
-# instead of an opaque one at dispatch. Best-effort: skipped with no jq, and a
-# nil/absent provider_access (no ModelProviders block on this deployment —
-# ci-run.sh's own from-nothing stack, today, always) means there is nothing to
-# check, so the legacy WARDYN_CI_SECRETS path below still applies.
-if [[ "${TASK_MODE:-harness}" != "exec" && -n "${MODEL_PROVIDER}" ]]; then
-  if command -v jq >/dev/null 2>&1; then
-    status_json="$(wardyn setup status --json 2>/dev/null || true)"
-    state="$(printf '%s' "${status_json}" | jq -r --arg p "${MODEL_PROVIDER}" \
-      '((.provider_access // [])[] | select(.provider == $p) | .state) // empty' 2>/dev/null)"
-    if [[ -z "${state}" ]]; then
-      access_count="$(printf '%s' "${status_json}" | jq -r '(.provider_access // []) | length' 2>/dev/null || echo 0)"
-      if [[ "${access_count}" != "0" ]]; then
-        die "model provider '${MODEL_PROVIDER}' (WARDYN_CI_MODEL_PROVIDER) is not one this CI identity may use — check it exists, serves the '${AGENT}' agent, and is granted to it. See docs/CI.md."
-      fi
-      # else: provider_access absent — no ModelProviders block on this
-      # deployment, so nothing to check (see comment above).
-    elif [[ "${state}" != "live" ]]; then
-      die "model provider '${MODEL_PROVIDER}' is not connected for this CI identity (state: ${state}) — store its credential once (PUT /model-providers/${MODEL_PROVIDER}/credential, or the console) before running CI. See docs/CI.md."
-    else
-      log "model provider ${MODEL_PROVIDER}: connected"
-    fi
-  else
-    warn "jq not found: skipping the WARDYN_CI_MODEL_PROVIDER connection check"
+# The run's credential is its owner's (D8): CI no longer writes one into the
+# operator's namespace for every run to share.
+if [[ -n "${WARDYN_CI_SECRETS:-}" ]]; then
+  die "WARDYN_CI_SECRETS is no longer supported: CI does not seed credentials into the operator's namespace. Store them once as the CI principal on your control plane and point WARDYN_URL at it — see docs/CI.md \"CI's identity\"."
+fi
+
+if [[ -n "${REMOTE_URL}" ]]; then
+  # ── an existing control plane, as the CI principal ─────────────────────────
+  [[ -n "${WARDYN_CI_TOKEN:-}" ]] || die "WARDYN_URL is set, so WARDYN_CI_TOKEN is required: the CI principal's own wdn_ token (docs/CI.md \"CI's identity\"). WARDYN_ADMIN_TOKEN is never sent there."
+  command -v wardyn >/dev/null 2>&1 || die "WARDYN_URL is set, so the wardyn CLI must be on PATH (a release asset — see docs/CI.md)"
+  if [[ "${TASK_MODE:-harness}" != "exec" ]]; then
+    [[ -n "${MODEL_PROVIDER}" ]] || die "harness mode against WARDYN_URL needs WARDYN_CI_MODEL_PROVIDER: the model provider whose credential the CI principal stored (docs/CI.md \"CI's identity\")"
+    command -v jq >/dev/null 2>&1 || die "jq is required to check WARDYN_CI_MODEL_PROVIDER before launch"
   fi
+  # WARDYN_TOKEN rides the environment, never argv. WARDYN_ADMIN_TOKEN is
+  # cleared because the CLI tries it FIRST (cmd/wardyn/main.go): left ambient on
+  # the runner it would silently win, and every write would land as the admin.
+  wardyn() { WARDYN_ADMIN_TOKEN= WARDYN_TOKEN="${WARDYN_CI_TOKEN}" command wardyn "$@"; }
+  POLICY_ARG="${POLICY_FILE}"
+else
+  # ── a throwaway stack ───────────────────────────────────────────────────────
+  [[ "${TASK_MODE:-harness}" == "exec" ]] || die "harness mode needs a model credential that belongs to a person, and a throwaway stack has none. Point WARDYN_URL at your control plane with WARDYN_CI_TOKEN and WARDYN_CI_MODEL_PROVIDER, or set WARDYN_CI_TASK_MODE=exec — see docs/CI.md."
+  [[ -z "${WARDYN_CI_TOKEN:-}${MODEL_PROVIDER}" ]] || die "WARDYN_CI_TOKEN and WARDYN_CI_MODEL_PROVIDER apply only with WARDYN_URL (an existing control plane) — see docs/CI.md."
+  export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
+  command -v docker >/dev/null 2>&1 || die "docker not found on PATH"
+  docker compose version >/dev/null 2>&1 || die "docker compose v2 required"
+
+  # Same daemon for image builds AND the compose wardynd (dual-daemon boxes):
+  # honor DOCKER_HOST / the native-dockerd preference, and point the wardynd
+  # container's bind-mounted socket at it. wardyn_pick_docker_host derives both
+  # DOCKER_HOST and WARDYN_DOCKER_SOCK.
+  wardyn_pick_docker_host
+
+  # A project name only isolates this job if nothing else is USING it. The
+  # `down --volumes` further down is unconditional and ephemerality is
+  # load-bearing (see its comment), so a name already in use would be torn out
+  # from under whoever holds it — a concurrent job, or an operator's
+  # WARDYN_CI_KEEP=1 stack. Refuse instead. The query is by compose's own project
+  # label rather than `compose ps`, because ${COMPOSE[@]} carries the CI overlay
+  # and that file cannot even be loaded until WARDYN_CI_TOOLS_DIR exists (set
+  # below). Only RUNNING containers count, so an ordinary retry of a pinned
+  # WARDYN_CI_PROJECT whose stack already exited still proceeds.
+  _live="$(docker ps -q --filter "label=com.docker.compose.project=${CI_PROJECT}" 2>/dev/null || true)"
+  if [[ -n "${_live}" ]]; then
+    die "compose project '${CI_PROJECT}' already has running containers — this job's 'down --volumes' would destroy them. Wait for that job, pick another WARDYN_CI_PROJECT, or tear it down: docker compose -p '${CI_PROJECT}' down --volumes"
+  fi
+  unset _live
+
+  # wardyn runs the shipped CLI inside the wardynd container (same shim as
+  # scripts/demo.sh — no host Go/binary needed at run time).
+  #
+  # It does NOT re-inject the admin bearer. wardynd already has it: compose
+  # interpolates WARDYN_ADMIN_TOKEN (exported above) into the service's own
+  # environment, so `exec` inherits it inside the container. Passing it again put
+  # a real fleet token on the HOST `docker` process argv — world-readable in `ps`
+  # and /proc/<pid>/cmdline to every other user on a shared runner — on every
+  # single CLI call this job makes. WARDYN_URL stays: it is an endpoint, not a
+  # credential, and the container has no reason to know it otherwise.
+  wardyn() {
+    "${COMPOSE[@]}" exec -T \
+      -e WARDYN_URL="http://localhost:8080" \
+      wardynd /usr/local/bin/wardyn "$@"
+  }
+
+  # Tools dir: created up front (the compose overlay interpolates it on every
+  # compose invocation, including builds); populated after the agent image build.
+  TOOLS_DIR="$(mktemp -d)"
+  export WARDYN_CI_TOOLS_DIR="${TOOLS_DIR}"
+
+  # ── build (skippable; CI caches docker layers) ───────────────────────────────
+  AGENT_IMAGE="wardyn/agent-${AGENT}:local"
+  if [[ "${WARDYN_CI_SKIP_BUILD:-}" != "1" ]]; then
+    log "Building wardynd + wardyn-proxy images"
+    "${COMPOSE[@]}" build wardynd || die "build wardynd (check disk space/network; retry, or set WARDYN_CI_SKIP_BUILD=1 to reuse existing local images)"
+    "${COMPOSE[@]}" --profile build-only build proxy-image || die "build proxy image (check disk space/network; retry, or set WARDYN_CI_SKIP_BUILD=1 to reuse existing local images)"
+    # The agent image is needed even for pure BYOA runs: it is the source of the
+    # runner tools the BYOI wrap COPYs into the user image.
+    agent_dockerfile="${REPO_ROOT}/deploy/images/${AGENT}/Dockerfile"
+    [[ -f "${agent_dockerfile}" ]] || die "no Dockerfile for agent '${AGENT}' at ${agent_dockerfile}"
+    log "Building agent image ${AGENT_IMAGE}"
+    docker build -f "${agent_dockerfile}" -t "${AGENT_IMAGE}" "${REPO_ROOT}" || die "build agent image"
+  fi
+
+  # ── assemble the runner-tools dir for the BYOI wrap ──────────────────────────
+  # FinalizeBase COPYs everything in this dir into the wrapped image; extract the
+  # tools from the agent image so there is one source of truth.
+  log "Assembling runner tools from ${AGENT_IMAGE} -> ${TOOLS_DIR}"
+  # The agent image has no default CMD (the driver always supplies argv), so
+  # docker create needs a dummy command; the container is never started.
+  tools_ctr="$(docker create "${AGENT_IMAGE}" true)" || die "docker create ${AGENT_IMAGE} (build it or unset WARDYN_CI_SKIP_BUILD)"
+  for tool in agent-run agent-run-lib.sh wardyn-rec wardyn-git-helper wardyn-scan; do
+    docker cp -q "${tools_ctr}:/usr/local/bin/${tool}" "${TOOLS_DIR}/" 2>/dev/null \
+      || warn "tool ${tool} not present in ${AGENT_IMAGE} (continuing)"
+  done
+  docker rm -f "${tools_ctr}" >/dev/null
+  for required in agent-run agent-run-lib.sh wardyn-rec wardyn-git-helper; do
+    [[ -f "${TOOLS_DIR}/${required}" ]] || die "required runner tool ${required} missing from ${AGENT_IMAGE}"
+  done
+  export WARDYN_CI_TOOLS_DIR="${TOOLS_DIR}"
+
+  # ── bring up the core stack (postgres + wardynd only; no dex, admin token) ───
+  cleanup() {
+    local code=$?
+    if [[ "${WARDYN_CI_KEEP:-}" == "1" ]]; then
+      # Print a teardown line the operator can actually paste into a fresh shell.
+      # THREE env vars are load-bearing and none of them survives this process: the
+      # CI overlay binds ${WARDYN_CI_TOOLS_DIR:?...}, so compose refuses to load the
+      # project at all without it; WARDYN_NS is what the recordings volume and the
+      # control-plane network are NAMED after, so a `down --volumes` without it
+      # reaps the default-named objects and leaves this job's behind; and
+      # DOCKER_HOST names the daemon the stack actually lives on —
+      # wardyn_pick_docker_host derives it (a dual-daemon box lands on the native
+      # dockerd, not the default context), so a paste without it addresses the WRONG
+      # daemon, finds no such project, and exits 0 having removed nothing while the
+      # trailing rm still deletes the tools dir the still-live wardynd is bind-
+      # mounting. Emitted only when set, so a single-daemon host gets no noise.
+      # Keeping the stack also skips the rm -rf below, so the tools dir outlives the
+      # job with its path visible only in scrollback — hence the trailing rm, in the
+      # same command, on the same line.
+      warn "WARDYN_CI_KEEP=1 — leaving the stack up, and the runner-tools dir ${TOOLS_DIR} with it. Tear both down with:"
+      warn "  ${DOCKER_HOST:+DOCKER_HOST='${DOCKER_HOST}' }WARDYN_NS='${WARDYN_NS}' WARDYN_CI_TOOLS_DIR='${TOOLS_DIR}' ${COMPOSE[*]} down --volumes && rm -rf '${TOOLS_DIR}'"
+    else
+      log "Tearing down the compose stack (volumes included — the stack is ephemeral)"
+      # compose down only reaps objects compose itself created. The docker runner
+      # mints the agent + proxy containers and the per-run internal network
+      # directly via the Docker API (internal/runner/docker/naming.go), so they
+      # are invisible to compose and survive `down` untouched. Remove them before
+      # the network they share endpoints on goes away, or every CI run leaks a
+      # sandbox.
+      # A cancel that lands while `run --wait` is still blocked leaves run_id
+      # unset (it is parsed only after the wait returns), so a name-only removal
+      # misses exactly the sandbox a cancel is most likely to hit. Reap by label
+      # instead, scoped to THIS job's control-plane network: the proxy is the only
+      # Wardyn-minted container attached to it and carries the run-id label every
+      # sibling object is named after, so a concurrent job's sandbox — on its own
+      # ${WARDYN_NS}-internal — is never touched. run_id is still appended for the
+      # one case the selector misses (proxy already gone, agent lingering).
+      for _rid in $(docker ps -a --filter "label=wardyn.managed=true" \
+        --filter "network=${WARDYN_NS}-internal" \
+        --format '{{.Label "wardyn.run-id"}}' 2>/dev/null) "${run_id:-}"; do
+        [[ -n "${_rid}" ]] || continue
+        docker rm -f "wardyn-proxy-${_rid}" "wardyn-agent-${_rid}" >/dev/null 2>&1 || true
+        docker network rm "wardyn-int-${_rid}" >/dev/null 2>&1 || true
+      done
+      "${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
+      rm -rf "${TOOLS_DIR}"
+    fi
+    exit "${code}"
+  }
+  # W16-S1-5: EXIT alone never fires on a hard job-cancel (SIGTERM, the signal a
+  # CI runner sends to abort a job) — the sandbox + control-plane network it
+  # started leaks past the job. `exit` inside a signal handler still fires the
+  # EXIT trap (bash re-enters it exactly once with the handler's own exit code),
+  # so TERM/INT just need to exit — cleanup itself stays registered only on
+  # EXIT, never running twice. SIGKILL still cannot be trapped by any process;
+  # nothing short of a reaper outside this shell recovers from that one.
+  trap cleanup EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+
+  # Ephemerality is load-bearing, not hygiene: a reused postgres volume holds
+  # secrets age-encrypted to a PREVIOUS boot's ephemeral key, and wardynd fails
+  # closed (by design) on the decrypt mismatch. Every invocation starts clean.
+  "${COMPOSE[@]}" down --volumes >/dev/null 2>&1 || true
+
+  log "Starting postgres + wardynd (WARDYN_ENVBUILD on for the BYOA wrap; project ${CI_PROJECT})"
+  "${COMPOSE[@]}" up -d postgres wardynd || die "compose up (check '${COMPOSE[*]} logs postgres wardynd')"
+  # Health from the CONTAINER, not a host port: CI publishes wardynd on an ephemeral
+  # host port (WARDYN_UP_PORT=0), so localhost:PORT is unknown here — but the
+  # container's own healthcheck runs `wardyn runs list` inside it. This is also
+  # topology-independent (works under Docker Desktop + WSL2 NAT).
+  log "Waiting for wardynd (container health, project ${CI_PROJECT})"
+  _cid="$("${COMPOSE[@]}" ps -q wardynd 2>/dev/null || true)"
+  _tries=0
+  until [ -n "${_cid}" ] && [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${_cid}" 2>/dev/null)" = "healthy" ]; do
+    _tries=$((_tries + 1))
+    if [ "${_tries}" -gt 45 ]; then "${COMPOSE[@]}" logs --tail 50 wardynd; die "wardynd did not become healthy"; fi
+    sleep 2
+    _cid="$("${COMPOSE[@]}" ps -q wardynd 2>/dev/null || true)"
+  done
+  log "wardynd healthy"
+  "${COMPOSE[@]}" cp "${POLICY_FILE}" wardynd:/tmp/wardyn-ci-policy.json >/dev/null || die "copy policy into wardynd"
+  POLICY_ARG=/tmp/wardyn-ci-policy.json
+fi
+
+# ── model provider check (existing control plane, harness mode) ────────────
+# Reads, never stores: the CI principal stored its credential once, out of
+# band, and a gap fails here naming the provider rather than at dispatch.
+# expiring still runs — the server counts it as usable.
+if [[ -n "${REMOTE_URL}" && "${TASK_MODE:-harness}" != "exec" ]]; then
+  status_json="$(wardyn setup status --json)" && [[ -n "${status_json}" ]] ||
+    die "could not read setup status as this CI identity (wardyn setup status --json) — check WARDYN_URL and WARDYN_CI_TOKEN"
+  state="$(printf '%s' "${status_json}" | jq -r --arg p "${MODEL_PROVIDER}" \
+    '[(.provider_access // [])[] | select(.provider == $p) | .state][0] // ""')" ||
+    die "setup status did not answer JSON — check WARDYN_URL points at a Wardyn control plane"
+  case "${state}" in
+    live) log "model provider ${MODEL_PROVIDER}: connected" ;;
+    expiring) warn "model provider ${MODEL_PROVIDER}: this CI identity's credential is expiring — renew it before it stops working" ;;
+    "") die "model provider '${MODEL_PROVIDER}' (WARDYN_CI_MODEL_PROVIDER) is not one this CI identity may use — check it exists, serves the '${AGENT}' agent, and is granted to it. See docs/CI.md." ;;
+    not_applicable) die "model provider '${MODEL_PROVIDER}': WARDYN_CI_TOKEN is the deployment's admin token, which holds no model credential — use a person's own wdn_ token (a dedicated CI principal). See docs/CI.md \"CI's identity\"." ;;
+    *) die "model provider '${MODEL_PROVIDER}' is not connected for this CI identity (state: ${state}) — store its credential once (PUT /model-providers/${MODEL_PROVIDER}/credential, or the console) before running CI. See docs/CI.md." ;;
+  esac
 fi
 
 # ── launch args (shared by the preflight preview and the real launch) ────────
 mkdir -p "${OUT_DIR}"
-"${COMPOSE[@]}" cp "${POLICY_FILE}" wardynd:/tmp/wardyn-ci-policy.json >/dev/null || die "copy policy into wardynd"
 
-base_args=(run --agent "${AGENT}" --task "${TASK}" --policy-file /tmp/wardyn-ci-policy.json)
+base_args=(run --agent "${AGENT}" --task "${TASK}" --policy-file "${POLICY_ARG}")
 [[ -n "${CI_REPO}" ]] && base_args+=(--repo "${CI_REPO}")
 [[ -n "${IMAGE}" ]] && base_args+=(--image "${IMAGE}")
 [[ -n "${TASK_MODE}" ]] && base_args+=(--task-mode "${TASK_MODE}")
+[[ -n "${MODEL_PROVIDER}" && "${TASK_MODE:-harness}" != "exec" ]] && base_args+=(--model-provider "${MODEL_PROVIDER}")
 
 # ── preflight (best-effort; a dry-run of launch resolution, mints nothing) ───
 # Same body the launch posts — the CLI builds it, so this can never drift from

@@ -5,9 +5,10 @@ description: Generate a Wardyn sandbox policy + CLI invocation (or full pipeline
 
 # Wardyn CI — generate the config and invocation
 
-Goal: produce (a) a `RunPolicySpec` JSON, (b) the launch invocation — either a
-`wardyn run` command against an existing control plane or a `scripts/ci-run.sh`
-env block for a from-nothing pipeline job — and (c) if asked, the pipeline YAML.
+Goal: produce (a) a `RunPolicySpec` JSON, (b) the launch invocation — a
+`scripts/ci-run.sh` env block (throwaway stack, or an existing control plane via
+`WARDYN_URL`) or a direct `wardyn run` command — and (c) if asked, the pipeline
+YAML.
 Reuse the shipped machinery; never hand-roll what exists.
 
 ## Ground truth (read these, don't restate from memory)
@@ -26,8 +27,8 @@ Reuse the shipped machinery; never hand-roll what exists.
 1. **Classify the task.**
    - Plain command in a user image (tests, builds, tools) → BYOA exec mode:
      `--image <ref> --task-mode exec --task '<command>'`. No LLM credentials.
-   - Agent task (e.g. claude-code fixing/refactoring) → harness mode: needs a
-     model-access grant (see step 3).
+   - Agent task (e.g. claude-code fixing/refactoring) → harness mode: needs an
+     existing control plane and a CI principal's model credential (step 3).
 
 2. **Author the policy from `examples/policies/ci.json`**, changing as little
    as possible. Non-negotiable for unattended runs:
@@ -37,23 +38,21 @@ Reuse the shipped machinery; never hand-roll what exists.
      the SCM host if `--repo` is used, the model provider for harness mode.
      Empty = sealed (right for exec-mode tasks that need no network).
    - No `eligible_grants` entry with `"requires_approval": true` (it will never
-     mint). Grants must be `requires_approval: false` with their secret seeded
-     up front (`WARDYN_CI_SECRETS` / `wardyn secret set`).
+     mint). Grants must be `requires_approval: false`, with a secret the CI
+     principal already holds on the control plane. Never propose
+     `WARDYN_CI_SECRETS`: `ci-run.sh` refuses it.
    - Keep `auto_stop_after_sec` bounded (baseline: 3600).
 
-3. **Model access (harness mode only).** If `site_config.model_providers` is
-   configured, model access is a **person's own credential**, not a
-   pipeline-seeded secret: the CI principal stores it once through
-   `PUT /model-providers/{id}/credential` (or the console), and the pipeline
-   sets `WARDYN_CI_MODEL_PROVIDER=<id>` so `ci-run.sh` checks it is connected
-   before launching (`docs/CI.md` § "CI's identity"). Nothing in the policy or
-   the env block carries the key. Otherwise (a from-nothing stack with no
-   providers configured — `ci-run.sh`'s own default), the older
-   zero-prior-state path still works: copy the `api_key` grant +
-   `api.anthropic.com` egress from `examples/policies/claude-llm.json`, and
-   the pipeline seeds `anthropic-api-key` from its secret store. Bedrock
-   bearer is the enterprise alternative (`docs/CI.md` § model access).
-   Subscription modes are refused in CI either way — do not propose them.
+3. **Model access (harness mode only).** A model credential is a **person's
+   own**: a dedicated CI principal stores it once through
+   `PUT /model-providers/{id}/credential` (or the console) on the deployment
+   CI launches on. The pipeline sets `WARDYN_URL`, `WARDYN_CI_TOKEN` (that
+   principal's own `wdn_` token) and `WARDYN_CI_MODEL_PROVIDER=<id>`;
+   `ci-run.sh` checks the credential is usable and launches on that provider
+   (`docs/CI.md` § "CI's identity"). Nothing in the policy or the env block
+   carries the key. `ci-run.sh`'s throwaway stack has no person on it, so it
+   runs `exec` mode only. Subscription modes are refused in CI — do not
+   propose them.
 
 4. **Validate before shipping the config**: with a control plane up, POST the
    exact create-run body to `/api/v1/runs/preflight` (dry-run, mints nothing)
@@ -68,13 +67,15 @@ Reuse the shipped machinery; never hand-roll what exists.
    `always_deny`.
 
 6. **Emit the invocation.**
-   - Fresh-stack pipeline job: a `ci-run.sh` env block (copy the shape from
-     `docs/ci/github-actions.yml` / `azure-pipelines.yml`).
-   - Existing control plane: `wardyn run --agent <a> [--image <ref>]
-     [--task-mode exec] [--repo org/name] --task '<t>' --policy-file <f>
-     --wait --timeout 30m` with `WARDYN_URL` + `WARDYN_TOKEN` set — the CI
-     principal's own `wdn_` token (`docs/CI.md` § "CI's identity"), not the
-     shared `WARDYN_ADMIN_TOKEN`.
+   - Pipeline job: a `ci-run.sh` env block (copy the shape from
+     `docs/ci/github-actions.yml` / `azure-pipelines.yml`) — exec mode on a
+     throwaway stack, or `WARDYN_URL` + `WARDYN_CI_TOKEN` (+
+     `WARDYN_CI_MODEL_PROVIDER` for harness mode) on an existing one.
+   - Direct CLI on an existing control plane: `wardyn run --agent <a>
+     [--image <ref>] [--task-mode exec] [--repo org/name]
+     [--model-provider <id>] --task '<t>' --policy-file <f> --wait
+     --timeout 30m` with `WARDYN_URL` + `WARDYN_TOKEN` set — the CI
+     principal's own `wdn_` token, not the shared `WARDYN_ADMIN_TOKEN`.
    - State the exit-code contract (0 / task's code / 2 / 124 — table in
      `docs/CI.md`) so the pipeline gate is explicit.
 
@@ -83,5 +84,5 @@ Reuse the shipped machinery; never hand-roll what exists.
 - Policy JSON round-trips: `jq . <file>` and no fields outside `RunPolicySpec`.
 - Every host the task touches is in `allowed_domains` (clone host included).
 - No approval-gated grant, no `wait_for_review`, bounded `auto_stop_after_sec`.
-- Harness mode: the model-provider host AND its `api_key` grant are both
-  present (one without the other fails at run time, not create time).
+- Harness mode: runs on an existing control plane with
+  `WARDYN_CI_MODEL_PROVIDER` set, never on the throwaway stack.
