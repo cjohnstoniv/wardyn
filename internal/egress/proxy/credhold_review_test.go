@@ -86,7 +86,7 @@ func TestReview_FollowerThroughResolveCtxQueuesOnReMuAndStartsASecondWorkflow(t 
 // workflow with a SECOND full budget — N callers, N budgets, one lapse.
 func TestReview_QueuedLiveFollowerOpensASecondFullBudgetWorkflow(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shrinkReauthFloor(t, 50*time.Millisecond)
+	shrinkReauthFloor(t, 200*time.Millisecond)
 	shortBudget(t, "1ms") // clamped UP to the (shrunk) floor; two sequential waits below
 	is := newInjectionServer(t, 1_000_000)
 	reader := &fakeApprovalReader{steps: pending(1)}
@@ -101,11 +101,13 @@ func TestReview_QueuedLiveFollowerOpensASecondFullBudgetWorkflow(t *testing.T) {
 	inj.reauth.mu.Lock()
 	counted := inj.reauth.counted
 	inj.reauth.mu.Unlock()
-	t.Logf("follower returned after %v with err=%v; counted workflows=%d", elapsed.Round(time.Second), ferr, counted)
+	t.Logf("follower returned after %v with err=%v; counted workflows=%d", elapsed.Round(time.Millisecond), ferr, counted)
 	if counted != 1 {
 		t.Errorf("counted workflows = %d, want 1 — the queued caller opened a fresh full-budget hold for the SAME lapse", counted)
 	}
-	if elapsed > time.Second {
+	// Relative to the floor: one shared workflow ends near 1x the budget, two
+	// sequential budgets near 2x.
+	if elapsed > minCredentialReauthTimeout*3/2 {
 		t.Errorf("one lapse held callers for %v with a %v budget — two sequential budgets, not one shared workflow", elapsed.Round(time.Millisecond), minCredentialReauthTimeout)
 	}
 }

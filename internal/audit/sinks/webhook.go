@@ -39,9 +39,7 @@ type WebhookConfig struct {
 	RetryBaseDelay string `json:"retry_base_delay,omitempty"`
 	// Timeout bounds the HTTP client's per-request wait, including a Close()
 	// drain against a wedged collector (default 15s). Parsed as a duration
-	// string. Exposed purely so a test can shrink it instead of waiting out
-	// the real 15s to exercise the "Close is bounded" shutdown path — the
-	// production default is unchanged when omitted.
+	// string; must be positive, since a zero http.Client timeout means none.
 	Timeout string `json:"timeout,omitempty"`
 }
 
@@ -125,6 +123,9 @@ func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 	timeout, err := time.ParseDuration(cfg.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("sinks.webhook: invalid timeout %q: %w", cfg.Timeout, err)
+	}
+	if timeout <= 0 {
+		return nil, fmt.Errorf("sinks.webhook: timeout %q must be positive (zero would never time out a wedged collector)", cfg.Timeout)
 	}
 	return &WebhookSink{
 		cfg:       cfg,

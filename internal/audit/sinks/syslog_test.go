@@ -321,10 +321,6 @@ func makeSyslogEvent(action string) types.AuditEvent {
 	}
 }
 
-// TestWebhookConfig_TimeoutDefaultUnchanged guards the production default:
-// WebhookConfig.Timeout is exposed so a test can shrink it (see
-// cmd/wardynd's TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector), but
-// omitting it must still give the real 15s client timeout.
 // TestSyslogWriteTimeout_ProductionValueUnchanged guards the production
 // default: a test that shrinks syslogWriteTimeout must restore it via
 // t.Cleanup, never leave it lowered for a package that ships it.
@@ -334,6 +330,12 @@ func TestSyslogWriteTimeout_ProductionValueUnchanged(t *testing.T) {
 	}
 }
 
+// TestWebhookConfig_TimeoutDefaultUnchanged guards the production default:
+// a test may shrink WebhookConfig.Timeout (see cmd/wardynd's
+// TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector), but omitting it must
+// still give the real 15s client timeout. It lives here, not in
+// webhook_test.go, because withDefaults is unexported and that file is the
+// external sinks_test package.
 func TestWebhookConfig_TimeoutDefaultUnchanged(t *testing.T) {
 	cfg := &WebhookConfig{URL: "https://example.invalid/ingest"}
 	got := cfg.withDefaults()

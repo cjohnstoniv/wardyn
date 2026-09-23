@@ -128,6 +128,17 @@ func TestWebhookSink_BearerRequiresHTTPS(t *testing.T) {
 	}
 }
 
+// A zero or negative timeout is refused: http.Client{Timeout: 0} never times
+// out, so Close() against a wedged collector would hang.
+func TestWebhookSink_RejectsNonPositiveTimeout(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{"0s", "-1s"} {
+		if _, err := sinks.NewWebhookSink(sinks.WebhookConfig{URL: "https://siem.internal/ingest", Timeout: v}); err == nil {
+			t.Errorf("NewWebhookSink(timeout %q) = nil error, want a refusal", v)
+		}
+	}
+}
+
 func TestWebhookSink_RetryOnServerError(t *testing.T) {
 	t.Parallel()
 

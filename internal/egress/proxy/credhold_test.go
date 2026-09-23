@@ -261,11 +261,12 @@ func TestResolveInjectionHolding_NonLockedErrorIsUnchanged(t *testing.T) {
 	}
 }
 
-// Nobody signs in: the hold ends inside its advertised bound (+10%) with the
-// sentinel that earns the 401 body.
+// Nobody signs in: the hold ends inside its advertised bound (+10%, at least
+// 100ms of slack for the 423 round trip and polling) with the sentinel that
+// earns the 401 body.
 func TestResolveInjectionHolding_TimesOutInsideItsBudget(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shrinkReauthFloor(t, 50*time.Millisecond)
+	shrinkReauthFloor(t, 200*time.Millisecond)
 	shortBudget(t, "1ms") // clamped UP to the (shrunk) floor either way
 	is := newInjectionServer(t, 1000)
 	reader := &fakeApprovalReader{steps: pending(1)}
@@ -284,8 +285,8 @@ func TestResolveInjectionHolding_TimesOutInsideItsBudget(t *testing.T) {
 	if elapsed < minCredentialReauthTimeout {
 		t.Errorf("the hold ended after %v, before its %v budget", elapsed, minCredentialReauthTimeout)
 	}
-	if elapsed > minCredentialReauthTimeout+minCredentialReauthTimeout/10 {
-		t.Errorf("the hold ran %v, past its advertised bound +10%%", elapsed)
+	if slack := max(minCredentialReauthTimeout/10, 100*time.Millisecond); elapsed > minCredentialReauthTimeout+slack {
+		t.Errorf("the hold ran %v, past its advertised bound +%v", elapsed, slack)
 	}
 	// The FIRST live observer gets the reportable sentinel — it writes the one
 	// decision row — and a later caller of the same workflow does not.

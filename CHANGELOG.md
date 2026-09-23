@@ -55,6 +55,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The `webhook` audit sink takes a `timeout` key** (per HTTP request, default `15s`); a zero or
+  negative value is refused at startup, since it would let shutdown hang on a wedged collector (#471).
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just
