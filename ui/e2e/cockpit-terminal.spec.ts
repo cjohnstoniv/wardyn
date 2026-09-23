@@ -29,7 +29,7 @@ import {
   stubTakeover,
 } from "./attach-stub";
 import { pollScreen } from "./demo/demos";
-import { RUN_COCKPIT } from "../src/app/components/wardyn/copy";
+import { RUN_COCKPIT, TERMINAL } from "../src/app/components/wardyn/copy";
 
 test.describe.configure({ mode: "serial" });
 
@@ -162,13 +162,23 @@ test.describe("Run cockpit terminal", () => {
     // Server-initiated abnormal close — the persistent tmux session survives
     // this on the real daemon, so the client re-attaches (attach-terminal.tsx's
     // bounded reconnect), unlike the 1008/taken-over case below.
+    //
+    // Connection state renders OUTSIDE the scrollback, in
+    // attach-terminal-status.tsx's persistent strip — never as bracket text
+    // written into the xterm buffer (#216, closed by PR #298 "Offer Reconnect
+    // instead of a scrollable [closed] line", which is the approved canon).
+    // The `[connection lost — reconnecting]` / `[reconnected]` lines this test
+    // used to poll the SCREEN for were removed from the product by that PR,
+    // three hours before this spec was even written — a stale assertion, not
+    // a product regression.
     latestWs!.close({ code: 1006, reason: "abnormal" });
 
-    await pollScreen(screen, /connection lost — reconnecting/, "no reconnect notice after an abnormal close");
+    await expect(pane.getByText(TERMINAL.RECONNECTING_LINE(1, 4))).toBeVisible();
     await expect
       .poll(() => opens(), { timeout: 10_000, message: "no second socket opened after the abnormal close" })
       .toBeGreaterThanOrEqual(2);
-    await pollScreen(screen, /reconnected/, "the [reconnected] banner never printed on the new socket");
+    await expect(pane.getByText(RUN_COCKPIT.driving)).toBeVisible();
+    await expect(pane.getByText(TERMINAL.RECONNECTING_LINE(1, 4))).toHaveCount(0);
   });
 
   test("a take-over closes and reconnects exactly once — it does not re-dial", async ({ page }) => {
