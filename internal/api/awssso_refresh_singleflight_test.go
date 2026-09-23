@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-// TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal.
+// TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal pins that
+// a stalled renewal cannot block a still-valid token.
 //
 // Dispatch is synchronous with POST /runs and needsRefresh fires a whole skew
 // window (10 min) ahead of expiry, so the common case is several people

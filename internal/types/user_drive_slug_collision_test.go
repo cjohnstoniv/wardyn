@@ -3,7 +3,7 @@
 
 package types
 
-// The premise migration 0061'S INDEX RESTS ON.
+// The premise migration 0061's index rests on.
 //
 // The index refuses two Wardyn-named drives whose names fold to one DriveSlug.
 // That is the right namespace only while the minted object name is a function of

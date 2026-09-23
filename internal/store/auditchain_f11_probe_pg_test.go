@@ -273,9 +273,8 @@ func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 	}
 }
 
-// TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean.
-//
-// A DB admin who disables/drops the 0047 trigger (or inserts in replica mode)
+// TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean pins rule 3 in
+// auditChainWalk: a DB admin who disables/drops the 0047 trigger (or inserts in replica mode)
 // appends a row with NULL prev_hash/row_hash AFTER the chain's genesis. If
 // the sweep treated every NULL-hash row as "legacy" with no positional
 // constraint (a bare `WHERE row_hash IS NOT NULL` + the Legacy count), then,
@@ -316,7 +315,8 @@ func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 	}
 }
 
-// TestPG_ProbeF11_UnlockedWriterDoesNotForkChain.
+// TestPG_ProbeF11_UnlockedWriterDoesNotForkChain pins that an un-serialized
+// writer cannot fork the chain.
 //
 // Any writer that is not one of the two in-tree ones (store.InsertAuditEvent,
 // the broker's insertAuditEventTx) — psql, scripts/e2e-backend.sh's seed

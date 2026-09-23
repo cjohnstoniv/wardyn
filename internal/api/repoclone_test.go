@@ -216,7 +216,7 @@ func TestConfineGitBrokerEgress(t *testing.T) {
 		}
 	}
 
-	// Brokered means single-LANE: ssh.github.com:443 must NOT survive the
+	// Brokered means single-lane: ssh.github.com:443 must not survive the
 	// confinement. Letting it through, on the reasoning that an ssh_key grant is
 	// operator-supplied and operator-bounded, would leave a brokered run with
 	// github.com:443 denied and ssh.github.com:443 allowed — a second push path the

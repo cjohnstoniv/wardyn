@@ -22,7 +22,8 @@ var siteConfigKeysV066 = []string{
 	"egress_redirects", "scm_hosts", "integrations",
 }
 
-// TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName.
+// TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName pins the
+// carry-forward that protects a round trip through an older client.
 //
 // PUT /site-config is a whole-document replace, so a v0.6.6 `site-config get |
 // edit | apply` round trip re-marshals a struct that has no field for anything

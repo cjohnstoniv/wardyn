@@ -40,7 +40,8 @@ func sharedClaudeRow() types.SiteConfig {
 	return agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO})
 }
 
-// TestUploadSSOToken_ScopeIsBoundToLaunchNotUploadTime.
+// TestUploadSSOToken_ScopeIsBoundToLaunchNotUploadTime pins that the scope is
+// fixed at launch time, not re-resolved at upload time.
 //
 // handleUploadSSOToken must not re-resolve the credential scope from the LIVE
 // roster. A login run stays alive to harnessLoginIdleCap, so an admin flipping

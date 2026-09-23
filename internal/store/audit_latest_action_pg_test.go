@@ -148,7 +148,7 @@ func TestPG_LatestAuditEventByActionFallsBackPastTheWindow(t *testing.T) {
 			"newest row by time inside the window", got.Time)
 	}
 
-	// And it self-HEALS AT THE NEXT BEAT, which is the whole reason the residual
+	// And it self-heals at the next beat, which is the whole reason the residual
 	// was accepted: one live beat takes the top of the window back.
 	next := beat(now.Add(time.Second))
 	got, err = pg.LatestAuditEventByAction(ctx, action)

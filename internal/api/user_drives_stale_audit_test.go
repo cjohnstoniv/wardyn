@@ -9,7 +9,8 @@ import (
 	"testing"
 )
 
-// TestDriveStaleSnapshotRefusalIsAudited.
+// TestDriveStaleSnapshotRefusalIsAudited pins that both deciding sites record
+// the refusal.
 //
 // groups_snapshot_stale has TWO deciding sites, not one: the governance
 // resolver's, and the drive resolver's mirror-image branch

@@ -160,7 +160,7 @@ func (c *captureGrantStore) CreateGrant(_ context.Context, g types.CredentialGra
 	return g, nil
 }
 
-// Production is byte-FOR-BYTE UNCHANGED, and this is the pin for it. A real
+// Production is byte-for-byte unchanged, and this is the pin for it. A real
 // portal serves TLS, so its entry must carry NO scheme prefix — the exact
 // spelling every deployment has today, parsed by a sidecar that predates the
 // prefix to exactly the same host and port.
@@ -192,7 +192,7 @@ func TestSSOPortalMITMEntry_ProductionIsUnprefixedAndPlainHTTPIsExplicit(t *test
 	}
 }
 
-// The pin is authored, AND IT IS AUTHORED FROM THE SNAPSHOT (docs REVIEW-3
+// The pin is authored, and it is authored from the snapshot (docs review-3
 // coverage note). The proxy enforces it (internal/egress/proxy), and the proxy's
 // tests supply the rule by hand — so nothing checked that a real dispatch
 // actually writes one. A grant authored without it is a rule the sidecar reads

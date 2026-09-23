@@ -252,7 +252,7 @@ func driveTierRank(t types.CapabilitySubjectType) int {
 
 // the handler harness
 
-// driveAdminServer builds the SUPER-admin server the /drives handlers run
+// driveAdminServer builds the super-admin server the /drives handlers run
 // behind, with an audit recorder so every write's row can be asserted.
 // hostRoots is the boot-parsed env ceiling; nil is the DEFAULT deployment,
 // which authors no host_path drive at all.
@@ -796,7 +796,7 @@ func TestUpdateAllocatedUserDriveGuardsTheRehome(t *testing.T) {
 		if st.drives[id].Name != "Corp NAS archive" {
 			t.Errorf("stored name = %q, want the confirmed rename to have landed", st.drives[id].Name)
 		}
-		// The point OF the field: one `drive.write` action covers both kinds of
+		// The point of the field: one `drive.write` action covers both kinds of
 		// edit, so without this the orphaning is invisible to an auditor.
 		data := driveAuditData(t, rec, "drive.write")
 		if data["rehomed"] != true {

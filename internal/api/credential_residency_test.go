@@ -54,7 +54,7 @@ func TestGradeModelCredential(t *testing.T) {
 		want     modelCredentialResidency
 		staged   bool
 	}{{
-		// The one row-FIXED CASE. Under per_user the only admissible lane is the
+		// The one row-fixed case. Under per_user the only admissible lane is the
 		// principal's own captured SSO session (mechanismSatisfied), and that lane
 		// is resident — so the answer does not depend on whether they have signed
 		// in yet, which is exactly the state the rail has to be honest about.

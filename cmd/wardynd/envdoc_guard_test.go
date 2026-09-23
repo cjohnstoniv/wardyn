@@ -341,14 +341,13 @@ func envDocRowFor(v string, docLines []string) string {
 	return ""
 }
 
-// TestEnvDoc_RowsNameTheirFlag pins that every docs/ENV.md row for a
-// flag-backed var names its flag, so no row can drop it silently. Derives
-// every (flag,
-// WARDYN_X) pair boot_flags.go actually registers and requires that var's
-// docs/ENV.md row to contain the flag literal — skipping a row that says
-// "No flag" (a var read once at boot with no CLI surface is a real shape,
-// not an omission) and a var with no row at all (TestEnvDoc_ForwardEveryReadIsDocumented's
-// job, not this test's).
+// TestEnvDoc_RowsNameTheirFlag pins that every docs/ENV.md row for a flag-
+// backed var names its flag, so no row can drop it silently. Derives every
+// (flag, WARDYN_X) pair boot_flags.go actually registers and requires that
+// var's docs/ENV.md row to contain the flag literal — skipping a row that says
+// "No flag" (a var read once at boot with no CLI surface is a real shape, not
+// an omission) and a var with no row at all
+// (TestEnvDoc_ForwardEveryReadIsDocumented's job, not this test's).
 func TestEnvDoc_RowsNameTheirFlag(t *testing.T) {
 	root := repoRoot(t)
 	src, err := os.ReadFile(filepath.Join(root, "cmd", "wardynd", "boot_flags.go"))

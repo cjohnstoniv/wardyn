@@ -263,7 +263,8 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 	})
 }
 
-// TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate.
+// TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate pins that Migrate
+// restores a dropped chain trigger.
 //
 // An owner/superuser drops the 0047 trigger. Migrate() records 0047 as applied
 // and skips it on every later boot (isMigrationApplied), so without a

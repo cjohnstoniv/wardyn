@@ -280,9 +280,9 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 	// would get an immediate io.EOF and end the session on ITS OWN, letting
 	// this test pass even with the ctx-cancel wiring ripped out entirely (a
 	// mutation probe that deletes the wiring stays green on a plain os.Stdin).
-	// Swapping in a pipe whose
-	// write end THIS TEST holds open blocks that half indefinitely, so the
-	// cancel below is the ONLY thing that can end the session.
+	// Swapping in a pipe whose write end THIS TEST holds open blocks that half
+	// indefinitely, so the cancel below is the ONLY thing that can end the
+	// session.
 	// Half 2 (attach.go's "Half 2" goroutine, os.Stdin.Read) is a KNOWN,
 	// pre-existing leak: os.Stdin.Read is a plain blocking syscall, not
 	// ctx-aware, so it stays parked on this pipe even after runAttach
@@ -512,9 +512,8 @@ func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
 // cancels ctx but can't unstick the write, and every SUBSEQUENT TERM is
 // caught by the same still-registered channel and silently discarded,
 // leaving the session unkillable by any number of them. runAttach reverts
-// the disposition itself the moment ctx
-// is Done, so THIS test's second TERM falls through to the normal,
-// process-killing default.
+// the disposition itself the moment ctx is Done, so THIS test's second TERM
+// falls through to the normal, process-killing default.
 //
 // The wedge is real, not simulated: the server floods far more than a
 // kernel pipe buffer's worth of data (Linux defaults to 64 KiB) at the

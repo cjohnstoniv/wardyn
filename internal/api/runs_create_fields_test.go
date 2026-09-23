@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestCreateRun_TextFieldsAreCappedAndControlCharFree.
+// TestCreateRun_TextFieldsAreCappedAndControlCharFree pins the field caps.
 //
 // title and description are rune-capped AND control-char-checked, and repo,
 // devcontainer_repo, task and agent are capped too — the 1 MiB body limit is

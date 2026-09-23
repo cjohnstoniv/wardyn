@@ -44,7 +44,8 @@ func perUserDisconnectSrv(t *testing.T, admin, member string) (*Server, *memSecr
 	return srv, sec
 }
 
-// TestHandleHarnessDisconnect_PerUserDeletesTheCallersOwnBlob.
+// TestHandleHarnessDisconnect_PerUserDeletesTheCallersOwnBlob pins that a
+// per-user Disconnect is scoped to the caller, not the whole estate.
 //
 // Under per_user EVERY capture — the admin's included — lives in For(subject),
 // so an unscoped Delete would remove nothing anybody had captured and still

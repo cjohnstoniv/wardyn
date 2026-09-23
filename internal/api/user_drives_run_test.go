@@ -1139,7 +1139,7 @@ func TestMeUserDrive(t *testing.T) {
 		}
 	})
 
-	// The DOOR'S HALF OF the same defect, one layer up. "" on the door key is an
+	// The door's half of the same defect, one layer up. "" on the door key is an
 	// affirmative promise that no profile denies the mount, and it was ALSO what
 	// a caller got when the ceiling could not be resolved — the permissive
 	// answer to an unknown question. Worse than the null above, because it
@@ -1190,8 +1190,8 @@ func TestMeUserDrive(t *testing.T) {
 // launch that will 422 is the exact failure the preflight handler exists not to
 // have.
 //
-// Both are driven through the REAL router as a signed-in member, so the
-// assertion covers the call site and its ORDER, not just the helper.
+// Both are driven through the real router as a signed-in member, so the
+// assertion covers the call site and its order, not just the helper.
 func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 	const body = `{"agent":"claude-code","task":"t","drive":{"enabled":true}}`
 

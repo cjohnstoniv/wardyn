@@ -483,7 +483,7 @@ func TestUserDriveHomeWithinItsRoot(t *testing.T) {
 	if crossDrive == nil {
 		t.Fatal("a home resolving into ANOTHER drive's root was accepted — that binds the other drive's directory")
 	}
-	// And the refusal is member-SAFE. Every driver refusal on this path becomes
+	// And the refusal is member-safe. Every driver refusal on this path becomes
 	// the run's failure_hint, read by the run's CREATOR — so the message names
 	// the drive and the directory (driveVolumeAdoptable's shape) and neither the
 	// drive's root nor the resolved real path. The operator reads those from the
