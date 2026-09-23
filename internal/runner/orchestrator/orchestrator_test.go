@@ -30,6 +30,7 @@ type fakeSubstrate struct {
 	drives     bool
 	managed    bool
 	diskEnf    types.StorageEnforcement
+	freeze     map[types.ConfinementClass]bool
 	refPrefix  string
 
 	mu                            sync.Mutex
@@ -50,6 +51,7 @@ func (f *fakeSubstrate) Classes(context.Context) (substrate.ClassSupport, error)
 		UserDrives:               f.drives,
 		ManagedFiles:             f.managed,
 		EphemeralDiskEnforcement: f.diskEnf,
+		Freeze:                   f.freeze,
 	}, nil
 }
 
@@ -490,5 +492,71 @@ func TestOrchestrator_EndSandbox(t *testing.T) {
 	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
 	if err := k8s.EndSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrEndUnsupported) {
 		t.Errorf("EndSandbox on a substrate that cannot keep a sandbox = %v, want ErrEndUnsupported", err)
+	}
+}
+
+// freezingSubstrate is a fakeSubstrate that can pause/resume the agent.
+type freezingSubstrate struct {
+	*fakeSubstrate
+	freezes, thaws []string
+}
+
+func (f *freezingSubstrate) FreezeSandbox(_ context.Context, ref string) error {
+	f.rec(&f.freezes, ref)
+	return nil
+}
+func (f *freezingSubstrate) ThawSandbox(_ context.Context, ref string) error {
+	f.rec(&f.thaws, ref)
+	return nil
+}
+
+// TestOrchestrator_FreezeSandbox: Freeze/Thaw reach a substrate that
+// implements runner.Freezer, and the route survives (a later kill still
+// finds it). A substrate that does not implement it (Kubernetes, or an
+// unverified OCI runtime's substrate) answers ErrFreezeUnsupported.
+func TestOrchestrator_FreezeSandbox(t *testing.T) {
+	ctx := context.Background()
+	oci := &freezingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	o := New(oci)
+	if err := o.FreezeSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("FreezeSandbox: %v", err)
+	}
+	if err := o.ThawSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("ThawSandbox: %v", err)
+	}
+	if err := o.KillSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("KillSandbox after freeze/thaw: %v", err)
+	}
+	if len(oci.freezes) != 1 || len(oci.thaws) != 1 || len(oci.kills) != 1 {
+		t.Errorf("freezes %v thaws %v kills %v; want each forwarded once and the route kept", oci.freezes, oci.thaws, oci.kills)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if err := k8s.FreezeSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrFreezeUnsupported) {
+		t.Errorf("FreezeSandbox on a substrate that cannot pause = %v, want ErrFreezeUnsupported", err)
+	}
+	if err := k8s.ThawSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrFreezeUnsupported) {
+		t.Errorf("ThawSandbox on a substrate that cannot pause = %v, want ErrFreezeUnsupported", err)
+	}
+}
+
+// TestCapabilities_FreezeAggregatesPerClass pins the per-class merge: the
+// orchestrator copies each substrate's Freeze map straight through (the same
+// deterministic first-claim rule Resolved uses), so a deployment whose
+// docker substrate has verified only CC1 never reports Freeze=true for a
+// class it did not claim.
+func TestCapabilities_FreezeAggregatesPerClass(t *testing.T) {
+	oci := &fakeSubstrate{
+		name:     "docker",
+		classes:  []types.ConfinementClass{types.CC1, types.CC2},
+		resolved: map[types.ConfinementClass]string{types.CC1: "oci/runc", types.CC2: "oci/runsc"},
+		freeze:   map[types.ConfinementClass]bool{types.CC1: true, types.CC2: false},
+	}
+	caps, err := New(oci).Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if !caps.Freeze[types.CC1] || caps.Freeze[types.CC2] {
+		t.Errorf("Freeze = %v, want {CC1:true, CC2:false}", caps.Freeze)
 	}
 }

@@ -95,6 +95,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   names it (`capped`, `latest_end`, `max_wait_sec`). A security admin is bounded like anyone and
   reaches only their own runs; a super admin is bounded by the deployment alone. A finished or ended
   run answers 409. Audited as `run.end.set` and `run.wait_budget.set`, refusals as `denied`.
+- **Runner Freeze/Thaw: the agent container can be paused and resumed in place (#571).**
+  `runner.Freezer` is an optional `Runner` capability (`FreezeSandbox`/`ThawSandbox`), implemented
+  today by the Docker driver as `ContainerPause`/`ContainerUnpause` on the agent only — the proxy
+  sidecar is never paused, so it keeps renewing its token and answering egress decisions while the
+  agent is frozen. Both are idempotent on a missing or already-in-that-state sandbox.
+  `runner.Capabilities.Freeze` (and its substrate-level counterpart, `substrate.ClassSupport.Freeze`)
+  reports support PER CONFINEMENT CLASS: `CC1` (the daemon-default `runc` runtime) is `true`, the
+  only substrate this is verified against; `runsc`/Kata-backed classes report `false` until that
+  pause path is verified. Kubernetes does not implement `Freezer`; a router in front of one answers
+  `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is RL-7.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

@@ -169,6 +169,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 	caps := runner.Capabilities{
 		Driver:   o.Name(),
 		Resolved: map[types.ConfinementClass]string{},
+		Freeze:   map[types.ConfinementClass]bool{},
 	}
 	drives := len(o.substrates) > 0
 	managed := len(o.substrates) > 0
@@ -190,6 +191,14 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 			// First substrate to claim a class wins its label (deterministic).
 			if _, ok := caps.Resolved[k]; !ok {
 				caps.Resolved[k] = v
+			}
+		}
+		for k, v := range cs.Freeze {
+			// Same rule as Resolved, and for the same reason: only one
+			// substrate ever backs a given class, so there is no real
+			// conflict to arbitrate — the first (deterministic) claim wins.
+			if _, ok := caps.Freeze[k]; !ok {
+				caps.Freeze[k] = v
 			}
 		}
 		caps.StructuralEgress = caps.StructuralEgress || cs.StructuralEgress
@@ -389,6 +398,34 @@ func (o *Orchestrator) EndSandbox(ctx context.Context, ref string) error {
 		return runner.ErrEndUnsupported
 	}
 	return ender.EndSandbox(ctx, ref)
+}
+
+// FreezeSandbox forwards a pause to ref's substrate when it implements
+// runner.Freezer (Docker/runc today). The route is kept: the sandbox still
+// exists, paused, and Thaw/Stop/Kill must still find its substrate.
+func (o *Orchestrator) FreezeSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	f, ok := s.(runner.Freezer)
+	if !ok {
+		return runner.ErrFreezeUnsupported
+	}
+	return f.FreezeSandbox(ctx, ref)
+}
+
+// ThawSandbox forwards a resume to ref's substrate; see FreezeSandbox.
+func (o *Orchestrator) ThawSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	f, ok := s.(runner.Freezer)
+	if !ok {
+		return runner.ErrFreezeUnsupported
+	}
+	return f.ThawSandbox(ctx, ref)
 }
 
 func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {

@@ -393,6 +393,31 @@ func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
 	return nil
 }
 
+// FreezeSandbox is runner Freeze/Thaw's pause half (runner.Freezer,
+// long-holds design rev 4 §3.1): ContainerPause on the AGENT ref only — never
+// the proxy sidecar, which is not addressed here and keeps renewing and
+// answering egress decisions while the agent is frozen. Verified against runc
+// (cgroup v2): a paused container refuses a new exec, its established TCP
+// stays ESTABLISHED and ACKed, and its timers fire at thaw. Idempotent: a
+// missing container, or one already paused, is not an error — a retried
+// freeze after a lost response must not surface as a failure.
+func (d *Driver) FreezeSandbox(ctx context.Context, ref string) error {
+	if _, err := d.cli.ContainerPause(ctx, ref, client.ContainerPauseOptions{}); err != nil && !isNotFound(err) && !isAlreadyPaused(err) {
+		return fmt.Errorf("docker: pause: %w", err)
+	}
+	return nil
+}
+
+// ThawSandbox is runner Freeze/Thaw's resume half (runner.Freezer):
+// ContainerUnpause on the agent ref. Idempotent: a missing container, or one
+// that is not paused, is not an error.
+func (d *Driver) ThawSandbox(ctx context.Context, ref string) error {
+	if _, err := d.cli.ContainerUnpause(ctx, ref, client.ContainerUnpauseOptions{}); err != nil && !isNotFound(err) && !isNotPaused(err) {
+		return fmt.Errorf("docker: unpause: %w", err)
+	}
+	return nil
+}
+
 // KillSandbox is the kill-switch path: immediate SIGKILL + force remove. The
 // control plane cascades identity/credential revocation around this call.
 func (d *Driver) KillSandbox(ctx context.Context, ref string) error {

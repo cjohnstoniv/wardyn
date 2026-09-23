@@ -184,6 +184,7 @@ const mainProcCastDir = "/tmp/wardyn-rec"
 // present the runner.Runner surface to the control plane.
 var _ substrate.Substrate = (*Driver)(nil)
 var _ runner.SandboxEnder = (*Driver)(nil)
+var _ runner.Freezer = (*Driver)(nil)
 
 // New constructs a Driver against the host Docker daemon. API-version negotiation
 // with the server is on by default in the moby v29 client (forward/backward compat).
@@ -240,6 +241,8 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// it cannot — which is EITHER warn-and-run-uncapped (vfs, fuse-overlayfs)
 		// OR create-refused (overlay2 over non-xfs); see capabilitiesForWith.
 		EphemeralDiskEnforcement: c.EphemeralDiskEnforcement,
+		// Per-class Freeze/Thaw support (RL-6) — see capabilitiesForWith.
+		Freeze: c.Freeze,
 	}, nil
 }
 

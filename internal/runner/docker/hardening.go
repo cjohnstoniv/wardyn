@@ -325,11 +325,23 @@ func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]
 	if storageDriverSupportsQuota(info) {
 		disk = types.StorageEnforcementFilesystem
 	}
+	// Freeze (runner Freeze/Thaw, RL-6): ContainerPause/Unpause is verified only
+	// on runc (runc 1.4.3, cgroup v2 — see FreezeSandbox). runsc and Kata pause
+	// are UNVERIFIED (the RL-0 spike), so every other resolved runtime — incl.
+	// an operator's own CC1 pin away from the daemon default — reports false
+	// rather than assume a control nobody proved. classToRuntime already
+	// refused to advertise a class at all when its runtime is absent; this
+	// narrows further, to the one runtime this driver's pause is proven against.
+	freeze := map[types.ConfinementClass]bool{}
+	for class, label := range resolved {
+		freeze[class] = label == "oci/runc"
+	}
 	return runner.Capabilities{
 		Driver:                   driverName,
 		ConfinementClasses:       classes, // strongest last
 		Resolved:                 resolved,
 		EphemeralDiskEnforcement: disk,
+		Freeze:                   freeze,
 		// L0 is structural here: NetworkMode "none" + internal-only per-run
 		// network means the agent has no default route and one egress path.
 		StructuralEgress: true,

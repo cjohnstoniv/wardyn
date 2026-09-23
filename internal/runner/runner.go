@@ -89,6 +89,17 @@ type Capabilities struct {
 	// setting a disk number can see whether anything will hold it. NOT on the
 	// anonymous /healthz.
 	EphemeralDiskEnforcement types.StorageEnforcement `json:"ephemeral_disk_enforcement,omitempty"`
+	// Freeze reports, PER CONFINEMENT CLASS, whether this driver can pause and
+	// resume the agent container in place without losing its state (long-holds
+	// design rev 4 §3.1: runner Freeze/Thaw). A class present and true is
+	// verified — Docker/runc (CC1) is the only one today. A class absent, or
+	// present and false, declares no freeze support for it: runsc/Kata pause is
+	// UNVERIFIED (the RL-0 spike), so it is never claimed here, the same
+	// never-claim-an-unproven-control rule ConfinementClasses follows one field
+	// up. A caller (the idle/wait pause reaper, RL-7) MUST check this per the
+	// run's own confinement class before attempting a freeze rather than assume
+	// every class a driver enforces can also be paused.
+	Freeze map[types.ConfinementClass]bool `json:"freeze,omitempty"`
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
@@ -638,6 +649,34 @@ type SandboxEnder interface {
 // ErrEndUnsupported is EndSandbox's answer from a router whose substrate for
 // ref cannot keep a stopped sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
+
+// Freezer is an OPTIONAL Runner capability: pause and resume the AGENT
+// container in place, without stopping it (runner Freeze/Thaw, long-holds
+// design rev 4 §3). FreezeSandbox pauses the agent process — its memory,
+// disk and any already-established TCP connection keep their state, and the
+// daemon refuses a new exec against it until thawed. ThawSandbox resumes it.
+// Both are idempotent: a missing sandbox, or a redundant call (freezing an
+// already-frozen one, thawing a running one), returns nil, the same
+// tolerant-of-a-retried-signal contract Stop/Kill hold for a gone sandbox.
+//
+// The PROXY SIDECAR IS NEVER FROZEN — only the ref this is called with (the
+// agent). The proxy keeps renewing its run token and answering egress
+// decisions while the agent is paused; a caller wanting the proxy left alone
+// gets that for free by calling this with only the agent's ref.
+//
+// A substrate that cannot pause without losing state (Kubernetes has no
+// primitive; runsc/Kata pause is UNVERIFIED per Capabilities.Freeze) does not
+// implement this, and a router in front of one returns ErrFreezeUnsupported;
+// the caller then leaves the run running rather than silently no-op a pause
+// nobody can prove happened.
+type Freezer interface {
+	FreezeSandbox(ctx context.Context, ref string) error
+	ThawSandbox(ctx context.Context, ref string) error
+}
+
+// ErrFreezeUnsupported is Freezer's answer from a router whose substrate for
+// ref cannot pause it.
+var ErrFreezeUnsupported = errors.New("runner: this substrate cannot freeze a sandbox")
 
 // ImageChecker is an OPTIONAL Runner capability: a
 // substrate whose local image cache can go stale out from under a workspace's

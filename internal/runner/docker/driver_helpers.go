@@ -100,3 +100,22 @@ func isNotRunning(err error) bool {
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "is not running")
 }
+
+// isAlreadyPaused / isNotPaused detect the daemon's redundant-pause-state
+// errors so FreezeSandbox/ThawSandbox stay idempotent on a retried call (a
+// pause request that lands twice, or a thaw after a lost response) instead of
+// surfacing the daemon's conflict as a caller-visible error.
+func isAlreadyPaused(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already paused")
+}
+
+func isNotPaused(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "is not paused") || strings.Contains(msg, "already unpaused")
+}

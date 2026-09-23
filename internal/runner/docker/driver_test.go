@@ -1211,3 +1211,65 @@ func TestEndSandbox_StopsTheAgentKeepsItAndRemovesTheProxy(t *testing.T) {
 		t.Error("a kill after the end must remove the per-run network")
 	}
 }
+
+// TestFreezeSandbox_PausesTheAgentOnly is runner Freeze/Thaw on Docker
+// (runner.Freezer, long-holds design rev 4 §3.1): FreezeSandbox pauses the
+// agent container and leaves the proxy sidecar untouched (it must keep
+// renewing/answering decisions while the agent is frozen). A second freeze is
+// idempotent (the daemon's "already paused" conflict must not surface).
+// ThawSandbox resumes it, and a second thaw is likewise idempotent. Status
+// keeps reporting RUNNING throughout — a pause never invents a new RunState.
+func TestFreezeSandbox_PausesTheAgentOnly(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+	proxyRef := proxyContainerName(runID)
+
+	for i := range 2 {
+		if err := d.FreezeSandbox(ctx, sb.Ref); err != nil {
+			t.Fatalf("FreezeSandbox #%d: %v", i+1, err)
+		}
+	}
+	agent := f.containers[sb.Ref]
+	if agent == nil || agent.state == nil || !agent.state.Paused {
+		t.Fatalf("agent after freeze = %+v; want paused", agent)
+	}
+	if st, err := d.Status(ctx, sb.Ref); err != nil || st.State != types.RunRunning {
+		t.Errorf("Status of a paused agent = %+v, %v; want RunRunning (paused must not be a new RunState)", st, err)
+	}
+	proxy := f.containers[proxyRef]
+	if proxy == nil || (proxy.state != nil && proxy.state.Paused) {
+		t.Errorf("proxy after freeze = %+v; the proxy must never be paused", proxy)
+	}
+
+	for i := range 2 {
+		if err := d.ThawSandbox(ctx, sb.Ref); err != nil {
+			t.Fatalf("ThawSandbox #%d: %v", i+1, err)
+		}
+	}
+	if agent = f.containers[sb.Ref]; agent == nil || agent.state == nil || agent.state.Paused {
+		t.Fatalf("agent after thaw = %+v; want not paused", agent)
+	}
+}
+
+// TestFreezeSandbox_MissingRefIsIdempotent mirrors the Stop/Kill/End
+// contract: Freeze/Thaw of a ref that no longer exists is success, not an
+// error, so a pause that races a teardown never turns into a caller-visible
+// failure.
+func TestFreezeSandbox_MissingRefIsIdempotent(t *testing.T) {
+	f := newFakeDocker()
+	d := newTestDriver(f)
+	ctx := context.Background()
+	if err := d.FreezeSandbox(ctx, "no-such-ref"); err != nil {
+		t.Errorf("FreezeSandbox of a missing ref: %v", err)
+	}
+	if err := d.ThawSandbox(ctx, "no-such-ref"); err != nil {
+		t.Errorf("ThawSandbox of a missing ref: %v", err)
+	}
+}
