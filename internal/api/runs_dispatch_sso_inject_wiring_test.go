@@ -68,7 +68,7 @@ func dispatchLLM(t *testing.T, s *Server, sso awsSSOScope) (dispatchLLMPlan, *ca
 	}
 	plan, ok := s.resolveLLMInjections(context.Background(), run,
 		dispatchParams{Interactive: false, TaskMode: ""},
-		&policy, sandboxEnv, nil, "", artifactRedirectPlan{}, false, site, true, false)
+		&policy, sandboxEnv, nil, "", artifactRedirectPlan{}, false, site, true, false, bedrockCredUngraded())
 	return plan, captured, sandboxEnv, ok
 }
 

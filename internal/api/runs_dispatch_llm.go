@@ -724,7 +724,7 @@ type dispatchLLMPlan struct {
 func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p dispatchParams,
 	policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant,
 	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig, siteCfgOK bool,
-	adoInject bool,
+	adoInject bool, bedrockGrade bedrockCredGrade,
 ) (dispatchLLMPlan, bool) {
 	// WHOSE credential, decided from a roster we could actually READ. A failed
 	// read yields a zero siteCfg — perUser=false, owner="" — which is the
@@ -752,6 +752,11 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// enforceConfiguredLLMMechanism. A zero-value siteCfg (the read failed) is
 	// legacy open mode: nothing is refused.
 	if !s.enforceConfiguredLLMMechanism(ctx, run, siteCfg, llm, injections) {
+		return dispatchLLMPlan{}, false
+	}
+	// And none the autonomy gate graded this run without (bedrockCredGradeHolds),
+	// in the same place for the same reason.
+	if !s.bedrockCredGradeHolds(ctx, run, bedrockGrade, llm) {
 		return dispatchLLMPlan{}, false
 	}
 

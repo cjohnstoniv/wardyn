@@ -31,7 +31,7 @@ func r3bWalledRun(t *testing.T, profile string, deny []string) ([]types.AuditEve
 	if profile != "" {
 		gc.Profile = &types.GovernanceProfile{Name: profile}
 	}
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 	})
 	return audit.events, run.ID
