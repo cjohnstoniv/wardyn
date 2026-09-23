@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
+  configuration carried a list of grants keyed by host, and every organisation shares
+  `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
+  The key is now `ado_grant` (one grant). The older `ado_grants` list still loads when it holds
+  one entry; a list with more than one, or one set beside `ado_grant`, fails the sidecar's
+  startup (#452).
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
