@@ -208,6 +208,18 @@ export interface ResourceLimits {
   disk_mib?: number;
 }
 
+// Content rules for a run's brokered git pushes (mirrors types.PushRulesSpec)
+// — the counterpart to git_push_any_branch's WHERE: this says WHAT a push may
+// touch. Phase one only: deny_paths and max_inspect_pack_mib are STORED and
+// VALIDATED, never matched — no matcher runs yet (that lands with the pack
+// inspector, a later change). Omitted/undefined on RunPolicySpec means no
+// content rules at all, identical to every policy authored before this field
+// existed.
+export interface PushRulesSpec {
+  deny_paths?: string[];
+  max_inspect_pack_mib?: number;
+}
+
 export interface RunPolicySpec {
   // The key is always present (no `,omitempty` on
   // internal/types/policy.go's AllowedDomains), but the VALUE can be `null` on
@@ -258,6 +270,13 @@ export interface RunPolicySpec {
   // stream marks each such push brokered:git:branch-ns-off. Read-only in the
   // console — operator-authored via the API/YAML.
   git_push_any_branch?: boolean;
+  // Content rules for this run's brokered git pushes (mirrors Go's
+  // RunPolicySpec.PushRules). Undefined/omitted means no rules at all — a
+  // policy that sets this while the run's only git grant is ssh_key is legal
+  // but unenforceable, and the Review rail's risk grade says so as a warning,
+  // never a refusal. Read-only in the console — operator/member-authored via
+  // the API/YAML, no editor here yet.
+  push_rules?: PushRulesSpec;
 }
 
 export interface RunPolicy {

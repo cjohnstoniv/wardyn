@@ -6,10 +6,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
-import {
-  EMAIL_DOMAIN_REFUSAL,
-  UNREACHABLE_ERROR,
-} from "../src/app/components/screens/sign-in";
+import { SIGNIN } from "../src/app/lib/sign-in-copy";
 
 // Auth / sign-in lane.
 //
@@ -96,7 +93,10 @@ test.describe("auth / sign-in gate", () => {
     await expect(page.getByText("Admin token", { exact: true })).toBeVisible();
     await expect(signInToken(page)).toBeVisible();
     await expect(useTokenButton(page)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign in with SSO" })).toBeVisible();
+    // #457: this harness has no OIDC configured — no disabled SSO stub, no
+    // control at all.
+    await expect(page.getByRole("button", { name: "Sign in with SSO" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Sign in with SSO" })).toHaveCount(0);
 
     // The console is NOT reachable while unauthenticated.
     await expect(runsNav(page)).toHaveCount(0);
@@ -271,12 +271,12 @@ test.describe("SSO-only screen shape (#378/#379)", () => {
     await expect(signInToken(page)).toHaveCount(0);
     await expect(page.getByText("Admin token", { exact: true })).toHaveCount(0);
 
-    // No role-source caveat — sso_only makes the "everyone is an admin"
-    // branch it describes unreachable.
+    // No role-source caveat — #457 removed it everywhere.
     await expect(page.getByText(/comes from your SSO role assignment/i)).toHaveCount(0);
   });
 
-  test("sso:true, sso_only:false, token_login:false: the admin-token form is gone but the role-source caveat stays", async ({ page }) => {
+  // #457: the role-source caveat is gone from every cell now, not just sso_only.
+  test("sso:true, sso_only:false, token_login:false: the admin-token form is gone, no role-source caveat", async ({ page }) => {
     await page.route("**/healthz", (route) =>
       route.fulfill({
         status: 200,
@@ -289,15 +289,14 @@ test.describe("SSO-only screen shape (#378/#379)", () => {
 
     await expect(page.getByRole("link", { name: "Sign in with SSO" })).toBeVisible();
     await expect(signInToken(page)).toHaveCount(0);
-    await expect(page.getByText(/comes from your SSO role assignment/i)).toBeVisible();
+    await expect(page.getByText(/comes from your SSO role assignment/i)).toHaveCount(0);
   });
 });
 
-// #212 (design/first-contact-prototype) — a sign-in refusal must not
-// advertise a working credential or hand an unauthenticated reader an
-// operator's remediation. These pin the words the person actually reads,
-// importing the constants sign-in.tsx exports rather than duplicating the
-// literal.
+// #212/#457 — a sign-in refusal must not advertise a working credential or
+// hand an unauthenticated reader an env var they cannot reach. These pin the
+// words the person actually reads, importing SIGNIN rather than duplicating
+// the literal.
 test.describe("sign-in refusals name Wardyn and point this reader at what they can do (#212)", () => {
   test("the admin-token field starts empty, with no working demo credential in the placeholder", async ({ page }) => {
     await clearTokenInit(page);
@@ -308,7 +307,7 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
     await expect(field).not.toHaveAttribute("placeholder");
   });
 
-  test("an unreachable daemon names Wardyn and names the daemon to check, not a bare 'control plane' dead end", async ({ page }) => {
+  test("an unreachable daemon names Wardyn, not a bare 'control plane' dead end", async ({ page }) => {
     await clearTokenInit(page);
     // Simulate a network failure on the token-probe request the same way a
     // daemon that never answers would: the fetch itself never resolves ok.
@@ -320,7 +319,7 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
 
     const alert = page.getByRole("alert");
     await expect(alert).toBeVisible();
-    await expect(alert).toHaveText(UNREACHABLE_ERROR);
+    await expect(alert).toHaveText(SIGNIN.UNREACHABLE_ERROR);
   });
 
   test("the email_domain refusal points a locked-out reader at their admin, not an env var they cannot reach", async ({ page }) => {
@@ -329,7 +328,7 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
 
     const alert = page.getByRole("alert");
     await expect(alert).toBeVisible();
-    await expect(alert).toHaveText(EMAIL_DOMAIN_REFUSAL);
+    await expect(alert).toHaveText(SIGNIN.EMAIL_DOMAIN);
     await expect(alert).not.toContainText("WARDYN_OIDC_EMAIL_DOMAINS");
   });
 });
@@ -382,12 +381,13 @@ test.describe("outage vs. rejection (R4/F027)", () => {
     });
     await clearTokenInit(page);
     await page.goto("/");
-    await expect(signInToken(page)).toBeVisible();
+    // #457: the FIRST read is the outage, so the screen is honestly
+    // "checking" until the next poll (SSO_POLL_MS) lands the real answer —
+    // longer than the default assertion timeout covers.
+    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
 
-    // The SSO control is present either way; what must NOT happen is it being
-    // frozen on the outage's answer. On an OIDC deployment the link appears on a
-    // later poll; on a token-only one the button stays disabled — in both cases
-    // the gate has asked more than once.
+    // What must NOT happen is the posture being frozen on the outage's
+    // answer — the gate has asked more than once.
     await expect
       .poll(() => served, { timeout: 30_000 })
       .toBeGreaterThan(1);

@@ -295,9 +295,10 @@ export const health = {
     token_login?: boolean;
     // sso_only mirrors WARDYN_SSO_ONLY (cmd/wardynd's validateSSOOnlyPosture):
     // true only when OIDC is configured and every other way in is refused at
-    // boot, so the sign-in screen can safely drop SIGNIN.ROLE_SOURCE's
-    // "everyone is an admin" caveat. Absent on an older daemon, which must
-    // read the same as `false`.
+    // boot. #457 dropped the sign-in screen's only client-side reader of this
+    // field (a role-source caveat, removed entirely); kept as the wire
+    // mirror — token_login already folds it into whether the token form
+    // shows. Absent on an older daemon, which must read the same as `false`.
     sso_only?: boolean;
     // SSH gateway discovery (run-detail's "Connect via SSH" pane): absent /
     // undefined on a deployment with the gateway off (WARDYN_SSH_LISTEN
@@ -323,6 +324,13 @@ export const health = {
     // has to be answerable pre-auth). Wire mirror only; not read client-side
     // yet. Absent on an older daemon.
     version?: string;
+    // WARDYN_DEMO_VIDEO_BASE_URL (internal/api/healthz.go), already validated
+    // at boot: the operator-run mirror the Getting Started demo episodes
+    // stream from on an air-gapped deployment, where github.com is
+    // unreachable. "" (the default, unset) or absent (an older daemon) both
+    // mean "no mirror" — lib/demo-videos.ts's episodeUrl falls back to its
+    // own hardcoded GitHub base either way.
+    demo_video_base_url?: string;
   }> {
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
