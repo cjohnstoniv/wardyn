@@ -110,20 +110,41 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
   agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
   suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its
-  agent stopped, its proxy removed, its pending approvals cancelled (`run_lost`) and its broker
+  agent stopped, its proxy stopped, its pending approvals cancelled (`run_lost`) and its broker
   credentials revoked. A run whose token has not been renewed for over an hour and five minutes (the
   control plane was down past the proxy's renew window, after which the proxy gives up renewing but
   used to keep forwarding allowlisted egress on a dead identity, unaudited) is now found at boot and
-  on every sweep: an interactive one is kept with `lost_reason: "outage"`, its proxy removed so it
+  on every sweep: an interactive one is kept with `lost_reason: "outage"`, its proxy stopped so it
   has no egress while its agent keeps running; a headless one is failed and torn down. A lost run is
   kept until its end plus `WARDYN_ENDED_RUN_GRACE` (`run.lost.expired`), or until it is killed when
   it has no end; an outage run's agent is stopped once its end passes. Anything that cannot be kept
   fails closed and is torn down (an outage run as `FAILED`): a headless run, one past its end and
-  grace, a substrate that cannot keep a sandbox (Kubernetes), or a proxy that cannot be removed. Every renew now stamps
+  grace, a substrate that cannot keep a sandbox (Kubernetes), or a proxy that cannot be stopped. Every renew now stamps
   the run and hands out its token only once the stamp lands; a kept (ended or lost) run's renew
   answers 403. Audited as `run.lost`. Migration `0071_agent_runs_token_renewed` adds
   `token_renewed_at`, starting every existing run with a fresh stamp so none is read as lapsed at
   upgrade.
+- **A run lost to a control-plane outage can be revived, and an admin can restart standing runs
+  with current limits (#575).** `POST /api/v1/runs/{id}/revive` (the run's owner, or a super
+  admin) gives a run lost to an `outage`, whose agent is still running, a new proxy sidecar: the
+  old one's own config is read back from the stopped container, a fresh run token is minted for
+  the owner, and the owner's CURRENT governance profile (the one captured at create) is
+  re-asserted over the frozen policy — its denies are added and every injection or brokered PAT
+  host they deny is dropped. It is never the caller's ceiling, so an admin's click cannot strip a
+  member's limits, and the policy is never re-resolved. The new proxy takes the old one's address
+  on the run's network and the current proxy image; the per-run MITM CA carries over and is copied
+  nowhere else. A revive is refused, with nothing changed, when the captured profile no longer
+  exists, when the profile now denies a host the run's git broker needs (the agent's grant id
+  cannot be withdrawn from a running sandbox), for a run lost to a `reboot` or `ended`, or past
+  its end. A proxy that cannot be replaced leaves the run lost (`outage`) again with no proxy.
+  Audited as `run.revive` with the actor and the owner as `subject`. Admins get the same path in
+  bulk: `POST /api/v1/admin/runs/restart` ("Restart with current limits") and
+  `GET /api/v1/admin/runs/proxy-window`, which lists the live runs whose proxy was started by a
+  release older than wardynd N−1 (or by one it cannot place). A lost run's proxy is now stopped
+  and kept rather than removed, since its env is where the config a revive reads back rests;
+  teardown removes it with the rest of the sandbox. A new contract test pins the internal API the
+  previous minor's proxy calls. Kubernetes cannot revive (the agent pins the proxy pod's IP).
+  Migration `0072_agent_runs_proxy_release` adds `proxy_release`.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

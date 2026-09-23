@@ -871,6 +871,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
 | `POST /admin/sandboxes/sweep` — force-reaping sandboxes across every workspace, not just the caller's own | ⛔ admin only |
+| `GET /admin/runs/proxy-window` and `POST /admin/runs/restart` — listing the runs whose proxy was started by a release older than wardynd N−1, and giving named runs a new proxy on the current release under each OWNER's current profile denies ("Restart with current limits"). Not the security tier: a restart replaces proxies on runs the caller does not own | ⛔ admin only |
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
@@ -4723,7 +4724,7 @@ because PostgreSQL requires ownership for `ALTER TABLE` and for
 `CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade. Every 0.6.x release ships
 through `0049`, so this path applies `0050`–`0062`, and most of it is exactly
 this shape: `0050` (secrets), `0052` and `0060` (api_tokens, created back in
-`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065`, `0069`, `0070`, `0071` (approvals and
+`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065`, `0069`, `0070`, `0071`, `0072` (approvals and
 `agent_runs`, both created in `0001`) are
 `ALTER TABLE` on tables an earlier release created — `0050` also drops and
 re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
@@ -4731,8 +4732,8 @@ re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
 `approvals.kind` with `credential_reauth`), `0063` adds the
 `agent_runs.status_detail` column, `0065` adds `agent_runs.autonomy_level`, `0069` adds the
 run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `governance_profile_id`), `0070` the
-lease columns (`lost_at`, `lost_reason`, `ending_soon_for`, `ending_soon_sec`) and `0071`
-`token_renewed_at` — and `0056`, `0057` and `0058` are three successive
+lease columns (`lost_at`, `lost_reason`, `ending_soon_for`, `ending_soon_sec`), `0071`
+`token_renewed_at` and `0072` `proxy_release` — and `0056`, `0057` and `0058` are three successive
 `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)

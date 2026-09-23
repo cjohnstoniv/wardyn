@@ -122,10 +122,10 @@ const (
 	LostEnded LostReason = "ended"
 	// LostReboot is an interactive run whose agent container exited under it
 	// (a host reboot, a Docker Desktop restart, a long suspend) but still
-	// exists: kept with its files and its proxy removed.
+	// exists: kept with its files and its proxy stopped.
 	LostReboot LostReason = "reboot"
 	// LostOutage is an interactive run whose run token lapsed because the
-	// control plane was unreachable past the token's life: its proxy is removed
+	// control plane was unreachable past the token's life: its proxy is stopped
 	// so it has no egress, and its agent is left running.
 	LostOutage LostReason = "outage"
 )

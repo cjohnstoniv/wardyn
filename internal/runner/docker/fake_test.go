@@ -465,6 +465,7 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		Name:            "/" + c.name,
 		State:           c.state,
 		Config:          c.cfg,
+		HostConfig:      c.host,
 		NetworkSettings: &container.NetworkSettings{Networks: nets},
 	}}, nil
 }

@@ -790,7 +790,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 //
 // The row does not end the run. The lapsed-token sweep does, once the token has
 // gone unrenewed past runTokenLapseAfter (run_lost.go): an interactive run is
-// kept as lost (outage) with its proxy removed, a headless one is failed.
+// kept as lost (outage) with its proxy stopped, a headless one is failed.
 // Deliberately quiet otherwise:
 //
 //   - the once-guard is per run id and in memory, so a wardynd restart may emit a

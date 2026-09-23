@@ -1,0 +1,106 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build docker
+
+package docker
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+)
+
+// TestReplaceProxy_ALostRunsProxyComesBackAtItsAddress is proxy-only revive on
+// Docker (long-holds design rev 4 §4.1): a lost run's stopped proxy gives its
+// config back, the old container is removed, and a new one starts from the
+// rewritten config on the current proxy image, at the address the agent's
+// hosts entry pins, re-joined to the control-plane network. The agent is not
+// touched.
+func TestReplaceProxy_ALostRunsProxyComesBackAtItsAddress(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal"})
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+	if err := d.StopProxy(ctx, sb.Ref); err != nil {
+		t.Fatalf("StopProxy: %v", err)
+	}
+	old := f.containers[proxyContainerName(runID)]
+
+	cfg, err := d.ProxyConfig(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("ProxyConfig of a stopped proxy: %v", err)
+	}
+	if !strings.Contains(string(cfg), `"run_token":"tok"`) {
+		t.Fatalf("config read back = %s; want the rendered config with its run token", cfg)
+	}
+	d.cfg.ProxyImage = "wardyn-proxy:next"
+	fresh := strings.Replace(string(cfg), `"run_token":"tok"`, `"run_token":"fresh"`, 1)
+	if err := d.ReplaceProxy(ctx, sb.Ref, []byte(fresh)); err != nil {
+		t.Fatalf("ReplaceProxy: %v", err)
+	}
+
+	if !old.removed {
+		t.Error("the retiring proxy was not removed")
+	}
+	p := f.containers[proxyContainerName(runID)]
+	if p == old || p == nil || p.state == nil || !p.state.Running {
+		t.Fatalf("new proxy = %+v; want a new, running container", p)
+	}
+	if !slices.Contains(p.cfg.Env, proxyConfigEnv+"="+fresh) {
+		t.Errorf("new proxy env = %v; want the rewritten config", p.cfg.Env)
+	}
+	if p.cfg.Image != "wardyn-proxy:next" || p.cfg.Labels[labelRun] != runID.String() {
+		t.Errorf("new proxy image %q labels %v; want the current image and the old labels", p.cfg.Image, p.cfg.Labels)
+	}
+	ep := p.net.EndpointsConfig[internalNetName(runID)]
+	if ep == nil || ep.IPAMConfig == nil || ep.IPAMConfig.IPv4Address.String() != "10.88.0.2" {
+		t.Errorf("new proxy endpoint = %+v; want it pinned to the agent's wardyn-proxy address 10.88.0.2", ep)
+	}
+	if !slices.Contains(p.connectedTo, "wardyn-internal") {
+		t.Errorf("new proxy networks = %v; want it re-joined to wardyn-internal", p.connectedTo)
+	}
+	if agent := f.containers[sb.Ref]; agent.removed || !agent.state.Running {
+		t.Errorf("agent after ReplaceProxy = %+v; want it untouched", agent)
+	}
+}
+
+// TestReplaceProxy_FailsClosed: a new proxy that cannot start reports
+// ErrProxyReplaceFailed with the old one already gone (the run then has no
+// egress, never the old token's proxy back), and a sandbox whose proxy is gone
+// has no config to read back.
+func TestReplaceProxy_FailsClosed(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+	cfg, err := d.ProxyConfig(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("ProxyConfig: %v", err)
+	}
+	old := f.containers[proxyContainerName(runID)]
+	f.failCreateContainer = "wardyn-proxy-"
+	if err := d.ReplaceProxy(ctx, sb.Ref, cfg); !errors.Is(err, runner.ErrProxyReplaceFailed) {
+		t.Fatalf("ReplaceProxy with a failing create = %v, want ErrProxyReplaceFailed", err)
+	}
+	if !old.removed {
+		t.Error("the retiring proxy must be gone before the new one is created")
+	}
+	if _, err := d.ProxyConfig(ctx, sb.Ref); err == nil {
+		t.Error("ProxyConfig of a removed proxy succeeded")
+	}
+}

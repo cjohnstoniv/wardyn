@@ -19,7 +19,7 @@ import (
 // The lease (long-holds design rev 4, §2.1, RL-3). A run with an end
 // (AgentRun.EndsAt) is warned at 24 h, 1 h and 10 min before it, and at the end
 // it stops and is KEPT: approvals cancelled, broker credentials revoked, the
-// agent stopped and the proxy removed, so it has no network while its files
+// agent and the proxy stopped, so it has no network while its files
 // stay for Config.EndedRunGrace. The grace running out tears it down. The run
 // token is deliberately not revoked: nothing holds it once the proxy is gone,
 // it lapses within its TTL, and a later revive mints from it.

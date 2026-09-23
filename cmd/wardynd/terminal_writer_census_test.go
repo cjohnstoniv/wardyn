@@ -74,6 +74,9 @@ var terminalWriterCensus = map[string]string{
 	"stopKeptRun": "CASes, then finalizeRunTail",
 	// A run whose token lapsed and that cannot be kept (#574).
 	"sweepLapsedRunTokens": "reconcileFinalize -> finalizeRunTail",
+	// A revived run whose proxy could not be replaced and that cannot be kept
+	// lost (#575).
+	"reloseRun": "reconcileFinalize -> finalizeRunTail",
 }
 
 // TestTerminalRunStateWriterCensus scans every non-test .go file in internal/api

@@ -294,7 +294,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// ALREADY ended), and the security tier CAN stop a foreign run, on purpose —
 	// ownsRunOrAdmin is isSecurityOperator, so kill admits it on any run. See
 	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
-	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
+	"POST /api/v1/admin/sandboxes/sweep":  {class: classAdmin},
+	"GET /api/v1/admin/runs/proxy-window": {class: classAdmin},
+	"POST /api/v1/admin/runs/restart":     {class: classAdmin},
 	// Minting a device enrolment token creates a credential, so it is SUPER;
 	// the inventory and the revoke are the inventory-then-revoke pair /tokens
 	// already puts on the security tier (classSecurity below).
@@ -524,7 +526,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/kill":             {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
-	"POST /api/v1/runs/{id}/profile":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// Revive gives a run egress again: a write, like PATCH above.
+	"POST /api/v1/runs/{id}/revive":  {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/profile": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// The run cockpit's live evidence reads. classOwner, same gate as GET
 	// /runs/{id} above: each names a run in its path and each exposes something
 	// about a LIVE sandbox — the workspace's diff, its resource usage, and who
@@ -1092,9 +1096,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// 17 since F287 moved GET /workspaces/{id}/env-as-code here from
 		// classMember (its emitted files are the operator's authored
 		// environment, and its write twin was already operatorOnly); 18 since
-		// #569 added PATCH /runs/{id}.
-		if probed != 18 {
-			t.Errorf("probed %d classOwner routes, want 18 — a route that left classOwner takes its tier "+
+		// #569 added PATCH /runs/{id}; 19 since #575 added POST
+		// /runs/{id}/revive.
+		if probed != 19 {
+			t.Errorf("probed %d classOwner routes, want 19 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -1162,9 +1167,12 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// the device inventory and revoke are the /tokens pair's twins and land on
 	// the security tier (= 26 SEC). A route silently reclassified in the table
 	// above would still pass every probe — it would just be enforcing the WRONG
-	// tier, exactly the drift the per-route loop cannot see.
-	if sec != 26 || super != 39 {
-		t.Errorf("tier split = %d security / %d admin, want 26 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	// tier, exactly the drift the per-route loop cannot see. #575 then added
+	// the standing-runs pair (GET /admin/runs/proxy-window, POST
+	// /admin/runs/restart), born SUPER because a restart replaces proxies on
+	// runs the caller does not own (= 41).
+	if sec != 26 || super != 41 {
+		t.Errorf("tier split = %d security / %d admin, want 26 / 41 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + #575's standing-runs pair, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 

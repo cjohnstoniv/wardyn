@@ -192,6 +192,7 @@ func (s *Server) routes() chi.Router {
 			r.Patch("/runs/{id}", s.handleSetRunEndAndWait)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
 			r.Post("/runs/{id}/kill", s.handleKillRun)
+			r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
@@ -803,4 +804,9 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// case — see reconcile.go) and deliberately not a ticker; see
 	// handleSweepSandboxes for the cost argument.
 	operatorOnly.Post("/admin/sandboxes/sweep", s.handleSweepSandboxes)
+	// Standing runs (run_revive.go). SUPER: a restart replaces the proxy of
+	// runs the caller does not own, under each owner's own ceiling, and the
+	// listing reads the whole fleet.
+	operatorOnly.Get("/admin/runs/proxy-window", s.handleAdminProxyWindow)
+	operatorOnly.Post("/admin/runs/restart", s.handleAdminRestartRuns)
 }

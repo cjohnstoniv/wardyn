@@ -15,7 +15,7 @@ import (
 
 // Lost runs (long-holds design rev 4, §4 rows 2–3, RL-9). A run outlives its
 // sandbox: instead of failing and tearing down, an interactive run is KEPT,
-// like an ended one (run_lease.go), with its proxy removed so it has no
+// like an ended one (run_lease.go), with its proxy stopped so it has no
 // egress, its approvals cancelled and its broker credentials revoked. Its run
 // identity is kept for a later revive to mint from; nothing holds its token.
 //
@@ -32,7 +32,7 @@ import (
 // that cannot be kept fails closed and is torn down as before: a headless run
 // (the completion watcher that would finish it skips kept runs), a run past
 // its end and grace, a substrate that cannot keep a sandbox (Kubernetes), or a
-// proxy removal that fails.
+// proxy stop that fails.
 
 // runTokenLapseAfter is how long a RUNNING run may go without a renew before
 // its identity is dead. The proxy renews at least every 30 minutes and gives
@@ -43,7 +43,7 @@ import (
 const runTokenLapseAfter = time.Hour + 5*time.Minute
 
 // sweepLapsedRunTokens is the boot and sweep check: every RUNNING run whose
-// token lapsed is marked lost (outage) with its proxy removed, or torn down.
+// token lapsed is marked lost (outage) with its proxy stopped, or torn down.
 func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	if !ok || s.cfg.Runner == nil {
@@ -57,7 +57,7 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 		func() {
 			ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 			defer cancel()
-			if s.loseRun(ctx, loser, run, types.LostOutage, types.RunFailed) {
+			if s.loseRun(ctx, loser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter) {
 				return
 			}
 			s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef,
@@ -81,23 +81,20 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 	if *st.ExitCode == 0 {
 		terminal = types.RunCompleted
 	}
-	return s.loseRun(ctx, loser, run, types.LostReboot, terminal)
+	return s.loseRun(ctx, loser, run, types.LostReboot, terminal, 0)
 }
 
-// loseRun marks run lost for reason and removes its proxy. false means the run
+// loseRun marks run lost for reason and stops its proxy. false means the run
 // cannot be kept, and the caller's fail-closed arm applies. true means it is
 // taken care of: kept, torn down (as terminal) because its proxy could not be
 // removed, or left alone because the claim did not land (another replica took
 // it, a renew landed, or it went terminal) or could not be written (the next
-// pass retries).
-func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, run types.AgentRun, reason types.LostReason, terminal types.RunState) bool {
+// pass retries). tokenLife > 0 also requires the run's token to be lapsed by
+// that much still (MarkRunLost), so the sweep's mark loses to a renew.
+func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration) bool {
 	now := s.cfg.Now()
 	if !s.lostRunKeepable(run, now) {
 		return false
-	}
-	var tokenLife time.Duration
-	if reason == types.LostOutage {
-		tokenLife = runTokenLapseAfter
 	}
 	applied, err := loser.MarkRunLost(ctx, run.ID, reason, now, tokenLife)
 	if err != nil {
@@ -151,7 +148,7 @@ func (s *Server) keptUntil(run types.AgentRun) (time.Time, bool) {
 	}
 }
 
-// stopLostSandbox removes a lost run's proxy. An outage run inside its lease
+// stopLostSandbox stops a lost run's proxy. An outage run inside its lease
 // keeps its agent running; any other lost run (a reboot, or an outage past
 // its end) has its agent stopped as at the end.
 func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun, now time.Time) error {

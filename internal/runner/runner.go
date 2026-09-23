@@ -635,7 +635,7 @@ type Runner interface {
 
 // SandboxEnder is an OPTIONAL Runner capability: stop a sandbox and KEEP it
 // (the lease end, long-holds design rev 4). EndSandbox stops the agent without
-// removing it, so its files survive, and removes the proxy sidecar, so nothing
+// removing it, so its files survive, and stops the proxy sidecar, so nothing
 // the agent could restart has a network path. StopSandbox/KillSandbox still
 // tear the kept sandbox down later. Idempotent on a missing sandbox.
 //
@@ -650,16 +650,45 @@ type SandboxEnder interface {
 // whose substrate for ref cannot keep a stopped (or lost) sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
 
-// ProxyStopper is an OPTIONAL Runner capability: remove a sandbox's proxy
+// ProxyStopper is an OPTIONAL Runner capability: stop a sandbox's proxy
 // sidecar and leave its agent running (a run lost to a control-plane outage,
 // long-holds design rev 4 §4 row 2). The agent keeps its processes and files
-// but has no network path, because the proxy was its only one. Idempotent on
-// a missing proxy; an unresolvable ref is an error, never a success that left
-// the proxy up. A router in front of a substrate without it returns
-// ErrEndUnsupported.
+// but has no network path, because the proxy was its only one. The stopped
+// proxy is kept, not removed: its rendered config is what ProxyReviver reads
+// back, and teardown removes it with the rest of the sandbox. Idempotent on
+// a missing or already-stopped proxy; an unresolvable ref is an error, never a
+// success that left the proxy up. A router in front of a substrate without it
+// returns ErrEndUnsupported.
 type ProxyStopper interface {
 	StopProxy(ctx context.Context, ref string) error
 }
+
+// ProxyReviver is an OPTIONAL Runner capability: replace a sandbox's proxy
+// sidecar, running or stopped, with a new one while the agent keeps running
+// (proxy-only revive and restart with current limits, long-holds design rev 4
+// §4.1). The control plane reads the old config back, rewrites only its token
+// and its denies, and hands it to ReplaceProxy; the per-run MITM CA inside it
+// is carried over, never copied anywhere else.
+//
+// ReplaceProxy removes the old proxy first, then starts the new one on the
+// run's network at the address the agent's hosts entry pins. An error wrapping
+// ErrProxyReplaceFailed means the old proxy is gone and no new one runs: the
+// sandbox has no egress, and the caller must treat the run as lost. Any other
+// error left the old proxy as it was. A router in front of a substrate without
+// it (Kubernetes: the agent pins the proxy pod's IP) returns
+// ErrReviveUnsupported.
+type ProxyReviver interface {
+	ProxyConfig(ctx context.Context, ref string) ([]byte, error)
+	ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error
+}
+
+// ErrReviveUnsupported is ProxyReviver's answer from a router whose substrate
+// for ref cannot replace a proxy in place.
+var ErrReviveUnsupported = errors.New("runner: this substrate cannot replace a sandbox's proxy")
+
+// ErrProxyReplaceFailed marks a ReplaceProxy that removed the old proxy and
+// could not start the new one.
+var ErrProxyReplaceFailed = errors.New("runner: the old proxy was removed and the new one did not start")
 
 // Freezer is an OPTIONAL Runner capability: pause and resume the AGENT
 // container in place, without stopping it (runner Freeze/Thaw, long-holds

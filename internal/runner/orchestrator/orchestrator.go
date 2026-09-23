@@ -411,6 +411,34 @@ func (o *Orchestrator) StopProxy(ctx context.Context, ref string) error {
 	return stopper.StopProxy(ctx, ref)
 }
 
+// ProxyConfig forwards a proxy config read-back to ref's substrate when it can
+// replace a proxy in place (runner.ProxyReviver).
+func (o *Orchestrator) ProxyConfig(ctx context.Context, ref string) ([]byte, error) {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	rv, ok := s.(runner.ProxyReviver)
+	if !ok {
+		return nil, runner.ErrReviveUnsupported
+	}
+	return rv.ProxyConfig(ctx, ref)
+}
+
+// ReplaceProxy forwards a proxy replacement to ref's substrate; see
+// ProxyConfig. The route is kept: the agent is the same sandbox.
+func (o *Orchestrator) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	rv, ok := s.(runner.ProxyReviver)
+	if !ok {
+		return runner.ErrReviveUnsupported
+	}
+	return rv.ReplaceProxy(ctx, ref, cfgJSON)
+}
+
 // FreezeSandbox forwards a pause to ref's substrate when it implements
 // runner.Freezer (Docker/runc today). The route is kept: the sandbox still
 // exists, paused, and Thaw/Stop/Kill must still find its substrate.

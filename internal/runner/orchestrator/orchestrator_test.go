@@ -529,6 +529,44 @@ func TestOrchestrator_StopProxy(t *testing.T) {
 	}
 }
 
+// revivingSubstrate is a fakeSubstrate that can replace a proxy in place.
+type revivingSubstrate struct {
+	*fakeSubstrate
+	replaced []string
+}
+
+func (r *revivingSubstrate) ProxyConfig(context.Context, string) ([]byte, error) {
+	return []byte(`{"run_token":"t"}`), nil
+}
+
+func (r *revivingSubstrate) ReplaceProxy(_ context.Context, ref string, _ []byte) error {
+	r.rec(&r.replaced, ref)
+	return nil
+}
+
+// TestOrchestrator_ProxyReviver: a proxy-only revive reaches a substrate that
+// can replace a proxy in place; one that cannot (Kubernetes) answers
+// ErrReviveUnsupported for both halves.
+func TestOrchestrator_ProxyReviver(t *testing.T) {
+	ctx := context.Background()
+	oci := &revivingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	o := New(oci)
+	if cfg, err := o.ProxyConfig(ctx, "wardyn-agent-x"); err != nil || string(cfg) != `{"run_token":"t"}` {
+		t.Fatalf("ProxyConfig = %s, %v", cfg, err)
+	}
+	if err := o.ReplaceProxy(ctx, "wardyn-agent-x", nil); err != nil || len(oci.replaced) != 1 {
+		t.Fatalf("ReplaceProxy: %v, replaced %v", err, oci.replaced)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if _, err := k8s.ProxyConfig(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("ProxyConfig on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	}
+	if err := k8s.ReplaceProxy(ctx, "wardyn-agent-y", nil); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("ReplaceProxy on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	}
+}
+
 // freezingSubstrate is a fakeSubstrate that can pause/resume the agent.
 type freezingSubstrate struct {
 	*fakeSubstrate

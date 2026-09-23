@@ -29,6 +29,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // ErrNotFound is returned when a Get* call finds no row.
@@ -268,10 +269,14 @@ func (s PG) execRun(ctx context.Context, verb, query string, args ...any) error 
 	return nil
 }
 
-// SetSandboxRef records the runner reference (container ID / pod name).
+// SetSandboxRef records the runner reference (container ID / pod name). A
+// non-empty ref also records this release as the one that started the run's
+// proxy (proxy_release, migration 0072).
 func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
 	return s.execRun(ctx, "set sandbox ref",
-		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now() WHERE id=$2`, ref, id)
+		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now(),
+		   proxy_release = CASE WHEN $1 <> '' THEN $3 ELSE proxy_release END
+		 WHERE id=$2`, ref, id, version.Version)
 }
 
 // SetRunImage scoped-writes ONLY the resolved-image provenance column. Called

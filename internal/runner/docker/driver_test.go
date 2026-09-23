@@ -1174,7 +1174,7 @@ func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
 // the kept files), the proxy sidecar is removed (no network path), and the
 // per-run network stays. A second end is a no-op, and a later kill still tears
 // the kept sandbox down completely.
-func TestEndSandbox_StopsTheAgentKeepsItAndRemovesTheProxy(t *testing.T) {
+func TestEndSandbox_StopsTheAgentAndTheProxyAndKeepsThem(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
@@ -1194,8 +1194,8 @@ func TestEndSandbox_StopsTheAgentKeepsItAndRemovesTheProxy(t *testing.T) {
 	if agent == nil || agent.removed || agent.state == nil || agent.state.Status != "exited" {
 		t.Fatalf("agent after the end = %+v; want stopped and still present", agent)
 	}
-	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
-		t.Error("the proxy sidecar must be removed at the end — it is the agent's only network path")
+	if p := f.containers[proxyContainerName(runID)]; p == nil || p.removed || p.state == nil || p.state.Running {
+		t.Error("the proxy sidecar must be stopped at the end — it is the agent's only network path — and kept for a revive to read")
 	}
 	if _, ok := f.networks[internalNetName(runID)]; !ok {
 		t.Error("the per-run network was removed at the end; teardown owns it")
@@ -1204,19 +1204,20 @@ func TestEndSandbox_StopsTheAgentKeepsItAndRemovesTheProxy(t *testing.T) {
 	if err := d.KillSandbox(ctx, sb.Ref); err != nil {
 		t.Fatalf("KillSandbox of the kept sandbox: %v", err)
 	}
-	if !f.containers[sb.Ref].removed {
-		t.Error("a kill after the end must remove the kept agent container")
+	if !f.containers[sb.Ref].removed || !f.containers[proxyContainerName(runID)].removed {
+		t.Error("a kill after the end must remove the kept agent and proxy containers")
 	}
 	if _, ok := f.networks[internalNetName(runID)]; ok {
 		t.Error("a kill after the end must remove the per-run network")
 	}
 }
 
-// TestStopProxy_RemovesOnlyTheProxy is a run lost to a control-plane outage
-// on Docker: the proxy sidecar, the agent's only network path, is removed,
-// while the agent container keeps running so a proxy-only revive can pick it
-// up. A second stop is a no-op.
-func TestStopProxy_RemovesOnlyTheProxy(t *testing.T) {
+// TestStopProxy_StopsOnlyTheProxy is a run lost to a control-plane outage
+// on Docker: the proxy sidecar, the agent's only network path, is stopped and
+// kept (its config is what a revive reads back), while the agent container
+// keeps running so a proxy-only revive can pick it up. A second stop is a
+// no-op.
+func TestStopProxy_StopsOnlyTheProxy(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
@@ -1232,8 +1233,8 @@ func TestStopProxy_RemovesOnlyTheProxy(t *testing.T) {
 			t.Fatalf("StopProxy #%d: %v", i+1, err)
 		}
 	}
-	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
-		t.Error("the proxy sidecar was not removed")
+	if p := f.containers[proxyContainerName(runID)]; p == nil || p.removed || p.state == nil || p.state.Running {
+		t.Errorf("proxy after StopProxy = %+v; want it stopped and kept", p)
 	}
 	if agent := f.containers[sb.Ref]; agent == nil || agent.removed || agent.state == nil || !agent.state.Running {
 		t.Fatalf("agent after StopProxy = %+v; want it still running", agent)
