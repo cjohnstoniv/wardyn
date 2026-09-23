@@ -63,6 +63,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   that used to explain themselves only through a `title` tooltip — the record pane's operator-only
   Approve buttons and the Recordings search field and empty state — now state the reason in visible
   text a keyboard or touch user can actually read (#459).
+- **`wardynd`'s shutdown now waits for a run launch already under way (#749).** `POST /api/v1/runs`
+  answers 201 and then builds the image and dispatches the run in a detached goroutine. That
+  goroutine was not tracked, so a SIGTERM during `CreateSandbox` stopped the daemon partway through
+  dispatch, and the run stayed `STARTING` until the boot reconcile found it. The launch is now
+  tracked like the sign-in launch, and shutdown waits for it within the same bound.
 
 ### Changed
 
