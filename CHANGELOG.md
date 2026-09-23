@@ -145,6 +145,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   its own `claude_signin_image` row (never blocking — the kind is optional). See `docs/OPERATIONS.md`
   § Claude sign-in image.
 
+- **Console TS mirror of the model-provider server surface (#535).** `lib/types/setup.ts` gains
+  `SetupProviderAccess` and `SetupStatus.provider_access` (#533's wire shape), and three new API
+  clients mirror the doors the console's provider screens build on: `model-providers.ts`
+  (`GET`/`PUT /model-providers`, ETag/If-Match, #521/#523), `model-provider-credentials.ts`
+  (`PUT`/`DELETE /model-providers/{id}/credential`, write-only, #525) and
+  `model-provider-signin.ts` (`POST`/`PUT /model-providers/{id}/sign-in`, #534). No screen reads
+  them yet — the types and clients alone.
+
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

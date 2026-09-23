@@ -348,6 +348,22 @@ export interface SetupModelProvider {
   host: string;
 }
 
+// One provider's connection state for THIS PRINCIPAL (internal/api.
+// SetupProviderAccess, MP-12) — SetupModelAccess generalised per provider
+// rather than the one hardcoded AWS-only row. `state` is one of
+// SetupModelAccess's five live states; `shared_expired` is never produced
+// here (design doctrine: every credential is per person). `action` is
+// already composed by the server and rendered verbatim, exactly like
+// SetupModelAccess.action — never reworded client-side.
+export interface SetupProviderAccess {
+  provider: string;
+  state: "live" | "expiring" | "expired_signin" | "not_configured" | "not_applicable" | (string & {});
+  action?: string;
+  // RFC3339 UTC, only on a state `action` names an instant for. Same reading
+  // rule as SetupModelAccess.deadline.
+  deadline?: string;
+}
+
 export interface SetupStatus {
   ready: boolean;
   // Server-computed "does SOME run/compose LLM access path exist" (resident
@@ -376,6 +392,11 @@ export interface SetupStatus {
   // The model providers the caller may use. Absent with no provider block
   // (today), or when none serves an agent the caller may launch.
   model_providers?: SetupModelProvider[];
+  // THIS PRINCIPAL's own connection state for each provider in
+  // `model_providers` (MP-12) — one row per provider, graded against the
+  // caller's own credential. Same absence rule as `model_providers`: absent
+  // with no provider block, or when it lists none.
+  provider_access?: SetupProviderAccess[];
   // The CALLER's own Azure DevOps access state — ModelAccess's sibling.
   // Absent when no Azure DevOps row is configured at all.
   scm_access?: SCMAccess;
