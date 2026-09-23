@@ -126,7 +126,7 @@ func TestPackCeiling_BlobContentIsNotRetained(t *testing.T) {
 	body := append(commandSection("report-status", cmd), buildPack(t, objs...)...)
 
 	res, retained := retainedBy(t, body)
-	if len(res.Changes) != 4 || res.Changes[0].Size != 8<<20 {
+	if len(res.Changes) != 4 || res.Changes[0].size != 8<<20 {
 		t.Fatalf("Changes = %+v, want four 8 MiB blobs", res.Changes)
 	}
 	runtime.KeepAlive(res)

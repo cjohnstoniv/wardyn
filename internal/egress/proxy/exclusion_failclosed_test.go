@@ -40,8 +40,9 @@ func TestOwnSubnetExclusionFailsClosedWhenTheStartupCaptureFails(t *testing.T) {
 		// A control-plane host that cannot resolve: exactly the "lookup failed"
 		// case the comment describes. ".invalid" is reserved by RFC 2606 and
 		// never resolves.
-		ControlPlaneURL: "http://wardynd.this-host-does-not-exist.invalid:8080",
-		RunToken:        "tok",
+		ControlPlaneURL:   "https://wardynd.this-host-does-not-exist.invalid:8443",
+		ControlPlaneCAPEM: testCPCAPEM,
+		RunToken:          "tok",
 		Policy: types.RunPolicySpec{
 			AllowedDomains: []string{"registry.corp.internal"},
 		},

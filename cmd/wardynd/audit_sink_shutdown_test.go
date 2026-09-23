@@ -252,7 +252,7 @@ func TestServeAndShutdownDrainsSinksOnAServeError(t *testing.T) {
 		tlsTerminated: &no, trustDomain: &trust,
 	}
 	srv := api.New(api.Config{})
-	if serr := serveAndShutdown(rootCtx, f, tlsPosture{}, srv, "none", fan); serr == nil {
+	if serr := serveAndShutdown(rootCtx, f, tlsPosture{}, srv, "none", fan, nil); serr == nil {
 		t.Fatal("serveAndShutdown returned nil against an address already in use")
 	}
 

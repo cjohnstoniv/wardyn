@@ -438,19 +438,18 @@ func TestMemberMode_SecurityAdminSurfaceDeniedToo(t *testing.T) {
 	}
 }
 
-// TestMemberMode_RefusesTokenAndKeyMint: the two doors that must REFUSE rather
-// than clamp. OnLogin re-stamps every API token and SSH key of a principal to
-// their freshly derived role at the next sign-in (store.RefreshAPITokenRoles,
-// the ssh-key stamp refresh), so a credential minted "as a member" would
-// silently become admin — a credential that outlives the mode is the one thing
-// this feature must not leave behind.
-func TestMemberMode_RefusesTokenAndKeyMint(t *testing.T) {
+// TestMemberMode_RefusesTokenMint: the door that must REFUSE rather than
+// clamp. OnLogin re-stamps every API token of a principal to their freshly
+// derived role at the next sign-in (store.RefreshAPITokenIdentity), so a token
+// minted "as a member" would silently become admin — a credential that outlives
+// the mode is the one thing this feature must not leave behind. The SSH-key
+// door stores a capped key instead (TestSSHKeys_UserViewAddIsCapped).
+func TestMemberMode_RefusesTokenMint(t *testing.T) {
 	srv, _ := memberModeServer(t)
 	on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
 
 	for _, tc := range []struct{ name, path, body string }{
 		{"api token", "/api/v1/me/tokens", `{"name":"minted-in-member-mode"}`},
-		{"ssh key", "/api/v1/me/ssh-keys", `{"public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIbdmX7dazl2gKzTjv0xfDCp4wTapmeoUaItm/kYMQz9 who@host"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := doSSO(t, srv, http.MethodPost, tc.path, on, tc.body)

@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -140,7 +141,7 @@ func (r *repo) push(refspec string, extra ...string) []byte {
 func paths(changes []Change) []string {
 	out := make([]string, 0, len(changes))
 	for _, c := range changes {
-		out = append(out, fmt.Sprintf("%s %s %d", c.Path, c.Mode, c.Size))
+		out = append(out, fmt.Sprintf("%s %s %d", c.Path, c.Mode, c.size))
 	}
 	return out
 }
@@ -785,6 +786,50 @@ func TestPackChange_OpaqueIsEverythingButARegularFile(t *testing.T) {
 	} {
 		if got := (Change{Mode: mode}).Opaque(); got != want {
 			t.Errorf("Change{Mode: %q}.Opaque() = %v, want %v", mode, got, want)
+		}
+	}
+}
+
+// TestPackChange_UnknownSizeIsNeverWithinALimit is issue #251: an ordinary
+// second push reports a file the pack does not carry, and every submodule
+// pointer is one, so both are the common case. A size rule deciding with Within
+// must refuse them at any limit, never admit them because -1 is small.
+func TestPackChange_UnknownSizeIsNeverWithinALimit(t *testing.T) {
+	r := newRepo(t)
+	r.write("dir/b.txt", "b\n", 0o644)
+	r.write("dir/unchanged.txt", "still here\n", 0o644)
+	r.commit("one")
+	r.push("HEAD:refs/heads/main", "--no-thin")
+	r.write("dir/b.txt", "b two\n", 0o644)
+	r.git("update-index", "--add", "--cacheinfo",
+		"160000,1111111111111111111111111111111111111111,sub")
+	r.commit("two")
+	res, err := Inspect(r.push("HEAD:refs/heads/main", "--no-thin"))
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	wantChanges(t, res.Changes,
+		"dir/b.txt 100644 6",
+		"dir/unchanged.txt 100644 -1",
+		"sub 160000 -1",
+	)
+
+	for _, c := range res.Changes {
+		n, known := c.Size()
+		if c.Path == "dir/b.txt" {
+			if !known || n != 6 || !c.Within(6) || c.Within(5) {
+				t.Errorf("%s: Size() = %d, %v; Within(6) = %v, Within(5) = %v — want 6, true; true, false",
+					c.Path, n, known, c.Within(6), c.Within(5))
+			}
+			continue
+		}
+		if known {
+			t.Errorf("%s: Size() reports %d as known; the pack does not carry it", c.Path, n)
+		}
+		for _, limit := range []int64{0, 1 << 20, math.MaxInt64} {
+			if c.Within(limit) {
+				t.Errorf("%s: Within(%d) admitted a size the pack does not carry", c.Path, limit)
+			}
 		}
 	}
 }

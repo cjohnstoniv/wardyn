@@ -195,9 +195,11 @@ func requestedScopeHost(scope json.RawMessage) string {
 	return s.Host
 }
 
-// ExpireStale transitions all PENDING approvals that were requested before
-// the cutoff (time.Now().UTC().Add(-olderThan)) to EXPIRED and emits one
-// audit event per expiration. Returns the number of approvals expired.
+// ExpireStale transitions to EXPIRED every PENDING approval that was requested
+// before the cutoff (time.Now().UTC().Add(-olderThan)), or whose own ExpiresAt
+// (the run's wait and end) has passed, and emits one audit event per
+// expiration. Returns the number of approvals expired. The cutoff is the
+// deployment's ceiling and binds every row, whatever its run's wait says.
 func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, error) {
 	n, _, err := ExpireStaleByKind(ctx, st, olderThan)
 	return n, err
@@ -213,7 +215,8 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 // run whose sidecar had already given up. A separate function rather than a
 // changed signature: every existing caller asks the question it always asked.
 func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[types.ApprovalKind]int, error) {
-	cutoff := time.Now().UTC().Add(-olderThan)
+	now := time.Now().UTC()
+	cutoff := now.Add(-olderThan)
 
 	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
 	if err != nil {
@@ -231,7 +234,8 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 	// it could not, the shape FSStore.Sweep already uses.
 	var failures []error
 	for _, ap := range pending {
-		if ap.RequestedAt.After(cutoff) {
+		runBound := ap.ExpiresAt != nil && !ap.ExpiresAt.After(now)
+		if ap.RequestedAt.After(cutoff) && !runBound {
 			continue
 		}
 		// Scope is left at its zero value ("", not ScopeRun): an expiry is a
@@ -254,6 +258,7 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 		auditData, _ := json.Marshal(map[string]any{
 			"approval_id": ap.ID,
 			"cutoff":      cutoff,
+			"expires_at":  ap.ExpiresAt,
 		})
 		ev := types.AuditEvent{
 			ID:        uuid.New(),

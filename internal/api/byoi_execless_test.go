@@ -67,7 +67,7 @@ func TestStartAgentOrIdle_BYOIOnExecLessRuntime_RefusedWithoutWastingTheSlot(t *
 	cfg.Runner = rn
 	srv := New(cfg)
 
-	srv.startAgentOrIdle(context.Background(), run, "fake-"+runID.String(), "wardyn-byoi/custom:latest", false)
+	srv.startAgentOrIdle(context.Background(), run, "fake-"+runID.String(), "wardyn-byoi/custom:latest", false, nil)
 
 	if n := rn.execCount(); n != 0 {
 		t.Fatalf("Exec must never be called for a BYOI image on an exec-less runtime (a selftest exec would consume the sandbox's only process, guaranteeing the task exec that follows fails); got %d Exec calls", n)
@@ -128,7 +128,7 @@ func TestStartAgentOrIdle_BYOIOnExecCapableRuntime_StillRunsSelftest(t *testing.
 	cfg.Runner = rn
 	srv := New(cfg)
 
-	srv.startAgentOrIdle(context.Background(), run, "fake-"+runID.String(), "wardyn-byoi/custom:latest", false)
+	srv.startAgentOrIdle(context.Background(), run, "fake-"+runID.String(), "wardyn-byoi/custom:latest", false, nil)
 
 	// The selftest exec (1) plus the task exec (2) both fire on an ordinary
 	// (exec-capable) runtime.

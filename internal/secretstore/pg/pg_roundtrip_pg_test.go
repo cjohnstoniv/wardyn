@@ -3,10 +3,10 @@
 
 package pg
 
-// Postgres-backed integration tests for the age-encrypted secret store. These
-// exercise the REAL backend end-to-end against a live Postgres (Put/Get/List/
-// Delete) AND assert the at-rest invariant directly from the raw `secrets`
-// column: the stored bytes are age ciphertext, never the plaintext. They also
+// Postgres-backed integration tests for the envelope-encrypted secret store.
+// These exercise the REAL backend end-to-end against a live Postgres (Put/Get/
+// List/Delete) AND assert the at-rest invariant directly from the raw `secrets`
+// columns: the stored bytes are a v1 envelope, never the plaintext. They also
 // pin the boot-key fail-closed distinction the HIGH fix depends on — a decrypt
 // failure must be distinguishable from a genuine not-found.
 //
@@ -29,12 +29,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 )
-
-// ageHeaderIntro is the leading line every age-encrypted payload begins with.
-// age.Encrypt (used by Store.encrypt) writes this binary header intro; asserting
-// the at-rest column starts with it proves the value is age ciphertext, not the
-// caller's plaintext.
-var ageHeaderIntro = []byte("age-encryption.org/v1")
 
 // newPGStore connects to the live Postgres named by WARDYN_TEST_PG, ensures the
 // schema is migrated (so the `secrets` table exists), and returns a Store backed
@@ -106,9 +100,10 @@ func rawCiphertext(t *testing.T, pool *pgxpool.Pool, name string) []byte {
 
 // TestPGPutGetRoundTripAndCiphertextAtRest is the core round-trip plus the
 // at-rest invariant: Put then Get returns the plaintext verbatim, while the raw
-// `secrets.ciphertext` column is NOT the plaintext and IS age ciphertext (begins
-// with the age header intro). This pins that secrets are encrypted at rest, never
-// stored in the clear.
+// row is a v1 envelope — enc_version 1, this store's kek_id, a 60-byte wrapped
+// DEK (nonce ‖ 32-byte key ‖ tag) and a ciphertext exactly nonce + value + tag
+// long that does not contain the plaintext. This pins that secrets are
+// encrypted at rest, never stored in the clear.
 func TestPGPutGetRoundTripAndCiphertextAtRest(t *testing.T) {
 	s, pool, _ := newPGStore(t)
 	ctx := context.Background()
@@ -138,9 +133,16 @@ func TestPGPutGetRoundTripAndCiphertextAtRest(t *testing.T) {
 	if bytes.Contains(ct, plain) {
 		t.Error("ciphertext column CONTAINS the plaintext bytes; encryption is leaking the secret at rest")
 	}
-	if !bytes.HasPrefix(ct, ageHeaderIntro) {
-		t.Errorf("ciphertext does not look like age ciphertext (missing %q header intro); first bytes=%q",
-			ageHeaderIntro, firstN(ct, 32))
+	var version int16
+	var kekID string
+	var wrapped []byte
+	if err := pool.QueryRow(ctx, `SELECT enc_version, kek_id, wrapped_dek FROM secrets WHERE name=$1`, name).
+		Scan(&version, &kekID, &wrapped); err != nil {
+		t.Fatalf("read envelope columns: %v", err)
+	}
+	if version != 1 || kekID != s.kek.ID() || len(wrapped) != 12+32+16 || len(ct) != 12+len(plain)+16 {
+		t.Errorf("row is not a v1 envelope: enc_version=%d kek_id=%q len(wrapped_dek)=%d len(ciphertext)=%d; first bytes=%q",
+			version, kekID, len(wrapped), len(ct), firstN(ct, 32))
 	}
 }
 

@@ -529,7 +529,7 @@ func TestSweepRunWatchers_ExecLessRunNotFinalized(t *testing.T) {
 
 	// The dispatch phase under test: persists the real post-Exec value for an
 	// exec-less launch, exactly as it does mid-dispatchRun.
-	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false)
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
 
 	if err := srv.sweepRunWatchers(context.Background()); err != nil {
 		t.Fatalf("sweepRunWatchers: %v", err)
@@ -666,7 +666,7 @@ func TestDispatchExecIDWriteLostFailsTheRunLoudly(t *testing.T) {
 	cfg.BaseCtx = bootTestCtx(t)
 	srv := New(cfg)
 
-	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false)
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
 
 	// Retried exactly once before giving up — a single attempt turns a blip into
 	// a dead run, and an unbounded loop holds the dispatcher open forever.
@@ -721,7 +721,7 @@ func TestDispatchExecIDWritePersistsOnTheHappyPath(t *testing.T) {
 	cfg.BaseCtx = bootTestCtx(t)
 	srv := New(cfg)
 
-	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false)
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, nil)
 
 	if fake.setExecIDCalls != 1 {
 		t.Errorf("SetRunAgentExecID attempts = %d, want 1 on the happy path", fake.setExecIDCalls)

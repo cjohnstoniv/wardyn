@@ -24,7 +24,7 @@ func upstreamProxySidecarAccepts(t *testing.T, raw string) error {
 	t.Helper()
 	b, err := json.Marshal(map[string]any{
 		"run_id":             uuid.New().String(),
-		"control_plane_url":  "http://wardynd:8080",
+		"control_plane_url":  "http://127.0.0.1:8080", // loopback: this probe is about the upstream proxy
 		"run_token":          "tok",
 		"upstream_proxy_url": raw,
 	})
