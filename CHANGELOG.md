@@ -99,9 +99,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolve, mints, renewal, decisions, approvals, uploads — never the system roots and never
   `WARDYN_TRUSTED_CA_FILE`, which now applies to egress only. `http://` is refused at wardynd boot
   and at proxy start unless the host is loopback (`localhost`, `127.0.0.0/8`, `::1`, matched
-  literally). The chart, compose (Desktop and m′ included) and `scripts/run-host.sh` default to
-  `https://…:8443`; `/healthz` gains `proxy_hop_tls`. THREAT-MODEL B6 is updated: the transport is
-  TLS, the proxy's authentication is still a bearer token, not mTLS.
+  literally). Both ends require TLS 1.3. The chart, compose (Desktop and m′ included) and
+  `scripts/run-host.sh` default to `https://…:8443`; the chart gives that port its own NetworkPolicy
+  rule (this namespace and the runs namespace, never `networkPolicy.ingress.from`). `/healthz` gains
+  `proxy_hop_tls`. THREAT-MODEL B6 is updated: the transport is TLS, the proxy's authentication is
+  still a bearer token, not mTLS, and `wardyn-tetragon-ingest`'s audit-write-only bearer still
+  crosses in plaintext (integrity, not confidentiality; #606).
 
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each

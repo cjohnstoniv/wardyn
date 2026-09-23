@@ -115,7 +115,12 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// So the transport is owned UNCONDITIONALLY and Proxy is cleared explicitly:
 	// Transport.Clone() PRESERVES the proxy function. Everything else about
 	// DefaultTransport (timeouts, HTTP/2, keep-alives) is kept.
-	if client != nil && client.Transport == nil {
+	// A nil client is built here, never left to a callee's fallback: the only
+	// transport a control-plane call may ride is the pinned one below.
+	if client == nil {
+		client = &http.Client{Timeout: controlPlaneCallTimeout}
+	}
+	if client.Transport == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = nil
 		// A COPY, not the shared pointer: this transport has HTTP/2 enabled,

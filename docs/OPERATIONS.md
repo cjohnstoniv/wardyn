@@ -3110,11 +3110,13 @@ it.
   control-plane call and must be relaunched. To rotate early, stop `wardynd`,
   delete the row (`DELETE FROM secrets WHERE owned_by = '' AND name =
   'wardyn-internal-ca';`) and start it again.
-- **What is not on this hop.** `wardyn-tetragon-ingest` posts to the console
-  listener with its audit-write-only token and carries no credential value. The
-  console listener still serves `/api/v1/internal/*` for it, for test harnesses,
-  and for runs dispatched before the upgrade, which finish on the plaintext path
-  they started with. The proxy authenticates to `wardynd` with its run token
+- **What is not on this hop.** `wardyn-tetragon-ingest` still posts to the
+  console listener in plaintext with an audit-write-only bearer: an integrity
+  exposure, not a confidentiality one — a captured token can forge ground-truth
+  events until it rotates, and cannot read or mint a credential. Moving it onto
+  the TLS listener is #606. The console listener also still serves
+  `/api/v1/internal/*` for test harnesses and for runs dispatched before the
+  upgrade, which finish on the plaintext path they started with. The proxy authenticates to `wardynd` with its run token
   (bearer, not mTLS — `threatmodel/THREAT-MODEL.md` B6).
 
 ### Corporate TLS-inspection root
