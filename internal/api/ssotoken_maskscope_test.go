@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 )
 
-// TestUploadSSOToken_MaskPatternsAreRunScoped is the F007 regression. The
+// TestUploadSSOToken_MaskPatternsAreRunScoped is the regression. The
 // upload registered the blob's access_token/refresh_token with
 // MaskRegistry.AddGlobal, and those bytes are pure sandbox input — the handler
 // binds WHOSE IdP and WHICH run may write, never what the token itself

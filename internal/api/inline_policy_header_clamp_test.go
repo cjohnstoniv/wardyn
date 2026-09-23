@@ -18,7 +18,7 @@ func apiKeyRuleGrant(host, secret, header, format string) types.GrantSpec {
 	})}
 }
 
-// TestFilterMemberGrants_ReHeaderedGrantDropped is the F097 regression on the
+// TestFilterMemberGrants_ReHeaderedGrantDropped is the regression on the
 // CLAMP half. The member pairing check compared (host, secret, known_hosts)
 // only, so a member or profile grant that kept the operator's blessed pairing
 // and named a DIFFERENT header — or a different format — matched the operator's
@@ -64,7 +64,7 @@ func TestFilterMemberGrants_ReHeaderedGrantDropped(t *testing.T) {
 	}
 }
 
-// TestValidateEligibleGrant_FormatRule is the F097 regression on the VALIDATION
+// TestValidateEligibleGrant_FormatRule is the regression on the VALIDATION
 // half. The sink does fmt.Sprintf(format, secret) unconditionally
 // (formatInjectionValue), and the INTEGRATION authoring path has always rejected
 // a format that is not exactly one %s with no CR/LF — while the policy path for

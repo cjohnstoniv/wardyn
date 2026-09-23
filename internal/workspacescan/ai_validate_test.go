@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestMergeAdvice_ValidatesAdvisorOutput pins B11b-F6. The advisor is fed
+// TestMergeAdvice_ValidatesAdvisorOutput pins the following. The advisor is fed
 // UnrecognizedSamples — untrusted repo content — and its answer went into the
 // profile through cleanSet, which only trims and dedupes. So it bypassed
 // validateSuggestedHosts (the normalise + charset + dot + cap the deterministic

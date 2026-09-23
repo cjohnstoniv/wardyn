@@ -99,8 +99,8 @@ func (s *uiMemStore) wasTouched() bool {
 
 // touchCount is wasTouched's cardinal twin: a relayed WebSocket is ONE inbound
 // request for its whole life, so "was it touched at all" cannot tell an
-// open-and-idle editor apart from one the reaper is about to stop under
-// (B3-F3). Only a count > 1 proves a keepalive is running.
+// open-and-idle editor apart from one the reaper is about to stop for
+// keepalive strain. Only a count > 1 proves a keepalive is running.
 func (s *uiMemStore) touchCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

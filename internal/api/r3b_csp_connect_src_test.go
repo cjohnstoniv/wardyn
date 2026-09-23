@@ -44,7 +44,7 @@ func r3bServedCSP(t *testing.T, h *harness, host string) string {
 	return csp
 }
 
-// TestR3BCSPConnectSrcNamesThisOriginOnly is F248's pin. The console's ONLY
+// TestR3BCSPConnectSrcNamesThisOriginOnly is the finding's pin. The console's ONLY
 // outbound channel is the PTY-attach WebSocket, and connect-src is the one
 // directive that says where an injected script on this admin-bearing origin may
 // ship data. It shipped the bare `ws:` and `wss:` SCHEMES, which match ANY host

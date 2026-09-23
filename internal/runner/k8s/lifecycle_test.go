@@ -264,7 +264,7 @@ func TestTeardown_UnresolvedRunIDLabel(t *testing.T) {
 
 func intPtr(i int) *int { return &i }
 
-// TestTeardown_AgentPodAlreadyGoneStillSweepsProxySecretAndNetPols is B9-F1:
+// TestTeardown_AgentPodAlreadyGoneStillSweepsProxySecretAndNetPols is
 // the k8s twin of docker's TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork.
 //
 // teardown resolved the run id from the agent pod's own wardyn.run-id LABEL, so

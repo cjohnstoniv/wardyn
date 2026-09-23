@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
-// TestDecisionSinkCountsTheClosedArmDrop (B10-F6, first half): a decision emitted
+// TestDecisionSinkCountsTheClosedArmDrop (first half): a decision emitted
 // after the sink closed vanished with NO audit row and NO drop count — the
 // closed arm returned without touching the counter, so the sink's whole
 // "best-effort delivery, but the gap is summarized, not silent" posture had a

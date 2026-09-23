@@ -623,7 +623,7 @@ func TestRelayStripsHopByHopResponseHeaders(t *testing.T) {
 // so a tail that emitted a single generic source would still pass a one-route
 // test while making the decision log unable to say WHICH brokered call failed.
 //
-// F144: the table said "these four" and carried four rows while the dispatcher
+// the table said "these four" and carried four rows while the dispatcher
 // (local_routes.go) routed six calls into relayControlPlane. routeSSOToken —
 // the sandbox's WRITE channel to the operator-wide AWS SSO blob, and the only
 // 0%-covered handler in the file — and routeApprovalsCreate were both missing.
@@ -683,7 +683,7 @@ func TestBrokeredRouteControlPlaneDownDeniesAndFails502(t *testing.T) {
 	}
 }
 
-// TestBrokeredRouteTableCoversEveryDispatchedRoute is the F144 root cause: the
+// TestBrokeredRouteTableCoversEveryDispatchedRoute pins the root cause: the
 // fail-closed table was maintained by hand and fell one (in fact two) routes
 // behind the dispatcher, silently, for as long as the stale "these four" comment
 // had been wrong. Read the dispatcher's own switch and require a row per

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestIsBlockedIPCoversTheReservedResidual (F115, F131) is the proxy-side half
+// TestIsBlockedIPCoversTheReservedResidual is the proxy-side half
 // of the ipguard registry pin: the classification, not just the membership.
 //
 // isBlockedIP composes net.IP's loopback/link-local/multicast/unspecified

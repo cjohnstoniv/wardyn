@@ -30,7 +30,7 @@ func (s staleAuditStore) HasGroupTierAssignments(context.Context) (bool, error) 
 	return s.hasGroupTier, nil
 }
 
-// TestStaleSnapshotRefusalIsAudited is F227.
+// TestStaleSnapshotRefusalIsAudited .
 //
 // docs/OPERATIONS.md's "Every denial that isn't a 404" makes authz.denied the
 // record of every member denial that is not a plain foreign-resource 404. The

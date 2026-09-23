@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestDriveGrantHomeOverrideIsBackendChecked is F151.
+// TestDriveGrantHomeOverrideIsBackendChecked .
 //
 // types.ValidateUserDriveGrant holds only the grant ROW, so it cannot see which
 // substrate the drive it points at lands on, and it applies the DOCKER segment

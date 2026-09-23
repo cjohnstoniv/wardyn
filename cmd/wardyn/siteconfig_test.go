@@ -120,7 +120,7 @@ func TestSiteConfigApply_WarnsIntegrationsNotRestored(t *testing.T) {
 // onboarding_completed_at on any install whose operator finished the Getting
 // Started funnel, and `apply` forwards that document VERBATIM — no client-side
 // strip stands between the operator's file and the handler. That is why the
-// server had to stop 400ing it (R3 F025): the fix belongs in the one place
+// server had to stop 400ing it (R3): the fix belongs in the one place
 // every consumer routes through, and a strip added here instead would silently
 // re-break the hand-rolled curl and the MDM-delivered
 // /etc/wardyn/site-config.json, which no client of ours touches.
@@ -145,7 +145,7 @@ func TestSiteConfigApply_ForwardsTheOnboardingMark(t *testing.T) {
 }
 
 // TestSiteConfigApply_WarnsTheOnboardingMarkWasNotApplied is the CLI half of the
-// signal that REPLACED the 400 (R3 F025 fix-up): onboarding_completed_at is
+// signal that REPLACED the 400 (R3 fix-up): onboarding_completed_at is
 // server-owned, so a captured document's copy is dropped on the write. The
 // server says so with onboarding_completed_at_ignored, and `apply` must print
 // that the way it prints the integrations warning ten lines above — this file is
@@ -189,7 +189,7 @@ func TestSiteConfigApply_WarnsTheOnboardingMarkWasNotApplied(t *testing.T) {
 	}
 }
 
-// TestSiteConfigApply_NotesFieldsAnOlderClientCannotName pins F285: the server
+// TestSiteConfigApply_NotesFieldsAnOlderClientCannotName: the server
 // carries forward a stored value for any key the request body did not MENTION
 // (carryForwardUnnamedSiteConfigFields, internal/api/site_config.go), which
 // closes the silent erase for every client — but an operator applying a

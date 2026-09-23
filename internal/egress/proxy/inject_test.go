@@ -246,7 +246,7 @@ func requireTLSInj(host string, hdr injectedHeader) *injector {
 	return inj
 }
 
-// TestRequireTLSRefusesCleartextRequest (F110 residual): with require_tls on the
+// TestRequireTLSRefusesCleartextRequest (a residual): with require_tls on the
 // rule, a plain-HTTP request to that host is DENIED — not merely forwarded
 // uncredentialed.
 //

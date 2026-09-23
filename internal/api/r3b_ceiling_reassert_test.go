@@ -37,7 +37,7 @@ func r3bWalledRun(t *testing.T, profile string, deny []string) ([]types.AuditEve
 	return audit.events, run.ID
 }
 
-// TestR3BCeilingReassertAuditsEveryAssignedProfile is F175's pin.
+// TestR3BCeilingReassertAuditsEveryAssignedProfile is the finding's pin.
 //
 // reassertCeilingDenies documents itself as "ALWAYS audited when a profile
 // applies, even with nothing to drop", and docs/AUDIT-ACTIONS.md says the same

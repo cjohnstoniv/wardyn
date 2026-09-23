@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// TestRunToken_NeverPrintedInUsage is the wardyn-rec half of F157. `-run-token`
+// TestRunToken_NeverPrintedInUsage is the wardyn-rec half of the fix. `-run-token`
 // took its default from os.Getenv("WARDYN_RUN_TOKEN"); flag captures whatever
 // default it is handed as Flag.DefValue, and the FlagSet's usage block —
 // printed on -help and on ANY parse error — renders a non-empty string default

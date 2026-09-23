@@ -741,7 +741,7 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 	if hasWarn(warns, "auto_stop_after_sec") {
 		t.Errorf("unexpected auto_stop_after_sec warning with no ceiling opinion: %v", warns)
 	}
-	// F062, replacing the W14-S1-3 assertion that used to stand here. That one
+	// the finding, replacing the W14-S1-3 assertion that used to stand here. That one
 	// pinned "-1 is rewritten to 0, with a warning" — a rewrite that changed the
 	// NUMBER and not the OUTCOME: internal/lifecycle's reaper skips every run
 	// whose policy value is <= 0, so 0 and -1 are the same never-reaped run. It

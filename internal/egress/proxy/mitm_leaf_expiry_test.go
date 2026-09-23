@@ -54,7 +54,7 @@ func seedExpiredLeaf(t *testing.T, a *certAuthority, host string) *tls.Certifica
 	return cert
 }
 
-// TestLeafForRemintsAnExpiredCachedLeaf pins F078: the per-host leaf cache must
+// TestLeafForRemintsAnExpiredCachedLeaf: the per-host leaf cache must
 // consult NotAfter.
 //
 // leafFor cached a minted leaf and returned it on every later call with no

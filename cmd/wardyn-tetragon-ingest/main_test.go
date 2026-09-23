@@ -122,7 +122,7 @@ func TestTailExport_ReadsRotatedFileFromStart(t *testing.T) {
 		"post-rotation event B was dropped: tailer seeked to END of the rotated file instead of START")
 }
 
-// TestTailExport_LogsOnUnopenableExportFile covers F158: openFile's os.Open
+// TestTailExport_LogsOnUnopenableExportFile: openFile's os.Open
 // error was discarded with `return false` and no log at any level, so a
 // typo'd/unreadable -export path left the sensor silently blind forever while
 // heartbeats and the stats loop kept printing as if it were healthy.
@@ -259,7 +259,7 @@ func TestTailExport_ReassemblesLineSplitAcrossEOF(t *testing.T) {
 }
 
 // TestTailExport_CapsPendingLineAt1MiB is the red-first regression for
-// B12b-F9: pending accumulated an unterminated export line with no bound at
+// pending accumulated an unterminated export line with no bound at
 // all, so a stretch of writes with no '\n' (a corrupted write, or Tetragon
 // itself emitting one abnormally long record) grew tailExport's own memory
 // without limit — the tail loop cannot refuse to read the file it is handed.

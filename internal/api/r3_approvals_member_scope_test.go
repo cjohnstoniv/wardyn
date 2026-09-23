@@ -68,7 +68,7 @@ func (s *scopedApprovals) ListApprovalsPage(_ context.Context, state types.Appro
 	return out, nil
 }
 
-// TestMemberApprovalListIsOwnershipScoped is F125's missing counterfactual.
+// TestMemberApprovalListIsOwnershipScoped is the finding's missing counterfactual.
 //
 // handleListApprovals narrows a member's UNSCOPED GET /approvals to approvals on
 // runs they created, and fails CLOSED with 500 when the backend cannot do it.

@@ -30,7 +30,7 @@ func authFailedRows(t *testing.T, h *harness) []struct{ Actor, Reason, Target st
 	return out
 }
 
-// TestInternalLaneRefusalsAreAudited is the pin for F068.
+// TestInternalLaneRefusalsAreAudited is the pin for the finding.
 //
 // internalAuth and internalAuthGroundtruth are the trust boundary between the
 // UNTRUSTED sandbox / host sensor and the control plane, and

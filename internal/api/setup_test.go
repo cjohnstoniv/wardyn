@@ -742,7 +742,7 @@ func TestAgentImageCheck(t *testing.T) {
 	}
 }
 
-// TestRedactSetupStatusForMember_DropsHostCredentialPosture closes F196.
+// TestRedactSetupStatusForMember_DropsHostCredentialPosture .
 // The redaction dropped the deployer's checklist (checks/providers/secret
 // names/runner detail) but left three fields that describe the OPERATOR'S HOST
 // rather than anything a member can act on:
@@ -777,7 +777,7 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 			HasCredentials: true,
 		},
 		Deployment: SetupDeployment{HostLike: true},
-		// RIDER B7-F6: populated so this fixture can actually see the leak —
+		// RIDER populated so this fixture can actually see the leak —
 		// TestRedactSetupStatusForMember_DropsHostCredentialPosture never did,
 		// which is exactly why the passthrough went unnoticed this long.
 		Bedrock: SetupBedrock{
@@ -810,7 +810,7 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	if !got.ChecksRedacted {
 		t.Error("checks_redacted = false — a member's stripped body must say the detail was withheld, not merely be empty")
 	}
-	// RIDER B7-F6: SetupBedrock rebuilt from an explicit field list, exactly
+	// RIDER SetupBedrock rebuilt from an explicit field list, exactly
 	// like Runner two lines up. Region/Model name the AWS transport this
 	// deployment reaches Anthropic through; CredsPresent/AWSMount/
 	// BearerPresent/SSOPresent are which of four AWS credential LANES are

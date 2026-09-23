@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestDenyAlwaysReject_BedrockLaneIsGuarded pins F019: the "which host is this
+// TestDenyAlwaysReject_BedrockLaneIsGuarded: the "which host is this
 // run's model provider" question had TWO implementations, and denyAlwaysReject —
 // the guard whose whole job is to refuse a deny·always that permanently breaks a
 // workspace's model access — consulted the anthropic/openai-only one. The Bedrock

@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestResolveLLMInspectionSecrets_ReservedNamesRefused is the F126 regression.
+// TestResolveLLMInspectionSecrets_ReservedNamesRefused is the regression.
 // resolveLLMInspectionSecrets resolves each workspace_secret_name to PLAINTEXT
 // on the policy copy dispatch hands the proxy sidecar, which makes it a
 // credential SINK — and sinkReservedSecret is the guard every sink takes

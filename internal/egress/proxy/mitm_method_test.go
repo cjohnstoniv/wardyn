@@ -46,7 +46,7 @@ func mitmProxyMethods(t *testing.T, methods []string, upstream *httptest.Server)
 	return p, buf, certPEM
 }
 
-// TestMITMInnerRequestHonoursAllowedMethods pins F107: allowed_methods is
+// TestMITMInnerRequestHonoursAllowedMethods: allowed_methods is
 // enforced on the requests INSIDE a TLS-terminated tunnel, not only on the
 // CONNECT that opened it.
 //

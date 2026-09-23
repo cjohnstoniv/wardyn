@@ -185,7 +185,7 @@ func TestEnsureImage_MissingHintsMakeTarget(t *testing.T) {
 	}
 }
 
-// TestEnsureImage_MissingDoesNotHintMakeTargetForANonDemoRef is B9-F8: the
+// TestEnsureImage_MissingDoesNotHintMakeTargetForANonDemoRef is the
 // hint is only true for the demo tags `make agent-images` actually builds. On
 // any OTHER ref — an operator's own registry image, a workspace-built
 // wardyn-workspace/... tag — it is advice that cannot work, and it buries the

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestSpoolRestartReplaysOnlyTheInFlightBatch is F219.
+// TestSpoolRestartReplaysOnlyTheInFlightBatch .
 //
 // Drain retires work by advancing a byte cursor and only REWRITES the file when
 // the reclaim pays for itself (at least half), so between compactions the cursor

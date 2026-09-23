@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestEvict_GenerationBumpsOnlyOnARealDelete pins the verifier's correction to
-// B11b-F8. The finding's own fix — make RunIDs return the cache-only ids too —
+// TestEvict_GenerationBumpsOnlyOnARealDelete pins the verifier's correction.
+// The finding's own fix — make RunIDs return the cache-only ids too —
 // is only safe alongside this one: Evict bumped gen UNCONDITIONALLY, and gen is
 // the cache key for EVERY run, so a sweep that newly evicts N cache-only ids
 // would invalidate every live run's cached Masker N times and re-derive it
@@ -55,7 +55,7 @@ func TestEvict_GenerationBumpsOnlyOnARealDelete(t *testing.T) {
 	}
 }
 
-// TestRunIDs_IncludesCacheOnlyRuns is B11b-F8 itself: the eviction lane's only
+// TestRunIDs_IncludesCacheOnlyRuns pins the fix itself: the eviction lane's only
 // input is RunIDs, and it listed the per-run map alone — so a run that never
 // registered a secret but DID have a Masker derived for it (a scan run, a
 // grantless run) was invisible to the sweep and its cached corpus lived for the

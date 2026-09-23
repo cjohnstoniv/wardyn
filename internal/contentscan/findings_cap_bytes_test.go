@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestFieldPathIsBoundedInBytes pins the F075 fix-up's first half: the
+// TestFieldPathIsBoundedInBytes pins the fix-up's first half: the
 // per-request cap bounds the NUMBER of findings, and nothing bounded their
 // SIZE.
 //
@@ -103,7 +103,7 @@ func isValidUTF8(s string) bool {
 	return true
 }
 
-// TestAlertModeKeepsTheHighSeverityFindingBehindCheapNoise pins the F075
+// TestAlertModeKeepsTheHighSeverityFindingBehindCheapNoise pins the
 // fix-up's second half: severity priority in EVERY mode.
 //
 // The keep-back used to be `e.mode == ModeBlock && …`, so in alert mode —
@@ -167,7 +167,7 @@ func TestAlertModeKeepsTheHighSeverityFindingBehindCheapNoise(t *testing.T) {
 	}
 }
 
-// TestFindingsCappedIsRecordedBehindAnEarlierSkipReason pins the F075 fix-up's
+// TestFindingsCappedIsRecordedBehindAnEarlierSkipReason pins the fix-up's
 // fourth item: SkipReason holds ONE value and the first writer keeps it, so a
 // body whose first span was oversize reported span_oversize and said nothing at
 // all about the truncation that followed. The flag has to be separate.

@@ -71,7 +71,7 @@ func (s *roleMapTokenStore) liveRoles() map[string]string {
 	return out
 }
 
-// TestRoleMappingWriteReportsStaleTokenSnapshots is F112.
+// TestRoleMappingWriteReportsStaleTokenSnapshots .
 //
 // An api_token's role is stamped at MINT and read verbatim on every request;
 // since 0.7 that stamp can be security_admin. The sibling credential got a bound
@@ -207,7 +207,7 @@ func jsonHasKey(t *testing.T, body, key string) bool {
 	return ok
 }
 
-// TestRoleMappingDemotionRevokesTheStampedTokens is F112's owner adjudication:
+// TestRoleMappingDemotionRevokesTheStampedTokens is the finding's owner adjudication:
 // "the role-mapping write and delete paths call revokeAPITokensFor for a
 // principal whose derived role drops, so demotion is effective immediately".
 //
@@ -302,7 +302,7 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 			t.Errorf("audit data = %v, want tokens_revoked 2 — the audit trail is the system of record for a demotion", data)
 		}
 
-		// AND THE COUNT IS NOT THE WHOLE RECORD (B5-F3 residual). The
+		// AND THE COUNT IS NOT THE WHOLE RECORD (a residual case). The
 		// unanswerable-snapshot arm revokes EVERY elevated stamp it cannot
 		// re-derive — sub-dan's token names no group at all — so "2" alone
 		// cannot answer "whose credentials did that edit kill". Each revoked

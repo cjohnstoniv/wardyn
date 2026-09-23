@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestLLMUpstreamPathIsTheClassifiedPath pins F035: the path content inspection
+// TestLLMUpstreamPathIsTheClassifiedPath: the path content inspection
 // JUDGED and the path the upstream RECEIVES must be the same bytes.
 //
 // classifyLLM keys on `rest`, which is derived from r.URL.Path — the

@@ -25,9 +25,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── B6-F2 + B6-F5: a rejected session gets its OWN answer ───────────────────
+// ─── a rejected session gets its OWN answer ───────────────────
 
-// TestSessionRejectionResponse is the reason→answer table B6-F2 and B6-F5 are
+// TestSessionRejectionResponse is the reason→answer table this test and its sibling are
 // both one edit of. The 503 is the load-bearing row: a revocation-store outage
 // used to fall through to adminAuth and answer 401 "missing bearer token",
 // which drove the console's sign-in gate, which drove a successful SSO login
@@ -82,7 +82,7 @@ func expiredSSOSession(t *testing.T, sub, email, role string) *http.Cookie {
 }
 
 // TestRejectedSessionAnswersItself drives the two rejection reasons a zero-value
-// Authenticator can produce end to end through the REAL router. Before B6-F5,
+// Authenticator can produce end to end through the REAL router. Before this fix,
 // an OIDC-only deployment (admin token unset, which cmd/wardynd itself
 // recommends) answered every one of them "admin token not configured; public
 // API disabled" — a sentence about the deployment's configuration, for a human
@@ -148,7 +148,7 @@ func TestRejectedSessionAnswersItself(t *testing.T) {
 	// the residual that leaves. An unknown `wdn_` token (a console holding a
 	// stale one in localStorage) suppresses the 503 short-circuit, hits
 	// ErrNotFound in apiTokenAuth, falls through to adminAuth and gets 401 —
-	// so the sign-in loop B6-F2 closes is still reachable this one narrow way.
+	// so the sign-in loop this guard closes is still reachable this one narrow way.
 	//
 	// It is NOT a regression (the base did the same) and the alternative —
 	// answering 503 whenever a bearer is present — would break the static admin
@@ -176,7 +176,7 @@ func TestRejectedSessionAnswersItself(t *testing.T) {
 }
 
 // errRevocations is a SessionRevocations whose store is down — the condition
-// B6-F2 is about, on the lane where it IS reachable end to end.
+// this test is about, on the lane where it IS reachable end to end.
 type errRevocations struct{ err error }
 
 func (e errRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
@@ -186,7 +186,7 @@ func (e errRevocations) IsSessionRevoked(context.Context, string, string, time.T
 func (e errRevocations) RevokeSub(context.Context, string) error { return nil }
 func (e errRevocations) RevokeAll(context.Context) error         { return nil }
 
-// TestAPITokenRevocationOutageIs503 pins the api-token half of B6-F2: the same
+// TestAPITokenRevocationOutageIs503 pins the api-token half of the same
 // unanswerable revocation check that now 503s on the SSO lane answered 500
 // here, so the two lanes disagreed about whether a database incident is the
 // client's fault. 503 is the honest status — retry later, nothing is wrong with
@@ -218,7 +218,7 @@ func TestAPITokenRevocationOutageIs503(t *testing.T) {
 	}
 }
 
-// ─── B6-F4: driver text stays in the log, never in the body ──────────────────
+// ─── driver text stays in the log, never in the body ──────────────────
 
 // errRunStore fails GetRun with a wrapped pgx-shaped error: the real ones carry
 // the DB host, port, user and database name plus the SQLSTATE and the table or
@@ -247,7 +247,7 @@ func (s errRunStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }
 
-// TestServerErrorsDoNotLeakDriverText pins B6-F4: ~149 sites wrote
+// TestServerErrorsDoNotLeakDriverText pins ~149 sites wrote
 // `err.Error()` straight into a 5xx body, and the member tier reaches plenty of
 // them — so an ordinary member could read the deployment's database host, port
 // and schema out of a transient store failure. The chokepoint logs the error and
@@ -278,7 +278,7 @@ func TestServerErrorsDoNotLeakDriverText(t *testing.T) {
 	// R-01: servePage serves /runs, /approvals, /audit, /policies AND
 	// /workspaces. A member whose WORKSPACE list 500s must not be told that
 	// listing RUNS failed — that is a sentence about a route they did not call,
-	// and it is the exact legibility B6-F4's own rationale rests on.
+	// and it is the exact legibility this test's rationale rests on.
 	ws := do(t, srv, http.MethodGet, "/api/v1/workspaces", adminToken, "")
 	if ws.Code != http.StatusInternalServerError {
 		t.Fatalf("workspace list: status = %d, want 500; body=%s", ws.Code, ws.Body.String())

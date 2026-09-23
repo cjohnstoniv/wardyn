@@ -128,7 +128,7 @@ func TestGrantPairingIsExact(t *testing.T) {
 	}
 }
 
-// TestAPIKeyPairingIncludesRequireTLS (F110 residual): require_tls is part of an
+// TestAPIKeyPairingIncludesRequireTLS (a residual): require_tls is part of an
 // api_key grant's IDENTITY, for the mirror of the reason header/format are.
 //
 // Without it the flag is decorative on every path a member's inline policy takes:

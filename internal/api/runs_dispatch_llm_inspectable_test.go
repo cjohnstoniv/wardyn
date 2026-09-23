@@ -27,7 +27,7 @@ func (s *inspectableGateStore) UpdateRunStateIf(_ context.Context, _ uuid.UUID, 
 	return true, nil
 }
 
-// TestEnforceInspectableLLM_BedrockBearerIsOpaque is the F048 regression.
+// TestEnforceInspectableLLM_BedrockBearerIsOpaque is the regression.
 // require_inspectable_llm is a RUNTIME guarantee (policy.go) and THREAT-MODEL
 // 5.1a promises a strict operator that an opaque-transport run fails CLOSED at
 // schedule time, with "Bedrock stays opaque regardless". The gate exempted the

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestCeilingResolvesOnTheAnswerableIdentityOnly is F349.
+// TestCeilingResolvesOnTheAnswerableIdentityOnly .
 //
 // resolveEffectiveCeiling's stale arm carries the rule as a comment: "The
 // unusable half must not be MATCHED against. Passing a truncated list would

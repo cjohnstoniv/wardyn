@@ -529,7 +529,7 @@ func TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects(t *t
 	}
 }
 
-// TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem is B7-F9:
+// TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem:
 // an unknown ecosystem key used to resolve to ecosystemPublicURL[eco] == "",
 // which the fold happily emitted as an EgressRedirect with From="" —
 // validateSiteConfig's NEXT pass then 400ed it as `egress_redirects[0]:
@@ -788,7 +788,7 @@ func TestValidateSiteConfig_RedirectEndpointPort(t *testing.T) {
 	}
 }
 
-// TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm is B7-F8:
+// TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm:
 // ScmHosts/EgressRedirects[].{From,To}/UpstreamProxyURL used to save whatever
 // case/whitespace the operator typed — validSiteHost/HostOf only trim+lower a
 // THROWAWAY copy to check it, never the stored string — so findEgressRedirect's
@@ -848,7 +848,7 @@ func TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm(t *testing.T) {
 	}
 }
 
-// TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets is B7-F4: the
+// TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets is the
 // datum used to answer ONLY upstream_proxy_configured (a bool) — two PUTs
 // naming two DIFFERENT proxy URLs produced the IDENTICAL audit row, so a
 // review could tell THAT the proxy changed but never TO WHAT, nor what the

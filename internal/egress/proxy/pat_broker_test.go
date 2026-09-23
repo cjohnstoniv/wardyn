@@ -36,7 +36,7 @@ func newPATBrokerUpstream(t *testing.T, token, username string) *gitBrokerUpstre
 // operator's GrantSpec.TTLSeconds up to the 1h cap, so an operator can author a
 // grant whose whole life is shorter than a cache margin. The fixture that
 // stated NO expiry exercised only brokeredToken's unparseable-response arm
-// (expiresAt == 0, cache forever), which is why the 5-minute margin bug (F120)
+// (expiresAt == 0, cache forever), which is why the 5-minute margin bug
 // survived a green cache pin.
 func newPATBrokerUpstreamTTL(t *testing.T, token, username string, ttl time.Duration) *gitBrokerUpstream {
 	t.Helper()
@@ -132,7 +132,7 @@ func TestPATBrokerClonesGrantedHost(t *testing.T) {
 	if up.mintCalls != 1 {
 		t.Fatalf("mintCalls = %d, want 1 (the PAT is minted server-side and cached per grant)", up.mintCalls)
 	}
-	// F014: the row must name the FORGE it dialled. Logged through
+	// the row must name the FORGE it dialled. Logged through
 	// emitLocalDecision it named the CONTROL PLANE, so a clone of gitlab.com and
 	// a credential mint were the same row, and two granted forges could not be
 	// told apart at all — in the one stream an egress review reads.
@@ -252,7 +252,7 @@ func TestPATBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
 	}
 }
 
-// F085: the smart-HTTP verb check reads the DECODED path, so a '#' (%23) or '?'
+// the smart-HTTP verb check reads the DECODED path, so a '#' (%23) or '?'
 // (%3F) inside the sandbox-supplied rest used to satisfy the "/info/refs" suffix
 // and then re-split the concatenated upstream URL — the brokered PAT delivered
 // to an arbitrary path on the granted forge (the forge's REST API included),
@@ -364,7 +364,7 @@ func newPATApprovalUpstream(t *testing.T, token string, approvalID uuid.UUID, ap
 	return u
 }
 
-// F120: ONE clone is ONE mint on the git_pat lane too.
+// ONE clone is ONE mint on the git_pat lane too.
 //
 // patToken used to call the control-plane mint route on every sub-request, and
 // a clone is two of them (GET info/refs, then POST git-upload-pack). An
@@ -397,7 +397,7 @@ func TestPATBrokerCachesTheMintAcrossOneClone(t *testing.T) {
 }
 
 // TestPATBrokerCachesAShortTTLMintAcrossOneClone is the same contract for the
-// grant shape the cache used to fail on outright (F120 fix-up).
+// grant shape the cache used to fail on outright (the fix-up).
 //
 // The freshness margin was injectRefreshMargin (5m), sized for a rotating
 // INJECTED credential. A git_pat grant states a real expiry and an operator may
@@ -435,7 +435,7 @@ func TestPATBrokerCachesAShortTTLMintAcrossOneClone(t *testing.T) {
 	}
 }
 
-// F120: a PENDING credential approval must be waited out, not returned as a 502.
+// a PENDING credential approval must be waited out, not returned as a 502.
 //
 // The broker mints server-side with no caller able to retry, so the GitHub lane
 // polls the same approval itself (W23-S1-1 / W19-W19a-1). patToken returned an

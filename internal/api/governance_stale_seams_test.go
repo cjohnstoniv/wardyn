@@ -20,9 +20,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded is F227's cross-cutting half.
+// TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded is the finding's cross-cutting half.
 //
-// F227 is that a member-reachable groups_snapshot_stale 403 left no
+// the finding is that a member-reachable groups_snapshot_stale 403 left no
 // authz.denied row, against docs/OPERATIONS.md's "Every denial that isn't a
 // 404" section's categorical claim that every member denial which is not a
 // plain foreign-resource 404 is audited. The
@@ -36,7 +36,7 @@ import (
 // THAT ARGUMENT IS ONLY TRUE WHILE THE DECIDING SITES ARE THE ONLY SOURCE. A
 // seam that raised errGroupsSnapshotStale itself — a new resolver, a copy of the
 // unusable-groups arm, a shortcut that skips effectiveCeiling — would refuse a
-// member with the documented sentence and record nothing, which is F227 again at
+// member with the documented sentence and record nothing, which is the finding again at
 // a site nobody thought to look at. Nothing executed that claim; the seams are
 // spread across policies.go, secrets.go, inline_policy.go,
 // runs_create_validate.go, workspace_run.go, profile.go and user_drives.go, and
@@ -157,7 +157,7 @@ func callsNamed(fn *ast.FuncDecl, name string) bool {
 	return found
 }
 
-// TestDrivePreviewWritesNoDenial is F227's residue.
+// TestDrivePreviewWritesNoDenial is the finding's residue.
 //
 // The emit landed at the deciding sites, and BOTH of them are reached by the
 // admin drive preview: drivePreviewDoorIsOpen resolves the previewed principal's
@@ -170,7 +170,7 @@ func callsNamed(fn *ast.FuncDecl, name string) bool {
 // handlePreviewUserDrive's own doc has always said this endpoint is "STILL NOT
 // AUDITED … nothing is minted and nothing changes", so the tree stated the rule
 // and then broke it. A denial stream with the wrong person in it is worse than
-// the silence F227 set out to fix: the silence was at least honest about who had
+// the silence the finding set out to fix: the silence was at least honest about who had
 // been refused.
 func TestDrivePreviewWritesNoDenial(t *testing.T) {
 	st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: true}

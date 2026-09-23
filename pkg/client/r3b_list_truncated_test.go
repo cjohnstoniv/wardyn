@@ -32,7 +32,7 @@ func r3bTruncatedServer(t *testing.T, truncated bool) *client.Client {
 	return client.New(srv.URL, "tok")
 }
 
-// TestR3BListFamiliesSurfaceTruncation is F265's pin.
+// TestR3BListFamiliesSurfaceTruncation is the finding's pin.
 //
 // The package doc names X-Wardyn-Truncated as THE pagination contract for "the
 // list endpoints and the audit trail", but only AuditEventsPage honoured it:

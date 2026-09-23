@@ -328,7 +328,7 @@ func auditTriggerEnabled(t *testing.T, pool *pgxpool.Pool, name string) bool {
 	return n == 1
 }
 
-// TestMigrateRestoresADisabledChainTrigger covers the half of F11 H2 that the
+// TestMigrateRestoresADisabledChainTrigger covers the half of the finding H2 that the
 // DROP probe does not: ALTER TABLE ... DISABLE TRIGGER leaves the catalog row in
 // place, so a check that only asked "does it exist" would pass on a table where
 // the chain never fires — the quietest version of the same hole, and the one an

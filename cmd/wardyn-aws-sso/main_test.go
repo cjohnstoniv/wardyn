@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/test/awsssofake"
 )
 
-// TestRun_NeverInvokesAWSCLIForAccountRoleLookup covers F160: run() used to
+// TestRun_NeverInvokesAWSCLIForAccountRoleLookup: run() used to
 // best-effort shell out to `aws sso list-accounts`/`list-account-roles
 // --access-token <token>`, putting the live SSO access token on that child
 // process's own argv — readable by any /proc reader in the sandbox sharing
@@ -85,7 +85,7 @@ func TestRun_NeverInvokesAWSCLIForAccountRoleLookup(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("the aws CLI stub was invoked — the live SSO access token would have been placed on its argv (F160)")
+		t.Fatal("the aws CLI stub was invoked — the live SSO access token would have been placed on its argv")
 	}
 	if uploaded == nil {
 		t.Fatal("expected an sso-token upload to have happened")

@@ -150,7 +150,7 @@ func TestProbeF4_SessionRecorder_MidEscapeTailWithheldThenFlushed(t *testing.T) 
 	if out != want {
 		t.Fatalf("decoded cast output = %q, want %q (withheld escape tail dropped or corrupted by finish)", out, want)
 	}
-	// Framed bytes AND reassembled payload (F147): the secret here is never
+	// Framed bytes AND reassembled payload: the secret here is never
 	// written in full, so the framed-only search was equally incapable of
 	// failing — a later change that DID emit it split across two events would
 	// have gone unnoticed.

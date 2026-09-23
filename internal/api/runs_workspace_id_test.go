@@ -494,12 +494,12 @@ func TestResolveWorkspaceImage_RepoOwnDevcontainerWinsVerbatim(t *testing.T) {
 		//
 		// Both halves of what handleBuildWorkspace's success path leaves behind
 		// are replayed here, because the READER consults the row and not just
-		// the tracker (B4-F2): resolveWorkspaceImage's SetWorkspaceBuiltImage is
+		// the tracker: resolveWorkspaceImage's SetWorkspaceBuiltImage is
 		// what puts the ref and this lane's own cache key on the workspace, and
 		// the fake records rather than applies it — the same store-write replay
 		// TestResolveBuildView_AgreesWithBuiltHash already does. Asserting off
 		// the tracker alone pinned an artefact of the fake: a ref that lives
-		// only in this process's memory is exactly the stale "done" B4-F2 exists
+		// only in this process's memory is exactly the stale "done" this guard exists
 		// to stop.
 		ws.ImageRef, ws.BuiltProfileHash = built, st.builtHash
 		srv.builds.finish(ws.ID, built, "")

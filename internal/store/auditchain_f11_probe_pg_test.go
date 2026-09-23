@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F11 PROBE — destination: internal/store/auditchain_f11_probe_pg_test.go
+// the finding PROBE — destination: internal/store/auditchain_f11_probe_pg_test.go
 //
 // Live probes for the audit hash chain (migration 0047) and the append-only
 // claim behind it. Guarded by WARDYN_TEST_PG like every *_pg_test.go here, and

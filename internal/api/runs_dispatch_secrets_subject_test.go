@@ -20,7 +20,7 @@ import (
 // CreatedBy is the ATTRIBUTION — in LocalMode it is whatever the DEV-ONLY
 // X-Wardyn-Principal header said (actorFromRequest's case 1). The SUBJECT, the
 // thing that selects a secret namespace, comes from runIdentitySubject, which
-// no request header can move (F099, runs_policy.go).
+// no request header can move (the finding, runs_policy.go).
 func dispatchSubjectFixture(t *testing.T, victim, secretName string) (*Server, *recRecorder, types.AgentRun) {
 	t.Helper()
 	h := newHarness(t)
@@ -35,7 +35,7 @@ func dispatchSubjectFixture(t *testing.T, victim, secretName string) (*Server, *
 	return New(cfg), audit, types.AgentRun{ID: uuid.New(), CreatedBy: victim, Agent: "claude-code"}
 }
 
-// TestDispatchSecrets_ResolveTheRunSubjectNotTheAttribution is B2-F2.
+// TestDispatchSecrets_ResolveTheRunSubjectNotTheAttribution .
 //
 // Both dispatch-side secret resolvers — the llm_inspection detection corpus and
 // the env_secret grants — read Secrets.For(run.CreatedBy). CreatedBy is the
@@ -88,7 +88,7 @@ func TestDispatchSecrets_ResolveTheRunSubjectNotTheAttribution(t *testing.T) {
 	}
 }
 
-// TestDispatchSecrets_OperatorRunIsUnchanged is B2-F2's negative control: with
+// TestDispatchSecrets_OperatorRunIsUnchanged is the negative control: with
 // no local principal on the context (every OIDC and admin-token caller)
 // runIdentitySubject returns CreatedBy unchanged, so the resolution is
 // byte-identical to what it has always been.

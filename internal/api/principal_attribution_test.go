@@ -87,7 +87,7 @@ func TestLocalModeHonorsOperatorAndDevHeader(t *testing.T) {
 	}
 }
 
-// TestLocalPrincipalOverrideIsBoundedAndClean is F339.
+// TestLocalPrincipalOverrideIsBoundedAndClean .
 //
 // In LOCAL MODE the X-Wardyn-Principal header IS honoured — the machine
 // authenticates nobody, so the caller saying who they are is the only

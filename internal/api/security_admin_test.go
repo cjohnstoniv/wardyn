@@ -341,7 +341,7 @@ func (s *recordTierStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.W
 }
 
 // GetSiteConfig answers the zero document: TestRecordWorkspaceIsSuperAdminOnly's
-// widened GET /api/v1/workspaces/{id} check (F015) reaches admissionStamper,
+// widened GET /api/v1/workspaces/{id} check reaches admissionStamper,
 // which reads it on every request — the nil embed panicked here (#338).
 func (s *recordTierStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
@@ -406,7 +406,7 @@ func TestRecordWorkspaceIsSuperAdminOnly(t *testing.T) {
 	//
 	// This used to assert that the same tier gets 404 on GET /workspaces/{id},
 	// offered as a corroborating inconsistency. That read was WIDENED
-	// deliberately (F015, ownsWorkspaceOrSecurityAdmin in helpers.go): a
+	// deliberately (the finding, ownsWorkspaceOrSecurityAdmin in helpers.go): a
 	// security admin already listed every workspace and already rewrote any
 	// workspace's approved/denied egress, so refusing it the row — and
 	// especially /observed-egress, the traffic that is the INPUT to the egress
@@ -424,7 +424,7 @@ func TestRecordWorkspaceIsSuperAdminOnly(t *testing.T) {
 	// being unable to see the row — which the old assertion could not
 	// distinguish.
 	if w := doSSO(t, srv, http.MethodGet, path, sess, ""); w.Code == http.StatusNotFound {
-		t.Errorf("security_admin GET workspace = 404; the read was widened for this tier (F015) — " +
+		t.Errorf("security_admin GET workspace = 404; the read was widened for this tier — " +
 			"if it has been narrowed again, that decision and this one need re-reconciling")
 	}
 	if w := doSSO(t, srv, http.MethodPost, path+"/record", sess, `{"name":"exfil"}`); w.Code != http.StatusForbidden {

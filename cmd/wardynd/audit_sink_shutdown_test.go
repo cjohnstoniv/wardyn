@@ -23,7 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestAuditFanoutSurvivesRootCtxCancellation pins B6-F3 (= B12b-F1).
+// TestAuditFanoutSurvivesRootCtxCancellation pins the following.
 //
 // SIGTERM cancels rootCtx. The webhook sink's Run loop rode that context, so it
 // drained and RETURNED before httpSrv.Shutdown had finished — up to 15 seconds
@@ -101,7 +101,7 @@ func containsID(body, id string) bool {
 	return false
 }
 
-// TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector is B6-F3's negative
+// TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector is the negative
 // control: running the flusher past rootCtx must not turn shutdown into a hang.
 // Close drains under the sink's own bounded context, so a collector that never
 // answers costs the client timeout and no more.
@@ -140,7 +140,7 @@ func TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector(t *testing.T) {
 	}
 }
 
-// ─── R-06: the masking recorder's half of B6-F1 ──────────────────────────────
+// ─── the masking recorder's half of the cap ────────────────────────
 
 // capturingRecorder keeps whatever the chain hands it.
 type capturingRecorder struct {
@@ -155,7 +155,7 @@ func (c *capturingRecorder) Record(_ context.Context, ev types.AuditEvent) error
 	return nil
 }
 
-// TestMaskingRecorderCapsTheTarget pins the OUTER half of B6-F1. The cap is
+// TestMaskingRecorderCapsTheTarget pins the OUTER half of the cap. The cap is
 // placed twice on purpose: store.InsertAuditEvent bounds the DATABASE, and this
 // recorder — which is outermost in the chain — is what bounds the SPOOL and the
 // SIEM SINKS. Nothing exercised it, so deleting that one line left every gate
@@ -198,7 +198,7 @@ func TestMaskingRecorderCapsTheTarget(t *testing.T) {
 
 // ─── R-05: the serve-error exit drains the sinks too ─────────────────────────
 
-// TestServeAndShutdownDrainsSinksOnAServeError pins the half of B6-F3 that
+// TestServeAndShutdownDrainsSinksOnAServeError pins the half of the fanout guard that
 // Appendix A added by name ("add the `errCh` serve-error `fan.Close()` gap").
 // The tail that closed the fanout ran only after the SIGNAL path; a
 // ListenAndServe error returned above it, so whatever the webhook batcher still

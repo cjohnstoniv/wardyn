@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestClassifyLLMBothSpellingsOfEveryPromptBearingArm pins F088: every
+// TestClassifyLLMBothSpellingsOfEveryPromptBearingArm: every
 // prompt-bearing arm of both classifiers must recognise the BARE spelling as
 // well as the "/"-prefixed one.
 //
@@ -22,14 +22,14 @@ import (
 // with no coverage row — the exact "silently allowed" outcome the arm's own doc
 // comment says it prevents.
 //
-// The NEGATIVE control moved to the METHOD axis when F112 made the default arm
+// The NEGATIVE control moved to the METHOD axis when the finding made the default arm
 // fail-closed: a POST the classifiers have no extractor for is now scanOpaque
 // (the sandbox picks the suffix and the vendor adds endpoints, so an enumerated
 // allowlist cannot be the fail-closed boundary), while a bodiless GET is what
 // still classifies quiet. The parity claim above is unchanged — a named
 // prompt-bearing arm must answer the same for both spellings — but a row
 // asserting "POST <unlisted> == scanNone" would now be pinning the very gap
-// F112 closed, so it is stated as scanOpaque here.
+// the finding closed, so it is stated as scanOpaque here.
 func TestClassifyLLMBothSpellingsOfEveryPromptBearingArm(t *testing.T) {
 	names := map[int]string{scanNone: "scanNone", scanMessages: "scanMessages", scanOpaque: "scanOpaque"}
 	cases := []struct {
@@ -46,7 +46,7 @@ func TestClassifyLLMBothSpellingsOfEveryPromptBearingArm(t *testing.T) {
 		{"openai", http.MethodPost, "v1/completions", scanOpaque},
 		{"openai", http.MethodPost, "chat/completions", scanMessages},
 		{"openai", http.MethodPost, "v1/chat/completions", scanMessages},
-		// F112: the vendor's own content-upload surface, which the enumerated
+		// the vendor's own content-upload surface, which the enumerated
 		// default used to stream through quietly with the brokered credential.
 		{"openai", http.MethodPost, "v1/files", scanOpaque},
 		{"openai", http.MethodPost, "v1/audio/transcriptions", scanOpaque},
@@ -66,7 +66,7 @@ func TestClassifyLLMBothSpellingsOfEveryPromptBearingArm(t *testing.T) {
 		{"anthropic", http.MethodPost, "v1/models", scanOpaque},
 		{"anthropic", http.MethodGet, "models", scanNone},
 		{"anthropic", http.MethodGet, "v1/models", scanNone},
-		// F088/F112 SECOND AXIS — the VERB. hasScannableBody accepts POST, PUT
+		// the SECOND AXIS — the VERB. hasScannableBody accepts POST, PUT
 		// and PATCH, so a PUT/PATCH body reaches the vendor exactly as a POST
 		// body does; the classifiers used to answer scanNone for anything but a
 		// POST, which made `PUT /v1/messages` a silent brokered forward with the

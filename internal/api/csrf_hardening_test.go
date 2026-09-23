@@ -117,7 +117,7 @@ func TestAttachOrigin_RedirectHostIsNotAGlob(t *testing.T) {
 	}
 }
 
-// TestAttachOrigin_LocalModeHasNoSecondName (review R-6). attachOriginRefused
+// TestAttachOrigin_LocalModeHasNoSecondName. attachOriginRefused
 // and the LocalMode REST arm must make the SAME decision, which is what
 // originNamesThisDeployment's doc promises ("so 'which origins are us' cannot
 // diverge"). LocalMode has no ingress and no IdP in front of it, so the
@@ -189,7 +189,7 @@ func TestCSRFGuard_RefusalNamesTheCSRFBoundary(t *testing.T) {
 	t.Fatal("no auth.failed row for a CSRF refusal")
 }
 
-// TestAttachWS_CrossOriginRefusalIsAudited (review R-3). The attach socket is
+// TestAttachWS_CrossOriginRefusalIsAudited. The attach socket is
 // the most dangerous cookie-authenticated capability in the product, and its
 // cross-origin refusal used to be SILENT: 403 and nothing in the trail, while
 // the REST guard emitted auth.failed/cross_origin_refused/wardyn/csrf at both

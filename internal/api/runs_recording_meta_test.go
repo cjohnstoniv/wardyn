@@ -138,7 +138,7 @@ func TestProjectRecordingMeta_ListAndGet(t *testing.T) {
 
 // TestProjectRecordingMeta_NilStoreIsNoop: a deployment with no recording
 // store configured (a stock Helm install, persistence.enabled=false — see
-// F199) must not fail the run list; every run just reports has_recording=false.
+// the finding) must not fail the run list; every run just reports has_recording=false.
 func TestProjectRecordingMeta_NilStoreIsNoop(t *testing.T) {
 	ast := newAuthzStore()
 	h := newHarness(t)

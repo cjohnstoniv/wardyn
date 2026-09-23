@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestEgressDeniesTotalCountsPolicyDeniesOnly pins F065. Every egress.Deny the
+// TestEgressDeniesTotalCountsPolicyDeniesOnly. Every egress.Deny the
 // proxy ingests used to move wardyn_egress_denies_total, whose exposition
 // declares it "Egress decisions ingested with decision=deny, by reason (proxy
 // decision ingest)" (DRAFT, M2 canon pending) — the only egress counter Wardyn

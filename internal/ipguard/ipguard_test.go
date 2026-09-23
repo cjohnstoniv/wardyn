@@ -57,7 +57,7 @@ func TestNAT64EmbeddedV4(t *testing.T) {
 	}
 }
 
-// F089: the gateway predicate's whole table, in the ONE place it now lives.
+// the gateway predicate's whole table, in the ONE place it now lives.
 //
 // It used to be two byte-identical unexported copies (api.llmGatewayIPRefused,
 // proxy.trustedGatewayIPRefused) coupled by a comment, and the proxy copy's

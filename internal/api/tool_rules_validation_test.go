@@ -98,7 +98,7 @@ func TestValidateToolRules(t *testing.T) {
 	})
 }
 
-// TestValidateAllowedDomainsCount is F061's residue: allowed_domains was the
+// TestValidateAllowedDomainsCount is the finding's residue: allowed_domains was the
 // last per-spec list with NO count cap, so one request body could carry ~52,425
 // entries (what fits under maxJSONBody) and every one of them became work — the
 // proxy matches against each per request, and on the member path

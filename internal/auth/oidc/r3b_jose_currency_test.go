@@ -13,7 +13,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 )
 
-// TestR3BJOSERejectsMalformedEd25519JWK is F241's pin: the floor on
+// TestR3BJOSERejectsMalformedEd25519JWK is the finding's pin: the floor on
 // github.com/go-jose/go-jose/v4, expressed as BEHAVIOUR rather than as a
 // version string, so an MVS downgrade or a revert fails here instead of
 // silently reopening the window.

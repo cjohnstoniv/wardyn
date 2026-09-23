@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// TestPollFailureDenyMessageNamesTheCause is the half of F159's pin that
+// TestPollFailureDenyMessageNamesTheCause is the half of the fix's pin that
 // compiles unchanged against the pre-fix gate struct (no new field): it only
 // inspects the returned deny message, so red-here is a genuine assertion
 // failure, not a compile error — the sibling test below additionally proves
@@ -48,7 +48,7 @@ func TestPollFailureDenyMessageNamesTheCause(t *testing.T) {
 	}
 }
 
-// TestPollFailuresAreLoggedAndNamedInDenyMessage covers F159: every poll
+// TestPollFailuresAreLoggedAndNamedInDenyMessage: every poll
 // error was treated identically to PENDING with no log anywhere (stdout,
 // stderr, or the returned message), so a control-plane outage during the wait
 // parked the agent for the full deadline and then denied it with a message

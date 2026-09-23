@@ -42,7 +42,7 @@ func (b *blockingBody) Read(p []byte) (int, error) {
 	return 0, io.EOF
 }
 
-// TestScanBufferedBodyBoundsConcurrentBuffering pins F074: the number of request
+// TestScanBufferedBodyBoundsConcurrentBuffering: the number of request
 // bodies buffered+extracted AT ONCE has to be bounded, because the extractor's
 // live-heap amplification (~5.3x, measured, and independent of the detector set)
 // against a 32 MiB per-body cap does not fit twice inside the proxy sidecar's
@@ -109,7 +109,7 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 	}
 }
 
-// TestScanSlotWaitIsContextBoundAndFailsClosed pins the OTHER half of F074's
+// TestScanSlotWaitIsContextBoundAndFailsClosed pins the OTHER half of the fix's
 // bound: the slot maxConcurrentScans hands out has to be taken through a wait
 // that ENDS, and ending has to mean Deny.
 //
@@ -120,7 +120,7 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 // internal/egress/proxy/server.go); only the inner MITM server carries one. So a
 // single slow-loris POST holding the process-wide slot would park every other
 // inspected request of the run in the semaphore send FOREVER — each retaining a
-// goroutine and a socket in a 256 MiB sidecar, the same retention class F079 is
+// goroutine and a socket in a 256 MiB sidecar, the same retention class the finding is
 // about, now reachable through the inspection path and triggerable by the
 // untrusted sandbox.
 //
@@ -203,7 +203,7 @@ func TestScanSlotWaitIsContextBoundAndFailsClosed(t *testing.T) {
 	}
 }
 
-// TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease pins the F074 fix-up:
+// TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease pins the fix-up:
 // the bound has to cover the buffer's LIFETIME, not just the window in which it
 // is extracted and scanned.
 //

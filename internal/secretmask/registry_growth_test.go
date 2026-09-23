@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestRegistryAddDeduplicates pins F076's growth half. Registry.Add appended
+// TestRegistryAddDeduplicates pins the finding's growth half. Registry.Add appended
 // unconditionally while its sibling AddGlobal de-duplicated, and AddGlobal's own
 // doc comment names exactly the hazard the per-run lane still had: "duplicates
 // would grow globals without bound — Snapshot clones and NewMasker sorts the

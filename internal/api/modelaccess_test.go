@@ -838,7 +838,7 @@ func loginStartURL(t *testing.T, audit *memAudit) string {
 // request's start URL under a per_user row and uses the admin's.
 //
 // This is a security property, not tidiness. The capture is bound to whatever
-// portal the launch was seeded with (ssotoken.go's F006 check compares the
+// portal the launch was seeded with (ssotoken.go's the finding check compares the
 // uploaded blob to THIS run's own audit record), so honouring a caller-supplied
 // URL would let anyone bind their capture to an IdP and account of their
 // choosing and have Wardyn bake it into every later Bedrock run's ~/.aws/config.

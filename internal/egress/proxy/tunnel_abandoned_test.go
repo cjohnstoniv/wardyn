@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// TestTunnelReleasesBothSidesWhenOneDirectionEnds pins F079: an opaque CONNECT
+// TestTunnelReleasesBothSidesWhenOneDirectionEnds: an opaque CONNECT
 // tunnel whose client side goes away while the upstream stays SILENT must
 // release both sockets (and therefore both copy goroutines) instead of pinning
 // them until the upstream eventually speaks.

@@ -525,7 +525,7 @@ func TestStorageDriverSupportsQuota(t *testing.T) {
 		want    bool
 	}{
 		{"overlay2 + xfs", "overlay2", "xfs", true},
-		// F064: these two pinned the WRONG answer. overlay2's `size` storage-opt
+		// these two pinned the WRONG answer. overlay2's `size` storage-opt
 		// is an xfs project quota — Docker's CLI reference says the option "is
 		// only available if the backing filesystem is xfs and mounted with the
 		// pquota mount option", and moby's overlay2 driver sets
@@ -804,7 +804,7 @@ func TestCapabilities_SessionRecordingFollowsRecordConfig(t *testing.T) {
 	}
 }
 
-// TestApplyDiskQuota_NonXFSOverlay2FailsClosedNamingXFS is F064.
+// TestApplyDiskQuota_NonXFSOverlay2FailsClosedNamingXFS .
 //
 // overlay2 over ext4 is the DEFAULT on Docker Desktop / WSL2 and on stock
 // Ubuntu/Debian, and a policy carrying disk_mib > 0 there has always failed the

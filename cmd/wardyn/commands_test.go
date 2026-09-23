@@ -2028,7 +2028,7 @@ func TestRunFailureReason_SurvivesACappedAuditTrail(t *testing.T) {
 	}
 }
 
-// TestUnknownSubcommandUnderEveryGroupIsAnError is F009: `wardyn secret ste`
+// TestUnknownSubcommandUnderEveryGroupIsAnError: `wardyn secret ste`
 // printed help on STDOUT and exited 0, so a mistyped subcommand reported
 // SUCCESS to a script, a CI step, or a pasted instruction. Wardyn sells the exit
 // code as the contract (README, docs/CI.md's exit-code taxonomy,
@@ -2120,7 +2120,7 @@ func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
 	}
 }
 
-// TestNoArgsLeavesRejectAnExtraArg is B12a-F8's tree-walk extension: it
+// TestNoArgsLeavesRejectAnExtraArg is the tree-walk extension: it
 // covers LEAF commands (Runnable, no subcommands of their own) that declare
 // `Args: cobra.NoArgs` — e.g. `setup wall`/`setup vault` (previously
 // undeclared: a stray positional was silently accepted and ignored). Unlike

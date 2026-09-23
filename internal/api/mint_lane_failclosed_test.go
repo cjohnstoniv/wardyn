@@ -25,7 +25,7 @@ func (erroringGrantsStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.
 	return nil, errors.New("store: connection reset by peer")
 }
 
-// TestInternalMint_GrantListErrorFailsClosed pins F098. brokeredForgeMintKind is
+// TestInternalMint_GrantListErrorFailsClosed. brokeredForgeMintKind is
 // the mint-time residual check for a policy STORED BEFORE
 // validateGrantLaneExclusivity: an ssh_key/git_pat grant row for a brokered forge
 // that anyone who learns the grant id can still mint. For exactly that residual
@@ -98,7 +98,7 @@ func TestInternalMint_GrantListErrorFailsClosed(t *testing.T) {
 	})
 }
 
-// TestInternalMintConflictCodesAreTheWireContract pins F134. The four mint-409
+// TestInternalMintConflictCodesAreTheWireContract. The four mint-409
 // "code" values are the discriminator cmd/wardyn-git-helper switches on to name
 // the real cause of a conflict. Every server-side assertion compared the decoded
 // JSON against the SAME package constant the handler had written, so all four

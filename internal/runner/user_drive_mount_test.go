@@ -69,7 +69,7 @@ func TestParseUserDriveHostRoots(t *testing.T) {
 	})
 
 	// A root under a DENIED BIND PREFIX is dead exactly as "/" is, and used to
-	// be the silent one (F13 H2): UserDriveHostRootCheck runs ValidateMountSource
+	// be the silent one (one case): UserDriveHostRootCheck runs ValidateMountSource
 	// before it ever compares against the roots, so /dev/shm, a share mounted
 	// under /var/run, or a relocated Docker data-root under /var/lib/docker
 	// parses clean and then refuses every drive authored inside it. The

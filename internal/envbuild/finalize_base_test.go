@@ -217,7 +217,7 @@ func TestFinalizeBase_AppliesOwnDeadline(t *testing.T) {
 	}
 }
 
-// TestFinalizeBase_PrePulledTagAndDigestBaseIsNotRePulled is B9-F2: the
+// TestFinalizeBase_PrePulledTagAndDigestBaseIsNotRePulled is the
 // fully-qualified `repo:tag@sha256:...` form — what a resolved BYOI base
 // actually carries once an operator pins it — is present locally under NEITHER
 // list verbatim. A real daemon splits it: `myco/dev:1.2` under RepoTags,
@@ -270,7 +270,7 @@ func TestFinalizeBase_AbsentDigestBasePullsExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestBuild_UntagsThePerBuildBaseAfterFinalize is B9-F3: every devcontainer
+// TestBuild_UntagsThePerBuildBaseAfterFinalize is every devcontainer
 // build pulls its own per-build base (newPushRef gives each one a fresh uuid
 // tag) and then wraps it into the output image. The base's layers are shared
 // with that output, so what is left behind is a TAG — one per build, forever,
@@ -327,7 +327,7 @@ func TestBuild_UntagsThePerBuildBaseAfterFinalize(t *testing.T) {
 // anything else is the daemon failing to answer. Treating the two the same still
 // fails closed (the pull errors too), but it reports a registry refusal for what
 // was a broken socket, on the private pre-pulled base where that message is
-// least true. Which is the exact confusion B9-F8 was raised to remove.
+// least true. Which is the exact confusion this test was raised to remove.
 func TestFinalizeBase_DigestInspectDaemonErrorIsNotAPull(t *testing.T) {
 	const ref = "myco/dev:3.0@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	f := newFakeEnvbuilderDocker()

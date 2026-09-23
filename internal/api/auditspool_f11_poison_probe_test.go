@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F11 PROBE — destination: internal/api/auditspool_f11_poison_probe_test.go
+// the finding PROBE — destination: internal/api/auditspool_f11_poison_probe_test.go
 //
 // Hypothesis H7: AuditSpool.Drain stops at the FIRST replay error and keeps
 // that line at the head of the file (auditspool.go: `replayErr = err; break`,

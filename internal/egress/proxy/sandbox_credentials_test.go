@@ -50,7 +50,7 @@ func assertNoSandboxCredentials(t *testing.T, got http.Header, where string) {
 	}
 }
 
-// TestBrokerLanesStripSandboxCredentials pins the F104 fix-up: the two BROKER
+// TestBrokerLanesStripSandboxCredentials pins the fix-up: the two BROKER
 // lanes strip the sandbox's credential headers through stripSandboxCredentials
 // — the one definition inject.go's own comment says must not be re-spelled at a
 // call site — rather than through a local Header.Del("Authorization").

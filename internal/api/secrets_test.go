@@ -625,14 +625,14 @@ func (d secretOwnerDirectory) ListWorkspaces(context.Context) ([]types.Workspace
 	return nil, nil
 }
 
-// TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit is the B5-F7 residual.
+// TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit pins the residual case.
 //
 // An admin's `?owner=` value that matches no principal this deployment knows is
 // stored VERBATIM, and deliberately so: pre-provisioning a member who has not
 // signed in yet is the affordance, and refusing a subject merely because nobody
 // has seen it would break it. What made that indistinguishable from a typo is
 // that both answer 204 with an outcome=success row — and the typo's namespace is
-// one the owner's runs will never read, which is the silent no-op F341 is about
+// one the owner's runs will never read, which is the silent no-op the finding is about
 // for the admitted population.
 //
 // So: the STATUS is unchanged (refusing is what the affordance rules out) and

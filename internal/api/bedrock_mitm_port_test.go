@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestAuthorBedrockBearerInjection_MITMEntryIsPortScoped is the pin for F037.
+// TestAuthorBedrockBearerInjection_MITMEntryIsPortScoped is the pin for the finding.
 //
 // A MITM-eligibility entry is ANY-PORT when it carries no ":port" suffix:
 // proxy.parseMITMHostPort returns port 0 for a bare host, and handleConnect

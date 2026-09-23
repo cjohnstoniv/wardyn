@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal is B2-F6.
+// TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal .
 //
 // Dispatch is synchronous with POST /runs and needsRefresh fires a whole skew
 // window (10 min) ahead of expiry, so the common case is several people
@@ -75,7 +75,7 @@ func TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal(t *testi
 	<-first
 }
 
-// TestAWSSSORefresh_AnExpiredTokenStillWaitsForTheRenewal is B2-F6's negative
+// TestAWSSSORefresh_AnExpiredTokenStillWaitsForTheRenewal is the negative
 // control and the reason the skip is conditional: a caller whose token has
 // actually expired has everything to gain by waiting for the flight already
 // under way, so it still takes the blocking lock.
@@ -107,14 +107,13 @@ func TestAWSSSORefresh_AnExpiredTokenStillWaitsForTheRenewal(t *testing.T) {
 	<-done
 }
 
-// TestAWSSSORefresh_ATokenTooCloseToExpiryStillWaits is R2's pin on B2-F6's
-// fast path.
+// TestAWSSSORefresh_ATokenTooCloseToExpiryStillWaits pins the fast path.
 //
 // refreshAWSSSOBlob early-returns unless needsRefresh, so EVERY caller that
 // reaches the single-flight is already inside awsSSORefreshSkew. Keying the fast
 // path on "not expired" alone therefore let a token with SECONDS left take it:
 // the second dispatch was served a credential that lapses mid-run, where before
-// B2-F6 it queued and got the renewed pair. Renewing a whole skew window ahead
+// this codepath it queued and got the renewed pair. Renewing a whole skew window ahead
 // of expiry exists precisely to keep a freshly dispatched run off that edge.
 func TestAWSSSORefresh_ATokenTooCloseToExpiryStillWaits(t *testing.T) {
 	s, _, _ := ssoRefreshServer(t)

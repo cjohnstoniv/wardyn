@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestCreateRun_TextFieldsAreCappedAndControlCharFree is B1-F6.
+// TestCreateRun_TextFieldsAreCappedAndControlCharFree .
 //
 // title/description were rune-capped but never control-char-checked, and repo,
 // devcontainer_repo, task and agent had no cap at all — only the 1 MiB body.
@@ -64,7 +64,7 @@ func TestCreateRun_TextFieldsAreCappedAndControlCharFree(t *testing.T) {
 	}
 }
 
-// TestCreateRun_MultilineTaskStillAccepted is B1-F6's negative control: a task
+// TestCreateRun_MultilineTaskStillAccepted is the negative control: a task
 // and a description are prose a human pasted, so newlines and tabs are content
 // there, not a forgery attempt.
 func TestCreateRun_MultilineTaskStillAccepted(t *testing.T) {
@@ -77,7 +77,7 @@ func TestCreateRun_MultilineTaskStillAccepted(t *testing.T) {
 	}
 }
 
-// TestInlineSecretRefs_NamesTheGrantKind is B1-F7. `needed` was filled from all
+// TestInlineSecretRefs_NamesTheGrantKind. `needed` was filled from all
 // three arms (api_key, git_pat, ssh_key) but every refusal said "api_key", so a
 // git_pat or ssh_key grant naming a missing secret sent the author looking at
 // the wrong grant. Reachable from four doors.

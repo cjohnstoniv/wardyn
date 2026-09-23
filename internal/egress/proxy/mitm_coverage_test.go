@@ -26,7 +26,7 @@ import (
 // WARDYN_BEDROCK_BASE_URL names a VPC endpoint.
 const bedrockVPCEHost = "vpce-0abc1234.bedrock-runtime.us-east-1.vpce.amazonaws.com"
 
-// TestMITMGenericChannelBodyIsScannedWhateverTheHostClassification pins F036: on
+// TestMITMGenericChannelBodyIsScannedWhateverTheHostClassification: on
 // a TLS-terminated tunnel the inspection core must be chosen by whether the body
 // is PARSEABLE (the channel), never by whether the host is classified as an LLM.
 //
@@ -109,7 +109,7 @@ func mitmPost(t *testing.T, proxyURL string, caPEM []byte, host, path, body stri
 	return resp
 }
 
-// TestMITMPortClampHoldsOnTheLLMBranchToo pins F009: MITM eligibility must not
+// TestMITMPortClampHoldsOnTheLLMBranchToo: MITM eligibility must not
 // be decidable without the port.
 //
 // The W13-S1-5 clamp lived inside handleConnect's isCorpMITMHost branch alone,

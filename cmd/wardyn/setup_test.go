@@ -16,10 +16,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 )
 
-// B12a-F8: `setup wall`/`setup vault` declared no Args validator, so cobra
+// `setup wall`/`setup vault` declared no Args validator, so cobra
 // defaulted to ArbitraryArgs — a stray positional (a typo'd flag value that
 // missed its `--`, e.g. `setup wall -y run`) was silently accepted and
-// ignored rather than refused, the same F009 shape the grouping commands
+// ignored rather than refused, the same the finding shape the grouping commands
 // already hold (commands.go's subcommandGroup) but leaf commands need their
 // own Args, not subcommandGroup (which also disables Runnable).
 func TestSetupTierCmd_DeclaresNoArgs(t *testing.T) {
@@ -406,7 +406,7 @@ func TestTierRuntimeName(t *testing.T) {
 	}
 }
 
-// TestGvisorScripts_NameWhatEachVerificationProves closes F205. The binary path
+// TestGvisorScripts_NameWhatEachVerificationProves. The binary path
 // fetches runsc AND runsc.sha512 from the same URL prefix, so `sha512sum -c`
 // proves the download was not corrupted in transit — it cannot prove the bucket
 // served what gVisor published, because whoever serves the binary serves the

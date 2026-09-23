@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// PIN for B8-F5: /healthz reports the eBPF sensor DEGRADED, with a stale
+// PIN for /healthz reports the eBPF sensor DEGRADED, with a stale
 // last_heartbeat, while beats are arriving normally.
 //
 // LatestAuditEventByAction answered "the latest kernel.sensor.heartbeat" with
@@ -92,7 +92,7 @@ func TestPG_LatestAuditEventByActionAnswersByEventTimeNotInsertionOrder(t *testi
 // outage longer than a few heartbeat intervals produces more than that — and
 // then the fresh beat is pushed out of the window and /healthz reads the stale
 // one again, until the next live beat arrives and takes the top of the window
-// back. That is B8-F5's accepted transience ("self-heals at the next beat"),
+// back. That is the accepted transience ("self-heals at the next beat"),
 // bounded by one heartbeat interval, and the difference between "the finding is
 // closed" and "the finding is bounded" is exactly what this asserts.
 func TestPG_LatestAuditEventByActionFallsBackPastTheWindow(t *testing.T) {

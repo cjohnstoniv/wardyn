@@ -16,9 +16,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestAllowedExactHostAcceptsAnAuthoredPort (B10-F1) pins the consumer half of
+// TestAllowedExactHostAcceptsAnAuthoredPort pins the consumer half of
 // the port-qualification contradiction. The dispatch producer writes a
-// token-bearing redirect as "m.corp:443" (F106: never bare, so a literal-IP `to`
+// token-bearing redirect as "m.corp:443" (the finding: never bare, so a literal-IP `to`
 // cannot open :22 as well) while the paired injection rule host is BARE — the
 // shape buildInjector's exact-allowlist binding has always required. Both halves
 // were individually right; together they made buildInjector, and therefore
@@ -28,7 +28,7 @@ import (
 // host in writing, never a wildcard, never approval"), so an entry the operator
 // port-qualified is the same written naming. The PORT-less contract is kept: no
 // caller passes a port, and the port clamp that matters for a credential lives
-// in injectableTransport (B10-F5) and mitmPortAllowed, not here.
+// in injectableTransport and mitmPortAllowed, not here.
 func TestAllowedExactHostAcceptsAnAuthoredPort(t *testing.T) {
 	if !CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"m.corp:443"}}).AllowedExactHost("m.corp") {
 		t.Error(`AllowedExactHost("m.corp") = false for an allowlist of ["m.corp:443"]; ` +
@@ -80,15 +80,15 @@ func TestAllowedExactHostAcceptsAnAuthoredPort(t *testing.T) {
 	}
 }
 
-// TestNoCleartextInjectionToTheTLSConventionalPorts (B10-F5) is the other half of
-// the same change, and it ships WITH it: B10-F1 alone widens this leak, because a
+// TestNoCleartextInjectionToTheTLSConventionalPorts is the other half of
+// the same change, and it ships WITH it: the any-port arm alone widens this leak, because a
 // port-qualified entry is exactly what AuthoredPortFor reads as the operator
 // declaring the transport.
 //
 // injectableTransport clamped cleartext at port 443 only, so
 // `allowed_domains: ["vendor.example:8443"]` plus an api_key grant handed the
 // operator's credential to `POST http://vendor.example:8443/…` in the clear —
-// the F110 leak one port over. The clamp now covers the TLS-conventional set
+// the leak one port over. The clamp now covers the TLS-conventional set
 // {443, 8443, 9443} regardless of authoring; a cleartext connector on any other
 // port is unchanged (port 80, or an authored port), and an https-only vendor on
 // one of these ports is served by `require_tls`, which refuses rather than

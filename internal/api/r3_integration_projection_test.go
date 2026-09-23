@@ -58,8 +58,8 @@ func (r3IntegStore) ListRunsPage(context.Context, store.Page) ([]types.AgentRun,
 	return nil, nil
 }
 
-// TestIntegrationProjectionWithholdsCredentialRefs is F247 (GET /integrations)
-// and F250 (GET /setup/status) — one projection, both routes.
+// TestIntegrationProjectionWithholdsCredentialRefs is the finding (GET /integrations)
+// and the finding (GET /setup/status) — one projection, both routes.
 //
 // routes.go called GET /integrations "the same RBAC posture as site-config's
 // GET", and that claim went false when site-config's GET moved to operatorOnly
@@ -103,7 +103,7 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 						"or it is a tier move wearing a projection's clothes.\nbody=%s", path, want, body)
 				}
 			}
-			// B7-F1: a DERIVED git_host row's id/name IS the internal host —
+			// a DERIVED git_host row's id/name IS the internal host —
 			// field-nulling alone never withholds it, so the row is dropped
 			// entirely from a member's body.
 			if strings.Contains(body, r3IntegGitHost) {
@@ -136,7 +136,7 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 		})
 	}
 
-	// F250 RESIDUE. The projection KEEPS Capabilities on purpose — a member's
+	// the finding RESIDUE. The projection KEEPS Capabilities on purpose — a member's
 	// launch card needs the live matrix — but a capability REASON is DERIVED
 	// from the four fields the projection drops: gatedCap's needs_setup reason
 	// interpolates the credential ref verbatim (`secret %q not stored`,

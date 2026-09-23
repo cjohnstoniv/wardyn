@@ -12,7 +12,7 @@ import (
 )
 
 // TestWardynLabels_ReservedKeysWinOverCallerSupplied is the docker half of
-// B9-F1: extra is caller-supplied (it reaches here from policy/dispatch), and
+// extra is caller-supplied (it reaches here from policy/dispatch), and
 // it was applied LAST — so an entry named wardyn.run-id silently overwrote the
 // run's own id on every object stamped with it. Every teardown path on this
 // substrate selects on that label, so a run that mislabelled itself could never

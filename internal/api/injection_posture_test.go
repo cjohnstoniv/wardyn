@@ -78,7 +78,7 @@ func TestInternalInjection_RefusesGrantAuthoredUnderAnotherPosture(t *testing.T)
 	}
 }
 
-// TestInjectionRuleFromScopeCarriesRequireTLS (F110 residual): this decoder is
+// TestInjectionRuleFromScopeCarriesRequireTLS (a residual): this decoder is
 // what BINDS the policy key. The rule it returns rides runner.InjectionGrant
 // into the proxy's own config, and the proxy's plain lane refuses a cleartext
 // request for a rule that sets it — so a decoder that silently dropped the field

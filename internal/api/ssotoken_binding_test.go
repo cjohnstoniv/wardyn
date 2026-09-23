@@ -95,7 +95,7 @@ func ssoBlobBody(startURL, region, accessToken string) string {
 	}`
 }
 
-// TestUploadSSOToken_ForeignIdPRejected is the F006 regression. Every guard
+// TestUploadSSOToken_ForeignIdPRejected is the regression. Every guard
 // ahead of it authenticates WHICH run may upload (claimsForRunUpload, then
 // run.Task/run.Agent against trusted server state) and shape-checks WHAT is
 // uploaded (valid, validateSSOStartURL, repoFieldSafe) — none compares the

@@ -197,7 +197,7 @@ func TestAPITokenStoreErrorIsCounted(t *testing.T) {
 	h.srv.cfg.Store = &apiTokenErrStore{err: boom}
 
 	w := do(t, h.srv, http.MethodGet, "/api/v1/runs", "wdn_deadbeefdeadbeefdeadbeefdeadbeef", "")
-	// 503 since B6-F2 (was 500): the STATUS word changed, the fail-closed
+	// 503 (was 500): the STATUS word changed, the fail-closed
 	// behaviour this test pins did not. The token may be perfectly good; this
 	// deployment simply cannot decide, which is retry-later and not the client's
 	// fault — and it is the same answer the SSO lane now gives the same cause.

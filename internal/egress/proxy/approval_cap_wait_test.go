@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestResolveWaitDoesNotRetryTheHostCap (B10-F4): past maxApprovalHosts, Resolve
+// TestResolveWaitDoesNotRetryTheHostCap: past maxApprovalHosts, Resolve
 // fails closed with no entry, no raise and no row. It used to report that as
 // {apPending, uuid.Nil} — the SAME shape a raise still in flight has — so
 // ResolveWait's concurrent-raise retry loop could not tell them apart and slept
@@ -59,13 +59,13 @@ func TestResolveWaitDoesNotRetryTheHostCap(t *testing.T) {
 	}
 }
 
-// TestCappedHostIsAuditedAsTheHostCap (R-03): apCapped and apPending are DIFFERENT
-// FACTS — that is the whole premise of B10-F4 — and the operator reading decision
-// rows must be able to tell them apart. "An approval is waiting on you" and "the
-// run's host table is full, nothing was raised and nothing ever will be" have
-// different fixes, and the only signal for the second used to be one slog line in
-// the sidecar. The wire verdict is unchanged (Pending, fail closed); only the
-// reason label distinguishes them.
+// TestCappedHostIsAuditedAsTheHostCap: apCapped and apPending are DIFFERENT
+// FACTS — and the operator reading decision rows must be able to tell them
+// apart. "An approval is waiting on you" and "the run's host table is full,
+// nothing was raised and nothing ever will be" have different fixes, and the
+// only signal for the second used to be one slog line in the sidecar. The
+// wire verdict is unchanged (Pending, fail closed); only the reason label
+// distinguishes them.
 func TestCappedHostIsAuditedAsTheHostCap(t *testing.T) {
 	buf := &bytes.Buffer{}
 	ap := newApprovalClient("http://127.0.0.1:1", newTokenSource("tok"), uuid.New(), nil)

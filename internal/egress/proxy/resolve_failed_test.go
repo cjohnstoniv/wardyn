@@ -3,7 +3,7 @@
 
 package proxy
 
-// F055: a name the proxy could not RESOLVE is not a private-address block.
+// a name the proxy could not RESOLVE is not a private-address block.
 //
 // evaluate() used to throw egressTarget's error away and stamp every
 // post-resolution denial "builtin:private-ip", so a resolver outage, an

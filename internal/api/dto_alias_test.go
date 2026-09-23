@@ -68,7 +68,7 @@ func jsonTagNames(t *testing.T, typ reflect.Type) map[string]bool {
 	return out
 }
 
-// R5 F027: putIntegrationRequest (setup_integrations.go) hand-mirrors
+// R5: putIntegrationRequest (setup_integrations.go) hand-mirrors
 // types.Integration with no SDK twin to alias, so nothing made adding a field
 // to the stored type also make it settable — a new operator-settable field
 // built clean, passed every alias/parity test, and was simply unreachable over

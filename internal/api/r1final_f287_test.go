@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// F287: redactWorkspaceForRead reached 2 of the 4 routes getWorkspaceReadable
+// redactWorkspaceForRead reached 2 of the 4 routes getWorkspaceReadable
 // feeds. GET /workspaces/{id}/build answered a plain member with
 // {"image":"registry.corp.internal/base:1"} and GET /workspaces/{id}/env-as-code
 // with a Dockerfile whose first line was `FROM registry.corp.internal/base:1` —
@@ -46,7 +46,7 @@ func TestF287_EveryReadableRouteProjectsTheAuthoredBaseImage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			srv, st := newTopologyWorkspaceServer(t, "")
 			id := st.ws.ID.String()
-			// A FAILED build in the tracker (B4-F1): the builder's own error
+			// A FAILED build in the tracker: the builder's own error
 			// quotes the operator's authored coordinate verbatim in the pull
 			// line that failed, and /build shipped it as `detail` to every
 			// authenticated reader. This sweep never seeded one, so the route

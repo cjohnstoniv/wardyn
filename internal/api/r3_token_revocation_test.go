@@ -76,7 +76,7 @@ func (c *cutoffRevocations) RevokeAll(context.Context) error {
 
 var _ oidc.SessionRevocations = (*cutoffRevocations)(nil)
 
-// TestAPITokenHonorsSessionRevocationCutoff is F143.
+// TestAPITokenHonorsSessionRevocationCutoff .
 //
 // POST /sessions/revoke revokes tokens by SWEEPING a ListAPITokens snapshot. A
 // mint whose INSERT commits after that snapshot is taken is never reachable by
@@ -175,7 +175,7 @@ func TestAPITokenHonorsSessionRevocationCutoff(t *testing.T) {
 		srv, st, rev := build(t)
 		mint(t, st, "wdn_x", "sub-alice", "alice@corp.example", time.Now().UTC())
 		rev.err = context.DeadlineExceeded
-		// 503 since B6-F2 (was 500) — see TestAPITokenStoreErrorIsCounted: the
+		// 503 (was 500) — see TestAPITokenStoreErrorIsCounted: the
 		// fail-closed rule is unchanged, only the status word is.
 		if w := do(t, srv, http.MethodGet, "/api/v1/me", "wdn_x", ""); w.Code != http.StatusServiceUnavailable {
 			t.Errorf("revocation-store outage = %d, want 503 — an unanswerable check must not authenticate; body=%s",
@@ -214,7 +214,7 @@ func (b *heldBody) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// TestAPITokenMintCannotOutliveTheLeverItRacedWith is F143's residue.
+// TestAPITokenMintCannotOutliveTheLeverItRacedWith is the finding's residue.
 //
 // The read-side cutoff check closed only the half of the window where the row's
 // created_at happens to land at-or-before the cutoff. handleCreateAPIToken

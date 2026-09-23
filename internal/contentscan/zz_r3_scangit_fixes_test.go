@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestF075_FindingsCapBoundsRequest pins F075: nothing capped how many
+// TestF075_FindingsCapBoundsRequest: nothing capped how many
 // Findings one ScanRequest could return, so a body split into many spans (a
 // JSON connector body with many string leaves, in this test) fanned out into
 // one finding per span with no upper bound — every one destined to be copied
@@ -46,7 +46,7 @@ func TestF075_FindingsCapBoundsRequest(t *testing.T) {
 	}
 }
 
-// TestF073_ScanBudgetStopsFurtherScanning pins F073: the per-span
+// TestF073_ScanBudgetStopsFurtherScanning: the per-span
 // max_scan_bytes cap does nothing to bound the TOTAL bytes scanned across a
 // request's many sub-cap spans. This test places ten 500,000-byte padding
 // blocks (5,000,000 bytes total, each individually well under the 1 MiB
@@ -79,7 +79,7 @@ func TestF073_ScanBudgetStopsFurtherScanning(t *testing.T) {
 	}
 }
 
-// TestF056_AttachmentDecodeFailureRecordedHonestly pins F056: a base64
+// TestF056_AttachmentDecodeFailureRecordedHonestly: a base64
 // attachment block extractAnthropicAttachments could not decode used to be
 // silently dropped (bare `continue`, no Skipped/SkipReason) and the result
 // still came back Scanned=true/Skipped=false — an undecodable-but-secret-
@@ -126,7 +126,7 @@ func TestF056_AttachmentDecodeFailureRecordedHonestly(t *testing.T) {
 	}
 }
 
-// TestF049_OpenAIChatScansSystemPromptMessage pins F049: THREAT-MODEL.md
+// TestF049_OpenAIChatScansSystemPromptMessage: THREAT-MODEL.md
 // 5.1a's "Only the system prompt + the last message of each turn are
 // scanned" is true for the Anthropic channel (top-level `system` field) but
 // was false for OpenAI/Codex, which carries the system prompt as a

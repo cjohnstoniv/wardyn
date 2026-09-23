@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-// TestDriveDoorsAnswerOverTheSameSentinels is F139's anti-recurrence guard.
+// TestDriveDoorsAnswerOverTheSameSentinels is the finding's anti-recurrence guard.
 //
-// F139 was the state collapse itself: three server states the launch path
+// the finding was the state collapse itself: three server states the launch path
 // refuses with 403, 422 and 500 all reached GET /me as the one
 // `{"user_drive":null}` a genuinely unallocated member gets, so the console
 // rendered no drive affordance and the member never met the sentence naming
@@ -25,7 +25,7 @@ import (
 // SWITCH, in the same order and over the same sentinels … so a new arm in one is
 // a missing arm in the other rather than a silent divergence" — and nothing
 // executes that claim. Add a sentinel to writeDriveError alone and every state
-// it names collapses back into driveUnavailableUnknown at /me: F139's exact
+// it names collapses back into driveUnavailableUnknown at /me: the finding's exact
 // defect, one sentinel at a time, with the whole package green.
 //
 // So the invariant is asserted the way the file states it: mechanically, over
@@ -81,7 +81,7 @@ func TestDriveDoorsAnswerOverTheSameSentinels(t *testing.T) {
 			i, door[i], me[i], driveUnavailableUnknown)
 	}
 
-	// A sentinel the DOOR grew and /me did not is the F139 direction exactly,
+	// A sentinel the DOOR grew and /me did not is exactly the finding's direction,
 	// so it is reported as its own failure rather than only as a length
 	// mismatch — the message has to name the arm an author has to go add.
 	for _, name := range door {

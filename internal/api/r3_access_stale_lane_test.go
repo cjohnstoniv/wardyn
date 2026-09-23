@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// TestAccessStaleSnapshotNamesTheCallerRemedy is F213.
+// TestAccessStaleSnapshotNamesTheCallerRemedy .
 //
 // The stale-snapshot guard fires on any caller whose stamped claim snapshot
 // cannot reproduce the admin role they hold, and apiTokenAuth installs exactly

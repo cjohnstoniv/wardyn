@@ -29,7 +29,7 @@ func readOpsDoc(t *testing.T, rel ...string) string {
 	return string(b)
 }
 
-// TestDocsOpsExamplePoliciesREADMENamesNoPhantomCLIFlag is F005: the shipped example
+// TestDocsOpsExamplePoliciesREADMENamesNoPhantomCLIFlag: the shipped example
 // README told the reader to "Launch it with --tool-approvals hold", a flag the
 // CLI has never had. tool_approvals is a run-CREATE body field (the console
 // wizard sets it; POST /runs validates it) with no CLI surface at all, so the
@@ -77,7 +77,7 @@ func TestDocsOpsExamplePoliciesREADMENamesNoPhantomCLIFlag(t *testing.T) {
 	}
 }
 
-// TestDocsOpsExamplePoliciesREADMEDocumentsEveryPolicyField is F042: a botched edit
+// TestDocsOpsExamplePoliciesREADMEDocumentsEveryPolicyField: a botched edit
 // deleted `git_push_any_branch`'s name from the remote-workspace prose, leaving
 // a subject-less sentence and a spliced markdown link — the one field that
 // disables push branch-namespace confinement went unnamed on the page that
@@ -139,7 +139,7 @@ func TestDocsOpsExamplePoliciesREADMEDocumentsEveryPolicyField(t *testing.T) {
 	}
 }
 
-// TestDocsOpsExampleUIAppsHaveAShippedLauncher is F044: the only shipped ui_apps
+// TestDocsOpsExampleUIAppsHaveAShippedLauncher: the only shipped ui_apps
 // example declared app name "code", and the gateway builds the launcher path as
 // /usr/local/bin/wardyn-ui-<name>. No image ships wardyn-ui-code, so the
 // feature's one worked policy fail-closed on the feature's one shipped image.
@@ -212,7 +212,7 @@ func TestDocsOpsExampleUIAppsHaveAShippedLauncher(t *testing.T) {
 	}
 }
 
-// TestDocsOpsLibraryRoutesDocMatchesRegistrations is F041: the workspace-model section
+// TestDocsOpsLibraryRoutesDocMatchesRegistrations: the workspace-model section
 // enumerated GET/PUT/DELETE on /sources/{id} and GET on /base-images/{id}, and
 // told the reader to author a source's requirements contract through the PUT —
 // a route whose handler the code deleted outright (the file's own DEADCODE
@@ -256,7 +256,7 @@ func TestDocsOpsLibraryRoutesDocMatchesRegistrations(t *testing.T) {
 	}
 }
 
-// TestDocsOpsSessionCookieDocsMatchTheCodec is F032/F033: three shipped documents said
+// TestDocsOpsSessionCookieDocsMatchTheCodec: three shipped documents said
 // a pre-0.6 session cookie stays valid across the upgrade with no forced
 // re-login, and docs/ENV.md contradicted itself inside a single table row. The
 // codec disagrees — decodeSession compares the payload's version EXACTLY, so a
@@ -297,7 +297,7 @@ func TestDocsOpsSessionCookieDocsMatchTheCodec(t *testing.T) {
 	}
 }
 
-// TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo is F063, rewritten in 0.7.2 when
+// TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo is the finding, rewritten in 0.7.2 when
 // the two substrates stopped behaving the same way. The row originally said the
 // cap "warns/fails closed when a cap is demanded but unsupported"; neither
 // substrate failed closed on that branch, both ran UNCAPPED. Now only Docker
@@ -351,7 +351,7 @@ func TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo(t *testing.T) {
 		t.Errorf("docs/POLICIES.md's disk_mib row never says the k8s substrate enforces the cap by EVICTION — the kubelet kills the pod, it does not refuse the write, and a run that dies mid-work is what an operator is actually planning for: %s", row)
 	}
 
-	// F064's doc half. The THIRD outcome is the one the mainstream host gets:
+	// the finding's doc half. The THIRD outcome is the one the mainstream host gets:
 	// overlay2's size storage-opt is an xfs project quota, so on overlay2 over
 	// ext4 (Docker Desktop/WSL2, stock Ubuntu/Debian) the daemon refuses the
 	// create and the run never starts. Anchored on the warning applyDiskQuota
@@ -365,7 +365,7 @@ func TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo(t *testing.T) {
 	}
 }
 
-// TestDocsOpsDirectoryEgressIsInTheDataFlowPage is F048: the page designated as the
+// TestDocsOpsDirectoryEgressIsInTheDataFlowPage: the page designated as the
 // answer to a vendor security questionnaire enumerated the daemon's outbound
 // destinations as exhaustive, and omitted the identity-directory connector —
 // the one place the daemon itself dials a hostname hard-coded in Wardyn's own
@@ -398,7 +398,7 @@ func TestDocsOpsDirectoryEgressIsInTheDataFlowPage(t *testing.T) {
 	}
 }
 
-// TestDocsOpsContinuousImageLaneDocumentedHonestly is F049: docs/VERIFY.md opened
+// TestDocsOpsContinuousImageLaneDocumentedHonestly: docs/VERIFY.md opened
 // "Every Wardyn image is signed, carries an SBOM you can read, and records how
 // it was built" without qualification, while RELEASING.md called the same
 // continuous lane "Unsigned." Both were wrong, in opposite directions:
@@ -429,7 +429,7 @@ func TestDocsOpsContinuousImageLaneDocumentedHonestly(t *testing.T) {
 	}
 }
 
-// TestDocsOpsGDPRRowDoesNotPointAtExportControl is F047: the docs index routed
+// TestDocsOpsGDPRRowDoesNotPointAtExportControl: the docs index routed
 // "Export or erase a run's data (GDPR-shaped requests)" to docs/EXPORT.md,
 // which is an export-CONTROL page (ECCN 5D002, EAR) and contains the string
 // "GDPR" exactly zero times.
@@ -450,7 +450,7 @@ func TestDocsOpsGDPRRowDoesNotPointAtExportControl(t *testing.T) {
 	}
 }
 
-// TestDocsOpsAuditStreamTriggerClaimIsScoped is F035: the front page said a Postgres
+// TestDocsOpsAuditStreamTriggerClaimIsScoped: the front page said a Postgres
 // trigger will not let you rewrite any of the three audit streams. Only
 // audit_events has one — PTY casts live in `recordings`, which no CREATE
 // TRIGGER in the schema covers and which the store upserts in place.
@@ -495,7 +495,7 @@ func TestDocsOpsAuditStreamTriggerClaimIsScoped(t *testing.T) {
 	t.Fatal("README.md has no \"Audit + attach\" capability row — re-anchor this guard")
 }
 
-// TestDocsOpsStatusSectionCarriesNoStaleVersion is F010: the README's Status section
+// TestDocsOpsStatusSectionCarriesNoStaleVersion: the README's Status section
 // named v0.6.0 as the current release six patch releases later, while the same
 // file's install line pinned v0.6.6. It is now written version-free; this keeps
 // it that way, or forces any literal reintroduced there to match the shipped
@@ -529,7 +529,7 @@ func TestDocsOpsStatusSectionCarriesNoStaleVersion(t *testing.T) {
 	}
 }
 
-// TestDocsOpsRestoreRunbookRestoresUserDrives is F015: the Restore runbook had no
+// TestDocsOpsRestoreRunbookRestoresUserDrives: the Restore runbook had no
 // user-drive step, though the Backup runbook backs drives up as step 4 and the
 // section forbids reversing the backup order. Following it verbatim on a host
 // rebuild brings back the drive ROWS (they are in the pg_dump) with none of the
@@ -569,7 +569,7 @@ func TestDocsOpsRestoreRunbookRestoresUserDrives(t *testing.T) {
 	}
 }
 
-// TestDocsOpsExitCodeTableNamesTheLocalCatchAll is F013: the exit-code taxonomy's `1`
+// TestDocsOpsExitCodeTableNamesTheLocalCatchAll: the exit-code taxonomy's `1`
 // row described only a response the CLI could not classify, while exitCodeFor's
 // bare `return 1` is the catch-all every LOCAL usage/validation failure lands on
 // — unknown flag, malformed id, unreadable --policy-file. A pipeline branching
@@ -613,7 +613,7 @@ func TestDocsOpsExitCodeTableNamesTheLocalCatchAll(t *testing.T) {
 	}
 }
 
-// TestDocsOpsRunAuditRowsCiteEveryEmitFile is F031: the declared audit-vocabulary
+// TestDocsOpsRunAuditRowsCiteEveryEmitFile: the declared audit-vocabulary
 // reference described ONE emit site each for run.create and run.build; there
 // are eight and four, and the failure family carries Data fields, an outcome
 // and (in one case) a Target that the documented set never mentioned. The emit
@@ -672,7 +672,7 @@ func TestDocsOpsRunAuditRowsCiteEveryEmitFile(t *testing.T) {
 	}
 }
 
-// TestDocsOpsExternalAttributionsAreRight is F052 and F053, two attribution defects a
+// TestDocsOpsExternalAttributionsAreRight names two attribution defects a
 // reader cannot check without leaving the page:
 //
 //   - PLUGGABILITY.md listed Kata Containers among CNCF-graduated/incubating

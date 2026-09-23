@@ -182,7 +182,7 @@ func TestWriteTarGzRoundTrip(t *testing.T) {
 // capWriter accepts the first n bytes then fails every Write after —
 // simulating ENOSPC surfacing only once the buffered tar/gzip output is
 // finally flushed (tar's trailer blocks, gzip's footer): every entry's Write
-// "succeeds" and the failure lands at Close, exactly the shape B12a-F6
+// "succeeds" and the failure lands at Close, exactly the shape this
 // describes ("what is lost is the final block + gzip footer + tar trailer").
 type capWriter struct{ n int }
 
@@ -199,7 +199,7 @@ func (c *capWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// B12a-F6: the OLD writeTarGz closed tw/gz/f via three bare `defer`s whose
+// the OLD writeTarGz closed tw/gz/f via three bare `defer`s whose
 // errors were never checked — a flush failure at Close (the ENOSPC shape
 // above) was silently swallowed and writeTarGz reported success. Close is
 // now explicit, in tw -> gz order, and the FIRST error wins.
@@ -217,7 +217,7 @@ func TestWriteTarGzWriter_FlushFailureIsNotSwallowed(t *testing.T) {
 	}
 }
 
-// B12a-F6: finalizePartFile is the shared .part+rename mechanism (also used
+// finalizePartFile is the shared .part+rename mechanism (also used
 // by `run recording`'s download) — on a non-nil err it removes the .part
 // file and leaves NOTHING at path; on a rename failure it does the same.
 func TestFinalizePartFile_ErrorLeavesNoFileAtPathAndRemovesPart(t *testing.T) {
@@ -466,7 +466,7 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 
 // ─── redactSecrets: the key names and value shapes the first pass missed ─────
 //
-// F070/F143/F166/F201. `support-bundle`'s own Long text promises "Never
+// `support-bundle`'s own Long text promises "Never
 // includes a secret VALUE", and the bundle is gathered from `docker compose
 // config` — the LIVE resolved environment, i.e. the real values, not ${VAR}
 // placeholders — and then mailed to a support ticket. Three holes:

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestOperationsUpstreamProxyCheckNamesTheLaneThatIsCheckedWhere (F003,
+// TestOperationsUpstreamProxyCheckNamesTheLaneThatIsCheckedWhere (the finding,
 // adversarial fix-up round 3) pins the runbook's upstream-proxy paragraph to
 // WHERE each of the two lanes is actually checked.
 //

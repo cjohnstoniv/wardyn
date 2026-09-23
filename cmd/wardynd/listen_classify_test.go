@@ -202,7 +202,7 @@ func TestSecondHumanBootWarningFiresOnlyForTheBrokenCombination(t *testing.T) {
 }
 
 // TestListenIsRoutablePublicResolvesHostnames closes the third classifier's
-// hole (F067). listenIsLoopback and listenBindsSpecificRoutable both resolve a
+// hole. listenIsLoopback and listenBindsSpecificRoutable both resolve a
 // hostname through listenHostIPs; listenIsRoutablePublic alone still did
 // net.ParseIP and returned false for anything that was not a literal. It is the
 // fail-closed gate for -local-mode — "a no-auth public API must never be served
@@ -249,7 +249,7 @@ func TestListenIsRoutablePublicResolvesHostnames(t *testing.T) {
 	}
 }
 
-// TestEmptyListenNeverReachesTheClassifiers closes F011. WARDYN_LISTEN="" (a
+// TestEmptyListenNeverReachesTheClassifiers. WARDYN_LISTEN="" (a
 // `docker run -e WARDYN_LISTEN` with no value, a compose `WARDYN_LISTEN=`
 // passthrough, or `-listen=`) used to survive all the way to net/http, whose
 // Server.Addr == "" means ":http" — 0.0.0.0:80. Every classifier read "" as

@@ -46,7 +46,7 @@ func r3bSecondHumanFixture(t *testing.T) (*harness, *Server, uuid.UUID) {
 	return h, srv, runID
 }
 
-// TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns is F147's pin.
+// TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns is the finding's pin.
 //
 // approval.second_human.bypass is the record that a four-eyes rule WAS bypassed
 // — that is how docs/ENV.md, docs/OPERATIONS.md and threatmodel/THREAT-MODEL.md
@@ -119,7 +119,7 @@ func TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
 		}
 	})
 
-	// F318. This subtest used to require ZERO rows here, and the concern behind
+	// This subtest used to require ZERO rows here, and the concern behind
 	// that is kept verbatim below: nothing was decided, so no row may CLAIM a
 	// decision. But the bypass itself did happen — the gate was passed, at the
 	// gate, before Decide was ever called — and docs/ENV.md promises the

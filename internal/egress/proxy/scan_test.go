@@ -71,7 +71,7 @@ func scanEngine(t *testing.T, mode string, secrets ...string) *contentscan.Engin
 // scanEngineFailClosed builds the engine a STRICT operator actually buys:
 // mode=block PLUS on_scanner_error=block, i.e. Engine.BlocksOnError() == true.
 //
-// F090: every other scan test in this package builds a fail-OPEN engine
+// every other scan test in this package builds a fail-OPEN engine
 // (scanEngine leaves on_scanner_error at its default) and asserts the ALLOW
 // outcome, so the two fail-CLOSED refusals in llm_routes.go — the
 // uninspected-channel refusal and the oversize refusal — were executed by ZERO

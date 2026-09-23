@@ -23,7 +23,7 @@ const envcodeCorpRegistry = "https://nexus.corp.internal/repository/npm"
 // It matters that this is a separate double. r3TopologyStore's site-config sets
 // ArtifactOverrides, and artifactBaseURLs (the artifactBaseURLs function in artifact_redirect.go) reads
 // EgressRedirects — so on that fixture the artifact bases are always nil and the
-// leak F288 names cannot occur, whatever the route does. A pin written against
+// leak the finding names cannot occur, whatever the route does. A pin written against
 // it would be green for a reason that has nothing to do with the property.
 type envcodeRedirectStore struct{ *r3TopologyStore }
 
@@ -41,7 +41,7 @@ func newEnvcodeRedirectServer(t *testing.T, ownedBy string) (*Server, string) {
 	return srv, st.ws.ID.String()
 }
 
-// TestEnvAsCodeWithholdsTheArtifactRegistryFromNonFullReaders is F288.
+// TestEnvAsCodeWithholdsTheArtifactRegistryFromNonFullReaders .
 //
 // GET /workspaces/{id}/env-as-code folds the operator's corporate
 // artifact-registry base URLs (site_config.egress_redirects[].to) into the
@@ -52,8 +52,8 @@ func newEnvcodeRedirectServer(t *testing.T, ownedBy string) (*Server, string) {
 //
 // The tier moved rather than the field being projected, because the whole point
 // of the response is that it is COMMITTABLE: there is no per-field projection
-// that leaves it useful. That move landed with F287; what did not land is
-// anything that exercises THIS datum. The F287 sweep asserts the base image and
+// that leaves it useful. That move landed with the finding; what did not land is
+// anything that exercises THIS datum. The the finding sweep asserts the base image and
 // the local_dir host path, on a fixture whose site-config carries no
 // EgressRedirects at all — so the artifact-registry half of the reason the tier
 // moved was pinned by nothing.

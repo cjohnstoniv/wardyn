@@ -10,7 +10,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestScanSummaryFrom_FindingsCappedStillAlerts pins B2 (F075 fix-up):
+// TestScanSummaryFrom_FindingsCappedStillAlerts pins B2 (the fix-up):
 // findings_capped sets Result.Skipped, and scanSummaryFrom used to resolve
 // `case res.Skipped` BEFORE ever reaching the "alert" default — so the
 // decision's Action flipped from "alert" to "skipped" exactly when the scan
@@ -48,9 +48,9 @@ func TestScanSummaryFrom_FindingsCappedStillAlerts(t *testing.T) {
 	}
 }
 
-// TestScanSummaryFrom_SkipReasonsWithFindingsStillAlert pins B4 (F073/F056
-// fix-up): B2 fixed findings_capped only, but scan_budget (F073) and
-// attachment_decode_error (F056) fall into the identical `case res.Skipped`
+// TestScanSummaryFrom_SkipReasonsWithFindingsStillAlert pins B4 (the
+// fix-up): B2 fixed findings_capped only, but scan_budget and
+// attachment_decode_error fall into the identical `case res.Skipped`
 // arm and flip a genuinely finding-bearing scan's audit action from
 // llm.scan.alert to llm.scan.skipped — the same sibling-caller class B2
 // declared blocking, with two of three siblings missed.

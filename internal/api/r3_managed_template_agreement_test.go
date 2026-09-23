@@ -10,7 +10,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestManagedTemplateWriteAndResolveAgree is F158's structural half, and it is
+// TestManagedTemplateWriteAndResolveAgree is the finding's structural half, and it is
 // the check the finding says would have caught the change that caused it: the
 // managed non-hash rule was WIDENED at the write boundary and the resolver's
 // defence-in-depth copy was left matching email_local alone, so a managed drive

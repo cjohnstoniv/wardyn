@@ -9,7 +9,7 @@ package store_test
 // graded on the exit code alone, and nothing inspected the JSON stream for
 // skips — so a probe that quietly stopped running looked exactly like a probe
 // that passed, and the invariant it proves (audit_events is append-only) was
-// unfalsifiable from CI's own output. internal/db's F11 probes were given this
+// unfalsifiable from CI's own output. internal/db's probes were given this
 // treatment; this package's were not, and its tamper probes skip on precisely
 // the precondition CI's lane always satisfies.
 //
@@ -35,7 +35,7 @@ import (
 )
 
 // storeProbeSkipMarker lets an operator ASSERT that this lane is fully
-// provisioned, turning every precondition guard in the F11 probes into a failure
+// provisioned, turning every precondition guard in these probes into a failure
 // instead of a skip.
 const storeProbeSkipMarker = "WARDYN_TEST_PG_SUPERUSER"
 
@@ -72,7 +72,7 @@ func storeSkipOrFatal(t *testing.T, pool *pgxpool.Pool, format string, args ...a
 
 // TestPG_ProbeF11_StoreLaneCannotSilentlySelfSkip pins the derivation itself, the
 // way internal/db's sibling does. On the lane CI actually runs — superuser, URL-
-// form DSN — every F11 probe in this package MUST be in fail-not-skip mode; if
+// form DSN — every the finding probe in this package MUST be in fail-not-skip mode; if
 // that stops being true, the tamper and splice probes can go back to reporting
 // `ok` while proving nothing.
 //

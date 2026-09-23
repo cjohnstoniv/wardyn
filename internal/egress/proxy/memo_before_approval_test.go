@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestMemoedPrivateHostSpendsNoApproval is V1-D5, and it is F032's argument one
+// TestMemoedPrivateHostSpendsNoApproval is V1-D5, and it is the finding's argument one
 // step further down the pipeline.
 //
 // B6's memo sat BELOW the first-use approval flow. For an `unknown`-verdict host

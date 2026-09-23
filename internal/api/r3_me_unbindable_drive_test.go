@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestMeWithholdsAnUnbindableDrive is F269.
+// TestMeWithholdsAnUnbindableDrive .
 //
 // driveIsMountableHere ran at the launch door and at the ADMIN preview, and
 // never on the member's own surface. So /me offered a mountable-looking
@@ -120,7 +120,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 
 // driveRefusedMetric reads the total across every reason from /metrics.
 //
-// R1 F321: this helper could not fail. It scraped /metrics on a Server with no
+// R1: this helper could not fail. It scraped /metrics on a Server with no
 // AdminToken, so the response was a 401 whose 60-byte body contains no series at
 // all; it then matched the prefix `wardyn_user_drive_refused_total`, which
 // nothing emits — the exposition is `wardyn_drive_refusals_total`

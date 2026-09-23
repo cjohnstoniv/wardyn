@@ -37,7 +37,7 @@ type gitBrokerUpstream struct {
 	gitBody   []byte // body the forge received (proves byte-for-byte forwarding)
 	gitHits   int
 	// gitHeaders is the FULL header set the forge saw. gitAuth alone could not
-	// see F104: the lane stripped Authorization and forwarded every other
+	// see the finding: the lane stripped Authorization and forwarded every other
 	// sandbox-set credential header (Private-Token, X-Api-Key, …) beside the
 	// brokered Basic auth.
 	gitHeaders http.Header
@@ -82,7 +82,7 @@ func newBrokerUpstream(t *testing.T, mintJSON string) *gitBrokerUpstream {
 // empty string. The fixture used to inject `"username":"x-access-token"`, a
 // shape the broker never emits — which made the mask pin green while the
 // rendering actually on the wire, base64("x-access-token:"+tok), was
-// unregistered (F120): brokeredToken registered base64(":"+tok) instead.
+// unregistered: brokeredToken registered base64(":"+tok) instead.
 func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 	t.Helper()
 	exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)

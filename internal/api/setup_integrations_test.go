@@ -114,7 +114,7 @@ func TestSetupHarnessTools(t *testing.T) {
 	}
 }
 
-// TestSetupHarnessTools_RosterCustomImageAgentAppended is B7-F3:
+// TestSetupHarnessTools_RosterCustomImageAgentAppended:
 // OPERATIONS.md's "Capabilities: what one member, or one group, may do"
 // section documents a WARDYN_AGENT_IMAGES id as a supported
 // custom agent, but setupHarnessTools used to publish ONLY harnessCatalog

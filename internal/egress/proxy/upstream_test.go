@@ -101,7 +101,7 @@ func newUpstreamProxy(t *testing.T, up *upstreamProxy) *Proxy {
 // test can say which layer it is actually exercising. A guard test for a
 // BUILTIN denial has to run under allow_all_egress: under a default-deny
 // allowlist every host it names is refused by policy whether the guard exists
-// or not (F004).
+// or not.
 func newUpstreamProxyPolicy(t *testing.T, up *upstreamProxy, spec types.RunPolicySpec) *Proxy {
 	t.Helper()
 	buf := &bytes.Buffer{}
@@ -191,7 +191,7 @@ func TestUpstreamPrivateIPException(t *testing.T) {
 // proxy set, an AGENT-chosen egress target that is a literal private/loopback/
 // metadata IP is STILL denied by the step-0 guard (no SSRF-via-corp-proxy).
 //
-// F004 — why the policy and the rule_source assertion are load-bearing: this
+// the finding — why the policy and the rule_source assertion are load-bearing: this
 // test used to run under AllowedDomains=["tls.test"], i.e. DEFAULT-DENY, and
 // assert only `dec != egress.Deny`... in fact only that the decision was Deny.
 // Every host it named was refused by `policy:default-deny` whether or not the
@@ -244,7 +244,7 @@ func TestUpstreamDoesNotWeakenLiteralIPGuard(t *testing.T) {
 }
 
 // TestUpstreamNeverHandsANonCanonicalLiteralToTheCorpProxy is the END of the
-// F143 gap: the table above proves the DECISION, this proves the WIRE.
+// the finding gap: the table above proves the DECISION, this proves the WIRE.
 //
 // The upstream lane is the one place the exposure is real — evaluate hands the
 // destination to the operator's proxy BY NAME, unresolved, so whatever the corp

@@ -1,8 +1,8 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The relay SESSION's own tests: which app a cookie is for (B3-F1 + B3-F8) and
-// how long, and under whose authority, it keeps working (B3-F5). The transport
+// The relay SESSION's own tests: which app a cookie is for and
+// how long, and under whose authority, it keeps working. The transport
 // matrix — header hygiene, launcher exit codes, the connection cap — lives in
 // uigateway_test.go and is untouched by these.
 package api
@@ -155,9 +155,9 @@ func uiGet(h *uiHarness, path string, c *http.Cookie) *httptest.ResponseRecorder
 	return rec
 }
 
-// ─── B3-F1 + B3-F8: one cookie per app, and a canonical run id ───────────────
+// ─── one cookie per app, and a canonical run id ───────────────
 
-// TestUIGateway_SecondAppDoesNotHijackTheFirstApp pins B3-F1. The relay cookie
+// TestUIGateway_SecondAppDoesNotHijackTheFirstApp pins the following. The relay cookie
 // was keyed per RUN (one name, Path=/r/<run>/) but pinned ONE app and port, so
 // entering a second declared app on the same run OVERWROTE the first app's
 // cookie in the browser: the still-open first tab's XHR then dialed the second
@@ -240,7 +240,7 @@ func TestUIGateway_SecondAppDoesNotHijackTheFirstApp(t *testing.T) {
 	}
 }
 
-// TestUIGateway_NonCanonicalRunIDIsNotARelayPath pins B3-F8: uuid.Parse accepts
+// TestUIGateway_NonCanonicalRunIDIsNotARelayPath pins uuid.Parse accepts
 // upper-case and braced spellings, but the prefix trim only ever removed the
 // canonical lower-case one — so a non-browser client could make the gateway
 // forward the /r/<id> prefix into the app. The path segment must BE the
@@ -259,7 +259,7 @@ func TestUIGateway_NonCanonicalRunIDIsNotARelayPath(t *testing.T) {
 	}
 }
 
-// ─── B3-F5: the cookie is not a frozen 8h bearer ─────────────────────────────
+// ─── the cookie is not a frozen 8h bearer ─────────────────────────────
 
 // signUISessionPayload signs a RAW payload the way encodeUISession does, so a
 // test can mint a cookie in a format the current code does not write — here,
@@ -288,7 +288,7 @@ func TestUIGateway_PreIssuedAtCookieFailsClosed(t *testing.T) {
 }
 
 // TestUIGateway_RevokedSessionIsRefusedOnTheNextConnection pins the first half
-// of B3-F5: the relay session was a bearer frozen at enter, and uiDial re-checked
+// of the relay session was a bearer frozen at enter, and uiDial re-checked
 // only that the run was alive — so "revoke this human now" (D16), which stops
 // their console session on the very next request, left them an editor with an
 // in-sandbox terminal for the rest of the session TTL.

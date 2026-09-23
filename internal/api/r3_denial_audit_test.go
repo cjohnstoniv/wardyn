@@ -22,7 +22,7 @@ func denialRows(events []types.AuditEvent) []types.AuditEvent {
 	return out
 }
 
-// TestInHandlerMemberDenialsAreAudited is F343.
+// TestInHandlerMemberDenialsAreAudited .
 //
 // docs/AUDIT-ACTIONS.md states the contract as "every member denial that isn't a
 // plain foreign-resource 404", and the MIDDLEWARE honours it — the same member

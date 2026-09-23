@@ -141,7 +141,7 @@ func (tr *auditTree) collectConsts(f *ast.File) {
 // event's Action field, keyed by function name and giving the parameter index
 // that carries the action.
 //
-// DERIVED, never enumerated — and that is the whole of F094's second round. The
+// DERIVED, never enumerated — and that is the whole of the fix's second round. The
 // old scan matched ONE hardcoded callee name, `auditEvent`, so the two in-tree
 // helpers that take the action as a PARAMETER were invisible: internal/identity/
 // embedded's (*Provider).audit and internal/groundtruth's auditFor. Adding a

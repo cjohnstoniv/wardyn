@@ -516,7 +516,7 @@ func TestResolveBedrockAuth_BaseURLOverride_Bearer(t *testing.T) {
 	if !ok {
 		t.Fatal("authorBedrockBearerInjection failed; want ok")
 	}
-	// host:PORT, not a bare host (F037): a bare MITM entry is any-port in the
+	// host:PORT, not a bare host: a bare MITM entry is any-port in the
 	// proxy, so the operator's Bearer would be injected on whatever answered on
 	// a port nobody configured. The override names no port, so 443.
 	wantMITM := net.JoinHostPort(bedrockOverrideHost, "443")

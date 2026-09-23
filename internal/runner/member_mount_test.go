@@ -355,7 +355,7 @@ func TestParseMemberMountPolicy_WarnsOnWideRoots(t *testing.T) {
 	}
 }
 
-// R5 F066: bootWarnings' sentence for a root must describe what withinAnyRoot
+// R5: bootWarnings' sentence for a root must describe what withinAnyRoot
 // actually does with that root — the two "/"-and-$HOME cases were merged into
 // one wide-open sentence, and for "/" it stated the OPPOSITE of the code.
 // withinAnyRoot matches `real == root || strings.HasPrefix(real, root+"/")`, so

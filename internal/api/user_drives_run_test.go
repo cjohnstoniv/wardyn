@@ -48,7 +48,7 @@ func driveRunServer(st *driveStore, runnerTarget string) (*Server, *recRecorder)
 // Nil roots is the deployment that has un-set the variable since the drive was
 // authored.
 //
-// IT CARRIES AN AdminToken (R1 F321) purely so /metrics can be READ. The
+// IT CARRIES AN AdminToken (R1) purely so /metrics can be READ. The
 // refusal-metric assertions in this family scrape the same Server the refusal
 // happened on, and /metrics is operator-gated: without a token the scrape
 // answered 401 and every counter read back as 0, which is a pin that cannot
@@ -372,7 +372,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 				"(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)",
 		},
 		{
-			// THE ADMIN'S VALUE, BLAMED ON THE MEMBER — F137's surviving half,
+			// THE ADMIN'S VALUE, BLAMED ON THE MEMBER — the finding's surviving half,
 			// pinned here because nothing exercised an INVALID override at all
 			// (every other test stores a legal one).
 			//
@@ -785,8 +785,8 @@ func TestSeedRequestDriveTruncatedGroupsIs403(t *testing.T) {
 			// here read "this is 'we cannot tell', not 'you may not'" and
 			// asserted an empty audit stream — while the GOVERNANCE resolver's
 			// mirror-image branch, for the same member on the same request,
-			// recorded the refusal (ceilingWithUnusableGroups, R1 F227). One
-			// tree cannot hold both readings of one condition, and R1 F317
+			// recorded the refusal (ceilingWithUnusableGroups, R1). One
+			// tree cannot hold both readings of one condition, and R1
 			// settled it the way the docs already had: OPERATIONS.md's "Every
 			// denial that isn't a 404" and AUDIT-ACTIONS.md:208's closed enum
 			// both list groups_snapshot_stale as an authz.denied reason. A
@@ -1606,7 +1606,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 			reason: driveRefusalBackendElsewhere,
 		},
 		{name: "the home directory is missing from the share", build: shareStore, reason: driveRefusalHomeMissing},
-		// THE FOUR ARMS THE TABLE NEVER EXERCISED (R1 F310). Every one of them
+		// THE FOUR ARMS THE TABLE NEVER EXERCISED (R1). Every one of them
 		// is a reachable deployment failure whose whole point is that an
 		// operator sees it, and not one of them had ever emitted its own series
 		// in a test — so the reason constant, the WARN and the counter could
@@ -1656,7 +1656,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 				srv, _ := driveShareServer(st, []string{root})
 				// A probe on this root already outstanding past its bound: the
 				// hung-mount state, reached without hanging the test on a real
-				// five-second syscall (see driveShareProbes, R1 F295).
+				// five-second syscall (see driveShareProbes, R1).
 				driveShareProbes.Store("root:"+root, time.Now().Add(-time.Minute))
 				t.Cleanup(func() { driveShareProbes.Delete("root:" + root) })
 				return st, srv
@@ -1712,7 +1712,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 	// dashboard that silently stops counting an arm.
 	//
 	// ANCHORED IN THE CONSTANT DECLARATIONS, not in driveRefusalReasons (R1
-	// F310). This loop used to walk driveRefusalReasons and look for each entry
+	// the finding). This loop used to walk driveRefusalReasons and look for each entry
 	// in /metrics — while metrics.go builds that output by walking the SAME
 	// slice. Deleting an entry deleted it from both sides at once, so the guard
 	// passed, the whole package passed, and the series for a still-reachable

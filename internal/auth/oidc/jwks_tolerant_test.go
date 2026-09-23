@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// jwks_tolerant_test.go pins the property F242's commit CLAIMED and only ever
+// jwks_tolerant_test.go pins the property the finding's commit CLAIMED and only ever
 // half-delivered: one odd entry in the IdP's JWKS cannot break login.
 //
 // go-oidc v3.21.0 buys that for entries whose `kty`/`crv` it cannot represent
@@ -49,7 +49,7 @@ const (
 
 // TestTolerantJWKSSurvivesAMalformedSupportedKey drives a REAL
 // gooidc.RemoteKeySet through the client production uses, against the same
-// one-good-ES256-key JWKS helper F242's pin uses.
+// one-good-ES256-key JWKS helper the finding's pin uses.
 //
 // Counterfactual: swap NewTolerantJWKSClientForTest for a plain &http.Client{}
 // (which is what go-oidc gets without this wiring) and every "malformed
@@ -179,7 +179,7 @@ func TestFilterJWKSPassesThroughWhatItDoesNotUnderstand(t *testing.T) {
 	})
 }
 
-// TestTolerantJWKSEndToEndLogin is the wiring pin, and it is the one F325's
+// TestTolerantJWKSEndToEndLogin is the wiring pin, and it is the one the finding's
 // finding is really about: a behavioural floor that talks to go-oidc DIRECTLY
 // stays green while Wardyn's own login is down, because nothing proves the
 // Authenticator actually fetches its key set through the tolerant client.

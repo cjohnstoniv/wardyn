@@ -20,7 +20,7 @@ import (
 // anyRunLive answers GetRun with a RUNNING run for ANY id.
 //
 // It exists because internalAuth now asks the store whether the run behind a
-// presented token is still alive (B2-F3, refuseTerminalRun), so a double that
+// presented token is still alive (refuseTerminalRun), so a double that
 // serves an /internal/* route has to be able to answer that one question. It is
 // embedded rather than copied into each double so "this fake has a live run"
 // reads as one fact in one place, and so a double that wants a DIFFERENT answer
@@ -48,7 +48,7 @@ func (s terminalRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRu
 }
 
 // internalDoors is every /internal/* route a run token can open, with a body
-// that gets past decoding. The TABLE is the point: B2-F3 is an instance of "one
+// that gets past decoding. The TABLE is the point: this guard is an instance of "one
 // door got the fix, its siblings did not" (only handleInternalTokenRenew
 // re-checked run state), so the pin has to be over the whole surface rather
 // than over the door that happened to be reported.
@@ -75,7 +75,7 @@ func internalDoors(runID, grantID uuid.UUID) []struct {
 	}
 }
 
-// TestInternalAuth_TerminalRunIsRefusedAtEveryDoor is B2-F3.
+// TestInternalAuth_TerminalRunIsRefusedAtEveryDoor .
 //
 // internalAuth verified signature, expiry, audience and the revocation list —
 // but revokeRunCascade is best-effort (Identity.RevokeRun's error is audited and
@@ -109,7 +109,7 @@ func TestInternalAuth_TerminalRunIsRefusedAtEveryDoor(t *testing.T) {
 	}
 }
 
-// TestInternalAuth_TailUploadsLandInsideTheGrace is B2-F3's asserted exemption.
+// TestInternalAuth_TailUploadsLandInsideTheGrace is the asserted exemption.
 // wardyn-rec, wardyn-scan and wardyn-aws-sso all PUT their artifact as the run
 // finishes, racing the completion watcher that flips the state — so a gate with
 // no grace would discard exactly the recordings and scan facts the run existed

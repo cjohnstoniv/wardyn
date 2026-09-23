@@ -41,7 +41,7 @@ func (m *mintSubjectRecorder) seen() (subjects, sponsors []string) {
 	return append([]string(nil), m.subjects...), append([]string(nil), m.sponsors...)
 }
 
-// TestLocalPrincipalHeaderCannotSteerTheSecretNamespace is the pin for F099
+// TestLocalPrincipalHeaderCannotSteerTheSecretNamespace is the pin for the finding
 // (Requirement 10).
 //
 // In LocalMode, actorFromRequest honors the DEV-ONLY X-Wardyn-Principal header,

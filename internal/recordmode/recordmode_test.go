@@ -252,7 +252,7 @@ func TestCapture(t *testing.T) {
 			},
 		},
 		{
-			// B11b-F4: the per-event correlation=unmapped branch is GONE. It
+			// the per-event correlation=unmapped branch is GONE. It
 			// could not fire in production — an unmapped event is by definition
 			// one that bound to no run, so the sidecar's gate drops it and what
 			// survives carries a nil run_id, which the caller's own run-scoped

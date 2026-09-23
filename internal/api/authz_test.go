@@ -124,7 +124,7 @@ const (
 // ownerTier names WHICH ADMIN TIER an owner-scoped route's admin bypass belongs
 // to. Required whenever class == classOwner, the same way entity already is.
 //
-// WHY THE TABLE NEEDED A THIRD DIMENSION (F155). routeMatrix is what routes.go
+// WHY THE TABLE NEEDED A THIRD DIMENSION. routeMatrix is what routes.go
 // calls authoritative, and classAdmin/classSecurity carry the tier so that a
 // route wired to the wrong predicate reddens TestSecurityAdminRouteTier.
 // classOwner carried none, so all 16 owner-scoped routes were SKIPPED by that
@@ -510,7 +510,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// emitted CONTENT that decides it: the files carry the internal registry
 	// coordinate the workspace reads blank, the site-config artifact redirects
 	// /site-config is admin-only for, and the operator's setup commands. Its
-	// write twin below has always been operatorOnly (F287).
+	// write twin below has always been operatorOnly.
 	"GET /api/v1/workspaces/{id}/env-as-code": {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"PUT /api/v1/workspaces/{id}":             {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
@@ -913,7 +913,7 @@ func TestAuthzMatrix(t *testing.T) {
 				// REQUIRED, the same way entity is: a new owner-scoped route
 				// that does not state which admin tier may bypass ownership on
 				// it cannot be classified, because the answer is not derivable
-				// from the class (F155). Fatal here rather than defaulted, so
+				// from the class. Fatal here rather than defaulted, so
 				// the omission is a failure and not a silent tierSuper.
 				if rc.ownerTier != tierSuper && rc.ownerTier != tierSecurity {
 					t.Fatalf("classOwner route %q has no ownerTier set (want tierSuper or tierSecurity) — "+
@@ -1003,7 +1003,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	secSess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
 	memberSess := ssoSession(t, "sub-member-tier", "member-tier@corp.example", oidc.RoleMember)
 
-	// F155: the owner-scoped half, probed against a REAL, SEEDED, FOREIGN
+	// the owner-scoped half, probed against a REAL, SEEDED, FOREIGN
 	// entity rather than the "x1" placeholder the gated-route loop uses.
 	//
 	// The placeholder is why this could not simply be folded into the loop
@@ -1086,7 +1086,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		}
 		// Every owner-scoped route is probed, not a subset: the count is what
 		// catches a route that silently leaves classOwner.
-		// 17 since F287 moved GET /workspaces/{id}/env-as-code here from
+		// 17 since the finding moved GET /workspaces/{id}/env-as-code here from
 		// classMember (its emitted files are the operator's authored
 		// environment, and its write twin was already operatorOnly).
 		if probed != 17 {

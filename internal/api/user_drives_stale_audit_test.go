@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// TestDriveStaleSnapshotRefusalIsAudited is F317.
+// TestDriveStaleSnapshotRefusalIsAudited.
 //
-// groups_snapshot_stale has TWO deciding sites, not one. F227 audited the
+// groups_snapshot_stale has TWO deciding sites, not one. the finding audited the
 // governance resolver's; the drive resolver's mirror-image branch
 // (driveWithUnusableGroups) raised the identical member-reachable 403 and
 // recorded nothing — while docs/AUDIT-ACTIONS.md and docs/OPERATIONS.md both
@@ -104,7 +104,7 @@ func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
 	})
 }
 
-// TestMePollsAreNotDenials is the other half of F317: the row must mean a
+// TestMePollsAreNotDenials is the other half of the finding: the row must mean a
 // refusal happened, not that a console is open.
 //
 // GET /me reaches BOTH groups_snapshot_stale deciding sites — the drive resolver
@@ -127,7 +127,7 @@ func TestMePollsAreNotDenials(t *testing.T) {
 	for range 3 {
 		// The state is still REPORTED: the mark suppresses the operator's row,
 		// never the member's answer. A /me that stopped saying
-		// groups_snapshot_stale would be F273 all over again.
+		// groups_snapshot_stale would be the finding all over again.
 		if _, _, reason := meDriveBody(t, srv, ctx); reason != driveUnavailableGroups {
 			t.Fatalf("user_drive_unavailable = %q, want %q — the mark must suppress the audit row, not the "+
 				"answer the member acts on", reason, driveUnavailableGroups)
@@ -163,7 +163,7 @@ func TestMePollsAreNotDenials(t *testing.T) {
 
 	// …and the shape where the DRIVE seam is the only site that can speak: no
 	// group-tier governance assignment, so the ceiling resolves fine and the
-	// refusal is decided at the drives door. This is the deployment F317 is
+	// refusal is decided at the drives door. This is the deployment the finding is
 	// about, where an unaudited drive seam left the denial stream entirely empty.
 	t.Run("the drive seam records for an enforcement caller", func(t *testing.T) {
 		st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: false}

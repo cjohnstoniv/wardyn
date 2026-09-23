@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestFlagEnv_SecretNeverPrintedInUsage is the F157 regression. FlagEnv seeded
+// TestFlagEnv_SecretNeverPrintedInUsage is the regression. FlagEnv seeded
 // the flag's DEFAULT from the env var, flag.String captures that as
 // Flag.DefValue, and PrintDefaults renders a non-empty string default as
 // `(default "…")` — printed for -help AND for EVERY parse error, since

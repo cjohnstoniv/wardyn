@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F11 PROBE — destination: internal/api/auditspool_f11_probe_pg_test.go
+// the finding PROBE — destination: internal/api/auditspool_f11_probe_pg_test.go
 //
 // The spool → drain → store hop of the append-only claim: a spooled line can
 // carry ANY prev_hash/row_hash (the JSON tags exist on types.AuditEvent) and

@@ -336,7 +336,7 @@ func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
 	})
 }
 
-// ─── an email names the same human as their sub (F002) ───────────────────────
+// ─── an email names the same human as their sub ───────────────────────
 
 // TestRevokeSessions_EmailFormRevokesTheSameHuman: "revoke a human now" is the
 // time-critical half of incident response, and it used to be keyed on the OIDC

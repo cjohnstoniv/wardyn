@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// F341: an admin's cross-principal ?owner= took the raw query string as the
+// an admin's cross-principal ?owner= took the raw query string as the
 // namespace key, with no canonicalization and no resolution. Naming a real
 // member by their EMAIL (or by a case-variant of their subject) answered 204
 // with an outcome=success audit row while the PUT landed in a namespace nobody

@@ -43,7 +43,7 @@ func routesNoteFor(t *testing.T, reg string) string {
 	return strings.Join(note, " ")
 }
 
-// TestIntegrationsRouteNoteMatchesItsRealTier is F247's second half.
+// TestIntegrationsRouteNoteMatchesItsRealTier is the finding's second half.
 //
 // The finding is two claims in one title: GET /integrations served credential
 // refs and internal egress hosts to any member (closed by

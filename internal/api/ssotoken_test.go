@@ -47,7 +47,7 @@ func (s ssoLoginRunStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]t
 
 // ssoLoginStartedEvents is the harness.login.started row launchHarnessLoginRun
 // writes for runID, carrying the operator's declared access-portal URL. The
-// upload handler binds the uploaded start_url to it (F006).
+// upload handler binds the uploaded start_url to it.
 func ssoLoginStartedEvents(runID uuid.UUID, startURL string) []types.AuditEvent {
 	return []types.AuditEvent{{
 		ID: uuid.New(), RunID: &runID, ActorType: types.ActorSystem, Actor: "wardynd",
@@ -78,7 +78,7 @@ func ssoLoginStartedPerUser(runID uuid.UUID, startURL, owner string) []types.Aud
 // in-memory secret store, and returns a valid run token for that run. The boot
 // config and the login-run audit trail declare the same start URL/region
 // validSSOBody carries, so these cases exercise the guards under test rather
-// than tripping the F006 operator binding.
+// than tripping the operator binding.
 func newSSOUploadSrv(t *testing.T) (*Server, *memSecrets, string, uuid.UUID) {
 	t.Helper()
 	h := newHarness(t)

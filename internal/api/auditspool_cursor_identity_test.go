@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-// TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool is F280.
+// TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool.
 //
 // The cursor sidecar used to be trusted on a SIZE BOUND alone (`n < 0 || n >
 // size`), while the comment above it claimed something a size bound cannot say:
@@ -90,7 +90,7 @@ func TestSpoolCursorRefusesAStaleCursorOverAReplacedSpool(t *testing.T) {
 	}
 }
 
-// TestSpoolCursorRefusesAStaleCursorOverACompactedSpool is F280's other arm: the
+// TestSpoolCursorRefusesAStaleCursorOverACompactedSpool is the finding's other arm: the
 // crash window inside compact() itself.
 //
 // compact() renames a rewritten spool over the old one and only then retires the
@@ -160,7 +160,7 @@ func TestSpoolCursorRefusesAStaleCursorOverACompactedSpool(t *testing.T) {
 
 // A cursor that still describes the file is still HONOURED. Without this the
 // fix could be "always replay from 0", which trades a silent loss for the
-// duplicate storm F219 measured (~32k duplicate rows on one restart of a 64k
+// duplicate storm the finding measured (~32k duplicate rows on one restart of a 64k
 // backlog) — and the pin above could not tell the two apart.
 func TestSpoolCursorHonoursACursorThatStillDescribesTheFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")

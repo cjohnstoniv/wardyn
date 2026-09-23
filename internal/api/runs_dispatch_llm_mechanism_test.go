@@ -638,7 +638,7 @@ func TestRecordLaunchRefusedMintsNothing(t *testing.T) {
 	}
 }
 
-// TestDispatch_UnreadableRosterRefusesTheCredential (V1-r2 fix-s2 review R-02).
+// TestDispatch_UnreadableRosterRefusesTheCredential (V1-r2 fix-s2).
 //
 // The scope that decides WHOSE captured AWS SSO session a run is served — and
 // whether the operator-wide Bedrock bearer key is reachable at all — is resolved

@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// F153 residue. The first fix added recordCeilingLimits, which reads the two
+// the finding residue. The first fix added recordCeilingLimits, which reads the two
 // named limits — and it CANNOT FIRE on the route the finding names, so that
 // route's behaviour was byte-for-byte unchanged:
 //

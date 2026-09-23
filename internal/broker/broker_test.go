@@ -895,7 +895,7 @@ func TestMint_AuditRidesTxAtomicWithJTI(t *testing.T) {
 	}
 }
 
-// TestRevokeRun_ErrorArms pins the two arms F135 measured at count=0 in the
+// TestRevokeRun_ErrorArms pins the two arms the finding measured at count=0 in the
 // coverage profile (RevokeRun's MintedCredentials error and its audit.Record
 // failure). They are the arms that decide what the KILL CASCADE does when
 // something under it is broken, so "untested" is the wrong state for them:
