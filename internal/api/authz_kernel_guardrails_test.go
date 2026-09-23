@@ -53,6 +53,10 @@ var authzGuardExceptions = map[string]string{
 		"recordingAuthorizer, owner-or-operator — just not visible to this AST scan.",
 }
 
+// authzGuardExceptionsMax caps authzGuardExceptions, which may only shrink
+// (K5). Lower it when an entry goes; raising it needs a reviewed reason.
+const authzGuardExceptionsMax = 1
+
 // handlerFuncName recovers h's bare method name ("handleGetRun") from the
 // *http.HandlerFunc* chi.Walk hands back for a leaf route — chi's ChainHandler
 // unwraps to .Endpoint before calling WalkFunc (tree.go), so h is the raw
@@ -69,6 +73,25 @@ func handlerFuncName(h http.Handler) string {
 		full = full[i+1:]
 	}
 	return full
+}
+
+// leafHandlers maps "METHOD /route" to the (*Server) method name chi.Walk
+// finds for it, across both the API router and the UI-enabled one.
+func leafHandlers(t *testing.T) map[string]string {
+	t.Helper()
+	srv, _, _, _ := newAuthzMatrixServer(t)
+	out := map[string]string{}
+	for _, router := range []chi.Router{srv.router, newAuthzMatrixServerWithUI(t).router} {
+		if err := chi.Walk(router, func(method, route string, h http.Handler, _ ...func(http.Handler) http.Handler) error {
+			if name := handlerFuncName(h); name != "" {
+				out[method+" "+route] = name
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("chi.Walk: %v", err)
+		}
+	}
+	return out
 }
 
 // serverCallSets maps every (*Server) method's name to the names of every
@@ -142,36 +165,23 @@ func reaches(calls map[string]map[string]bool, name string, want []string) bool 
 }
 
 // TestAuthzMatrixHandlersReachAuthz is G1: every classOwner route's handler
-// transitively reaches one of the ownership functions its declared entity
-// names. It is the completeness half TestAuthzMatrix's runtime probes cannot
-// give: a probe over one fixture proves the handler refuses THAT case, never
-// that every code path through it does.
+// statically references the ownership check its declared entity names,
+// somewhere in its transitive (*Server) call graph. That is a necessary
+// condition, not a per-path proof: a handler that gates one branch and reads
+// the store ungated on another still passes. It catches the check being
+// dropped outright, which TestAuthzMatrix's runtime probes over one fixture
+// cannot rule out. Tier strictness is not checked here either — entityRun
+// accepts ownsRunOrAdmin as well as ownsRunOrSuperAdmin — and stays with
+// TestAuthzMatrix's ownerTier probes.
 func TestAuthzMatrixHandlersReachAuthz(t *testing.T) {
-	srv, _, _, _ := newAuthzMatrixServer(t)
-	uiSrv := newAuthzMatrixServerWithUI(t)
-
-	handlerOf := map[string]string{}
-	walk := func(router chi.Router) {
-		if err := chi.Walk(router, func(method, route string, h http.Handler, _ ...func(http.Handler) http.Handler) error {
-			if name := handlerFuncName(h); name != "" {
-				handlerOf[method+" "+route] = name
-			}
-			return nil
-		}); err != nil {
-			t.Fatalf("chi.Walk: %v", err)
-		}
-	}
-	walk(srv.router)
-	walk(uiSrv.router)
-
+	handlerOf := leafHandlers(t)
 	calls := serverCallSets(t)
 
 	for key, rc := range routeMatrix {
 		if rc.class != classOwner {
 			continue
 		}
-		if reason, exempt := authzGuardExceptions[key]; exempt {
-			_ = reason
+		if _, exempt := authzGuardExceptions[key]; exempt {
 			continue
 		}
 		want := entityGateFuncs[rc.entity]
@@ -193,21 +203,13 @@ func TestAuthzMatrixHandlersReachAuthz(t *testing.T) {
 
 // TestNoAuthzGuardExceptionRot: an exception whose handler now DOES reach its
 // entity's gate is a stale licence — narrow the map instead of carrying it
-// forward.
+// forward. The map may also only shrink.
 func TestNoAuthzGuardExceptionRot(t *testing.T) {
-	srv, _, _, _ := newAuthzMatrixServer(t)
-	uiSrv := newAuthzMatrixServerWithUI(t)
-	handlerOf := map[string]string{}
-	walk := func(router chi.Router) {
-		_ = chi.Walk(router, func(method, route string, h http.Handler, _ ...func(http.Handler) http.Handler) error {
-			if name := handlerFuncName(h); name != "" {
-				handlerOf[method+" "+route] = name
-			}
-			return nil
-		})
+	if len(authzGuardExceptions) > authzGuardExceptionsMax {
+		t.Errorf("authzGuardExceptions has %d entries, the cap is %d — gate the new route instead of exempting it",
+			len(authzGuardExceptions), authzGuardExceptionsMax)
 	}
-	walk(srv.router)
-	walk(uiSrv.router)
+	handlerOf := leafHandlers(t)
 	calls := serverCallSets(t)
 
 	for key := range authzGuardExceptions {
@@ -235,44 +237,50 @@ func TestNoAuthzGuardExceptionRot(t *testing.T) {
 // grant narrow an answer, breaks this without needing to know which rule.
 // Randomized rather than exhaustive: TestCapResolverNonescapeTable (K0) already
 // exhaustively covers kind x tier x grant-state x store; this is the property
-// that table's fixed points cannot state.
+// that table's fixed points cannot state. Each iteration draws the kind from
+// capabilityKinds and the switch per kind, so the widening path (image, with
+// step 2's switch-off skip and step 4) runs as well as the narrowing one.
 func TestCapabilityResolutionIsMonotone(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	groups := []string{"eng"}
-	values := []string{"host-a.example", "host-b.example", "*"}
+	values := []string{"a.example", "b.example", "*.example", "*"}
 
-	decide := func(grants []types.CapabilityGrant, enf bool, value string) bool {
-		srv := capServer(&monotoneStore{grants: grants, enf: map[string]bool{capEgressHost: enf}})
+	decide := func(grants []types.CapabilityGrant, enf map[string]bool, kind, value string) bool {
+		srv := capServer(&monotoneStore{grants: grants, enf: enf})
 		ctx := withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleMember), groups)
-		allowed, err := srv.newCapBatch(ctx).allowed(ctx, capEgressHost, value)
+		allowed, err := srv.newCapBatch(ctx).decide(ctx, kind, capKinds[kind].direction, value)
 		if err != nil {
 			t.Fatalf("decide: %v", err)
 		}
 		return allowed
 	}
 
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 700; i++ {
+		kind := capabilityKinds[rng.Intn(len(capabilityKinds))]
 		value := values[rng.Intn(len(values))]
-		base := randomGrants(rng, groups, values)
-		enf := rng.Intn(2) == 1
-
-		before := decide(base, enf, value)
-
-		allowGrant := grant(types.CapabilitySubjectUser, capSub, capEgressHost, value, types.CapabilityAllow)
-		afterAllow := decide(append(slices.Clone(base), allowGrant), enf, value)
-		if before && !afterAllow {
-			t.Fatalf("adding an ALLOW grant turned an ALLOW into a DENY for %q (enforced=%v, base=%v)", value, enf, base)
+		base := randomGrants(rng, kind, groups, values)
+		enf := map[string]bool{}
+		for _, k := range capabilityKinds {
+			enf[k] = rng.Intn(2) == 1
 		}
 
-		denyGrant := grant(types.CapabilitySubjectUser, capSub, capEgressHost, value, types.CapabilityDeny)
-		afterDeny := decide(append(slices.Clone(base), denyGrant), enf, value)
+		before := decide(base, enf, kind, value)
+
+		allowGrant := grant(types.CapabilitySubjectUser, capSub, kind, value, types.CapabilityAllow)
+		afterAllow := decide(append(slices.Clone(base), allowGrant), enf, kind, value)
+		if before && !afterAllow {
+			t.Fatalf("%s: adding an ALLOW grant turned an ALLOW into a DENY for %q (enforced=%v, base=%v)", kind, value, enf[kind], base)
+		}
+
+		denyGrant := grant(types.CapabilitySubjectUser, capSub, kind, value, types.CapabilityDeny)
+		afterDeny := decide(append(slices.Clone(base), denyGrant), enf, kind, value)
 		if !before && afterDeny {
-			t.Fatalf("adding a DENY grant turned a DENY into an ALLOW for %q (enforced=%v, base=%v)", value, enf, base)
+			t.Fatalf("%s: adding a DENY grant turned a DENY into an ALLOW for %q (enforced=%v, base=%v)", kind, value, enf[kind], base)
 		}
 	}
 }
 
-func randomGrants(rng *rand.Rand, groups, values []string) []types.CapabilityGrant {
+func randomGrants(rng *rand.Rand, kind string, groups, values []string) []types.CapabilityGrant {
 	n := rng.Intn(4)
 	out := make([]types.CapabilityGrant, 0, n)
 	for i := 0; i < n; i++ {
@@ -284,7 +292,7 @@ func randomGrants(rng *rand.Rand, groups, values []string) []types.CapabilityGra
 		if rng.Intn(2) == 0 {
 			subjType, subject = types.CapabilitySubjectGroup, groups[0]
 		}
-		out = append(out, grant(subjType, subject, capEgressHost, values[rng.Intn(len(values))], effect))
+		out = append(out, grant(subjType, subject, kind, values[rng.Intn(len(values))], effect))
 	}
 	return out
 }

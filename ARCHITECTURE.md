@@ -195,14 +195,17 @@ issues AK-1..AK-9 (`#735`-`#741`, two 0.9 issues not yet filed).
     hand.
   - `TestEveryRegisteredReasonIsEmitted` / `TestAuthzDeniedReasonsAreDocumented`
     — the registry, the emit sites and the two docs agree, both ways.
-  - `TestAuthzMatrix` (route tier, chi.Walk-enumerated) and
-    `TestAuthzMatrixHandlersReachAuthz` (every `classOwner` route's handler
-    statically reaches the ownership check its declared entity — run,
-    workspace, approval — names) together cover what a runtime probe over one
-    fixture cannot: that every code path through a handler is gated, not just
-    the one case a test happens to construct.
+  - `TestAuthzMatrix` (route tier, chi.Walk-enumerated, with runtime
+    `ownerTier` probes) and `TestAuthzMatrixHandlersReachAuthz` (every
+    `classOwner` route's handler statically references its entity's ownership
+    check — run, workspace, approval — somewhere in its call graph). The
+    static check is a necessary condition, not a per-path proof: it catches a
+    check dropped outright, not a branch that skips it, and tier strictness
+    (owner-or-admin vs. owner-or-super-admin) stays with the `ownerTier`
+    probes. Its exception map may only shrink (asserted by length).
   - `TestPreflightMirrorsLaunchGates` — a gate added to launch is either
-    reproduced by preflight or named in an exception map with why.
+    reproduced by preflight or named in an exception map with why; that map
+    may only shrink (asserted by length).
   - `TestCapResolverNonescapeTable` / `TestCapabilityResolutionIsMonotone` —
     the capability resolver (`capBatch.decide`, `internal/api/capabilities.go`)
     is exhaustively checked kind x tier x grant-state x store against a
