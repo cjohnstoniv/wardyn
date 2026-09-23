@@ -142,8 +142,13 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	scope, ok := s.loginRunScope(r.Context(), stamp, claims.Sub)
 	if !ok {
 		// No stamp, on a deployment whose row now reads `per_user`: unprovable, so
-		// refused. See ssoTokenUnstampedScopeRefusal.
-		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonUnstampedScope, ssoTokenUnstampedScopeRefusal, nil)
+		// refused. See ssoTokenUnstampedScopeRefusal. A provider sign-in whose
+		// stamp names no owner, or another one, is refused the same way.
+		msg := ssoTokenUnstampedScopeRefusal
+		if stamp.ModelProviderUID != "" {
+			msg = mpsCaptureNotOwner
+		}
+		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonUnstampedScope, msg, nil)
 		return
 	}
 
@@ -225,7 +230,16 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	blob.CapturedAt = s.cfg.Now().UTC()
 	blob.SourceRunID = claims.RunID.String()
 
-	if err := s.storeAWSSSOBlob(r.Context(), scope, blob); err != nil {
+	// A provider sign-in lands only while that provider is still the one it
+	// was launched for (storeProviderSignIn); the legacy door as before.
+	store := func() (bool, error) { return false, s.storeAWSSSOBlob(r.Context(), scope, blob) }
+	if scope.provider != "" {
+		store = func() (bool, error) { return s.storeProviderSignIn(r.Context(), stamp, scope, blob) }
+	}
+	if changed, err := store(); changed {
+		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonProviderChanged, mpsCaptureChanged, &scope)
+		return
+	} else if err != nil {
 		// Audited like every other refusal on this route: the provenance is
 		// already stamped but NOTHING is persisted, so "the capture did not
 		// land" is the honest reading, and a failed persist is exactly the
@@ -254,16 +268,19 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.RefreshToken))
 	}
 
+	captured := map[string]any{
+		"provider": awsSSOProvider, "source": "helper",
+		// owner + credential_source say WHOSE credential landed: "" / "shared" is
+		// the one every run uses, a subject / "per_user" is one person's. Without
+		// the pair a per_user estate's capture rows are indistinguishable from
+		// each other, and "who signed in" is the first question after an incident.
+		"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
+	}
+	if stamp.ModelProvider != "" {
+		captured["model_provider"] = stamp.ModelProvider
+	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"harness.credential.captured", harnessCredSecretName(awsSSOProvider), "success",
-		mustJSON(map[string]any{
-			"provider": awsSSOProvider, "source": "helper",
-			// owner + credential_source say WHOSE credential landed: "" / "shared" is
-			// the one every run uses, a subject / "per_user" is one person's. Without
-			// the pair a per_user estate's capture rows are indistinguishable from
-			// each other, and "who signed in" is the first question after an incident.
-			"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
-		})))
+		"harness.credential.captured", scope.ssoSecret(), "success", mustJSON(captured)))
 
 	// A sign-in answers any held run. Every PENDING credential_reauth
 	// this capture satisfies moves to APPROVED, so the sidecar holding that run's
@@ -348,14 +365,21 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	// cmp.Or(BedrockAWSSSORegion, BedrockRegion) boot config this sandbox was
 	// launched with, and the start URL is the operator's own request value read
 	// back off THIS run's harness.login.started row.
-	if blob.Region != cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion) {
+	//
+	// A provider sign-in binds to that provider's region and model as they read
+	// at launch (its stamp), never the boot config; an empty one refuses.
+	region, model := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion), s.cfg.BedrockModel
+	if stamp.ModelProviderUID != "" {
+		region, model = stamp.SSORegion, stamp.Model
+	}
+	if blob.Region != region {
 		return "sso token region does not match the AWS SSO region this login run was launched with", refuseReasonRegionMismatch
 	}
 	if blob.StartURL != stamp.SSOStartURL {
 		return "sso token start_url does not match the AWS access portal URL this login run was launched with", refuseReasonStartURLMismatch
 	}
 	// Which account and role, not merely which portal.
-	return bindCaptureToPin(blob, stamp, s.cfg.BedrockModel)
+	return bindCaptureToPin(blob, stamp, model)
 }
 
 // missingFields names the fields valid() requires and this blob does not carry.
@@ -401,6 +425,15 @@ func (b awsSSOBlob) missingFields() []string {
 // and it needs a pre-upgrade run still alive across the wardynd restart that
 // deployed this code. Every run launched from here on carries a stamp.
 func (s *Server) loginRunScope(ctx context.Context, stamp loginRunStamp, subject string) (awsSSOScope, bool) {
+	if stamp.ModelProviderUID != "" {
+		// A provider's own door: the launcher's own name for that provider, and
+		// only the launcher's — the run token is authority for whose run it is.
+		// The roster never decides it.
+		if stamp.Owner == "" || stamp.Owner != subject {
+			return awsSSOScope{}, false
+		}
+		return awsSSOScope{perUser: true, owner: stamp.Owner, provider: stamp.ModelProviderUID}, true
+	}
 	switch stamp.CredentialSource {
 	case string(types.CredentialSourcePerUser):
 		// The launch-time owner, not the live roster's answer. Empty is fail-closed

@@ -245,18 +245,10 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 			map[string]any{"host": minted.Injection.Host})
 	}
 
-	if reason != "" && scope.provider != "" {
-		// No hold: a provider's sign-in door, which a hold would wait on,
-		// arrives with MP-13. The run's next model call fails, naming it.
-		state, remedy := mpBRNotSignedIn, mpRunRemedySignIn
-		if reason == awsSSOReauthReasonUnavailable && blob.renewable(s.cfg.Now()) {
-			state, remedy = mpBRRenewing, mpBRRemedyRetry
-		}
-		return fail(http.StatusForbidden, "provider_signin_"+reason,
-			fmt.Sprintf(mpRunRefusal, run.ModelProviderID, state, remedy), nil)
-	}
 	if reason != "" {
-		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, reason)
+		// A provider run is held like any other: its owner's sign-in through
+		// that provider's own door (provider_signin.go) answers the hold.
+		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, run.ModelProviderID, reason)
 	}
 
 	// (6) LIVE. Per-run masking is ADDITIVE to the global registration
@@ -305,7 +297,7 @@ const (
 // sweeper) answers TERMINAL at once, so the hold ends within one poll instead of
 // running its whole budget against a question nobody can answer.
 func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Request,
-	claims *identity.Claims, snapshot awsSSOScopeSnapshot, reason string,
+	claims *identity.Claims, snapshot awsSSOScopeSnapshot, modelProvider, reason string,
 ) bool {
 	ctx := r.Context()
 	rows, lerr := s.runApprovals(ctx, claims.RunID, "")
@@ -356,12 +348,19 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	}
 
 	// The scope is the DEDUP KEY, so it carries identity and nothing else: the
-	// reason lives on the audit row, not here.
-	reqScope, _ := json.Marshal(map[string]string{
+	// reason lives on the audit row, not here. A provider run's hold also names
+	// its provider — the id to show, the UID to match (reauthResolvableBy) — so
+	// only a sign-in for that provider answers it; a roster run's scope stays
+	// byte-for-byte what it was.
+	scopeFields := map[string]string{
 		"mechanism":         snapshot.Mechanism,
 		"credential_source": snapshot.CredentialSource,
 		"owner":             snapshot.OwnerSubject,
-	})
+	}
+	if snapshot.ProviderUID != "" {
+		scopeFields["provider"], scopeFields["provider_uid"] = modelProvider, snapshot.ProviderUID
+	}
+	reqScope, _ := json.Marshal(scopeFields)
 	// The id is minted HERE so this caller can tell whether it RAISED the request
 	// or merely found one. RequestApproval's dedup — the pre-insert
 	// scan and the partial unique index's loser alike — answers with the WINNER'S
@@ -393,11 +392,11 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	// unanswerable from the trail.
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
 		"credential.reauth.requested", created.ID.String(), "success",
-		mustJSON(map[string]any{
+		mustJSON(withModelProvider(map[string]any{
 			"approval_id": created.ID, "owner": snapshot.OwnerSubject,
 			"credential_source": snapshot.CredentialSource, "provider": awsSSOProvider,
 			"reason": reason, "detail": credentialReauthRaisedSentence,
-		})))
+		}, modelProvider))))
 	s.metrics.credentialReauthRecorded(credentialReauthOutcomeRequested)
 	writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 	return true
@@ -553,13 +552,16 @@ func reauthResolvableBy(ap types.ApprovalRequest, scope awsSSOScope, loginRun ty
 	var sc struct {
 		Owner            string `json:"owner"`
 		CredentialSource string `json:"credential_source"`
+		ProviderUID      string `json:"provider_uid"`
 	}
 	if json.Unmarshal(ap.RequestedScope, &sc) != nil {
 		return false
 	}
 	// I2 — whose credential this capture became, decided at the login run's
-	// LAUNCH (loginRunScope), never from the live roster.
-	if sc.Owner != scope.owner || sc.CredentialSource != awsSSOCredentialSourceLabel(scope) {
+	// LAUNCH (loginRunScope), never from the live roster. And which provider's:
+	// a capture answers only its own provider's holds, a roster capture only
+	// roster holds (both "").
+	if sc.Owner != scope.owner || sc.CredentialSource != awsSSOCredentialSourceLabel(scope) || sc.ProviderUID != scope.provider {
 		return false
 	}
 	// I6 — generation. Strictly after: a login run created in the same instant
@@ -594,19 +596,17 @@ func (s *Server) resolveReauth(ctx context.Context, ap types.ApprovalRequest, re
 	if !ok {
 		return errReauthResolverUnavailable
 	}
-	var owner string
 	var sc struct {
-		Owner string `json:"owner"`
+		Owner    string `json:"owner"`
+		Provider string `json:"provider"`
 	}
-	if json.Unmarshal(ap.RequestedScope, &sc) == nil {
-		owner = sc.Owner
-	}
+	_ = json.Unmarshal(ap.RequestedScope, &sc)
 	ev := s.auditEvent(&ap.RunID, types.ActorHuman, resolvedBy,
 		"credential.reauth.resolved", ap.ID.String(), "success",
-		mustJSON(map[string]any{
-			"approval_id": ap.ID, "owner": owner, "resolved_by": resolvedBy,
+		mustJSON(withModelProvider(map[string]any{
+			"approval_id": ap.ID, "owner": sc.Owner, "resolved_by": resolvedBy,
 			"capture_run_id": captureRunID, "provider": awsSSOProvider,
-		}))
+		}, sc.Provider)))
 	if _, err := resolver.ResolveReauthApproval(ctx, ap.ID, types.ApprovalDecision{
 		State: types.ApprovalApproved, DecidedBy: resolvedBy, Reason: "signed in again",
 	}, ev); err != nil {
@@ -642,7 +642,10 @@ func (s *Server) reconcileReauthOnRead(ctx context.Context, ap types.ApprovalReq
 	if scErr != nil {
 		return ap // never derive a scope from a read that failed
 	}
-	scope := awsSSOScopeFor(siteCfg, run.Agent, runIdentitySubject(ctx, run.CreatedBy))
+	scope, ok := reauthScopeForRun(siteCfg, run, runIdentitySubject(ctx, run.CreatedBy))
+	if !ok {
+		return ap
+	}
 	blob, found, berr := s.readAWSSSOBlob(ctx, scope)
 	if berr != nil || !found || blob.SourceRunID == "" {
 		return ap

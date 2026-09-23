@@ -94,6 +94,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   these rows instead of reading "No model/harness provider configured" beside them, and each
   granted provider gets its own `llm_provider:<id>` row whose fix is that provider's action. The
   legacy checklist rows stay until MP-4.
+- **Sign-in doors keyed by model provider (#534).** `POST /model-providers/{id}/sign-in` launches a
+  person's own sign-in for a `bedrock_sso` or `anthropic_subscription` provider, seeded from the
+  provider record alone (its access portal, region and account/role pin — never the request or the
+  boot `WARDYN_BEDROCK_*` values). The capture lands only in the signer's own namespace under the
+  provider's own name (`wardyn-provider-<uid>-sso` / `-oauth`), never the roster's shared name or the
+  operator's: an AWS sign-in through the sandbox's own upload, bound to the provider as it read at
+  launch and refused (`provider_changed`) if the provider was removed, re-created or re-addressed
+  while it was open; a Claude sign-in through `PUT` on the same path with the printed setup-token,
+  bound to a sign-in run the caller launched for that provider. The door answers only while a
+  model-provider block exists, and `POST /setup/harness-login` now answers only while none does. The
+  caller must be granted the provider and an agent it serves; the admin token under SSO cannot sign
+  in. A run whose provider AWS session lapses mid-run is now held for its owner to sign in again,
+  as roster runs are: the hold's `requested_scope` names the provider (`provider`, `provider_uid`),
+  and only its owner's sign-in for that provider answers it. `harness.login.started`,
+  `harness.credential.captured` and `credential.reauth.*` gain `model_provider`.
 
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0069_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to

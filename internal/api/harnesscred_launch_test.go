@@ -224,7 +224,7 @@ func TestHandleHarnessLogin_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
 	if !ok {
 		t.Fatal("aws-sso harness login convention missing")
 	}
-	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: perUserPortal})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState(t *testing
 	if !ok {
 		t.Fatal("aws-sso harness login convention missing")
 	}
-	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, loginTarget{startURL: perUserPortal})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}

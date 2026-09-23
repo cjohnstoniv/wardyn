@@ -391,9 +391,6 @@ func TestProviderBedrockSSOSink(t *testing.T) {
 				sn.ProviderUID, sn.OwnerSubject, sn.CredentialSource = "", "", string(types.CredentialSourceShared)
 			})
 		}, credentialReauthScopeChangedRefusal},
-		{"the owner's session is gone: the operator's never stands in", func(_ *subStore, sec *memSecrets, p types.ModelProvider) {
-			_ = sec.For(subOwner).Delete(context.Background(), providerSecretName(p.UID, providerSSOPart))
-		}, fmt.Sprintf(mpRunRefusal, "bedrock-prod", mpBRNotSignedIn, mpRunRemedySignIn)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := brSSOProvider()

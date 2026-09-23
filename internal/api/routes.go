@@ -100,7 +100,7 @@ func (s *Server) routes() chi.Router {
 			//   mountAgentProviderRoutes            operatorOnly
 			//       (agent_providers.go)
 			//   mountModelProviderRoutes            split: 2 operatorOnly,
-			//       2 authenticated (model_providers_api.go)
+			//       4 authenticated (model_providers_api.go)
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
 			operatorOnly := r.With(s.requireOperator)

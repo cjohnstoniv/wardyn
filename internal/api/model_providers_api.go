@@ -29,11 +29,13 @@ const (
 // org's gateways, its AWS access portal and account pins. The member-safe
 // projection is a different, narrower document — SetupStatus.ModelProviders.
 // There is no DELETE: removing a provider is a PUT without it. Each person's
-// own credential door mounts on the authenticated group r beside them.
+// own credential and sign-in doors mount on the authenticated group r beside
+// them.
 func (s *Server) mountModelProviderRoutes(r, operatorOnly chi.Router) {
 	operatorOnly.Get("/model-providers", s.handleGetModelProviders)
 	operatorOnly.Put("/model-providers", s.handlePutModelProviders)
 	s.mountModelProviderCredentialRoutes(r)
+	s.mountProviderSignInRoutes(r)
 }
 
 // storedModelProviders is the stored block as a VALUE — what GET returns and

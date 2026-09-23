@@ -123,6 +123,10 @@ const (
 	// KILLED — by its own Cancel, or by the person's next sign-in superseding it
 	// (harnesscred_supersede.go). See ssoTokenRunKilledRefusal.
 	refuseReasonRunKilled = "run_killed"
+	// refuseReasonProviderChanged: a sign-in through a model provider's own
+	// door whose provider was removed, re-kinded or re-addressed while the
+	// login sandbox was open (storeProviderSignIn).
+	refuseReasonProviderChanged = "provider_changed"
 )
 
 // DRAFT (M2 canon pending)

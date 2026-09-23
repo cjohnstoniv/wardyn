@@ -4,7 +4,6 @@
 package api
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -415,14 +414,13 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 // asciicast is ever persisted. The gate lives at that single call site so a future
 // second attach path cannot miss it. (harness.login.started and session.attach
 // still record who attached, when, and why — no provenance is lost.)
-// ssoStartURL (AWS only, "" for every other provider) is the operator's IAM
-// Identity Center access-portal URL. It is seeded into the sandbox as a
-// pre-login ~/.aws/config so the auto-typed `aws sso login --sso-session wardyn`
-// has an sso_start_url/sso_region to read — see awsSSOLoginConfigFileContents.
-// There is no server-side start-URL config to read it from (deliberately: it is
-// per-organization and this is the only flow that needs it), so it arrives with
-// the login request and is validated by the caller.
-func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, ssoStartURL string, pin awsSSOPin, scope awsSSOScope) (types.AgentRun, harnessLoginDispatch, error) {
+// t.startURL (AWS only, "" for every other provider) is the IAM Identity
+// Center access-portal URL. It is seeded into the sandbox as a pre-login
+// ~/.aws/config so the auto-typed `aws sso login --sso-session wardyn` has an
+// sso_start_url/sso_region to read — see awsSSOLoginConfigFileContents. The
+// caller decides it (the roster row or the request on the legacy door, the
+// provider record on the provider door) and validates it.
+func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, t loginTarget) (types.AgentRun, harnessLoginDispatch, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("no runner configured")
 	}
@@ -486,12 +484,10 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if err != nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, err
 	}
-	// Region-scoped SSO endpoints are resolved from the operator's boot config —
-	// the SSO region if set, else the Bedrock region (same precedence
-	// resolveBedrockAuth uses). Empty means "not configured": the flow's regional
-	// hosts are then left to first-use approval rather than pre-allowed wide.
-	ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion)
-	egress := hl.loginEgress(ssoRegion, s.cfg.AWSSSOEndpointOverride)
+	// Region-scoped SSO endpoints come from the target's region. Empty means
+	// "not configured": the flow's regional hosts are then left to first-use
+	// approval rather than pre-allowed wide.
+	egress := hl.loginEgress(t.region, s.cfg.AWSSSOEndpointOverride)
 	policy := types.RunPolicySpec{
 		MinConfinementClass: cc,
 		// Default-deny, limited to the OAuth hosts. An off-policy host the login
@@ -523,7 +519,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// materialize_aws_sso_config in agent-run-lib.sh). Non-secret: an sso-session
 	// block with the start URL + region and NO token cache — the login sandbox
 	// must not receive a credential, it exists to produce one.
-	extraEnv := hl.loginEnv(ssoStartURL, ssoRegion, pin, s.cfg.AWSSSOEndpointOverride)
+	extraEnv := hl.loginEnv(t.startURL, t.region, t.pin, s.cfg.AWSSSOEndpointOverride)
 
 	// The launch-time credential scope, stamped — the one authorizeHarnessLogin's
 	// roster read PROVED, passed in, never re-resolved. Re-resolving it at upload
@@ -531,18 +527,20 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// OPERATOR-WIDE credential; re-resolving it HERE, through the fail-open
 	// resolver, would let a mere store blip stamp the same `shared`/"" pair the
 	// stamp exists to prevent.
+	stamp := map[string]any{
+		"provider": hl.provider, "egress": egress,
+		"sso_start_url": t.startURL, // operator config, not a credential
+		// WHOSE credential this run may capture, decided HERE and read back by
+		// handleUploadSSOToken — never recomputed there.
+		"credential_source": awsSSOCredentialSourceLabel(t.scope),
+		"owner":             t.scope.owner,
+		// The pin as it read at launch — what the upload binds to.
+		"sso_account_id": t.pin.AccountID,
+		"sso_role_name":  t.pin.RoleName,
+	}
+	t.stampProvider(stamp)
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.started",
-		runID.String(), "success", mustJSON(map[string]any{
-			"provider": hl.provider, "egress": egress,
-			"sso_start_url": ssoStartURL, // operator config, not a credential
-			// WHOSE credential this run may capture, decided HERE and read back by
-			// handleUploadSSOToken — never recomputed there.
-			"credential_source": awsSSOCredentialSourceLabel(scope),
-			"owner":             scope.owner,
-			// The pin as it read at launch — what the upload binds to.
-			"sso_account_id": pin.AccountID,
-			"sso_role_name":  pin.RoleName,
-		})))
+		runID.String(), "success", mustJSON(stamp)))
 
 	image := agentImage(hl.agent, s.cfg.AgentImages)
 	if hl.loginImageKey != "" {
@@ -588,6 +586,14 @@ type loginRunStamp struct {
 	// in flight. Empty means "launched unpinned", which the upload accepts.
 	SSOAccountID string `json:"sso_account_id,omitempty"`
 	SSORoleName  string `json:"sso_role_name,omitempty"`
+	// The model provider a sign-in through its own door is for, "" on the
+	// legacy door: the capture lands under that provider's UID-keyed name, and
+	// SSORegion/Model are the provider's as they read at launch — what an AWS
+	// upload binds to in place of the boot config (provider_signin.go).
+	ModelProvider    string `json:"model_provider,omitempty"`
+	ModelProviderUID string `json:"model_provider_uid,omitempty"`
+	SSORegion        string `json:"sso_region,omitempty"`
+	Model            string `json:"model,omitempty"`
 }
 
 func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunStamp, error) {

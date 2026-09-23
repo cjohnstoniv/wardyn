@@ -481,6 +481,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// given provider is model_provider_credentials_test.go's job.
 	"PUT /api/v1/model-providers/{id}/credential":    {class: classMember},
 	"DELETE /api/v1/model-providers/{id}/credential": {class: classMember},
+	// Each person's own sign-in for a provider (MP-13): who may sign in to a
+	// given provider is provider_signin_test.go's job.
+	"POST /api/v1/model-providers/{id}/sign-in": {class: classMember},
+	"PUT /api/v1/model-providers/{id}/sign-in":  {class: classMember},
 
 	// The workspace READS stay member-class: an operator-owned workspace — every
 	// pre-0048 row — is readable by any authenticated caller exactly as before.
