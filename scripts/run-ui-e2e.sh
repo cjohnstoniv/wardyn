@@ -110,6 +110,7 @@ allow_all_skipped=" ${WARDYN_E2E_ALLOW_ALL_SKIPPED:-} "
 # explicit spec list (a developer running two named specs by hand) and LIVE
 # mode (one already-running external Wardyn) run a single lane.
 NUM_LANES="${WARDYN_E2E_LANES:-3}"
+[[ ${NUM_LANES} =~ ^[0-9]+$ ]] || { echo "run-ui-e2e.sh: WARDYN_E2E_LANES must be a positive integer, got '${NUM_LANES}'" >&2; exit 1; }
 [[ $# -gt 0 || -n "${LIVE_BASE_URL}" ]] && NUM_LANES=1
 [[ ${NUM_LANES} -lt 1 ]] && NUM_LANES=1
 [[ ${NUM_LANES} -gt 3 ]] && NUM_LANES=3
@@ -246,13 +247,36 @@ run_lane() {
   [[ -n "${LIVE_BASE_URL}" ]] || ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
 }
 
+# kill_tree PID: TERM the whole descendant tree of PID, children first (so a
+# parent doesn't get orphaned before its own children are found). Walks
+# /proc-derived parent links via `pgrep -P`, never `pkill -f` (a name/cmdline
+# match can hit an unrelated process sharing the pattern). Used below because
+# `kill "$pid"` alone only reaches the lane subshell: the `pnpm exec
+# playwright` child and its chromium survive it as orphans, keep running
+# their remaining tests against a backend this script is about to tear down,
+# and keep writing into ui/test-results/<spec>/ and test/reports/e2e/ after
+# the script has exited. (A process-group kill via `set -m` + `kill -- -pid`
+# was tried instead and rejected: without a controlling terminal — exactly
+# the case here under `timeout`/CI — job control can hand the new group
+# unexpected signal/terminal ownership, which risked killing more than the
+# lane.)
+kill_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "${pid}" 2>/dev/null); do
+    kill_tree "${child}"
+  done
+  kill -TERM "${pid}" 2>/dev/null
+}
+
 # Ctrl-C or a cancelled CI job: stop every lane rather than leave them running
 # their remaining specs (a backgrounded lane ignores SIGINT), then free each
 # lane's ports.
 pids=()
 stop_lanes() {
   trap - INT TERM
-  kill "${pids[@]}" 2>/dev/null
+  for pid in "${pids[@]}"; do
+    kill_tree "${pid}"
+  done
   wait
   if [[ -z "${LIVE_BASE_URL}" ]]; then
     for ((i = 0; i < NUM_LANES; i++)); do

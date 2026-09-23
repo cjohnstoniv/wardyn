@@ -175,6 +175,10 @@ test.describe("Runs board (default view)", () => {
     // alone.
     await expect(async () => {
       await search.fill("e2e fixture 4");
+      // Named separately from the count assertion below: if the fill itself
+      // is what got lost, this is the failure that says so, instead of the
+      // retry silently absorbing it into an unrelated card-count mismatch.
+      await expect(search).toHaveValue("e2e fixture 4");
       await expect(page.getByTestId("run-card")).toHaveCount(1, { timeout: 3_000 });
     }).toPass({ timeout: 15_000 });
     await expect(page.getByText("e2e fixture 4")).toBeVisible();
@@ -190,6 +194,9 @@ test.describe("Runs board (default view)", () => {
     // retried with the fill, for the same lost-fill reason as the test above.
     await expect(async () => {
       await search.fill("zzz-no-such-run-zzz");
+      // See the fixture-4 test above: named separately so a lost fill is a
+      // named failure, not silently folded into the empty-state assertion.
+      await expect(search).toHaveValue("zzz-no-such-run-zzz");
       await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
     }).toPass({ timeout: 15_000 });
     await expect(page.getByText("Try a different search term or facet.")).toBeVisible();
