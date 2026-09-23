@@ -56,10 +56,25 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 			"push_rules.deny_paths[0]: \"./infra/**\" has an empty"},
 		{"deny_paths entry with an empty segment", spec(&types.PushRulesSpec{DenyPaths: []string{"infra//**"}}),
 			"push_rules.deny_paths[0]: \"infra//**\" has an empty"},
-		{"deny_paths entry with a .. segment", spec(&types.PushRulesSpec{DenyPaths: []string{"ok/**", "infra/../x"}}),
-			"push_rules.deny_paths[1]: \"infra/../x\" has an empty"},
 		{"deny_paths entry that is only a separator", spec(&types.PushRulesSpec{DenyPaths: []string{"/"}}),
-			"push_rules.deny_paths[0]: \"/\" has an empty"},
+			"push_rules.deny_paths[0]: \"/\" is absolute"},
+		// #271: leading/trailing whitespace, an absolute path, a ".."
+		// substring (even one that never forms its own path segment, so
+		// DenyPathSegments' per-segment check alone would miss it) and
+		// invalid UTF-8 can never be matched by a repo-relative glob matcher
+		// either — refuse them at the same door for the same reason.
+		{"deny_paths entry with leading whitespace", spec(&types.PushRulesSpec{DenyPaths: []string{" infra/**"}}),
+			"push_rules.deny_paths[0]: \" infra/**\" has leading or trailing whitespace"},
+		{"deny_paths entry with trailing whitespace", spec(&types.PushRulesSpec{DenyPaths: []string{"infra/**\t"}}),
+			"push_rules.deny_paths[0]: \"infra/**\\t\" has leading or trailing whitespace"},
+		{"deny_paths entry that is an absolute path", spec(&types.PushRulesSpec{DenyPaths: []string{"/etc/passwd"}}),
+			"push_rules.deny_paths[0]: \"/etc/passwd\" is absolute"},
+		{"deny_paths entry with a .. segment", spec(&types.PushRulesSpec{DenyPaths: []string{"ok/**", "infra/../x"}}),
+			"push_rules.deny_paths[1]: \"infra/../x\" contains \"..\""},
+		{"deny_paths entry with a .. substring outside any segment", spec(&types.PushRulesSpec{DenyPaths: []string{"infra..x/**"}}),
+			"push_rules.deny_paths[0]: \"infra..x/**\" contains \"..\""},
+		{"deny_paths entry that is not valid UTF-8", spec(&types.PushRulesSpec{DenyPaths: []string{"deploy/\xff\xfe"}}),
+			"push_rules.deny_paths[0]: not valid UTF-8"},
 		{"max_inspect_pack_mib negative", spec(&types.PushRulesSpec{MaxInspectPackMiB: -1}),
 			"push_rules.max_inspect_pack_mib must be between"},
 		{"max_inspect_pack_mib above the cap", spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB + 1}),
@@ -82,7 +97,7 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 		spec(nil),
 		spec(&types.PushRulesSpec{}),
 		spec(&types.PushRulesSpec{DenyPaths: []string{".github/workflows/**", "infra/**"}, MaxInspectPackMiB: 8}),
-		spec(&types.PushRulesSpec{DenyPaths: []string{"infra/", "/infra/**"}}), // trailing and leading separators read, not refused
+		spec(&types.PushRulesSpec{DenyPaths: []string{"infra/"}}), // a trailing separator reads, not refused
 		spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB}),
 	} {
 		if err := validatePolicySpec(ok); err != nil {

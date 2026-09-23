@@ -10,6 +10,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `push_rules.deny_paths` entries that could never be matched by any future path matcher —
+  leading/trailing whitespace, an absolute path, a `..`-shaped segment, or invalid UTF-8 — are
+  now refused at write time instead of stored as a deny rule that silently enforces nothing (#271).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
