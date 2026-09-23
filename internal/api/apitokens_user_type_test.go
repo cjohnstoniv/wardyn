@@ -129,6 +129,38 @@ func TestRoleMappingTypeChangeRevokesTokensCarryingTheOldType(t *testing.T) {
 		assertRevoked(t, st, []string{"sub-alice", "sub-dan"})
 	})
 
+	// A value with no row derives the default type, Standard user, so its
+	// first type assignment retypes from standard — the type every token
+	// minted before user types carries. A snapshot that cannot say whether it
+	// names the value is revoked whoever holds it; one that provably names
+	// another group is kept.
+	t.Run("the first type assignment revokes unanswerable standard tokens", func(t *testing.T) {
+		st := &roleMapTokenStore{toks: []types.APIToken{
+			{ID: uuid.New(), Principal: "sub-legacy", Email: "sub-legacy@corp.example", Role: oidc.RoleUser,
+				UserType: types.UserTypeStandard, CreatedAt: now},
+			{ID: uuid.New(), Principal: "sub-modern", Email: "sub-modern@corp.example", Role: oidc.RoleUser,
+				UserType: types.UserTypeStandard, Groups: []string{"desk-b"}, GroupsTruncated: &complete, CreatedAt: now},
+		}}
+		st.userTypes = accessOrgTypes
+		cfg := baseTestConfig(newHarness(t), st)
+		cfg.OIDC = newAccessAuth(t, map[string]string{"chart-admin": oidc.RoleAdmin}, oidc.RoleUser, nil, &st.roleMapStore)
+		w := do(t, New(cfg), http.MethodPost, "/api/v1/access/mappings", adminToken,
+			`{"value":"`+pmGroup+`","role":"user","user_type":"portfolio-manager","acknowledge_access_change":true}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("upsert = %d %s", w.Code, w.Body.String())
+		}
+		live := st.liveRoles()
+		if _, ok := live["sub-legacy"]; ok {
+			t.Errorf("sub-legacy's token is live; a standard token with no group snapshot cannot prove it does not name %s", pmGroup)
+		}
+		if _, ok := live["sub-modern"]; !ok {
+			t.Errorf("sub-modern's token was revoked; its snapshot names only desk-b")
+		}
+		if n := tokensRevoked(t, w.Body.Bytes()); n != 1 {
+			t.Errorf("tokens_revoked = %d, want 1", n)
+		}
+	})
+
 	t.Run("re-saving the same type revokes nothing", func(t *testing.T) {
 		srv, st, _ := newSrv(t)
 		w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken,

@@ -608,8 +608,10 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // type the value derives, every live token still stamped with the OLD type is
 // revoked if it names the value (principal, email or group) or if its group
 // snapshot is unanswerable — a token that cannot prove it does not derive
-// from the value is treated as if it does. A token carrying any other type is
-// not this edit's business. A type change made in the chart has no
+// from the value is treated as if it does. When the old type is standard (the
+// first type assignment to a value), that arm reaches every Standard-user token
+// minted before 0.7 whose holder has not signed in since, whoever holds it. A
+// token carrying any other type is not this edit's business. A type change made in the chart has no
 // before/after edit and reaches a token only at its holder's next sign-in
 // (THREAT-MODEL #38).
 //

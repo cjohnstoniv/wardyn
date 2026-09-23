@@ -2003,8 +2003,14 @@ type change made on the People page revokes rather than waits: when a
 role-mapping write or delete changes the user type a value derives, Wardyn
 revokes every live token still carrying the old type that names the value
 (by principal, email or group) or whose group snapshot is missing or
-partial, and counts them in the same `tokens_revoked`. The holder mints a
-new token after signing in. A type change made in `WARDYN_OIDC_ROLE_MAP`
+partial, and counts them in the same `tokens_revoked`. On the first type
+assignment to a value that derived Standard user before, that last arm is
+every Standard-user token whose snapshot is missing or partial — every token
+minted before 0.7 whose holder has not signed in since, and every
+truncated-snapshot token — whether or not its holder has anything to do with
+the value; `stale_token_snapshots` counts only the tokens that name the value,
+so `tokens_revoked` can exceed it. The holder mints a new token after signing
+in. A type change made in `WARDYN_OIDC_ROLE_MAP`
 has no People-page edit to act on, so it reaches a token only at its
 holder's next sign-in — revoke explicitly when that is too late. A user type
 a live token still carries cannot be deleted (`409`, naming the count).

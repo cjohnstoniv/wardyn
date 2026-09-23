@@ -45,7 +45,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   through a token too, and `token.create` audit rows name it. A People-page edit that changes the
   type a value derives revokes every live token still carrying the old type that names the value,
   or whose group snapshot can't say whether it does, and counts them in `tokens_revoked`; the
-  holder mints a new one after signing in. A type change made in the chart reaches a token only at
+  holder mints a new one after signing in. On the first type assignment to a value that derived
+  Standard user before, that is every token minted before 0.7 whose holder hasn't signed in since
+  and every truncated-snapshot token, whoever holds it. A type change made in the chart reaches a token only at
   its holder's next sign-in (threat model #38). `DELETE /user-types/{id}` is refused (`409`) while
   a live token carries the type, and the database now refuses a token with an empty `user_type`.
 - **Sign-in derives a user type (#609).** A `WARDYN_OIDC_ROLE_MAP` value, a People row or
