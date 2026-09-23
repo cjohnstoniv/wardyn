@@ -214,7 +214,6 @@ test.describe("setup gate — forced on access, never a prison", () => {
   }) => {
     let blocking = false;
     await page.route("**/api/v1/setup/status*", async (route) => {
-      await new Promise((r) => setTimeout(r, 600));
       const response = await route.fetch();
       const json = await response.json();
       json.onboarding_complete = false;
