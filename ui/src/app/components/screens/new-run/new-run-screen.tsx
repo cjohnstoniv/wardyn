@@ -206,8 +206,10 @@ export function NewRunScreen() {
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // prefill: useLocation().state keeps its identity across re-renders
+    // (it only changes on a real navigation), so this is still a one-shot
+    // mount effect in practice.
+  }, [prefill]);
 
   React.useEffect(() => {
     policiesApi
@@ -238,8 +240,7 @@ export function NewRunScreen() {
   // from this page in this session.
   React.useEffect(() => {
     reloadWorkspaces();
-    // run once on mount — reload is stable (useCallback([]))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; reload is stable (useCallback([]))
   }, []);
 
   // The envelope-field detach funnel retired with the controls it guarded:
@@ -324,8 +325,7 @@ export function NewRunScreen() {
   // one policy and launch another.
   const merged = React.useMemo(
     () => (parsed.ok ? mergeRunSelections(parsed.spec, state, workspaces) : null),
-    // parsed is rebuilt every render; specText is what actually changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- parsed is rebuilt every render; specText is what actually changes
     [specText, state, workspaces],
   );
   const added = merged?.added;
@@ -410,7 +410,7 @@ export function NewRunScreen() {
       // reaches window — so closing a Select or the Add-workspace dialog was also
       // leaving the screen.
       if (e.key !== "Escape" || e.defaultPrevented || dirty) return;
-      navigate("/runs");
+      void navigate("/runs");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

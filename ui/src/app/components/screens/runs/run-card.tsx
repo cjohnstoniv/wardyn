@@ -322,7 +322,7 @@ export function RunActions({
         toast.warning(CLONE_UNREADABLE);
         return;
       }
-      navigate("/runs/new", { state: { prefill } });
+      void navigate("/runs/new", { state: { prefill } });
     } catch (err) {
       toast.error(CLONE_LOAD_FAILED, { description: getErrorMessage(err) });
     }

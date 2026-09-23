@@ -24,12 +24,12 @@ describe("useCopyToClipboard", () => {
     const { result } = renderHook(() => useCopyToClipboard(1000));
 
     await act(async () => {
-      result.current.copy("hi");
+      void result.current.copy("hi"); // fire-and-forget, same as a real onClick
       await Promise.resolve(); // let the fire-and-forget copyAsync() microtask settle
     });
     expect(result.current.copied).toBe(true);
 
-    act(() => vi.advanceTimersByTime(1000));
+    await act(() => vi.advanceTimersByTime(1000));
     expect(result.current.copied).toBe(false);
   });
 
@@ -38,7 +38,7 @@ describe("useCopyToClipboard", () => {
     const { result } = renderHook(() => useCopyToClipboard(1000));
 
     await act(async () => {
-      result.current.copy("hi");
+      void result.current.copy("hi"); // fire-and-forget, same as a real onClick
       await Promise.resolve();
     });
     expect(result.current.copied).toBe(false);
@@ -94,12 +94,12 @@ describe("useCopyToClipboard", () => {
     const { result } = renderHook(() => useCopyToClipboard(null));
 
     await act(async () => {
-      result.current.copy("hi");
+      void result.current.copy("hi"); // fire-and-forget, same as a real onClick
       await Promise.resolve();
     });
     expect(result.current.copied).toBe(true);
 
-    act(() => vi.advanceTimersByTime(10_000));
+    await act(() => vi.advanceTimersByTime(10_000));
     expect(result.current.copied).toBe(true);
 
     act(() => result.current.setCopied(false));

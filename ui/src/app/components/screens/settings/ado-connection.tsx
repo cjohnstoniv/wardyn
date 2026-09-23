@@ -63,9 +63,7 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
       // a mouse click (the consent door's own click, on the previous page).
       sectionRef.current?.focus({ focusVisible: true } as FocusOptions);
     }
-    // location.key, not location.hash (F2): a real navigation is what should
-    // re-run this, not every render this card happens to get.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- location.key, not location.hash (F2): a real navigation is what should re-run this, not every render this card happens to get
   }, [location.key, hasRow]);
   const handleConnect = async () => {
     if (await connect()) onChanged();

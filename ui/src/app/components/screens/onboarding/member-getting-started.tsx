@@ -102,7 +102,9 @@ export function MemberGettingStarted() {
 
   React.useEffect(() => {
     let active = true;
-    setupApi.getSetupStatus().then((s) => {
+    // getSetupStatus only ever rejects on a 401, already routed to the
+    // module-level onUnauthorized handler (core.ts) before it gets here.
+    void setupApi.getSetupStatus().then((s) => {
       if (active) setStatus(s);
     });
     return () => {
@@ -119,7 +121,7 @@ export function MemberGettingStarted() {
   const memberLocalDirRoot = useMemberLocalDirRoot();
   React.useEffect(() => {
     reloadWorkspaces();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; reload is stable (useCallback([]))
   }, []);
 
   const [mine, setMine] = React.useState<string[] | null>(null);

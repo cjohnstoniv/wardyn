@@ -479,7 +479,7 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
+lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate + console ESLint
 	@echo "Running go vet (default + docker + k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
@@ -490,6 +490,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 	./scripts/check-file-size.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
+	@echo "Running console ESLint (react-hooks + no-floating-promises, ui/eslint.config.js)..."
+	cd ui && pnpm install --frozen-lockfile && pnpm lint
 
 # The shell half of the test suite: each of these pins a fixed regression in
 # scripts/ that no Go test can see (up.sh's reset warnings, the compose

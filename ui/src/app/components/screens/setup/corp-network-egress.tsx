@@ -509,11 +509,11 @@ export function EgressTab({
                     r={r}
                     onCancel={() => setExpandedFrom(null)}
                     onSave={(next) => {
-                      setRedirects(redirects.map((row) => (row.from === r.from ? next : row)));
+                      void setRedirects(redirects.map((row) => (row.from === r.from ? next : row)));
                       setExpandedFrom(null);
                     }}
                     onRemove={() => {
-                      setRedirects(redirects.filter((row) => row.from !== r.from));
+                      void setRedirects(redirects.filter((row) => row.from !== r.from));
                       setExpandedFrom(null);
                     }}
                   />

@@ -595,7 +595,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         void saveToken(tok);
       }
     },
-    [saveToken, confirmCapture, flow, runId, onDone, closeAuthTab],
+    [saveToken, confirmCapture, flow, runId, closeAuthTab],
   );
 
   // Bridge the pasted login code into the terminal's stdin, so the operator uses

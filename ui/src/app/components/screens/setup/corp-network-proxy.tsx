@@ -825,7 +825,7 @@ export function HostProxyTab({
         existingNames={secretNames}
         onSaved={(name) => {
           setAddSecretOpen(false);
-          saveSecretRef(name);
+          void saveSecretRef(name);
         }}
       />
     </div>

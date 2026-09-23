@@ -275,7 +275,6 @@ function adoSegmentHazard(seg: string): boolean {
     seg === ".." ||
     seg.trim() !== seg ||
     seg.endsWith(".") ||
-    // eslint-disable-next-line no-control-regex
     /[\u0000-\u001f\u007f-\u009f]/.test(seg) ||
     /[/\\]/.test(seg)
   );

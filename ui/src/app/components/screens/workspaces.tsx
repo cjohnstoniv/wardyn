@@ -242,7 +242,7 @@ export function WorkspacesScreen() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        openDetail(w.id);
+                        void openDetail(w.id);
                       }
                     }}
                     className={notAdmitted ? "cursor-pointer opacity-70" : "cursor-pointer"}
@@ -309,7 +309,7 @@ export function WorkspacesScreen() {
           onClose={() => setAddOpen(false)}
           onCreated={(created) => {
             load();
-            openDetail(created.id);
+            void openDetail(created.id);
           }}
         />
       )}
