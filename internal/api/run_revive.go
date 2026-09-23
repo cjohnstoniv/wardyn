@@ -44,7 +44,8 @@ import (
 // would let an admin's click strip a member's limits. The ceiling comes from
 // the profile captured on the run at create, and a run whose profile no longer
 // exists is refused. The policy is never re-resolved; the rewrite only adds
-// denies and removes credential lanes. The per-run MITM CA inside the config
+// denies and removes credential lanes, and the rest of the owner's authority
+// is re-checked as run_owner_authority.go describes. The per-run MITM CA inside the config
 // is carried over, and no copy of it is made anywhere else.
 
 // reviveBulkMax bounds one admin restart request.
@@ -146,6 +147,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	cfg, re, rerr := reassertProxyCeiling(run, old, c)
 	if rerr != nil {
+		return reviveResult{}, rerr
+	}
+	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience)
@@ -261,19 +265,14 @@ type ownerCeiling struct {
 // A captured profile that no longer exists is refused: its walls cannot be
 // known.
 func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCeiling, *reviveError) {
-	if run.GovernanceProfileID == nil {
+	p, ref := s.ownerProfile(ctx, run)
+	switch {
+	case ref != nil:
+		return ownerCeiling{}, reviveRefused(ref.status, ref.msg)
+	case p == nil:
 		return ownerCeiling{}, nil
 	}
-	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
-	if err != nil {
-		return ownerCeiling{}, reviveRefused(http.StatusServiceUnavailable, "resolve the owner's governance profile: "+err.Error())
-	}
-	i := slices.IndexFunc(profiles, func(p types.GovernanceProfile) bool { return p.ID == *run.GovernanceProfileID })
-	if i < 0 {
-		return ownerCeiling{}, reviveRefused(http.StatusConflict,
-			"the governance profile this run was created under no longer exists; start a new run")
-	}
-	return ownerCeiling{deny: profiles[i].Ceiling.DeniedDomains, profile: profiles[i].Name}, nil
+	return ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name}, nil
 }
 
 // reasserted is what reassertProxyCeiling changed.

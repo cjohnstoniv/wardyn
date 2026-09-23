@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +26,37 @@ type leaseStore struct {
 	*dispatchTestStore
 	warnFor *time.Time
 	warnSec int
+	// The owner re-check's reads (run_owner_authority.go): capability rows and
+	// switches, the site config and the run's credential grants.
+	caps       []types.CapabilityGrant
+	enf        map[string]bool
+	site       types.SiteConfig
+	siteErr    error
+	credGrants []types.CredentialGrant
+}
+
+func (s *leaseStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return slices.Clone(s.caps), nil
+}
+
+func (s *leaseStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+	return (&capStore{grants: s.caps}).ListCapabilityGrantsFor(ctx, users, groups)
+}
+
+func (s *leaseStore) ListGroupDenyGrants(ctx context.Context, kind string) ([]types.CapabilityGrant, error) {
+	return (&capStore{grants: s.caps}).ListGroupDenyGrants(ctx, kind)
+}
+
+func (s *leaseStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return maps.Clone(s.enf), nil
+}
+
+func (s *leaseStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.site, s.siteErr
+}
+
+func (s *leaseStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return s.credGrants, nil
 }
 
 func (s *leaseStore) ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error) {

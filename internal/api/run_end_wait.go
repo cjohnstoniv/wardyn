@@ -20,7 +20,9 @@ import (
 // changing the wait need the run's captured user_changes_limits gate. An
 // over-ask is capped at the limit and the response says so. Only a super admin
 // is exempt, bounded by the deployment alone, the way a super admin's own run
-// captures no profile limits; a security admin is bounded like any user.
+// captures no profile limits; a security admin is bounded like any user. A
+// later end or No end also re-checks the owner's authority (extendRefusal),
+// whoever asks.
 
 // runEndWaitRequest is the PATCH body. An absent field is left alone; an
 // explicit "ends_at": null is No end.
@@ -110,6 +112,14 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 	if p.refusal != "" {
 		writeError(w, p.status, p.refusal)
 		return
+	}
+	if p.endChanged && (p.resp.EndsAt == nil || (run.EndsAt != nil && p.resp.EndsAt.After(*run.EndsAt))) {
+		if ref := s.extendRefusal(r, run); ref != nil {
+			s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.end.set", run.ID.String(),
+				"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": ref.reason})))
+			writeError(w, ref.status, ref.msg)
+			return
+		}
 	}
 	if p.endChanged || p.waitChanged {
 		applied, err := leaser.SetRunEndAndWait(r.Context(), run.ID, run.EndsAt, run.WaitBudgetSec,

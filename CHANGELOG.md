@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Reviving a run, and moving its end later, now re-check its owner's authority instead of keeping
+  the run alive on what it was granted at launch.** A revive (the run's page or an admin's "Restart
+  with current limits") and a later end or No end are refused, naming the capability, when the owner
+  no longer holds the run's agent, one of its workspaces or the git provider of one of its repos;
+  an extension is also refused when the governance profile the run was created under is gone. A
+  revive is also refused when the model credential its proxy would inject has been erased or its
+  integration disabled, and the revived proxy takes the upstream proxy, trusted CA and model
+  gateways from the current configuration rather than its old rendered copy. Each refusal is
+  audited `denied` with the owner as `subject` (#679).
 - **The idle reaper is now hold-aware: it no longer stops a run out from under an open
   push/egress/ADO/credential/tool-call request that is still within its wait.** The idle-stop
   CAS (`UpdateRunStateIfIdle`) now also checks for a PENDING approval whose own
