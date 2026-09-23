@@ -75,10 +75,11 @@ const (
 
 // legacySubscriptionSentinelRefusal is the record pin on the two legacy
 // subscription sentinels: status 0 while no provider block is set, else the
-// refusal. An unreadable block refuses, since it may be set.
+// refusal. An unreadable block refuses, since it may be set; so does a missing
+// store, which cannot say.
 func (s *Server) legacySubscriptionSentinelRefusal(ctx context.Context) (int, string, string) {
 	if s.cfg.Store == nil {
-		return 0, "", ""
+		return http.StatusServiceUnavailable, "providers_unreadable", legacySentinelBlockUnreadable
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	switch {

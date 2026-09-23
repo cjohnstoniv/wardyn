@@ -29,22 +29,14 @@ const (
 )
 
 // providerKeyRecheck is how long a resolved provider key is good for. The
-// proxy re-resolves an injection this close to expiry minus its own 5-minute
-// refresh margin (injectRefreshMargin), so a key is re-checked against the
-// provider record about once a minute while the run makes model calls. That
-// is what makes a provider removed, turned off or re-pointed mid-run fail
-// closed on the run's next model call rather than keep its startup copy: the
-// sidecar's exact-host allowlist was fixed at dispatch and cannot follow a new
-// address.
-const providerKeyRecheck = 6 * time.Minute
-
-// providerKeyLaneKinds are the kinds whose -key this arm resolves: the ones
-// providerKeyLaneFor derives a lane for.
-var providerKeyLaneKinds = map[types.ModelProviderKind]bool{
-	types.ModelProviderAnthropicAPIKey: true,
-	types.ModelProviderOpenAIAPIKey:    true,
-	types.ModelProviderCustomEndpoint:  true,
-}
+// proxy re-resolves 5 minutes before expiry (injectRefreshMargin), so a key is
+// re-checked against the provider record about every 10 minutes while the run
+// makes model calls; each re-check is one credential.mint and one secret.read
+// audit row. A provider removed, turned off or re-pointed mid-run therefore
+// fails closed within that window rather than keep its startup copy, and the
+// sidecar's exact-host allowlist, fixed at dispatch, already refuses a new
+// address in the meantime.
+const providerKeyRecheck = 15 * time.Minute
 
 // resolveProviderKeyInjection is the wardyn-provider-<uid>-key arm of
 // handleInternalInjection: a person's own key or token for a key or endpoint
@@ -91,7 +83,7 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 		return fail(http.StatusServiceUnavailable, "providers_unreadable", providerKeyRecordUnreadable)
 	}
 	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
-	if !found || p.UID != rec.ProviderUID || p.Disabled || !providerKeyLaneKinds[p.Kind] {
+	if !found || p.UID != rec.ProviderUID || p.Disabled || !providerKindDispatched[p.Kind] {
 		return fail(http.StatusForbidden, "provider_changed", providerKeyChanged)
 	}
 	lane, ok := providerKeyLaneFor(p, run.Agent)
