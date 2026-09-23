@@ -7,7 +7,7 @@
 // All wire fields are snake_case (see lib/types.ts's barrel comment for the
 // one documented exception, in a different domain module).
 
-import type { AutonomyLevel, AutonomyResolution } from "../api/governance";
+import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
 import type { SCMAccess } from "./setup";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -167,6 +167,14 @@ export interface AgentRun {
   // (#99 is types/storage/mirrors only); this field exists so the console has
   // somewhere to read it the day #93 renders it.
   autonomy_level?: AutonomyLevel;
+  // Run limits captured at create (migration 0072, #567): the lease end (null =
+  // no end), the wait for a decision (absent = the deployment's approval
+  // expiry), the owner's profile run limits and that profile's id (absent for
+  // an unassigned or super-admin owner). Optional: a pre-0.8 daemon sends none.
+  ends_at?: string | null;
+  wait_budget_sec?: number;
+  run_limits?: RunLimits;
+  governance_profile_id?: string;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that

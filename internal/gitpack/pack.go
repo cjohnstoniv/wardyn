@@ -148,12 +148,13 @@ type Change struct {
 	// caller can act on the difference. A directory the pack does not carry is
 	// reported as ModeUncarried; see Opaque.
 	Mode string
-	// Size is the blob's size in bytes, or -1 when the pack does not carry the
+	// size is the blob's size in bytes, or -1 when the pack does not carry the
 	// blob: a submodule pointer, an uncarried directory, or content the
-	// receiving side already stores.
-	// A size rule must DECIDE what -1 means rather than compare it, because -1
-	// passes every "is this under the limit" test by accident.
-	Size int64
+	// receiving side already stores. It is unexported because -1 passes every
+	// "is this under the limit" test by accident, and an ordinary second push
+	// and every submodule pointer produce it. A caller reads it through Size,
+	// which cannot be compared without deciding what unknown means, or Within.
+	size int64
 	// OID is the object id the tree entry names — the blob, the submodule's
 	// commit, or for an uncarried directory its tree. Object ids are content
 	// addresses, so an entry whose mode and OID match the ones the same path
@@ -164,7 +165,20 @@ type Change struct {
 
 // Carried reports whether the pack holds the object c names. One it does not
 // hold is content the receiving side already stores, at some path.
-func (c Change) Carried() bool { return c.Size >= 0 }
+func (c Change) Carried() bool { return c.size >= 0 }
+
+// Size is the blob's size in bytes, and false when the pack does not carry the
+// blob, so the size is unknown. It returns a pair so that a comparison against
+// a limit does not compile until the caller has decided what unknown means.
+func (c Change) Size() (int64, bool) { return c.size, c.size >= 0 }
+
+// Within reports whether c's blob is known to be at most limit bytes. An
+// unknown size is never within: a size rule refuses what it cannot measure
+// rather than admitting it.
+func (c Change) Within(limit int64) bool {
+	n, known := c.Size()
+	return known && n <= limit
+}
 
 // Command is one ref update from the request's command section.
 type Command struct {
@@ -421,7 +435,7 @@ func (i *index) put(typ objectType, data []byte) string {
 }
 
 // blobSize is the size of the blob oid names, or -1 when the pack does not carry
-// it. See Change.Size.
+// it. See Change.size.
 func (i *index) blobSize(oid string) int64 {
 	if o, ok := i.byOID[oid]; ok && o.typ == objBlob {
 		return o.size

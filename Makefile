@@ -13,6 +13,7 @@ GITLEAKS_VERSION     ?= v8.30.1
 GO_LICENSES_VERSION  ?= v1.6.0
 SYFT_VERSION         ?= v1.46.0
 GOLANGCI_LINT_VERSION ?= v2.12.2
+ACTIONLINT_VERSION    ?= v1.7.12
 # Throwaway local registry for the real-daemon envbuild smoke test (U064). Pinned
 # by tag like the other daemon images CI pulls (postgres:17, alpine:latest).
 ENVBUILD_REGISTRY_IMAGE ?= registry:2
@@ -479,7 +480,7 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
+lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + actionlint gates
 	@echo "Running go vet (default + docker + k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
@@ -490,6 +491,17 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 	./scripts/check-file-size.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
+	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
+	./scripts/check-migration-numbers.sh
+	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
+	# -shellcheck= disables actionlint's embedded shellcheck pass: whether it
+	# runs, and which findings it reddens the build on, depends on whatever
+	# shellcheck happens to be on the runner's PATH (or absent, as it is on a
+	# bare local checkout) — the rest of the repo treats shellcheck as
+	# best-effort (scripts/test-desktop-profile.sh, scripts/test-install-sh.sh
+	# only run it `if command -v shellcheck`), and actionlint's own YAML/
+	# expression checks are what this gate is actually for.
+	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION) -shellcheck=
 
 # The shell half of the test suite: each of these pins a fixed regression in
 # scripts/ that no Go test can see (up.sh's reset warnings, the compose
@@ -510,6 +522,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
+	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
@@ -526,9 +539,14 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 
 # Secret scan over full git history (NOT gitleaks-action, whose default scan
 # range is only the triggering diff — see ci.yml's gitleaks-job comment).
-gitleaks: ## Scan the FULL git history for committed secrets
-	@echo "Scanning full git history for secrets with gitleaks $(GITLEAKS_VERSION)..."
-	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml -v
+# --log-opts scopes the scan to THIS branch's own history: gitleaks' default
+# (no --log-opts) is `git log --full-history --all`, which also scans every
+# other fetched branch (fetch-depth: 0 fetches all of them) — an unmerged
+# branch's own finding then reds every unrelated PR and main alike (#372/G6).
+GITLEAKS_LOG_OPTS ?= HEAD --full-history
+gitleaks: ## Scan this branch's own git history for committed secrets
+	@echo "Scanning git history (log-opts: $(GITLEAKS_LOG_OPTS)) for secrets with gitleaks $(GITLEAKS_VERSION)..."
+	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml --log-opts="$(GITLEAKS_LOG_OPTS)" -v
 
 # Every Go dependency licence must be on licenses/ALLOWED-LICENSES.txt.
 #
@@ -610,6 +628,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q 'value: "/data/recordings"' || { echo "WARDYN_RECORDING_DIR does not follow the persistent mount"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" || { echo "inline secrets.ageKey is not injected — every stored secret dies on restart"; exit 1; }; \
 	echo "$$out" | grep -q "name: wardyn-oidc" || { echo "extraEnv did not render (secret-bearing env has no secretKeyRef path)"; exit 1; }; \
+	echo "$$out" | grep -q "secretProviderClass: wardyn-boot" || { echo "extraVolumes did not render (a CSI-mounted WARDYN_*_FILE has no volume)"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /mnt/secrets-store" || { echo "extraVolumeMounts did not render (a CSI-mounted WARDYN_*_FILE path would name nothing)"; exit 1; }; \
 	echo "$$out" | grep -q "name: regcred" || { echo "image.pullSecrets did not render"; exit 1; }; \
 	echo "$$out" | grep -q "storageClassName: fast" || { echo "persistence.storageClass did not render"; exit 1; }; \
 	echo "$$out" | grep -q "kubernetes.io/metadata.name: ingress-nginx" || { echo "networkPolicy.ingress.from did not render"; exit 1; }; \
@@ -640,6 +660,24 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_TRUSTED_CA_FILE" | grep -q 'value: "/etc/wardyn/trusted-ca/ca.pem"' || { echo "trustedCA did not wire WARDYN_TRUSTED_CA_FILE at the mounted path — wardynd would boot trusting only the public roots while the operator believes the corporate CA is installed"; exit 1; }; \
 	echo "$$out" | grep -q "mountPath: /etc/wardyn/trusted-ca" || { echo "trustedCA rendered no volumeMount — WARDYN_TRUSTED_CA_FILE would name a path nothing mounts"; exit 1; }; \
 	echo "$$out" | grep -A2 '^        - name: trusted-ca$$' | grep -q "name: wardyn-trusted-ca" || { echo "the trusted-ca volume does not source the ConfigMap the chart rendered"; exit 1; }
+	@# The control-plane -> proxy hop (#561): proxies dial https on the internal
+	@# TLS listener, pinned to wardynd's own internal CA. There is deliberately no
+	@# CA Secret to assert: the CA lives in wardynd's secret store (Postgres,
+	@# age-encrypted), minted on first boot, so the render carries only the port.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	echo "$$out" | grep -q -- "- -internal-listen=:8443" || { echo "chart no longer passes -internal-listen — the proxy-facing TLS listener would bind a port the Service does not name"; exit 1; }; \
+	echo "$$out" | grep -B1 -A2 "name: internal$$" | grep -q "targetPort: internal" || { echo "chart rendered no internal Service port — run proxies cannot reach the TLS listener"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
+	echo "$$out" | grep -A1 "name: WARDYN_CONTROL_PLANE_URL" | grep -q 'value: "https://wardyn.default.svc.cluster.local:8443"' || { echo "k8s.enabled did not render WARDYN_CONTROL_PLANE_URL as https on the internal port — wardynd refuses to boot on a non-loopback http URL, and the proxy would resolve credentials in cleartext"; exit 1; }; \
+	echo "$$out" | grep -q "http://wardyn.default.svc" && { echo "an http:// control-plane URL is still rendered"; exit 1; }; \
+	rules=$$(echo "$$out" | awk '/^kind: NetworkPolicy/{n=1} n && /^  egress:/{n=0} n && /^    - from:/{i++} n && i {print i": "$$0}'); \
+	ir=$$(echo "$$rules" | awk -F': ' '/port: internal$$/{print $$1}' | sort -u); \
+	[ "$$(echo "$$ir" | wc -w)" = "1" ] || { echo "the internal TLS port must be granted by exactly ONE NetworkPolicy ingress rule (got rules: $$ir)"; exit 1; }; \
+	echo "$$rules" | grep "^$$ir: " | grep -qE "ingress-nginx|monitoring" && { echo "the internal TLS port rides networkPolicy.ingress.from — the console's ingress controller and scrapers can reach the port proxies resolve credentials on"; exit 1; }; \
+	echo "$$rules" | grep "^$$ir: " | grep -q "podSelector: {}" || { echo "the internal TLS port rule lost its same-namespace peer — run proxies in this namespace lose their control plane"; exit 1; }; \
+	echo "$$rules" | grep "^$$ir: " | grep -q "kubernetes.io/metadata.name: wardyn-runs" || { echo "the internal TLS port rule lost the runs-namespace peer — every proxy in k8s.runsNamespace loses its control plane"; exit 1; }; \
+	true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set service.internalPort=8080 2>&1 | grep -q "service.internalPort 8080 collides" || { echo "chart no longer refuses service.internalPort == service.port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
@@ -701,6 +739,22 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set k8s.rbac=null | grep -q '^kind: Role$$' || { echo "k8s.rbac=null (the key PRESENT and explicitly null, which is what `--set k8s.rbac=null` and a hand-cleared block both produce) no longer renders RBAC — hasKey must treat an absent key as unset, not as create=false"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age | grep -A3 "name: WARDYN_AGE_KEY" | grep -q "name: wardyn-age" || { echo "secrets.ageKeySecretRef.name did not wire WARDYN_AGE_KEY from that Secret"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "secrets.ageKeySecretRef.name is set together with" || { echo "chart no longer refuses two age-identity sources named at once"; exit 1; }
+	@# #596 boot secrets as files: secretFiles.enabled turns every chart-wired secret
+	@# into a WARDYN_*_FILE path into one projected volume, and must render NO secret
+	@# as env at all — that absence is the scanner finding the mode exists to clear.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set secretFiles.enabled=true); \
+	dep=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Deployment$$/{r=1} r'); \
+	echo "$$dep" | grep -q "kind: Deployment" || { echo "secretFiles.enabled rendered no Deployment — the absence check below would be vacuous"; exit 1; }; \
+	echo "$$dep" | grep -qE 'secretKeyRef|name: WARDYN_(PG_DSN|ADMIN_TOKEN|AGE_KEY)$$' && { echo "secretFiles.enabled still renders a secret as env (a secretKeyRef, or a plain WARDYN_PG_DSN/ADMIN_TOKEN/AGE_KEY)"; exit 1; }; \
+	for v in PG_DSN ADMIN_TOKEN AGE_KEY; do echo "$$dep" | grep -A1 "name: WARDYN_$${v}_FILE" | grep -q 'value: "/etc/wardyn/secrets/' || { echo "secretFiles.enabled did not point WARDYN_$${v}_FILE into the boot-secrets mount"; exit 1; }; done; \
+	echo "$$dep" | grep -A1 '^        - name: boot-secrets$$' | grep -q "projected:" || { echo "secretFiles.enabled rendered no projected boot-secrets volume"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set postgres.dsn.secretRef.name= --set env.WARDYN_PG_DSN_FILE=/mnt/s/pg-dsn --set env.WARDYN_ADMIN_TOKEN_FILE=/mnt/s/admin-token --set env.WARDYN_AGE_KEY_FILE=/mnt/s/age-key) || { echo "an all-_FILE (Vault Agent / CSI) install no longer renders"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c '^kind: Secret$$')" = "0" ] || { echo "an all-_FILE install still rendered a chart Secret"; exit 1; }; \
+	echo "$$out" | grep -q "secretKeyRef" && { echo "an all-_FILE install still rendered a secretKeyRef"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_PG_DSN_FILE=/mnt/s/pg-dsn 2>&1 | grep -q "pick exactly one DSN source" || { echo "chart no longer refuses WARDYN_PG_DSN_FILE beside postgres.dsn.secretRef — in secretFiles mode the later _FILE entry would silently win"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set env.WARDYN_AGE_KEY=AGE-SECRET-KEY-EXAMPLE --set env.WARDYN_AGE_KEY_FILE=/mnt/s/age-key 2>&1 | grep -q "WARDYN_AGE_KEY and WARDYN_AGE_KEY_FILE are both set" || { echo "chart no longer refuses WARDYN_AGE_KEY beside WARDYN_AGE_KEY_FILE — wardynd refuses both forms at boot, so the pod would crash-loop"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set secrets.ageKeyFromSecret=true --set env.WARDYN_ADMIN_TOKEN=tok --set extraEnv[0].name=WARDYN_ADMIN_TOKEN_FILE --set extraEnv[0].value=/mnt/s/admin-token 2>&1 | grep -q "WARDYN_ADMIN_TOKEN and WARDYN_ADMIN_TOKEN_FILE are both set" || { echo "chart no longer refuses WARDYN_ADMIN_TOKEN beside WARDYN_ADMIN_TOKEN_FILE (across env and extraEnv) — wardynd refuses both forms at boot"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name= --set env.WARDYN_PG_DSN_FILE=/mnt/s/pg-dsn 2>&1 | grep -q "WARDYN_PG_DSN_FILE is a PERSISTENT Postgres, but no age identity is wired" || { echo "chart no longer refuses a file-delivered (Vault Agent / CSI) DSN with an ephemeral age key — boot 2 cannot decrypt what boot 1 wrote"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-file defaultPolicy=examples/policies/demo.json --set env.WARDYN_DEFAULT_POLICY=/examples/policies/demo.json | grep -q 'value: "/examples/policies/demo.json"' || { echo "env.WARDYN_DEFAULT_POLICY no longer wins over the ConfigMap-backed default"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set awsSSOProxyInject=off --set env.WARDYN_AWS_SSO_PROXY_INJECT=on | grep -A1 "name: WARDYN_AWS_SSO_PROXY_INJECT" | grep -q 'value: "on"' || { echo "env.WARDYN_AWS_SSO_PROXY_INJECT no longer wins over awsSSOProxyInject — scripts/kind-sso-walk.sh's --set env.WARDYN_AWS_SSO_PROXY_INJECT posture pin would stop working"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set defaultPolicy='not json' 2>&1 | grep -q "mustFromJson" || { echo "chart no longer refuses an invalid defaultPolicy at render"; exit 1; }
@@ -822,8 +876,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@#     (uiSandbox.port == service.port, ssh.port == service.port).
 	@#   pod/containerSecurityContext  — the DEFAULT render is what pins runAsNonRoot
 	@#     and readOnlyRootFilesystem; an all-on override would weaken that assertion.
+	@#   secretFiles                   — exercised by its own render (#596 block above);
+	@#     in all-on it would turn the env-mode DSN/age-key assertions into _FILE ones.
 	@missing=""; for k in $$(grep -oE '^[a-zA-Z][a-zA-Z0-9]*:' deploy/helm/wardyn/values.yaml | tr -d ':'); do \
-		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe service podSecurityContext containerSecurityContext " in *" $$k "*) continue ;; esac; \
+		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe service podSecurityContext containerSecurityContext secretFiles " in *" $$k "*) continue ;; esac; \
 		grep -qE "^$$k:" deploy/helm/wardyn/ci/all-on-values.yaml || missing="$$missing $$k"; \
 	done; \
 	[ -z "$$missing" ] || { echo "values.yaml keys neither helm-lint render exercises:$$missing — add them to deploy/helm/wardyn/ci/all-on-values.yaml, or exempt them in the comment above with the reason"; exit 1; }
