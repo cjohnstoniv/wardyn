@@ -164,6 +164,14 @@ func TestCapabilitiesFor_FreezeVerifiedOnRuncOnly(t *testing.T) {
 	if pinned.Freeze[types.CC1] {
 		t.Errorf("Freeze[CC1] = true for a sysbox pin; ContainerPause is verified against runc only")
 	}
+
+	// Nor a daemon whose DEFAULT runtime is not runc: CC1 with no pin is
+	// scheduled on that default, even though its label still reads "oci/runc".
+	runscDefault := infoWithRuntimes("runsc")
+	runscDefault.DefaultRuntime = "runsc"
+	if got := capabilitiesForWith(runscDefault, nil, true); got.Freeze[types.CC1] {
+		t.Errorf("Freeze[CC1] = true on a daemon whose default runtime is runsc; ContainerPause is verified against runc only")
+	}
 }
 
 // A CC1 operator override that pins a runtime the host does not have must NOT

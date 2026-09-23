@@ -510,25 +510,33 @@ func (f *freezingSubstrate) ThawSandbox(_ context.Context, ref string) error {
 	return nil
 }
 
-// TestOrchestrator_FreezeSandbox: Freeze/Thaw reach a substrate that
-// implements runner.Freezer, and the route survives (a later kill still
-// finds it). A substrate that does not implement it (Kubernetes, or an
+// TestOrchestrator_FreezeSandbox: Freeze/Thaw reach the substrate that owns
+// the ref when it implements runner.Freezer, and the route survives (a later
+// kill still finds it). Two substrates and no RefStore, so there is no
+// sole-substrate fallback: a Freeze that dropped the route would fail the
+// kill. A substrate that does not implement Freezer (Kubernetes, or an
 // unverified OCI runtime's substrate) answers ErrFreezeUnsupported.
 func TestOrchestrator_FreezeSandbox(t *testing.T) {
 	ctx := context.Background()
-	oci := &freezingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
-	o := New(oci)
-	if err := o.FreezeSandbox(ctx, "wardyn-agent-x"); err != nil {
+	vmm := &fakeSubstrate{name: "smolvm", classes: []types.ConfinementClass{types.CC3}, refPrefix: "vm-"}
+	oci := &freezingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}, refPrefix: "wardyn-agent-"}}
+	o := New(vmm, oci)
+	sb, err := o.CreateSandbox(ctx, specFor(types.CC1))
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if err := o.FreezeSandbox(ctx, sb.Ref); err != nil {
 		t.Fatalf("FreezeSandbox: %v", err)
 	}
-	if err := o.ThawSandbox(ctx, "wardyn-agent-x"); err != nil {
+	if err := o.ThawSandbox(ctx, sb.Ref); err != nil {
 		t.Fatalf("ThawSandbox: %v", err)
 	}
-	if err := o.KillSandbox(ctx, "wardyn-agent-x"); err != nil {
+	if err := o.KillSandbox(ctx, sb.Ref); err != nil {
 		t.Fatalf("KillSandbox after freeze/thaw: %v", err)
 	}
-	if len(oci.freezes) != 1 || len(oci.thaws) != 1 || len(oci.kills) != 1 {
-		t.Errorf("freezes %v thaws %v kills %v; want each forwarded once and the route kept", oci.freezes, oci.thaws, oci.kills)
+	if len(oci.freezes) != 1 || len(oci.thaws) != 1 || len(oci.kills) != 1 || len(vmm.kills) != 0 {
+		t.Errorf("docker freezes %v thaws %v kills %v, smolvm kills %v; want each forwarded once to docker and the route kept",
+			oci.freezes, oci.thaws, oci.kills, vmm.kills)
 	}
 
 	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
@@ -540,11 +548,11 @@ func TestOrchestrator_FreezeSandbox(t *testing.T) {
 	}
 }
 
-// TestCapabilities_FreezeAggregatesPerClass pins the per-class merge: the
-// orchestrator copies each substrate's Freeze map straight through (the same
-// deterministic first-claim rule Resolved uses), so a deployment whose
-// docker substrate has verified only CC1 never reports Freeze=true for a
-// class it did not claim.
+// TestCapabilities_FreezeAggregatesPerClass pins the per-class merge: each
+// class's Freeze comes from the substrate routing picks for it (the first to
+// list it), so a deployment whose docker substrate has verified only CC1
+// never reports Freeze=true for a class it did not claim, and a later
+// substrate's claim never vouches for runs routed elsewhere.
 func TestCapabilities_FreezeAggregatesPerClass(t *testing.T) {
 	oci := &fakeSubstrate{
 		name:     "docker",
@@ -558,5 +566,16 @@ func TestCapabilities_FreezeAggregatesPerClass(t *testing.T) {
 	}
 	if !caps.Freeze[types.CC1] || caps.Freeze[types.CC2] {
 		t.Errorf("Freeze = %v, want {CC1:true, CC2:false}", caps.Freeze)
+	}
+
+	// k8s lists CC1 first, with no Freeze entry: CC1 runs route there, so
+	// docker's later Freeze[CC1]=true must not be reported for them.
+	k8s := &fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}}
+	caps, err = New(k8s, oci).Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if caps.Freeze[types.CC1] {
+		t.Errorf("Freeze[CC1] = true, but CC1 routes to k8s, which cannot freeze (Freeze = %v)", caps.Freeze)
 	}
 }

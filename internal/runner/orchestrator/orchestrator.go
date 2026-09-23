@@ -185,20 +185,17 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 			if !seen[c] {
 				seen[c] = true
 				classes = append(classes, c)
+				// Freeze is decided by the substrate substrateFor ROUTES the
+				// class to (the first to list it), so a later substrate's
+				// claim can never vouch for runs it will not receive. An
+				// absent entry reads false.
+				caps.Freeze[c] = cs.Freeze[c]
 			}
 		}
 		for k, v := range cs.Resolved {
 			// First substrate to claim a class wins its label (deterministic).
 			if _, ok := caps.Resolved[k]; !ok {
 				caps.Resolved[k] = v
-			}
-		}
-		for k, v := range cs.Freeze {
-			// Same rule as Resolved, and for the same reason: only one
-			// substrate ever backs a given class, so there is no real
-			// conflict to arbitrate — the first (deterministic) claim wins.
-			if _, ok := caps.Freeze[k]; !ok {
-				caps.Freeze[k] = v
 			}
 		}
 		caps.StructuralEgress = caps.StructuralEgress || cs.StructuralEgress

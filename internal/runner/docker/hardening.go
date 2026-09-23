@@ -6,6 +6,7 @@
 package docker
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -296,6 +297,10 @@ func pickRuntime(info system.Info, want string) string {
 func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]string, record bool) runner.Capabilities {
 	classes := []types.ConfinementClass{}
 	resolved := map[types.ConfinementClass]string{}
+	// effective is the runtime NAME each class is actually scheduled on — not the
+	// display label: CC1's "" is the daemon's default runtime, which runtimeOrRunc
+	// labels "runc" whatever the daemon is configured with.
+	effective := map[types.ConfinementClass]string{}
 	// CC1 is the floor, but an operator CC1 override (e.g. a stronger sysbox pin)
 	// can still be unhonorable when that runtime is absent. Treat its error EXACTLY
 	// like CC2/CC3: never advertise a class whose (possibly pinned) runtime can't
@@ -305,14 +310,17 @@ func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]
 	if rt, _, err := resolveRuntime(types.CC1, info, overrides); err == nil {
 		classes = append(classes, types.CC1)
 		resolved[types.CC1] = "oci/" + runtimeOrRunc(rt)
+		effective[types.CC1] = cmp.Or(rt, info.DefaultRuntime) // the same hop runtimeSupportsRecursiveReadOnly makes
 	}
 	if rt, _, err := resolveRuntime(types.CC2, info, overrides); err == nil {
 		classes = append(classes, types.CC2)
 		resolved[types.CC2] = "oci/" + rt
+		effective[types.CC2] = rt
 	}
 	if rt, _, err := resolveRuntime(types.CC3, info, overrides); err == nil {
 		classes = append(classes, types.CC3)
 		resolved[types.CC3] = "oci/" + rt
+		effective[types.CC3] = rt
 	}
 	// The word is gated on the SAME probe applyDiskQuota consults. `filesystem`
 	// = a per-container quota binds bytes. `none` covers the two arms where no
@@ -327,14 +335,15 @@ func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]
 	}
 	// Freeze (runner Freeze/Thaw, RL-6): ContainerPause/Unpause is verified only
 	// on runc (runc 1.4.3, cgroup v2 — see FreezeSandbox). runsc and Kata pause
-	// are UNVERIFIED (the RL-0 spike), so every other resolved runtime — incl.
-	// an operator's own CC1 pin away from the daemon default — reports false
-	// rather than assume a control nobody proved. classToRuntime already
-	// refused to advertise a class at all when its runtime is absent; this
-	// narrows further, to the one runtime this driver's pause is proven against.
+	// are UNVERIFIED (the RL-0 spike), so every other effective runtime — incl.
+	// an operator's own CC1 pin away from runc, and a daemon whose default
+	// runtime is not runc — reports false rather than assume a control nobody
+	// proved. classToRuntime already refused to advertise a class at all when
+	// its runtime is absent; this narrows further, to the one runtime this
+	// driver's pause is proven against. An unknown default ("") reads false.
 	freeze := map[types.ConfinementClass]bool{}
-	for class, label := range resolved {
-		freeze[class] = label == "oci/runc"
+	for class, rt := range effective {
+		freeze[class] = rt == "runc"
 	}
 	return runner.Capabilities{
 		Driver:                   driverName,

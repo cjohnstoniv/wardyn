@@ -494,9 +494,10 @@ func (f *fakeDocker) ContainerKill(ctx context.Context, id string, _ client.Cont
 // ContainerPause / ContainerUnpause mirror the real daemon's redundant-state
 // conflicts (a real "already paused"/"is not paused" 409) so the driver's
 // isAlreadyPaused/isNotPaused idempotency handling is actually exercised by a
-// repeated Freeze/Thaw, not merely assumed. A paused container stays
-// Running=true (statusFromInspect must keep reporting RUNNING while frozen —
-// the design's "paused → Running=true → RUNNING" contract).
+// repeated Freeze/Thaw, not merely assumed. A paused container reports what a
+// real daemon does — Status "paused" with Running=true and Paused=true — and
+// statusFromInspect must keep reporting RUNNING while frozen (the design's
+// "paused → Running=true → RUNNING" contract).
 func (f *fakeDocker) ContainerPause(ctx context.Context, id string, _ client.ContainerPauseOptions) (client.ContainerPauseResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -507,7 +508,7 @@ func (f *fakeDocker) ContainerPause(ctx context.Context, id string, _ client.Con
 	if c.state != nil && c.state.Paused {
 		return client.ContainerPauseResult{}, fmt.Errorf("Error response from daemon: Container %s is already paused", id)
 	}
-	c.state = &container.State{Status: "running", Running: true, Paused: true}
+	c.state = &container.State{Status: "paused", Running: true, Paused: true}
 	return client.ContainerPauseResult{}, nil
 }
 

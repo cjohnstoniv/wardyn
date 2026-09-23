@@ -101,10 +101,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sidecar is never paused, so it keeps renewing its token and answering egress decisions while the
   agent is frozen. Both are idempotent on a missing or already-in-that-state sandbox.
   `runner.Capabilities.Freeze` (and its substrate-level counterpart, `substrate.ClassSupport.Freeze`)
-  reports support PER CONFINEMENT CLASS: `CC1` (the daemon-default `runc` runtime) is `true`, the
-  only substrate this is verified against; `runsc`/Kata-backed classes report `false` until that
-  pause path is verified. Kubernetes does not implement `Freezer`; a router in front of one answers
-  `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is RL-7.
+  reports support PER CONFINEMENT CLASS, keyed on the runtime the class actually runs on: only a
+  class on `runc` (the one runtime this is verified against) is `true`; a daemon whose default
+  runtime is not `runc`, an operator pin away from it, and `runsc`/Kata-backed classes report
+  `false` until that pause path is verified. Kubernetes does not implement `Freezer`; a router in
+  front of one answers `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is
+  #572.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just
