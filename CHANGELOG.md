@@ -13,10 +13,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The published tree no longer cites the author's private machine or gitignored review
   directories.** `CHANGELOG.md`'s R1–R7 hardening-pass ledger, `ROADMAP.md`'s punt list, the
   Azure DevOps / user-drives / Workspace Providers design prompts, several probe tests' "copy this
-  file in" run instructions, and two demo e2e specs' script citations all pointed a reader at
-  `~/.claude/plans|verify-runs` or `local/review-…` paths that exist only on one machine. The
-  citation guard (`cmd/wardynd/citation_guard_test.go`) now reds on any new one, over tracked
-  Markdown and non-test Go comments (#461).
+  file in" run instructions, and two demo e2e specs' script citations all pointed a reader at the
+  author's private plan and verify-run directories or the gitignored review-notes tree, which
+  exist only on one machine. The citation guard (`cmd/wardynd/citation_guard_test.go`) now reds
+  on any new one, over tracked Markdown and non-test Go comments (#461).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
@@ -4149,9 +4149,8 @@ debt, owner-hardware debt, or a decision deliberately not taken.
   (all at or before v0.7.1 — 0.7.2 fixed none of them), **5 had WORSENED and
   are fixed in this release** (the Kubernetes orphan sweep, `-race -tags k8s`,
   and the Compose envelope forwards, all named above), and **7 needed a deeper
-  probe than a re-read**. The triage sheet is operator-local and untracked
-  (`local/v072/R2-quickpass.md`), so this list is the shipped record of it. The
-  53 carried rows are the honest number for "known, unreviewed at 0.7".
+  probe than a re-read**. The triage sheet itself is not published, so this
+  list is the shipped record of it. The 53 carried rows are the honest number for "known, unreviewed at 0.7".
 - **Two browser rows could not be delivered by the harness.** The Playwright
   agent-roster spec cannot drive "a member signs in to AWS SSO and launches" or
   "an expired shared credential is refused with the named sentence": capability
@@ -4195,7 +4194,7 @@ debt, owner-hardware debt, or a decision deliberately not taken.
   once at the top of this section and repeated here because it is the largest
   single caveat: the `400`/`412`/`422` bodies and the new console copy are
   constants awaiting the maintainer's canon sitting, tracked on an
-  operator-local sheet (`local/v072/M2-canon-sheet.md`). Four of them already
+  unpublished sheet. Four of them already
   diverge from the design prompt's staging, including the terminal's `Ctrl+]`
   exit chord. Tests assert through the constants, so adopting the canon is a
   one-file diff that moves no behaviour.
@@ -4242,39 +4241,17 @@ git PATs.
 - **Governance profiles** — a named policy ceiling an admin can ASSIGN to a person, to an SSO group, or to everyone, so a contractor group and a platform team can hold genuinely different limits on one install. A profile REPLACES the site-wide default rather than composing with it. - **A security-admin role**, and a console that can be delegated to it — the second admin tier governs the verdict (profiles, permissions, egress decisions, token inventory, audit verification) and deliberately does NOT reach into a run. - A governance profile can cap **how many runs one person has going at once**, and self-service secrets gain the per-owner cap the sibling surfaces already had. - An admin can fence **which agents and which model providers** a member may name on their own run, as two more permission kinds on the existing Permissions page. - **User drives** — an admin registers persistent storage and allocates it to people, groups or everyone; a member mounts theirs per run at `/home/agent/drive`, **read-only unless allowed**, and the server resolves which drive belongs to the signed-in caller. Registering a drive on a host path is fenced by `WARDYN_USER_DRIVE_HOST_ROOTS`, unset and therefore closed by default. - **Git PATs for non-GitHub forges are never resident** — `agent-run` rewrites a granted host to a plain-HTTP broker path, the proxy mints server-side and injects Basic auth itself, and the grant ids are withheld from the sandbox env. `WARDYN_GIT_PAT_BROKER=off` restores the old lane; there is deliberately **no automatic fallback**.   - The lane is on by default and, until this release candidate, **was not actually running**: "the switch resolved into a setting nothing read, and the lane was carried by an internal per-launch flag no launch path ever set". - An operator can trust a corporate TLS-inspecting proxy's root CA (`WARDYN_TRUSTED_CA_FILE`), delivered on compose, the desktop profile and the Helm chart. - An operator can declare internal hostnames allowed to resolve to private/CGNAT addresses (`SiteConfig.internal_hosts`), and can tell a corporate proxy **which destinations to skip** (`upstream_proxy_no_proxy`). - Bedrock can be reached through a **VPC (PrivateLink) endpoint** (`WARDYN_BEDROCK_BASE_URL`), with full model ARNs documented as accepted identifiers. - An operator can point the API-key model-access lane at an **internal gateway** (`WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL`). - **A member can bring their own model API key** and set and remove their own secrets — it works in their own runs with no admin setup and is never reachable from anyone else's run. - The **People step becomes an acting surface**: an admin adds, edits and deletes `WARDYN_OIDC_ROLE_MAP` role mappings live from the console, guarded by a posture-flip acknowledgement and a lockout refusal. - Console `tool_rules`: a per-tool allow / hold / deny editor in the policy panel, a "What this run can do" line on the New run rail, and audit rows that read **Decided by rule** with the verbatim `rule_source`. - **A blocked egress request now says WHICH rule blocked it** — `X-Wardyn-Egress-Reason` carries the decision log's own rule source (`policy:default-deny`, `approval:denied`, `builtin:private-ip`, …). - Wardyn reports whether the Kubernetes NetworkPolicy that isolates sandboxes is **actually enforced** (`/healthz`'s `network_policy` field, plus a boot-time audit event on an unenforced-but-allowed cluster). - **Helm `image.digest`** — the blessed Kubernetes path no longer has to float on a mutable tag. - External clients can drive a sandbox over the SSH gateway: `wardyn ssh-key ensure|list`, `wardyn run wait-ready <id> --json`, `wardyn ssh <id> --json`, plus the per-run `git_push_any_branch` opt-out. - **A browser desktop (noVNC) is a shipped image variant** (`deploy/images/novnc/`, `make agent-image-novnc`) — local build only, and it changed no server code. - A fresh install **remembers being set up server-side** (`POST /setup/onboarding-complete`), so a different browser — or a different admin — lands past the funnel too. - `threatmodel/AGENT-THREAT-MODEL.md` — a portable threat model for agent systems generally, carrying twice as many non-mitigated verdicts as mitigated ones. 
 ### Hardening pass
 
-0.7 was reviewed before release rather than after. Seven independent verification
-runs (R1–R7) were opened over the release candidate, one per subject area, staffed
-with blind reviewer agents working from a written brief. Six of them produced ledgers;
-the seventh (R2, the run plane) was abandoned before its first round finished, and that
-gap is stated below rather than averaged away. Every finding the six recorded is in a
-ledger, and every fix claim names the command that proves it. This section is the
-arithmetic out of those ledgers, the contract changes an operator will notice, and what
-is still open. **The bullets in the sections below this one are the individual fixes
-those runs produced.**
+0.7 was reviewed before release rather than after, in seven subject areas (R1–R7): authz +
+governance, the run plane, egress + credentials, the UI console, ops / install / CLI, docs + the
+threat model, and user drives. This section is the arithmetic out of that review, the contract
+changes an operator will notice, and what is still open. **The bullets in the sections below this
+one are the individual fixes it produced.**
 
-Across the six completed runs: 1140 findings total (14 Critical, 117 High, 453 Medium,
-421 Low, 135 Info), 566 fixed, 7 disputed, 10 deferred, 557 open. **"Fixed" mostly means
-fix-claimed, not reviewer-verified** — six of the seven runs ended `INCONCLUSIVE
-(budget)`: the fix wave landed, the gates were re-run green on the release candidate
-(`make ci` 24/24 plus the PostgreSQL lane, `gate exit=0 tree 776c1065` and `gate exit=0
-tree 0e8a751d`), but a second blind reviewer round to confirm the fixes was not funded.
-Only R1 (authz + governance, 351 findings) carries reviewer-verified fixes (101 of them),
-and even there the 62 final-wave fixes are "fixed-unverified, gate-green". **"Open" is
-almost entirely Low/Info residue** deliberately left for 0.7.1. Only one open finding is
-above Low (a single R7 Medium). The ten `deferred` findings are the ones to read: two of
-them are **High** (R3 F055, R4 F107) and both are named under Residuals below.
-
-R2 (run plane) is the one subject area 0.7 did not verify: its abandoned round banked 18
-lens files with 75 untriaged candidate rows (4 High, 36 Medium, 26 Low, 9 Info), which
-are 0.7.1's first triage. Nothing in this release claims to have reviewed the run plane.
-
-### Known gaps
-
-- The R2 (run plane) subject area carries no reviewer verification for 0.7; its 75
-  untriaged candidate rows (4 High, 36 Medium, 26 Low, 9 Info) are 0.7.1's first triage.
-- Six of seven runs ended `INCONCLUSIVE (budget)` — fixes are gate-green but not
-  reviewer-confirmed by a second round. R3 F055 and R4 F107 (both High) are deferred.
-
+Across the six areas whose review completed: 1140 findings total (14 Critical, 117 High, 453
+Medium, 421 Low, 135 Info), 566 fixed, 7 disputed, 10 deferred, 557 open. The gates were re-run
+green on the release candidate (`make ci` 24/24 plus the PostgreSQL lane). "Open" is almost
+entirely Low/Info residue; only one open finding is above Low (a single R7 Medium). What "fixed"
+does and does not mean, and the two deferred High findings, are under Known gaps below.
 
 #### Contract and compatibility changes
 
@@ -4686,6 +4663,19 @@ proceed.
 
 Six episodes of the walkthrough series were re-recorded on this release and ship as its assets (01, 02, 03a, 03b, 03d, 05). The rest are being re-recorded on 0.7 and are uploaded to this same release as each take passes; until then their rows in the README and the console read *coming soon*, and no 0.6.0 footage is linked, because the console it shows has changed.
 
+#### Known gaps
+
+- **The run plane (R2) was not reviewed for 0.7.** Its 75 untriaged candidate rows (4 High, 36
+  Medium, 26 Low, 9 Info) are 0.7.1's first triage. Nothing in this release claims to have
+  reviewed the run plane.
+- **"Fixed" mostly means fix-claimed, not reviewer-verified.** Every fix is gate-green on the
+  release candidate, but only R1 carries reviewer-verified fixes (101 of them), and its 62
+  final-wave fixes are gate-green only. Unverified fix claims: R3 56, R4 51, R5 137, R6 70, R7 27;
+  R3's re-check covered Critical and High findings only.
+- **Low/Info residue is deliberately unfixed**: R1 182 · R3 68 · R4 83 · R5 101 · R6 64 · R7 59.
+- **Two High findings are deferred** — R3 F055 and R4 F107, both named under Known residuals
+  below.
+
 #### Known residuals and owner-gated items
 
 **Owner-gated — the release does not claim them.**
@@ -4696,17 +4686,9 @@ Six episodes of the walkthrough series were re-recorded on this release and ship
 - **R3's one open High, F055, was fixed after the counts above were taken** (`fix/v0.7-f055`, merged 41079162): a name that did not resolve was audited as the private-IP guard; it is now audited as itself. The R3 row still counts it as open.
 - **Twenty-four of R1's first-run claims carry a wrong `fix_elsewhere` annotation.** The fixes and their evidence are real; the claim script that stamped them had a column bug. The annotations were left as they are rather than rewritten.
 - **PF-48 — resident credential lanes sit above the ceiling re-assertion.** "Resident credential lanes (`WARDYN_GIT_PAT_GRANTS` with the broker off, `WARDYN_SSH_GRANTS`) are marshalled into the sandbox ABOVE the re-assertion phase, so a ceiling-denied host's PAT or key is still resident and exfiltratable through other egress. Named, not closed." The code says the same: they "are marshalled into env at `applyDispatchModeEnv`, above this phase … a resident credential for a denied host still meets that deny on every named dial." - **PF-1 residual — an unassigned member still selects stored policies unclamped.** "Closing it deployment-wide is an `all`-subject assignment, by design." The governance code keys every refusal on `ceiling.Profile != nil`, "never on the ceiling's contents — an UNASSIGNED member is byte-for-byte today here (PF-1's stated residual)". - **An egress redirect's `to` cannot be an IPv6 literal.** R3 F005, severity Info, **status `open`**: "No site-config field can name an IPv6 literal: `hostrules.HostOf` cuts at the first ':' inside the brackets … Every such value is rejected at PUT with 'invalid URL'/'invalid host'; the operator has no spelling that works." Pre-existing, unrelated to this campaign, unfixed. Use a hostname or an IPv4 literal. - **The redirect probe's SNI swap has one edge it can green wrongly.** The probe now "dials the target while presenting the original hostname, which is what a real run does" (fixed, `CHANGELOG.md:402`, with `WARDYN_PROBE_TO_CONNECT`). The residual: "The narrow edge is an **Ecosystem** redirect whose `To` is a literal IP: the agent's tool dials the To address directly, so its SNI is the To IP, and the probe's From-SNI swap would green a config the real tool fails." `redirectProbeTo` still fires the swap on `net.ParseIP(toHost) != nil` alone and reads no redirect kind. "Confirm on the real-mirror walk before changing probe code." - **F055 — a DNS failure is still reported as an SSRF deny, and closing it is an owner decision.** R3 F055, severity **High**, status **`deferred-proposed`**: "A DNS/resolver failure is audited and reported to the sandbox as an SSRF private-IP deny, with a remediation instruction to widen the SSRF guard." It is deferred because the fix is all canon surface: "The fix REQUIRES a new quoted audit decision string in the decision stream (`builtin:resolve-failed`), a new row in `docs/UI-SANDBOXES.md`'s `rule_source` table, and a new operator-facing `X-Wardyn-Egress-Detail` sentence / 403 body". Recorded as an owner decision: "F055 [High] is `deferred-proposed` (canon-strings law) and is an OWNER decision (FOLLOW-UPS P0)." **One of exactly two High-severity findings in the whole campaign that ship neither fixed nor rejected** (the other is R4 F107, below). - **R4 F107 — a failed sign-out looks identical to a successful one.** Severity **High**, status **`deferred-proposed`**: "A failed sign-out is reported only to the devtools console, so the human sees the sign-in gate while the HttpOnly SSO session stays alive … a page reload re-enters the console through the still-valid session cookie without any credential being presented." It is deferred with the other five R4 items that need new console copy under the canon rule: "R4 DEFERRED-PROPOSED six (owner mock round; new copy/state under canon rule (c)): R4-F009 preflight `setup_items` in the rail, R4-F052 the four `user_drive_unavailable` sentences …, R4-F070 security-tier probes surface, R4-F093 preview `home_subject`/`warning` rows, R4-F107 sign-out-failed strings, R4-F144 terminal keyboard-trap chord." - **R4 F144 — the cockpit terminal is a WCAG 2.1.2 keyboard trap.** Severity Medium, status `deferred-proposed`: "Keyboard focus cannot leave the cockpit terminal … Tab, Shift+Tab and Escape all stay in the PTY textarea." Deferred with the same six; it is the one on that list with an accessibility-conformance name attached. 
-**Closed since the handoff was written — do not re-publish these.**
+**Closed since the release candidate — do not re-publish these.**
 
-- **The ssh cockpit widget predicate.** `local/HANDOFF-0.7-RELEASE.md:142-146` says the widget is owner-only while `ConnectSSHCard`'s `mayAttach` is owner-or-admin. That is no longer true in the tree: `widget-registry.ts:189-192` now reads `ctx.run.state === "RUNNING" && ((!!ctx.principal && ctx.run.created_by === ctx.principal) || ctx.operator)` with the comment "run-detail-ssh.tsx:50 verbatim, plus the RUNNING check: owner OR admin", and `run-detail.tsx:580-584` asserts "all three must agree". What survives is a **test** gap — R4 F129, "The SSH widget's owner-only availability gate has no test, and the canvas suite is constructed to avoid it", status `fix-claimed`, verification `unverified-budget`. 
-**Verification debt owed before 0.7.1 can claim "reviewed".**
-
-Quoted from the 0.7.1 follow-ups triage, §"Deferred review work":
-
-- **R2 (run plane) — NO review in 0.7.** The one subject area with no verification at all. 75 candidate rows (4 High, 36 Medium, 26 Low, 9 Info) sit untriaged.
-- **R5 — 137 fix claims unverified by reviewer**; **R6 — 70**; **R3 — no blind round 2** (a Critical/High-only adversarial pass was the 0.7 substitute); **R4 — no round 2**, 51 unverified; **R7 — round 2 dropped** by owner decision ("treat R7 like R5/R6"), 27 claims unverified; **R1 — 62 wave fixes "fixed-unverified, gate-green"**.
-- **Low/Info residue, all runs, deliberately unfixed**: R1 182 · R3 68 · R4 83 · R5 101 · R6 64 · R7 59.
-
+- **The ssh cockpit widget predicate.** The release candidate's notes said the widget is owner-only while `ConnectSSHCard`'s `mayAttach` is owner-or-admin. That is no longer true in the tree: `widget-registry.ts:189-192` now reads `ctx.run.state === "RUNNING" && ((!!ctx.principal && ctx.run.created_by === ctx.principal) || ctx.operator)` with the comment "run-detail-ssh.tsx:50 verbatim, plus the RUNNING check: owner OR admin", and `run-detail.tsx:580-584` asserts "all three must agree". What survives is a **test** gap — R4 F129, "The SSH widget's owner-only availability gate has no test, and the canvas suite is constructed to avoid it", status `fix-claimed`, verification `unverified-budget`. 
 **Published threat-model residuals.** `threatmodel/THREAT-MODEL.md` §5 now lists 39;
 `v0.6.6` listed 27. **#28–#39 are new in 0.7.** The ones a 0.7 operator should read
 before turning a 0.7 feature on:

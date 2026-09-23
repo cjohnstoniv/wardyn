@@ -263,17 +263,18 @@ func TestCommentsCiteSymbolsNotLineNumbers(t *testing.T) {
 }
 
 // privatePathCitation matches a reference to the author's own machine (a
-// `~/.claude` plan or verify-run) or to the gitignored `local/review-…`
-// working-notes tree. Both live outside the published repo, so a citation to
-// either sends a reader — anyone who is not the one machine that wrote it —
-// to a path that does not exist for them. The published tree must be legible
-// on its own.
+// `~/.claude` plan or verify-run) or to a private note in the gitignored
+// `local/` tree: a `review-…` ledger, a `HANDOFF…` file, or a Markdown note
+// under a `vN…/` release folder there. All of them live outside
+// the published repo, so a citation sends a reader — anyone who is not the one
+// machine that wrote it — to a path that does not exist for them. The
+// published tree must be legible on its own.
 //
 // Deliberately narrower than "cites `local/`": other `local/vN…` paths in this
 // tree are real, documented runtime defaults (e.g. `WARDYN_KIND_SSO_EVIDENCE`
-// in docs/ENV.md), not private notes, and flagging those would train people to
-// ignore the guard.
-var privatePathCitation = regexp.MustCompile(`~/\.claude/(plans|verify-runs)|(^|[^A-Za-z0-9_])local/review-`)
+// in docs/ENV.md names a directory, not a note), and flagging those would
+// train people to ignore the guard.
+var privatePathCitation = regexp.MustCompile(`~/\.claude/(plans|verify-runs)|(^|[^A-Za-z0-9_])local/(review-|HANDOFF|v0[0-9]+/[^ ]*\.md)`)
 
 // TestNoPrivatePathCitations fails on a tracked Markdown doc, or a non-test Go
 // comment, that cites the author's private plan/review directories. It is
