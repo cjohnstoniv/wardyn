@@ -155,6 +155,9 @@ ds-bundle/
 # terminal-escape-canon.md is a permanent doc (#133), not a mock round or a
 # proposal draft — it ships for the same reason CONSOLE-RULES.md does.
 !/docs/design/terminal-escape-canon.md
+# announced-failures-canon.md is the shipped canon for #459's frozen strings
+# (RAIL.LAUNCH_ERROR_LABEL etc.) — the accompanying copy modules cite it.
+!/docs/design/announced-failures-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
