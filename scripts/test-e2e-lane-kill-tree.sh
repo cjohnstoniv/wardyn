@@ -37,6 +37,17 @@ eval "${body}"
 
 fail() { echo "test-e2e-lane-kill-tree: FAIL: $*" >&2; exit 1; }
 
+# Pins the wiring, not just the function in isolation: stop_lanes must
+# actually call kill_tree on each lane pid. Without this, kill_tree() could
+# pass every check above while stop_lanes silently went back to a plain
+# `kill "${pids[@]}"` (the original regression) and this test would never
+# notice, since it evals kill_tree() straight out of the source rather than
+# exercising stop_lanes itself.
+stop_lanes_body="$(extract_func stop_lanes)"
+[[ -n "${stop_lanes_body}" ]] || fail "stop_lanes() not found in ${RUN_E2E_SH}"
+echo "${stop_lanes_body}" | grep -q 'kill_tree' \
+  || fail "stop_lanes() no longer calls kill_tree() in ${RUN_E2E_SH}"
+
 # make_tree DURATION: a 3-generation `sleep DURATION` tree (grandparent ->
 # parent -> leaf), standing in for lane-subshell -> playwright -> chromium.
 # Each level has a trailing statement after `sleep` so bash forks a real
@@ -45,23 +56,33 @@ fail() { echo "test-e2e-lane-kill-tree: FAIL: $*" >&2; exit 1; }
 # than echoing it: run through `x="$(make_tree ...)"`, the background job
 # lands in the COMMAND-SUBSTITUTION subshell instead of this script, and it
 # does not survive that subshell's exit (confirmed empirically — not the
-# ordinary "orphans get reparented and keep running" case). DURATION also
-# tags the leaf so wait_for_leaf can find the right process (the two
-# fixtures below never run at the same time, but a distinct duration keeps
-# this robust if that ever changes).
+# ordinary "orphans get reparented and keep running" case).
 make_tree() {
   local duration="$1"
   ( ( ( sleep "${duration}"; : ) & wait ) & wait ) &
   MADE_TREE_PID=$!
 }
-wait_for_leaf() {  # DURATION -> leaf pid on stdout, "" if it never showed up
-  local duration="$1" pid=""
+wait_for_leaf() {  # TOP_PID -> the tree's `sleep` pid on stdout, "" if it never showed up
+  # Walks descendants via `pgrep -P` from TOP_PID, exactly like kill_tree()
+  # itself, instead of `pgrep -f` matching the sleep duration against the
+  # whole machine: a stray `sleep 31` or `sleep 32` left over from another
+  # worktree or an aborted run would otherwise be picked up (and killed) by
+  # this test, and would falsely report "the orphan-process regression is
+  # back".
+  local top="$1" pid child comm
   for _ in $(seq 1 20); do
-    pid="$(pgrep -f "^sleep ${duration}$" | head -1)"
-    [[ -n "${pid}" ]] && break
+    pid="${top}"
+    while child="$(pgrep -P "${pid}" 2>/dev/null | head -1)" && [[ -n "${child}" ]]; do
+      pid="${child}"
+    done
+    comm="$(ps -o comm= -p "${pid}" 2>/dev/null)"
+    if [[ "${pid}" != "${top}" && "${comm}" == "sleep" ]]; then
+      echo "${pid}"
+      return
+    fi
     sleep 0.1
   done
-  echo "${pid}"
+  echo ""
 }
 
 # RED, demonstrated on its own fixture: killing only the top PID must NOT
@@ -69,7 +90,7 @@ wait_for_leaf() {  # DURATION -> leaf pid on stdout, "" if it never showed up
 # (`kill "${pids[@]}"` alone, before this fix).
 make_tree 31
 red_top="${MADE_TREE_PID}"
-red_leaf="$(wait_for_leaf 31)"
+red_leaf="$(wait_for_leaf "${red_top}")"
 [[ -n "${red_leaf}" ]] || fail "the sleep-31 leaf never started — test fixture is broken, not the fix"
 kill "${red_top}" 2>/dev/null
 sleep 0.3
@@ -84,7 +105,7 @@ kill -9 "${red_leaf}" 2>/dev/null  # clean up the leak we just proved
 # kill_tree of the top PID must take out every generation.
 make_tree 32
 green_top="${MADE_TREE_PID}"
-green_leaf="$(wait_for_leaf 32)"
+green_leaf="$(wait_for_leaf "${green_top}")"
 [[ -n "${green_leaf}" ]] || fail "the sleep-32 leaf never started — test fixture is broken, not the fix"
 kill_tree "${green_top}"
 sleep 0.3
