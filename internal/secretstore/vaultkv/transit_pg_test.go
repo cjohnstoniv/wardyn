@@ -41,6 +41,14 @@ func TestTransitKEK_Conformance(t *testing.T) {
 	secretstoretest.RunConformance(t, func(t *testing.T) secretstore.Store { return pgStore(t, pool, nil, tr, true) })
 }
 
+// A tampered row under Transit is a refusal, never not-found.
+func TestTransitKEK_TamperConformance(t *testing.T) {
+	pool := throwawayDB(t)
+	tr := newFakeTransit(t, newFakeVault(t))
+	secretstoretest.RunTamperConformance(t, func(t *testing.T) secretstore.Store { return pgStore(t, pool, nil, tr, true) },
+		secretstoretest.FlipCiphertext(pool))
+}
+
 func rowKEK(t *testing.T, pool *pgxpool.Pool, owner, name string) (string, []byte) {
 	t.Helper()
 	var id string

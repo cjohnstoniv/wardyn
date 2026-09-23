@@ -113,6 +113,8 @@ path "%[1]s/decrypt/rsa" { capabilities = ["update"] }
 			t.Skip("WARDYN_TEST_PG not set")
 		}
 		pool := throwawayDB(t)
-		secretstoretest.RunConformance(t, func(t *testing.T) secretstore.Store { return pgStore(t, pool, nil, tr, true) })
+		newStore := func(t *testing.T) secretstore.Store { return pgStore(t, pool, nil, tr, true) }
+		secretstoretest.RunConformance(t, newStore)
+		secretstoretest.RunTamperConformance(t, newStore, secretstoretest.FlipCiphertext(pool))
 	})
 }

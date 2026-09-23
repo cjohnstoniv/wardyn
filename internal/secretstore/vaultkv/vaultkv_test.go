@@ -5,6 +5,7 @@ package vaultkv
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -51,6 +52,74 @@ func TestKubernetesLogin_SendsRoleJWTAndNamespace(t *testing.T) {
 	}
 	if f.logins != 1 {
 		t.Fatalf("logins = %d, want 1", f.logins)
+	}
+}
+
+// The kubelet rewrites the projected service-account token in place, and the
+// token it replaced stops working: every login reads the file again, whether
+// a 403 or a renewal of a token that cannot be renewed triggers it.
+func TestKubernetesLogin_RereadsTheTokenFileAtEveryLogin(t *testing.T) {
+	f := newFakeVault(t)
+	path := writeFile(t, "jwt-1\n")
+	f.mu.Lock()
+	f.jwts["jwt-1"] = "wardyn"
+	f.mu.Unlock()
+	s, err := New(t.Context(), Config{Addr: f.srv.URL, Auth: AuthKubernetes, AuthMount: "kubernetes", Role: "wardyn",
+		K8sTokenFile: path, Mount: "wardyn", Prefix: "p", MaxVersions: 1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.c.backoff = 0
+	rotate := func(from, to string) {
+		t.Helper()
+		f.mu.Lock()
+		delete(f.jwts, from)
+		f.jwts[to] = "wardyn"
+		f.tokens = map[string]bool{} // the Vault token from the last login is gone too
+		f.mu.Unlock()
+		if err := os.WriteFile(path, []byte(to+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotate("jwt-1", "jwt-2")
+	if _, err := s.Put(t.Context(), "", "k", "", []byte("v"), false); err != nil {
+		t.Fatalf("Put after the kubelet rotated the token: %v (the 403 login did not re-read the file)", err)
+	}
+	rotate("jwt-2", "jwt-3")
+	if err := s.c.renew(t.Context()); err != nil {
+		t.Fatalf("renewal of a non-renewable token after a rotation: %v (the login did not re-read the file)", err)
+	}
+	if f.logins != 3 {
+		t.Fatalf("logins = %d, want 3 (boot, the 403, the renewal)", f.logins)
+	}
+}
+
+// The Vault client's TLS config is its own (the 0.7.9 lesson: one *tls.Config
+// shared with another transport is mutated under it — Go's HTTP/2 setup
+// writes NextProtos in place). wardynd sets http.DefaultTransport's config
+// for WARDYN_TRUSTED_CA_FILE, and the client clones that transport.
+func TestClient_TLSConfigIsItsOwn(t *testing.T) {
+	def := http.DefaultTransport.(*http.Transport)
+	orig := def.TLSClientConfig
+	def.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	t.Cleanup(func() { def.TLSClientConfig = orig })
+	tlsOf := func(cfg Config) *tls.Config {
+		t.Helper()
+		c, err := newClient(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.http.Transport.(*http.Transport).TLSClientConfig
+	}
+	a := tlsOf(Config{Addr: "https://vault.example:8200"})
+	b := tlsOf(Config{Addr: "https://vault.example:8200"})
+	switch {
+	case a == nil:
+		t.Fatal("the Vault client has no TLS config of its own")
+	case a == def.TLSClientConfig:
+		t.Fatal("the Vault client shares http.DefaultTransport's *tls.Config")
+	case a == b:
+		t.Fatal("two Vault clients share one *tls.Config")
 	}
 }
 

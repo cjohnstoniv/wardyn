@@ -10,6 +10,8 @@ package pg
 import (
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest"
 )
@@ -19,4 +21,13 @@ func TestPG_Conformance(t *testing.T) {
 		s, _, _ := newPGStore(t)
 		return s
 	})
+}
+
+func TestPG_TamperConformance(t *testing.T) {
+	var pool *pgxpool.Pool
+	secretstoretest.RunTamperConformance(t, func(t *testing.T) secretstore.Store {
+		s, p, _ := newPGStore(t)
+		pool = p
+		return s
+	}, func(t *testing.T, owner, name string) { secretstoretest.FlipCiphertext(pool)(t, owner, name) })
 }
