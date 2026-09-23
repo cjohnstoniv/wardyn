@@ -4,7 +4,7 @@
 package api
 
 // membermode.go — "view as member": POST
-// /me/member-mode, the two mint doors it closes, and the audit marker every
+// /me/member-mode, the mint door it closes, and the audit marker every
 // refusal met inside the mode carries.
 //
 // What the mode is. An admin asks to be treated as a member for the rest of
@@ -37,13 +37,14 @@ const (
 	memberModeNoHumanRefusal = "member mode needs a signed-in SSO human: the admin token, local mode " +
 		"and a deployment with no identity provider all use one shared credential with no per-person " +
 		"role to pause. Sign in through SSO to use it."
-	// memberModeMintRefusal is the 409 both credential-mint doors answer with
-	// while the mode is on. ONE sentence for both, because it is one rule: a
-	// credential minted here would be re-stamped with the caller's REAL role at
-	// their next sign-in (store.RefreshAPITokenRoles and the SSH-key stamp
-	// refresh, both fired by OnLogin), so a "member" token would quietly become
-	// an admin one and outlive the mode that created it.
-	memberModeMintRefusal = "Exit member mode to mint a token or register a key."
+	// memberModeMintRefusal is the 409 the API-token mint door answers with
+	// while the mode is on: a token minted here would be re-stamped with the
+	// caller's REAL role at their next sign-in (store.RefreshAPITokenIdentity,
+	// fired by OnLogin), so a "member" token would quietly become an admin one
+	// and outlive the mode that created it. The SSH-key door no longer refuses:
+	// a key registered in the mode is stored capped instead (sshkeys.go,
+	// migration 0069).
+	memberModeMintRefusal = "Exit member mode to mint a token."
 )
 
 // memberModeRequest is POST /me/member-mode's body. An ABSENT/empty body

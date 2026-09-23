@@ -185,3 +185,62 @@ func TestPG_SSHKeys_RoleCheckedAtRoundTripsAndRefreshes(t *testing.T) {
 		t.Errorf("refresh for a principal with no keys: %v, want nil error", err)
 	}
 }
+
+// TestPG_SSHKeys_CappedKeyStaysMemberAtLogin pins migration 0069 at the login
+// re-stamp: an admin's login refreshes role_checked_at on every key they own,
+// promotes their uncapped key to admin as it always has, and leaves their
+// capped key (registered in the user view) a member key. The CHECK refuses a
+// capped admin row from any write path.
+func TestPG_SSHKeys_CappedKeyStaysMemberAtLogin(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	principal := fmt.Sprintf("capped-%d@example.com", time.Now().UnixNano())
+	registered := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	key := func(tag string, capped bool) types.SSHPublicKey {
+		return types.SSHPublicKey{
+			Fingerprint: fmt.Sprintf("SHA256:%s-%s-%d", tag, t.Name(), time.Now().UnixNano()),
+			Principal:   principal, PublicKey: "ssh-ed25519 AAAA" + tag, Role: "member",
+			RoleCheckedAt: &registered, Capped: capped, CreatedAt: time.Now().UTC(),
+		}
+	}
+	capped, uncapped := key("capped", true), key("uncapped", false)
+	for _, k := range []types.SSHPublicKey{capped, uncapped} {
+		if _, err := st.AddSSHKey(ctx, k); err != nil {
+			t.Fatalf("add %s: %v", k.Fingerprint, err)
+		}
+		t.Cleanup(func() { _ = st.DeleteSSHKey(context.Background(), k.Fingerprint, principal) })
+	}
+
+	loginAt := time.Now().UTC().Truncate(time.Microsecond)
+	if err := st.RefreshSSHKeyRoles(ctx, principal, "admin", loginAt); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	for _, tc := range []struct {
+		k        types.SSHPublicKey
+		wantRole string
+	}{{capped, "member"}, {uncapped, "admin"}} {
+		got, err := st.GetSSHKeyByFingerprint(ctx, tc.k.Fingerprint)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.Role != tc.wantRole || got.Capped != tc.k.Capped {
+			t.Errorf("%s after an admin login: role=%q capped=%v, want role=%q capped=%v",
+				tc.k.Fingerprint, got.Role, got.Capped, tc.wantRole, tc.k.Capped)
+		}
+		if got.RoleCheckedAt == nil || !got.RoleCheckedAt.Equal(loginAt) {
+			t.Errorf("%s role_checked_at = %v, want the login's %v", tc.k.Fingerprint, got.RoleCheckedAt, loginAt)
+		}
+	}
+
+	bad := key("capped-admin", true)
+	bad.Role = "admin"
+	if _, err := st.AddSSHKey(ctx, bad); err == nil {
+		_ = st.DeleteSSHKey(ctx, bad.Fingerprint, principal)
+		t.Error("a capped key stamped admin was stored; the 0069 CHECK must refuse it")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE ssh_public_keys SET role = 'admin' WHERE fingerprint = $1`, capped.Fingerprint); err == nil {
+		t.Error("a hand-run UPDATE promoted a capped key to admin; the 0069 CHECK must refuse it")
+	}
+}

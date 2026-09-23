@@ -2221,8 +2221,10 @@ longer unboundedly so. The same TTL is why **an admin upgrading from 0.5 (or pre
 does not get the override on the key they already have until it is refreshed**:
 `0043` backfills every pre-existing row as `member` (fail-closed) and `0046`
 backfills `role_checked_at` as `NULL`, which `sshAuth` treats as infinitely
-stale. A member's key never satisfies the override (`docs/SSH.md`'s Bounds
-section; `threatmodel/THREAT-MODEL.md` residual #15). See
+stale. A member's key never satisfies the override, and neither does a key an
+admin registered while in the user view, which is stored capped (migration
+`0069_ssh_key_view_capped`; `docs/SSH.md`'s Bounds section;
+`threatmodel/THREAT-MODEL.md` residual #15). See
 [ROADMAP.md](../ROADMAP.md) for what's queued.
 
 **None of this governance is a paid tier.** The admin/member split, the capability
@@ -2306,11 +2308,17 @@ else. Everything outside model access is untouched too: `GET /me` still returns
 the admin's own user-drive allocation, and their own runs, workspaces and
 secrets are still theirs (ceilings 1 and 2).
 
-Two doors REFUSE instead of clamping, both with `409`: minting an API token
-(`POST /me/tokens`) and registering an SSH key (`POST /me/ssh-keys`). Both
-credentials carry a role stamp that is re-derived from your REAL role at your
-next sign-in, so one minted "as a member" would quietly become an admin
+Minting an API token (`POST /me/tokens`) REFUSES instead of clamping, with
+`409`: a token carries a role stamp that is re-derived from your REAL role at
+your next sign-in, so one minted "as a member" would quietly become an admin
 credential that outlives the mode. Exit first.
+
+Registering an SSH key (`POST /me/ssh-keys`) is allowed in the mode, and the key
+is stored **capped** (migration `0069_ssh_key_view_capped`): it is a member key
+for good. Your sign-in re-stamp leaves its role at `member`, and the SSH
+gateway never grants it the admin override, even while you are an admin. It
+reaches your own runs and nothing else. A break-glass key that reaches other
+people's runs is registered outside the mode.
 
 > **It shows you what a member SEES. It is not proof that a member is
 > REFUSED.** Four ceilings, all deliberate:
@@ -2325,8 +2333,8 @@ credential that outlives the mode. Exit first.
 >    member mode still holds the admin override on other people's runs over SSH.
 >    By the identical argument, any `wdn_` API token you already hold keeps its
 >    own stamped role (the token lane replays the DB row, never the session), as
->    does the deployment admin bearer token. The `409` mint doors stop NEW
->    credentials; they cannot reach into old ones. Your browser session is
+>    does the deployment admin bearer token. The `409` token door and the
+>    capped key door stop NEW credentials; they cannot reach into old ones. Your browser session is
 >    clamped; another credential of yours is a different session.
 > 3. **Rolling upgrades.** The flag rides the existing session cookie with no
 >    codec bump (a bump would sign every live session out mid-rollout, which is
