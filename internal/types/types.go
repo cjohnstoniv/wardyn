@@ -754,6 +754,10 @@ type AuditEvent struct {
 // upgrading to 0046" — a pre-migration row, or a key registered before an
 // OIDC-configured deployment's first login for that principal — and sshAuth
 // treats nil as infinitely stale, never as fresh.
+//
+// Capped marks a key registered while an admin's session was in the user view
+// (migration 0070): Role stays member through every login re-stamp, and
+// sshAuth never grants it the admin override.
 type SSHPublicKey struct {
 	Fingerprint   string     `json:"fingerprint"`
 	Principal     string     `json:"principal"`
@@ -761,6 +765,7 @@ type SSHPublicKey struct {
 	PublicKey     string     `json:"public_key"` // authorized_keys line; never a secret
 	Role          string     `json:"role"`
 	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
+	Capped        bool       `json:"capped"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
 

@@ -131,6 +131,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
   key always; the OIDC session, UI-sandbox session and SSH host keys when those features are on). The age key plus a read of the database
   therefore yields all of them. Splitting those keys is planned for 0.8.
 
+- **Stored credentials are encrypted with AES-256-GCM, bound to their row, and can no longer be
+  forged (#562).** A `secrets` row was one age payload (X25519 + ChaCha20-Poly1305) with no
+  associated data: a database writer could move a ciphertext to another person or another name
+  undetected, and, age being public-key, anyone holding the deployment's public recipient could
+  write a row that decrypted. Every row is now envelope v1 (migration `0069_secret_envelope_v1`):
+  each save draws a fresh 32-byte data key, seals the value with AES-256-GCM bound to the row's
+  `(owned_by, name)`, and wraps the data key with AES-256-GCM under a key-encryption key.
+  `WARDYN_AGE_KEY` stays the only key input and is used through HKDF-SHA256 alone to derive that
+  key-encryption key, which is symmetric and so cannot be derived from the public recipient; age
+  itself is used only once, to convert legacy rows. A moved, forged or tampered row is refused with
+  an error that names the row, never its value, and is never read as missing, so a tampered boot
+  key fails boot rather than being replaced. `wardynd -rotate-age-key` now rewraps data keys only
+  and never decrypts a value (`secret.rekey` is unchanged). With `WARDYN_AGE_KEY` unset, wardynd
+  now refuses to start while any row is sealed under an age key, instead of minting an ephemeral
+  key that strands them. Still open: a database writer can copy an older row back into its own
+  slot (THREAT-MODEL residual 48).
+- **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
+  view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
+  The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `member`,
+  and it never gains the admin override: the sign-in re-stamp leaves its role alone, a CHECK
+  refuses a capped row that reads `admin`, and the SSH gateway refuses the override for it
+  (`ssh.auth` reason "capped key (registered in the user view): no admin override"). It still
+  reaches its owner's own runs. `ssh_key.add` carries `capped: true` for such a key. Keys
+  registered outside the user view behave exactly as before, and `POST /me/tokens` still refuses
+  in the mode. See `docs/SSH.md#bounds`.
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
