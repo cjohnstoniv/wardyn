@@ -4172,7 +4172,11 @@ token to the configured gateway proxy-side (TLS-MITM, exactly as it is sent to
 `api.anthropic.com` today) instead of only ever the public host — see
 [CHANGELOG.md](../CHANGELOG.md). The harness-login (`claude setup-token`) lane
 is exempt and always stays on the public host: that flow mints the OAuth token
-itself and must not be redirected.
+itself and must not be redirected. With a gateway configured, a resident
+subscription credential is mounted only when the run's own policy reaches the
+**gateway** (its host, or a `*.` wildcard covering it, judged as the proxy will
+judge the CONNECT); an `api.anthropic.com` or `*.anthropic.com` entry no longer
+counts, because the run never dials the vendor host.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`
@@ -5660,13 +5664,13 @@ driver, not a guess:
   at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed
   target prefixes). Nothing is mounted at `/home/agent` itself, because a volume there would
   shadow each image's baked `.bashrc`, swallow the reserved drive target `/home/agent/drive`, and
-  hide the read-only `~/.claude` bind the subscription path mounts. **Risk carried by the cache
-  volume specifically:** an `emptyDir` at `/home/agent/.cache` shadows the full image's
-  pre-created, agent-owned `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`) with a
-  fresh directory whose ownership the kubelet decides — `FSGroup` is only applied to a pod with a
-  drive attached (`internal/runner/k8s/drives.go`), so a run with `disk_mib` set and no drive can
-  get a root-owned mount the uid-1000 agent cannot write into; only the conformance "Cache" fill
-  target, run against a real cluster, catches this. **What the proof
+  hide the read-only `~/.claude` bind the subscription path mounts. **The cache volume starts
+  cold:** an `emptyDir` at `/home/agent/.cache` shadows the full image's pre-created
+  `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`), so the Go build cache is
+  rebuilt from empty. The mount is writable without `FSGroup`: the kubelet creates an `emptyDir`
+  root-owned but `0777`, the same mode `/tmp` and `/home/agent/work` have been written through by
+  the uid-1000 agent since 0.7.5; the conformance "Cache" fill target writes it against a real
+  cluster. **What the proof
   does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
   runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and
   Kata. The live kind SSO walk separately exercises a real `agent-run` boot — the aws-sso sign-in
