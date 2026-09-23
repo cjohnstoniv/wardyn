@@ -116,6 +116,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **An Admin-view browser session no longer starts runs (#639).** `POST /runs` and
+  `POST /runs/preflight` answer `409` with reason `admin_view` and "Runs start in the user view. Use
+  User view at the top of the console to start one." when an SSO session of an admin or security
+  admin is in the Admin view. The User view, users, the admin token and `wdn_` tokens launch as
+  before, so the CLI and CI are unaffected; a request that carries the session cookie is refused
+  even if it also carries a bearer.
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's

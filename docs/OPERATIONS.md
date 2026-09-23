@@ -2270,6 +2270,12 @@ that is one shared credential with no per-person role to pause, so nothing is
 clamped or POSTed, and `POST /me/member-mode` answers those callers `400` if
 called directly.
 
+**Runs start in the User view.** A signed-in SSO admin or security admin in the
+**Admin view** cannot start or preview a run: `POST /runs` and `POST /runs/preflight`
+answer `409` with reason `admin_view`. Switch to the User view to launch. The
+refusal keys on the browser session only — the admin token, a `wdn_` token and a
+single-operator install launch as before.
+
 **The no-credential preview — "Preview as a new user".** The Permissions page
 header offers **Preview as a new user**. It is the User view plus one thing: your OWN captured AWS SSO session reads as
 absent for the rest of the session. On a `per_user` deployment that is the state

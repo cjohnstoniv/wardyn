@@ -153,6 +153,9 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // API-only operation is allowed for v0).
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if s.refuseAdminViewLaunch(w, r) {
+		return
+	}
 	req, ceiling, reqCC, taskWarning, ok := s.decodeAndValidateCreateRun(w, r)
 	if !ok {
 		return

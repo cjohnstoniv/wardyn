@@ -433,6 +433,51 @@ test("the view switch: an admin drops to the User view, is refused, and comes ba
   ).toBe(204);
 });
 
+test("S1: an Admin-view session starts no run; the User view and a bearer still reach the doors", async ({ page, request }) => {
+  // M-8 (#639). The probes send no agent, so a door that lets the caller
+  // through answers its own validation error and no sandbox is ever started.
+  const launch = async (path: string) =>
+    page.evaluate(async (p: string) => {
+      const r = await fetch(p, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    }, path);
+  const doors = ["/api/v1/runs", "/api/v1/runs/preflight"];
+  const segment = (name: string) => page.getByRole("group", { name: CONSOLE_VIEW.GROUP }).getByRole("button", { name });
+
+  await dexSignIn(page, ADMIN_EMAIL);
+  await expect(segment(CONSOLE_VIEW.ADMIN)).toHaveAttribute("aria-pressed", "true");
+  for (const door of doors) {
+    const got = await launch(door);
+    expect(got.status, `${door} from the Admin view`).toBe(409);
+    expect(got.body).toEqual({
+      error: "Runs start in the user view. Use User view at the top of the console to start one.",
+      reason: "admin_view",
+    });
+  }
+
+  await segment(CONSOLE_VIEW.USER).click();
+  await expect(segment(CONSOLE_VIEW.USER)).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
+  for (const door of doors) {
+    const got = await launch(door);
+    expect(got.status, `${door} from the User view`).not.toBe(409);
+    expect(got.body.reason ?? "").not.toBe("admin_view");
+  }
+
+  // The CLI's lane never carried the session, so the view does not reach it.
+  for (const door of doors) {
+    const r = await request.post(door, { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` }, data: {} });
+    expect(r.status(), `${door} with the admin token`).not.toBe(409);
+  }
+
+  await segment(CONSOLE_VIEW.ADMIN).click();
+  await expect(page).toHaveURL(/\/admin\//, { timeout: 60_000 });
+});
+
 test("the view switch: another tab follows the session into the same view", async ({ page, context }) => {
   // §2.4: the view is the session's, so a second tab must not keep painting the
   // other one. The BroadcastChannel is the fast path; focus, the minute poll and
