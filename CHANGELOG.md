@@ -128,9 +128,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `WARDYN_AGE_KEY` aborts the conversion and the boot, naming the row; nothing is committed. After
   a conversion commits, an older wardynd can read none of the rows: going back means restoring the
   Postgres dump taken before the upgrade, together with the age key. There is no rolling upgrade
-  across this release — stop every older replica first, since one still running keeps writing
-  pre-envelope rows that 0.8 refuses ("an older wardynd is still writing"). Runbook:
-  `docs/OPERATIONS.md` § Upgrades.
+  across this release — stop every older replica first. One still running keeps writing pre-envelope
+  payloads that 0.8 refuses by name ("an older wardynd is still writing"): a new name it wrote is
+  converted at the next restart, but a name it replaced is overwritten in place and must be set
+  again. Runbook: `docs/OPERATIONS.md` § Upgrades.
 
 ### Fixed
 
