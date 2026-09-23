@@ -339,3 +339,75 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 func ownerSessionAs(t *testing.T) *http.Cookie {
 	return ssoSession(t, endWaitOwner, ownerEmail, oidc.RoleMember)
 }
+
+// TestRecheck_AnAdminOwnedRunIsHeldToItsOwnersSubRows pins the by-sub rule for
+// an owner who launched as an admin, exempt at the launch gate: another
+// admin's revive, restart with current limits or extension knows the owner by
+// sub alone, not by role, so under an enforced kind with no `all` or
+// owner-sub allow row it is refused. The owner's own session, or an allow row
+// for the owner's sub, passes.
+func TestRecheck_AnAdminOwnedRunIsHeldToItsOwnersSubRows(t *testing.T) {
+	otherAdmin := ssoSession(t, "sub-other-admin", "admin@corp.example", oidc.RoleAdmin)
+	for _, tc := range []struct {
+		name     string
+		byOwner  bool
+		subAllow bool
+		code     int
+	}{
+		{"by its owner", true, false, http.StatusOK},
+		{"by another admin", false, false, http.StatusForbidden},
+		{"by another admin, allow row for the owner's sub", false, true, http.StatusOK},
+	} {
+		caps := func(owner string) []types.CapabilityGrant {
+			if !tc.subAllow {
+				return nil
+			}
+			return []types.CapabilityGrant{grant(types.CapabilitySubjectUser, owner, capAgent, "claude-code", types.CapabilityAllow)}
+		}
+		t.Run("revive "+tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			f.st.run.GovernanceProfileID = nil // a super admin captures none
+			f.st.caps, f.st.enf = caps(f.run.CreatedBy), map[string]bool{capAgent: true}
+			as := otherAdmin
+			if tc.byOwner {
+				as = ssoSession(t, f.run.CreatedBy, ownerEmail, oidc.RoleAdmin)
+			}
+			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", as, "")
+			if w.Code != tc.code {
+				t.Fatalf("revive = %d %s, want %d", w.Code, w.Body.String(), tc.code)
+			}
+			if tc.code != http.StatusOK {
+				f.assertReviveRefused(t, "capability_"+capAgent)
+			}
+		})
+		t.Run("extend "+tc.name, func(t *testing.T) {
+			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+			f.st.caps, f.st.enf = caps(endWaitOwner), map[string]bool{capAgent: true}
+			as := otherAdmin
+			if tc.byOwner {
+				as = ssoSession(t, endWaitOwner, ownerEmail, oidc.RoleAdmin)
+			}
+			if code, _ := f.patch(t, as, endsAtBody(f.now.Add(7*24*time.Hour))); code != tc.code {
+				t.Fatalf("PATCH = %d, want %d", code, tc.code)
+			}
+		})
+	}
+	t.Run("restart with current limits by another admin", func(t *testing.T) {
+		f, _ := newOwnerFixture(t)
+		f.st.run.LostAt, f.st.run.LostReason, f.st.run.GovernanceProfileID = nil, "", nil
+		f.st.enf = map[string]bool{capAgent: true}
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/admin/runs/restart", otherAdmin, `{"run_ids":["`+f.run.ID.String()+`"]}`)
+		var out struct {
+			Results []adminRestartResult `json:"results"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("restart = %d %s (%v), want 200", w.Code, w.Body.String(), err)
+		}
+		if len(out.Results) != 1 || out.Results[0].OK || !strings.Contains(out.Results[0].Error, "the agent capability for claude-code") {
+			t.Fatalf("results = %+v; want the admin-owned run refused naming the agent capability", out.Results)
+		}
+		if len(f.rr.replaced) != 0 {
+			t.Error("a refused restart replaced the proxy")
+		}
+	})
+}

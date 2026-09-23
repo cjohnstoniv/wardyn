@@ -17,8 +17,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   an extension is also refused when the governance profile the run was created under is gone. A
   revive is also refused when the model credential its proxy would inject has been erased or its
   integration disabled, and the revived proxy takes the upstream proxy, trusted CA and model
-  gateways from the current configuration rather than its old rendered copy. Each refusal is
-  audited `denied` with the owner as `subject` (#679).
+  gateways from the current configuration rather than its old rendered copy. When anyone but the
+  owner asks, the owner is known by sub alone: any deny row covering the value refuses, and only
+  `all` rows or allow rows for the owner's sub count, not the owner's admin role. So under an
+  enforced kind, an admin-owned run can be revived, restarted or extended only by its owner, or
+  with an allow row for the owner's sub. Each refusal is audited `denied` with the owner as
+  `subject` (#679).
 - **The idle reaper is now hold-aware: it no longer stops a run out from under an open
   push/egress/ADO/credential/tool-call request that is still within its wait.** The idle-stop
   CAS (`UpdateRunStateIfIdle`) now also checks for a PENDING approval whose own

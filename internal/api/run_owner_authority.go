@@ -50,7 +50,11 @@ type ownerRefusal struct {
 // included). Otherwise the owner is known only by the sub on the run row:
 // any deny row of the kind covering the value refuses, since the owner's
 // email and groups cannot be ruled out, and only allow rows for that sub or
-// everyone count.
+// everyone count. Nor can the owner's role be known by sub, so an owner who
+// launched as an admin (exempt at the launch gate) is held to the same rows:
+// under an enforced kind another admin's revive, restart or extension of
+// their run needs an allow row for the owner's sub or everyone. The owner's
+// own session passes.
 func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun, callerIsOwner bool, repos []string) (*ownerRefusal, error) {
 	if callerIsOwner && s.isOperator(ctx) {
 		return nil, nil
@@ -274,7 +278,10 @@ func integrationHoldsSecret(in types.Integration, secret string) bool {
 // upstream proxy, the trusted CA, the internal model gateways and the
 // internal-host lift. A site config that cannot be read refuses rather than
 // reuse the rendered copy. The internal-host lift only narrows: a host the
-// operator added since is not lifted for a run that never had it.
+// operator added since is not lifted for a run that never had it. The
+// brokered-LLM 404 detail (LLMUnavailableDetail) keeps its rendered text:
+// recomputing it needs the dispatch-time LLM plan, and it changes only what
+// that 404 says, not what the sandbox may reach.
 func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun, cfg *proxy.Config) error {
 	sc, err := s.siteConfigForDispatch(ctx)
 	if err != nil {
