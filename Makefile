@@ -301,9 +301,15 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 # take seconds. The two :local images it needs (wardyn/wardyn-proxy,
 # wardyn/agent-claude-code) are built by ci.yml's `conformance` job right before this
 # runs; locally they come from `make agent-images` / compose.
+# Routed through scripts/test-report.sh (T-08/G9), not a bare `go test`: the
+# must-pass floor there is what turns a capability flip or an unset probe
+# (L0StructuralEgress, CreateStatusStop, ExecStream, ManagedFiles,
+# TestBootEgress_NoFirstUseApproval quietly SKIPping) into a red job instead of
+# a green one with fewer subtests. See test-report.sh's REQUIRE_PASS default
+# for the exact set.
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required; needs wardyn/wardyn-proxy:local + wardyn/agent-claude-code:local)..."
-	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 20m ./test/conformance/...
+	WARDYN_TEST_DOCKER=1 ./scripts/test-report.sh conformance-docker -tags docker -timeout 20m ./test/conformance/...
 
 # 30m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
 # (7m) waiting for the kubelet ONCE PER FILL TARGET, and 0.7.5 gave it two (/tmp and the
@@ -316,9 +322,12 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 # (local/v075/evidence/k8s-emptydir/green-conformance-k8s.log), and a ceiling set to the eviction
 # case alone loses the whole run whenever the pathological case and an ordinary suite land
 # together.
+# Routed through scripts/test-report.sh (T-08/G9) — see test-conformance-docker
+# above for why: AgentCannotReachAPIServer, CreateStatusStop and WaitExitCode
+# must-pass here too.
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
 	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
-	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 30m ./test/conformance/...
+	WARDYN_TEST_K8S=1 ./scripts/test-report.sh conformance-k8s -tags k8s -timeout 30m ./test/conformance/...
 
 # H1 (review round 2): the conformance agent image MUST carry wardyn-rec —
 # k8s's SessionRecording is unconditionally true (exec.go's recordCmd has no
@@ -359,6 +368,11 @@ test-conformance-stub: ## Run the driver-agnostic conformance honesty stub (no c
 # WSL/host loopback in any network mode. The tools are staged from the same
 # in-repo sources the agent images ship (cmd/* + deploy/images/*), so the
 # finalize COPY has real binaries to layer, not stubs.
+#
+# Also routed through scripts/test-report.sh (T-08/G9): the "unsupported
+# daemon" skip cases in integration_test.go / agent_tool_integration_test.go
+# have to actually SUCCEED on this target's own provisioned daemon+registry,
+# so a skip here is real news, not a self-skip disguised as green.
 test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs Docker)
 	@echo "Running real-daemon envbuild integration tests (U064; requires Docker)..."
 	@set -eu; \
@@ -376,7 +390,7 @@ test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs D
 	WARDYN_TEST_DOCKER=1 \
 	WARDYN_TEST_CACHE_REPO=localhost:5000/wardyn-envbuild-test \
 	WARDYN_TEST_TOOLS_DIR="$$tools_dir" \
-	go test -tags docker -run 'TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI' -timeout 40m -v ./internal/envbuild/
+	./scripts/test-report.sh envbuild -tags docker -run 'TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI' -timeout 40m ./internal/envbuild/
 
 # Live full-stack security e2e (L0 egress, metadata block, kill cascade,
 # brokered creds, recording). Heavy: stands up the compose stack. Guarded by

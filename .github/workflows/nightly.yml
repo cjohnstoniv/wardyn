@@ -501,8 +501,22 @@ jobs:
             echo "::error::kind-sso-walk.sh self-skipped — WARDYN_TEST_K8S did not reach the walk step"
             exit 1
           fi
-          if ! grep -qE 'UI e2e summary: [1-9][0-9]* spec file\(s\) passed' "$log"; then
-            echo "::error::no spec file was reported as executed and passed — see the uploaded log"
+          # T-08 (G9): "[1-9][0-9]* spec file(s) passed" alone let a run with real
+          # failures or skips through — the 09-22 log showed "1 spec file(s)
+          # passed, 1 failed, 4 test(s) skipped" and this regex still matched it.
+          # WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 above fixes this job's spec list to
+          # exactly sso-member + sso-member-recovery (see kind-sso-walk.sh), and
+          # both specs' own WARDYN_TEST_K8S guard is satisfied here, so "0 failed,
+          # 0 skipped" is not aspirational — it is what this job's own
+          # configuration implies. Require the exact line, not a loose substring.
+          summary="$(grep -oE 'UI e2e summary: [0-9]+ spec file\(s\) passed, [0-9]+ failed, [0-9]+ test\(s\) skipped.*' "$log" | tail -1)"
+          if [ -z "$summary" ]; then
+            echo "::error::no UI e2e summary line found — see the uploaded log"
+            exit 1
+          fi
+          echo "$summary"
+          if ! grep -qE '^UI e2e summary: 2 spec file\(s\) passed, 0 failed, 0 test\(s\) skipped' <<<"$summary"; then
+            echo "::error::expected exactly 2 spec file(s) passed, 0 failed, 0 test(s) skipped (sso-member + sso-member-recovery; reauth-hold is dropped by WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1) — got: $summary"
             exit 1
           fi
           if ! grep -q '^kind-sso-walk: PASS' "$log"; then

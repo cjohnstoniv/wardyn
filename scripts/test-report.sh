@@ -14,7 +14,7 @@
 #   scripts/test-report.sh unit ./...
 #   scripts/test-report.sh docker -tags docker ./internal/runner/...
 #
-# Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER (passed through to go test).
+# Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
 # Exit code mirrors the test run (non-zero if any test failed).
 set -uo pipefail
 
@@ -82,12 +82,39 @@ fi
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "unit" ]; then
   REQUIRE_PASS='^(TestF7_|TestRedirectProbe)'
 fi
+# T-08 (G9): conformance and envbuild have no must-pass floor at all today —
+# their Makefile targets call `go test` directly, never through this script —
+# and their falsifiable cases are exactly the ones a capability flip or an
+# unset probe silently turns into a SKIP that never reddens the job (see
+# conformance.go's DefaultRouteProbe/RecordingProbe skip sites). Named by
+# subtest so a rename cannot quietly empty the set, same law as the floors
+# above. WARDYN_TEST_DOCKER/WARDYN_TEST_K8S gate whether the real driver ran
+# at all — a lane without them declared has no substrate, same as the pg
+# floor's default-off shape.
+if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+  REQUIRE_PASS='^TestConformanceDocker/(L0StructuralEgress|CreateStatusStop|ExecStream|ManagedFiles)$|^TestBootEgress_NoFirstUseApproval$'
+fi
+if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
+  REQUIRE_PASS='^TestConformanceK8s/(AgentCannotReachAPIServer|CreateStatusStop|WaitExitCode)$'
+fi
+if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+  REQUIRE_PASS='^(TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI)$'
+fi
 if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
   # go test -json emits one event per line; a top-level test's outcome is the
   # event whose Test is the bare name (subtests carry a "/"). Extracted with
   # grep/sed so this needs no jq on the runner.
+  #
+  # G9: a REQUIRE_PASS that itself names a subtest (contains "/", e.g.
+  # "TestConformanceDocker/CreateStatusStop") widens the extraction to the
+  # full Test field so those events are not dropped before the match; a
+  # bare-name floor (pg, unit) keeps the narrower "[^\"/]*" filter unchanged,
+  # so this cannot surface an unrelated subtest skip those floors never
+  # claimed to police.
   names() {
-    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",\"Test\":\"[^\"/]*\"" "$OUT/test-output.json" \
+    local extract='"Test":"[^"/]*"'
+    case "$REQUIRE_PASS" in *"/"*) extract='"Test":"[^"]*"' ;; esac
+    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",${extract}" "$OUT/test-output.json" \
       | sed 's/.*"Test":"//; s/"$//' | grep -E "$REQUIRE_PASS" | sort -u
   }
   PASSED="$(names pass)"
@@ -104,6 +131,10 @@ if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
     if [ "$SUITE" = "pg" ]; then
       echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Give the lane a CREATE ROLE-capable" >&2
       echo ">> role over a URL-form DSN, or set WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2
+    elif [ "$SUITE" = "conformance-docker" ] || [ "$SUITE" = "conformance-k8s" ] || [ "$SUITE" = "envbuild" ]; then
+      echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. These cases are falsifiable ONLY" >&2
+      echo ">> against the real driver (a capability flip, a missing probe, or an unpullable image all read" >&2
+      echo ">> as this same skip) — see conformance.go's skip sites for the specific cause." >&2
     else
       echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Put curl on PATH — these probes" >&2
       echo ">> exist to prove a real curl round-trip and cannot do that skipped. A minimal dev container" >&2
