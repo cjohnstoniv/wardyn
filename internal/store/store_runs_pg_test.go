@@ -339,6 +339,107 @@ func TestPG_UpdateRunStateIfIdle_TOCTOU(t *testing.T) {
 	}
 }
 
+// newApproval builds a PENDING approval for run, requested at requestedAt. The
+// caller owns persistence via CreateApproval; cleanup rides the run's own
+// ON DELETE CASCADE (persistRun's cleanup), so no separate teardown is needed.
+func newApproval(runID uuid.UUID, requestedAt time.Time) types.ApprovalRequest {
+	return types.ApprovalRequest{
+		ID:             uuid.New(),
+		RunID:          runID,
+		Kind:           types.ApprovalToolCall,
+		RequestedScope: json.RawMessage(`{}`),
+		State:          types.ApprovalPending,
+		RequestedAt:    requestedAt,
+	}
+}
+
+// TestPG_UpdateRunStateIfIdle_HoldAware covers RL-5, the hold-aware idle
+// reaper (long-holds-design.md §2.1: "idle stop never fires while a request
+// is open within its wait"). The CAS guard lives inside UpdateRunStateIfIdle
+// itself (store.openHoldSQL), not as an earlier skip in the reaper's scan
+// loop, so this drives the store method directly exactly as
+// TestPG_UpdateRunStateIfIdle_TOCTOU does for the touch guard.
+func TestPG_UpdateRunStateIfIdle_HoldAware(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	notAfter := time.Now().UTC().Add(time.Hour) // generous: only the hold should block
+
+	// Case 1 — a PENDING approval well inside the run's wait: the stop must
+	// NO-OP, even though the idleness guard alone would let it through.
+	openHold := persistRun(t, ctx, pool, func() types.AgentRun {
+		r := newRun(types.RunRunning)
+		r.WaitBudgetSec = 3600
+		return r
+	}())
+	ap, err := st.CreateApproval(ctx, newApproval(openHold.ID, time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+	applied, err := st.UpdateRunStateIfIdle(ctx, openHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (open hold): %v", err)
+	}
+	if applied {
+		t.Error("idle CAS must NO-OP while a PENDING approval is open within its wait")
+	}
+	if got, _ := st.GetRun(ctx, openHold.ID); got.State != types.RunRunning {
+		t.Errorf("open-hold run state = %q, want RUNNING (left untouched)", got.State)
+	}
+
+	// Deciding the approval closes the hold: the SAME idle CAS must now APPLY.
+	if _, err := st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "tester@example.com",
+	}); err != nil {
+		t.Fatalf("decide approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, openHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (decided hold): %v", err)
+	}
+	if !applied {
+		t.Error("idle CAS must APPLY once the open approval has been decided")
+	}
+	if got, _ := st.GetRun(ctx, openHold.ID); got.State != types.RunStopped {
+		t.Errorf("decided-hold run state = %q, want STOPPED", got.State)
+	}
+
+	// Case 2 — a PENDING approval whose wait has ALREADY elapsed (the sweeper
+	// has not yet caught up and expired it): it is no longer "within its wait",
+	// so it must NOT block the stop.
+	staleHold := persistRun(t, ctx, pool, func() types.AgentRun {
+		r := newRun(types.RunRunning)
+		r.WaitBudgetSec = 1
+		return r
+	}())
+	if _, err := st.CreateApproval(ctx, newApproval(staleHold.ID, time.Now().UTC().Add(-time.Hour))); err != nil {
+		t.Fatalf("create stale approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, staleHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (stale hold): %v", err)
+	}
+	if !applied {
+		t.Error("idle CAS must APPLY when the only PENDING approval's wait has already elapsed")
+	}
+
+	// Case 3 — a PENDING approval with NO run-scoped bound (wait_budget_sec 0,
+	// ends_at NULL — a run created before migration 0069, or one with neither
+	// set): openHoldSQL's LEAST(...) is NULL, which reads as "still open" (the
+	// deployment's own approval-expiry ceiling reaps it, not the idle reaper).
+	noBoundHold := persistRun(t, ctx, pool, newRun(types.RunRunning)) // WaitBudgetSec 0, EndsAt nil
+	if _, err := st.CreateApproval(ctx, newApproval(noBoundHold.ID, time.Now().UTC())); err != nil {
+		t.Fatalf("create no-bound approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, noBoundHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (no-bound hold): %v", err)
+	}
+	if applied {
+		t.Error("idle CAS must NO-OP for a PENDING approval with no run-scoped expiry (NULL reads as open)")
+	}
+}
+
 // TestPG_ListRuns_ReaperCandidateQuery exercises the query shape the idle reaper
 // relies on (internal/lifecycle): it lists runs, then selects RUNNING runs whose
 // updated_at is older than the idle threshold. We backdate one run's updated_at

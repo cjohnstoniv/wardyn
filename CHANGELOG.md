@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The idle reaper is now hold-aware: it no longer stops a run out from under an open
+  push/egress/ADO/credential/tool-call request that is still within its wait.** The idle-stop
+  CAS (`UpdateRunStateIfIdle`) now also checks for a PENDING approval whose own
+  `min(requested_at + wait, ends_at)` has not yet passed, and refuses the transition while one
+  is open — closing the same race window the existing touched-after-snapshot guard closes, since
+  a request can be raised between the reaper's scan and the stop. A re-auth hold's own timeout
+  decision (`credential:reauth-timeout`) no longer resets the run's idle clock, since it is the
+  proxy reporting that nobody answered, not real agent activity (#570).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

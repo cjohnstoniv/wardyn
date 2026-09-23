@@ -53,7 +53,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// Debounced: a chatty agent can emit many decisions a second, and each touch
 	// is an UPDATE on the same agent_runs row; the reaper thresholds are minutes,
 	// so one touch per touchDebounce per run loses nothing.
-	if s.cfg.Store != nil && s.shouldTouch(runID) {
+	if s.cfg.Store != nil && s.shouldTouch(runID, dl.RuleSource) {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 
@@ -896,7 +896,19 @@ const touchDebounce = lifecycle.TouchDebounce
 // prune, which the debounce exists to make harmless.
 // ponytail: in-process only; per-replica debounce is fine because the singleton
 // control plane is a documented constraint (docs/OPERATIONS.md).
-func (s *Server) shouldTouch(runID uuid.UUID) bool {
+//
+// ruleSource excludes the ONE decision that is not real agent activity:
+// credential:reauth-timeout is the proxy's own signal that a re-auth hold's
+// WAIT ran out with nobody there (ruleSourceCredentialReauthTimeout, mirrored
+// from internal/egress/proxy). Touching on it would fight the hold-aware idle
+// reaper (RL-5, store.openHoldSQL): the run would look freshly active at the
+// exact moment its open request stopped being open, so a chatty retrying
+// client could keep an otherwise-idle run alive forever purely by repeating
+// the timeout it is causing.
+func (s *Server) shouldTouch(runID uuid.UUID, ruleSource string) bool {
+	if ruleSource == ruleSourceCredentialReauthTimeout {
+		return false
+	}
 	now := time.Now()
 	s.lastTouchMu.Lock()
 	defer s.lastTouchMu.Unlock()
