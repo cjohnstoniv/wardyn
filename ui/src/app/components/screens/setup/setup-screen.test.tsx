@@ -361,15 +361,17 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // renders disabled and says why.
     // #213 — a demo's footer is the optional-step pair now, not a numbered
     // Next: "Done with this one" targets Review, and it must render DISABLED
-    // (with the gate's reason as its title) rather than a dead-enabled
-    // button whose click silently no-ops.
-    it("a demo's 'Done with this one' is DISABLED, with the gate's reason as its title — never a dead-enabled button", async () => {
+    // (with the gate's reason as VISIBLE text — #497, never a title tooltip
+    // a disabled control can't surface) rather than a dead-enabled button
+    // whose click silently no-ops.
+    it("a demo's 'Done with this one' is DISABLED, with the gate's reason as visible text — never a dead-enabled button", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sts-fail-closed");
       await screen.findByRole("heading", { name: /no identity, no credential/i });
       expect(screen.queryByRole("button", { name: /^next:/i })).not.toBeInTheDocument();
       const done = screen.getByRole("button", { name: /^done with this one$/i });
       expect(done).toBeDisabled();
-      expect(done.getAttribute("title")).toMatch(/one probe/i);
+      expect(done).not.toHaveAttribute("title");
+      expect(screen.getAllByText(/one probe/i).length).toBeGreaterThan(0);
       // Back to required steps is never gated by refuseNext, same as every
       // other Back button in this shell.
       expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeEnabled();

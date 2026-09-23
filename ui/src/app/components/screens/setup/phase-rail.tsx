@@ -60,7 +60,6 @@ function RailItem({
         onClick={() => onSelect(stepId)}
         aria-current={active ? "step" : undefined}
         disabled={!!refusal}
-        title={refusal}
         className={cn(
           "group flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
           active ? "border-primary/50 bg-primary/10" : "border-transparent hover:bg-muted",
@@ -90,6 +89,9 @@ function RailItem({
             {STEP_LABEL[stepId]}
           </span>
           <span className={cn("block text-xs", TONE_DOT[badge.tone])}>{badge.text}</span>
+          {/* #459/#497: the refusal reason as visible text, not a title
+              tooltip a disabled control can't surface. */}
+          {refusal && <span className="block text-xs text-muted-foreground">{refusal}</span>}
         </span>
       </button>
     </li>
@@ -141,7 +143,14 @@ export function PhaseRail({
               onClick={() => onSelect(stepId)}
               aria-current={active ? "step" : undefined}
               disabled={!!refusal}
-              title={refusal ?? label}
+              // #459/#497: the refusal reason is never title-only — a
+              // disabled control can't surface a tooltip. This icon-only
+              // rail has no room for visible caption text, so the reason
+              // goes into the accessible name below instead; the always-
+              // visible full rail (the same steps, one breakpoint away)
+              // carries the reason as page text. `title` keeps naming the
+              // icon on hover only when the step isn't refused.
+              title={refusal ? undefined : label}
               className={cn(
                 "flex size-8 items-center justify-center rounded-full border transition-colors",
                 active ? "border-primary bg-primary/10" : "border-transparent hover:bg-muted",
@@ -161,7 +170,7 @@ export function PhaseRail({
               >
                 {isDone && <Check className="size-3" aria-hidden />}
               </span>
-              <span className="sr-only">{label}</span>
+              <span className="sr-only">{refusal ? `${label} — ${refusal}` : label}</span>
             </button>
           );
         })}

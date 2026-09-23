@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The remaining disabled Setup controls explained themselves only through a hover
+  title (#497).** The "Done with this one" and "Next" footer buttons, and the phase
+  rail's step buttons (both the full and icon-only compact rail), disabled a refused
+  move but said why only in a tooltip a keyboard or touch user never sees. The reason
+  now renders as visible text next to the control (the icon-only compact rail, with no
+  room for a caption, carries it in the button's accessible name instead).
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
