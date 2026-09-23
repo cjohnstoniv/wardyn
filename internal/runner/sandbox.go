@@ -67,8 +67,10 @@ const (
 // always waited out the full kill timeout (k8s pod grace period + teardown
 // slack, docker's stop timeout) instead of exiting promptly. `trap ... TERM
 // INT; while :; do sleep 3600 & wait $!; done` is POSIX sh (busybox/dash
-// compatible): the backgrounded sleep is what receives the signal and `wait`
-// returns immediately, running the trap.
+// compatible): the shell (PID 1) receives the signal, `wait` returns at once
+// and the trap runs. Exits 143/130 (the usual SIGTERM/SIGINT codes), not 0:
+// an out-of-band container/pod stop (daemon restart, host shutdown, a manual
+// `docker stop`) must still read as a signal kill downstream, not success.
 const AgentIdleScript = `d=/tmp/wardyn
 if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
   mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
@@ -87,7 +89,8 @@ if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
     cp "$d/mitm-ca.pem" /usr/local/share/ca-certificates/wardyn-mitm.crt 2>/dev/null && update-ca-certificates >/dev/null 2>&1 || true
   fi
 fi
-trap 'exit 0' TERM INT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 while :; do sleep 3600 & wait $!; done`
 
 // knownNonVaultRuntimes are OCI runtime families known to NOT boot a

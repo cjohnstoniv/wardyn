@@ -195,8 +195,9 @@ type AgentRun struct {
 	// (the default idle-container + `docker exec` path). Empty for exec-less /
 	// main-process substrates (krun) and before Exec runs. Persisted so the crash
 	// reconciler can observe AGENT liveness via ExecInspect across a wardynd
-	// restart: for an idle-container run the container is `sleep infinity`, so
-	// container liveness != agent liveness, and the exec id otherwise lived only in
+	// restart: for an idle-container run the container runs the TERM-aware idle
+	// loop (AgentIdleScript / `agent-run --idle`), so container liveness !=
+	// agent liveness, and the exec id otherwise lived only in
 	// the driver's in-memory map — lost on restart, stranding the run.
 	AgentExecID string `json:"agent_exec_id,omitempty"`
 	// FailureHint is an operator-facing one-line reason a run FAILED, stamped by

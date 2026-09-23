@@ -5,6 +5,7 @@ package runner
 
 import (
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"slices"
 	"syscall"
@@ -169,8 +170,11 @@ func TestBuildProxyConfig_TrustedCAPEM(t *testing.T) {
 }
 
 // TestAgentIdleScript_ExitsOnSIGTERM pins #468: the idle main process must exit
-// 0 promptly on TERM. `exec sleep infinity` fails this (TERM kills it, not exit
-// 0), and as PID 1 it would ignore TERM and sit out the full kill timeout.
+// promptly on TERM, with the usual signal exit code 143 (not 0 — a downstream
+// probe maps ExitCode==0 to RunCompleted, and an out-of-band container/pod
+// stop must still read as a kill, not success). `exec sleep infinity` fails
+// this (TERM kills it, not a clean exit), and as PID 1 it would ignore TERM
+// and sit out the full kill timeout.
 func TestAgentIdleScript_ExitsOnSIGTERM(t *testing.T) {
 	cmd := exec.Command("sh", "-c", AgentIdleScript)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -187,8 +191,12 @@ func TestAgentIdleScript_ExitsOnSIGTERM(t *testing.T) {
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("idle script on SIGTERM: %v, want exit 0", err)
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("idle script on SIGTERM: %v, want *exec.ExitError with code 143", err)
+		}
+		if code := exitErr.ExitCode(); code != 143 {
+			t.Fatalf("idle script on SIGTERM: exit code %d, want 143", code)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("idle script did not exit within 2s of SIGTERM")

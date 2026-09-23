@@ -70,7 +70,10 @@ if [ "${1:-}" = "--idle" ]; then
     # TERM-aware idle loop (not `exec sleep infinity`): as PID 1, sleep
     # ignores SIGTERM, so a stop always waited out the full kill timeout
     # instead of exiting promptly (wardyn issue #468).
-    trap 'exit 0' TERM INT
+    # Exits 143/130 (the usual SIGTERM/SIGINT codes), not 0: an out-of-band
+    # stop must still read as a signal kill downstream, not success.
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
     while :; do sleep 3600 & wait $!; done
 fi
 
