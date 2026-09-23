@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,10 +19,10 @@ import (
 
 // provider_access_test.go: MP-12's per-provider grading (SetupProviderAccess),
 // generalising SetupModelAccess's single hardcoded AWS-SSO lane to every kind
-// a person may be granted. Every test reads through providerAccessFor/
-// setupProviderAccess exactly as GET /setup/status does — never the lower
-// helpers (awsSSOCredentialState, ownSecret) directly — so a passing test is an
-// assertion about the wire shape, not about a helper this file merely calls.
+// a person may be granted. The grading tests read through providerAccessFor/
+// setupProviderAccess — the functions GET /setup/status calls — never the lower
+// helpers (awsSSOCredentialState, ownSecret) directly;
+// TestSetupStatusProviderAccess reads it off the endpoint itself.
 
 const paOwner = "alice@example.com"
 
@@ -156,6 +158,28 @@ func TestProviderAccess_BedrockSSO(t *testing.T) {
 	if got.Action != wantAction {
 		t.Errorf("pin-mismatch action = %q, want %q", got.Action, wantAction)
 	}
+
+	// The pin matches, but an admin has since pointed the provider at another
+	// access portal (rule 8 does not purge on that): dispatch refuses the
+	// session (mpBRPortal), so this row must not read live beside it.
+	_ = sec.For(paOwner).Put(context.Background(), providerSecretName(p.UID, providerSSOPart),
+		brBlob("sso-tok-alice", "123456789012", "BedrockUser", now.Add(48*time.Hour)))
+	moved, b := p, *p.Bedrock
+	b.SSOStartURL = "https://other.awsapps.com/start"
+	moved.Bedrock = &b
+	got = h.srv.providerAccessFor(context.Background(), moved, paOwner)
+	if got.State != modelAccessExpiredSignin || got.Deadline != "" || got.Action != providerAccessPortalAction {
+		t.Fatalf("session from another access portal: got %+v, want expired_signin, no deadline, action %q", got, providerAccessPortalAction)
+	}
+	_, refusal, err := h.srv.providerBedrockRefusal(context.Background(), moved, "claude-code", paOwner, false)
+	if err != nil || !strings.Contains(refusal, mpBRPortal) {
+		t.Fatalf("dispatch on the same credential: refusal=%q err=%v, want the access-portal refusal", refusal, err)
+	}
+	// Case and a trailing slash are the same portal, as dispatch reads it.
+	b.SSOStartURL = "HTTPS://acme.awsapps.com/start/"
+	if got = h.srv.providerAccessFor(context.Background(), moved, paOwner); got.State != modelAccessLive {
+		t.Errorf("same portal spelled differently: state = %q, want live", got.State)
+	}
 }
 
 // TestProviderAccess_MechanismPrincipalIsNotApplicable: the shared admin
@@ -223,6 +247,104 @@ func TestSetupProviderAccess_OneRowPerGrantedProvider(t *testing.T) {
 	stale := []SetupModelProvider{{ID: "gone"}}
 	if got := h.srv.setupProviderAccess(context.Background(), sc, stale, paOwner); len(got) != 0 {
 		t.Errorf("a provider id no longer in the block: got %+v, want an empty slice", got)
+	}
+}
+
+// TestProviderAccessCheck_RowPerState is the checklist half of MP-12: each
+// provider_access state in the checklist's grammar, the row's fix being the
+// provider_access action verbatim so the two never disagree.
+func TestProviderAccessCheck_RowPerState(t *testing.T) {
+	p := types.ModelProvider{ID: "corp-gateway", Name: "Corp gateway", Kind: types.ModelProviderCustomEndpoint}
+	for _, tc := range []struct {
+		state, action, wantStatus, wantDetail, wantFix string
+	}{
+		{modelAccessLive, "", "ok", "Your token for this provider is connected; runs on it use your own credential.", ""},
+		{modelAccessExpiring, "Sign in again before x", "warn", "Your token for this provider may stop working soon; runs on it fail once it does.", "Sign in again before x"},
+		{modelAccessExpiredSignin, "Sign in to AWS", "warn", "Your token for this provider can no longer be used, so runs on it are refused until you sign in again.", "Sign in to AWS"},
+		{modelAccessNotConfigured, providerAccessAddTokenAction, "warn", "You have not connected your token for this provider yet, so runs on it are refused until you do.", providerAccessAddTokenAction},
+		{modelAccessNotApplicable, "", "info", providerAccessMechanismDetail, bedrockMechanismFix},
+	} {
+		got := providerAccessCheck(p, SetupProviderAccess{Provider: p.ID, State: tc.state, Action: tc.action})
+		want := SetupCheck{ID: "llm_provider:corp-gateway", Label: "LLM access: Corp gateway",
+			Status: tc.wantStatus, Detail: tc.wantDetail, Fix: tc.wantFix}
+		if got != want {
+			t.Errorf("%s:\n got  %+v\n want %+v", tc.state, got, want)
+		}
+		assertSetupCheckBlocking(t, got)
+	}
+}
+
+// TestLLMProviderCheck_ProviderArm: with no legacy signal, a provider block
+// granting this caller providers is not "no model/harness provider
+// configured" — the LLM access row answers from provider_access instead.
+func TestLLMProviderCheck_ProviderArm(t *testing.T) {
+	row := func(id, state string) SetupProviderAccess { return SetupProviderAccess{Provider: id, State: state} }
+	missing := llmProviderCheck("", SetupBedrock{}, []SetupProviderAccess{row("a", modelAccessNotConfigured), row("b", modelAccessExpiredSignin)})
+	if missing.Status != "warn" || missing.Detail != providerAccessLLMMissingDetail || missing.Fix != providerAccessLLMMissingFix {
+		t.Errorf("no usable provider: got %+v, want the warn arm", missing)
+	}
+	live := llmProviderCheck("", SetupBedrock{}, []SetupProviderAccess{row("a", modelAccessNotConfigured), row("b", modelAccessLive), row("c", modelAccessExpiring)})
+	if live.Status != "ok" || live.Detail != "Model providers you can run on now: b, c." || live.Fix != "" {
+		t.Errorf("b live, c expiring: got %+v, want ok naming b and c", live)
+	}
+	mech := llmProviderCheck("", SetupBedrock{}, []SetupProviderAccess{row("a", modelAccessNotApplicable)})
+	if mech.Status != "info" || mech.Detail != providerAccessMechanismDetail {
+		t.Errorf("mechanism principal: got %+v, want info", mech)
+	}
+	// The legacy winning signal still outranks the provider arm (until MP-4).
+	if got := llmProviderCheck("legacy lane", SetupBedrock{}, []SetupProviderAccess{row("a", modelAccessNotConfigured)}); got.Status != "ok" || got.Detail != "legacy lane" {
+		t.Errorf("legacy signal: got %+v, want it unchanged", got)
+	}
+	for _, chk := range []SetupCheck{missing, live, mech} {
+		assertSetupCheckBlocking(t, chk)
+	}
+}
+
+// TestSetupStatusProviderAccess reads provider_access off GET /setup/status
+// itself: graded against the REQUESTING member's own namespace (the handler's
+// owner derivation), on the wire, and through the member redaction — plus the
+// per-provider checklist row an admin sees.
+func TestSetupStatusProviderAccess(t *testing.T) {
+	p := paKeyProvider("anthropic", types.ModelProviderAnthropicAPIKey)
+	site := types.SiteConfig{ModelProviders: providerBlock(p),
+		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey})}
+	srv := modelProvidersStatusSrv(t, site, &capStore{})
+	sec := srv.cfg.Secrets.(*memSecrets)
+	status := func(t *testing.T, sub string) SetupStatus {
+		t.Helper()
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", ssoSession(t, sub, sub+"@corp.example", oidc.RoleMember), "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /setup/status = %d; body=%s", w.Code, w.Body.String())
+		}
+		var st SetupStatus
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	_ = sec.For("sub-alice").Put(context.Background(), providerSecretName(p.UID, providerKeyPart), []byte("alices-own-key-0123456789"))
+
+	if got := status(t, "sub-alice").ProviderAccess; len(got) != 1 || got[0] != (SetupProviderAccess{Provider: "anthropic", State: modelAccessLive}) {
+		t.Errorf("alice, own key stored: provider_access = %+v, want [anthropic live]", got)
+	}
+	want := SetupProviderAccess{Provider: "anthropic", State: modelAccessNotConfigured, Action: providerAccessAddKeyAction}
+	if got := status(t, "sub-bob").ProviderAccess; len(got) != 1 || got[0] != want {
+		t.Errorf("bob, only alice's key stored: provider_access = %+v, want [%+v]", got, want)
+	}
+
+	w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "")
+	var admin SetupStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &admin); err != nil {
+		t.Fatal(err)
+	}
+	var row *SetupCheck
+	for i := range admin.Checks {
+		if admin.Checks[i].ID == "llm_provider:anthropic" {
+			row = &admin.Checks[i]
+		}
+	}
+	if row == nil || row.Status != "info" || row.Detail != providerAccessMechanismDetail {
+		t.Errorf("admin token's checklist row for anthropic = %+v, want the not_applicable info row", row)
 	}
 }
 

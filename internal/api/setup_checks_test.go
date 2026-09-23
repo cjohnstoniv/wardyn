@@ -645,7 +645,7 @@ func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
 // regression: an install with no Bedrock row at all keeps today's exact
 // optional-provider sentence.
 func TestLLMProviderCheck_NoBedrockRowUnchanged(t *testing.T) {
-	got := llmProviderCheck("", SetupBedrock{})
+	got := llmProviderCheck("", SetupBedrock{}, nil)
 	want := SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
 		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
@@ -662,7 +662,7 @@ func TestLLMProviderCheck_NoBedrockRowUnchanged(t *testing.T) {
 // IS configured.
 func TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured(t *testing.T) {
 	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true}
-	got := llmProviderCheck("", b)
+	got := llmProviderCheck("", b, nil)
 	if strings.Contains(got.Detail, "No model/harness provider configured") {
 		t.Errorf("detail = %q, must not claim no provider when Bedrock IS configured per_user", got.Detail)
 	}
@@ -675,7 +675,7 @@ func TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured(t *tes
 // info-not-warn rule for the same caller.
 func TestLLMProviderCheck_MechanismPrincipalIsInfo(t *testing.T) {
 	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true, Mechanism: true}
-	got := llmProviderCheck("", b)
+	got := llmProviderCheck("", b, nil)
 	if got.Status != "info" {
 		t.Errorf("status = %q, want info", got.Status)
 	}
@@ -718,6 +718,8 @@ var setupCheckNeverBlocks = map[string]bool{
 	"claude_subscription_staging": true, "agent_image": true,
 	"harness_credential": true, "harness_credential_aws": true,
 	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true,
+	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
+	"llm_provider:corp-gateway": true,
 }
 
 // assertSetupCheckBlocking is the one gate every case in TestSetupCheckBlocking
@@ -813,10 +815,10 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, permissionsPostureCheck(nil))
 
-	assertSetupCheckBlocking(t, llmProviderCheck("a model provider is connected", SetupBedrock{}))
-	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{}))
+	assertSetupCheckBlocking(t, llmProviderCheck("a model provider is connected", SetupBedrock{}, nil))
+	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{}, nil))
 	// per_user warn — one of the four per-person rows; must stay non-blocking.
-	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{Region: "us-east-1", Model: "m", PerUser: true}))
+	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{Region: "us-east-1", Model: "m", PerUser: true}, nil))
 
 	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m", CredsPresent: true}); ok {
 		assertSetupCheckBlocking(t, chk)

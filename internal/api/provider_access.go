@@ -10,9 +10,11 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -27,14 +29,19 @@ const (
 	// (multi-provider-design.md 5.4, row C10) byte for byte, since the console
 	// may render it verbatim like every other composed action.
 	providerAccessClaudeAgingAction = "Your Claude sign-in is over 11 months old and may stop working — sign in again."
+	// providerAccessPortalAction: a live session from another AWS access
+	// portal than the provider names. Names no URL — the row carries none.
+	providerAccessPortalAction = "Your stored AWS session is from a different AWS access portal than this provider uses — sign in again."
 )
 
 // SetupProviderAccess is one provider's connection state for the caller — the
 // wire shape provider_access: [{provider, state, action, deadline}] the design
-// names. Member-safe by construction, the same discipline SetupModelProvider
-// already follows: a provider id, one of the five SetupModelAccess states, an
+// names: a provider id, one of the five SetupModelAccess states, an
 // already-composed sentence, and (only when the state names one) a deadline
-// instant. No secret name, no account pin, no start URL, no host.
+// instant. No secret name, no start URL, no host. The one place a pinned
+// account and role appear is the pin-mismatch action, which names both pairs
+// to the caller — members included — because they must pick the pinned pair
+// when they sign in again (the same sentence model_access already sends).
 type SetupProviderAccess struct {
 	Provider string `json:"provider"`
 	State    string `json:"state"`
@@ -42,13 +49,97 @@ type SetupProviderAccess struct {
 	Deadline string `json:"deadline,omitempty"`
 }
 
-// setupModelProviderState is handleSetupStatus's one call site for both
-// SetupStatus.ModelProviders and its ProviderAccess sibling: the second is
-// graded per row of the first, so bundling them keeps the handler to one
-// statement instead of two (its own funlen ratchet, setup.go's doc comment).
-func (s *Server) setupModelProviderState(ctx context.Context, sc types.SiteConfig, owner string) ([]SetupModelProvider, []SetupProviderAccess) {
+// setupModelProviderState is handleSetupStatus's one call site for
+// SetupStatus.ModelProviders, its ProviderAccess sibling and the checklist rows
+// graded from it: each is derived from the one before, so bundling them keeps
+// the handler to one statement (its own funlen ratchet, setup.go's doc comment).
+func (s *Server) setupModelProviderState(ctx context.Context, sc types.SiteConfig, owner string) ([]SetupModelProvider, []SetupProviderAccess, []SetupCheck) {
 	mp := s.setupModelProviders(ctx, sc)
-	return mp, s.setupProviderAccess(ctx, sc, mp, owner)
+	access := s.setupProviderAccess(ctx, sc, mp, owner)
+	checks := make([]SetupCheck, 0, len(access))
+	for _, a := range access {
+		p, _ := modelProviderByID(sc.ModelProviders, a.Provider)
+		checks = append(checks, providerAccessCheck(p, a))
+	}
+	return mp, access, checks
+}
+
+// The checklist copy for the per-provider rows. DRAFT (M2 canon pending).
+// %s is the credential's noun (providerCredentialNoun).
+const (
+	providerAccessLiveDetail     = "Your %s for this provider is connected; runs on it use your own credential."
+	providerAccessExpiringDetail = "Your %s for this provider may stop working soon; runs on it fail once it does."
+	providerAccessExpiredDetail  = "Your %s for this provider can no longer be used, so runs on it are refused until you sign in again."
+	providerAccessMissingDetail  = "You have not connected your %s for this provider yet, so runs on it are refused until you do."
+	// providerAccessMechanismDetail: the shared admin token under OIDC.
+	providerAccessMechanismDetail = "This request arrived on the shared admin token, which owns no model credential — a person's own console session answers this row."
+	// providerAccessLLMLiveDetail: %s = the provider ids this caller can run on.
+	providerAccessLLMLiveDetail    = "Model providers you can run on now: %s."
+	providerAccessLLMMissingDetail = "Model providers are configured, but you have no working credential for any of them — agent-harness runs will be refused until you connect one."
+	providerAccessLLMMissingFix    = "Connect your own credential on a provider's row below (Settings → Model providers)."
+)
+
+// providerAccessCheck is awsSSOCredentialRow and llmProviderCheck's per_user
+// arm generalised per provider (MP-12): one checklist row per provider_access
+// row, in the checklist's grammar. Its fix is the provider_access action
+// verbatim, so the checklist and the member's own console never disagree about
+// one credential. Graded through the caller's own credential, so never
+// Blocking (SetupCheck's doc).
+func providerAccessCheck(p types.ModelProvider, a SetupProviderAccess) SetupCheck {
+	chk := SetupCheck{ID: "llm_provider:" + a.Provider, Label: "LLM access: " + cmp.Or(p.Name, a.Provider), Fix: a.Action}
+	noun := providerCredentialNoun(p.Kind)
+	switch a.State {
+	case modelAccessLive:
+		chk.Status, chk.Detail = "ok", fmt.Sprintf(providerAccessLiveDetail, noun)
+	case modelAccessExpiring:
+		chk.Status, chk.Detail = "warn", fmt.Sprintf(providerAccessExpiringDetail, noun)
+	case modelAccessExpiredSignin:
+		chk.Status, chk.Detail = "warn", fmt.Sprintf(providerAccessExpiredDetail, noun)
+	case modelAccessNotApplicable:
+		chk.Status, chk.Detail, chk.Fix = "info", providerAccessMechanismDetail, bedrockMechanismFix
+	default:
+		chk.Status, chk.Detail = "warn", fmt.Sprintf(providerAccessMissingDetail, noun)
+	}
+	return chk
+}
+
+// providerCredentialNoun names what a person holds for a provider kind.
+func providerCredentialNoun(k types.ModelProviderKind) string {
+	switch k {
+	case types.ModelProviderBedrockSSO:
+		return "AWS sign-in"
+	case types.ModelProviderAnthropicSubscription:
+		return "Claude sign-in"
+	case types.ModelProviderCustomEndpoint:
+		return "token"
+	default:
+		return "API key"
+	}
+}
+
+// providerAccessLLMCheck is llmProviderCheck's provider-block arm: with no
+// legacy signal, the LLM access row answers from the caller's own
+// provider_access rows rather than saying nothing is configured beside a list
+// that names providers. ok=false with no granted provider.
+func providerAccessLLMCheck(access []SetupProviderAccess) (SetupCheck, bool) {
+	if len(access) == 0 {
+		return SetupCheck{}, false
+	}
+	chk := SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "warn",
+		Detail: providerAccessLLMMissingDetail, Fix: providerAccessLLMMissingFix}
+	var usable []string
+	for _, a := range access {
+		if a.State == modelAccessLive || a.State == modelAccessExpiring {
+			usable = append(usable, a.Provider)
+		}
+	}
+	switch {
+	case len(usable) > 0:
+		chk.Status, chk.Detail, chk.Fix = "ok", fmt.Sprintf(providerAccessLLMLiveDetail, strings.Join(usable, ", ")), ""
+	case access[0].State == modelAccessNotApplicable: // per caller, so every row agrees
+		chk.Status, chk.Detail, chk.Fix = "info", providerAccessMechanismDetail, bedrockMechanismFix
+	}
+	return chk, true
 }
 
 // setupProviderAccess is SetupStatus.ProviderAccess: one row per provider in
@@ -176,6 +267,15 @@ func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProvider
 		row.State = modelAccessExpiredSignin
 		row.Deadline = ""
 		row.Action = fmt.Sprintf(modelAccessPinContradictedAction, stored.AccountID, stored.RoleName, pinned.AccountID, pinned.RoleName)
+		return
+	}
+	// Dispatch's next refusal after the pin (mpBRPortal): a session captured
+	// against another access portal — reachable whenever an admin edits the
+	// provider's portal, which rule 8 does not purge on.
+	if !sameStartURL(blob.StartURL, p.Bedrock.SSOStartURL) {
+		row.State = modelAccessExpiredSignin
+		row.Deadline = ""
+		row.Action = providerAccessPortalAction
 	}
 }
 

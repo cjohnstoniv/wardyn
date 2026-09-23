@@ -85,10 +85,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   setup-token); a Bedrock SSO provider reuses the five-state AWS-SSO vocabulary over a
   provider-scoped read, and a live, renewable session for an account or role the provider's own pin
   no longer allows grades `expired_signin`, naming both pairs, rather than reading `live` for an
-  identity dispatch would refuse. The shared admin bearer token under OIDC reads `not_applicable`
-  for every provider kind, having no credential of its own to grade. Member-safe by construction,
-  the same discipline `model_providers` follows: a state name, an already-composed sentence and a
-  deadline instant, never a secret name, account pin or start URL.
+  identity dispatch would refuse; so does a session from another AWS access portal than the
+  provider now names. The shared admin bearer token under OIDC reads `not_applicable` for every
+  provider kind, having no credential of its own to grade. Each row is a state name, an
+  already-composed sentence and a deadline instant — never a secret name or start URL; the
+  pin-mismatch sentence is the one place the pinned account and role appear, members included, as
+  `model_access`'s already does. The setup checklist follows it: the "LLM access" row answers from
+  these rows instead of reading "No model/harness provider configured" beside them, and each
+  granted provider gets its own `llm_provider:<id>` row whose fix is that provider's action. The
+  legacy checklist rows stay until MP-4.
 
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0069_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to

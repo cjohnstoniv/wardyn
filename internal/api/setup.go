@@ -145,10 +145,11 @@ type SetupStatus struct {
 	// ModelProviders (MP-12) — one row per provider, generalising the single
 	// AWS-SSO-only answer ModelAccess gives. Getting started and the setup
 	// checklist read this instead of grading one hardcoded lane, so a person
-	// granted several providers sees all of them. Member-safe by construction,
-	// same as ModelProviders: a state name, an already-composed action
-	// sentence, and a deadline instant — no secret names, no account pin, no
-	// start URL. Absent with no provider block.
+	// granted several providers sees all of them. Kept for members: a state
+	// name, an already-composed action sentence, and a deadline instant — no
+	// secret names, no start URL. The pin-mismatch action is the one place the
+	// pinned account and role appear (SetupProviderAccess's doc). Absent with
+	// no provider block.
 	ProviderAccess []SetupProviderAccess `json:"provider_access,omitempty"`
 }
 
@@ -507,15 +508,16 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// listing, a CLI sweep + subscription peek, and an AWS-SSO-blob age decrypt.
 	integrations := s.integrationsWithCapabilitiesUsing(ctx, present, providers, bedrock)
 	llmReady := computeLLMReady(llmDetail, integrations)
+	modelProviders, providerAccess, providerChecks := s.setupModelProviderState(ctx, siteCfg, runIdentitySubject(ctx, principalFromRequest(r)))
 
 	// checks: the rows the wizard renders. "info" is used for permanent /
 	// non-fixable or purely-optional conditions so the user is never shown a red
-	// they cannot clear.
-	checks := []SetupCheck{
+	// they cannot clear. Each granted provider's own row follows LLM access.
+	checks := append([]SetupCheck{
 		runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages),
 		claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner),
-		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(llmDetail, bedrock),
-	}
+		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(llmDetail, bedrock, providerAccess),
+	}, providerChecks...)
 	// confinement_floor: the operator's configured floor vs what this runner
 	// can actually enforce — see confinementFloorCheck.
 	if chk, ok := confinementFloorCheck(rnr, s.cfg.DefaultPolicy.MinConfinementClass); ok {
@@ -618,7 +620,6 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// the wizard opens rather than hiding a half-configured bootstrap.
 	// Credentials are warnings, not readiness gates.
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
-	modelProviders, providerAccess := s.setupModelProviderState(ctx, siteCfg, runIdentitySubject(ctx, principalFromRequest(r)))
 
 	resp := SetupStatus{
 		Ready:  ready,
