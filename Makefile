@@ -640,6 +640,19 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_TRUSTED_CA_FILE" | grep -q 'value: "/etc/wardyn/trusted-ca/ca.pem"' || { echo "trustedCA did not wire WARDYN_TRUSTED_CA_FILE at the mounted path — wardynd would boot trusting only the public roots while the operator believes the corporate CA is installed"; exit 1; }; \
 	echo "$$out" | grep -q "mountPath: /etc/wardyn/trusted-ca" || { echo "trustedCA rendered no volumeMount — WARDYN_TRUSTED_CA_FILE would name a path nothing mounts"; exit 1; }; \
 	echo "$$out" | grep -A2 '^        - name: trusted-ca$$' | grep -q "name: wardyn-trusted-ca" || { echo "the trusted-ca volume does not source the ConfigMap the chart rendered"; exit 1; }
+	@# The control-plane -> proxy hop (#561): proxies dial https on the internal
+	@# TLS listener, pinned to wardynd's own internal CA. There is deliberately no
+	@# CA Secret to assert: the CA lives in wardynd's secret store (Postgres,
+	@# age-encrypted), minted on first boot, so the render carries only the port.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	echo "$$out" | grep -q -- "- -internal-listen=:8443" || { echo "chart no longer passes -internal-listen — the proxy-facing TLS listener would bind a port the Service does not name"; exit 1; }; \
+	echo "$$out" | grep -B1 -A2 "name: internal$$" | grep -q "targetPort: internal" || { echo "chart rendered no internal Service port — run proxies cannot reach the TLS listener"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
+	echo "$$out" | grep -A1 "name: WARDYN_CONTROL_PLANE_URL" | grep -q 'value: "https://wardyn.default.svc.cluster.local:8443"' || { echo "k8s.enabled did not render WARDYN_CONTROL_PLANE_URL as https on the internal port — wardynd refuses to boot on a non-loopback http URL, and the proxy would resolve credentials in cleartext"; exit 1; }; \
+	echo "$$out" | grep -q "http://wardyn.default.svc" && { echo "an http:// control-plane URL is still rendered"; exit 1; }; \
+	echo "$$out" | grep -A6 "kubernetes.io/metadata.name: wardyn-runs" | grep -q "port: internal" || { echo "the runs-namespace NetworkPolicy peer is not granted the internal TLS port — every proxy in k8s.runsNamespace loses its control plane"; exit 1; }; \
+	true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set service.internalPort=8080 2>&1 | grep -q "service.internalPort 8080 collides" || { echo "chart no longer refuses service.internalPort == service.port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }

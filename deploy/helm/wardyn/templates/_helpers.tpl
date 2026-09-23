@@ -164,6 +164,10 @@ rejected object — so say it at render, like every other guard in this chart.
 {{- $http := int .Values.service.port -}}
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
+{{- $internal := int (.Values.service.internalPort | default 8443) -}}
+{{- if or (eq $internal $http) (and $ssh.enabled (eq $internal (int ($ssh.port | default 2222)))) (and $ui.enabled (eq $internal (int ($ui.port | default 8081)))) -}}
+{{- fail (printf "wardyn: service.internalPort %d collides with another wardynd port (service.port, ssh.port or uiSandbox.port). It is the proxy-facing TLS listener and needs its own number." $internal) -}}
+{{- end -}}
 {{- if and $ssh.enabled (eq (int ($ssh.port | default 2222)) $http) -}}
 {{- fail (printf "wardyn: ssh.port and service.port are both %d — the SSH gateway and the console cannot share one port. Give ssh.port its own number." $http) -}}
 {{- end -}}

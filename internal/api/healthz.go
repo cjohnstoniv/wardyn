@@ -151,6 +151,10 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// this one would need to appear alongside, so there is nothing an
 		// absent key would need to hide.
 		"demo_video_base_url": s.cfg.DemoVideoBaseURL,
+		// proxy_hop_tls: every run's proxy reaches this daemon over TLS pinned to
+		// its internal CA (internal/hoptls). false only on a local install whose
+		// control-plane URL is loopback http. One bit, no address or cert detail.
+		"proxy_hop_tls": s.cfg.ControlPlaneCAPEM != "",
 	}
 	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"
 	// grade, present ONLY on a k8s substrate — omitted from the map entirely

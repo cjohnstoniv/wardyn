@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 )
 
 // Server bundles a Proxy with its http.Server and async decision sink for
@@ -80,9 +81,12 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// re-resolves, the approval client, and the brokered local routes.
 	ts := newTokenSource(cfg.RunToken)
 
-	// Corporate CA pool, built ONCE before any control-plane client exists:
-	// the forward transport (Options.TLSClientConfig below) AND the sidecar's
-	// own control-plane client must both trust a corp-issued wardynd cert.
+	// Two TLS trust sets, never merged and never shared. The corporate CA pool
+	// (system roots plus WARDYN_TRUSTED_CA_FILE) is for EGRESS only: a
+	// TLS-inspecting middlebox sits between this sidecar and the internet, not
+	// between it and wardynd. Control-plane calls trust wardynd's internal CA
+	// and nothing else (internal/hoptls) — an empty pin fails every handshake
+	// rather than falling back to the system roots.
 	var tlsCfg *tls.Config
 	if cfg.TrustedCAPEM != "" {
 		pool, perr := x509.SystemCertPool()
@@ -94,33 +98,31 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		}
 		tlsCfg = &tls.Config{RootCAs: pool}
 	}
+	cpTLS, err := hoptls.ClientConfig(cfg.ControlPlaneCAPEM)
+	if err != nil {
+		return nil, err
+	}
 	// The four control-plane clients below — the decision sink, the injector, the
 	// approval client and the token renewer — all ride THIS client. A caller-supplied
 	// client with no Transport rides http.DefaultTransport, so it would see neither
-	// the corp CA pool above nor, more importantly, the Proxy: nil the proxy's OWN
+	// the internal CA pin above nor, more importantly, the Proxy: nil the proxy's OWN
 	// transports set ("keeps the run token off the corp-proxy wire"): it would ride
 	// ProxyFromEnvironment instead. With HTTP(S)_PROXY visible to the sidecar
 	// (dockerd-level proxy injection, a host-run or custom proxy image) the run
 	// token, approvals, decisions and MINTED CREDENTIAL VALUES would transit the
 	// corporate proxy and skip resolveTrustedURL's pin.
 	//
-	// So the transport is owned UNCONDITIONALLY, not only on the corp-CA branch,
-	// and Proxy is cleared explicitly: Transport.Clone() PRESERVES the proxy
-	// function, so a transport built on only one branch would carry the same risk.
-	// Everything else about DefaultTransport (timeouts, HTTP/2, keep-alives)
-	// is kept, and the CA pool rides along when there is one.
+	// So the transport is owned UNCONDITIONALLY and Proxy is cleared explicitly:
+	// Transport.Clone() PRESERVES the proxy function. Everything else about
+	// DefaultTransport (timeouts, HTTP/2, keep-alives) is kept.
 	if client != nil && client.Transport == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = nil
-		if tlsCfg != nil {
-			// A COPY, not the shared pointer: this transport has HTTP/2 enabled,
-			// and enabling it prepends "h2" to the config's own NextProtos on
-			// first use (net/http's http2configureTransports). Shared, that edit
-			// reached the proxy's forward transport, which then OFFERED h2 —
-			// the estate that reported #359 had a corporate CA, which is the
-			// only way this config is non-nil.
-			tr.TLSClientConfig = tlsCfg.Clone()
-		}
+		// A COPY, not the shared pointer: this transport has HTTP/2 enabled,
+		// and enabling it prepends "h2" to the config's own NextProtos on
+		// first use (net/http's http2configureTransports) — the v0.7.9 defect
+		// (#359), where a shared config made the egress transport offer h2.
+		tr.TLSClientConfig = cpTLS.Clone()
 		c := *client
 		c.Transport = tr
 		client = &c
@@ -211,12 +213,11 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
 
 	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE, forwarded from wardynd as
-	// trusted_ca_pem): additive to the system roots for THIS sidecar's own
-	// outbound TLS. One config covers the forward/egress transport
-	// (MITM-terminated forwards + the brokered LLM/git/PAT routes) and the
-	// control-plane transport; each transport that may EDIT it — anything with
+	// trusted_ca_pem): additive to the system roots for THIS sidecar's egress
+	// TLS — the forward transport (MITM-terminated forwards + the brokered
+	// LLM/git/PAT routes). Each transport that may EDIT it — anything with
 	// HTTP/2 enabled — takes its own copy first (offerHTTP2,
-	// upstream_protocol.go, and the control-plane client above). Nil (unset) leaves it nil, byte-identical to today (system roots,
+	// upstream_protocol.go). Nil (unset) leaves it nil, byte-identical to today (system roots,
 	// ServerName from URL). applyDefaultsAndValidate already fail-fast-checked
 	// this same PEM at config-load time without retaining a pool; this is the
 	// live proxy's own parse, matching parseUpstreamProxy's "validate at load,
@@ -240,6 +241,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		Upstream:             up,
 		UpstreamNoProxy:      cfg.UpstreamProxyNoProxy,
 		TLSClientConfig:      tlsCfg,
+		ControlTLS:           cpTLS,
 		InternalHosts:        cfg.InternalHosts,
 		LLMUpstreams:         cfg.LLMUpstreams,
 		LLMUnavailableDetail: cfg.LLMUnavailableDetail,
