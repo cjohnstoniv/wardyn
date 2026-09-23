@@ -34,12 +34,14 @@ bad() { echo "FAIL: $*" >&2; fail=1; }
 ok()  { echo "ok: $*"; }
 
 # ── 1. nightly notification coverage ─────────────────────────────────────────
-# e2e-live is exempt for pre-existing, uncharacterised failures; kind-sso-walk
-# for never having been green on a dispatch (0/4, #511 F2 — see nightly.yml's
-# own comment on notify-new-lanes' needs:). notify-new-lanes cannot need
-# itself.
+# e2e-live is exempt for pre-existing, uncharacterised failures. kind-sso-walk
+# is exempt from notify-new-lanes specifically (never been green on a
+# dispatch, 0/4, #511 F2 — see nightly.yml's own comment on notify-new-lanes'
+# needs:) but is NOT silent (SF-17): notify-kind-sso-walk watches it on its
+# own, with its own issue title. notify-new-lanes and notify-kind-sso-walk
+# cannot need themselves.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live kind-sso-walk notify-new-lanes"
+NOTIFY_EXEMPT="e2e-live kind-sso-walk notify-new-lanes notify-kind-sso-walk"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"

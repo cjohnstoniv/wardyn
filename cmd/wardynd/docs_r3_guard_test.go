@@ -342,22 +342,6 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 	)
 }
 
-// methodBody returns the source of a method by name, from its `func (recv)`
-// line to the closing brace in column 0. funcBody's anchor only matches a
-// plain top-level func.
-func methodBody(t *testing.T, src, name string) string {
-	t.Helper()
-	loc := regexp.MustCompile(`(?m)^func \([^)]*\) ` + regexp.QuoteMeta(name) + `\(`).FindStringIndex(src)
-	if loc == nil {
-		t.Fatalf("method %s not found — the guard's anchor moved, so it is asserting nothing", name)
-	}
-	rest := src[loc[0]:]
-	if end := strings.Index(rest, "\n}\n"); end >= 0 {
-		return rest[:end]
-	}
-	return rest
-}
-
 // TestMembersDocStatesTheThreeKeyDriveContract (F169) pins the member-facing
 // doc to the shape GET /me actually returns.
 //

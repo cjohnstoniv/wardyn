@@ -123,6 +123,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
 	// The order of the five gates below is create's own order, and it is
 	// load-bearing rather than tidy. The structural parity guard
 	// (TestPreflightMirrorsLaunchGates) can see the gate SET but not the
@@ -297,7 +298,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// copy and is discarded with it (preflight dispatches nothing); the 201
 	// warnings belong to the launch channel, and the site-config snapshot to
 	// launch's egress union, so both are dropped here too.
-	autonomy, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	// The frozen Azure DevOps grade is dropped with the rest: preflight
+	// dispatches nothing, so there is no dispatch for it to bind.
+	autonomy, _, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
 	if !ok {
 		return
 	}

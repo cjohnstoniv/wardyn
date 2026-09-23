@@ -8,7 +8,7 @@ import { resolve } from "node:path";
 
 import { describe, it, expect } from "vitest";
 
-import { ACCESS_ERROR, GUARD, PEOPLE, PREVIEW, SIGNIN } from "./people-access-copy";
+import { ACCESS_ERROR, GUARD, PEOPLE, PREVIEW } from "./people-access-copy";
 
 // Sentinel byte-exact pins against docs/design/people-access-prompt.md §7 — a
 // hand-retyped copy could silently drift (an em-dash swapped for a hyphen, a
@@ -84,17 +84,6 @@ describe("people-access-copy — PREVIEW result trio + the DEFAULT/LEGACY split"
     const legacy = PREVIEW.RESULT_LEGACY("admin");
     expect(legacy).toBe("Would sign in as admin — no mappings are configured; the operator allowlist decides.");
     expect(legacy).not.toContain("default role");
-  });
-});
-
-describe("people-access-copy — SIGNIN arms (§7.7)", () => {
-  it("NO_ROLE and EMAIL_VERIFIED_ABSENT both name 'your Wardyn admin', not a bare 'an operator'", () => {
-    expect(SIGNIN.NO_ROLE).toMatch(/ask your wardyn admin/i);
-    expect(SIGNIN.EMAIL_VERIFIED_ABSENT).toMatch(/ask your wardyn admin/i);
-  });
-
-  it("ROLE_CHECK_UNAVAILABLE is pinned", () => {
-    expect(SIGNIN.ROLE_CHECK_UNAVAILABLE).toBe("Couldn't check your access — try again, or contact your admin.");
   });
 });
 

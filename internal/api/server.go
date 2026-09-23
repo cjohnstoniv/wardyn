@@ -862,6 +862,23 @@ type Server struct {
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.
 	adoEntraTokens adoEntraAccessCache
+	// bg tracks every goroutine spawned through goBackground — work detached
+	// from a request so the answering call does not wait for it
+	// (finishHarnessLoginLaunch, killTeardownTail's supersede caller).
+	// http.Server (cmd/wardynd/boot_serve.go) only waits for in-flight
+	// HANDLERS to return; these goroutines outlive their handler by design, so
+	// Shutdown alone would let a SIGTERM cut one off mid-teardown — a run left
+	// KILLED with its sandbox still up, its credentials unrevoked and no
+	// run.kill row. See WaitBackground, which cmd/wardynd calls after
+	// httpSrv.Shutdown so an orderly stop gives this work its own bounded
+	// window to finish. Zero value is ready to use.
+	bg sync.WaitGroup
+	// bgWaitBudget overrides backgroundShutdownBudget for THIS server only,
+	// same shape as keepaliveEvery/pingEvery above: a test proving WaitBackground
+	// actually gives up at its bound needs to do so in milliseconds, not the
+	// real ~35s budget. Zero (the default) means "use backgroundShutdownBudget".
+	// See background.go for goBackground/WaitBackground themselves.
+	bgWaitBudget time.Duration
 }
 
 // New constructs a Server and builds its router. It does not start listening.

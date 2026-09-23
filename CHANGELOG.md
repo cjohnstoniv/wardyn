@@ -10,8 +10,48 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
+  that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
+  explaining there is no per-person connection to show. The capability card's consent door now
+  reads "Connect Azure DevOps" (matching its destination) and lands on the Settings card's own
+  anchor, which takes focus on arrival; a decide's `busy` state now tracks which button was
+  pressed, so Approve and Deny no longer spin together on a single click (#458).
+- **Sign-in first contact: honest loading state, no jargon (#457).** Before the console has ever
+  heard back from `/healthz`, the sign-in screen used to guess — rendering a token field and a
+  disabled "Sign in with SSO" stub that might be wrong for a moment. It now shows only "Checking
+  sign-in options…" (adding "Still checking — Wardyn hasn't answered yet." after three unanswered
+  reads) until a real answer names which doors exist. The disabled SSO stub and its
+  `WARDYN_OIDC_*` title are gone entirely — the button renders only when SSO is actually
+  configured. Every refusal sentence (`NO_ROLE`, `CLAIMS_OVERAGE`, `EMAIL_VERIFIED_ABSENT`,
+  `EMAIL_DOMAIN`, `ROLE_CHECK_UNAVAILABLE`, `OIDC_CONFIG`, `AUTH_FAILED`, and the shared
+  `ErrorState` default) dropped every env var name and "operator" in favor of "your Wardyn
+  admin" — a reader here, sometimes not even signed in, cannot reach a chart value. The
+  SSO-role-source caveat ("comes from your SSO role assignment") is removed entirely, with its
+  tests. Frozen strings: docs/design/signin-first-contact-canon.md.
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
+- Azure DevOps projects and repositories whose names carry spaces or other permitted characters
+  (`Payments Platform`, `Card Auth (v2).Service`) now import, launch, clone, fetch and push:
+  every door stores one spelling of the address, and approvals name the repository the same
+  way on the REST and git paths. When two repositories in one run would clone into the same
+  directory, the run's response now says which one was not cloned (#485).
+
+### Changed
+
+- **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
+  `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
+  `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
+  `killTeardownTail` (`KillSandbox`, both credential revocations, and the `run.kill` audit row).
+  `supersedeOneLoginRun` claims the transition synchronously, so its three-attempt CAS re-read loop
+  is unchanged and the superseded run reads `KILLED` before the launch POST answers, then hands the
+  teardown to a goroutine detached with `context.WithoutCancel`. `killRunCascade` itself still runs
+  claim then tail back to back under one shared `killCascadeTimeout` deadline, so `handleKillRun`'s
+  own synchronous cascade keeps the exact 30s budget it always had. The detached teardown (and the
+  sign-in launch's own detached dispatch) is now tracked by a new `Server.goBackground`/
+  `WaitBackground`: `wardynd`'s shutdown waits for it, bounded, after `http.Server.Shutdown` — before
+  this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
+  revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
+  already detached from itself.
 
 ### Added
 
@@ -28,6 +68,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
+  near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
+  object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
+  256 MiB cap (#250). The object ceiling is now 200,000, far above a real push, so that pack is
+  refused as uninspectable; objects are allocated at their exact size, and a blob's content is
+  released once the pack is parsed. A max-legal pack of that shape now keeps 22 MiB. Inspections
+  already ran one at a time behind the proxy's inspection slot; a test now pins it.
 - **A repository's own `.claude/settings.json` could approve tool calls on a `tool_approvals=hold`
   run before Wardyn's approval gate was asked.** Claude Code resolves `permissions.allow` rules
   before it consults `--permission-prompt-tool`, so a matching rule in the workspace (which the
@@ -177,6 +224,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   when the chip appears.
 
 ### Added
+
+- **`WARDYN_DAEMON_PROXY_SECRET`** lets an estate whose egress proxy requires a
+  credential run the daemon behind it. `WARDYN_DAEMON_PROXY_URL` keeps refusing a
+  `user:pass@` URL (a credential in the process environment is visible to
+  diagnostics and logs); the new var is a **file path** instead, read once at
+  boot — the daemon's proxy transport is installed before the database connects
+  and before the secret store exists, so a secret-store reference cannot be
+  resolved here. The file's mode must be `0600` or tighter, and boot refuses if
+  both vars are set rather than picking one silently. See `docs/ENV.md`.
 
 - **A brokered push that touches a denied path, cannot be inspected, or is too large is refused.**
   `push_rules` is enforcement now, not storage. When a run's policy carries content rules, both
@@ -928,6 +984,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
+- Azure DevOps projects and repositories whose names carry spaces or other permitted characters
+  (`Payments Platform`, `Card Auth (v2).Service`) now import, launch, clone, fetch and push:
+  every door stores one spelling of the address, and approvals name the repository the same
+  way on the REST and git paths. When two repositories in one run would clone into the same
+  directory, the run's response now says which one was not cloned (#485).
 
 ### Changed
 
@@ -1519,8 +1580,6 @@ tighten an existing input check and one turns a relayed oversized upload into a 
   that key today and the Go sentence it mirrors already differed from it, but the table is canon: the
   doc's own **Q11** (recommend (a) — the sentence takes a `{remedy}`) has to be ruled in M2 before the
   frozen row can take the third argument.
-- `WARDYN_DAEMON_PROXY_URL` has no credentialed-proxy form (a `WARDYN_DAEMON_PROXY_SECRET` secret-ref
-  knob mirroring `UpstreamProxySecretRef` is a follow-up, not built in 0.7.6).
 - The spent-token mark stays in-memory and unpersisted (the existing single-instance posture); a daemon
   restart re-grades a spent-but-not-yet-refresh-window credential `live` until the next dispatch marks
   it spent again. Persisting it is a follow-up, not built in 0.7.6.

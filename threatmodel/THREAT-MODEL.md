@@ -2297,7 +2297,7 @@ opaque tunnel and is never offered the operator's bearer.
   by an in-process test, and the full container path by `TestLive_SubscriptionInject`
   (`test/e2e/live/subscription_test.go`; Docker-gated, not in default CI).
   **Interactive** runs install the per-run CA too: the container's main process is
-  `agent-run --idle` (`idleCmd`, `internal/runner/docker/driver.go`), which calls
+  `agent-run --idle` (`idleCmd`, `internal/runner/docker/driver_network.go`), which calls
   the same `install_mitm_ca` batch runs use (`deploy/images/claude-code/agent-run`,
   `deploy/images/common/agent-run-lib.sh`), so a human driving `claude` in the
   attach shell trusts the proxy's TLS termination exactly as a batch run does. SDK
@@ -2517,7 +2517,20 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   allow — four compressed 31 MiB blobs are a 34 KB request — and the proxy
   sidecar has a hard 256 MiB cap. Inspection takes the same process-wide slot
   and retained-bytes budget as LLM request scanning, and a push that cannot get
-  them in time is refused, never forwarded unread.
+  them in time is refused, never forwarded unread. The slot is one wide
+  (`internal/egress/proxy`'s `maxConcurrentScans`), so inspections run one at a
+  time. One inspection is bounded beyond its body at about 232 MiB, as
+  `internal/gitpack`'s package comment breaks down: `maxInflatedBytes` (128 MiB)
+  of inflated objects, per-object bookkeeping held under 160 bytes an object by
+  `maxObjects` (200,000; about 30 MiB), and a change set of at most
+  `maxChanges` entries, plus one delta result (up to `maxObjectBytes`) that is
+  built before it is charged. Before #250 the object ceiling was 1,048,576, and a
+  legal 16.8 MB pack of that many near-empty blobs was inspected while holding
+  656 MiB; it is now refused as uninspectable. The residual is that the
+  ceilings are not sized jointly to the sidecar: a 64 MiB body (the most
+  `max_inspect_pack_mib` admits) inflating to every ceiling at once, beside a
+  full 64 MiB retained-bytes budget, would pass 256 MiB, and the inflation
+  ceiling is the term to lower if that shape matters.
 - **The key lane is not covered at all.** An `ssh_key` grant is an opaque
   tunnel with no broker seam, so a policy that sets `push_rules` while
   `ssh_key` is the run's only git-capable grant is graded a medium-risk warning
@@ -2970,7 +2983,7 @@ six of nine had rotted onto unrelated code (one past EOF) once the files split.
 The mechanism is structural and tier-independent: (1) the per-run Docker network
 is created with `Internal: true` (no gateway), so the agent container has no
 default route regardless of confinement class — the `NetworkCreate` in
-`CreateSandbox` (`internal/runner/docker/driver.go`); (2) the agent joins ONLY that
+`CreateSandbox` (`internal/runner/docker/driver_network.go`); (2) the agent joins ONLY that
 network — `CreateSandbox` step (3) attaches it at create time via `NetworkMode` +
 `NetworkingConfig`, never the host bridge, and `HTTP_PROXY`/`HTTPS_PROXY`
 (`buildBaseSandboxEnv`, `internal/api/runs_dispatch_mounts.go`) are a convenience

@@ -91,7 +91,7 @@ func TestDecodeWorkspaceRequest_DuplicateExplicitTargetsRejected(t *testing.T) {
 	]}`
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
 	w := httptest.NewRecorder()
-	_, msg := decodeWorkspaceRequest(w, r)
+	_, msg := decodeWorkspaceRequest(w, r, nil)
 	if msg == "" {
 		t.Fatal("two sources with the same explicit target: got no rejection, want one")
 	}
@@ -116,7 +116,7 @@ func TestDecodeWorkspaceRequest_DistinctOrEmptyTargetsAccepted(t *testing.T) {
 	} {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
 		w := httptest.NewRecorder()
-		if _, msg := decodeWorkspaceRequest(w, r); msg != "" {
+		if _, msg := decodeWorkspaceRequest(w, r, nil); msg != "" {
 			t.Errorf("body=%s: got rejection %q, want none", body, msg)
 		}
 	}

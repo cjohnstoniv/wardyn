@@ -30,8 +30,9 @@ import { ADO } from "./ado-entra-copy";
 // is ITS OWN checker's count — this suite's parser is the one that matters.
 // It agreed at 217 when §7 was frozen; CONNECT_POPUP_BLOCKED (review
 // follow-up N1) added one row after the freeze at the same gate (218), and
-// §10's 19 rows (S10 round 2/3, capability-card additions — see that
-// section's own header note) bring the live count to 237.
+// §10's 23 rows (S10 round 2/3's 19 capability-card additions, plus §10.7's
+// 2 rows for issue #458 — the not-applicable Settings card and the owner
+// fallback) bring the live count to 241.
 //
 // Two normalisations, both documented rules rather than fudges (the drives
 // precedent):
@@ -93,8 +94,13 @@ function render(docKey: string): string {
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 
 describe("ado-entra-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 239 frozen keys in the doc (218 from §7, 21 from §10)", () => {
-    expect(doc.size).toBe(239);
+  it("finds all 241 frozen keys in the doc (218 from §7, 23 from §10)", () => {
+    expect(doc.size).toBe(241);
+  });
+
+  it("(#458) NOT_APPLICABLE_BODY and REQ_OWNER_FALLBACK are byte-exact", () => {
+    expect(render("NOT_APPLICABLE_BODY")).toBe(doc.get("NOT_APPLICABLE_BODY"));
+    expect(render("REQ_OWNER_FALLBACK")).toBe(doc.get("REQ_OWNER_FALLBACK"));
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

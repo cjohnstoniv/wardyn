@@ -546,7 +546,13 @@ jobs:
   # always-failing lane in here would make this job's body's "every one of
   # them was green when wired" claim false and its "real regression, not known
   # noise" promise worthless for every OTHER lane sharing the same issue.
-  # Re-add it once a dispatch is green (#511 F2's own fix direction).
+  #
+  # It is NOT silent, though (SF-17): notify-kind-sso-walk, below, watches it
+  # on its own — the only nightly lane that exercises SSO + ADO on a real kind
+  # cluster, and a regression in that path is not something an already-known
+  # 0/4 lane should be allowed to hide behind. Fold it back into this job's
+  # needs: once a dispatch is green (#511 F2's own fix direction), and drop
+  # notify-kind-sso-walk with it.
   notify-new-lanes:
     needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke]
     if: failure()
@@ -573,6 +579,42 @@ jobs:
               "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, or buildx-smoke (multi-arch build)." \
               "" \
               "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
+              "" \
+              "Run: $RUN_URL")
+            gh issue create --title "$title" --body "$body"
+          fi
+
+  # kind-sso-walk's OWN notifier (SF-17): a separate issue, a separate title,
+  # and deliberately NOT the "real regression, not known noise" claim above —
+  # this lane is 0/4 today (#511 F2), so every dispatch failure here is
+  # expected until that root cause is fixed, not a surprise. The point is not
+  # "alert on every red", it is "an operator can still find this lane's
+  # status without reading raw run logs" — dedupe-by-title keeps it to one
+  # standing issue rather than a fresh one per night.
+  notify-kind-sso-walk:
+    needs: [kind-sso-walk]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the kind-sso-walk issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="nightly: kind-sso-walk red"
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing: $RUN_URL"
+          else
+            body=$(printf '%s\n' \
+              "kind-sso-walk (the only nightly lane exercising member + recovery AWS SSO on a real kind cluster) failed." \
+              "" \
+              "This lane is exempted from notify-new-lanes because it has never been green on a dispatch (0/4 as of #511 F2 — sso-member-recovery.spec.ts case I times out provisioning a fresh sign-in capture, root cause still open). That does not make a red run uninteresting; it means a NEW failure mode here is as likely to be hidden inside the existing one as it is to be a fresh regression — check the uploaded kind-sso-walk-results artifact against prior runs." \
               "" \
               "Run: $RUN_URL")
             gh issue create --title "$title" --body "$body"
