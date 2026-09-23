@@ -38,6 +38,12 @@ var (
 	_ client.SiteConfig
 	_ map[string]client.ArtifactOverride
 	_ []client.EgressRedirect
+	_ client.ModelProviders
+	_ client.ModelProvider
+	_ client.ModelProviderKind
+	_ client.ProviderAuth
+	_ client.BedrockSettings
+	_ client.ProviderHarness
 	_ client.ApprovalScope
 	_ client.DecisionOpts
 	_ []client.SSHPublicKey

@@ -62,6 +62,13 @@ type Store interface {
 	Get(ctx context.Context, name string) ([]byte, error)
 	Delete(ctx context.Context, name string) error
 	List(ctx context.Context) ([]string, error)
+	// DeleteEverywhere removes every namespace's row of each name — the
+	// operator's and every principal's — whatever view it is called on, and
+	// returns how many rows it removed. It is the one cross-owner write: a
+	// model provider whose address changes must take every person's
+	// credential for it with it, and no caller knows every owner to Delete
+	// them one by one.
+	DeleteEverywhere(ctx context.Context, names []string) (int, error)
 	// For returns a view of the store scoped to owner, the per-principal
 	// namespace introduced by migration 0050 (member BYOK). owner "" is the
 	// OPERATOR namespace — the zero value of every existing caller, so a call

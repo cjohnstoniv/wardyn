@@ -159,6 +159,13 @@ type SiteConfig struct {
 	// key carries the stored value forward, an explicit {} clears it — which is
 	// what makes the agent roster MDM-deliverable to a laptop.
 	AgentProviders *AgentProviders `json:"agent_providers,omitempty"`
+	// ModelProviders is the org's model-provider configuration — see
+	// ModelProviders (a POINTER for the byte-identical-GET reason the two blocks
+	// above are). Nil (the default) is today: create and dispatch keep the
+	// existing lane-resolution path. Written through PUT /site-config on the
+	// sibling blocks' terms: an absent key carries the stored value forward and
+	// an explicit {} clears it.
+	ModelProviders *ModelProviders `json:"model_providers,omitempty"`
 	// EffectiveScmHosts is READ-ONLY and SERVER-OWNED: the one spelling of
 	// "which git hosts does this deployment actually admit" — ScmHosts MINUS
 	// every host a present provider row claims, UNION the hosts of every ENABLED

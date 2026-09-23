@@ -8,7 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +99,21 @@ func (s *memSecrets) List(_ context.Context) ([]string, error) {
 		out = append(out, k)
 	}
 	return out, nil
+}
+
+func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
+	n := 0
+	for _, rows := range append([]map[string][]byte{s.m}, slices.Collect(maps.Values(s.owned))...) {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
 }
 
 // For returns an owner-scoped view sharing the same backing maps as s — see

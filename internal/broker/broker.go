@@ -862,15 +862,22 @@ var reservedBrokerSecretNames = map[string]bool{
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the
 // static keys above PLUS the managed-harness OAuth-blob pattern
-// (wardyn-harness-<provider>-oauth). The static map alone missed the pattern, so
+// (wardyn-harness-<provider>-oauth) PLUS every model-provider credential name. The static map alone missed the pattern, so
 // a policy could name e.g. "wardyn-harness-anthropic-oauth" as a git_pat/ssh_key
 // secret and have the broker resolve the resident OAuth token into the sandbox.
 func reservedBrokerSecret(name string) bool {
 	if reservedBrokerSecretNames[name] {
 		return true
 	}
-	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
+	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth") ||
+		strings.HasPrefix(name, providerSecretPrefix)
 }
+
+// providerSecretPrefix mirrors internal/api's: every per-person model-provider
+// credential (wardyn-provider-<uid>-{key,oauth,sso}). A model key is injected
+// proxy-side as a header, never minted, so a git_pat/ssh_key grant naming one
+// could only hand the person's own API key to the sandbox as a git password.
+const providerSecretPrefix = "wardyn-provider-"
 
 // ReservedSecretName reports whether name is a key the broker must never
 // resolve into a sandbox. Exported for the same single caller

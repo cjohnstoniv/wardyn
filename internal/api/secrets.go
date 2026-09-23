@@ -60,7 +60,8 @@ func reservedSecret(name string) bool {
 	if reservedSecretNames[name] {
 		return true
 	}
-	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
+	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth") ||
+		providerSignInSecret(name)
 }
 
 // ReservedPlatformSecret reports whether name is one of this package's
@@ -125,8 +126,13 @@ func sinkReservedSecret(name string) bool {
 // AWS SSO blob, so a value Put under that name would be silently shadowed. It
 // is likewise NOT in sinkReservedSecret — being resolved at that sink is the
 // whole point.
+//
+// Every per-person model-provider name (providerSecretPrefix) is here too, the
+// -key included: those rows are written only by PUT /model-providers/{id}/credential,
+// into the caller's own namespace, and an operator Put under one would plant a
+// row the strict read never consults while every door reported it stored.
 func secretsAPIReserved(name string) bool {
-	return reservedSecret(name) || name == types.SubscriptionOAuthSecret ||
+	return reservedSecret(name) || strings.HasPrefix(name, providerSecretPrefix) || name == types.SubscriptionOAuthSecret ||
 		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret ||
 		name == types.ADOEntraAccessTokenSecret
 }

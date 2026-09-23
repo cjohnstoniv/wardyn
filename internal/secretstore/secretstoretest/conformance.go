@@ -132,6 +132,9 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) secretstore.Store)
 	t.Run("erase_owner_removes_own_rows_only", func(t *testing.T) {
 		testEraseOwnerRemovesOwnRowsOnly(t, ctx, newStore, uniq)
 	})
+	t.Run("delete_everywhere_reaches_every_owner_and_only_its_names", func(t *testing.T) {
+		testDeleteEverywhere(t, ctx, newStore, uniq)
+	})
 }
 
 // newStoreFunc and uniqFunc name the two closures every owner-scoping case
@@ -276,5 +279,36 @@ func testEraseOwnerRemovesOwnRowsOnly(t *testing.T, ctx context.Context, newStor
 	}
 	if got, err := op.Get(ctx, name); err != nil || string(got) != "v-" {
 		t.Fatalf("operator row after a refused operator erase = (%q, %v), want it untouched", got, err)
+	}
+}
+
+// testDeleteEverywhere: called on ONE owner's view, it still removes the
+// operator's row and every other owner's row of the named name, counts them,
+// and leaves a different name — in the same namespaces — alone.
+func testDeleteEverywhere(t *testing.T, ctx context.Context, newStore newStoreFunc, uniq uniqFunc) {
+	op := newStore(t)
+	name, other := uniq("purge"), uniq("purge-keep")
+	a, b := uniq("owner-a"), uniq("owner-b")
+	t.Cleanup(func() {
+		_, _ = op.DeleteEverywhere(ctx, []string{name, other})
+	})
+	for _, owner := range []string{"", a, b} {
+		if err := op.For(owner).Put(ctx, name, []byte("v")); err != nil {
+			t.Fatalf("For(%q).Put: %v", owner, err)
+		}
+	}
+	_ = op.For(a).Put(ctx, other, []byte("kept"))
+
+	n, err := op.For(b).DeleteEverywhere(ctx, []string{name})
+	if err != nil || n != 3 {
+		t.Fatalf("For(b).DeleteEverywhere = (%d, %v), want 3 rows removed", n, err)
+	}
+	for _, owner := range []string{"", a, b} {
+		if _, err := op.For(owner).Get(ctx, name); !errors.Is(err, secretstore.ErrNotFound) {
+			t.Fatalf("For(%q).Get after DeleteEverywhere err = %v, want ErrNotFound", owner, err)
+		}
+	}
+	if got, err := op.For(a).Get(ctx, other); err != nil || string(got) != "kept" {
+		t.Fatalf("a name DeleteEverywhere was not given = (%q, %v), want kept", got, err)
 	}
 }

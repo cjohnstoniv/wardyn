@@ -91,6 +91,13 @@ export interface SiteConfig {
   // above is, and stripped from every GET-spread body for the same reason
   // (SERVER_OWNED_SITE_CONFIG_KEYS).
   agent_providers?: AgentProviders;
+  // The org's model-provider configuration — which kinds of model credential
+  // this deployment supports, where each sends requests, and which agents may
+  // use it. Configuration only: every person brings their own credential.
+  // Absent (the default) is today. No console surface writes it yet, and it is
+  // stripped from every GET-spread body (SERVER_OWNED_SITE_CONFIG_KEYS) for the
+  // sibling blocks' reason.
+  model_providers?: ModelProviders;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -130,6 +137,7 @@ export const SERVER_OWNED_SITE_CONFIG_KEYS = [
   "onboarding_completed_at",
   "workspace_providers",
   "agent_providers",
+  "model_providers",
   "effective_scm_hosts",
 ] as const satisfies readonly (keyof SiteConfig)[];
 
@@ -165,6 +173,77 @@ export interface AgentProvider {
   // (bedrock_sso + per_user). ADMIN-OWNED for the same reason sso_start_url is.
   sso_account_id?: string;
   sso_role_name?: string;
+  // The model provider (model_providers[].id) a new run of this agent uses
+  // unless the person chooses another. Must name a provider enabled for this
+  // agent; that provider may be turned off, which makes this default's runs
+  // refused rather than moved. Absent is today.
+  default_provider?: string;
+}
+
+// The org's model-provider configuration. Hand-maintained mirror of Go's
+// types.ModelProviders (internal/types/model_provider.go) — the json tags
+// verbatim; a removed wire field is a runtime TypeError only e2e catches.
+export interface ModelProviders {
+  providers?: ModelProvider[];
+}
+
+// Closed set, server-validated.
+export type ModelProviderKind =
+  | "anthropic_subscription"
+  | "bedrock_sso"
+  | "anthropic_api_key"
+  | "openai_api_key"
+  | "bedrock_bearer"
+  | "custom_endpoint";
+
+// One provider. No credential lives here — each person supplies their own.
+export interface ModelProvider {
+  // The admin's slug ("corp-gateway"), what a run names.
+  id: string;
+  // SERVER-OWNED: minted on first write, carried by id, never reissued. A
+  // submitted value is ignored.
+  readonly uid?: string;
+  // What people see when they choose it.
+  name?: string;
+  kind: ModelProviderKind;
+  // Negative-sense: absent is ENABLED. A disabled provider may still be an
+  // agent's default, whose runs are then refused rather than moved elsewhere.
+  disabled?: boolean;
+  // custom_endpoint: required. Anthropic/OpenAI kinds: an optional
+  // route-through gateway. Bedrock kinds: never (see bedrock.base_url).
+  base_url?: string;
+  // custom_endpoint only: how each person's token is sent. The server fills
+  // Authorization / "Bearer %s" when absent.
+  auth?: ProviderAuth;
+  // bedrock_sso / bedrock_bearer only.
+  bedrock?: BedrockSettings;
+  // The agents this provider may serve, with the settings for each.
+  harnesses?: ProviderHarness[];
+}
+
+export interface ProviderAuth {
+  header?: string;
+  format?: string;
+}
+
+export interface BedrockSettings {
+  region?: string;
+  base_url?: string;
+  // bedrock_sso only, and ADMIN-OWNED: a sign-in never chooses another.
+  sso_start_url?: string;
+  sso_account_id?: string;
+  sso_role_name?: string;
+}
+
+export interface ProviderHarness {
+  // A harness-catalog id ("claude-code", "codex-cli").
+  harness: string;
+  // Admin-set, no member override; required on a Bedrock kind.
+  model?: string;
+  // custom_endpoint only: where the endpoint serves this agent's API dialect.
+  path?: string;
+  auth_header?: string;
+  auth_format?: string;
 }
 
 // The org's workspace-provider policy. Hand-maintained mirror of Go's

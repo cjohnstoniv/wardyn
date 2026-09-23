@@ -864,7 +864,8 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
 | launching a recording session (`POST /workspaces/{id}/record`) — it sat with the egress-decision routes above until 0.7 re-tiered it, because the route does not decide a ceiling: it LAUNCHES a credentialed, host-mounting, open-egress sandbox and stamps the caller as its owner, which is reach into a run and at the host. The egress DECISION stays delegable; only the launch moved | ⛔ admin only |
 | the workspace-provider policy — `GET /workspace-providers` and `PUT /workspace-providers`: which git hosts (and which org paths on them) a run may clone from, which credential lanes it may use there, and the ephemeral/drive storage ceilings. Both verbs, because a provider's allowed addresses name the org's forge hosts and org paths — corporate topology, the same reason the `/site-config` reads above are gated. A member is told the provider KIND in a refusal, never the addresses | ⛔ admin only |
-| the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, the one model-access lane each may use, whether that credential is shared or captured per person, and the AWS access portal every person signs in against. Both verbs, for the sibling row's reason: the block names the org's model-provider choices and its identity provider. A member is served a narrower document instead — the `enabled`/`mechanism`/`credential_source` fields on `GET /setup/status`'s harness rows, which carry no portal URL | ⛔ admin only |
+| the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, the one model-access lane each may use, whether that credential is shared or captured per person, the AWS access portal every person signs in against, and (0.8) each agent's `default_provider` — the model provider a new run uses unless the person chooses another, which must be enabled for that agent and may be turned off (its runs are then refused, never moved). Both verbs, for the sibling row's reason: the block names the org's model-provider choices and its identity provider. A member is served a narrower document instead — the `enabled`/`mechanism`/`credential_source` fields on `GET /setup/status`'s harness rows, which carry no portal URL | ⛔ admin only |
+| the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin) | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
@@ -4510,6 +4511,45 @@ image builder has no SSH-clone wiring), `resolveWorkspaceImage`
 An agent CLI is present there only if the repo's own devcontainer installs it; an
 agent run on an image without one fails at the CLI, visibly, rather than being
 silently patched.
+
+## Claude sign-in image
+
+The `anthropic_subscription` model-provider kind (each person's own Claude
+subscription, captured by a container sign-in) needs a login sandbox that carries
+the real `claude` CLI. Wardyn does not publish that image — `agent-claude-code`
+bundles a vendor CLI that is not open-source and whose terms are not readable
+from the image (`deploy/images/THIRD-PARTY-TERMS.md`) — so every install that
+wants to offer the kind builds it locally and the daemon must be told where it
+is:
+
+```
+make agent-images-core            # builds wardyn/agent-claude-code:local (+ the other core images)
+```
+
+`make setup` (both containerized and host mode) already runs this and pins the
+result: the compose stack's `WARDYN_AGENT_IMAGES` default and `scripts/run-host.sh`'s
+own default both name `wardyn/agent-claude-code:local` for `claude-code`, so a
+stock `make setup` needs nothing further. Point at a different image (a
+registry mirror, a corp-built tag) with `WARDYN_AGENT_IMAGES='{"claude-code":"<ref>"}'`
+(compose: in `deploy/compose/.env`; host mode: exported before `run-host.sh`).
+
+**"Resolves" is two checks, not one.** A pin alone is not proof the image
+exists — this repo's own defaults pin it unconditionally, build or no build —
+so Wardyn also asks the wired Runner to confirm the pinned ref is actually
+present (the docker substrate's local image store; on Kubernetes, which pulls
+fresh per launch, the pin is trusted and a missing image surfaces at the login
+run itself, naming it). Until both hold, `PUT /model-providers` and
+`PUT /site-config` refuse a write that adds an `anthropic_subscription` provider
+that is on (E4): *"Claude subscriptions need the Claude Code sign-in image, which
+this install hasn't built yet."* A provider that is off, and one already stored,
+are never refused: if the image goes missing later (a prune, a daemon swap),
+turning the provider off, editing other providers and re-applying the site
+config all keep working.
+
+`GET /api/v1/setup/status` carries this as its own row, `claude_signin_image` —
+`info` once it resolves, `warn` with the fix above when it does not. It is
+never `blocking`: the kind is optional, so an install offering only API-key or
+Bedrock providers is never funneled back into setup over it.
 
 ## Rotating the age key
 

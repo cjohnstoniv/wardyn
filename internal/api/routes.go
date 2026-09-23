@@ -99,6 +99,8 @@ func (s *Server) routes() chi.Router {
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
 			//       (agent_providers.go)
+			//   mountModelProviderRoutes            split: 2 operatorOnly,
+			//       2 authenticated (model_providers_api.go)
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
 			//   the credential erase (this body)    securityOps
@@ -503,6 +505,7 @@ func (s *Server) routes() chi.Router {
 			// attached with no blank line, for the ratchet reason just above.
 			s.mountWorkspaceProviderRoutes(operatorOnly)
 			s.mountAgentProviderRoutes(operatorOnly)
+			s.mountModelProviderRoutes(r, operatorOnly)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /

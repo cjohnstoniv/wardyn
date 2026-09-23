@@ -136,6 +136,11 @@ type SetupStatus struct {
 	// redactSetupStatusForMember does not zero it — a bare count carries no
 	// PEM content, host name, or other detail members are barred from.
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
+	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
+	// member-safe shape (SetupModelProvider) — the same for every tier, so the
+	// member redaction has nothing to strip. Absent with no provider block,
+	// which is today.
+	ModelProviders []SetupModelProvider `json:"model_providers,omitempty"`
 }
 
 // SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
@@ -498,10 +503,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// non-fixable or purely-optional conditions so the user is never shown a red
 	// they cannot clear.
 	checks := []SetupCheck{
-		runnerCheck(rnr),
-		agentImageCheck(s.cfg.AgentImages),
-		envBuilderCheck(s.cfg.ImageBuilder != nil),
-		llmProviderCheck(llmDetail, bedrock),
+		runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages),
+		claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner),
+		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(llmDetail, bedrock),
 	}
 	// confinement_floor: the operator's configured floor vs what this runner
 	// can actually enforce — see confinementFloorCheck.
@@ -629,10 +633,12 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// Integrations reuses the single integrationsWithCapabilitiesUsing call
 		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
 		Integrations: integrations,
-		Harnesses:    setupHarnessTools(siteCfg, s.cfg.AgentImages),
-		LLMReady:     llmReady,
-		ModelAccess:  modelAccess,
-		SCMAccess:    s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
+		// The roster and the model providers it defaults to, side by side (one
+		// line: this function sits at its funlen ratchet).
+		Harnesses: setupHarnessTools(siteCfg, s.cfg.AgentImages), ModelProviders: s.setupModelProviders(ctx, siteCfg),
+		LLMReady:    llmReady,
+		ModelAccess: modelAccess,
+		SCMAccess:   s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),

@@ -267,8 +267,13 @@ var routeMatrix = map[string]classifiedRoute{
 	// choices and its IdP. The member tier is served a DIFFERENT, narrower
 	// document — SetupStatus.harnesses' enabled/mechanism/credential_source —
 	// which carries no start URL.
-	"GET /api/v1/agent-providers":      {class: classAdmin},
-	"PUT /api/v1/agent-providers":      {class: classAdmin},
+	"GET /api/v1/agent-providers": {class: classAdmin},
+	"PUT /api/v1/agent-providers": {class: classAdmin},
+	// Model providers (0.8): gateway addresses, the AWS access portal and
+	// account pins. SUPER for the agent roster's reason; the member tier is
+	// served SetupStatus.model_providers instead, which carries none of them.
+	"GET /api/v1/model-providers":      {class: classAdmin},
+	"PUT /api/v1/model-providers":      {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":    {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}": {class: classAdmin},
 	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
@@ -473,6 +478,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/secrets/{name}": {class: classMember},
 	"GET /api/v1/secrets":           {class: classMember},
 	"GET /api/v1/setup/status":      {class: classMember},
+
+	// Each person's own model-provider credential (0.8): the same self-service
+	// shape, written into the caller's own namespace only. Who may reach a
+	// given provider is model_provider_credentials_test.go's job.
+	"PUT /api/v1/model-providers/{id}/credential":    {class: classMember},
+	"DELETE /api/v1/model-providers/{id}/credential": {class: classMember},
+
 	// The workspace READS stay member-class: an operator-owned workspace — every
 	// pre-0048 row — is readable by any authenticated caller exactly as before.
 	// What 0048 adds is that another MEMBER's owned row 404s, which is the same
@@ -1160,12 +1172,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// enrolment token creates a credential, so it is born SUPER (= 39), while
 	// the device inventory and revoke are the /tokens pair's twins and land on
 	// the security tier (= 26 SEC). CS-5 added the credential erase, which
-	// only subtracts, on the security tier (= 27 SEC). A route silently
-	// reclassified in the table above would still pass every probe — it would
-	// just be enforcing the WRONG tier, exactly the drift the per-route loop
-	// cannot see.
-	if sec != 27 || super != 39 {
-		t.Errorf("tier split = %d security / %d admin, want 27 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the credential erase, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	// only subtracts, on the security tier (= 27 SEC). 0.8's model providers
+	// add GET/PUT /model-providers, SUPER for the agent roster's reason
+	// (= 41). A route silently reclassified in the table above would still
+	// pass every probe — it would just be enforcing the WRONG tier, exactly
+	// the drift the per-route loop cannot see.
+	if sec != 27 || super != 41 {
+		t.Errorf("tier split = %d security / %d admin, want 27 / 41 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the credential erase, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 

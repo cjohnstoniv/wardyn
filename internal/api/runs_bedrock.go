@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -603,7 +602,7 @@ func bedrockLaneSelectable(runAgent string, modelRun, subscriptionActive, haveSe
 // (internal/secretstore/pg), so the obvious For(owner).Get would serve the
 // ADMIN's bearer to a member who has stored nothing — the cross-principal
 // substitution per_user exists to refuse. For("").List is never consulted, so
-// the owner's own rows are all this can see. readAWSSSOBlob carries the
+// the owner's own rows are all this can see (ownSecret). readAWSSSOBlob carries the
 // identical dance for the identical reason; a per-user scope with no owner, or
 // one read inside the no-credential member preview, is ABSENT there and here.
 //
@@ -616,21 +615,16 @@ func bedrockLaneSelectable(runAgent string, modelRun, subscriptionActive, haveSe
 // grant, and surface as an upstream 403 naming neither the lane it picked nor
 // the empty secret it picked it on.
 func (s *Server) bedrockBearerFor(ctx context.Context, scope awsSSOScope) []byte {
-	st := s.cfg.Secrets
-	if st == nil || !scope.readsBearer() {
+	if s.cfg.Secrets == nil || !scope.readsBearer() {
 		return nil
 	}
+	var raw []byte
+	var err error
 	if scope.perUser {
-		if !scope.namespaced() || previewHidesOwnCredential(ctx) {
-			return nil
-		}
-		st = st.For(scope.owner)
-		own, err := st.List(ctx)
-		if err != nil || !slices.Contains(own, bedrockAPIKeySecret) {
-			return nil
-		}
+		raw, _, err = s.ownSecret(ctx, scope.owner, bedrockAPIKeySecret)
+	} else {
+		raw, err = s.cfg.Secrets.Get(ctx, bedrockAPIKeySecret)
 	}
-	raw, err := st.Get(ctx, bedrockAPIKeySecret)
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		return nil
 	}
