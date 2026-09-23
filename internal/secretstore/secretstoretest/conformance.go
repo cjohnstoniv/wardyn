@@ -23,7 +23,9 @@ import (
 // a usable store on each call (it need not be empty; the suite uses unique names).
 func RunConformance(t *testing.T, newStore func(t *testing.T) secretstore.Store) {
 	ctx := context.Background()
-	uniq := func(p string) string { return "conformance/" + p + "/" + uuid.NewString() }
+	// Names keep to the API's secretNameRE: a store may refuse anything else
+	// (vaultkv refuses a "/", which would change the Vault path's shape).
+	uniq := func(p string) string { return "conformance-" + p + "-" + uuid.NewString() }
 
 	t.Run("put_get_roundtrip_binary", func(t *testing.T) {
 		s := newStore(t)

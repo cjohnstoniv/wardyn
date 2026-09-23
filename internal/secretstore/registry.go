@@ -4,6 +4,8 @@
 package secretstore
 
 import (
+	"time"
+
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -12,12 +14,17 @@ import (
 
 // Deps are the platform primitives a secretstore.Store constructor may use. The
 // age identity is parsed (and the demo-key guard applied) by the control plane
-// before construction; an alternate (OpenBao/Vault/KMS) ignores the pg-specific
-// fields and reads its address/role from the env in its own constructor, the way
-// the docker substrate does (internal/runner/docker/register.go).
+// before construction, and is nil in store mode when no WARDYN_AGE_KEY is set.
+// External is the configured external store client, or nil: store mode writes
+// to it, and every mode reads the pointer rows it names (design §2.2).
 type Deps struct {
 	Pool        *pgxpool.Pool
 	AgeIdentity age.Identity
+	External    External
+	// ExternalTimeout is WARDYN_SECRET_STORE_TIMEOUT, the bound on each call
+	// to External (0: its 5 s default); a store-mode write is bounded at six
+	// times it.
+	ExternalTimeout time.Duration
 }
 
 // Constructor builds a Store from Deps.

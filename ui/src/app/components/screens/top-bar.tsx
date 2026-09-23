@@ -199,17 +199,18 @@ export function TopBar({
               </Link>
             </DropdownMenuItem>
             {/* Settings is the one home for connections — Host · Model provider ·
-                Providers · Your SSH keys. It replaced /integrations, which now
-                redirects here, and the barrier chip above points at it too.
-                Hidden on a SETTLED-but-unknown identity: /settings is the two-click
-                route to the operator-only Model-provider Connect/Disconnect card
-                and the Providers card into admin /providers, and the shell paints
-                no route at all in that state, so the link would be an invitation
-                to a blank page. Sign out below stays — it is the one control that
-                still works. */}
+                Providers · Your SSH keys. M-1b: /settings and /integrations are
+                both deleted (clean break) — an admin tier lands on
+                /admin/settings, a member on their own /account. Hidden on a
+                SETTLED-but-unknown identity: this is the two-click route to the
+                operator-only Model-provider Connect/Disconnect card and the
+                Providers card into /admin/providers, and the shell paints no
+                route at all in that state, so the link would be an invitation
+                to a blank page. Sign out below stays — it is the one control
+                that still works. */}
             {!(meta.resolved && !meta.identityResolved) && (
               <DropdownMenuItem asChild>
-                <Link to="/settings">
+                <Link to={meta.role === "member" ? "/account" : "/admin/settings"}>
                   <Settings className="size-4" /> Settings
                 </Link>
               </DropdownMenuItem>

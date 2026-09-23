@@ -104,8 +104,8 @@ describe("AppShell (the model-access strip)", () => {
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
-  it("is withheld on /settings for an OPERATOR, which already mounts the same pane", async () => {
-    renderShellAt("/settings", { ...MEMBER_WITH_DYING_SESSION, operator: true, role: "admin" });
+  it("is withheld on /admin/settings for an OPERATOR, which already mounts the same pane", async () => {
+    renderShellAt("/admin/settings", { ...MEMBER_WITH_DYING_SESSION, operator: true, role: "admin" });
     await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
     await waitFor(() => expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull());
   });
@@ -113,8 +113,8 @@ describe("AppShell (the model-access strip)", () => {
   // …and the member it does not: the Settings card's AWS button is
   // `disabled={!operator}` there, so hiding the strip would strand exactly the
   // person the refusal sentence sends to that page.
-  it("stays for a MEMBER on /settings", async () => {
-    renderShellAt("/settings", MEMBER_WITH_DYING_SESSION);
+  it("stays for a user on /account", async () => {
+    renderShellAt("/account", MEMBER_WITH_DYING_SESSION);
     expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 
