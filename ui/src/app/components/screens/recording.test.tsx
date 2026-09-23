@@ -290,6 +290,25 @@ describe("RecordingScreen", () => {
     expect(screen.queryByTestId("player")).not.toBeInTheDocument();
   });
 
+  // #876 — a run opened FROM /admin/recordings stays in the Admin view: the
+  // card's "Open run" link used to be hard-coded to the User-view path, so
+  // clicking it left the Admin view (and refused an admin-only SSO token
+  // outright). Mounted at /admin/recordings it must go through runPath to
+  // /admin/runs/:id; the /runs/{id} case above (a User-view mount) is the
+  // negative control.
+  it("/admin/recordings: 'Open run' goes to /admin/runs/:id (#876)", async () => {
+    listRunsMock.mockResolvedValue(page([recorded("run_1", { task: "ship the fix" })]));
+    render(
+      <MemoryRouter initialEntries={["/admin/recordings"]}>
+        <RecordingScreen />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("ship the fix");
+    const link = screen.getByRole("link", { name: /open run/i });
+    expect(link).toHaveAttribute("href", "/admin/runs/run_1");
+  });
+
   // ui-auditRec-4: the card used to be a single role="button" div with the
   // "Open run" <Link> nested INSIDE it (an ARIA nested-interactive
   // anti-pattern — a real, separately-focusable anchor inside another

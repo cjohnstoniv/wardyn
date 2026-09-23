@@ -49,6 +49,7 @@ import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit
 import { PageHeader } from "../wardyn/page-header";
 import { cn } from "../ui/utils";
 import { useSecurityOperator } from "../wardyn/operator-context";
+import { runPath, useConsoleMode, type ConsoleView } from "../wardyn/console-view";
 
 // Audit is append-only, so live-tailing is meaningful (unlike a poll on mutable
 // state). Kept modest — this is a background refresh, not a chat stream.
@@ -264,6 +265,7 @@ export function AuditScreen() {
   // unfiltered trail an admin does — reading and verifying it is that tier's
   // job. The "admin-only" empty state below is all this gates.
   const securityOperator = useSecurityOperator();
+  const view = useConsoleMode();
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -486,6 +488,7 @@ export function AuditScreen() {
           run={drillRun}
           loading={drillLoading}
           error={drillError}
+          view={view}
           onRetry={() => fetchDrillRun(runFilter)}
           onClear={() => setRunFilter("")}
         />
@@ -594,6 +597,7 @@ function DrillBanner({
   run,
   loading,
   error,
+  view,
   onRetry,
   onClear,
 }: {
@@ -601,6 +605,7 @@ function DrillBanner({
   run: AgentRun | undefined;
   loading: boolean;
   error: "not-found" | "failed" | null;
+  view: ConsoleView;
   onRetry: () => void;
   onClear: () => void;
 }) {
@@ -632,7 +637,7 @@ function DrillBanner({
       )}
       <div className="ml-auto flex items-center gap-4">
         <Link
-          to={`/runs/${encodeURIComponent(runId)}`}
+          to={runPath(view, runId)}
           className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
         >
           Open run <ArrowRight className="size-3.5" />
