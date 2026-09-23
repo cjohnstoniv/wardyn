@@ -4594,9 +4594,11 @@ upgrade across this release**:
 ```sh
 # 0. Take the Postgres dump (see Backup) AND confirm you hold the age key. The
 #    dump plus that key is the ONLY way back to an older wardynd afterwards.
-# 1. Stop EVERY older replica. An older binary still running keeps writing
-#    pre-envelope rows, which 0.8 refuses by name ("an older wardynd is still
-#    writing") — one-instance locking cannot see it under -allow-multi-instance.
+# 1. Stop EVERY older replica — one-instance locking cannot see it under
+#    -allow-multi-instance. An older binary still running keeps writing
+#    pre-envelope payloads, which 0.8 refuses by name ("an older wardynd is
+#    still writing"). A NEW name it wrote is converted at the next 0.8 restart;
+#    a name it REPLACED is overwritten in place and must be set again.
 # 2. Start 0.8 with the SAME WARDYN_AGE_KEY. The log says how many it converted:
 #    INFO wardynd: converted stored secrets to envelope v1; … secrets=7
 ```

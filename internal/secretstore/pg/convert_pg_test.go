@@ -12,11 +12,13 @@ import (
 	"bytes"
 	"context"
 	"strings"
-	"sync"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
 )
 
 // seedV0 writes a row the way every wardynd before envelope v1 did: an age
@@ -154,9 +156,11 @@ func TestPG_ConvertV0_AbortsOnAnUndecryptableRowAndCommitsNothing(t *testing.T) 
 	}
 }
 
-// TestPG_ConvertV0_IsSingleWriter: two replicas booting at once convert each
-// row exactly once between them — the loser waits on the advisory lock, then
-// finds nothing left.
+// TestPG_ConvertV0_IsSingleWriter pins the advisory lock itself, not just
+// the outcome (row FOR UPDATE alone would already convert each row once): while
+// another session holds db.SecretConvertLockKey, a conversion must be seen
+// WAITING on that lock in pg_locks, must not have converted anything, and must
+// finish only once the lock is released.
 func TestPG_ConvertV0_IsSingleWriter(t *testing.T) {
 	pool := rekeyDatabase(t)
 	ctx := context.Background()
@@ -164,30 +168,125 @@ func TestPG_ConvertV0_IsSingleWriter(t *testing.T) {
 	for _, f := range v0Fixture {
 		seedV0(t, pool, id, f.owner, f.name, f.value)
 	}
-	var wg sync.WaitGroup
-	counts := make([]int, 2)
-	errs := make([]error, 2)
-	for i := range counts {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			s, _ := New(pool, id)
-			counts[i], errs[i] = s.ConvertV0(ctx, id)
-		}()
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			t.Fatalf("concurrent ConvertV0: %v", err)
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.SecretConvertLockKey); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		n   int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		s, _ := New(pool, id)
+		n, err := s.ConvertV0(ctx, id)
+		done <- result{n, err}
+	}()
+
+	waiting := func() bool {
+		var n int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_locks
+			 WHERE locktype='advisory' AND NOT granted AND objsubid=1
+			   AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+			   AND classid::bigint=$1 AND objid::bigint=$2`,
+			db.SecretConvertLockKey>>32, db.SecretConvertLockKey&0xffffffff).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !waiting() {
+		if time.Now().After(deadline) {
+			t.Fatal("ConvertV0 never waited on db.SecretConvertLockKey — the conversion is not single-writer")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	select {
+	case r := <-done:
+		t.Fatalf("ConvertV0 returned (%d, %v) while another session held the conversion lock", r.n, r.err)
+	default:
+	}
+	for k, r := range rawRows(t, pool) {
+		if r.version != 0 {
+			t.Fatalf("%s converted while the lock was held elsewhere", k)
 		}
 	}
-	if counts[0]+counts[1] != len(v0Fixture) || (counts[0] != 0 && counts[1] != 0) {
-		t.Fatalf("concurrent conversions converted %v rows, want all %d by exactly one", counts, len(v0Fixture))
+
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
+	select {
+	case r := <-done:
+		if r.err != nil || r.n != len(v0Fixture) {
+			t.Fatalf("ConvertV0 after the lock was released = (%d, %v), want (%d, nil)", r.n, r.err, len(v0Fixture))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ConvertV0 did not finish after the lock was released")
+	}
+}
+
+// TestPG_OlderWardyndWritingAfterConversion covers the no-rolling-upgrade
+// window, with the exact statement a pre-envelope wardynd runs. A NEW name it
+// inserts lands as v0 and the next boot converts it. A name it REPLACES keeps
+// its v1 columns around an age payload (its upsert sets ciphertext alone),
+// which no conversion revisits: the read refuses it by name and says to set
+// the secret again — and setting it again is the fix.
+func TestPG_OlderWardyndWritingAfterConversion(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	id := mustIdentity(t)
 	s, _ := New(pool, id)
-	for _, f := range v0Fixture {
-		if got, err := s.For(f.owner).Get(ctx, f.name); err != nil || string(got) != f.value {
-			t.Errorf("Get %s = (%q, %v)", rowRef(f.owner, f.name), got, err)
+	if err := s.Put(ctx, "replaced", []byte("v1-value")); err != nil {
+		t.Fatal(err)
+	}
+	oldPut := func(name, value string) {
+		var buf bytes.Buffer
+		w, err := age.Encrypt(&buf, id.Recipient())
+		if err != nil {
+			t.Fatal(err)
 		}
+		_, _ = w.Write([]byte(value))
+		_ = w.Close()
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO secrets (owned_by, name, ciphertext)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (owned_by, name) DO UPDATE
+				SET ciphertext=$3, updated_at=now()`, "", name, buf.Bytes()); err != nil {
+			t.Fatalf("older wardynd's Put: %v", err)
+		}
+	}
+	oldPut("fresh", "old-binary-new-name")
+	oldPut("replaced", "old-binary-replacement")
+
+	if n, err := s.ConvertV0(ctx, id); err != nil || n != 1 {
+		t.Fatalf("restart's ConvertV0 = (%d, %v), want the one new name converted", n, err)
+	}
+	if got, err := s.Get(ctx, "fresh"); err != nil || string(got) != "old-binary-new-name" {
+		t.Errorf("a new name an older wardynd wrote = (%q, %v) after a restart, want it converted and readable", got, err)
+	}
+
+	got, err := s.Get(ctx, "replaced")
+	if err == nil {
+		t.Fatalf("a v1 row an older wardynd overwrote in place opened as %q", got)
+	}
+	for _, want := range []string{rowRef("", "replaced"), "an older wardynd is still writing", "set this secret again"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "old-binary-replacement") || strings.Contains(err.Error(), "v1-value") {
+		t.Error("error carries a value")
+	}
+	if err := s.Put(ctx, "replaced", []byte("set-again")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get(ctx, "replaced"); err != nil || string(got) != "set-again" {
+		t.Errorf("after setting it again = (%q, %v)", got, err)
 	}
 }
