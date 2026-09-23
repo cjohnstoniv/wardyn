@@ -757,7 +757,9 @@ for what is and is not built.
 
 **Minting a token.** `POST /api/v1/admin/devices/enrolment-tokens` (admin) mints
 a single-use token for one named device; it is returned once and stored only as
-a hash, so keep it wherever your MDM staging step reads it from. Deliver it as
+a hash, so keep it wherever your MDM staging step reads it from. It expires 72
+hours after it is minted (`deviceEnrolmentTokenTTL`, `internal/api/devices.go`),
+so mint it close to when the laptop will first boot. Deliver it as
 `WARDYN_ORG_ENROLMENT_TOKEN` in the laptop's `secret.env`, beside `WARDYN_ORG_URL`
 pointed at this control plane. `device.enrolment_token.create` is the audit row
 ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
@@ -780,15 +782,20 @@ audit table upward every 15s from a durable cursor; `wardyn_org_federation_lag`
 (present only when `WARDYN_ORG_URL` is set on THAT laptop — see
 [Monitoring](#monitoring) above) is the local rows the organisation has not
 yet acknowledged, and `/healthz`'s `org_federation.lag` on that same laptop is
-the human-readable twin. A laptop that never reaches this control plane climbs
-on both forever; one that was offline and reconnects drains and the gauge
-falls. A laptop that stops advancing for a reason OTHER than reachability —
-its batch is refused `400`/`422` — shows as a flat, non-zero lag with
-`device.audit.ingest` failure rows accruing on THIS side (`reason` is
-`invalid_row`, `chain_mismatch` or `org_run`; see AUDIT-ACTIONS.md's Devices
-table): the laptop's forwarder halts pushing on a refusal that definitive, and
-only a `wardynd` restart on the laptop retries it, so a flat lag with matching
-ingest failures is an operator page, not a network blip to wait out.
+the human-readable twin. Whenever forwarding is not advancing, lag grows at
+exactly the rate the laptop writes new audit rows, and it grows the same way
+whether the organisation is unreachable or has refused a batch: the forwarder
+re-reads the local head on every tick either way. Lag alone cannot tell the two
+apart; once forwarding resumes, the backlog drains and the gauge falls. What
+does tell them apart is a refusal's evidence. On THIS side, each refused batch
+writes `device.audit.ingest` failure rows (`reason` is `invalid_body` or
+`batch_too_large` at `400`/`413`, `invalid_row` at `400`, `chain_mismatch` or
+`org_run` at `422`; see AUDIT-ACTIONS.md's Devices table). On the laptop,
+`wardynd` logs `forwarding is halted until wardynd restarts` at ERROR. An
+unreachable organisation produces neither. The laptop's forwarder halts
+pushing on a refusal that definitive, and only a `wardynd` restart on the
+laptop retries it, so growing lag with matching ingest failures is an operator
+page, not a network blip to wait out.
 
 **A device credential authenticates nothing but that device's own ingest
 routes.** `deviceAuth` (`internal/api/devices_auth.go`) resolves the
@@ -796,7 +803,7 @@ routes.** `deviceAuth` (`internal/api/devices_auth.go`) resolves the
 `/api/v1/devices/{id}/*`; it never resolves to an operator or a member, so a
 stolen device credential cannot create a run, read a workspace or reach any
 other admin surface — it can only forge audit rows *about that one device*
-until it is revoked. See threat-model residuals #48–#50.
+until it is revoked. See threat-model residuals #50–#52.
 
 ## Multi-user: who can change what
 

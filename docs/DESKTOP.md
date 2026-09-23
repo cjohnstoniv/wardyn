@@ -38,13 +38,14 @@ RBAC, no shared docker socket). This tier sits below both.
   │      ├──▶ agent sandbox container               │
   │      └──▶ wardyn-proxy sidecar ──▶ egress       │
   │                                                 │
-  └──────────────────────┬──────────────────────────┘
-                         │ audit fanout (webhook, ?device=<serial>)
-                         ▼                             ▲
-                     org SIEM              org control plane (hybrid only,
-                                            WARDYN_ORG_URL) — enrol once,
-                                            then audit rows forward upward
-                                            every 15s from a durable cursor
+  └─────────┬────────────────────────────┬──────────┘
+            │ audit fanout               │ m′ only (WARDYN_ORG_URL +
+            │ (webhook,                  │ WARDYN_MEMBER_MODE): enrol
+            │ ?device=<serial>)          │ once, then audit rows
+            ▼                            │ forward every 15s from a
+        org SIEM                         │ durable cursor
+                                         ▼
+                                 org control plane
 ```
 
 Three properties define it:
@@ -289,18 +290,24 @@ an upward audit forwarder. It does not change where runs execute; that is the
 per-run placement work planned for 0.9
 ([docs/design/hybrid-0.8.md](design/hybrid-0.8.md)).
 
-**Enrolling.** An org admin mints a single-use token
-(`POST /api/v1/admin/devices/enrolment-tokens`) and MDM renders it into the
-laptop's `secret.env` as `WARDYN_ORG_ENROLMENT_TOKEN`, beside `WARDYN_ORG_URL`.
-At boot, with no device credential stored yet, `wardynd` posts the token to
-`WARDYN_ORG_URL` and stores the device credential the organisation returns in
-the laptop's age-encrypted secret store under the reserved name
-`wardyn-org-device-credential` — the same store `age.key` protects, never an
-MDM-delivered file. No credential and no token, or an enrolment call that fails
+**Enrolling.** Hybrid enrolment is done by `wardynd` at boot, not by
+`install.sh`: the installer's first-device enrolment (minting `age.key`, below)
+is a separate, earlier step. An org admin mints a single-use token
+(`POST /api/v1/admin/devices/enrolment-tokens`, valid for 72 hours) and MDM
+renders it into the laptop's `secret.env` as `WARDYN_ORG_ENROLMENT_TOKEN`, and
+sets `WARDYN_ORG_URL` alongside `WARDYN_MEMBER_MODE=true` (`wardynd` refuses
+`WARDYN_ORG_URL` without member mode). At boot, with no device credential
+stored yet, `wardynd` posts the token to `WARDYN_ORG_URL` and stores the
+device credential the organisation returns in the laptop's age-encrypted
+secret store under the reserved name `wardyn-org-device-credential` — the same
+store `age.key` protects, never an MDM-delivered file. No credential and no token, or an enrolment call that fails
 (the organisation unreachable included), **refuses the boot**; the service
 manager and the 300s converge tick retry it, the way an unreachable IdP already
-does for m′'s OIDC discovery. See `bootHybrid`
-(`cmd/wardynd/boot_hybrid.go`).
+does for m′'s OIDC discovery. A retry helps only while the token is unspent and
+unexpired: the organisation spends a token when it accepts it, so an enrolment
+whose answer never reached the laptop, or that failed on the organisation's side
+after that, leaves every later retry refused `401` until an admin mints a new
+token. See `bootHybrid` (`cmd/wardynd/boot_hybrid.go`).
 
 **Forwarding.** Once enrolled, `wardynd` pushes this laptop's own audit rows to
 the organisation's table, 500 at a time, on a 15s tick, from a durable cursor —
@@ -640,7 +647,7 @@ network; here is what each does when it cannot.
 | OIDC discovery at boot (m′ only) | **Fails boot, loudly, inside a 30s budget — and that is correct.** See below. |
 | First-device enrolment (`install.sh`) | **Needs the network, once.** It mints `age.key` by running `wardynd -gen-age-key`, so it needs that image — `ghcr.io/cjohnstoniv/wardynd:latest` unless `WARDYN_INSTALL_IMAGE` names another (see "The install lane"). This is inherent: enrolment cannot complete offline. Pre-seed that exact ref, or enrol on-network. |
 | Audit fanout to the SIEM | **Drops past the buffer.** At-most-once beyond 4096 events; see the ceiling above. This is the one that loses evidence rather than recovering. |
-| Hybrid enrolment to the org control plane (m′ only, `WARDYN_ORG_URL` set) | **Needs the network, once**, the same inherent cost as first-device enrolment above. A boot with no stored device credential and no reachable organisation refuses, naming the missing token or the failure; the service manager retries. Pre-enrol on-network. |
+| Hybrid enrolment to the org control plane (m′ only, `WARDYN_ORG_URL` set) | **Needs the network, once** — a separate step from the `install.sh` row above: `wardynd` does it at boot, reaching the organisation rather than an image registry. A boot with no stored device credential and no reachable organisation refuses, naming the missing token or the failure; the service manager retries, which helps only while the token is unspent and inside its 72 hours — a spent or expired token needs an admin to mint a new one. Enrol on-network. |
 | Audit forwarding to the org control plane, once enrolled | **Buffered, not dropped.** Rows accrue past the durable local cursor and `/healthz`'s `org_federation.lag` (and `wardyn_org_federation_lag`) grows; nothing is lost, because the org path is at-least-once, unlike the SIEM row above. The backlog drains once the organisation is reachable again. |
 | Runs, once the organisation has revoked this device | **Fails closed, deliberately.** Every run-creating path answers `503` naming re-enrolment, the organisation reachable or not — a run substituting local execution for an org-refused device would be the placement-substitution mistake this tier does not make. See [Enrolling into an org control plane](#enrolling-into-an-org-control-plane). |
 

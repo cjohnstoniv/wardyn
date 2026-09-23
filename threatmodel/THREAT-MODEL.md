@@ -52,7 +52,7 @@ invitation, not an embarrassment.
 | **Compromised single runner node** | Root on one runner host; tries lateral movement to control plane, other tenants' sandboxes, or the secret store. | ⛔ Untrusted after compromise; blast-radius containment target. |
 | **Platform operator / SRE (super admin)** | Admin of the control plane (`admin`; `isOperator`). | 🟢 Trusted. Out of scope as an adversary in v1 (insider-admin threat = future hardening). |
 | **Security admin (`security_admin`, v0.7)** | The SECOND admin tier — **beside** the super admin, not below it (`internal/auth/oidc`'s `RoleSecurityAdmin`; the `securityOps` router group, admitted by `isSecurityOperator`). Governs the deployment's security posture: approval decisions of any kind on any run, audit read/export and chain verify, capability-grant CRUD and the enforcement switches, governance profiles, session/token revocation, workspace egress writes, and — through `ownsRunOrAdmin` — `POST /runs/{id}/kill` on a run they do not own. Deliberately CANNOT reach INTO a run: no attach ticket, no cookie attach lane, no take-over (`ownsRunOrSuperAdmin`), SSH keys stamped `member`, and no host-wide act such as `POST /api/v1/admin/sandboxes/sweep`. Capability-BOUNDED exactly like a member — `capAllowed`/`capGranted` exempt `isOperator` only, so no grant kind can widen this tier. | 🟡 Trusted for governance; untrusted for run-reach, credential material and the host. The separation is real but partial — residual #14 states what it does and does not separate. |
-| **Enrolled hybrid laptop (device, v0.8)** | Not a human — a member-mode laptop (topology m′) that has enrolled with an org control plane and holds a `wdd_`-prefixed device credential (issue #103). `deviceAuth` (`internal/api/devices_auth.go`) resolves that bearer to a device identity ONLY, scoped ONLY to `/api/v1/devices/{id}/*` (push its own audit rows, heartbeat) — it is never a caller `isOperator` or `isMember` admits anywhere else. | 🟡 Authenticated, narrowly trusted, self-reporting. Trusted to submit ITS OWN audit rows under a chain the organisation verifies on ingest; not trusted for completeness of what it chose to send, and not an operator or member principal on any other route. Residuals #48–#50 state the limits. |
+| **Enrolled hybrid laptop (device, v0.8)** | Not a human — a member-mode laptop (topology m′) that has enrolled with an org control plane and holds a `wdd_`-prefixed device credential (issue #103). `deviceAuth` (`internal/api/devices_auth.go`) resolves that bearer to a device identity ONLY, scoped ONLY to `/api/v1/devices/{id}/*` (push its own audit rows, heartbeat) — it is never a caller `isOperator` or `isMember` admits anywhere else. | 🟡 Authenticated, narrowly trusted, self-reporting. Trusted to submit ITS OWN audit rows under a chain the organisation verifies on ingest; not trusted for completeness of what it chose to send, and not an operator or member principal on any other route. Residuals #50–#52 state the limits. |
 
 ---
 
@@ -1878,7 +1878,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     asked for CC1" from "CC1 is what today's runner had to offer," which an
     `enforced` value of CC1 alone cannot say on its own.
 
-48. **A device's self-reported audit rows are LINK-verified, not
+50. **A device's self-reported audit rows are LINK-verified, not
     COMPLETENESS-verified (issue #103, hybrid enrolment).** `handleDeviceAuditIngest`
     (`internal/api/devices_auth.go`) recomputes each row's hash and refuses a
     batch that does not extend the device's recorded chain (`chain_mismatch`,
@@ -1894,37 +1894,48 @@ hiding them would repeat the failure mode we are designed to avoid.
     (`docs/AUDIT-ACTIONS.md`). That reset row is the evidence a completeness
     claim rests on — an org relying on a device's audit trail for what a
     developer did on their OWN laptop reads a reset row's absence as
-    continuity, never as proof nothing was deleted before the very first push.
+    continuity, never as proof that nothing was deleted from a tail the
+    organisation had not yet acknowledged (an offline backlog of any length
+    included; residual #52).
 
-49. **A device credential's blast radius is bounded to forging rows about
+51. **A device credential's blast radius is bounded to forging rows about
     itself, never to a run.** The `wdd_`-prefixed bearer `deviceAuth`
     (`internal/api/devices_auth.go`) resolves to a device identity ONLY,
     scoped to `/api/v1/devices/{id}/*` — it is never `isOperator` or
     `isMember`, so it cannot create, read or reach into a run, a workspace or
-    a secret. It is stored on the laptop the same way the age identity is:
-    under the reserved secret name `wardyn-org-device-credential`, age-encrypted
-    at rest, never delivered by MDM (`cmd/wardynd/boot_hybrid.go`). The
-    residual: a laptop compromised while enrolled lets an attacker push
-    fabricated `success`/`denied` rows attributed to that device — self-serving
-    audit noise, not a credential-mint or run-launch primitive — until an
-    admin revokes it (`DELETE /api/v1/admin/devices/{id}`), after which every
-    push and heartbeat 401s and no further row is ever accepted from it.
+    a secret. On the laptop it is a secret-store row under the reserved name
+    `wardyn-org-device-credential`, encrypted under the age identity
+    (`age.key`) through the same `loadOrCreateSecret` path as
+    `wardyn-signing-key`, and never delivered by MDM
+    (`cmd/wardynd/boot_hybrid.go`). That encryption is no boundary against
+    the developer: on m′ the member is root on the laptop (residual #26), can
+    read both `age.key` and the database, and so can always extract their own
+    device's credential. The residual is the same for every holder — that
+    developer, or an attacker on a laptop compromised while enrolled: they can
+    push fabricated `success`/`denied` rows attributed to that one device —
+    self-serving audit noise, not a credential-mint or run-launch primitive —
+    until an admin revokes it (`DELETE /api/v1/admin/devices/{id}`), after
+    which every push and heartbeat 401s and no further row is ever accepted
+    from it.
 
-50. **One audit chain per writer means a device's tail CAN be re-chained before
-    its first forward, undetectably.** §4.5's off-box-head rule — a chain
-    break is provable only once an independent witness holds the head hash a
-    later rewrite would have to match — applies per device here exactly as it
-    applies to the organisation's own table: the ORGANISATION becomes that
-    witness the moment it acknowledges a device's row, but for any row not yet
-    forwarded there is no witness at all. A member with root (m′, the same
-    actor residual #48 names) can delete and re-chain their laptop's local
-    table before the very first push ever leaves the box, and the result
-    verifies as a perfectly ordinary, perfectly clean chain the organisation
-    has no earlier head to contradict. This is why direction is load-bearing
-    (design decision D5, `docs/design/hybrid-0.8.md`): evidence flows toward
-    the party the developer cannot edit, and the residual is bounded to the
-    WINDOW before a row first crosses that boundary, never to a row already
-    acknowledged.
+52. **One audit chain per writer means any tail of a device's chain not yet
+    acknowledged CAN be re-chained, undetectably — an offline backlog of any
+    length included.** §4.5's off-box-head rule — a chain break is provable
+    only once an independent witness holds the head hash a later rewrite would
+    have to match — applies per device here exactly as it applies to the
+    organisation's own table: the ORGANISATION becomes that witness for a row
+    the moment it acknowledges it, and for any row not yet acknowledged there
+    is no witness at all. That window is open at every moment, not only before
+    the first push: once the organisation holds head H, a member with root
+    (m′, the same actor residual #50 names) can delete or re-chain the local
+    rows after H and push rows that link cleanly to H — ingest checks each
+    row's link and that seq strictly increases (`invalidFederatedRow`), never
+    that seqs are contiguous. A laptop kept offline holds its whole backlog in
+    that window for as long as it stays offline — days, not one 15s tick. This
+    is why direction is load-bearing (design decision D5,
+    `docs/design/hybrid-0.8.md`): evidence flows toward the party the developer
+    cannot edit, and the residual is bounded per row to the time before that
+    row is acknowledged: an acknowledged row is witnessed.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

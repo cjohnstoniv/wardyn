@@ -4,21 +4,22 @@ Status: **Phase 0 decided, 2026-09-19** — O1 `m′`-at-org, O2 offline runs co
 durable evidence, O3 one audit chain per writer, O4 no placement field in Phase 1, O5
 drive-as-source as Phase 3a; the defaults and their reasons are in
 [0.8/PLAN.md](0.8/PLAN.md) § B, and Phase 1 is on the `0.8.0` milestone. Written in 0.7.2 as
-research; built in nothing yet. This is the brief behind
+research; in 0.8, only rung 3's enrolment and the one audit stream are built (see the
+owner ruling below), and everything else here is still a proposal. This is the brief behind
 [ROADMAP.md](../../ROADMAP.md)'s "Also new for 0.8: hybrid local + remote" row. Every
 claim about today's tree is anchored to the file and line it came from, at
 `feat/v0.7.2`; every claim about tomorrow is marked as a decision, an option or an
 open question, and none of it is code.
 
-**Owner ruling, 2026-09-23: the full rollout below moves to 0.9.** 0.8 ships only the
-first rung of §2.2's ladder — desktop enrolment to a remote control plane and the one
+**Owner ruling, 2026-09-23: the full rollout below moves to 0.9.** 0.8 ships only
+rung 3 of §2.2's ladder (desktop enrolment to a remote control plane) and the one
 audit stream (issues #102, #103, #106) — never per-run placement (§6), the disk link
 (§7), or a laptop's runs deciding anywhere but locally. Rungs 4 and 5 and the
 placement issues #107–#117 (except #115), T-27 (#687) and #475 are 0.9.0 work; see
 [ROADMAP.md](../../ROADMAP.md)'s milestone table. What DID ship, and is no longer
 this brief's proposal but its build: `docs/DESKTOP.md`'s "Enrolling into an org
 control plane", `docs/OPERATIONS.md`'s "Managed laptops", and
-[THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) residuals #48–#50, all written
+[THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) residuals #50–#52, all written
 against the shipped code rather than this design's projection of it.
 
 The shape of the ask, in one sentence: **the org runs the control plane on its
