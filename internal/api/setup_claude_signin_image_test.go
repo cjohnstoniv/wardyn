@@ -5,9 +5,21 @@ package api
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
+
+// imageCheckErrRunner is the production k8s shape: the wired Orchestrator
+// always implements runner.ImageChecker, and answers an error when no
+// substrate can check (a k8s-only install) or the Docker daemon is unreachable.
+type imageCheckErrRunner struct{ *fakeRunner }
+
+func (imageCheckErrRunner) ImagePresent(context.Context, string) (bool, error) {
+	return false, errors.New("orchestrator: no wired substrate supports image presence checks")
+}
 
 func TestClaudeSignInImageResolves(t *testing.T) {
 	ctx := context.Background()
@@ -21,7 +33,15 @@ func TestClaudeSignInImageResolves(t *testing.T) {
 	t.Run("pinned with no ImageChecker Runner is trusted", func(t *testing.T) {
 		images := map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
 		if !claudeSignInImageResolves(ctx, images, &fakeRunner{}) {
-			t.Fatal("a pin must be trusted when the wired Runner cannot confirm local presence (k8s)")
+			t.Fatal("a pin must be trusted when the wired Runner cannot confirm local presence")
+		}
+	})
+
+	t.Run("pinned and the presence check errors (k8s) is trusted, unverified", func(t *testing.T) {
+		images := map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
+		st := resolveClaudeSignInImage(ctx, images, imageCheckErrRunner{&fakeRunner{}})
+		if !st.resolved || st.verified {
+			t.Fatalf("state = %+v, want resolved and unverified: an inconclusive check must not refuse every subscription write", st)
 		}
 	})
 
@@ -72,7 +92,7 @@ func TestClaudeSignInImageCheck(t *testing.T) {
 		}
 	})
 
-	t.Run("pinned and confirmed present is ok", func(t *testing.T) {
+	t.Run("pinned and confirmed present is info", func(t *testing.T) {
 		ref := "wardyn/agent-claude-code:local"
 		rnr := &imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{ref: true}}
 		chk := claudeSignInImageCheck(ctx, map[string]string{"claude-code": ref}, rnr)
@@ -96,14 +116,18 @@ func TestClaudeSignInImageCheck(t *testing.T) {
 		}
 	})
 
-	t.Run("pinned with an unverifiable Runner (k8s) is info, not a false ok", func(t *testing.T) {
-		ref := "wardyn/agent-claude-code:local"
-		chk := claudeSignInImageCheck(ctx, map[string]string{"claude-code": ref}, &fakeRunner{})
-		if chk.Status != "info" {
-			t.Fatalf("status = %q, want info", chk.Status)
-		}
-		if !strings.Contains(chk.Detail, "cannot confirm") {
-			t.Errorf("detail does not disclose the check is unverified: %q", chk.Detail)
-		}
-	})
+	for name, rnr := range map[string]runner.Runner{
+		"no ImageChecker":               &fakeRunner{},
+		"a presence check errors (k8s)": imageCheckErrRunner{&fakeRunner{}},
+	} {
+		t.Run("pinned and "+name+" is info that says it is unverified", func(t *testing.T) {
+			chk := claudeSignInImageCheck(ctx, map[string]string{"claude-code": "wardyn/agent-claude-code:local"}, rnr)
+			if chk.Status != "info" {
+				t.Fatalf("status = %q, want info", chk.Status)
+			}
+			if !strings.Contains(chk.Detail, "cannot confirm") {
+				t.Errorf("detail does not disclose the check is unverified: %q", chk.Detail)
+			}
+		})
+	}
 }

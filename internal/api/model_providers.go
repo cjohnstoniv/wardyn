@@ -11,7 +11,6 @@ package api
 
 import (
 	"cmp"
-	"context"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -23,7 +22,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -233,22 +231,38 @@ func validateModelProviders(p *types.ModelProviders) error {
 }
 
 // validateModelProviderImagePrereqs is the E4 refusal (multi-provider design
-// 2.2, 5.2 E4): an anthropic_subscription provider is refused unless the
-// Claude sign-in image resolves (setup_claude_signin_image.go). Kept OUT of
-// validateModelProviders, which stays pure and needs no server state — this
-// check needs the boot agent-image map and the wired Runner, exactly the
-// reason validateAgentProviders is its own call at each write door instead of
-// living inside validateSiteConfig (see that function's doc).
-func validateModelProviderImagePrereqs(ctx context.Context, p *types.ModelProviders, images map[string]string, rnr runner.Runner) error {
-	if p == nil {
-		return nil
-	}
-	for _, mp := range p.Providers {
-		if mp.Kind == types.ModelProviderAnthropicSubscription && !claudeSignInImageResolves(ctx, images, rnr) {
-			return fmt.Errorf(mp400SignInImage, mp.ID)
-		}
+// 2.2, 5.2 E4): a write that introduces an anthropic_subscription provider is
+// refused while the Claude sign-in image does not resolve
+// (setup_claude_signin_image.go). Only introducing one is refused — see
+// introducedSubscription. Kept OUT of validateModelProviders, which stays pure
+// and needs no server state: this check needs the stored block and the image
+// answer, which each door takes itself (Server.claudeSignInImageOK).
+func validateModelProviderImagePrereqs(block, stored *types.ModelProviders, imageResolves bool) error {
+	if id := introducedSubscription(block, stored); id != "" && !imageResolves {
+		return fmt.Errorf(mp400SignInImage, id)
 	}
 	return nil
+}
+
+// introducedSubscription names the first anthropic_subscription provider in
+// block that is on and was not already stored with that kind; "" when there is
+// none. A provider that is off, and one already stored, are never E4's: turning
+// one off is the incident switch, and a stored one must not wedge every later
+// save of this document (an edit to another provider, a console save, the MDM
+// file deploy/desktop re-applies on every boot) once the image goes missing.
+func introducedSubscription(block, stored *types.ModelProviders) string {
+	if block == nil {
+		return ""
+	}
+	for _, p := range block.Providers {
+		if p.Kind != types.ModelProviderAnthropicSubscription || p.Disabled {
+			continue
+		}
+		if prior, ok := modelProviderByID(stored, p.ID); !ok || prior.Kind != p.Kind {
+			return p.ID
+		}
+	}
+	return ""
 }
 
 // validateProviderAddress holds BaseURL to the seven rules the boot gateway

@@ -711,14 +711,11 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}
-	if err := validateModelProviderImagePrereqs(r.Context(), cfg.ModelProviders, s.cfg.AgentImages, s.cfg.Runner); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
-		return
-	}
 	if err := validateSiteConfig(cfg); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}
+	imageOK := s.claudeSignInImageOK(r.Context(), cfg.ModelProviders)
 	// SEAM-1: serializes this read-modify-write (it carries the STORED
 	// Integrations forward from its own read, below) against the three
 	// integration-write handlers' own RMWs on the same document
@@ -768,6 +765,12 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// After the carry-forward: the roster's defaults are checked against the
 	// providers this document will actually hold, whichever side was named.
 	if err := validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
+	// E4 against the stored block: this door is the one re-applied on every
+	// boot, so a subscription it already holds must never be refused here.
+	if err := validateModelProviderImagePrereqs(cfg.ModelProviders, existing.ModelProviders, imageOK); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}

@@ -62,7 +62,9 @@ func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request)
 // If-Match is optional optimistic concurrency, as on the sibling blocks.
 // Removing a provider, or unticking the harness it is the default for, is
 // refused while the agent roster names it — the admin chooses another default
-// first. Turning one off is not: that is the incident switch.
+// first. Turning one off is not: that is the incident switch. Adding a Claude
+// subscription is refused until its sign-in image resolves (E4); keeping or
+// turning off one already stored never is.
 //
 //	PUT /api/v1/model-providers
 func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request) {
@@ -76,10 +78,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	ctx := r.Context()
-	if err := validateModelProviderImagePrereqs(ctx, block, s.cfg.AgentImages, s.cfg.Runner); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid model providers: "+err.Error())
-		return
-	}
+	imageOK := s.claudeSignInImageOK(ctx, block)
 	// SEAM-1, handlePutAgentProviders's reason: the same singleton document.
 	s.siteConfigMu.Lock()
 	defer s.siteConfigMu.Unlock()
@@ -94,6 +93,10 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	}
 	if msg := stillDefaultRefusal(existing.AgentProviders, block); msg != "" {
 		writeError(w, http.StatusBadRequest, "invalid model providers: "+msg)
+		return
+	}
+	if err := validateModelProviderImagePrereqs(block, existing.ModelProviders, imageOK); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid model providers: "+err.Error())
 		return
 	}
 	assignModelProviderUIDs(block, existing.ModelProviders)

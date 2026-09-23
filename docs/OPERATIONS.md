@@ -4506,9 +4506,12 @@ so Wardyn also asks the wired Runner to confirm the pinned ref is actually
 present (the docker substrate's local image store; on Kubernetes, which pulls
 fresh per launch, the pin is trusted and a missing image surfaces at the login
 run itself, naming it). Until both hold, `PUT /model-providers` and
-`PUT /site-config` refuse to add or keep an `anthropic_subscription` provider
-(E4): *"Claude subscriptions need the Claude Code sign-in image, which this
-install hasn't built yet."*
+`PUT /site-config` refuse a write that adds an `anthropic_subscription` provider
+that is on (E4): *"Claude subscriptions need the Claude Code sign-in image, which
+this install hasn't built yet."* A provider that is off, and one already stored,
+are never refused: if the image goes missing later (a prune, a daemon swap),
+turning the provider off, editing other providers and re-applying the site
+config all keep working.
 
 `GET /api/v1/setup/status` carries this as its own row, `claude_signin_image` —
 `info` once it resolves, `warn` with the fix above when it does not. It is

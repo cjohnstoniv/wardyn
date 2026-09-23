@@ -32,9 +32,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   must be pinned, and, when the wired Runner can confirm its local image store (the Docker
   substrate), the pinned ref must actually be present — a pin alone was not proof of a build, since
   the compose/run-host defaults already bake one in unconditionally. `PUT /model-providers` and
-  `PUT /site-config` refuse to add or keep an `anthropic_subscription` provider until both hold, and
-  `GET /setup/status` carries the state as its own `claude_signin_image` row (never blocking — the
-  kind is optional). See `docs/OPERATIONS.md` § Claude sign-in image.
+  `PUT /site-config` refuse a write that adds an `anthropic_subscription` provider that is on until
+  both hold — one that is off, or already stored, is never refused, so the off switch and every other
+  save keep working if the image later goes missing — and `GET /setup/status` carries the state as
+  its own `claude_signin_image` row (never blocking — the kind is optional). See `docs/OPERATIONS.md`
+  § Claude sign-in image.
 
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -193,12 +194,38 @@ func TestModelProvidersPutKeepsDefaults(t *testing.T) {
 	}
 }
 
+const signInRef = "wardyn/agent-claude-code:local"
+
+// signInImageSrv is a server whose store holds stored, with the claude-code
+// image pinned to signInRef and rnr wired as its Runner; the fake store is
+// returned so a test can read what was saved.
+func signInImageSrv(t *testing.T, stored types.SiteConfig, rnr runner.Runner) (*Server, *fakeSiteConfigStore) {
+	t.Helper()
+	fake := &fakeSiteConfigStore{cfg: stored}
+	cfg := baseTestConfig(newHarness(t), fake)
+	cfg.AgentImages = map[string]string{"claude-code": signInRef}
+	cfg.Runner = rnr
+	return New(cfg), fake
+}
+
+// signInImageMissing is the Docker runner after the image went missing (a
+// prune, a daemon swap, an MDM file applied before the first build).
+func signInImageMissing() runner.Runner {
+	return &imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{}}
+}
+
+func subscriptionProvider(id string) types.ModelProvider {
+	return types.ModelProvider{ID: id, Kind: types.ModelProviderAnthropicSubscription,
+		Harnesses: []types.ProviderHarness{{Harness: "claude-code"}}}
+}
+
 // TestModelProvidersPutSubscriptionNeedsSignInImage is the E4 refusal (multi-
-// provider design 2.2, 5.2 E4): a PUT that adds/keeps an anthropic_subscription
+// provider design 2.2, 5.2 E4): a PUT that adds an anthropic_subscription
 // provider is refused until the Claude sign-in image resolves — proven live
-// against the write door, not just the pure validator.
+// against the write door, not just the pure validator — while one that is off,
+// or already stored, never is: the off switch and every other edit keep working
+// after the image goes missing.
 func TestModelProvidersPutSubscriptionNeedsSignInImage(t *testing.T) {
-	const ref = "wardyn/agent-claude-code:local"
 	body := `{"providers":[{"id":"claude-sub","kind":"anthropic_subscription","harnesses":[{"harness":"claude-code"}]}]}`
 
 	t.Run("no pin at all: refused", func(t *testing.T) {
@@ -215,11 +242,7 @@ func TestModelProvidersPutSubscriptionNeedsSignInImage(t *testing.T) {
 	})
 
 	t.Run("pinned but the Docker runner does not have it yet: refused", func(t *testing.T) {
-		h := newHarness(t)
-		cfg := baseTestConfig(h, &fakeSiteConfigStore{})
-		cfg.AgentImages = map[string]string{"claude-code": ref}
-		cfg.Runner = &imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{}}
-		srv := New(cfg)
+		srv, _ := signInImageSrv(t, types.SiteConfig{}, signInImageMissing())
 		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("a pin the daemon does not actually have must still be refused: PUT = %d; body=%s", w.Code, w.Body.String())
@@ -227,26 +250,82 @@ func TestModelProvidersPutSubscriptionNeedsSignInImage(t *testing.T) {
 	})
 
 	t.Run("pinned and present: accepted", func(t *testing.T) {
-		h := newHarness(t)
-		cfg := baseTestConfig(h, &fakeSiteConfigStore{})
-		cfg.AgentImages = map[string]string{"claude-code": ref}
-		cfg.Runner = &imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{ref: true}}
-		srv := New(cfg)
+		srv, _ := signInImageSrv(t, types.SiteConfig{},
+			&imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{signInRef: true}})
 		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
 		if w.Code != http.StatusOK {
 			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
 	})
 
-	t.Run("pinned with no way to verify locally (k8s): trusted, accepted", func(t *testing.T) {
-		h := newHarness(t)
-		cfg := baseTestConfig(h, &fakeSiteConfigStore{})
-		cfg.AgentImages = map[string]string{"claude-code": ref}
-		cfg.Runner = &fakeRunner{} // does not implement runner.ImageChecker
-		srv := New(cfg)
+	t.Run("pinned and the runner cannot confirm (k8s): trusted, accepted", func(t *testing.T) {
+		srv, _ := signInImageSrv(t, types.SiteConfig{}, imageCheckErrRunner{&fakeRunner{}})
 		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
 		if w.Code != http.StatusOK {
 			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a subscription that is off is never refused", func(t *testing.T) {
+		srv, fake := signInImageSrv(t, types.SiteConfig{}, signInImageMissing())
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken,
+			`{"providers":[{"id":"claude-sub","kind":"anthropic_subscription","disabled":true,"harnesses":[{"harness":"claude-code"}]}]}`)
+		if w.Code != http.StatusOK || !fake.putSeen.ModelProviders.Providers[0].Disabled {
+			t.Fatalf("PUT = %d, want 200 with the provider stored off; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a stored subscription never blocks an edit to another provider", func(t *testing.T) {
+		stored := types.SiteConfig{ModelProviders: providerBlock(subscriptionProvider("claude-sub"), keyProvider("anthropic", "claude-code"))}
+		srv, fake := signInImageSrv(t, stored, signInImageMissing())
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken,
+			`{"providers":[{"id":"claude-sub","kind":"anthropic_subscription","harnesses":[{"harness":"claude-code"}]},`+
+				`{"id":"anthropic","name":"Anthropic key","kind":"anthropic_api_key","harnesses":[{"harness":"claude-code"}]}]}`)
+		if w.Code != http.StatusOK || fake.putSeen.ModelProviders.Providers[1].Name != "Anthropic key" {
+			t.Fatalf("PUT = %d, want 200 with the edit saved; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a stored id changing kind to a subscription adds one: refused", func(t *testing.T) {
+		stored := types.SiteConfig{ModelProviders: providerBlock(keyProvider("claude-sub", "claude-code"))}
+		srv, _ := signInImageSrv(t, stored, signInImageMissing())
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "sign-in image") {
+			t.Fatalf("PUT = %d, want 400 with the E4 sentence; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// TestSiteConfigPutSubscriptionNeedsSignInImage is E4 at the site-config door:
+// refused when the document adds a subscription, never when it only carries a
+// stored one — console saves spread the GET document, and deploy/desktop
+// re-applies the MDM file on every boot.
+func TestSiteConfigPutSubscriptionNeedsSignInImage(t *testing.T) {
+	body := `{"scm_hosts":["github.com"],"model_providers":{"providers":[` +
+		`{"id":"claude-sub","kind":"anthropic_subscription","harnesses":[{"harness":"claude-code"}]}]}}`
+
+	t.Run("a new subscription, pinned but absent: refused", func(t *testing.T) {
+		srv, _ := signInImageSrv(t, types.SiteConfig{}, signInImageMissing())
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "sign-in image") {
+			t.Fatalf("PUT = %d, want 400 with the E4 sentence; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a new subscription, pinned and present: accepted", func(t *testing.T) {
+		srv, _ := signInImageSrv(t, types.SiteConfig{},
+			&imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{signInRef: true}})
+		if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body); w.Code != http.StatusOK {
+			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("an unrelated save carrying the stored subscription: accepted", func(t *testing.T) {
+		stored := types.SiteConfig{ModelProviders: providerBlock(subscriptionProvider("claude-sub"))}
+		srv, fake := signInImageSrv(t, stored, signInImageMissing())
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+		if w.Code != http.StatusOK || len(fake.putSeen.ScmHosts) != 1 {
+			t.Fatalf("PUT = %d, want 200 with the save landed; body=%s", w.Code, w.Body.String())
 		}
 	})
 }
