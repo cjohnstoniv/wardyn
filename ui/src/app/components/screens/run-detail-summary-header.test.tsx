@@ -483,6 +483,18 @@ describe("SummaryHeader — PENDING's own queued sentence (#125)", () => {
     expect(screen.getByText(CHIP_QUEUED).closest("[title]")).toHaveAttribute("title", PENDING_NO_DETAIL);
   });
 
+  // SF-25: a tooltip alone cannot be read on a touch device — the mock
+  // (packet-4.html state 3) shows the sentence as a visible line under the
+  // header, byte-exact, not only on the chip's `title`.
+  it("also renders the queued sentence as a visible line under the header, not only on the chip's title", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={pending({ status_detail: "" })} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(PENDING_NO_DETAIL)).toBeInTheDocument();
+  });
+
   it("a real stage line replaces the queued sentence the moment one lands", () => {
     renderHeader(
       <OperatorProvider operator={true}>

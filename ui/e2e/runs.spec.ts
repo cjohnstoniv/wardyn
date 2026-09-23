@@ -605,6 +605,10 @@ test.describe("Run header — PENDING's own queued sentence (#125)", () => {
     const queuedChip = header.getByText(CHIP_QUEUED, { exact: true });
     await expect(queuedChip).toBeVisible();
     await expect(header.getByTitle(PENDING_NO_DETAIL)).toBeVisible();
+    // SF-25: a title tooltip alone cannot be read on a touch device — the
+    // mock (packet-4.html state 3) shows the sentence as a visible line
+    // under the header, byte-exact, not only on the chip's title.
+    await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toBeVisible();
     expect(
       await queuedChip.evaluate((e) => e.scrollWidth <= e.clientWidth),
       "the chip's own text must never overflow — that is the whole point of the short register",
@@ -615,6 +619,7 @@ test.describe("Run header — PENDING's own queued sentence (#125)", () => {
     stage = { status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" };
     await expect(header.getByText(CHIP_WAITING_FOR_MACHINE)).toBeVisible({ timeout: 8_000 });
     await expect(header.getByText(CHIP_QUEUED, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toHaveCount(0);
   });
 });
 

@@ -140,6 +140,9 @@ export function SummaryHeader({
   // tooltip's sentence, never the chip's own truncatable text (max-w-[160px]
   // truncates the 42-character sentence to a fragment, the same failure this
   // chip's own doc comment already warns statusDetailChip exists to avoid).
+  // The sentence also rides a visible line below the bar (the `pendingQueued`
+  // block near the end of this component) — the title tooltip alone cannot
+  // be read on a touch device.
   const statusChip = pendingQueued
     ? CHIP_QUEUED
     : run.state === "STARTING" || run.state === "PENDING"
@@ -165,6 +168,7 @@ export function SummaryHeader({
   // (min-h, not h, below xl) only on widths narrower than this console's
   // primary target.
   return (
+    <>
     <div
       data-testid="run-summary-header"
       // overflow-hidden — the single-line xl+ row still floors near
@@ -434,5 +438,15 @@ export function SummaryHeader({
         />
       </div>
     </div>
+    {/* SF-25: PENDING_NO_DETAIL rode only the chip's `title` above, which a
+        touch device can never open — the mock (packet-4.html state 3) shows
+        this sentence as a visible line under the header, not a tooltip.
+        Byte-exact to PENDING_NO_DETAIL; the chip's own word stays "Queued". */}
+    {pendingQueued && (
+      <p data-testid="run-summary-secondary" className="border-b border-border bg-card px-4 py-1.5 text-body text-muted-foreground">
+        {PENDING_NO_DETAIL}
+      </p>
+    )}
+    </>
   );
 }
