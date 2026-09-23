@@ -38,10 +38,11 @@ func f287Sessions(t *testing.T) map[string]*http.Cookie {
 	}
 }
 
-// TestF287_EveryReadableRouteProjectsTheAuthoredBaseImage is the consumer-set
+// TestEveryReadableRouteProjectsTheAuthoredBaseImage is the consumer-set
 // sweep: NO route fed by getWorkspaceReadable may hand a non-full reader the
 // operator's authored base image.
-func TestF287_EveryReadableRouteProjectsTheAuthoredBaseImage(t *testing.T) {
+func TestEveryReadableRouteProjectsTheAuthoredBaseImage(t *testing.T) {
+	// ticket: F287
 	for name, session := range f287Sessions(t) {
 		t.Run(name, func(t *testing.T) {
 			srv, st := newTopologyWorkspaceServer(t, "")
@@ -83,11 +84,12 @@ func TestF287_EveryReadableRouteProjectsTheAuthoredBaseImage(t *testing.T) {
 	}
 }
 
-// TestF287_BuildKeepsWhatTheMemberNeeds is the counterfactual: the projection
+// TestBuildKeepsWhatTheMemberNeeds is the counterfactual: the projection
 // must not be satisfied by emptying the response. The BUILT image is the one the
 // member's own run executes and stays, exactly as image_ref stays on
 // GET /workspaces/{id}.
-func TestF287_BuildKeepsWhatTheMemberNeeds(t *testing.T) {
+func TestBuildKeepsWhatTheMemberNeeds(t *testing.T) {
+	// ticket: F287
 	const built = "ghcr.io/acme/ws-payments:built"
 	srv, st := newTopologyWorkspaceServer(t, "")
 	st.ws.ImageRef = built
@@ -109,8 +111,9 @@ func TestF287_BuildKeepsWhatTheMemberNeeds(t *testing.T) {
 	}
 }
 
-// TestF287_OwnerAndSuperStillSeeEverything: the projection is a READER rule.
-func TestF287_OwnerAndSuperStillSeeEverything(t *testing.T) {
+// TestOwnerAndSuperStillSeeEverything: the projection is a READER rule.
+func TestOwnerAndSuperStillSeeEverything(t *testing.T) {
+	// ticket: F287
 	const owner = "sub-ws-owner"
 	for _, tc := range []struct {
 		name    string

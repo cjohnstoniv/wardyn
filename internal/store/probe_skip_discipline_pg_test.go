@@ -32,6 +32,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 // storeProbeSkipMarker lets an operator ASSERT that this lane is fully
@@ -76,9 +78,11 @@ func storeSkipOrFatal(t *testing.T, pool *pgxpool.Pool, format string, args ...a
 // that stops being true, the tamper and splice probes can go back to reporting
 // `ok` while proving nothing.
 //
-// Its own name matches the skip floor scripts/test-report.sh applies to the pg
-// suite, so a lane that cannot even run THIS is caught by the tooling.
+// It calls testfloor.Mark(t, "pg"), the skip floor scripts/test-report.sh
+// applies to the pg suite, so a lane that cannot even run THIS is caught by
+// the tooling.
 func TestPG_ProbeF11_StoreLaneCannotSilentlySelfSkip(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	if !storeProbeMustNotSkip(t, pool) {
 		u, _ := url.Parse(os.Getenv("WARDYN_TEST_PG"))

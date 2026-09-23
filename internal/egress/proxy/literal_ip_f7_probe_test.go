@@ -29,6 +29,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -43,6 +44,7 @@ import (
 // (which never MITMs: grants nil, handleTestSiteConfigRedirect in
 // site_config_probe.go) reports "reached".
 func TestF7_LeafForLiteralIP_VerifiesAsIPSAN(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	certPEM, keyPEM := genTestCA(t)
 	ca, err := newCertAuthority(certPEM, keyPEM)
 	if err != nil {
@@ -75,6 +77,7 @@ func TestF7_LeafForLiteralIP_VerifiesAsIPSAN(t *testing.T) {
 // (the shape an egress-redirect To writes via substituteArtifactEgress, or
 // the probe run's []string{toHost}) is trusted straight through.
 func TestF7_LiteralIPTrust_RefusesOwnSubnetAndControlPlane(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	_, ownSubnet, _ := net.ParseCIDR("172.18.0.0/16")
 	controlPlane := net.ParseIP("172.18.0.2")
 	neighbour := "172.18.0.5" // e.g. postgres on wardyn-internal

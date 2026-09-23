@@ -40,6 +40,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -111,6 +112,7 @@ func sweep(t *testing.T, pool *pgxpool.Pool) store.AuditChainStatus {
 // not an edit, because the hash covers the stored jsonb, not the caller's
 // bytes (0047's "data -> embedded as jsonb").
 func TestPG_ProbeF11_RewrittenRowReportsExactSeq(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool)
 	ctx := context.Background()
@@ -196,6 +198,7 @@ func TestPG_ProbeF11_RewrittenRowReportsExactSeq(t *testing.T) {
 // byte-for-byte (OVERRIDING SYSTEM VALUE, triggers off so 0047 does not
 // re-chain it) so the shared table is whole again afterwards.
 func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool)
 	ctx := context.Background()
@@ -287,6 +290,7 @@ func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 // did not hold on the RC; rule 3 in auditChainWalk delivers it now, so this is
 // a GREEN regression pin.
 func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool)
 	ctx := context.Background()
@@ -344,6 +348,7 @@ func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 // commits after it returns. Measured, not assumed: with the lock in the trigger
 // that shape hangs in store.InsertAuditEvent until the go test timeout kills it.
 func TestPG_ProbeF11_UnlockedWriterDoesNotForkChain(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool) // only for the cleanup delete
 	ctx := context.Background()

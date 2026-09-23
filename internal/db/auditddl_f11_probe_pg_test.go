@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 func sqlState(err error) string {
@@ -89,6 +91,7 @@ func skipOrFatal(t *testing.T, mustNotSkip bool, format string, args ...any) {
 // probes can go back to reporting `ok` while proving nothing, which is the whole
 // finding.
 func TestPG_ProbeF11_LaneCannotSilentlySelfSkip(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 	var canCreateRole bool
@@ -107,6 +110,7 @@ func TestPG_ProbeF11_LaneCannotSilentlySelfSkip(t *testing.T) {
 }
 
 func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 
@@ -280,6 +284,7 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 // (ensureAuditTriggers), so this is a GREEN regression pin. The
 // trigger is put back afterwards by re-executing 0047 (idempotent DDL).
 func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 

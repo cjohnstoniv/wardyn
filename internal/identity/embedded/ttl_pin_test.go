@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 )
 
-// TestRenewU070_TokenTTLStaysShortAndExpiredIsRefused pins the invariant the
+// TestTokenTTLStaysShortAndExpiredIsRefused pins the invariant the
 // renew route exists to PRESERVE.
 //
 // The bug renew fixes — a run outliving its token loses every /internal/* call —
@@ -28,7 +28,8 @@ import (
 // It also asserts the other half: a token past its TTL really is refused. That is
 // what makes renewal load-bearing rather than decorative — if expiry were not
 // enforced, nothing would need renewing.
-func TestRenewU070_TokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
+func TestTokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
+	// ticket: U070
 	// The ceiling this design rests on. Renewal is the sanctioned way to outlive
 	// it; raising it is not.
 	const maxAcceptableTTL = time.Hour

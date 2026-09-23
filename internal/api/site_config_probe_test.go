@@ -25,6 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -216,6 +217,7 @@ func TestClassifyRedirectProbe_TimedOut(t *testing.T) {
 // for a request that was actually denied. -f must turn that HTTP error into a
 // curl failure (exit 22) that propagates out of the script unchanged.
 func TestRedirectProbeScript_HTTPErrorIsNotReached(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
 	}

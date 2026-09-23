@@ -62,10 +62,11 @@ func f341Admin(t *testing.T) *http.Cookie {
 	return ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
 }
 
-// TestF341_OwnerParamResolvesIdentityForms is the headline arm: an admin naming
+// TestOwnerParamResolvesIdentityForms is the headline arm: an admin naming
 // a member by EMAIL, or by a case-variant of their subject, must reach the same
 // row the member's own self-service call does.
-func TestF341_OwnerParamResolvesIdentityForms(t *testing.T) {
+func TestOwnerParamResolvesIdentityForms(t *testing.T) {
+	// ticket: F341
 	for _, form := range []string{"alice@corp.example", "ALICE", "alice"} {
 		t.Run(form, func(t *testing.T) {
 			sec := &memSecrets{m: map[string][]byte{}}
@@ -93,13 +94,14 @@ func TestF341_OwnerParamResolvesIdentityForms(t *testing.T) {
 	}
 }
 
-// TestF341_OwnerParamCaseCollision: an OIDC subject is opaque and
+// TestOwnerParamCaseCollision: an OIDC subject is opaque and
 // case-SENSITIVE, so a deployment may legitimately hold two that differ only by
 // case. An EXACT match must win outright, and a value that merely folds onto
 // both must be REFUSED rather than resolved to whichever the directory happened
 // to list first — guessing there writes a credential into the wrong human's
 // namespace, which is worse than the miss this finding is about.
-func TestF341_OwnerParamCaseCollision(t *testing.T) {
+func TestOwnerParamCaseCollision(t *testing.T) {
+	// ticket: F341
 	collision := []types.APIToken{
 		{ID: uuid.New(), Principal: "alice", Email: "alice@corp.example", CreatedAt: time.Now().UTC()},
 		{ID: uuid.New(), Principal: "ALICE", Email: "alice.other@corp.example", CreatedAt: time.Now().UTC()},
@@ -163,10 +165,11 @@ func TestF341_OwnerParamCaseCollision(t *testing.T) {
 	})
 }
 
-// TestF341_UnpairedEmailOwnerRefused: an email form that pairs to no principal
+// TestUnpairedEmailOwnerRefused: an email form that pairs to no principal
 // this deployment knows can only mint a namespace nothing reads. It must be
 // refused — never 204 with a success audit row.
-func TestF341_UnpairedEmailOwnerRefused(t *testing.T) {
+func TestUnpairedEmailOwnerRefused(t *testing.T) {
+	// ticket: F341
 	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodGet} {
 		t.Run(method, func(t *testing.T) {
 			sec := &memSecrets{m: map[string][]byte{}}
@@ -200,12 +203,13 @@ func TestF341_UnpairedEmailOwnerRefused(t *testing.T) {
 	}
 }
 
-// TestF341_CrossNamespaceDeleteThatRemovedNothingIsReported: the DELETE half's
+// TestCrossNamespaceDeleteThatRemovedNothingIsReported: the DELETE half's
 // own closure, and it needs no directory. An admin who names a namespace that
 // does not hold the row is told so, rather than being handed the 204 +
 // outcome=success that made the miss invisible. (A MEMBER's own delete keeps its
 // idempotent 204 — the no-existence-oracle posture is about members.)
-func TestF341_CrossNamespaceDeleteThatRemovedNothingIsReported(t *testing.T) {
+func TestCrossNamespaceDeleteThatRemovedNothingIsReported(t *testing.T) {
+	// ticket: F341
 	sec := &memSecrets{m: map[string][]byte{}}
 	h, srv := f341Server(t, sec, f341Alice())
 	admin := f341Admin(t)

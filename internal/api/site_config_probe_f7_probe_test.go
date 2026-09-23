@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -156,6 +157,7 @@ func f7ToScheme(to string) string {
 // hostOfForTest copy in site_config_noproxy_test.go, which skips the
 // ValidApprovedHost gate and therefore cannot see what the handler sees.
 func TestF7_RedirectProbeTo_Probe1DialsOnlyTheStoredTo(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	cases := []struct {
 		name         string
 		red          types.EgressRedirect
@@ -259,6 +261,7 @@ func TestF7_RedirectProbeTo_Probe1DialsOnlyTheStoredTo(t *testing.T) {
 // classifyDomain-parsable IPv6 — this test then fails on the first shape that
 // is not.
 func TestF7_IPv6LiteralTo_IsRefusedAtWriteOrBracketed(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	for _, to := range []string{"https://[fd00::1]:8443/", "[fd00::1]:8443", "fd00::1", "https://[fd00::1]"} {
 		t.Run(to, func(t *testing.T) {
 			cfg := types.SiteConfig{EgressRedirects: []types.EgressRedirect{{From: "ghcr.io", To: to}}}
@@ -297,6 +300,7 @@ func TestF7_IPv6LiteralTo_IsRefusedAtWriteOrBracketed(t *testing.T) {
 // Expected RED at fa910735 (H-2): probe 2's `-f` turns the 403 into a curl
 // failure, the `&& exit 250` is skipped, and the script exits 0.
 func TestF7_RedirectProbeScript_PublicHostHTTPErrorIsBypassNotReached(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
 	}
@@ -333,6 +337,7 @@ func TestF7_RedirectProbeScript_PublicHostHTTPErrorIsBypassNotReached(t *testing
 // no CONNECT), so the proxy is asked for the PUBLIC host, never the To
 // address named in --connect-to. Expected RED at fa910735.
 func TestF7_HTTPFrom_LiteralIPTo_EndToEndThroughScript(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
 	}

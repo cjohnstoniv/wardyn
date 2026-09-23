@@ -52,7 +52,7 @@ func r3bAuditDetail(t *testing.T, ev types.AuditEvent) string {
 	return data.Detail
 }
 
-// TestR3BLearnVerifyEgressAuditsEveryGiveUp is F146's pin.
+// TestLearnVerifyEgressAuditsEveryGiveUp is F146's pin.
 //
 // approvals_writeback.go's file header states the contract these functions
 // share and the rest of the package does not: FAIL SILENT BUT AUDITED. The
@@ -71,7 +71,8 @@ func r3bAuditDetail(t *testing.T, ev types.AuditEvent) string {
 // not-applicable conditions must STILL stay silent — a failure row on every
 // plain-run approval would drown the two that mean something — so this pins
 // both directions.
-func TestR3BLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
+func TestLearnVerifyEgressAuditsEveryGiveUp(t *testing.T) {
+	// ticket: R3B
 	t.Run("GetRun failure audits the miss", func(t *testing.T) {
 		h := newHarness(t)
 		runID, wsID := uuid.New(), uuid.New()

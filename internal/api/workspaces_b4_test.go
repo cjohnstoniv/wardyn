@@ -35,7 +35,7 @@ import (
 // quotes the operator's authored base-image coordinate verbatim in its FROM /
 // pull line — is projected by the reader's tier exactly as Log already is. The
 // other three Details are fixed prose about the host's configuration and stay
-// for every tier (TestF287_BuildKeepsWhatTheMemberNeeds pins that they do).
+// for every tier (TestBuildKeepsWhatTheMemberNeeds pins that they do).
 func TestB4F1_FailedBuildDetailIsTieredLikeTheLog(t *testing.T) {
 	const authored = "registry.corp.internal/base:1"
 	srv := &Server{}

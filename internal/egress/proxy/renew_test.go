@@ -86,12 +86,13 @@ func (c *renewCP) bearers() []string {
 
 func itoa(i int) string { return string(rune('0' + i)) }
 
-// TestRenewU070_RenewerRotatesTokenUsedByControlPlaneCalls is the proxy-side
+// TestRenewerRotatesTokenUsedByControlPlaneCalls is the proxy-side
 // counterfactual. It proves the renewed token actually REACHES the callers: the
 // decision sink must present the renewed bearer, not the startup one it was
 // constructed with. Before the change the sink captured the token string at
 // startup, so it presented the stale token forever and 401'd once the TTL lapsed.
-func TestRenewU070_RenewerRotatesTokenUsedByControlPlaneCalls(t *testing.T) {
+func TestRenewerRotatesTokenUsedByControlPlaneCalls(t *testing.T) {
+	// ticket: U070
 	cp := &renewCP{ttl: 2 * time.Second} // half-life 1s => renews promptly
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()
@@ -130,14 +131,15 @@ func TestRenewU070_RenewerRotatesTokenUsedByControlPlaneCalls(t *testing.T) {
 	}
 }
 
-// TestRenewU070_RenewerKeepsOldTokenWhenControlPlaneRefuses proves the loop is
+// TestRenewerKeepsOldTokenWhenControlPlaneRefuses proves the loop is
 // dumb and safe: when the control plane REFUSES a renew (a revoked or terminal
 // run gets 403), the renewer must not clobber the source with garbage or wedge —
 // it keeps the existing token. Authority lives on the control plane, never in
 // this loop. Since B5 the loop also STOPS on that 403 (the refusal is permanent
 // and the control plane has said so post-authentication), which the sibling test
 // below owns; what this one still pins is that the token is left intact.
-func TestRenewU070_RenewerKeepsOldTokenWhenControlPlaneRefuses(t *testing.T) {
+func TestRenewerKeepsOldTokenWhenControlPlaneRefuses(t *testing.T) {
+	// ticket: U070
 	cp := &renewCP{ttl: time.Hour, renewErr: http.StatusForbidden}
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()
@@ -304,14 +306,15 @@ func TestRenewB5_ASuccessfulRenewResetsTheGiveUpHorizon(t *testing.T) {
 	}
 }
 
-// TestRenewU070_ServerStartsRenewerAndShutdownStopsIt drives the REAL lifecycle
+// TestServerStartsRenewerAndShutdownStopsIt drives the REAL lifecycle
 // the sidecar uses: NewServer, then ListenAndServe on one goroutine and Shutdown
 // from another (exactly cmd/wardyn-proxy's shape). It proves the renewer actually
 // runs for a Server built the production way — not just when a test calls
 // runTokenRenewer directly — and that Shutdown stops it rather than leaking it.
 // Under -race this also pins the renewer's fields as set-once-in-NewServer:
 // starting it from ListenAndServe would race the read in Shutdown.
-func TestRenewU070_ServerStartsRenewerAndShutdownStopsIt(t *testing.T) {
+func TestServerStartsRenewerAndShutdownStopsIt(t *testing.T) {
+	// ticket: U070
 	cp := &renewCP{ttl: 2 * time.Second}
 	cpSrv := httptest.NewServer(cp.handler())
 	defer cpSrv.Close()
@@ -365,9 +368,10 @@ func TestRenewU070_ServerStartsRenewerAndShutdownStopsIt(t *testing.T) {
 	}
 }
 
-// TestRenewU070_RenewTokenParsesFreshTokenAndExpiry covers the wire contract in
+// TestRenewTokenParsesFreshTokenAndExpiry covers the wire contract in
 // isolation: the fields the control plane returns are the fields the loop reads.
-func TestRenewU070_RenewTokenParsesFreshTokenAndExpiry(t *testing.T) {
+func TestRenewTokenParsesFreshTokenAndExpiry(t *testing.T) {
+	// ticket: U070
 	cp := &renewCP{ttl: 30 * time.Minute}
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()

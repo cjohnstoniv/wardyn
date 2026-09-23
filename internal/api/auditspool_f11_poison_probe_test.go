@@ -38,7 +38,8 @@ func (r *rejectingRecorder) Record(ctx context.Context, ev types.AuditEvent) err
 	return r.fakeRecorder.Record(ctx, ev)
 }
 
-func TestProbeF11_SpoolPoisonLineDoesNotWedgeLaterLines(t *testing.T) {
+func TestSpoolPoisonLineDoesNotWedgeLaterLines(t *testing.T) {
+	// ticket: F11
 	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
 	sp, err := NewAuditSpool(path)
 	if err != nil {

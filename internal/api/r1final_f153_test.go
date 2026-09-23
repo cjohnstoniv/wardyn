@@ -77,7 +77,7 @@ func f153Scan(t *testing.T, profile *types.GovernanceProfile, active int) (*Serv
 	return srv, err
 }
 
-// TestF153_ScanLaneIsBoundByTheRunQuota is the reachable half of the residue.
+// TestScanLaneIsBoundByTheRunQuota is the reachable half of the residue.
 //
 // POST /workspaces/{id}/scan is mounted on the MEMBER group and handleScanWorkspace
 // authorizes owner-or-admin, so a WALLED MEMBER genuinely reaches this lane —
@@ -85,7 +85,8 @@ func f153Scan(t *testing.T, profile *types.GovernanceProfile, active int) (*Serv
 // answers a walled principal 403 at the door. The lane creates a run FOR that
 // member and read no limit at all: someone sitting at their max_concurrent_runs
 // cap could keep spawning scans, and each one carries a git-broker grant.
-func TestF153_ScanLaneIsBoundByTheRunQuota(t *testing.T) {
+func TestScanLaneIsBoundByTheRunQuota(t *testing.T) {
+	// ticket: F153
 	p := govProfile("two-at-a-time")
 	p.Limits = types.GovernanceLimits{MaxConcurrentRuns: 2}
 
@@ -105,11 +106,12 @@ func TestF153_ScanLaneIsBoundByTheRunQuota(t *testing.T) {
 	}
 }
 
-// TestF153_ScanLaneIgnoresDenyInteractive is the other half of the per-lane
+// TestScanLaneIgnoresDenyInteractive is the other half of the per-lane
 // decision: whether a lane opens an attachable session is STRUCTURAL, and a scan
 // run never is. Binding deny_interactive here would refuse a walled member's
 // workspace scan for a terminal nobody can open.
-func TestF153_ScanLaneIgnoresDenyInteractive(t *testing.T) {
+func TestScanLaneIgnoresDenyInteractive(t *testing.T) {
+	// ticket: F153
 	p := govProfile("no-terminals") // govProfile carries DenyInteractive:true
 	p.Limits = types.GovernanceLimits{DenyInteractive: true}
 	if _, err := f153Scan(t, p, 0); err != nil {
@@ -117,9 +119,10 @@ func TestF153_ScanLaneIgnoresDenyInteractive(t *testing.T) {
 	}
 }
 
-// TestF153_UnwalledPrincipalsThreadNothing is the counterfactual the guard must
+// TestUnwalledPrincipalsThreadNothing is the counterfactual the guard must
 // not be satisfied by refusing everyone: no assignment ⇒ Record Mode unchanged.
-func TestF153_UnwalledPrincipalsThreadNothing(t *testing.T) {
+func TestUnwalledPrincipalsThreadNothing(t *testing.T) {
+	// ticket: F153
 	srv, fr := f153RecordSrv(t, nil, 0)
 	if _, _, err := srv.launchRecordRun(govMemberCtx(nil, false),
 		"unwalled@corp.example", types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned}, "build", "build", false); err != nil {
@@ -130,13 +133,14 @@ func TestF153_UnwalledPrincipalsThreadNothing(t *testing.T) {
 	}
 }
 
-// TestF153_RecordRouteStaysOnTheOperatorTier pins the structural half the
+// TestRecordRouteStaysOnTheOperatorTier pins the structural half the
 // residue proved and the shipped comment denied. The finding's stated `actual`
 // ("a security_admin gets the session") is not reachable BECAUSE of this
 // mounting — if the route ever moves to securityOps, the guard above becomes
 // the only thing standing between that tier and an allow-all credentialed
 // sandbox, and this test is where that decision gets made rather than inherited.
-func TestF153_RecordRouteStaysOnTheOperatorTier(t *testing.T) {
+func TestRecordRouteStaysOnTheOperatorTier(t *testing.T) {
+	// ticket: F153
 	srv, st := newTopologyWorkspaceServer(t, "")
 	path := "/api/v1/workspaces/" + st.ws.ID.String() + "/record"
 	for _, tc := range []struct {

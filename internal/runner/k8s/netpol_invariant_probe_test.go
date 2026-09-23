@@ -51,6 +51,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 // probeCreate runs a full CreateSandbox on a fresh enforcing fake and returns
@@ -114,6 +115,7 @@ func probeHasPolicyType(np *networkingv1.NetworkPolicy, pt networkingv1.PolicyTy
 // second rule — and the selector really selects the agent pod even when
 // spec.Labels tries to override the reserved keys.
 func TestProbe_F9_AgentNetPolEgressPeerIsExactlyTheProxy(t *testing.T) {
+	testfloor.Mark(t, "k8s")
 	_, cs, spec, sb := probeCreate(t, func(s *runner.SandboxSpec) {
 		// Adversarial extras: attempt to un-select the agent from its own policy.
 		s.Labels[labelComponent] = componentProxy
@@ -200,6 +202,7 @@ func TestProbe_F9_AgentNetPolEgressPeerIsExactlyTheProxy(t *testing.T) {
 // else can use the credential-injecting proxy at the packet layer), and every
 // egress peer is an ipBlock that excludes the cloud-metadata address.
 func TestProbe_F9_ProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata(t *testing.T) {
+	testfloor.Mark(t, "k8s")
 	_, cs, spec, sb := probeCreate(t, nil)
 	wantAgent := wardynLabels(spec.RunID, componentAgent, nil)
 	wantProxy := wardynLabels(spec.RunID, componentProxy, nil)
@@ -264,6 +267,7 @@ func TestProbe_F9_ProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata(t *test
 // pod consumes it via secretKeyRef (never an inline Value), and no inline env
 // on either pod carries those values.
 func TestProbe_F9_ProxySecretsLiveOnlyInTheSecret(t *testing.T) {
+	testfloor.Mark(t, "k8s")
 	const token = "probe-run-token-7f3a9c"
 	const caKey = "-----BEGIN EC PRIVATE KEY-----\nPROBE-MITM-KEY-0xdeadbeef\n-----END EC PRIVATE KEY-----"
 	_, cs, spec, sb := probeCreate(t, func(s *runner.SandboxSpec) {
@@ -338,6 +342,7 @@ func TestProbe_F9_ProxySecretsLiveOnlyInTheSecret(t *testing.T) {
 // the agent, by reference. A driver that silently dropped it would satisfy the
 // no-inline-value loop while breaking every env_secret grant on this substrate.
 func TestProbe_F9_H1_AgentEnvSecretsAreAPIReadable(t *testing.T) {
+	testfloor.Mark(t, "k8s")
 	const secretVal = "ghp_probe_env_secret_value_1234567890"
 	_, cs, spec, sb := probeCreate(t, func(s *runner.SandboxSpec) {
 		// shape of resolveEnvSecretGrants' sandboxEnv[name] = string(val), after

@@ -273,10 +273,10 @@ func TestRekey_TwoNamespacesKeepDistinctPlaintexts(t *testing.T) {
 	}
 }
 
-// TestRekeyRejectsANonX25519Identity keeps the constructor's contract visible at
+// TestRekeyRejectsAnIdentityWithNoRecipient keeps the constructor's contract visible at
 // this seam: New derives the recipient from the identity, so an identity that
 // cannot produce one must fail here rather than mid-transaction.
-func TestRekeyRejectsANonX25519Identity(t *testing.T) {
+func TestRekeyRejectsAnIdentityWithNoRecipient(t *testing.T) {
 	pool := rekeyDatabase(t)
 	_, err := Rekey(context.Background(), pool, scryptOnlyIdentity{}, mustIdentity(t))
 	if err == nil {

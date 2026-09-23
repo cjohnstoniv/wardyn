@@ -68,7 +68,7 @@ func r3bJWKS(t *testing.T, extra ...string) (jwksURL, token string) {
 	return srv.URL, token
 }
 
-// TestR3BJWKSSurvivesAnUnrepresentableKey is F242's pin, and its scope is
+// TestJWKSSurvivesAnUnrepresentableKey is F242's pin, and its scope is
 // EXACTLY the dependency floor — not the broader property the commit that added
 // it claimed.
 //
@@ -101,7 +101,8 @@ func r3bJWKS(t *testing.T, extra ...string) (jwksURL, token string) {
 //
 // The `alg`-carrying variant is the case that already worked and is the control
 // for the second arm: it is why the bug was invisible on most IdPs.
-func TestR3BJWKSSurvivesAnUnrepresentableKey(t *testing.T) {
+func TestJWKSSurvivesAnUnrepresentableKey(t *testing.T) {
+	// ticket: R3B
 	ctx := context.Background()
 
 	verify := func(t *testing.T, extra ...string) error {

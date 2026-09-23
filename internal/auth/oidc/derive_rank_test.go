@@ -169,7 +169,7 @@ func TestDeriveRoleDefaultRoleFallthroughUnchanged(t *testing.T) {
 	}
 }
 
-// TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03 pins the exact hazard the
+// TestDeriveRoleComposeDefaultDeniesUnlistedLogin pins the exact hazard the
 // blind review (R-03) caught before it shipped: giving WARDYN_OIDC_ROLE_MAP a
 // RUNTIME `:-` default on the compose stack — demo@wardyn.local=admin,
 // member@wardyn.local=member — would have applied to every EXISTING deployment
@@ -184,7 +184,8 @@ func TestDeriveRoleDefaultRoleFallthroughUnchanged(t *testing.T) {
 // than as a docker-compose.yaml runtime default; this test pins the underlying
 // deriveRole behavior directly against the literal string, so the hazard stays
 // provable even if the shape of the fix changes later.
-func TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03(t *testing.T) {
+func TestDeriveRoleComposeDefaultDeniesUnlistedLogin(t *testing.T) {
+	// ticket: R03
 	const composeDefault = "demo@wardyn.local=admin,member@wardyn.local=member"
 	roleMap, err := oidc.ParseRoleMap(composeDefault)
 	if err != nil {
