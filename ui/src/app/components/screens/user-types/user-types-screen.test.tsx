@@ -39,6 +39,7 @@ vi.mock("../../../lib/api/permissions", async () => {
 
 import { HttpError } from "../../../lib/api/core";
 import type { UserType } from "../../../lib/types";
+import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { USER_TYPES as UT } from "../../../lib/user-types-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -156,6 +157,47 @@ describe("UserTypesScreen — edit reads Ceiling and What this type gets", () =>
     await screen.findByText(t.name);
     await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} ${t.name}` }));
     expect(await screen.findByText(UT.CEILING_PROFILE("Portfolio"))).toBeInTheDocument();
+  });
+
+  it("renders the bound profile's run limits read-only, in Governance's labels", async () => {
+    const t = type();
+    getGovernanceMock.mockResolvedValue({
+      profiles: [
+        {
+          id: "prof-1",
+          name: "Portfolio",
+          ceiling: {},
+          limits: { deny_interactive: true, max_concurrent_runs: 3, max_drive_size_mib: 2048 },
+          created_at: "",
+          updated_at: "",
+        },
+      ],
+      assignments: [
+        { id: "a1", subject_type: "user_type", subject: t.id, profile_id: "prof-1", priority: 0, created_at: "" },
+      ],
+    });
+    renderScreen([t]);
+    await screen.findByText(t.name);
+    await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} ${t.name}` }));
+    expect(await screen.findByText(GOV.LIMIT_INTERACTIVE_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(GOV.LIMIT_QUOTA_LABEL(3))).toBeInTheDocument();
+    expect(screen.getByText(`${GOV.LIMIT_DRIVE_SIZE_LABEL}: 2048`)).toBeInTheDocument();
+    expect(screen.queryByText(GOV.LIMITS_NONE)).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("a bound profile with no limits reads None", async () => {
+    const t = type();
+    getGovernanceMock.mockResolvedValue({
+      profiles: [{ id: "prof-1", name: "Portfolio", ceiling: {}, limits: {}, created_at: "", updated_at: "" }],
+      assignments: [
+        { id: "a1", subject_type: "user_type", subject: t.id, profile_id: "prof-1", priority: 0, created_at: "" },
+      ],
+    });
+    renderScreen([t]);
+    await screen.findByText(t.name);
+    await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} ${t.name}` }));
+    expect(await screen.findByText(GOV.LIMITS_NONE)).toBeInTheDocument();
   });
 
   it("no assignment: names the fallback rather than a blank section", async () => {

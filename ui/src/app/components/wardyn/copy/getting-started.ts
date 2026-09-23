@@ -8,16 +8,19 @@
 // the sole reader.
 export const MEMBER_GETTING_STARTED = {
   TITLE: "Getting started",
-  // UT-7a: introduces the caller's own user type by name, once /me carries
-  // one. name/description are the SESSION's stamped type (health.ts's Me
-  // .user_type) — undefined for a caller with none (the admin token, local
-  // mode, or a pre-0.8 daemon), which falls back to the original sentence
-  // rather than naming a type that wasn't sent. An empty description reads
-  // the same as none: not every type has one.
-  SUBTITLE: (typeName?: string, typeDescription?: string): string =>
-    typeName
-      ? `You're a ${typeName}${typeDescription ? ` — ${typeDescription}` : ""}. Your admin set the ceiling; you run inside it.`
-      : "You're a member of this Wardyn. Your admin set the ceiling; you run inside it.",
+  // UT-7a: introduces the caller's own user type by name (packet B's "You're
+  // set up as a Portfolio manager: {description}", without the article — a
+  // type name is admin-typed, and "a Engineer" reads wrong). name/description
+  // are the SESSION's stamped type (health.ts's Me.user_type); every SSO
+  // sign-in stamps one, Standard user at the least. undefined only for a
+  // caller with none (the admin token, local mode), which keeps the original
+  // sentence. An empty description reads the same as none, and a trailing
+  // period on one is dropped so the sentence never ends "..".
+  SUBTITLE: (typeName?: string, typeDescription?: string): string => {
+    if (!typeName) return "You're a member of this Wardyn. Your admin set the ceiling; you run inside it.";
+    const about = typeDescription?.trim().replace(/\.+$/, "");
+    return `You're set up as ${typeName}${about ? `: ${about}` : ""}. Your admin set the ceiling; you run inside it.`;
+  },
   UNREACHABLE_TITLE: "Couldn't reach Wardyn.",
   UNREACHABLE_BODY:
     "Nothing below is marked done until it can be checked — a broken connection is not a finished step.",

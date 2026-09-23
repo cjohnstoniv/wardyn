@@ -425,6 +425,68 @@ describe("PermissionsScreen — add a grant", () => {
     );
   });
 
+  // Design §7: a deny at the user_type tier is a wall — the form asks first.
+  it("a deny for a user type asks to confirm before it is written", async () => {
+    listUserTypesMock.mockResolvedValue([
+      { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
+    ]);
+    upsertGrantMock.mockResolvedValue({ grant: grant(), updated: false });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(PERM.ADD_TITLE);
+    await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
+    await user.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
+    await user.click(await screen.findByRole("option", { name: "Portfolio manager" }));
+    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    await user.click(screen.getByRole("button", { name: PERM.EFFECT_DENY }));
+    await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(PERM.TYPE_DENY_TITLE)).toBeInTheDocument();
+    expect(within(dialog).getByText(PERM.TYPE_DENY_BODY)).toBeInTheDocument();
+    expect(upsertGrantMock).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(upsertGrantMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: PERM.ADD_CTA }));
+    await waitFor(() =>
+      expect(upsertGrantMock).toHaveBeenCalledWith(
+        expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager", effect: "deny" }),
+      ),
+    );
+  });
+
+  it("a deny for a person is written without the type wall's confirm", async () => {
+    upsertGrantMock.mockResolvedValue({ grant: grant(), updated: false });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(PERM.ADD_TITLE);
+    await user.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
+    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    await user.click(screen.getByRole("button", { name: PERM.EFFECT_DENY }));
+    await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalled());
+    expect(screen.queryByText(PERM.TYPE_DENY_TITLE)).toBeNull();
+  });
+
+  // Typed text carried into the type picker would post an id nobody can see.
+  it("switching Who to User type clears the typed subject", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(PERM.ADD_TITLE);
+    await user.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
+    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
+    expect(screen.getByRole("button", { name: PERM.ADD_CTA })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER }));
+    expect(screen.getByRole("textbox", { name: PERM.FIELD_WHO })).toHaveValue("");
+  });
+
   it("submits the natural key + effect, and says so when the upsert only updated one", async () => {
     upsertGrantMock.mockResolvedValue({ grant: grant(), updated: true });
     const user = userEvent.setup({ pointerEventsCheck: 0 });

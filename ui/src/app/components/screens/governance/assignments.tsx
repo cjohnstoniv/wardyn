@@ -269,7 +269,12 @@ function AddAssignmentForm({
           <div className="space-y-2">
             <Segmented
               value={subjectType}
-              onChange={(v) => setSubjectType(v)}
+              onChange={(v) => {
+                // A typed subject is no type id, and the reverse — see
+                // permissions.tsx's AddGrantForm.
+                if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
+                setSubjectType(v);
+              }}
               disabled={disabled}
               options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
             />

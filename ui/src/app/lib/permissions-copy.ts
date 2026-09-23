@@ -219,6 +219,10 @@ export const PERM = {
   // 0.8 (user-types design, UT-7a): pick one of the org's user types.
   HINT_USER_TYPE: "Everyone stamped with this user type at sign-in.",
   HINT_ALL: "Every signed-in member. Super admins are exempt; a security admin is not.",
+  // user-types-design.md rev 4 §7: a deny at the user_type tier is a wall, so
+  // adding one asks first. Title + body are the design's one sentence pair.
+  TYPE_DENY_TITLE: "This blocks everyone of this type.",
+  TYPE_DENY_BODY: "A person or group allow will not override it.",
   DUPLICATE: "That grant already exists — its effect was updated.",
 
   // ---- group snapshot honesty ----

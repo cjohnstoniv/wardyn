@@ -15,19 +15,16 @@
 // it is the answer to "what was this agent actually allowed to do", and the
 // rest of the page never states it.
 import { Fingerprint } from "lucide-react";
-import type { AgentRun } from "../../../../lib/types";
+import type { RunDetail } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
-import { useUserTypes, userTypeById } from "../../../../lib/use-user-types";
 import { CopyButton } from "../../../wardyn/copy-button";
 import { WidgetCard } from "../../../wardyn/primitives";
 
-export function IdentityWidget({ run }: { run: AgentRun }) {
-  // UT-7a: "Ran as {type}" — resolves run.user_type's id against the loaded
-  // list. Renders nothing for either a run with no stamped type (a pre-0.8
-  // row, or a system run with no human creator) or an id the list no longer
-  // holds (a deleted type) — never the raw id as a fallback guess.
-  const { userTypes } = useUserTypes();
-  const ranAs = run.user_type ? userTypeById(userTypes, run.user_type)?.name : undefined;
+export function IdentityWidget({ run }: { run: RunDetail }) {
+  // UT-7a: "Ran as {type}" reads the name GET /runs/{id} resolved server-side
+  // (RunDetail.user_type_name). Nothing renders for a run with no type or a
+  // type since deleted — never the raw id.
+  const ranAs = run.user_type_name;
 
   return (
     <WidgetCard title="Identity" Icon={Fingerprint} grow>

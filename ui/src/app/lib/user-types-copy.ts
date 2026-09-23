@@ -11,9 +11,10 @@
 // one home for the screen's wording so it can be reviewed and revised in one
 // place rather than reopening every component that renders it.
 //
-// Reuses GOVERNANCE's own limit labels for the Ceiling and run limits section
-// rather than re-wording them — a profile's "No secret access" reads the same
-// whether it's found through Governance or through the type that carries it.
+// The Ceiling and run limits section reuses GOVERNANCE's own limit labels
+// (governance/limit-chips.tsx) rather than re-wording them — a profile's
+// "Deny exec runs" reads the same whether it's found through Governance or
+// through the type that carries it.
 //
 // TITLE reads USER_TYPES_NAV_TITLE (nav-copy.ts) — the same constant
 // app-shell.tsx's eager sidebar uses — so the nav label and the screen
@@ -77,7 +78,8 @@ export const USER_TYPES = {
     not_available: "Not available",
   } as const,
   // The wall warning (design §2.6): a blocked cell is a deny, and a deny binds
-  // every tier, including admins — the one state worth a second line under the
+  // everyone of the type but a super admin (isOperator is the one exemption,
+  // PERM.HINT_ALL's wording) — the one state worth a second line under the
   // grid rather than only a chip.
-  WALL_WARNING: "Blocked means a deny — it walls the widest allow this type would otherwise get, admins included.",
+  WALL_WARNING: "Blocked means a deny — it walls the widest allow this type would otherwise get. Super admins are exempt; a security admin is not.",
 };

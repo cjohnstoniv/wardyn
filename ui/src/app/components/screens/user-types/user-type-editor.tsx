@@ -17,6 +17,7 @@ import { HttpError } from "../../../lib/api/core";
 import { userTypes as api } from "../../../lib/api/user-types";
 import type { GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
+import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { USER_TYPES as UT } from "../../../lib/user-types-copy";
 import type { UserType } from "../../../lib/types";
 import { Button } from "../../ui/button";
@@ -25,6 +26,7 @@ import { Textarea } from "../../ui/textarea";
 import { Field } from "../../wardyn/form-primitives";
 import { SafetyMeter } from "../../wardyn/safety-meter";
 import { Note } from "../governance/display";
+import { limitChips, sizeLimitChips } from "../governance/limit-chips";
 import { ExplainGrid } from "./explain-grid";
 
 // The profile bound to this type, by governance's own priority rule (highest
@@ -143,6 +145,17 @@ export function UserTypeEditor({
                 <div className="mt-3 max-w-md">
                   <SafetyMeter spec={profile.ceiling} />
                 </div>
+                {(() => {
+                  const chips = [...limitChips(profile.limits), ...sizeLimitChips(profile.limits)];
+                  return (
+                    <div className="mt-3">
+                      <p className="text-xs text-muted-foreground">{GOV.LIMITS_TITLE}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-body">
+                        {chips.length > 0 ? chips : GOV.LIMITS_NONE}
+                      </div>
+                    </div>
+                  );
+                })()}
               </>
             ) : (
               <Note>{UT.CEILING_NONE}</Note>

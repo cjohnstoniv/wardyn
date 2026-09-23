@@ -7,9 +7,11 @@ import * as React from "react";
 import { userTypes as userTypesApi } from "./api/user-types";
 import type { UserType } from "./types";
 
-// useUserTypes — the full user-types list every surface that names a type
-// needs: the Permissions / Governance / Drives subject pickers (UT-7a), the
-// People step's type picker, and the run header's id -> display-name lookup.
+// useUserTypes — the full user-types list the admin surfaces that name a type
+// need: the Permissions / Governance / Drives subject pickers (UT-7a) and the
+// People step's type picker. GET /user-types is securityOps, so nothing a
+// user-tier caller renders may call this (the run page reads its "Ran as"
+// name off GET /runs/{id} instead).
 //
 // Degrades to an EMPTY list on a failed fetch, never an error state — every
 // caller here is additive to a screen that already has its own load/error
@@ -31,11 +33,4 @@ export function useUserTypes(): { userTypes: UserType[]; loading: boolean; reloa
   React.useEffect(reload, [reload]);
 
   return { userTypes, loading, reload };
-}
-
-// byId — the id -> row lookup every display site needs (a name off a bare id
-// on a grant, a run, or an assignment). undefined for an id no longer in the
-// list, which a caller renders as "the id itself" or "nothing", never a guess.
-export function userTypeById(list: UserType[], id: string): UserType | undefined {
-  return list.find((t) => t.id === id);
 }

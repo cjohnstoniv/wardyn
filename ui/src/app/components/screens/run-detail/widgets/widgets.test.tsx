@@ -16,12 +16,6 @@ vi.mock("../../../../lib/api/runs", () => ({
   },
 }));
 
-// UT-7a: IdentityWidget's "Ran as" row resolves run.user_type against this list.
-const listUserTypesMock = vi.fn();
-vi.mock("../../../../lib/api/user-types", () => ({
-  userTypes: { listUserTypes: () => listUserTypesMock() },
-}));
-
 import { HttpError } from "../../../../lib/api/core";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { EgressWidget } from "./egress";
@@ -33,9 +27,6 @@ import { IdentityWidget } from "./identity";
 beforeEach(() => {
   getFilesMock.mockReset();
   getResourcesMock.mockReset();
-  listUserTypesMock.mockReset().mockResolvedValue([
-    { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
-  ]);
 });
 
 describe("SandboxWidget", () => {
@@ -236,10 +227,10 @@ describe("IdentityWidget", () => {
     expect(screen.queryByText("Why")).not.toBeInTheDocument();
   });
 
-  // UT-7a — "Ran as {type}", resolved by id against the loaded list.
-  it("shows Ran as with the type's name when the run carries one", async () => {
-    render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager" }} />);
-    expect(await screen.findByText("Portfolio manager")).toBeInTheDocument();
+  // UT-7a — "Ran as {type}", named by GET /runs/{id}'s user_type_name.
+  it("shows Ran as with the type's name when the run carries one", () => {
+    render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} />);
+    expect(screen.getByText("Portfolio manager")).toBeInTheDocument();
     expect(screen.getByText("Ran as")).toBeInTheDocument();
   });
 
@@ -248,10 +239,22 @@ describe("IdentityWidget", () => {
     expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
   });
 
-  it("renders no row for a type id the list no longer holds — never the raw id", async () => {
+  it("renders no row for a type the server could not name (deleted) — never the raw id", () => {
     render(<IdentityWidget run={{ ...run, user_type: "deleted-type" }} />);
-    await screen.findByText(run.spiffe_id);
     expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
     expect(screen.queryByText("deleted-type")).not.toBeInTheDocument();
+  });
+
+  // GET /user-types is securityOps: a user-tier owner's run page asking for it
+  // is a 403 and an authz.denied audit row on every visit.
+  it("issues no /user-types request", () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager", user_type_name: "Portfolio manager" }} />);
+      expect(fetchSpy.mock.calls.filter(([u]) => String(u).includes("/user-types"))).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -577,6 +577,7 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
   const [effect, setEffect] = React.useState<CapabilityEffect>("allow");
   const [saving, setSaving] = React.useState(false);
   const [duplicate, setDuplicate] = React.useState(false);
+  const [confirmWall, setConfirmWall] = React.useState(false);
 
   const copy = KIND[kind];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
@@ -613,7 +614,12 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
           <div className="space-y-2">
             <Segmented
               value={subjectType}
-              onChange={(v) => setSubjectType(v)}
+              onChange={(v) => {
+                // Typed text is no type id, and a type id is no typed text:
+                // carried across, it would post a subject nobody can see.
+                if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
+                setSubjectType(v);
+              }}
               disabled={disabled}
               options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
             />
@@ -675,12 +681,37 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
         </Field>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button onClick={submit} disabled={disabled || saving || !ready}>
+        <Button
+          // A deny on a user type is a wall no person or group allow lifts —
+          // design §7 asks before writing one.
+          onClick={() => (effect === "deny" && subjectType === "user_type" ? setConfirmWall(true) : submit())}
+          disabled={disabled || saving || !ready}
+        >
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {PERM.ADD_CTA}
         </Button>
         {duplicate && <Chip tone="info">{PERM.DUPLICATE}</Chip>}
       </div>
+      <AlertDialog open={confirmWall} onOpenChange={setConfirmWall}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{PERM.TYPE_DENY_TITLE}</AlertDialogTitle>
+            <AlertDialogDescription>{PERM.TYPE_DENY_BODY}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              onClick={() => {
+                setConfirmWall(false);
+                void submit();
+              }}
+            >
+              {PERM.ADD_CTA}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

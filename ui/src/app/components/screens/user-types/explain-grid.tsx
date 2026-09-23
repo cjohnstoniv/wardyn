@@ -9,10 +9,11 @@
 // names) plus every specific value the type (or `all`) holds an explicit
 // grant for.
 //
-// This asks Explain with subject_type=user_type: until UT-3 widens
-// capability_grants' CHECK constraint, no grant row can name a type, so every
-// answer here comes from the `all` rows alone — correct, not merely a
-// placeholder (the server's own doc comment on capabilitySubjectUserType).
+// This asks Explain with subject_type=user_type. As #837 stands, Explain reads
+// only the `all` rows for a type subject — a grant row naming the type itself
+// (which UT-3 now allows) is not read, so a type-tier deny or allow would not
+// show. This grid must not ship until Explain resolves user_type subjects
+// (#911).
 import * as React from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { permissions as api, type ExplainRow, type ExplainState } from "../../../lib/api/permissions";
