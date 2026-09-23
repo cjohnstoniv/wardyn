@@ -23,6 +23,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 
@@ -89,6 +91,62 @@ func gitProviderRows(sc types.SiteConfig) []types.GitProvider {
 		return nil
 	}
 	return sc.WorkspaceProviders.Git
+}
+
+// adoServerHosts is every host an azure_devops provider row names — the Azure
+// DevOps Server hosts this install knows to be Azure DevOps, which adoscope's
+// name rule cannot tell from any other forge by name alone (the service hosts
+// it knows itself). A disabled row counts: the question is what a host IS, not
+// whether it admits.
+func adoServerHosts(sc types.SiteConfig) []string {
+	var out []string
+	for _, row := range gitProviderRows(sc) {
+		if row.Kind != types.GitProviderAzureDevOps {
+			continue
+		}
+		for _, raw := range row.BaseURLs {
+			if h := hostrules.HostOf(raw); h != "" && !slices.Contains(out, h) {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
+}
+
+// adoHostsLoader answers adoServerHosts for one request, reading the stored
+// site config at most once and only for an address that could need it (see
+// forAddresses), so a write naming no such address costs no read. A config
+// that cannot be read yields none — the narrower answer: only the Azure DevOps
+// service hosts then take the name rule, and an escaped name on any other host
+// is refused as it always was. A nil loader answers none.
+type adoHostsLoader func() []string
+
+func (s *Server) adoHostsLoader(ctx context.Context) adoHostsLoader {
+	var once sync.Once
+	var hosts []string
+	return func() []string {
+		once.Do(func() {
+			if s.cfg.Store == nil {
+				return
+			}
+			if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
+				hosts = adoServerHosts(sc)
+			}
+		})
+		return hosts
+	}
+}
+
+// forAddresses is the Azure DevOps Server hosts to canonicalise and validate
+// values with. Only a "%" or whitespace makes the answer matter — the name
+// rule leaves every other address as written — so without one nothing is read.
+func (l adoHostsLoader) forAddresses(values ...string) []string {
+	if l == nil || !slices.ContainsFunc(values, func(v string) bool {
+		return strings.ContainsFunc(v, func(r rune) bool { return r == '%' || unicode.IsSpace(r) })
+	}) {
+		return nil
+	}
+	return l()
 }
 
 // providersConfigured reports whether this install has ANY git-provider row —
@@ -290,7 +348,7 @@ type cloneTarget struct {
 // The port is deliberately not part of the comparison: hostrules.HostOf discards
 // it and so does the egress allowlist, so treating it as a scoping boundary here
 // would claim a narrowing the rest of the system does not implement.
-func parseCloneTarget(cloneURL string) (cloneTarget, bool) {
+func parseCloneTarget(cloneURL string, adoServerHosts []string) (cloneTarget, bool) {
 	raw := strings.TrimSpace(cloneURL)
 	if raw == "" {
 		return cloneTarget{}, false
@@ -301,7 +359,7 @@ func parseCloneTarget(cloneURL string) (cloneTarget, bool) {
 	// operator/member sentences every other unreadable target earns. See
 	// repoLocatorPathSafe (runs_scm.go) for why no spelling of pathAdmits
 	// survives one.
-	if !repoLocatorPathSafe(raw) {
+	if !repoLocatorPathSafe(raw, adoServerHosts) {
 		return cloneTarget{}, false
 	}
 	// sshCloneHost answers only for ssh:// and scp-form strings (it refuses
@@ -467,7 +525,7 @@ func admitRepoURL(sc types.SiteConfig, cloneURL string) providerVerdict {
 	if len(rows) == 0 {
 		return providerVerdict{Admitted: true, Unconfigured: true}
 	}
-	t, ok := parseCloneTarget(cloneURL)
+	t, ok := parseCloneTarget(cloneURL, adoServerHosts(sc))
 	if !ok {
 		return providerVerdict{}
 	}

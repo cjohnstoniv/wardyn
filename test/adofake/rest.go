@@ -284,9 +284,11 @@ func (s *Server) handleProjectsGet(w http.ResponseWriter, r *http.Request) {
 // handleRepositoriesGet answers GET .../{project}/_apis/git/repositories with
 // every repository RegisterRepo put in that project, spelled the way Azure
 // DevOps spells them: the names literal in the JSON, and escaped in every URL.
-// The URLs are escaped by url.PathEscape — wider than Wardyn's own spelling
-// ("(" becomes %28) — so a caller that onboards a remoteUrl from here proves
-// its door canonicalises what the service hands out.
+// The URLs are escaped by url.PathEscape, which escapes "(", ")", "'" and "!"
+// as well as the space. How the real service spells punctuation in a
+// remoteUrl is not documented; this is the widest plausible spelling, and
+// wider than Wardyn's own, so a caller that onboards a remoteUrl from here
+// proves its door canonicalises whatever the service hands out.
 func (s *Server) handleRepositoriesGet(w http.ResponseWriter, r *http.Request) {
 	org, project := r.PathValue("org"), r.PathValue("project")
 	prefix := org + "/" + project + "/"

@@ -297,17 +297,14 @@ export function unescapeADOName(raw: string): string | null {
   return null;
 }
 
-/** Whether a repository address is an Azure DevOps one — its host, or the
- *  "_git" segment Azure DevOps Server paths carry (adoscope.CanonicalRepoURL). */
+/** Whether a repository address is on an Azure DevOps service host — the
+ *  hosts adoscope.CanonicalRepoURL knows without configuration. An Azure DevOps
+ *  Server host is one only when a provider row names it, which this screen
+ *  does not read; its name is shown as written. */
 export function isADOAddress(locator: string): boolean {
   const m = /^(?:[a-z][a-z+.-]*:\/\/)?(?:[^@/]*@)?([^/:]+)/i.exec(locator.trim());
   const host = (m?.[1] ?? "").toLowerCase();
-  return (
-    host === "dev.azure.com" ||
-    host.endsWith(".dev.azure.com") ||
-    host.endsWith(".visualstudio.com") ||
-    /\/_git(\/|$)/.test(locator)
-  );
+  return host === "dev.azure.com" || host.endsWith(".dev.azure.com") || host.endsWith(".visualstudio.com");
 }
 
 /** An Azure DevOps repository's own name from its address — "Card Auth

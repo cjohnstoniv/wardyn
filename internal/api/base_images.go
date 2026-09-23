@@ -81,7 +81,7 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
 	if entry.Name == "" {
-		entry.Name = lastPathSegment(entry.Image)
+		entry.Name = lastPathSegment(entry.Image, nil)
 	}
 	if msg := validateBaseImageWrite(entry); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)

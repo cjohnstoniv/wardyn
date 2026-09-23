@@ -126,12 +126,16 @@ func CanonicalPath(path string) (string, bool) {
 }
 
 // CanonicalRepoURL is CanonicalURL for an Azure DevOps repository address: one
-// whose host is an Azure DevOps host or whose path names a "_git" segment (the
-// Azure DevOps Server shape). ok=false for anything else — another forge's
-// URL above all — which callers leave untouched.
-func CanonicalRepoURL(raw string) (string, bool) {
-	_, path, host, ok := splitRepoAddress(raw)
-	if !ok || !(azureDevOpsHost(host) || slices.Contains(strings.Split(path, "/"), "_git")) {
+// whose host is an Azure DevOps service host (dev.azure.com and its
+// subdomains, or <org>.visualstudio.com) or one of serverHosts — the Azure
+// DevOps Server hosts a caller knows from its own configuration, lowercased.
+// ok=false for anything else — another forge's URL above all — which callers
+// leave untouched. There is deliberately no "the path has a _git segment"
+// guess: a name rule applied to a forge that is not Azure DevOps would admit
+// escapes that forge never needs.
+func CanonicalRepoURL(raw string, serverHosts []string) (string, bool) {
+	_, _, host, ok := splitRepoAddress(raw)
+	if !ok || !(azureDevOpsHost(host) || slices.Contains(serverHosts, host)) {
 		return "", false
 	}
 	return CanonicalURL(raw)
@@ -139,11 +143,13 @@ func CanonicalRepoURL(raw string) (string, bool) {
 
 // CanonicalURL is CanonicalPath applied to the path of an https:// or ssh://
 // URL, or of scp-form [user@]host:path. The scheme, userinfo and host are left
-// exactly as written. ok=false for a query or fragment, a URL with no path, or
-// a segment that does not decode.
+// exactly as written, and none may hold a "%": the name rule covers the path
+// alone, and an escape anywhere else is one no caller reads the way a server
+// would. ok=false for that, a query or fragment, a URL with no path, or a
+// segment that does not decode.
 func CanonicalURL(raw string) (string, bool) {
 	head, path, _, ok := splitRepoAddress(raw)
-	if !ok {
+	if !ok || strings.Contains(head, "%") {
 		return "", false
 	}
 	p, ok := CanonicalPath(path)

@@ -1198,7 +1198,7 @@ func TestDriveTargetIsReservedFromAuthoring(t *testing.T) {
 		t.Run("workspace source "+target, func(t *testing.T) {
 			msg := validateWorkspaceSource(types.WorkspaceSource{
 				Type: types.WorkspaceSourceTypeEphemeral, Target: target,
-			})
+			}, nil)
 			if !strings.Contains(msg, "reserved") {
 				t.Fatalf("msg = %q, want a reserved-target refusal", msg)
 			}
@@ -1222,7 +1222,7 @@ func TestDriveTargetIsReservedFromAuthoring(t *testing.T) {
 	// is untouched, so the refusal is the reserved subtree and not /home/agent.
 	if msg := validateWorkspaceSource(types.WorkspaceSource{
 		Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/drives-report",
-	}); msg != "" {
+	}, nil); msg != "" {
 		t.Errorf("neighbouring target refused: %q — the reservation must be the subtree, not a prefix match", msg)
 	}
 
