@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -214,10 +215,73 @@ func TestInternalInjection_FailsClosed(t *testing.T) {
 	if rr.Code != http.StatusFailedDependency || !strings.Contains(rr.Body.String(), "wardyn secret set") {
 		t.Fatalf("missing secret: status = %d body=%s", rr.Code, rr.Body.String())
 	}
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"not-found"`) {
+		t.Fatalf("missing secret: audit data = %s, want the not-found reason", ev.Data)
+	}
 
 	// No auth => 401.
 	if rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), "", ""); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("no auth: status = %d, want 401", rr.Code)
+	}
+}
+
+// unavailableSecrets is a store whose external backend cannot answer.
+type unavailableSecrets struct{ *memSecrets }
+
+func (unavailableSecrets) Get(context.Context, string) ([]byte, error) {
+	return nil, fmt.Errorf("vault GET wardyn/data/x: 503: %w", secretstore.ErrUnavailable)
+}
+func (u unavailableSecrets) For(string) secretstore.Store { return u }
+
+// A store that did not answer is a distinct 503, never the 424 that means the
+// credential is gone (design §2.3a.4): the two must not be confused by the
+// proxy or the person reading the run's failure.
+func TestInternalInjection_StoreUnavailableIsDistinctFromMissing(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	h.srv.cfg.Secrets = unavailableSecrets{sec}
+	h.srv.router = h.srv.routes()
+	token := h.mintRunToken(t, uuid.New())
+	h.broker.minted = broker.Minted{
+		Kind:      types.GrantAPIKey,
+		JTI:       "j3",
+		Injection: &egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", SecretName: "anthropic-api-key"},
+	}
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "couldn't reach the service") {
+		t.Fatalf("store unavailable: status = %d body=%s, want 503", rr.Code, rr.Body.String())
+	}
+	// Wardyn's own audit tells the outage apart too, not only the status.
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"store-unavailable"`) {
+		t.Fatalf("store unavailable: audit data = %s, want the store-unavailable reason", ev.Data)
+	}
+}
+
+type refusedSecrets struct{ *memSecrets }
+
+func (refusedSecrets) Get(context.Context, string) ([]byte, error) {
+	return nil, fmt.Errorf("refused: Vault no longer holds this credential at wardyn/ns1/operator/x")
+}
+func (u refusedSecrets) For(string) secretstore.Store { return u }
+
+// A credential whose row exists but whose value the store refused is not
+// reported as missing: the "set it" hint would overwrite what is left of it.
+func TestInternalInjection_RefusedIsNotReportedAsMissing(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	h.srv.cfg.Secrets = refusedSecrets{sec}
+	h.srv.router = h.srv.routes()
+	token := h.mintRunToken(t, uuid.New())
+	h.broker.minted = broker.Minted{
+		Kind:      types.GrantAPIKey,
+		JTI:       "j4",
+		Injection: &egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", SecretName: "anthropic-api-key"},
+	}
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+	body := rr.Body.String()
+	if rr.Code != http.StatusFailedDependency || !strings.Contains(body, "exists but could not be used") || strings.Contains(body, "wardyn secret set") {
+		t.Fatalf("refused: status = %d body=%s, want 424 saying the credential exists but was refused", rr.Code, body)
+	}
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"refused"`) {
+		t.Fatalf("refused: audit data = %s, want the refused reason", ev.Data)
 	}
 }
 

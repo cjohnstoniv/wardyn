@@ -26,6 +26,16 @@ package main
 // caller's mark counts only if it is the context the Get receives. Every
 // function that calls SiteAudited must itself record a "secret.read". Audited
 // also refuses an unmarked Get at run time; this guard finds it before then.
+//
+// Two reads never go through Get: the pg store's bulk readers, ConvertV0 (the
+// boot conversion) and Migrate (`wardynd -migrate-secrets`), open values
+// directly and their callers record each read. Their calls are held to the same
+// rule as a Get: the context must be marked. And inside the pg store, every
+// function that can reach a value-opening primitive (a local envelope's
+// kek.Open, a legacy row's age.Decrypt, or the external store's Get, vaultkv's
+// included) must be reached only from Get or those two bulk readers, so a new
+// way to open a value fails here until it is classified. Reconcile is not a
+// read: it calls the external store's Check and Walk, which read metadata only.
 
 import (
 	"encoding/json"
@@ -37,6 +47,7 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,7 +61,31 @@ const (
 	guardStorePkg    = guardModPath + "/internal/secretstore"
 	guardWithPurpose = guardStorePkg + ".WithPurpose"
 	guardSiteAudited = guardStorePkg + ".SiteAudited"
+	guardPGPkg       = guardStorePkg + "/pg"
+	guardPGStore     = "(*" + guardPGPkg + ".Store)"
 )
+
+// guardBulkReaders are the pg store's methods that open values without a Get.
+// A call of one is checked like a Get: its context must be marked.
+var guardBulkReaders = map[string]bool{
+	guardPGStore + ".ConvertV0": true,
+	guardPGStore + ".Migrate":   true,
+}
+
+// guardValueOpeners are the primitives that turn a stored row into its value.
+var guardValueOpeners = []string{
+	guardStorePkg + "/kek.Open",
+	"filippo.io/age.Decrypt",
+	"(" + guardStorePkg + ".External).Get",
+}
+
+// guardPGReadEntries are the only pg-store entry points allowed to reach a
+// value opener: Get, which the Audited decorator records, and the bulk readers.
+var guardPGReadEntries = map[string]bool{
+	guardPGStore + ".Get":       true,
+	guardPGStore + ".ConvertV0": true,
+	guardPGStore + ".Migrate":   true,
+}
 
 type listedPkg struct {
 	ImportPath, Dir, Export string
@@ -87,6 +122,7 @@ type secretReadScan struct {
 	siteMarks map[string]string      // function calling SiteAudited -> its position
 	emitters  map[string]bool        // function whose body holds the literal "secret.read"
 	purposes  int
+	pgCallers map[string][]string // inside the pg store: callee -> its callers
 }
 
 func goListExport(t *testing.T, root string) []listedPkg {
@@ -311,7 +347,9 @@ func (s *secretReadScan) scanCall(info *types.Info, sc *ctxScope, from string, c
 		callOf[f] = call
 	case *ast.SelectorExpr:
 		callOf[f.Sel] = call
-		if sel := info.Selections[f]; sel != nil && f.Sel.Name == "Get" && sel.Kind() == types.MethodVal && s.isStore(sel.Recv()) {
+		sel := info.Selections[f]
+		isGet := sel != nil && f.Sel.Name == "Get" && sel.Kind() == types.MethodVal && s.isStore(sel.Recv())
+		if isGet || guardBulkReaders[calleeKey(info, call)] {
 			g := getSite{pos: s.fset.Position(call.Pos()).String(), ctx: ctxOther}
 			if len(call.Args) > 0 {
 				g.ctx = sc.class(call.Args[0], map[types.Object]bool{})
@@ -340,6 +378,7 @@ func scanSecretReads(t *testing.T, root string) *secretReadScan {
 		refs:      map[string][]secretRef{},
 		siteMarks: map[string]string{},
 		emitters:  map[string]bool{},
+		pgCallers: map[string][]string{},
 	}
 	imp := importer.ForCompiler(s.fset, "gc", func(path string) (io.ReadCloser, error) {
 		if exports[path] == "" {
@@ -354,8 +393,9 @@ func scanSecretReads(t *testing.T, root string) *secretReadScan {
 	s.storeType = ss.Scope().Lookup("Store").Type().Underlying().(*types.Interface)
 
 	for _, p := range pkgs {
-		if !strings.HasPrefix(p.ImportPath, guardModPath+"/") || p.ImportPath == guardStorePkg ||
-			strings.HasPrefix(p.ImportPath, guardStorePkg+"/") || len(p.GoFiles) == 0 {
+		pgStore := p.ImportPath == guardPGPkg
+		if !pgStore && (!strings.HasPrefix(p.ImportPath, guardModPath+"/") || p.ImportPath == guardStorePkg ||
+			strings.HasPrefix(p.ImportPath, guardStorePkg+"/")) || len(p.GoFiles) == 0 {
 			continue
 		}
 		var files []*ast.File
@@ -377,13 +417,57 @@ func scanSecretReads(t *testing.T, root string) *secretReadScan {
 		}
 		for _, f := range files {
 			for _, d := range f.Decls {
-				if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil {
+				fd, ok := d.(*ast.FuncDecl)
+				switch {
+				case !ok || fd.Body == nil:
+				case pgStore:
+					s.scanPGCalls(info, fd)
+				default:
 					s.scanFunc(info, fd)
 				}
 			}
 		}
 	}
 	return s
+}
+
+// scanPGCalls records, inside the pg store, which functions fd references.
+func (s *secretReadScan) scanPGCalls(info *types.Info, fd *ast.FuncDecl) {
+	from := funcKey(info.Defs[fd.Name])
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			if to := funcKey(info.Uses[id]); to != "" && to != from {
+				s.pgCallers[to] = append(s.pgCallers[to], from)
+			}
+		}
+		return true
+	})
+}
+
+// pgValueReaders returns every pg-store function that can reach a value
+// opener, and the entry points among them (exported, or referenced by nothing
+// in the package) that are not Get or a bulk reader.
+func (s *secretReadScan) pgValueReaders() (reached map[string]bool, unclassified []string) {
+	reached = map[string]bool{}
+	queue := slices.Clone(guardValueOpeners)
+	for len(queue) > 0 {
+		fn := queue[0]
+		queue = queue[1:]
+		for _, c := range s.pgCallers[fn] {
+			if !reached[c] {
+				reached[c] = true
+				queue = append(queue, c)
+			}
+		}
+	}
+	for fn := range reached {
+		name := fn[strings.LastIndex(fn, ".")+1:]
+		if (token.IsExported(name) || len(s.pgCallers[fn]) == 0) && !guardPGReadEntries[fn] {
+			unclassified = append(unclassified, fn)
+		}
+	}
+	slices.Sort(unclassified)
+	return reached, unclassified
 }
 
 // unmarkedPaths climbs from each Get whose context is a parameter through the
@@ -394,7 +478,7 @@ func (s *secretReadScan) unmarkedPaths() []string {
 	var bad []string
 	for fn, sites := range s.getSites {
 		for _, g := range sites {
-			why := "Get at " + g.pos + " in " + fn
+			why := "read at " + g.pos + " in " + fn
 			switch g.ctx {
 			case ctxMarked:
 			case ctxOther:
@@ -606,6 +690,8 @@ func TestEverySecretReadIsAuditedOnce(t *testing.T) {
 		guardModPath + "/internal/api.readHarnessBlob",
 		"(*" + guardModPath + "/internal/api.Server).handleInternalInjection",
 		"(*" + guardModPath + "/internal/broker.Broker).mintGitPAT",
+		guardModPath + "/cmd/wardynd.convertSecretStore", // ConvertV0
+		guardModPath + "/cmd/wardynd.migrateMode",        // Migrate
 	} {
 		if len(s.getSites[fn]) == 0 {
 			t.Errorf("the scan found no secret-store Get in %s; the guard no longer sees the reads it pins", fn)
@@ -617,6 +703,15 @@ func TestEverySecretReadIsAuditedOnce(t *testing.T) {
 
 	for _, line := range s.unmarkedPaths() {
 		t.Errorf("secret read with no audit mark: %s\n\tmark the context with secretstore.WithPurpose, or record secret.read at the site and mark it secretstore.SiteAudited", line)
+	}
+	reached, unclassified := s.pgValueReaders()
+	for fn := range guardPGReadEntries {
+		if !reached[fn] {
+			t.Errorf("the scan does not see %s reach a value opener; the pg-store half of the guard no longer sees the reads it pins", fn)
+		}
+	}
+	for _, fn := range unclassified {
+		t.Errorf("%s can open a stored value but is neither Get nor a bulk reader the guard checks (%v): route the read through Get, or add it to guardBulkReaders and guardPGReadEntries with a marked context at every call", fn, slices.Sorted(maps.Keys(guardBulkReaders)))
 	}
 	for fn, pos := range s.siteMarks {
 		if !s.emitters[fn] {

@@ -150,6 +150,16 @@ func (a *audited) Delete(ctx context.Context, name string) error { return a.inne
 
 func (a *audited) List(ctx context.Context) ([]string, error) { return a.inner.List(ctx) }
 
+// StoresExternally forwards the wrapped store's description of the external
+// store its writes go to (the pg store in store mode), or "": metadata for the
+// setup row, never a value.
+func (a *audited) StoresExternally() string {
+	if d, ok := a.inner.(interface{ StoresExternally() string }); ok {
+		return d.StoresExternally()
+	}
+	return ""
+}
+
 func (a *audited) For(owner string) Store {
 	return &audited{inner: a.inner.For(owner), rec: a.rec, owner: owner}
 }

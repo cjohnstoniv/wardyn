@@ -656,7 +656,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "checksum/trusted-ca:" || { echo "trustedCA did not stamp the checksum pod annotation — an edit to the CA bundle alone would not roll the pod"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_TRUSTED_CA_FILE" | grep -q 'value: "/etc/wardyn/trusted-ca/ca.pem"' || { echo "trustedCA did not wire WARDYN_TRUSTED_CA_FILE at the mounted path — wardynd would boot trusting only the public roots while the operator believes the corporate CA is installed"; exit 1; }; \
 	echo "$$out" | grep -q "mountPath: /etc/wardyn/trusted-ca" || { echo "trustedCA rendered no volumeMount — WARDYN_TRUSTED_CA_FILE would name a path nothing mounts"; exit 1; }; \
-	echo "$$out" | grep -A2 '^        - name: trusted-ca$$' | grep -q "name: wardyn-trusted-ca" || { echo "the trusted-ca volume does not source the ConfigMap the chart rendered"; exit 1; }
+	echo "$$out" | grep -A2 '^        - name: trusted-ca$$' | grep -q "name: wardyn-trusted-ca" || { echo "the trusted-ca volume does not source the ConfigMap the chart rendered"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_VAULT_TOKEN_FILE" | grep -q '/vault/secrets/token' || { echo "secretStore.vault.auth=token-file did not render WARDYN_VAULT_TOKEN_FILE"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_VAULT_KV_PREFIX" | grep -q 'wardyn-ci' || { echo "secretStore.vault.kvPrefix did not render"; exit 1; }; \
+	echo "$$out" | grep -q "wardyn-vault-token" && { echo "token-file auth still projected the Kubernetes Vault token"; exit 1; } || true
 	@# The control-plane -> proxy hop (#561): proxies dial https on the internal
 	@# TLS listener, pinned to wardynd's own internal CA. There is deliberately no
 	@# CA Secret to assert: the CA lives in wardynd's secret store (Postgres,
@@ -679,6 +682,15 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth 2>&1 | grep -q "no age identity is wired" || { echo "chart no longer refuses an external-DSN install with an ephemeral age key — boot 2 cannot decrypt what boot 1 wrote, so the pod crash-loops on its SECOND start and those rows are unrecoverable (W27-S1-5)"; exit 1; }
+	@# Store mode (#644): no age key is the goal, a dedicated audience-"vault" token is projected, and a missing address or role is a render refusal (wardynd would refuse to boot).
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn) || { echo "store mode with an external DSN and no age key no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_SECRET_STORE" | grep -q 'value: "vaultkv"' || { echo "secretStore.backend=vaultkv did not render WARDYN_SECRET_STORE"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_VAULT_K8S_TOKEN_FILE" | grep -q '/var/run/secrets/wardyn-vault/token' || { echo "store mode did not point wardynd at the projected Vault token"; exit 1; }; \
+	echo "$$out" | grep -A3 "serviceAccountToken:" | grep -q 'audience: "vault"' || { echo "the projected Vault token lost its audience — a token for the API server would be sent to Vault"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" && { echo "store mode rendered WARDYN_AGE_KEY although none was wired"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: false')" = "2" ] || { echo "store mode turned on the API-server token automount — the Vault token is a separate projected volume"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv 2>&1 | grep -q "needs secretStore.vault.addr" || { echo "chart no longer refuses vaultkv with no Vault address"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 2>&1 | grep -q "needs secretStore.vault.role" || { echo "chart no longer refuses Kubernetes auth with no Vault role"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.allowEphemeralAgeKey=true >/dev/null 2>&1 || { echo "secrets.allowEphemeralAgeKey no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set env.WARDYN_AGE_KEY=AGE-SECRET-KEY-EXAMPLE >/dev/null 2>&1 || { echo "an age identity wired through .Values.env no longer satisfies the refusal — the chart refuses a render that is actually fine"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set readinessProbe.path=/healthz | grep -q 'path: "/healthz"' || { echo "readinessProbe.path no longer pins the probe back to /healthz — an image <= 0.5.0 serves no /readyz, so the pod would never become Ready and the rollout would hang"; exit 1; }
@@ -1012,6 +1024,7 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@echo "Validating docker-compose config..."
 	docker compose -f $(COMPOSE_FILE) config >/dev/null
 	WARDYN_CI_TOOLS_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.ci.yaml config >/dev/null
+	WARDYN_VAULT_ADDR=https://vault.example:8200 WARDYN_VAULT_TOKEN_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.vault.yaml config >/dev/null
 	@# The desktop entrypoint too: it `include:`s the base file, and an include
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).

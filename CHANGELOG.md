@@ -136,13 +136,41 @@ and does not yet follow semantic versioning (interfaces are not stable).
   injection sinks keep their own row, with its grant and jti, and now name the stored row too; the
   decorator stays silent for those reads, so no read is counted twice. A read that finds nothing
   records nothing, and a refused row is a `failure` without the store's error text. The first
-  0.8 boot records one `migrate` read per legacy row it converts. A guard type-checks every read
-  site and fails the build on one that says neither why it reads nor that it records the read
-  itself, following the context the read actually receives; a read that still reaches the store
+  0.8 boot records one `migrate` read per legacy row it converts. A read in store mode names the
+  store `vaultkv`. A guard type-checks every read site, the boot conversion's and
+  `wardynd -migrate-secrets`' bulk reads included, and fails the build on one that says neither
+  why it reads nor that it records the read itself, following the context the read actually
+  receives; it also fails on a new path to a stored value inside the store that it does not check; a read that still reaches the store
   with no purpose is refused and recorded as an `unmarked` failure. The row's owner, the read's own
   owner, and ref are all cut to 512 bytes and stripped of control characters before they are
   recorded, since a database writer controls them. Deployments that poll setup status often will
   see more `secret.read` rows: each status check that decrypts a captured sign-in is now one.
+- **Store mode: credentials can live in your organisation's Vault, and Wardyn holds no key
+  (#644).** `WARDYN_SECRET_STORE=vaultkv` writes every stored credential to a Vault KV v2 engine
+  (OpenBao is a supported endpoint) and keeps only a pointer row in Postgres (`enc_version` 2, no
+  ciphertext); Wardyn does no at-rest cryptography for it, and once every row is in Vault,
+  `WARDYN_AGE_KEY` is unset. Wardyn's own boot keys live there too, under `platform/`. A read
+  derives the Vault path from the row's owner and name and refuses a row that points anywhere
+  else, then refuses a value whose `custom_metadata` (owner, name, kind, format) names another
+  row, so a pointer moved by a database writer reads nothing. A row whose value is gone, or whose
+  data at Vault is not in Wardyn's format, is a refusal, never "not found" or an empty value, so a
+  lost boot key, or one whose data was replaced with another shape, fails boot instead of being
+  minted over; a Put never writes over a path bound to another row. Put writes Vault before the
+  row and Delete removes every version from Vault before the row. wardynd authenticates with a projected
+  service-account token (Kubernetes auth) or a token file, never a token in an environment
+  variable; it refuses `http://` to a non-loopback Vault and uses a TLS config of its own. A
+  sealed, throttled or unreachable Vault is transient (the credential sink answers 503, distinct
+  from a missing credential's 424, and audits `secret.read` with `reason` `store-unavailable`); a
+  401/403 is definitive, and re-authenticates at most once every 30 s. There is no last-good grace
+  period yet: a transient failure fails the credential at once (the grace is CS-4). A KV v2 mount
+  that does not exist fails boot, and a write or delete Vault answers 404 fails rather than reading
+  as done. The documented Vault policy grants `read` on `<mount>/config`, no `delete` on `data/`,
+  and no `destroy/` or `undelete/`. `wardynd -migrate-secrets
+  -to=vaultkv|local` moves rows online in either direction (`secret.migrate`), and
+  `wardynd -reconcile` reports pointers without values and values without pointers. The chart's
+  `secretStore.vault.*` values, a compose token-file overlay, a setup row naming the store, and
+  docs/OPERATIONS.md "Store mode: credentials in Vault" go with it. Tested against a fake Vault
+  and live against Vault OSS 2.1.1 and OpenBao 2.6.2, including Kubernetes auth on kind.
 - **Secret-carrying boot settings no longer have to live in environment variables (#596).** Cloud
   posture scanners flag a pod with a secret in its env, and a "secrets delivered at runtime"
   control rules it out. The `_FILE` twins and the chart's `secretFiles.enabled` close both.
