@@ -1,0 +1,329 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — Console residue (0.8) mock</title>
+<!--
+  Console-residue mock · static, for owner review.
+  Every visible PRODUCT string below is verbatim from
+  docs/design/console-residue-0.8-prompt.md (the frozen tables — source of truth).
+  Sections 1-2 and 6 freeze shipped behavior byte for byte; sections 3-5 stage new
+  copy this round owes. No build, no deps, no fetch — open the file. The only
+  script is the light/dark toggle, carried over from the user-drives mock;
+  the page starts in the light theme (:root) and the button stamps data-theme.
+  Tokens and CSS idioms copied verbatim from docs/design/user-drives-mock/index.html.
+
+  SCAFFOLD vs PRODUCT: the sticky bar, the `.tag` state labels, the `.varlabel`
+  variant strips and the HTML comments are REVIEW SCAFFOLDING — 11px uppercase,
+  muted, outside the `.frame`. Everything inside a `.frame` is the product.
+-->
+<style>
+:root{
+  --background:#ffffff; --foreground:#171717; --card:#ffffff; --surface-2:#f4f4f5;
+  --muted-foreground:#737373; --border:#e5e5e5; --border-strong:#d4d4d4;
+  --primary:#0f766e; --primary-fg:#ffffff;
+  --success:#047857; --success-subtle:rgba(4,120,87,.12); --warning:#92400e; --warning-subtle:rgba(245,158,11,.13);
+  --danger:#b91c1c; --danger-subtle:rgba(239,68,68,.13);
+  --info:#1d4ed8; --info-subtle:rgba(29,78,216,.13);
+  --neutral-subtle:rgba(115,115,115,.12);
+  --font-sans:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+html[data-theme="dark"]{
+  --background:#0a0a0a; --foreground:#ededed; --card:#111111; --surface-2:#1f1f1f;
+  --muted-foreground:#a3a3a3; --border:#262626; --border-strong:#333333;
+  --primary:#14b8a6; --primary-fg:#0a0a0a;
+  --success:#10b981; --success-subtle:rgba(16,185,129,.15); --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.15);
+  --danger:#dc2626; --danger-subtle:rgba(220,38,38,.16);
+  --info:#3b82f6; --info-subtle:rgba(59,130,246,.16);
+  --neutral-subtle:rgba(163,163,163,.14);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);
+  font-family:var(--font-sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:var(--font-mono);font-size:.8125rem}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em}
+p{margin:0}
+a{color:var(--primary)}
+
+.sheet{max-width:1000px;margin:0 auto;padding:32px 24px 96px}
+.mockbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+  padding:12px 24px;background:var(--card);border-bottom:1px solid var(--border)}
+.mockbar h1{font-size:15px}
+.mockbar .sub{font-size:12.5px;color:var(--muted-foreground)}
+.mockbar button{margin-left:auto;font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground);cursor:pointer}
+.state{margin-top:44px}
+.state > .tag{display:flex;gap:10px;align-items:baseline;margin-bottom:10px;
+  font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground)}
+.state > .tag b{color:var(--foreground);font-size:13px;letter-spacing:0;text-transform:none}
+.frame{border:1px solid var(--border);border-radius:14px;background:var(--card);overflow:hidden}
+.frame > .pad{padding:22px 24px}
+.varlabel{padding:8px 24px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground);background:var(--surface-2);border-top:1px solid var(--border)}
+.varlabel b{color:var(--foreground);letter-spacing:0;text-transform:none}
+
+.lead{color:var(--muted-foreground);font-size:14px;margin-top:6px;max-width:74ch}
+.sectitle{font-size:14px;margin-top:0}
+hr.rule{border:0;border-top:1px solid var(--border);margin:0}
+
+.chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;
+  font-size:11.5px;font-weight:500;white-space:nowrap;border:1px solid transparent}
+.chip.neutral{background:var(--neutral-subtle);color:var(--muted-foreground)}
+.chip.success{background:var(--success-subtle);color:var(--success)}
+.chip.warning{background:var(--warning-subtle);color:var(--warning)}
+.dot{width:6px;height:6px;border-radius:999px;background:currentColor}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.chip.pulse .dot{animation:pulse 1.4s ease-in-out infinite}
+
+.btn{font:inherit;font-size:13px;font-weight:500;padding:6px 13px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground)}
+.btn.primary{background:var(--primary);color:var(--primary-fg);border-color:transparent}
+.btn.danger{background:var(--danger);color:#fff;border-color:transparent}
+.btn.ghost{background:none;border-color:transparent;color:var(--muted-foreground)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+a.btn{display:inline-block;text-decoration:none;color:var(--foreground)}
+
+.toolbar{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
+.toolbar .spacer{margin-left:auto}
+.evrow{padding:10px 0;font-size:13px;border-bottom:1px solid var(--border)}
+.evrow:last-child{border-bottom:none}
+
+.dl{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:13px;margin:0}
+.dl dt{color:var(--muted-foreground)}
+.dl dd{margin:0}
+.note{margin-top:10px;padding:9px 12px;border-radius:8px;font-size:12.5px}
+.note.warning{background:var(--warning-subtle);color:var(--warning)}
+
+.card{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px;max-width:340px}
+.card h3{font-size:13px;font-weight:500}
+.card .body{margin-top:4px;font-size:12.5px;color:var(--muted-foreground);min-height:2.6em}
+.card .skel{height:12px;width:70%;border-radius:4px;background:var(--surface-2);margin-top:6px}
+
+.dialog{border:1px solid var(--border);border-radius:12px;background:var(--card);max-width:420px;
+  padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+.dialog h4{font-size:15px}
+.dialog p{font-size:13.5px;color:var(--muted-foreground);margin-top:8px}
+.dialog .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+</style>
+</head>
+<body>
+<div class="mockbar">
+  <h1>Console residue — 0.8 mock</h1>
+  <span class="sub">docs/design/console-residue-0.8-prompt.md · #157</span>
+  <button id="tt" type="button">Toggle theme</button>
+</div>
+<div class="sheet">
+
+<!-- ============ 1. Audit liveness chip ============ -->
+<section class="state">
+  <div class="tag"><span>State 1</span><b>Audit trail toolbar — the liveness chip (components/screens/audit.tsx)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="toolbar">
+        <span style="font-size:13px">All kinds</span>
+        <span style="font-size:13px;color:var(--muted-foreground)">All actors</span>
+        <div class="spacer" style="display:flex;align-items:center;gap:10px">
+          <span class="chip success pulse"><span class="dot"></span>Live · appending</span>
+          <span style="font-size:13px;color:var(--muted-foreground)">128 events</span>
+        </div>
+      </div>
+      <div class="evrow">workspace.created · alice@corp.example · 14:02:11</div>
+      <div class="evrow">run.started · agent · 14:02:44</div>
+    </div>
+  </div>
+  <div class="varlabel"><b>status === "ready" && !pollStale</b> — the last poll tick answered.</div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 1b</span><b>Same toolbar, one failed poll tick — no chip</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="toolbar">
+        <span style="font-size:13px">All kinds</span>
+        <span style="font-size:13px;color:var(--muted-foreground)">All actors</span>
+        <div class="spacer" style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;color:var(--muted-foreground)">128 events</span>
+        </div>
+      </div>
+      <div class="evrow">workspace.created · alice@corp.example · 14:02:11</div>
+      <div class="evrow">run.started · agent · 14:02:44</div>
+    </div>
+  </div>
+  <div class="varlabel"><b>status === "ready" && pollStale</b> — the last good rows stay on screen, unlabeled as live, until a tick answers again.</div>
+</section>
+
+<!-- ============ 2. Episode-catalog member chip ============ -->
+<section class="state">
+  <div class="tag"><span>State 2</span><b>Episode catalog — the member-audience chip (components/screens/onboarding/episode-card.tsx)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Your deployment — multi-user</h4>
+      <div class="evrow" style="display:flex;justify-content:space-between">
+        <span>04b · Inviting your team</span>
+        <span class="chip neutral">For your members</span>
+      </div>
+      <div class="evrow" style="display:flex;justify-content:space-between">
+        <span>13 · Handing off a workspace</span>
+        <span class="chip neutral">For your members</span>
+      </div>
+      <div class="evrow" style="display:flex;justify-content:space-between">
+        <span>02 · Your first run</span>
+        <span></span>
+      </div>
+    </div>
+  </div>
+  <div class="varlabel">Chip count = <b>EPISODES.filter(path === "multi" && audience === "member").length</b> — derived, not a literal the test hard-codes.</div>
+</section>
+
+<!-- ============ 3. Security-tier probes surface ============ -->
+<section class="state">
+  <div class="tag"><span>State 3</span><b>Security-tier control, refused (components/wardyn/copy.ts#SECURITY_ONLY_REASON)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Allowed hosts</h4>
+      <p class="lead">Add a host this workspace's runs may reach.</p>
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+        <button class="btn" disabled>Add host</button>
+        <span class="chip neutral">Requires the admin or security admin role.</span>
+      </div>
+    </div>
+  </div>
+  <div class="varlabel">The same string, unchanged, at every SECURITY-tier surface — §3's table names nine call sites.</div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 3b</span><b>Operator-tier control on the same screen — the narrower reason, not the security one</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Provider settings</h4>
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+        <button class="btn" disabled>Save providers</button>
+        <span class="chip neutral">Requires the admin role.</span>
+      </div>
+    </div>
+  </div>
+  <div class="varlabel">A viewer who is not an operator reads OPERATOR_ONLY_REASON here and SECURITY_ONLY_REASON at a security-tier control beside it — the two never collapse into one.</div>
+</section>
+
+<!-- ============ 4. Drives preview dropped fields ============ -->
+<section class="state">
+  <div class="tag"><span>State 4</span><b>"Who gets what" preview — the two staged rows (docs/design/user-drives-prompt.md §7.3)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Who gets what</h4>
+      <dl class="dl" style="margin-top:12px">
+        <dt>Directory</dt><dd class="mono">d-3f9a1c7e2b64d0a5e8c1</dd>
+        <dt>Object</dt><dd class="mono" title="wardyn-drive-scratch-d-3f9a1c7e2b64d0a5e8c1">"Scratch"</dd>
+        <dt>Size</dt><dd>50 GiB</dd>
+        <dt>Mode</dt><dd>Read/write</dd>
+        <dt>Enforcement</dt><dd>Bind-mounted</dd>
+        <dt>Matched on</dt><dd class="mono">sub</dd>
+      </dl>
+      <div class="note warning">The directory name keys on the sign-in subject; paste it first.</div>
+    </div>
+  </div>
+  <div class="varlabel"><b>PREVIEW_SUBJECT_LABEL</b> (new row) + <b>PREVIEW_WARNING</b> (new inline note) — additive; the five existing rows are unchanged.</div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 4b</span><b>Same preview, no server warning — the new row renders, the note does not</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Who gets what</h4>
+      <dl class="dl" style="margin-top:12px">
+        <dt>Directory</dt><dd class="mono">alice</dd>
+        <dt>Object</dt><dd class="mono" title="wardyn-drive-home-alice">"Home"</dd>
+        <dt>Size</dt><dd>20 GiB</dd>
+        <dt>Mode</dt><dd>Read/write</dd>
+        <dt>Enforcement</dt><dd>Bind-mounted</dd>
+        <dt>Matched on</dt><dd class="mono">email</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. User-drives card third state ============ -->
+<section class="state">
+  <div class="tag"><span>State 5</span><b>The drives card — loading / failed read (components/screens/setup/user-drives-card.tsx)</b></div>
+  <div class="card">
+    <h3>User drives</h3>
+    <p class="body">Persistent storage people can mount into a run — separate from any workspace.</p>
+    <div style="margin-top:12px"><a class="btn" href="#">Manage drives</a></div>
+  </div>
+  <div class="varlabel">counts === null — CARD_LEAD renders alone; no summary line, never a placeholder count.</div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 5b</span><b>The drives card — populated (existing State 9 precedent, shown for contrast)</b></div>
+  <div class="card">
+    <h3>User drives</h3>
+    <p class="body">Persistent storage people can mount into a run — separate from any workspace.<br>4 drives · 11 allocations</p>
+    <div style="margin-top:12px"><a class="btn" href="#">Manage drives</a></div>
+  </div>
+</section>
+
+<!-- ============ 6. Unsaved-changes guard ============ -->
+<section class="state">
+  <div class="tag"><span>State 6</span><b>Unsaved-changes guard — clean vs. dirty (lib/use-unsaved-guard.tsx, frozen as shipped)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Providers</h4>
+      <p class="lead">Git hosts and storage ceilings.</p>
+      <div style="margin-top:14px;display:flex;gap:10px">
+        <button class="btn primary" disabled>Save providers</button>
+        <span class="chip neutral">No unsaved changes</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 6b</span><b>Dirty, navigating away in-app — the blocking confirm</b></div>
+  <div class="frame">
+    <div class="pad" style="display:flex;justify-content:center;background:var(--surface-2)">
+      <div class="dialog">
+        <h4>Leave without saving?</h4>
+        <p>This form has changes that aren't saved. Leaving now discards them.</p>
+        <div class="foot">
+          <button class="btn ghost">Keep editing</button>
+          <button class="btn danger">Discard changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="varlabel">Fires on a sidebar nav link click while any registered form is dirty. A modifier/middle click (new tab) is left alone.</div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 6c</span><b>Dirty, closing or reloading the tab — the browser's own prompt, no console copy</b></div>
+  <div class="frame">
+    <div class="pad" style="display:flex;justify-content:center;background:var(--surface-2)">
+      <div class="dialog">
+        <h4>Leave site?</h4>
+        <p>Changes you made may not be saved.</p>
+        <div class="foot">
+          <button class="btn ghost">Cancel</button>
+          <button class="btn danger">Leave</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="varlabel">window.beforeunload while dirty — a native browser dialog. Wardyn ships no copy for it; shown here only so the state is enumerated.</div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>
