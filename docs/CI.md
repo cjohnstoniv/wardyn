@@ -329,6 +329,12 @@ slots, not the length of any one run: with many pull requests open, a run waits
 in the queue far longer than it executes. So the budget is counted in checks and
 runner-minutes as well as minutes.
 
+`pull_request:` carries no `branches:` filter — that field matches the PR's
+*base*, and the 0.8 working practice stacks lanes on `<kind>/<issue#>-<slug>`
+branches (#90), not on `main`, so a filtered trigger gave a stacked PR no
+checks at all. `push:` stays narrow to `main`, `master`, `release/**` and
+`feature/**`, since every commit already gets a run from its own PR.
+
 **Before and after #211**, measured from the GitHub Actions API: job times over
 the 60 most recent completed `ci.yml` runs as of 2026-09-21 05:00Z (a "green run" is one
 of the 26 whose `build` passed); superseded runs over all 215 `ci.yml` runs

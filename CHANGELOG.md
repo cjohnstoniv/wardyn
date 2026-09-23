@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A PR based on a `<kind>/<issue#>-<slug>` lane branch got no CI checks at all** — `ci.yml`'s
+  `pull_request` trigger filtered on `branches:`, which matches the PR's base, not its head; the
+  0.8 working practice stacks PRs on other lane branches, not `main`, so those PRs ran no checks
+  (`gh pr checks` reported none). The filter is removed from `pull_request:`; `push:` stays narrow
+  (#211).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

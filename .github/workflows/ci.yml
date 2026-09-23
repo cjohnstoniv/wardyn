@@ -3,8 +3,15 @@ name: CI
 on:
   push:
     branches: [main, master, 'release/**', 'feature/**']
-  pull_request:
-    branches: [main, master, 'release/**', 'feature/**']
+  # No branches filter: `branches:` matches the PR's BASE, and the 0.8
+  # working-practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90),
+  # not on main — a filtered trigger gave a stacked PR no checks at all
+  # (`gh pr checks` -> "no checks reported" on #348 and #351, both based on a
+  # lane branch). `push:` stays narrow: every commit already gets a run from
+  # its own PR, so an unfiltered push trigger would only double it, and the
+  # `concurrency:` group below keys pull_request runs off the PR number, push
+  # runs off run_id — it does not save a redundant push run from a lane branch.
+  pull_request: {}
 
 # Least-privilege default: CI only needs to read the repo — nothing here writes
 # back. Mirrors nightly.yml, which already sets this.
