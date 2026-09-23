@@ -384,7 +384,7 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 // immediately. An operator is exempt in one line at the top, so nothing below
 // ever costs them a store read.
 //
-// Five fields, three different answers:
+// Six fields, three different answers:
 //
 //   - devcontainer_repo is UNCONDITIONALLY operator-only, and is not a
 //     capability kind at all. It hands attacker-authored build configuration
@@ -395,10 +395,10 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 //     its own comment). Same build path as devcontainer_repo, but a pinned ref
 //     an admin wrote down is a bounded thing; a repo whose contents change
 //     under them is not.
-//   - workspace, agent and integration_id all NARROW: each is something every
-//     member could already do, so each stays allowed until an admin enforces
-//     its kind (denyMemberCapability, capSeamAllowed). Each gates the member's
-//     OWN choice and nothing else — never the workspace a stored policy or a
+//   - workspace, agent, integration_id and policy_id all NARROW: each is
+//     something every member could already do, so each stays allowed until an
+//     admin enforces its kind (denyMemberCapability, capSeamAllowed). Each
+//     gates the member's OWN choice and nothing else — never the workspace a stored policy or a
 //     scan linkage brings in, never the workspace pin or site default
 //     resolveRunIntegration falls back to, all of which are admin-authored
 //     (the doctrine in OPERATIONS §Multi-user).
@@ -457,6 +457,12 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 	// operator's site default fold on untouched.
 	if req.IntegrationID != "" && s.denyMemberCapability(w, r, capIntegration, req.IntegrationID, "runs.integration",
 		"you are not granted integration "+req.IntegrationID+" — ask an admin to grant it, or launch without integration_id") {
+		return governanceCeiling{}, true
+	}
+	// The stored policy the caller SELECTED, and only that: a run naming no
+	// policy runs under its own ceiling, which is nothing to bound.
+	if req.PolicyID != nil && s.denyMemberCapability(w, r, capPolicy, req.PolicyID.String(), "runs.policy",
+		"Stored policy "+req.PolicyID.String()+" isn't available to you. Ask your admin, or launch without policy_id.") {
 		return governanceCeiling{}, true
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
