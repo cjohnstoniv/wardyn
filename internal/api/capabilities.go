@@ -105,6 +105,13 @@ const (
 // capabilityKinds is the closed set, in the order the admin surface shows them.
 var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider}
 
+// capKindsVersion numbers the kind table, and GET /me/capabilities returns it so
+// a client holding a copy of the set (the console's CAPABILITY_KINDS) can tell
+// its copy is stale. Monotonic: a change to capKinds — a kind added, or a row's
+// direction changed — bumps it by one and it never goes down.
+// TestCapKindsVersionPinsTheTable fails on a table change that forgets to.
+const capKindsVersion = 1
+
 // validCapabilityKind reports whether kind is one of the seven. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }

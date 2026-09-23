@@ -296,6 +296,16 @@ func (s *fakeSiteConfigStore) PutSiteConfig(_ context.Context, cfg types.SiteCon
 	return cfg, nil
 }
 
+// The grant reads a member's per-person lists make (capVisible): no rows, so
+// every row is offered, as on a deployment that adopted no grants.
+func (s *fakeSiteConfigStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
+func (s *fakeSiteConfigStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
 func newSiteConfigHarness(t *testing.T, fake *fakeSiteConfigStore) (*Server, *recRecorder) {
 	t.Helper()
 	h := newHarness(t)

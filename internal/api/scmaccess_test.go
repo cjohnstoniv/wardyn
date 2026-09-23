@@ -71,6 +71,18 @@ type scmTestStore struct {
 
 func (s *scmTestStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, nil }
 
+// The capability reads: no grant rows and no switch, so a member caller is
+// offered every row, as a deployment that adopted no grants offers it.
+func (s *scmTestStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *scmTestStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *scmTestStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
 const scmTestRowID = "ado-row-1"
 
 // scmTestBaseline is what a sign-in on these rows must cover to be live: the

@@ -72,6 +72,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **The lists a person picks from now hold only what they may use (#737).** The harnesses and
+  integrations in `GET /setup/status`, `GET /integrations`, and the Azure DevOps rows in
+  `GET /me/scm-access` and `/setup/status`'s `scm_access` are filtered by the same capability rules
+  the launch doors refuse with (`agent`, `integration`, `workspace_provider`). A refused row is
+  dropped whole and reads exactly as one the deployment does not have; if the grant tables cannot
+  be read, those lists come back empty rather than unfiltered. Admins still see every row.
+  `GET /me/capabilities` gains `kinds_version`, which goes up whenever the set of capability kinds
+  changes.
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
