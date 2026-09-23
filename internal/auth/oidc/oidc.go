@@ -771,8 +771,8 @@ func clearCookie(w http.ResponseWriter, name string) {
 	})
 }
 
-// Auth-error codes carried on the "/?auth_error=<code>" redirect
-// Stable, machine-readable strings a sign-in screen maps to a
+// Auth-error codes carried on the "/?auth_error=<code>" redirect:
+// stable, machine-readable strings a sign-in screen maps to a
 // human message; never the raw internal error text.
 const (
 	authErrorEmailUnverified = "email_unverified"

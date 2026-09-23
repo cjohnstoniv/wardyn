@@ -74,7 +74,7 @@ func decodeAttachmentBase64(s string) ([]byte, bool) {
 // the newest message and yields the decoded content as spans (opt-in; off by
 // default). It reports (via the return value) whether any base64 block could
 // not be decoded under ANY known alphabet, so the caller can record an honest
-// Skipped{attachment_decode_error} instead of a silent "inspected clean"
+// Skipped{attachment_decode_error} instead of a silent "inspected clean".
 // A malformed body is still tolerated (returns false, nothing to
 // report).
 func extractAnthropicAttachments(body []byte, yield func(Span)) bool {

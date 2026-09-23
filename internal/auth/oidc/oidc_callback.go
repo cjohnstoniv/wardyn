@@ -243,7 +243,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	if a.httpClient != nil {
 		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
 	}
-	// D12: a transient IdP hiccup on the token endpoint (5xx, timeout) used to
+	// A transient IdP hiccup on the token endpoint (5xx, timeout) must not
 	// hard-fail the whole login on the FIRST blip — retryExchange gives it
 	// tokenExchangeRetries short-backoff attempts before giving up. A
 	// PERMANENT rejection (bad client secret, expired/replayed code —

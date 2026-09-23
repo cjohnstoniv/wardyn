@@ -152,13 +152,14 @@ func (p *Proxy) relayUpstream(w http.ResponseWriter, r *http.Request, host strin
 // refuseADOGitUpstream answers git, in git's own terms, when Azure DevOps
 // refused a brokered git request, and reports whether it did. A relayed 401
 // would make git prompt for a username; a relayed 203 page is not a git answer.
-func (p *Proxy) refuseADOGitUpstream(w http.ResponseWriter, r *http.Request, host, rest string, port int, push *adoGitPush, resp *http.Response) bool {
+// The port is 443 because the brokered git lane always dials :443.
+func (p *Proxy) refuseADOGitUpstream(w http.ResponseWriter, r *http.Request, host, rest string, push *adoGitPush, resp *http.Response) bool {
 	c := classifyADOUpstream(resp)
 	if c == adoUpstreamOK {
 		return false
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-	p.noteADOUpstream(r, host, port, c, true, resp.StatusCode)
+	p.noteADOUpstream(r, host, 443, c, true, resp.StatusCode)
 	writeADOGitRefusal(w, push, "Wardyn's git broker: "+c.message(host+(&url.URL{Path: rest}).EscapedPath(), resp.StatusCode))
 	return true
 }

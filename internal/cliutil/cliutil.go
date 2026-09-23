@@ -49,10 +49,10 @@ func EnvOr(key, def string) string {
 // never treats an explicit empty as an intentional blank — doing so would
 // erase a compiled default for anyone whose orchestrator passes every known
 // variable through. The escape hatch for a genuinely-intended blank is
-// escape hatch for a genuinely-intended blank is `-name=`, which states it.
+// `-name=`, which states it.
 //
 // The env value is applied to the flag's VARIABLE, never to its registered
-// DEFAULT (F157). flag.String captures whatever default it is handed as
+// DEFAULT. flag.String captures whatever default it is handed as
 // Flag.DefValue, and PrintDefaults renders a non-empty string default as
 // `(default "…")` — printed not only for -help but for EVERY parse error, since
 // flag.CommandLine is ExitOnError. Seeding the default from the env therefore

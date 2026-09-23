@@ -33,7 +33,7 @@ import (
 // grantPairing is the identity a ceiling entry is matched on, as opposed to the
 // BOUNDS (approval, TTL, github scope) that are clamped once a match is found.
 //
-// F110-residual: require_tls rides the same rule for the same reason (see the
+// require_tls rides the same rule for the same reason (see the
 // field below).
 //
 // Header/format are part of that IDENTITY for api_key, not a bound.

@@ -57,7 +57,7 @@ const (
 // Roles is the closed set, in rank order, and it is the ONE place the set is
 // written down. ValidRole is implemented over it and the DDL parity guard
 // (internal/db's TestClosedEnumChecksMatchConstants, role_mappings.role) reads
-// it, so a fourth role cannot land on one side alone in EITHER direction. It
+// it, so a fourth role cannot land on one side alone in EITHER direction.
 // A duplicate copy could drift from this guard, silently admitting a role
 // the database still refuses.
 // The sibling user_drives enums already derive from types.DriveBackends and

@@ -156,7 +156,7 @@ type InjectionRule struct {
 	// Format wraps the secret, e.g. "Bearer %s".
 	Format string `json:"format"`
 	// RequireTLS declares that this rule's credential may ride ONLY a transport
-	// the proxy runs TLS on (F110's residual half). It is the operator's
+	// the proxy runs TLS on. It is the operator's
 	// transport intent, which no other field could carry: injectableTransport
 	// (internal/egress/proxy/inject.go) can rule out cleartext to :443 and to a
 	// host the proxy itself only ever speaks TLS to, but a plaintext connector on

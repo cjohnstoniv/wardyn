@@ -540,8 +540,7 @@ func (m WorkspaceMount) ReadOnlyOrDefault() bool {
 // clones the remote's default branch, unchanged from before this field
 // existed. Carried as a 4th tab-separated field in WARDYN_REPOS
 // (buildRepoRecords, runs_scm.go) for agent-run-lib.sh's clone_one to check
-// out (W9-S1-3 — previously advertised on the source's identity but never
-// actually honored by any clone).
+// out.
 type WorkspaceRepo struct {
 	Repo   string `json:"repo"`
 	Target string `json:"target,omitempty"`

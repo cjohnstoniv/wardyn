@@ -45,8 +45,8 @@ func New(name string, d Deps) (Store, error) {
 
 func init() {
 	// "off" — recording disabled, spelled out. It exists because 0.7's
-	// FlagEnv keeps a compiled default when an env value is EMPTY (
-	// WARDYN_LISTEN="" must not become 0.0.0.0:80), which made the Helm
+	// FlagEnv keeps a compiled default when an env value is EMPTY:
+	// WARDYN_LISTEN="" must not become 0.0.0.0:80. That made the Helm
 	// chart's old off recipe — WARDYN_RECORDING_STORE=fs plus an empty
 	// WARDYN_RECORDING_DIR — unreachable: the empty dir kept ./data/recordings,
 	// NewFSStore's MkdirAll hit the read-only root FS, and a stock install

@@ -54,7 +54,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	// created_at AFTER the cutoff and survive it, so "revoke every session for
 	// this human" would silently not.
 	//
-	// The age, not now(), because plain now() would re-open F143: the API stamps
+	// The age, not now(), because plain now() would break admission-time stamping: the API stamps
 	// t.CreatedAt at request ADMISSION, before it reads the body, precisely so a
 	// caller who holds a mint request open across POST /sessions/revoke cannot
 	// land a created_at after the cutoff. now() - age keeps that and adds the

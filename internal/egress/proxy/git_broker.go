@@ -47,7 +47,7 @@ const (
 	// authenticates as — fixed by GitHub, not configurable. Named because it is
 	// half of the credential's wire rendering (SetBasicAuth sends
 	// base64(gitBrokerUsername + ":" + token)), so the mask registration and the
-	// outbound header must derive it from the same place (F155).
+	// outbound header must derive it from the same place.
 	gitBrokerUsername = "x-access-token"
 	// ruleSourceGitRef marks a decision-log row denied by push branch-namespace
 	// confinement (as opposed to the per-repo allowlist), so audit says WHICH gate
@@ -105,7 +105,7 @@ const (
 // expiry (internal/broker/broker_mint_kinds.go mints with ttlFor, honouring an
 // operator ttl_seconds), so any grant authored with ttl_seconds <= 300 was born
 // INSIDE a 5-minute margin: the cached token was treated as stale on the very
-// next sub-request and the clone re-minted and failed (F120). At the
+// next sub-request and the clone re-minted and failed. At the
 // sub-request scale the margin only has to cover the round trip.
 const brokerRefreshMargin = 30 * time.Second
 
@@ -278,10 +278,9 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	removeHopByHop(outReq.Header)
 	// Defensive: strip any sandbox-supplied credential before injecting ours, so a
 	// rogue in-sandbox client can't smuggle its own onto the outbound request.
-	// F104: stripSandboxCredentials is the one definition of that set (inject.go);
-	// the local Header.Del("Authorization") this replaces left every OTHER
-	// credential header the sandbox set — X-Api-Key, Cookie, X-Access-Token — on
-	// the request alongside the brokered installation token.
+	// stripSandboxCredentials is the one definition of that set (inject.go); a
+	// local Header.Del("Authorization") would leave X-Api-Key, Cookie and
+	// X-Access-Token beside the brokered installation token.
 	stripSandboxCredentials(outReq.Header, "")
 	// Content rules need a pack they can read, and a client only sends one when
 	// the server asks (push_advert.go). The advertisement must be PARSEABLE to be
@@ -382,7 +381,7 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 //
 // wireUser maps the mint's username to the one the CALLING LANE will actually
 // put on the wire, so the mask registered below covers the rendering that
-// leaves the process (F120) — the GitHub lane always sends gitBrokerUsername,
+// leaves the process — the GitHub lane always sends gitBrokerUsername,
 // while a github_token mint returns no username at all.
 func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser func(mintUsername string) string) (token, username string, err error) {
 	p.gitTokMu.Lock()
@@ -421,14 +420,14 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	// AddGlobal dedupes by value, so the cache's re-mints add at most one entry
 	// per rotation on a process that lives one run.
 	//
-	// Both renderings (F155): the raw token AND the base64(username + ":" + tok)
-	// that SetBasicAuth puts on the wire. Registering only the raw token left the
+	// Both renderings: the raw token AND the base64(username + ":" + tok)
+	// that SetBasicAuth puts on the wire. Registering only the raw token leaves the
 	// wire form — the one a transport error quoting the outbound request carries —
 	// unmasked; the mask is exact-bytes, so it protects exactly the renderings it
 	// was given. registerBasicAuthCredential (inject.go) is the one definition of
 	// that set.
 	//
-	// wireUser(user), NOT the mint's username (F120): the two lanes send
+	// wireUser(user), NOT the mint's username: the two lanes send
 	// different usernames and only the caller knows which. internal/broker
 	// leaves Username empty for a github_token (broker.go, "Empty for
 	// github_token") while handleGitBroker authenticates as the constant

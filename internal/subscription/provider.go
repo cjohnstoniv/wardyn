@@ -175,7 +175,7 @@ func (p *provider) read() (Token, error) {
 // The egress proxy single-flights per HOST (inject.go's reMu), so the stampede
 // it does not cover is the CROSS-proxy one: N runs each POST /internal/injection
 // inside the 10-minute margin and arrive here as N concurrent refreshes. Each
-// would each spawn its own `claude -p ok`, and the sharp end of that is not the
+// would spawn its own `claude -p ok`, and the sharp end of that is not the
 // wasted turns — it is N processes writing the ONE resident
 // ~/.claude/.credentials.json, whose atomic write-back `claude` owns and
 // coordinates only with itself.

@@ -556,7 +556,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 // suffix: `PUT /v1/messages` with a secret in the body would reach the vendor
 // with the operator's brokered credential under mode=block, allowed, with
 // scanSummary=nil — audit-indistinguishable from a bodiless GET /v1/models.
-// Closing the suffix axis (F112's fail-closed default) while leaving the verb
+// Closing the suffix axis (the fail-closed default) while leaving the verb
 // axis open would just move the same bypass one keystroke sideways.
 func bodyBearingMethod(method string) bool {
 	switch method {
@@ -748,7 +748,7 @@ func classifyAnthropicLLM(method, rest string) int {
 	case method == http.MethodPost && strings.HasSuffix(r, "/count_tokens"):
 		return scanMessages
 	default:
-		// Fail-closed default (F112): every OTHER POST on this route is
+		// Fail-closed default: every OTHER POST on this route is
 		// uninspected, not quiet — the enumerated arms above cannot be trusted to
 		// cover the vendor's whole content-upload surface, because the SANDBOX
 		// picks the whole suffix (handleLocalRoute dispatches on a bare prefix
@@ -787,7 +787,7 @@ func classifyOpenAILLM(method, rest string) int {
 	case method == http.MethodPost && (r == "chat/completions" || strings.HasSuffix(r, "/chat/completions")):
 		return scanMessages
 	default:
-		// Fail-closed default (F112), same rule as classifyAnthropicLLM: an
+		// Fail-closed default, same rule as classifyAnthropicLLM: an
 		// enumerated allowlist of endpoints cannot be trusted to cover the
 		// vendor's whole content-upload surface. The vendor's own OpenAPI spec
 		// defines POST /v1/files and the multipart

@@ -247,8 +247,7 @@ var _ ActiveRunsAtPathReader = PG{}
 // ponytail: no new index. workspace_path is selective and the state filter is a
 // cheap check over the rows that match it; a composite (workspace_path, state)
 // index is the upgrade if a deployment ever has enough runs on ONE path to
-// notice. What this replaces was not an index problem — it was reading the
-// whole table.
+// notice.
 func (s PG) ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string) ([]types.AgentRun, error) {
 	states := make([]string, 0, len(types.NonTerminalRunStates))
 	for _, st := range types.NonTerminalRunStates {
