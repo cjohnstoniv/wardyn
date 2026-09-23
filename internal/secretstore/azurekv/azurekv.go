@@ -194,6 +194,18 @@ func (s *Store) parse(owner, name, ref string) (secretName string, gen int64, n 
 	return secretName, gen, n, nil
 }
 
+// Ref implements secretstore.External: the secret the row's value lives in.
+// The stem is DERIVED from (owner, name); only the generation comes from the
+// recorded ref, and a ref naming any other stem is refused, so a forged
+// pointer claims nothing.
+func (s *Store) Ref(owner, name, ref string) (string, error) {
+	secretName, _, _, err := s.parse(owner, name, ref)
+	if err != nil {
+		return "", err
+	}
+	return s.c.host + "/" + secretName, nil
+}
+
 // binding is the tag set a value for (owner, name) carries. The operator's
 // "" owner is written as no wardyn-owner tag; the kind says which.
 func binding(owner, name string) map[string]string {

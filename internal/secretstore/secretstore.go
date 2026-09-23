@@ -108,6 +108,11 @@ type External interface {
 	// Check reports whether the value behind ref exists and is bound to
 	// (owner, name), without reading it (-reconcile).
 	Check(ctx context.Context, owner, name, ref string) error
+	// Ref is the object DERIVED from (owner, name): where the row's value
+	// must live, whatever the row records (-reconcile). A store whose object
+	// names carry state no row can derive (Key Vault's generation) takes that
+	// part from ref, and refuses a ref whose derivable part is not the row's.
+	Ref(owner, name, ref string) (string, error)
 	// Delete removes every version of the value behind ref. Idempotent.
 	Delete(ctx context.Context, owner, name, ref string) error
 	// Walk lists every value this install holds in the store (-reconcile).

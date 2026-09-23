@@ -153,7 +153,7 @@ func (l adoHostsLoader) forAddresses(values ...string) []string {
 // the ONE place "legacy open mode" is decided. Every predicate in this file
 // answers "admitted" when it is false, BEFORE any other read, so an upgraded
 // 0.7.1 install behaves byte-identically to what it did before this feature
-// existed (the absent-row doctrine capEnforced and every GovernanceLimits zero
+// existed (the absent-row doctrine capBatch.enforced and every GovernanceLimits zero
 // value already follow).
 //
 // It counts rows enabled or disabled: a disabled row is still configuration —

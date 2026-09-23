@@ -307,8 +307,11 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 				"Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment.")
 			return
 		}
-		writeError(w, http.StatusFailedDependency,
-			"secret "+minted.Injection.SecretName+" is not in the store (set it with `wardyn secret set`)")
+		msg := "secret " + minted.Injection.SecretName + " is not in the store (set it with `wardyn secret set`)"
+		if reason == "refused" { // the row exists: re-setting it would overwrite what an operator may need to inspect
+			msg = "secret " + minted.Injection.SecretName + " exists but could not be used: the store refused it (its value is gone, or bound to another row). Nothing was substituted; ask an admin to check it."
+		}
+		writeError(w, http.StatusFailedDependency, msg)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,

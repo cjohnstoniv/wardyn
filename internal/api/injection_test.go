@@ -254,6 +254,35 @@ func TestInternalInjection_StoreUnavailableIsDistinctFromMissing(t *testing.T) {
 	}
 }
 
+type refusedSecrets struct{ *memSecrets }
+
+func (refusedSecrets) Get(context.Context, string) ([]byte, error) {
+	return nil, fmt.Errorf("refused: Vault no longer holds this credential at wardyn/ns1/operator/x")
+}
+func (u refusedSecrets) For(string) secretstore.Store { return u }
+
+// A credential whose row exists but whose value the store refused is not
+// reported as missing: the "set it" hint would overwrite what is left of it.
+func TestInternalInjection_RefusedIsNotReportedAsMissing(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	h.srv.cfg.Secrets = refusedSecrets{sec}
+	h.srv.router = h.srv.routes()
+	token := h.mintRunToken(t, uuid.New())
+	h.broker.minted = broker.Minted{
+		Kind:      types.GrantAPIKey,
+		JTI:       "j4",
+		Injection: &egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", SecretName: "anthropic-api-key"},
+	}
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+	body := rr.Body.String()
+	if rr.Code != http.StatusFailedDependency || !strings.Contains(body, "exists but could not be used") || strings.Contains(body, "wardyn secret set") {
+		t.Fatalf("refused: status = %d body=%s, want 424 saying the credential exists but was refused", rr.Code, body)
+	}
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"refused"`) {
+		t.Fatalf("refused: audit data = %s, want the refused reason", ev.Data)
+	}
+}
+
 // Secret management: write/list/delete only; values never come back; reserved
 // platform keys are protected; everything is admin-gated and audited.
 func TestSecretsAPI_WriteOnlyLifecycle(t *testing.T) {
