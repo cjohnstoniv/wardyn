@@ -59,6 +59,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Boot secrets from files: a `<VAR>_FILE` twin for every secret-carrying `wardynd` setting
+  (#596).** `WARDYN_PG_DSN`, `WARDYN_PG_MIGRATE_DSN`, `WARDYN_ADMIN_TOKEN`, `WARDYN_AGE_KEY`,
+  `WARDYN_OIDC_CLIENT_SECRET`, `WARDYN_DIRECTORY_CLIENT_SECRET`, `WARDYN_AUDIT_SINKS` and
+  `WARDYN_ORG_ENROLMENT_TOKEN` each accept a `_FILE` path. `wardynd` reads the file once at boot,
+  so a Vault Agent injector, the Secrets Store CSI driver or a projected Secret volume can deliver
+  the value without it entering the process environment. Setting a variable both ways refuses boot,
+  and the chart refuses to render it. Boot is also refused on an unreadable or empty file, a group-
+  or world-writable one, or one wardynd's own non-root uid owns that others can read. The error
+  names the variable and the path, never the content. One trailing newline is trimmed. The chart's new `secretFiles.enabled`
+  (off by default) mounts the Secrets it already wires as files and renders no `secretKeyRef` env.
+  A `WARDYN_*_FILE` in `env`/`extraEnv` counts as wired in every render check, and
+  `extraVolumes`/`extraVolumeMounts` carry a CSI volume. Examples are in `docs/OPERATIONS.md`,
+  "Secrets from files (Vault Agent / CSI)".
+
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just
@@ -72,39 +86,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
-- **Stored credentials are encrypted with AES-256-GCM, bound to their row, and can no longer be
-  forged (#562).** A `secrets` row was one age payload (X25519 + ChaCha20-Poly1305) with no
-  associated data: a database writer could move a ciphertext to another person or another name
-  undetected, and, age being public-key, anyone holding the deployment's public recipient could
-  write a row that decrypted. Every row is now envelope v1 (migration `0069_secret_envelope_v1`):
-  each save draws a fresh 32-byte data key, seals the value with AES-256-GCM bound to the row's
-  `(owned_by, name)`, and wraps the data key with AES-256-GCM under a key-encryption key.
-  `WARDYN_AGE_KEY` stays the only key input and is used through HKDF-SHA256 alone to derive that
-  key-encryption key, which is symmetric and so cannot be derived from the public recipient; age
-  itself is used only once, to convert legacy rows. A moved, forged or tampered row is refused with
-  an error that names the row, never its value, and is never read as missing, so a tampered boot
-  key fails boot rather than being replaced. `wardynd -rotate-age-key` now rewraps data keys only
-  and never decrypts a value (`secret.rekey` is unchanged). With `WARDYN_AGE_KEY` unset, wardynd
-  now refuses to start while any row is sealed under an age key, instead of minting an ephemeral
-  key that strands them. Still open: a database writer can copy an older row back into its own
-  slot (THREAT-MODEL residual 48).
-- **The control-plane → proxy hop is TLS, pinned to Wardyn's own CA (#561).** wardynd sent resolved
-  credential values to every run's `wardyn-proxy` over plain `http://` (the chart rendered
-  `http://…svc.cluster.local:8080`, compose `http://wardynd:8080`). wardynd now mints an internal CA
-  on first boot (secret-store row `wardyn-internal-ca`, kept across restarts and upgrades), signs a
-  serving certificate for the host of `WARDYN_CONTROL_PLANE_URL` at each boot, and serves the
-  proxy-facing routes (`/api/v1/internal/*`, `/healthz`) on a new TLS listener,
-  `WARDYN_INTERNAL_LISTEN` (`:8443`). Dispatch hands the CA certificate to each proxy in its sealed
-  config (`control_plane_ca_pem`), and the proxy trusts it alone for every control-plane call — the
-  resolve, mints, renewal, decisions, approvals, uploads — never the system roots and never
-  `WARDYN_TRUSTED_CA_FILE`, which now applies to egress only. `http://` is refused at wardynd boot
-  and at proxy start unless the host is loopback (`localhost`, `127.0.0.0/8`, `::1`, matched
-  literally). Both ends require TLS 1.3. The chart, compose (Desktop and m′ included) and
-  `scripts/run-host.sh` default to `https://…:8443`; the chart gives that port its own NetworkPolicy
-  rule (this namespace and the runs namespace, never `networkPolicy.ingress.from`). `/healthz` gains
-  `proxy_hop_tls`. THREAT-MODEL B6 is updated: the transport is TLS, the proxy's authentication is
-  still a bearer token, not mTLS, and `wardyn-tetragon-ingest`'s audit-write-only bearer still
-  crosses in plaintext (integrity, not confidentiality; #606).
+- **Secret-carrying boot settings no longer have to live in environment variables (#596).** Cloud
+  posture scanners flag a pod with a secret in its env, and a "secrets delivered at runtime"
+  control rules it out. The `_FILE` twins and the chart's `secretFiles.enabled` close both.
+  `threatmodel/THREAT-MODEL.md` residual #49 now records a related risk: `WARDYN_AGE_KEY` guards
+  every stored credential **and** up to four boot keys in the same store (the identity signing
+  key always; the OIDC session, UI-sandbox session and SSH host keys when those features are on). The age key plus a read of the database
+  therefore yields all of them. Splitting those keys is planned for 0.8.
 
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
@@ -142,37 +130,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
   `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
   handler written in this indirect style no longer passes CI clean.
-
-### Upgrading
-
-- **This upgrade is one-way: rolling back to 0.7.11 needs the pre-upgrade backup (#562).** The
-  first boot converts every stored secret to envelope v1 before it reads its boot keys: one
-  transaction, under its own advisory lock, so a second replica waits and then finds nothing to do,
-  and later boots convert nothing. A row that does not decrypt under `WARDYN_AGE_KEY` aborts the
-  conversion and the boot, naming the row; nothing is committed. Once a conversion commits, 0.7.11
-  and earlier can read none of the rows: going back means restoring the Postgres dump taken before
-  the upgrade, together with the same `WARDYN_AGE_KEY`. Keep `WARDYN_AGE_KEY` exactly as it is — it
-  remains the key input. There is no rolling upgrade: stop every older replica first. One still
-  running keeps writing pre-envelope payloads that are refused by name ("an older wardynd is still
-  writing"): a new name it wrote is converted at the next restart, but a name it replaced is
-  overwritten in place and must be set again. Runbook: `docs/OPERATIONS.md` § Upgrades.
-- **0.7.11 → 0.7.12, control-plane TLS (#561): no step on a stock install.** The chart, the compose
-  file (and with it Desktop and m′) and `scripts/run-host.sh` carry the new URL, and wardynd mints
-  its internal CA on the first boot. Act only if one of these is true of your install:
-  - **Your proxy image is pinned separately** (`k8s.proxyImage`, `WARDYN_PROXY_IMAGE`): move it to
-    the 0.7.12 image together with wardynd. A 0.7.11 proxy refuses the new `control_plane_ca_pem`
-    config key at start, so every new run fails loudly until the two match.
-  - **You set `WARDYN_CONTROL_PLANE_URL` yourself** (chart `env`/`extraEnv`, your own compose or
-    systemd environment, a host-mode export) to an `http://` URL whose host is not loopback: wardynd
-    now refuses to boot on it. Remove the override, or set `https://<the host your proxies dial>:8443`.
-  - **Something outside Wardyn filters ports between the proxies and wardynd** (a cluster-wide
-    baseline NetworkPolicy, a mesh authorization policy, a host firewall in host mode): allow TCP
-    8443 (`service.internalPort` / `WARDYN_INTERNAL_LISTEN`) from the proxies to wardynd.
-  - **Port 8443 is taken where wardynd runs** (host mode, a custom container): set
-    `WARDYN_INTERNAL_LISTEN` and the port in `WARDYN_CONTROL_PLANE_URL` to a free one (chart:
-    `service.internalPort`). wardynd refuses to start rather than run without the listener.
-
-  Runs already in flight during the upgrade finish on the path they were dispatched with.
 
 ### Fixed
 

@@ -35,6 +35,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Network: upstream proxy and egress redirects](#network-upstream-proxy-and-egress-redirects)
 - [Toolchain-fidelity environment](#toolchain-fidelity-environment)
 - [Recommended builds on compose](#recommended-builds-on-compose)
+- [Secrets from files (Vault Agent / CSI)](#secrets-from-files-vault-agent--csi)
 - [Rotating the age key](#rotating-the-age-key)
 - [Upgrades](#upgrades)
 - [Kubernetes: day-2](#kubernetes-day-2)
@@ -4545,6 +4546,151 @@ An agent CLI is present there only if the repo's own devcontainer installs it; a
 agent run on an image without one fails at the CLI, visibly, rather than being
 silently patched.
 
+## Secrets from files (Vault Agent / CSI)
+
+Every secret-carrying `wardynd` boot setting has a `<VAR>_FILE` twin that holds
+a **path** instead of the value: `WARDYN_PG_DSN_FILE`,
+`WARDYN_PG_MIGRATE_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_AGE_KEY_FILE`,
+`WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`,
+`WARDYN_AUDIT_SINKS_FILE` and `WARDYN_ORG_ENROLMENT_TOKEN_FILE`
+([ENV.md](ENV.md)). Use them when a control requires
+secrets delivered at runtime (Vault Agent injector, Secrets Store CSI driver,
+projected volumes), or when a posture scanner flags secret env vars.
+
+How `wardynd` reads them (`resolveSecretFiles`, `cmd/wardynd/secret_file.go`):
+
+- **Once, at boot.** A rotated file takes effect on the next restart, the same
+  as a changed env var.
+- **Both forms set refuses boot**, naming both variables. There is no
+  precedence.
+- **An unreadable, empty, group- or world-writable file refuses boot**, naming
+  the variable and the path. The content is never logged or echoed. The mode
+  is checked on the opened file, so the file checked is the file read.
+- **One trailing newline is trimmed** (`\n` or `\r\n`). Anything else in the
+  file is part of the value.
+- **Other-readable is refused only on a file wardynd's own non-root uid
+  owns.** That is the hand-made host file, and `chmod 640` fixes it (under
+  Vault Agent, set `agent-inject-perms-<name>`). Other-readable files that a
+  supported mechanism produces are allowed: a kubelet Secret volume
+  (root-owned `0440` under `fsGroup`), a Secrets Store CSI file (root-owned
+  `0644`, readable by a non-root process only through the other-read bit) and
+  Vault Agent's default (`0644`, owned by the agent's uid). This is why the
+  rule differs from `WARDYN_DAEMON_PROXY_SECRET`'s 0600 rule. Scope the mount
+  to the wardynd container.
+
+On Kubernetes, `secretFiles.enabled=true` delivers the chart's own Secrets this
+way with no other change (chart README, "Boot secrets as files"). Both examples
+below replace the Kubernetes Secret entirely. They use generic names: Vault at
+`https://vault.example:8200`, a Vault role `wardyn` bound to the chart's
+ServiceAccount, and a KV v2 secret at `secret/data/wardyn/boot` with keys
+`pg_dsn`, `admin_token` and `age_key`. Both leave `postgres.dsn.secretRef.name`
+empty (it has a non-empty default), so the DSN comes only from the file.
+
+**Vault Agent injector.** The injector writes each secret to `/vault/secrets/`.
+`agent-pre-populate-only` runs the agent as an init container only, which is
+enough because wardynd reads once at boot.
+
+```yaml
+podAnnotations:
+  vault.hashicorp.com/agent-inject: "true"
+  vault.hashicorp.com/agent-pre-populate-only: "true"
+  vault.hashicorp.com/service: "https://vault.example:8200"
+  vault.hashicorp.com/role: "wardyn"
+  vault.hashicorp.com/agent-inject-secret-pg-dsn: "secret/data/wardyn/boot"
+  vault.hashicorp.com/agent-inject-template-pg-dsn: |
+    {{- with secret "secret/data/wardyn/boot" }}{{ .Data.data.pg_dsn }}{{ end }}
+  vault.hashicorp.com/agent-inject-perms-pg-dsn: "0440"
+  vault.hashicorp.com/agent-inject-secret-admin-token: "secret/data/wardyn/boot"
+  vault.hashicorp.com/agent-inject-template-admin-token: |
+    {{- with secret "secret/data/wardyn/boot" }}{{ .Data.data.admin_token }}{{ end }}
+  vault.hashicorp.com/agent-inject-perms-admin-token: "0440"
+  vault.hashicorp.com/agent-inject-secret-age-key: "secret/data/wardyn/boot"
+  vault.hashicorp.com/agent-inject-template-age-key: |
+    {{- with secret "secret/data/wardyn/boot" }}{{ .Data.data.age_key }}{{ end }}
+  vault.hashicorp.com/agent-inject-perms-age-key: "0440"
+postgres:
+  dsn:
+    secretRef:
+      name: ""
+env:
+  WARDYN_PG_DSN_FILE: /vault/secrets/pg-dsn
+  WARDYN_ADMIN_TOKEN_FILE: /vault/secrets/admin-token
+  WARDYN_AGE_KEY_FILE: /vault/secrets/age-key
+networkPolicy:
+  egress:
+    extra:
+      # The agent runs inside the wardynd pod, so the pod's egress policy
+      # applies to it. Narrow this to your Vault address.
+      - ports: [{port: 8200, protocol: TCP}]
+```
+
+The injector's Kubernetes auth needs a ServiceAccount token in the pod, and
+the chart turns automount off. Either set `serviceAccount.automount=true`, or
+mount a projected token through `extraVolumes` and name that volume in
+`vault.hashicorp.com/agent-service-account-token-volume-name`.
+
+**Secrets Store CSI driver** (Vault provider shown; other providers take the same
+chart values). The driver mounts the files from the node, so the pod's
+NetworkPolicy and ServiceAccount automount do not apply.
+
+```yaml
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: wardyn-boot
+spec:
+  provider: vault
+  parameters:
+    vaultAddress: "https://vault.example:8200"
+    roleName: "wardyn"
+    objects: |
+      - objectName: "pg-dsn"
+        secretPath: "secret/data/wardyn/boot"
+        secretKey: "pg_dsn"
+      - objectName: "admin-token"
+        secretPath: "secret/data/wardyn/boot"
+        secretKey: "admin_token"
+      - objectName: "age-key"
+        secretPath: "secret/data/wardyn/boot"
+        secretKey: "age_key"
+```
+
+```yaml
+extraVolumes:
+  - name: boot-secrets-csi
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: wardyn-boot
+extraVolumeMounts:
+  - name: boot-secrets-csi
+    mountPath: /mnt/secrets-store
+    readOnly: true
+postgres:
+  dsn:
+    secretRef:
+      name: ""
+env:
+  WARDYN_PG_DSN_FILE: /mnt/secrets-store/pg-dsn
+  WARDYN_ADMIN_TOKEN_FILE: /mnt/secrets-store/admin-token
+  WARDYN_AGE_KEY_FILE: /mnt/secrets-store/age-key
+```
+
+The chart counts an `env`/`extraEnv` `_FILE` entry as that secret being wired.
+The auth and age-key render checks pass. Naming it beside the chart's own
+source (`auth.adminToken.*`, `postgres.dsn.*`, `secrets.ageKey*`) is refused
+at render, as it would be at boot, and so is naming both `WARDYN_X` and
+`WARDYN_X_FILE`. The file path itself is not a secret, which
+is why it can sit in `env`.
+
+**Compose.** `deploy/compose/docker-compose.yaml` still passes the plain
+variables, and `WARDYN_ADMIN_TOKEN` falls back to the demo token when it is
+empty. A `_FILE` beside a non-empty plain variable refuses boot. Before you use a
+`_FILE` twin, set the plain variable to `""` under `environment:` in a compose
+override file. Blanking it in `.env` does not work, because the `:-` default
+fills an empty value.
+
 ## Rotating the age key
 
 Each stored secret is an envelope (`internal/secretstore/pg`, since 0.7.12): the
@@ -4617,6 +4763,16 @@ WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
 #    Compose: rewrite the .env line. Helm: update the Secret's age-key entry.
 docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 ```
+
+**With `WARDYN_AGE_KEY_FILE` on Kubernetes**, the key file is a read-only
+Secret, CSI or Vault Agent mount, and the rotation cannot replace it in place.
+Rotate against a writable copy instead. Scale wardynd to 0, then in a one-off
+pod (or on a host with the DSN) copy the mounted key to a scratch file you own
+(`umask 077; cp /etc/wardyn/secrets/age-key /tmp/age.key`). Run
+`WARDYN_AGE_KEY_FILE=/tmp/age.key wardynd -rotate-age-key /tmp/age.key`. Then
+write the new key into the Secret, or into the Vault/CSI source it comes from,
+before you scale back up. Until the source holds the new key, every restart
+reads the retired one and fails closed.
 
 Verify the same way the restore runbook does — a row count proves nothing about
 decryptability, so launch a run against a workspace that depends on a stored

@@ -625,6 +625,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q 'value: "/data/recordings"' || { echo "WARDYN_RECORDING_DIR does not follow the persistent mount"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" || { echo "inline secrets.ageKey is not injected — every stored secret dies on restart"; exit 1; }; \
 	echo "$$out" | grep -q "name: wardyn-oidc" || { echo "extraEnv did not render (secret-bearing env has no secretKeyRef path)"; exit 1; }; \
+	echo "$$out" | grep -q "secretProviderClass: wardyn-boot" || { echo "extraVolumes did not render (a CSI-mounted WARDYN_*_FILE has no volume)"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /mnt/secrets-store" || { echo "extraVolumeMounts did not render (a CSI-mounted WARDYN_*_FILE path would name nothing)"; exit 1; }; \
 	echo "$$out" | grep -q "name: regcred" || { echo "image.pullSecrets did not render"; exit 1; }; \
 	echo "$$out" | grep -q "storageClassName: fast" || { echo "persistence.storageClass did not render"; exit 1; }; \
 	echo "$$out" | grep -q "kubernetes.io/metadata.name: ingress-nginx" || { echo "networkPolicy.ingress.from did not render"; exit 1; }; \
@@ -734,6 +736,22 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set k8s.rbac=null | grep -q '^kind: Role$$' || { echo "k8s.rbac=null (the key PRESENT and explicitly null, which is what `--set k8s.rbac=null` and a hand-cleared block both produce) no longer renders RBAC — hasKey must treat an absent key as unset, not as create=false"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age | grep -A3 "name: WARDYN_AGE_KEY" | grep -q "name: wardyn-age" || { echo "secrets.ageKeySecretRef.name did not wire WARDYN_AGE_KEY from that Secret"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "secrets.ageKeySecretRef.name is set together with" || { echo "chart no longer refuses two age-identity sources named at once"; exit 1; }
+	@# #596 boot secrets as files: secretFiles.enabled turns every chart-wired secret
+	@# into a WARDYN_*_FILE path into one projected volume, and must render NO secret
+	@# as env at all — that absence is the scanner finding the mode exists to clear.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set secretFiles.enabled=true); \
+	dep=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Deployment$$/{r=1} r'); \
+	echo "$$dep" | grep -q "kind: Deployment" || { echo "secretFiles.enabled rendered no Deployment — the absence check below would be vacuous"; exit 1; }; \
+	echo "$$dep" | grep -qE 'secretKeyRef|name: WARDYN_(PG_DSN|ADMIN_TOKEN|AGE_KEY)$$' && { echo "secretFiles.enabled still renders a secret as env (a secretKeyRef, or a plain WARDYN_PG_DSN/ADMIN_TOKEN/AGE_KEY)"; exit 1; }; \
+	for v in PG_DSN ADMIN_TOKEN AGE_KEY; do echo "$$dep" | grep -A1 "name: WARDYN_$${v}_FILE" | grep -q 'value: "/etc/wardyn/secrets/' || { echo "secretFiles.enabled did not point WARDYN_$${v}_FILE into the boot-secrets mount"; exit 1; }; done; \
+	echo "$$dep" | grep -A1 '^        - name: boot-secrets$$' | grep -q "projected:" || { echo "secretFiles.enabled rendered no projected boot-secrets volume"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set postgres.dsn.secretRef.name= --set env.WARDYN_PG_DSN_FILE=/mnt/s/pg-dsn --set env.WARDYN_ADMIN_TOKEN_FILE=/mnt/s/admin-token --set env.WARDYN_AGE_KEY_FILE=/mnt/s/age-key) || { echo "an all-_FILE (Vault Agent / CSI) install no longer renders"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c '^kind: Secret$$')" = "0" ] || { echo "an all-_FILE install still rendered a chart Secret"; exit 1; }; \
+	echo "$$out" | grep -q "secretKeyRef" && { echo "an all-_FILE install still rendered a secretKeyRef"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_PG_DSN_FILE=/mnt/s/pg-dsn 2>&1 | grep -q "pick exactly one DSN source" || { echo "chart no longer refuses WARDYN_PG_DSN_FILE beside postgres.dsn.secretRef — in secretFiles mode the later _FILE entry would silently win"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set env.WARDYN_AGE_KEY=AGE-SECRET-KEY-EXAMPLE --set env.WARDYN_AGE_KEY_FILE=/mnt/s/age-key 2>&1 | grep -q "WARDYN_AGE_KEY and WARDYN_AGE_KEY_FILE are both set" || { echo "chart no longer refuses WARDYN_AGE_KEY beside WARDYN_AGE_KEY_FILE — wardynd refuses both forms at boot, so the pod would crash-loop"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set secrets.ageKeyFromSecret=true --set env.WARDYN_ADMIN_TOKEN=tok --set extraEnv[0].name=WARDYN_ADMIN_TOKEN_FILE --set extraEnv[0].value=/mnt/s/admin-token 2>&1 | grep -q "WARDYN_ADMIN_TOKEN and WARDYN_ADMIN_TOKEN_FILE are both set" || { echo "chart no longer refuses WARDYN_ADMIN_TOKEN beside WARDYN_ADMIN_TOKEN_FILE (across env and extraEnv) — wardynd refuses both forms at boot"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name= --set env.WARDYN_PG_DSN_FILE=/mnt/s/pg-dsn 2>&1 | grep -q "WARDYN_PG_DSN_FILE is a PERSISTENT Postgres, but no age identity is wired" || { echo "chart no longer refuses a file-delivered (Vault Agent / CSI) DSN with an ephemeral age key — boot 2 cannot decrypt what boot 1 wrote"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-file defaultPolicy=examples/policies/demo.json --set env.WARDYN_DEFAULT_POLICY=/examples/policies/demo.json | grep -q 'value: "/examples/policies/demo.json"' || { echo "env.WARDYN_DEFAULT_POLICY no longer wins over the ConfigMap-backed default"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set awsSSOProxyInject=off --set env.WARDYN_AWS_SSO_PROXY_INJECT=on | grep -A1 "name: WARDYN_AWS_SSO_PROXY_INJECT" | grep -q 'value: "on"' || { echo "env.WARDYN_AWS_SSO_PROXY_INJECT no longer wins over awsSSOProxyInject — scripts/kind-sso-walk.sh's --set env.WARDYN_AWS_SSO_PROXY_INJECT posture pin would stop working"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set defaultPolicy='not json' 2>&1 | grep -q "mustFromJson" || { echo "chart no longer refuses an invalid defaultPolicy at render"; exit 1; }
@@ -855,8 +873,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@#     (uiSandbox.port == service.port, ssh.port == service.port).
 	@#   pod/containerSecurityContext  — the DEFAULT render is what pins runAsNonRoot
 	@#     and readOnlyRootFilesystem; an all-on override would weaken that assertion.
+	@#   secretFiles                   — exercised by its own render (#596 block above);
+	@#     in all-on it would turn the env-mode DSN/age-key assertions into _FILE ones.
 	@missing=""; for k in $$(grep -oE '^[a-zA-Z][a-zA-Z0-9]*:' deploy/helm/wardyn/values.yaml | tr -d ':'); do \
-		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe service podSecurityContext containerSecurityContext " in *" $$k "*) continue ;; esac; \
+		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe service podSecurityContext containerSecurityContext secretFiles " in *" $$k "*) continue ;; esac; \
 		grep -qE "^$$k:" deploy/helm/wardyn/ci/all-on-values.yaml || missing="$$missing $$k"; \
 	done; \
 	[ -z "$$missing" ] || { echo "values.yaml keys neither helm-lint render exercises:$$missing — add them to deploy/helm/wardyn/ci/all-on-values.yaml, or exempt them in the comment above with the reason"; exit 1; }
