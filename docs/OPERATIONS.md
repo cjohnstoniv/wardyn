@@ -2156,11 +2156,12 @@ gate against a sandbox sidecar's own run token rather than against a person. The
 live in this table because the action, the shape and the `reason` field are the
 same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
 
-One FIELD rides beside the reason since 0.7.4: `member_mode: true`, on every
-ADMIN-TIER `403` below — the two `requireOperator` / `requireSecurityOperator`
-chokepoints and the in-handler refusals that raise the same two reasons — when
-the refused caller is an admin exercising
-[view as member](#exercising-member-mode-as-an-admin). It is a marker, not a
+One FIELD rides beside the reason since 0.7.4: `user_view: true` (renamed in 0.8
+from `member_mode` — see [Renamed in 0.8](#renamed-in-08); pre-0.8 rows keep
+`member_mode`), on every ADMIN-TIER `403` below — the two `requireOperator` /
+`requireSecurityOperator` chokepoints and the in-handler refusals that raise the
+same two reasons — when the refused caller is an admin exercising
+[the user view](#exercising-member-mode-as-an-admin). It is a marker, not a
 reason — the `reason`, the status code and the body are unchanged, and the key
 is absent entirely for an ordinary member. A burst of denials carrying it is an
 admin walking the member path, not an incident.
@@ -2297,7 +2298,7 @@ alone, so every per-principal credential lookup still finds your own. In the
 preview, `GET /setup/status` grades your model access `not_configured` with
 "Sign in to AWS", a Claude Code run is refused at create with the same sentence
 a member who has not signed in meets, and `POST /setup/harness-login` answers
-`409` — *"Exit member mode to sign in to AWS — the capture would land on your
+`409` — *"Exit the user view to sign in to AWS — the capture would land on your
 own identity."* Nothing is deleted: your session sits untouched in the store
 and comes back the moment you exit. The transition is audited as
 `auth.member_mode` with `no_credential: true` beside `enabled` and `real_role`.

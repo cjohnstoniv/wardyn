@@ -54,7 +54,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   marker is `user_view`; the BYOI refusal reason is `byoi_user`. `runner.MemberMountPolicy` is
   `UserMountPolicy` and 29 more `*Member*` server functions (`denyMember*`, `filterMemberGrants`,
   `SetMemberMode`, …) are renamed to their `*User*` counterparts. See docs/OPERATIONS.md's
-  "Renamed in 0.8" appendix for the full old-name/new-name table; no user-facing copy changed.
+  "Renamed in 0.8" appendix for the full old-name/new-name table. Three refusal sentences now
+  say "the user view": the no-SSO `400` ("The user view needs a signed-in SSO human…") and the
+  two `409`s ("Exit the user view to mint a token or register a key." and "Exit the user view to
+  sign in to AWS…"); an unrecognised `view` value refuses `400` with `The "view" field must be
+  "user" or "admin".` The console's own "Exit member mode" button keeps its name until #618.
 - **Sign-in derives a user type (#609).** A `WARDYN_OIDC_ROLE_MAP` value, a People row or
   `WARDYN_OIDC_DEFAULT_ROLE` may now name a user type id (`pm-group=portfolio-manager`); the
   session carries that type beside the tier. Among the types a person matches, the highest

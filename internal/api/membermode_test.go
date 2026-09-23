@@ -158,7 +158,7 @@ func TestMemberMode_RefusesAdminTokenAndLocalMode(t *testing.T) {
 }
 
 // TestMemberMode_Toggle: the ordinary round trip. On clamps /me, off restores
-// it, an empty body decodes to enabled:false and answers 200 (which is what
+// it, an empty body decodes to the zero View (off) and answers 200 (which is what
 // routeMatrix's bodyFor sends), and a REAL member toggling on is a no-op 200.
 func TestMemberMode_Toggle(t *testing.T) {
 	srv, _ := memberModeServer(t)
@@ -188,7 +188,7 @@ func TestMemberMode_Toggle(t *testing.T) {
 		t.Errorf("principal = %v, want %q — the mode never changes who you are", body["principal"], memberModeAdminSub)
 	}
 
-	// EMPTY BODY: decodes to enabled:false, answers 200 — the shape the authz
+	// EMPTY BODY: decodes to the zero View (off), answers 200 — the shape the authz
 	// matrix probes every classMember route with.
 	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/view", on, "")
 	if w.Code != http.StatusOK {
@@ -223,7 +223,7 @@ func TestMemberMode_Toggle(t *testing.T) {
 			t.Fatalf("chunked POST = %d, want 200: %s", cw.Code, cw.Body.String())
 		}
 		if b := meBody(t, srv, sessionCookieFrom(t, cw.Result().Cookies())); b["user_view"] != true {
-			t.Errorf("user_view = %v after a chunked {\"enabled\":true}, want true", b["user_view"])
+			t.Errorf("user_view = %v after a chunked {\"view\":\"user\"}, want true", b["user_view"])
 		}
 	})
 }
@@ -661,9 +661,8 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 // TestUserView_ViewFieldReplacesEnabled (#617) pins the 0.8 wire contract:
 // POST /me/view takes `{"view":"user"|"admin"}`, never the 0.7 boolean
 // `enabled` — a clean break, so an old caller still sending `enabled` is
-// simply ignored (the unrecognised field decodes to the zero View, "off"),
-// and an unrecognised View value is refused 400 rather than silently
-// defaulting.
+// refused 400 (decodeStrict disallows the unknown field), and an unrecognised
+// View value is refused 400 rather than silently defaulting.
 func TestUserView_ViewFieldReplacesEnabled(t *testing.T) {
 	srv, _ := memberModeServer(t)
 	admin := ssoSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin)

@@ -121,7 +121,7 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 	case "user":
 		on = true
 	default:
-		writeError(w, http.StatusBadRequest, `"view" must be "user" or "admin"`)
+		writeError(w, http.StatusBadRequest, `The "view" field must be "user" or "admin".`)
 		return
 	}
 	// The posture is granted by the server, never taken from the body. The

@@ -122,11 +122,11 @@ test.describe.configure({ mode: "serial" });
 // silently flipped to retrying.
 
 /** The 409 body of POST /setup/harness-login inside the no-credential preview
- *  (internal/api/membermode_preview.go's memberPreviewSignInRefusal — Go-side
+ *  (internal/api/membermode_preview.go's userViewPreviewSignInRefusal — Go-side
  *  and unexported, so there is no TS constant to import; lane member-preview's
  *  canon hands the spelling over verbatim and pins it from the Go side). */
 const MEMBER_PREVIEW_SIGNIN_REFUSAL =
-  "Exit member mode to sign in to AWS — the capture would land on your own identity.";
+  "Exit the user view to sign in to AWS — the capture would land on your own identity.";
 
 /** The kind context/namespace the walk installed into, so case E can taint the
  *  node and read the run pod's phase. scripts/kind-sso-walk.sh exports both. */
@@ -1117,7 +1117,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   // `intro` and POST /setup/harness-login is sent only by "Start login"
   // (harness-login-pane.tsx's launch) — so a case that clicked the CTA and then
   // waited for the 409 sentence would have waited for a request it never made.
-  // The sentence is Go-side (memberPreviewSignInRefusal) and reaches the console
+  // The sentence is Go-side (userViewPreviewSignInRefusal) and reaches the console
   // as the pane's error, which renders in its role="alert" region.
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
   await page.getByRole("button", { name: "Start login" }).click();
