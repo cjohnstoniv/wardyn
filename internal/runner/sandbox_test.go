@@ -5,8 +5,11 @@ package runner
 
 import (
 	"encoding/json"
+	"os/exec"
 	"slices"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -162,5 +165,32 @@ func TestBuildProxyConfig_TrustedCAPEM(t *testing.T) {
 	}
 	if _, present := raw["trusted_ca_pem"]; present {
 		t.Errorf("trusted_ca_pem key present with an empty ProxyConfig.TrustedCAPEM, want absent (omitempty)")
+	}
+}
+
+// TestAgentIdleScript_ExitsOnSIGTERM pins #468: the idle main process must exit
+// 0 promptly on TERM. `exec sleep infinity` fails this (TERM kills it, not exit
+// 0), and as PID 1 it would ignore TERM and sit out the full kill timeout.
+func TestAgentIdleScript_ExitsOnSIGTERM(t *testing.T) {
+	cmd := exec.Command("sh", "-c", AgentIdleScript)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start idle script: %v", err)
+	}
+	// The trap exits without reaping the backgrounded sleep; kill the group.
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+	time.Sleep(300 * time.Millisecond) // let the trap install
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("idle script on SIGTERM: %v, want exit 0", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle script did not exit within 2s of SIGTERM")
 	}
 }

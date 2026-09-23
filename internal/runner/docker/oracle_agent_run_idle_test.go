@@ -28,8 +28,9 @@ const oracleAgentRunPath = "../../../deploy/images/oracle/agent-run"
 //
 // Proof without a real container: run the actual script under `timeout`. A
 // script that exits immediately reports ITS OWN exit code before the timeout
-// fires; a script that holds the process open (the fix: `exec sleep infinity`)
-// gets killed BY timeout, which reports 124. That distinction is the fix.
+// fires; a script that holds the process open (the fix: a TERM-aware wait loop
+// as PID 1, same pid) gets killed BY timeout, which reports 124. That
+// distinction is the fix.
 func TestOracleAgentRun_IdleHoldsOpen(t *testing.T) {
 	scriptPath, err := filepath.Abs(oracleAgentRunPath)
 	if err != nil {

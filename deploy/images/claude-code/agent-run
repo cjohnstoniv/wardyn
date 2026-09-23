@@ -474,8 +474,9 @@ if [[ "${1:-}" == "--idle" ]]; then
     # TERM-aware idle loop (not `exec sleep infinity`): as PID 1, sleep
     # ignores SIGTERM, so a stop always waited out the full kill timeout
     # instead of exiting promptly (wardyn issue #468).
+    # `|| :`: under set -e, a kill of the child sleep alone must not end PID 1.
     trap 'exit 0' TERM INT
-    while :; do sleep 3600 & wait $!; done
+    while :; do sleep 3600 & wait $! || :; done
 fi
 
 # ── boot-seed mode (INTERACTIVE runs that carry a seed) ───────────────────────
