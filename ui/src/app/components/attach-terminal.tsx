@@ -54,6 +54,7 @@ import { TerminalConnectionStatus } from "./attach-terminal-status";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
+import { useSignedOut } from "../lib/use-signed-out";
 
 // Auth-mode detection
 // api.ts stores the admin token in localStorage under this key.  When the
@@ -184,9 +185,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // detail, the demo screen, …): no failed ticket POST, no WS handshake the
   // server would refuse anyway.
   const operator = useOperator();
-  // Whether `operator` is the SERVER'S answer or still the fail-open default —
-  // see the lane choice in connect() below.
+  // Whether `operator` is the SERVER'S answer or the fail-open default (connect() below).
   const operatorResolved = useOperatorResolved();
+  const signedOut = useSignedOut(); // #483: no socket at all while signed out mid-page
   const principal = usePrincipal();
   // Unknown ownership asks the server (P1) — see createdBy's doc above.
   const owned = createdBy === undefined || createdBy === principal;
@@ -315,9 +316,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // never sets WARDYN_OIDC_OPERATOR_EMAILS. A confirmed non-operator on a run
     // whose stated creator is somebody else skips straight to the reason below,
     // before creating a terminal or a socket.
-    if (!operator && !owned) {
-      setConnState("error");
-      setErrorMsg("Attaching to a live sandbox requires the admin role or ownership of this run.");
+    if (signedOut || (!operator && !owned)) {
+      setConnState(signedOut ? "closed" : "error");
+      setErrorMsg(signedOut ? "" : "Attaching to a live sandbox requires the admin role or ownership of this run.");
       return;
     }
 
@@ -742,7 +743,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // operatorResolved rides with operator for the same reason: when /me lands
     // late, the lane the socket picked on the fail-open default must be
     // re-decided against the answer.
-  }, [runId, tokenOnlyMode, refit, operator, operatorResolved, owned]);
+  }, [runId, tokenOnlyMode, refit, operator, operatorResolved, owned, signedOut]);
 
   // Fullscreen (native API, Escape fallback, refit-on-toggle) — see
   // use-attach-terminal-fullscreen.ts for the reasoning; split into its own

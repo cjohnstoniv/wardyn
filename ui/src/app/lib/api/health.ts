@@ -400,7 +400,7 @@ export const health = {
     // button. The log line stays (it names the status); the BOOLEAN is what
     // App.tsx turns into words.
     try {
-      const res = await wfetch("/auth/logout", { method: "POST" });
+      const res = await wfetch("/auth/logout", { method: "POST", endsSession: true });
       if (!res.ok) {
         console.error(`logout: server returned HTTP ${res.status}; session may still be active`);
         return false;

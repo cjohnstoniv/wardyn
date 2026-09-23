@@ -39,8 +39,11 @@ export function setSignedOutHold(on: boolean): void {
 }
 
 /** RequestInit plus `save`: the owning screen's id when this request is that
- *  screen's Save, so a refused one is named beside that Save and nowhere else. */
-export type WfetchInit = RequestInit & { save?: string };
+ *  screen's Save, so a refused one is named beside that Save and nowhere else;
+ *  and `endsSession`: the logout, the one write the signed-out hold lets
+ *  through — it ends a session and carries nothing of the page. Per request,
+ *  never a global release: a Save clicked during the logout stays held. */
+export type WfetchInit = RequestInit & { save?: string; endsSession?: true };
 
 // The full sign-in screen's notice for a session that ended (an amber
 // warning, not the error box). wfetch cannot tell an expired SSO session from
@@ -179,12 +182,12 @@ async function drainBody(res: Response): Promise<void> {
 
 export async function wfetch(
   path: string,
-  { save, ...init }: WfetchInit = {},
+  { save, endsSession, ...init }: WfetchInit = {},
   timeoutMs: number = WFETCH_TIMEOUT_MS,
 ): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const refused: Refused = { write: method !== "GET" && method !== "HEAD", save };
-  if (refused.write && _signedOutHold) {
+  if (refused.write && _signedOutHold && !endsSession) {
     _unauthorized?.(refused);
     throw new HttpError(401, "Unauthorized");
   }

@@ -83,11 +83,14 @@ function json(status: number, body: unknown): Response {
 // /healthz answers regardless, with `sso` deciding the dialog's doors.
 const daemon = { dead: false, down: false, sso: false, me: ME as Record<string, unknown> };
 const calls: string[] = [];
+// Set to hold POST /auth/logout open, so the sign-out round trip can be caught mid-flight.
+let heldLogout: Promise<Response> | null = null;
 const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
   const u = String(url);
   calls.push(`${init?.method ?? "GET"} ${u}`);
   if (u.includes("/healthz")) return Promise.resolve(json(200, { status: "ok", sso: daemon.sso, token_login: true }));
   if (u.includes("/readyz")) return Promise.resolve(json(200, { status: "ok" }));
+  if (heldLogout && u.includes("/auth/logout")) return heldLogout;
   if (daemon.down) return Promise.reject(new TypeError("Failed to fetch"));
   if (daemon.dead) return Promise.resolve(json(401, { error: "unauthorized" }));
   if (u.includes("/setup/status")) return Promise.resolve(json(200, SETUP_STATUS_READY));
@@ -106,6 +109,7 @@ beforeEach(() => {
   user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
   Object.assign(daemon, { dead: false, down: false, sso: false, me: ME });
   mockState.claim = true;
+  heldLogout = null;
   calls.length = 0;
   sessionStorage.setItem("wardyn_admin_token", "good-token");
   vi.stubGlobal("fetch", fetchMock);
@@ -268,6 +272,26 @@ describe("App — a session that ends mid-page (#483)", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     await signInWithToken();
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(count("PUT /api/v1/stub-save")).toBe(puts);
+  });
+
+  it("a Save clicked while the sign-out is in flight sends nothing", async () => {
+    await lapseMidPage();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    Object.assign(daemon, { dead: false, me: { ...ME, principal: "someone-else" } });
+    let endLogout!: (r: Response) => void;
+    heldLogout = new Promise<Response>((r) => (endLogout = r));
+    const header = screen.getByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await waitFor(() => expect(count("POST /api/v1/auth/logout")).toBe(1));
+    const puts = count("PUT /api/v1/stub-save");
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    expect(count("PUT /api/v1/stub-save")).toBe(puts);
+    endLogout(json(200, {}));
+    await screen.findByText("Admin token", { exact: true });
     expect(count("PUT /api/v1/stub-save")).toBe(puts);
   });
 

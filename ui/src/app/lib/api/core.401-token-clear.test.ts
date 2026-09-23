@@ -27,6 +27,7 @@ describe("wfetch — a real 401 clears the stored admin token", () => {
     vi.stubGlobal("fetch", fetchMock);
   });
   afterEach(() => {
+    setSignedOutHold(false);
     vi.unstubAllGlobals();
     onUnauthorized(() => {});
   });
@@ -91,18 +92,20 @@ describe("wfetch — a real 401 clears the stored admin token", () => {
     const handler = vi.fn();
     onUnauthorized(handler);
     setSignedOutHold(true);
-    try {
-      await expect(wfetch("/workspace-providers", { method: "PUT", body: "{}", save: "providers" })).rejects.toMatchObject({
-        status: 401,
-      });
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(handler).toHaveBeenLastCalledWith({ write: true, save: "providers" });
-      fetchMock.mockResolvedValue(new Response("[]", { status: 200 }));
-      await expect(wfetch("/runs")).resolves.toBeTruthy();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    } finally {
-      setSignedOutHold(false);
-    }
+    await expect(wfetch("/workspace-providers", { method: "PUT", body: "{}", save: "providers" })).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenLastCalledWith({ write: true, save: "providers" });
+    fetchMock.mockResolvedValue(new Response("[]", { status: 200 }));
+    await expect(wfetch("/runs")).resolves.toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The logout alone passes, per request — the hold itself stays up.
+    fetchMock.mockResolvedValue(new Response("", { status: 200 }));
+    await expect(wfetch("/auth/logout", { method: "POST", endsSession: true })).resolves.toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(wfetch("/workspace-providers", { method: "PUT", body: "{}" })).rejects.toMatchObject({ status: 401 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   // Live repro (found via e2e auth.spec.ts, not this file): App.tsx's mount

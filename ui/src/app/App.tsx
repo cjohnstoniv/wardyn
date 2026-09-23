@@ -602,10 +602,11 @@ export default function App() {
                 // #483: a deliberate sign-out is not a session that ended — the
                 // logout's own 401 (a session already dead) and any read still
                 // in flight must open neither the dialog nor the gate's notice.
+                //
+                // The signed-out hold stays up through the logout (which alone
+                // passes it, core.ts WfetchInit.endsSession) and drops with
+                // resetReauth below, once the logout has settled.
                 signingOutRef.current = true;
-                // The logout is the one write the signed-out hold lets through:
-                // it ends a session, it submits nothing of the page.
-                setSignedOutHold(false);
                 if (!(await health.logout())) {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
