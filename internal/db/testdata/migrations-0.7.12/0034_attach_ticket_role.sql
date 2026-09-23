@@ -1,0 +1,27 @@
+-- Copyright 2025 The Wardyn Authors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- Attach tickets (0026) gain a role, stamped at mint time from the minting
+-- caller's OWN role (admin/member -- B1's oidc.RoleAdmin/RoleMember). B2 moves
+-- POST /runs/{id}/attach-ticket from admin-only to owner-or-admin, so a member
+-- who owns the run can mint one too; the WS attach route's ?ticket= lane
+-- bypasses humanOrAdminAuth entirely (browsers cannot carry a session cookie
+-- into that handshake reliably), so this column is the ONLY role source
+-- available when the WS handler re-checks owner-or-admin at consume time.
+--
+-- Numbered 0034 (merge-time renumber): authored as 0033 on the wave-2 branch
+-- behind the SSH lane's 0032; the v0.5-k8s-cloud merge into main shifted both
+-- past main's own 0032_attach_tickets_token_sha256.sql, so this lands at 0034
+-- after 0033_ssh_public_keys.sql. Prefixes stay contiguous with no gaps
+-- (TestMigrationPrefixesNoGapsOrDupes). Both this and main's 0032 only ALTER
+-- attach_tickets to ADD distinct columns, so their relative order is immaterial.
+--
+-- NOT NULL DEFAULT 'admin' is a rolling-upgrade safety net for a ticket
+-- minted by a pre-migration binary mid-deploy (tickets are 30s-TTL, so the
+-- window is vanishingly small either way) -- and 'admin' is not merely the
+-- cautious guess, it is the CORRECT backfill value: pre-B2, minting
+-- (POST /runs/{id}/attach-ticket) was admin-only (see above), so every row a
+-- pre-migration binary could possibly have written was, by construction,
+-- minted by an admin caller. There is no other role such a row could honestly
+-- hold.
+ALTER TABLE attach_tickets ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin';

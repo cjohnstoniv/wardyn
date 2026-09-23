@@ -606,6 +606,10 @@ jobs:
           WARDYN_TEST_DOCKER: "1"
         run: make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
+      - name: Published 0.7.11 wardynd fails closed over a converted secret store (docker)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        run: go test -count=1 -v -run '^TestPG_OldBinaryAgainstV1Store$' ./cmd/wardynd/
 
   # ── real-daemon envbuild integration ───────────────────────────────
   # Exercises the envbuilder push -> finalize-FROM-pushed -> pull cycle against

@@ -32,6 +32,17 @@ import (
 // internal/secretstore/pg's rekey tests (an unexported _test.go helper there).
 func envelopeDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	pool := throwawayDB(t)
+	if err := db.Migrate(t.Context(), pool); err != nil {
+		t.Fatalf("migrate throwaway database: %v", err)
+	}
+	return pool
+}
+
+// throwawayDB is an empty database on the WARDYN_TEST_PG server, dropped on
+// cleanup.
+func throwawayDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	dsn := os.Getenv("WARDYN_TEST_PG")
 	if dsn == "" {
 		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed boot-conversion test")
@@ -62,9 +73,6 @@ func envelopeDB(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("connect to throwaway database %s: %v", name, err)
 	}
 	t.Cleanup(pool.Close)
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate throwaway database: %v", err)
-	}
 	return pool
 }
 

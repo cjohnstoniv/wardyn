@@ -1,0 +1,30 @@
+-- Copyright 2025 The Wardyn Authors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- SSH gateway admin override (0.6 workstream F1): registered keys gain a role,
+-- stamped at REGISTRATION time from the registering session's own role
+-- (oidc.RoleAdmin / oidc.RoleMember), exactly the way 0034 stamps
+-- attach_tickets.role at mint time. sshAuth's authorization becomes
+-- owner-OR-key.role=='admin', closing THREAT-MODEL residual #15 ("an admin
+-- cannot reach another human's run over SSH, only via the web terminal").
+--
+-- CEILING, stated here because the column cannot state it itself: this is a
+-- STAMP, not a live check. SSH has no session cookie to carry a current role,
+-- so the gateway has no equivalent of the web terminal's live requireOperator
+-- — a DEMOTED admin's already-registered key keeps its override until the key
+-- is deleted (DELETE /api/v1/me/ssh-keys/{fingerprint}) or re-registered.
+-- Documented in docs/SSH.md §Bounds + OPERATIONS.md.
+--
+-- DEFAULT 'member' is the fail-closed backfill: every key registered by a
+-- pre-migration binary predates the override entirely, so owner-only is
+-- exactly the authorization it was granted under. Unlike 0034's 'admin'
+-- default (where the pre-migration route WAS admin-only, making 'admin' the
+-- only honest value), nothing here tells us a pre-existing key's registrant
+-- was an admin — and guessing 'admin' would silently hand every existing key
+-- in the deployment a cross-user reach it never had.
+--
+-- No CHECK constraint, matching 0034's role column: the two values are Go
+-- constants (oidc.RoleAdmin / oidc.RoleMember) written at exactly one call
+-- site (handleAddSSHKey), and sshAuth compares for equality with RoleAdmin —
+-- any other value is inert (fail closed), never a privilege.
+ALTER TABLE ssh_public_keys ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member';

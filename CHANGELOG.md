@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Rolling back to 0.7.11 over a converted database is explained, not mistaken for a wrong age
+  key (#674).** 0.7.11 fails closed over envelope v1 rows with `… age decrypt: failed to read
+  header: parsing age header: file is empty` or `… unexpected intro: "…"`, which reads like a key
+  problem. OPERATIONS "Upgrades" now names both endings and says: do not replace the key; start
+  0.7.12 or later again, or restore the pre-upgrade dump. `TestPG_OldBinaryAgainstV1Store` boots
+  the published 0.7.11 image over a converted store to pin it, and `TestPG_UpgradeFrom_0_7_12`
+  upgrades a database as 0.7.12 left it (its `0065_secret_envelope_v1` backport included) and
+  checks that a second boot changes nothing.
+
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

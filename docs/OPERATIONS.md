@@ -4878,6 +4878,18 @@ upgrade across this release**:
 - **`WARDYN_AGE_KEY` unset now refuses to start** while any row is sealed under an
   age key (pre-envelope or `local:`), instead of minting an ephemeral key that
   would strand them all.
+- **Starting 0.7.11 or earlier over a converted database fails closed** with a
+  line that looks like an age-key problem but is not one:
+  `load secret "wardyn-signing-key": pg secretstore: decrypt wardyn-signing-key: age decrypt: failed to read header: parsing age header:`
+  followed by `file is empty` or by `unexpected intro: "…"`. Either ending means
+  the row is not an age payload at all: it is envelope v1, which that binary
+  cannot read with any key. The row is not empty ("file is empty" is age's
+  wording for "no line break found"), and the quoted bytes are the start of its
+  AES-GCM ciphertext. The older binary changes no stored secret before it
+  exits. **Do not rotate or replace `WARDYN_AGE_KEY`.** Start 0.7.12 or later
+  again with the same key, or restore the pre-upgrade dump (step 0) before you
+  run the older version. A wrong key reads differently:
+  `age decrypt: no identity matched any of the recipients`.
 
 **Upgrading to 0.7 signs every SSO human out, once.** The session payload gained
 a codec version and `decodeSession` requires an exact match
