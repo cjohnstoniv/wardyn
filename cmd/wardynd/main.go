@@ -9,10 +9,6 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -29,7 +25,6 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -209,7 +204,9 @@ func run() error {
 	// Embedded identity provider: signing key persisted in the secret store,
 	// generated on first boot. The pg-backed revocation store is the kill-switch
 	// denylist (identity_revocations).
-	signKey, err := loadOrCreateSigningKey(bootCtx, secrets)
+	// Boot keys: created under a lock that serializes replicas (#754).
+	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
+	signKey, err := loadOrCreateSigningKey(bootCtx, bootKeys)
 	if err != nil {
 		return err
 	}
@@ -341,7 +338,7 @@ func run() error {
 	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds,
 	// subscription/managed LLM credential providers, advisory AI scan
 	// fallback) — each nil/off when unconfigured; see buildOptionalFeatures.
-	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, posture.secureCookies, subPostureOK)
+	feats, err := buildOptionalFeatures(rootCtx, bootCtx, f, pool, secrets, bootKeys, posture.secureCookies, subPostureOK)
 	if err != nil {
 		return err
 	}
@@ -725,174 +722,6 @@ func buildSecretStore(pool *pgxpool.Pool, ageKey, storeName string) (secretstore
 		return nil, fmt.Errorf("secret store: %w", err)
 	}
 	return s, nil
-}
-
-// secretKeyStore is the minimal secret-store surface loadOrCreateSecret needs.
-// Narrowing the dependency to Get/Put makes the load-or-create control flow
-// unit-testable with a hand-rolled fake (cmd/wardynd/main_test.go) and documents
-// that key bootstrap touches nothing else. secretstore.Store satisfies it.
-type secretKeyStore interface {
-	Get(ctx context.Context, name string) ([]byte, error)
-	Put(ctx context.Context, name string, value []byte) error
-}
-
-// loadOrCreateSecret is the shared, fail-closed bootstrap for the two boot keys
-// (the embedded-identity signing key and the OIDC session key).
-//
-// SECURITY (boot-key destruction): the previous per-key logic treated ANY
-// Get error as "key not present" and then generated + Put a fresh key,
-// OVERWRITING whatever ciphertext was already there. The pg secret store
-// distinguishes a TRUE not-found (it wraps pgx.ErrNoRows) from an age-decrypt
-// failure (a generic error). Conflating the two meant a single transient/
-// permanent decrypt error silently rotated the key, invalidating every issued
-// SVID and every active session cookie. We now regenerate ONLY when the key is
-// genuinely absent or present-but-invalid; on any other error we FAIL CLOSED —
-// return the error and never Put, so the existing ciphertext is preserved.
-//
-//   - valid reports whether an existing raw value is usable as-is.
-//   - generate produces fresh key material to persist (called only when the key
-//     is absent or invalid).
-func loadOrCreateSecret(
-	ctx context.Context,
-	secrets secretKeyStore,
-	name string,
-	valid func(raw []byte) bool,
-	generate func() ([]byte, error),
-) ([]byte, error) {
-	// secretKeyStore has no For: the boot keys it bootstraps (identity signing,
-	// OIDC session) are process-global, never per-principal.
-	raw, err := secrets.Get(ctx, name)
-	switch {
-	case err == nil:
-		if valid(raw) {
-			return raw, nil
-		}
-		// Present but unusable (e.g. a legacy too-short session key): fall
-		// through to regenerate. This is safe — the stored value cannot serve
-		// its purpose anyway.
-	case errors.Is(err, pgx.ErrNoRows):
-		// TRUE not-found (first boot): generate + persist below.
-	default:
-		// Decrypt failure or any other Get error: FAIL CLOSED. Do NOT generate
-		// or Put — overwriting here would destroy the existing key.
-		return nil, fmt.Errorf("load secret %q: %w", name, err)
-	}
-
-	val, gerr := generate()
-	if gerr != nil {
-		return nil, fmt.Errorf("generate secret %q: %w", name, gerr)
-	}
-	if perr := secrets.Put(ctx, name, val); perr != nil {
-		return nil, fmt.Errorf("persist secret %q: %w", name, perr)
-	}
-	return val, nil
-}
-
-// loadOrCreateSigningKey returns the embedded identity ES256 key, persisting a
-// freshly-generated one into the secret store on first boot. The key never
-// enters a sandbox; it lives only in the broker/control-plane process memory
-// and the encrypted secret column. A decrypt error fails closed (see
-// loadOrCreateSecret) rather than minting a fresh key over the old one.
-func loadOrCreateSigningKey(ctx context.Context, secrets secretKeyStore) (*ecdsa.PrivateKey, error) {
-	raw, err := loadOrCreateSecret(ctx, secrets, secretSigningKey,
-		func(b []byte) bool { return len(b) > 0 },
-		func() ([]byte, error) {
-			key, gerr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			if gerr != nil {
-				return nil, fmt.Errorf("generate signing key: %w", gerr)
-			}
-			pemBytes, merr := marshalECPrivateKeyPEM(key)
-			if merr != nil {
-				return nil, merr
-			}
-			slog.Info("wardynd: generated and persisted embedded identity signing key")
-			return pemBytes, nil
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	key, perr := parseECPrivateKeyPEM(raw)
-	if perr != nil {
-		return nil, fmt.Errorf("parse stored signing key: %w", perr)
-	}
-	return key, nil
-}
-
-// loadOrCreateSessionKey returns the 32-byte OIDC session-cookie HMAC key,
-// persisting a freshly-generated one into the secret store on first boot. Like
-// the signing key it never enters a sandbox; it lives only in process memory
-// and the encrypted secret column. Returning the key is safe — the caller is
-// the OIDC authenticator, which never logs it. A decrypt error fails closed
-// (see loadOrCreateSecret) rather than rotating every session out from under
-// logged-in users.
-func loadOrCreateSessionKey(ctx context.Context, secrets secretKeyStore) ([]byte, error) {
-	return loadOrCreateSecret(ctx, secrets, secretSessionKey,
-		func(b []byte) bool { return len(b) >= 32 },
-		func() ([]byte, error) {
-			key := make([]byte, 32)
-			if _, gerr := rand.Read(key); gerr != nil {
-				return nil, fmt.Errorf("generate session key: %w", gerr)
-			}
-			slog.Info("wardynd: generated and persisted OIDC session key")
-			return key, nil
-		},
-	)
-}
-
-// loadOrCreateUISessionKey returns the UI-sandbox gateway's relay-cookie HMAC
-// key, persisted in the secret store and generated on first boot — the same
-// loadOrCreateSecret pattern as the signing/session/SSH-host keys. It is
-// SEPARATE from the OIDC session key on purpose: the two cookies live on
-// different origins and authorize different things, so one key must never be
-// able to forge the other's cookie.
-func loadOrCreateUISessionKey(ctx context.Context, secrets secretKeyStore) ([]byte, error) {
-	return loadOrCreateSecret(ctx, secrets, secretUISessionKey,
-		func(b []byte) bool { return len(b) >= 32 },
-		func() ([]byte, error) {
-			key := make([]byte, 32)
-			if _, gerr := rand.Read(key); gerr != nil {
-				return nil, fmt.Errorf("generate ui session key: %w", gerr)
-			}
-			slog.Info("wardynd: generated and persisted UI-sandbox relay cookie key")
-			return key, nil
-		},
-	)
-}
-
-// loadOrCreateSSHHostKey returns the SSH gateway's ed25519 host key,
-// persisting a freshly-generated one into the secret store on first boot —
-// the same loadOrCreateSecret pattern as the signing/session keys above,
-// cloned for the one new field this key needs (ed25519 has no "is this a
-// valid key of the right size" shortcut as cheap as the session key's length
-// check, so validity is "does it parse", checked by the generate/persist
-// round-trip itself; a corrupt stored value fails the parse below and
-// loadOrCreateSecret's caller sees that as a startup error, never a silent
-// re-mint over a key clients have already pinned).
-func loadOrCreateSSHHostKey(ctx context.Context, secrets secretKeyStore) (ed25519.PrivateKey, error) {
-	raw, err := loadOrCreateSecret(ctx, secrets, secretSSHHostKey,
-		func(b []byte) bool { return len(b) > 0 },
-		func() ([]byte, error) {
-			_, priv, gerr := ed25519.GenerateKey(rand.Reader)
-			if gerr != nil {
-				return nil, fmt.Errorf("generate ssh host key: %w", gerr)
-			}
-			pemBytes, merr := marshalEd25519PrivateKeyPEM(priv)
-			if merr != nil {
-				return nil, merr
-			}
-			slog.Info("wardynd: generated and persisted ssh gateway host key")
-			return pemBytes, nil
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	key, perr := parseEd25519PrivateKeyPEM(raw)
-	if perr != nil {
-		return nil, fmt.Errorf("parse stored ssh host key: %w", perr)
-	}
-	return key, nil
 }
 
 // goSafe runs fn with panic recovery so a panic in a DETACHED background

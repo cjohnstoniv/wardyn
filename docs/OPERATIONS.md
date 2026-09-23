@@ -5056,7 +5056,7 @@ Two supported wirings, and the chart refuses both ways of getting it wrong
 external-DSN install wiring neither would get **no** stable identity: wardynd
 mints an ephemeral one per boot. That install works perfectly once; its second
 boot cannot decrypt what its first wrote, and because the control plane loads its
-own keys during startup (`loadOrCreateSecret`, `cmd/wardynd/main.go`) it fails
+own keys during startup (`loadOrCreateSecret`, `cmd/wardynd/boot_keys.go`) it fails
 closed there, before serving — a `CrashLoopBackOff`, not a degraded pod. Hence the
 fourth row: the chart stops the install at render.
 
@@ -5124,7 +5124,7 @@ rollback, since the Secret, not `<key-file>.bak`, is what the chart reads.
 The SSH gateway (`ssh.enabled`) carries no host key in the chart or in a volume.
 wardynd generates an ed25519 key on first boot and persists it into the secret
 store under `wardyn-ssh-host-key` (`loadOrCreateSSHHostKey`,
-`cmd/wardynd/main.go`), through the same `loadOrCreateSecret` path as the signing
+`cmd/wardynd/boot_keys.go`), through the same `loadOrCreateSecret` path as the signing
 key. So the fingerprint a client pins is stable across pod churn with no operator
 action — the same value survived a rolling `helm upgrade` and a full
 scale-to-zero-and-back on the quickstart cluster:

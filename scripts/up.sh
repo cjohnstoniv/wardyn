@@ -371,7 +371,7 @@ ensure_env_file() {
 # one PER BOOT, and this compose file gives postgres a persistent volume and
 # `restart: unless-stopped`. Boot 1 encrypts its own signing key into that
 # database under identity A; boot 2 generates identity B, cannot decrypt it, and
-# loadOrCreateSecret fails closed rather than overwrite (cmd/wardynd/main.go) —
+# loadOrCreateSecret fails closed rather than overwrite (cmd/wardynd/boot_keys.go) —
 # the daemon does not start at all and the rows written under A are
 # unrecoverable. install.sh dies on this condition and
 # deploy/helm/wardyn/templates/secret.yaml fails the render on it; up.sh was the

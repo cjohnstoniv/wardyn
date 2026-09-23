@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Two replicas booting at once no longer end on different boot keys (#754).** With
+  `-allow-multi-instance`, two wardynd replicas starting against an empty store could each
+  generate the identity signing key (or the OIDC, UI or SSH host key) and each write it; the
+  one whose write was overwritten served with a key no other replica held. A boot key is now
+  created only under a Postgres advisory lock and read again under it, so every replica ends
+  on the one stored value; a replica that cannot take the lock fails its boot instead of
+  creating a key unlocked. A single-instance daemon is unchanged — its instance lock already
+  excludes any other replica.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
