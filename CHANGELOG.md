@@ -775,6 +775,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **`limits.deny_task_mode_exec` also refuses an interactive run's shell startup command.** A
+  member under that profile could send the exec command as an interactive run's task with
+  `interactive_start` unset or `shell`; the image runs it as `bash -lc` at sandbox boot, before
+  anyone attaches — unattended, exactly what the limit exists to close. The request is now
+  refused `403` (`authz.denied`, reason `governance_profile`, target `runs.interactive_start`),
+  at launch and at Review alike. `interactive_start=agent` with a task, or a run with no task,
+  still launches.
+
 - **`composer.Clamp` hands back a spec that owns its memory.** The clamped spec began as a shallow
   copy of the proposal, so every field the operator ceiling had no opinion on reached the caller as
   the caller's own backing array or pointee: `allowed_domains`, `denied_domains`, `allowed_methods`,
