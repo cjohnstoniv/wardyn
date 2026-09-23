@@ -556,16 +556,17 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/attach": {class: classAdmin},
 
 	// ── internal (run-token / ground-truth-token bearer only) ──
-	"GET /api/v1/internal/approvals/{id}":       {class: classInternal},
-	"GET /api/v1/internal/injection/{grantID}":  {class: classInternal},
-	"POST /api/v1/internal/approvals":           {class: classInternal},
-	"POST /api/v1/internal/credentials/mint":    {class: classInternal},
-	"POST /api/v1/internal/decisions":           {class: classInternal},
-	"POST /api/v1/internal/groundtruth":         {class: classInternal},
-	"POST /api/v1/internal/token/renew":         {class: classInternal},
-	"PUT /api/v1/internal/recordings/{runID}":   {class: classInternal},
-	"PUT /api/v1/internal/scan-results/{runID}": {class: classInternal},
-	"PUT /api/v1/internal/sso-token/{runID}":    {class: classInternal},
+	"GET /api/v1/internal/approvals/{id}":                  {class: classInternal},
+	"GET /api/v1/internal/injection/{grantID}":             {class: classInternal},
+	"POST /api/v1/internal/approvals":                      {class: classInternal},
+	"POST /api/v1/internal/credentials/mint":               {class: classInternal},
+	"POST /api/v1/internal/decisions":                      {class: classInternal},
+	"POST /api/v1/internal/groundtruth":                    {class: classInternal},
+	"POST /api/v1/internal/token/renew":                    {class: classInternal},
+	"PUT /api/v1/internal/recordings/{runID}":              {class: classInternal},
+	"PUT /api/v1/internal/recordings/{runID}/parts/{part}": {class: classInternal},
+	"PUT /api/v1/internal/scan-results/{runID}":            {class: classInternal},
+	"PUT /api/v1/internal/sso-token/{runID}":               {class: classInternal},
 
 	// ── device (a `wdd_` device bearer on its own {id} only) ──
 	"POST /api/v1/devices/{id}/audit":     {class: classDevice},

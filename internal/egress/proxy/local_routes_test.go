@@ -104,6 +104,15 @@ func TestLocalRouteForwardsRunTokenAndBody(t *testing.T) {
 			wantStatus:     http.StatusNoContent,
 			wantRuleSource: ruleSourceRecordings,
 		},
+		{
+			name:           "recording-part",
+			method:         http.MethodPut,
+			route:          routeRecordings + runID.String() + "/parts/2",
+			body:           `{"version":2}`,
+			wantCPPath:     "/api/v1/internal/recordings/" + runID.String() + "/parts/2",
+			wantStatus:     http.StatusNoContent,
+			wantRuleSource: ruleSourceRecordings,
+		},
 	}
 
 	for _, tc := range cases {
@@ -381,6 +390,11 @@ func TestLocalRouteRejectsBadPathSegment(t *testing.T) {
 		{"recording-nonuuid", http.MethodPut, routeRecordings + "x"},
 		{"recording-traversal", http.MethodPut, routeRecordings + "../decisions"},
 		{"recording-nested", http.MethodPut, routeRecordings + uuid.New().String() + "/extra"},
+		{"recording-part-1", http.MethodPut, routeRecordings + uuid.New().String() + "/parts/1"},
+		{"recording-part-padded", http.MethodPut, routeRecordings + uuid.New().String() + "/parts/02"},
+		{"recording-part-nonnumeric", http.MethodPut, routeRecordings + uuid.New().String() + "/parts/x"},
+		{"recording-part-nested", http.MethodPut, routeRecordings + uuid.New().String() + "/parts/2/extra"},
+		{"recording-part-bad-run", http.MethodPut, routeRecordings + "x/parts/2"},
 		{"approval-nested", http.MethodGet, routeApprovals + "abc/extra"},
 	}
 

@@ -701,9 +701,10 @@ recover_git_helper_secret() {
 # proxy-side, masking happens control-plane-side), never the unmasked shared
 # mount.  It lands under the bare-runID cast key; per-attach recordings use
 # composite runID:sessionID keys, so the boot cast collides with nothing.  The
-# cast uploads when the seed process exits — a force-killed session loses the
-# pre-attach span, the same window an autonomous run already has, and the
-# attached span is covered again by the per-attach-session recorder.
+# cast uploads in parts while the seed runs (every 24 h or 64 MiB, wardyn-rec's
+# tail upload) and the rest when it exits — a force-killed session loses only
+# the span since the last part, the same window an autonomous run already has,
+# and the attached span is covered again by the per-attach-session recorder.
 boot_seed_rec_wrap() {
     WARDYN_REC_WRAP=()
     [[ "${WARDYN_RECORDING:-}" == "1" ]] || return 0

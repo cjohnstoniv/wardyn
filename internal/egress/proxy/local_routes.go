@@ -314,19 +314,31 @@ func envNames(names []string) string {
 // must match the path run id), so the sandbox can deliver ONLY its own cast —
 // this is the multi-node-safe delivery path that replaces the shared volume
 // (which leaked recordings across same-uid agent containers).
+//
+// A long run's cast arrives in parts (wardyn-rec's tail upload): part 1 on the
+// bare route, part n >= 2 on /{runID}/parts/{n}. A part number that is not
+// canonical decimal >= 2 never reaches the control plane.
 func (p *Proxy) handleBrokerRecording(w http.ResponseWriter, r *http.Request) {
-	p.forwardBrokeredUpload(w, r, routeRecordings, "/api/v1/internal/recordings/",
-		ruleSourceRecordings, "read recording body", maxRecordingBody)
+	const cpPrefix = "/api/v1/internal/recordings/"
+	id, part, isPart := strings.Cut(strings.TrimPrefix(r.URL.Path, routeRecordings), "/parts/")
+	cpPath := cpPrefix + id
+	if isPart {
+		if n, err := strconv.Atoi(part); err != nil || n < 2 || strconv.Itoa(n) != part {
+			http.Error(w, "invalid recording part", http.StatusNotFound)
+			return
+		}
+		cpPath += "/parts/" + part
+	}
+	p.forwardBrokeredUpload(w, r, id, cpPath, ruleSourceRecordings, "read recording body", maxRecordingBody)
 }
 
 // forwardBrokeredUpload is the shared PUT-upload path for the brokered
-// recording/scan-result/verify-result routes: parse the {runID} from the path,
-// read the capped body, forward to the control plane with the run token injected,
-// emit the decision, and pass the response through verbatim. The sandbox query
-// string is deliberately NOT forwarded — the run→workspace linkage comes from
-// trusted control-plane state, never sandbox input.
-func (p *Proxy) forwardBrokeredUpload(w http.ResponseWriter, r *http.Request, prefix, cpPathPrefix, ruleSource, readErrMsg string, maxBody int64) {
-	id := strings.TrimPrefix(r.URL.Path, prefix)
+// recording/scan-result/verify-result routes: validate the {runID} the caller
+// took from the path, read the capped body, forward it to cpPath with the run
+// token injected, emit the decision, and pass the response through verbatim.
+// The sandbox query string is deliberately NOT forwarded — the run→workspace
+// linkage comes from trusted control-plane state, never sandbox input.
+func (p *Proxy) forwardBrokeredUpload(w http.ResponseWriter, r *http.Request, id, cpPath, ruleSource, readErrMsg string, maxBody int64) {
 	if _, err := uuid.Parse(id); err != nil {
 		http.Error(w, "invalid run id", http.StatusNotFound)
 		return
@@ -342,7 +354,7 @@ func (p *Proxy) forwardBrokeredUpload(w http.ResponseWriter, r *http.Request, pr
 		http.Error(w, "upload exceeds size limit", http.StatusRequestEntityTooLarge)
 		return
 	}
-	p.relayControlPlane(w, r, http.MethodPut, cpPathPrefix+id, body,
+	p.relayControlPlane(w, r, http.MethodPut, cpPath, body,
 		r.Header.Get("Content-Type"), ruleSource, nil)
 }
 
@@ -354,7 +366,8 @@ func (p *Proxy) forwardBrokeredUpload(w http.ResponseWriter, r *http.Request, pr
 // is deliberately NOT forwarded (like recordings): the run→workspace linkage the
 // control plane needs must come from TRUSTED state, never from sandbox input.
 func (p *Proxy) handleBrokerScanResult(w http.ResponseWriter, r *http.Request) {
-	p.forwardBrokeredUpload(w, r, routeScanResults, "/api/v1/internal/scan-results/",
+	id := strings.TrimPrefix(r.URL.Path, routeScanResults)
+	p.forwardBrokeredUpload(w, r, id, "/api/v1/internal/scan-results/"+id,
 		ruleSourceScanResults, "read scan result body", maxScanResultBody)
 }
 
@@ -365,7 +378,8 @@ func (p *Proxy) handleBrokerScanResult(w http.ResponseWriter, r *http.Request) {
 // uploads are rejected control-plane-side (token run id must match the path run
 // id); the sandbox-supplied Authorization is stripped, the run token injected.
 func (p *Proxy) handleBrokerSSOToken(w http.ResponseWriter, r *http.Request) {
-	p.forwardBrokeredUpload(w, r, routeSSOToken, "/api/v1/internal/sso-token/",
+	id := strings.TrimPrefix(r.URL.Path, routeSSOToken)
+	p.forwardBrokeredUpload(w, r, id, "/api/v1/internal/sso-token/"+id,
 		ruleSourceSSOToken, "read sso token body", maxScanResultBody)
 }
 
