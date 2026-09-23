@@ -2297,7 +2297,7 @@ opaque tunnel and is never offered the operator's bearer.
   by an in-process test, and the full container path by `TestLive_SubscriptionInject`
   (`test/e2e/live/subscription_test.go`; Docker-gated, not in default CI).
   **Interactive** runs install the per-run CA too: the container's main process is
-  `agent-run --idle` (`idleCmd`, `internal/runner/docker/driver.go`), which calls
+  `agent-run --idle` (`idleCmd`, `internal/runner/docker/driver_network.go`), which calls
   the same `install_mitm_ca` batch runs use (`deploy/images/claude-code/agent-run`,
   `deploy/images/common/agent-run-lib.sh`), so a human driving `claude` in the
   attach shell trusts the proxy's TLS termination exactly as a batch run does. SDK
@@ -2970,7 +2970,7 @@ six of nine had rotted onto unrelated code (one past EOF) once the files split.
 The mechanism is structural and tier-independent: (1) the per-run Docker network
 is created with `Internal: true` (no gateway), so the agent container has no
 default route regardless of confinement class — the `NetworkCreate` in
-`CreateSandbox` (`internal/runner/docker/driver.go`); (2) the agent joins ONLY that
+`CreateSandbox` (`internal/runner/docker/driver_network.go`); (2) the agent joins ONLY that
 network — `CreateSandbox` step (3) attaches it at create time via `NetworkMode` +
 `NetworkingConfig`, never the host bridge, and `HTTP_PROXY`/`HTTPS_PROXY`
 (`buildBaseSandboxEnv`, `internal/api/runs_dispatch_mounts.go`) are a convenience
