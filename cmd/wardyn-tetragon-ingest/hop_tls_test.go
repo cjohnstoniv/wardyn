@@ -102,8 +102,13 @@ func TestControlPlaneClient_FailsClosedOnWrongCA(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink := newEventSinkWithSource(srv.URL, nil, 1, 1, time.Second, wrong)
-	if status := sink.doPost([]byte(`{"events":[]}`), "gt-bearer"); status != 0 {
+	status, postErr := sink.doPost([]byte(`{"events":[]}`), "gt-bearer")
+	if status != 0 {
 		t.Fatalf("a server outside the pinned CA answered %d; want a refused handshake", status)
+	}
+	// The batch-failed log carries this error, so an operator sees the cause.
+	if postErr == nil || !strings.Contains(postErr.Error(), "certificate") {
+		t.Fatalf("refused handshake error = %v; want the certificate failure", postErr)
 	}
 	if hits.Load() != 0 {
 		t.Fatal("the bearer reached a server the internal CA did not sign")
@@ -114,7 +119,7 @@ func TestControlPlaneClient_FailsClosedOnWrongCA(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink = newEventSinkWithSource(srv.URL, nil, 1, 1, time.Second, right)
-	if status := sink.doPost([]byte(`{"events":[]}`), "gt-bearer"); status != http.StatusOK || hits.Load() != 1 {
+	if status, _ := sink.doPost([]byte(`{"events":[]}`), "gt-bearer"); status != http.StatusOK || hits.Load() != 1 {
 		t.Fatalf("pinned to the right CA: status=%d hits=%d, want 200 and 1", status, hits.Load())
 	}
 }

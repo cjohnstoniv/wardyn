@@ -283,7 +283,7 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 
 	backoff := 250 * time.Millisecond
 	for attempt := 1; attempt <= maxPostAttempts; attempt++ {
-		status := s.doPost(body, s.currentToken())
+		status, postErr := s.doPost(body, s.currentToken())
 
 		// On a 401 (expired/rotated aud token — the embedded identity mints with a
 		// fixed ~1h ceiling) refresh the token from the source and retry ONCE. If
@@ -296,7 +296,7 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 			slog.Warn("wardyn-tetragon-ingest: ground-truth token rejected (401); refreshed and retrying batch",
 				slog.Int("events", len(batch)),
 			)
-			status = s.doPost(body, refreshed)
+			status, postErr = s.doPost(body, refreshed)
 		}
 
 		switch {
@@ -310,6 +310,7 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 					slog.Int("attempts", attempt),
 					slog.Int("events", len(batch)),
 					slog.Int("status", status),
+					slog.Any("err", postErr),
 				)
 				return
 			}
@@ -318,6 +319,7 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 				slog.Int("max_attempts", maxPostAttempts),
 				slog.Int("events", len(batch)),
 				slog.Int("status", status),
+				slog.Any("err", postErr),
 			)
 			time.Sleep(backoff)
 			backoff *= 2
@@ -337,24 +339,25 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 }
 
 // doPost performs a single POST with the given bearer token. It returns the HTTP
-// status code, or 0 on a transport error (so the caller can distinguish a
-// network failure from an HTTP reject and decide whether to refresh the token).
-func (s *eventSink) doPost(body []byte, token string) int {
+// status code, or 0 and the transport error (so the caller can distinguish a
+// network failure from an HTTP reject, and its log names the cause, such as a
+// certificate the pinned internal CA did not sign).
+func (s *eventSink) doPost(body []byte, token string) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		// Best-effort: a failed post must not block the tail.
-		return 0
+		return 0, err
 	}
 	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
-	return resp.StatusCode
+	return resp.StatusCode, nil
 }
 
 func (s *eventSink) droppedCount() uint64 { return s.dropped.Load() }
