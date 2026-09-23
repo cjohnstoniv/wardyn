@@ -108,6 +108,9 @@ spec:
     metadata:
       labels:
         {{- include "wardyn.labels" . | nindent 8 }}
+        {{- if eq (include "wardyn.azureWorkloadIdentity" .) "true" }}
+        azure.workload.identity/use: "true"
+        {{- end }}
       {{- $podAnnotations := .Values.podAnnotations | default dict }}
       {{- if .Values.defaultPolicy }}
       {{- /* Forces a rollout when the ConfigMap's content changes — a Deployment
@@ -247,6 +250,33 @@ spec:
               value: {{ .vault.kvPrefix | default $.Release.Namespace | quote }}
             - name: WARDYN_VAULT_KV_MAX_VERSIONS
               value: {{ .vault.maxVersions | quote }}
+            {{- end }}
+            {{- if and .azure .azure.vaultUrl }}
+            # Store mode's Key Vault client (docs/OPERATIONS.md "Store mode:
+            # credentials in Azure Key Vault"). With workload identity the
+            # webhook sets AZURE_FEDERATED_TOKEN_FILE, which wardynd reads.
+            - name: WARDYN_AZURE_KV_URL
+              value: {{ .azure.vaultUrl | quote }}
+            - name: WARDYN_AZURE_AUTH
+              value: {{ .azure.auth | quote }}
+            {{- with .azure.tenantId }}
+            - name: WARDYN_AZURE_TENANT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .azure.clientId }}
+            - name: WARDYN_AZURE_CLIENT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .azure.authorityHost }}
+            - name: WARDYN_AZURE_AUTHORITY_HOST
+              value: {{ . | quote }}
+            {{- end }}
+            - name: WARDYN_AZURE_KV_PREFIX
+              value: {{ .azure.prefix | default $.Release.Namespace | quote }}
+            - name: WARDYN_AZURE_KV_MAX_VERSIONS
+              value: {{ .azure.maxVersions | quote }}
+            - name: WARDYN_AZURE_KV_PURGE
+              value: {{ .azure.purge | quote }}
             {{- end }}
             {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_RECORDING_STORE") }}

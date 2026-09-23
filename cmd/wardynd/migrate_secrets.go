@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/azurekv"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -79,11 +80,11 @@ func migrateMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recorde
 	var from string
 	switch to {
 	case secretstorepg.MigrateLocal:
-		from = vaultkv.Name
-	case vaultkv.Name:
+		from = ps.ExternalName()
+	case vaultkv.Name, azurekv.Name:
 		from = "pg"
 	default:
-		return fmt.Errorf("refusing to migrate: -to must be %q or %q, not %q", vaultkv.Name, secretstorepg.MigrateLocal, to)
+		return fmt.Errorf("refusing to migrate: -to must be %q, %q or %q, not %q", vaultkv.Name, azurekv.Name, secretstorepg.MigrateLocal, to)
 	}
 	n, err := ps.Migrate(ctx, to, func(owner, name string) {
 		// One secret.read per value read on the way (design §2.3a.9).

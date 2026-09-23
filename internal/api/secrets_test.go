@@ -707,3 +707,42 @@ func TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
 		t.Errorf("secret.delete owner_known = (%v, present=%v), want false", known, present)
 	}
 }
+
+// reportingSecrets is memSecrets whose Delete reports as an external store
+// does when the vault kept the value soft-deleted.
+type reportingSecrets struct {
+	*memSecrets
+	rep secretstore.DeleteReport
+}
+
+func (r reportingSecrets) For(owner string) secretstore.Store {
+	return reportingSecrets{r.memSecrets.For(owner).(*memSecrets), r.rep}
+}
+
+func (r reportingSecrets) Delete(ctx context.Context, name string) error {
+	secretstore.ReportDelete(ctx, r.rep)
+	return r.memSecrets.Delete(ctx, name)
+}
+
+// secret.delete carries what an external store kept (design §2.3a.3): not
+// purged, and for how many days the organisation can recover it.
+func TestDeleteSecret_AuditSaysWhatTheStoreKept(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{"npm-token": []byte("v")}}
+	h, srv := secretsRBACServer(t, sec)
+	srv.cfg.Secrets = reportingSecrets{sec, secretstore.DeleteReport{Store: "azurekv", Purged: false, RecoverableDays: 90}}
+	srv.router = srv.routes()
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/npm-token", admin, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d: %s", w.Code, w.Body.String())
+	}
+	var data map[string]any
+	if err := json.Unmarshal(lastAuditEvent(t, h.audit.events, "secret.delete").Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["store"] != "azurekv" || data["purged"] != false || data["recoverable_days"] != float64(90) {
+		t.Fatalf("secret.delete data = %v; want store azurekv, purged false, recoverable_days 90", data)
+	}
+	if _, present := data["secret_owner"]; present {
+		t.Fatal("an operator delete carries secret_owner")
+	}
+}

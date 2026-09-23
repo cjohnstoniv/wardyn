@@ -97,6 +97,15 @@ func (s *Store) Name() string {
 	return "pg"
 }
 
+// ExternalName names the configured external store ("vaultkv", "azurekv"),
+// or "" when there is none.
+func (s *Store) ExternalName() string {
+	if s.ext == nil {
+		return ""
+	}
+	return s.ext.Name()
+}
+
 // StoresExternally describes the external store every write goes to ("Vault
 // at vault.example:8200"), or "" in local mode.
 func (s *Store) StoresExternally() string {

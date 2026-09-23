@@ -264,13 +264,34 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("owner") != "" && !s.crossOwnerDeleteHitsARow(w, r, owner, name) {
 		return
 	}
-	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), name); err != nil {
+	ctx, rep := secretstore.WithDeleteReport(r.Context())
+	if err := s.cfg.Secrets.For(owner).Delete(ctx, name); err != nil {
 		writeServerError(w, r, "delete secret", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.delete", name, "success", secretOwnerAuditData(owner, ownerKnown)))
+		"secret.delete", name, "success", secretDeleteAuditData(owner, ownerKnown, *rep)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// secretDeleteAuditData is secretOwnerAuditData plus, when the value lived in
+// an external store, what that store kept (design §2.3a.3): whether it was
+// purged, and for how many days the organisation can still recover it.
+func secretDeleteAuditData(owner string, known bool, rep secretstore.DeleteReport) json.RawMessage {
+	if rep.Store == "" {
+		return secretOwnerAuditData(owner, known)
+	}
+	data := map[string]any{"store": rep.Store, "purged": rep.Purged}
+	if rep.RecoverableDays > 0 {
+		data["recoverable_days"] = rep.RecoverableDays
+	}
+	if owner != "" {
+		data["secret_owner"] = owner
+		if !known {
+			data["owner_known"] = false
+		}
+	}
+	return mustJSON(data)
 }
 
 // secretOwnerParam resolves the secret-store namespace PUT, DELETE and the

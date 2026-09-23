@@ -275,8 +275,10 @@ type bootFlags struct {
 	migrateSecrets *bool
 	migrateTo      *string
 	reconcile      *bool
-	// vault configures the Vault KV v2 external store (secret_store.go).
+	// vault configures the Vault KV v2 external store, azure the Azure Key
+	// Vault one (secret_store.go).
 	vault vaultFlags
+	azure azureFlags
 
 	// allowMultiInstance is the runtime twin of the Helm chart's
 	// allowMultiReplica: it waives the single-instance boot lock
@@ -477,9 +479,10 @@ func parseBootFlags() *bootFlags {
 
 		// flag.Bool/flag.String, NOT the env helpers: no env pair by design.
 		migrateSecrets: flag.Bool("migrate-secrets", false, "MAINTENANCE MODE, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit. Idempotent and resumable. See docs/OPERATIONS.md"),
-		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv" or "local"`),
+		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
 		reconcile:      flag.Bool("reconcile", false, "MAINTENANCE MODE: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit (non-zero on any). Deletes nothing"),
 		vault:          registerVaultFlags(),
+		azure:          registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address (e.g. ":8081"); empty (the default) disables the gateway entirely — no listener, no new surface. MUST differ from -listen: relayed pages are the sandbox's own code, and the separate origin is what keeps them away from the console's session`),

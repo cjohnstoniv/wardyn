@@ -202,15 +202,15 @@ func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T)
 	}
 }
 
-// The boot keys live under platform/ (design §2.13): the vaultkv package's
-// list must name every one of them.
+// The boot keys live under platform/ (design §2.13): the shared list must
+// name every one of them.
 func TestBootKeysAreThePlatformSet(t *testing.T) {
 	for _, n := range []string{secretSigningKey, secretSessionKey, secretUISessionKey, secretSSHHostKey} {
-		if !vaultkv.PlatformNames[n] {
-			t.Errorf("boot key %q is not in vaultkv.PlatformNames", n)
+		if !secretstore.PlatformNames[n] {
+			t.Errorf("boot key %q is not in secretstore.PlatformNames", n)
 		}
 	}
-	if len(vaultkv.PlatformNames) != 4 {
-		t.Errorf("vaultkv.PlatformNames has %d names, want the four boot keys", len(vaultkv.PlatformNames))
+	if len(secretstore.PlatformNames) != 4 {
+		t.Errorf("secretstore.PlatformNames has %d names, want the four boot keys", len(secretstore.PlatformNames))
 	}
 }

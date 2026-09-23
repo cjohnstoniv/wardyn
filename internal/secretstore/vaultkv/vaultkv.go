@@ -8,7 +8,7 @@
 //
 // Path scheme, under the mount and a per-install prefix:
 //
-//	<prefix>/platform/<name>              owner "" and a boot key (PlatformNames)
+//	<prefix>/platform/<name>              owner "" and a boot key (secretstore.PlatformNames)
 //	<prefix>/operator/<name>              owner "" (operator-namespace credentials)
 //	<prefix>/people/<owner-b32>/<name>    every other owner
 //
@@ -40,17 +40,6 @@ import (
 
 // Name is the registered store name and the kek_id prefix.
 const Name = "vaultkv"
-
-// PlatformNames are the boot keys wardynd mints and reads at every boot
-// (cmd/wardynd loadOrCreateSecret). They live under platform/ so the org can
-// audit, filter and (with a second role) restrict them apart from people's
-// credentials (design §2.13).
-var PlatformNames = map[string]bool{
-	"wardyn-signing-key":    true,
-	"wardyn-session-key":    true,
-	"wardyn-ui-session-key": true,
-	"wardyn-ssh-host-key":   true,
-}
 
 // The custom_metadata keys that bind a value to its row.
 const (
@@ -141,16 +130,7 @@ func validSegments(p string) error {
 	return nil
 }
 
-func kind(owner, name string) string {
-	switch {
-	case owner != "":
-		return "people"
-	case PlatformNames[name]:
-		return "platform"
-	default:
-		return "operator"
-	}
-}
+func kind(owner, name string) string { return secretstore.Kind(owner, name) }
 
 // rel is the path under the mount DERIVED from the row. It is the only way
 // this store ever computes where a value lives.

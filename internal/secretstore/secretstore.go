@@ -8,6 +8,8 @@
 //   - vaultkv: store mode — the value lives in the organisation's Vault KV v2
 //     (OpenBao is a supported endpoint) and the Postgres row is a pointer to it
 //     (package vaultkv; credential-storage design §2.3a).
+//   - azurekv: store mode in the organisation's Azure Key Vault (package
+//     azurekv; design §2.3a.3).
 //
 // Secrets are late-bound: they are resolved at use time by the broker or
 // injected proxy-side, so as a RULE no value lands in a sandbox's environment
@@ -29,6 +31,7 @@ package secretstore
 import (
 	"context"
 	"errors"
+	"strings"
 )
 
 // ErrNotFound is the typed sentinel a Store.Get returns (wrapped) when no secret
@@ -78,6 +81,10 @@ type Store interface {
 // (enc_version 2, kek_id "<Name()>:<ref>"). The pg store owns the row, the
 // owner fallback and the ordering (external first on Put and Delete); an
 // External only moves bytes to and from the store and checks the binding.
+//
+// A ref names one object in the store, optionally followed by "#<version>"
+// (azurekv counts the versions it wrote into the object). Two refs that
+// differ only after the "#" name the same object: see RefObject.
 type External interface {
 	// Name is the registered store name and the kek_id prefix ("vaultkv").
 	Name() string
@@ -100,6 +107,64 @@ type External interface {
 	Delete(ctx context.Context, owner, name, ref string) error
 	// Walk lists every value this install holds in the store (-reconcile).
 	Walk(ctx context.Context) ([]ExternalEntry, error)
+}
+
+// PlatformNames are the boot keys wardynd mints and reads at every boot
+// (cmd/wardynd loadOrCreateSecret). An external store files them under their
+// own kind, so the org can audit, filter and (with a second identity)
+// restrict them apart from people's credentials (design §2.13).
+var PlatformNames = map[string]bool{
+	"wardyn-signing-key":    true,
+	"wardyn-session-key":    true,
+	"wardyn-ui-session-key": true,
+	"wardyn-ssh-host-key":   true,
+}
+
+// Kind is the store-side kind of the row (owner, name): "platform" for a boot
+// key, "operator" for the rest of the operator namespace, "people" for every
+// other owner.
+func Kind(owner, name string) string {
+	switch {
+	case owner != "":
+		return "people"
+	case PlatformNames[name]:
+		return "platform"
+	default:
+		return "operator"
+	}
+}
+
+// RefObject is the object a ref names: the ref without its "#<version>".
+func RefObject(ref string) string {
+	obj, _, _ := strings.Cut(ref, "#")
+	return obj
+}
+
+// DeleteReport is what an external store's Delete says about what it left
+// behind (design §2.3a.3), for the caller's audit row: whether the value was
+// purged, and if not, for how many days the organisation can still recover
+// it (0: unknown).
+type DeleteReport struct {
+	Store           string
+	Purged          bool
+	RecoverableDays int
+}
+
+type deleteReportKey struct{}
+
+// WithDeleteReport returns a context under which an external store's Delete
+// fills the returned report. Store stays "" when nothing reported, which is
+// every delete that never reached an external store.
+func WithDeleteReport(ctx context.Context) (context.Context, *DeleteReport) {
+	r := &DeleteReport{}
+	return context.WithValue(ctx, deleteReportKey{}, r), r
+}
+
+// ReportDelete records r for the caller that asked with WithDeleteReport.
+func ReportDelete(ctx context.Context, r DeleteReport) {
+	if p, ok := ctx.Value(deleteReportKey{}).(*DeleteReport); ok {
+		*p = r
+	}
 }
 
 // ExternalEntry is one value found in an external store by Walk.

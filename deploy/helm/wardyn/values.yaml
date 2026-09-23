@@ -203,8 +203,14 @@ secrets:
 # not apply, and WARDYN_AGE_KEY is needed only until `wardynd -migrate-secrets
 # -to=vaultkv` has moved the existing rows. The default NetworkPolicy denies
 # wardynd's egress: add a rule for Vault to networkPolicy.egress.extra.
+#
+# backend azurekv is the same in Azure Key Vault (docs/OPERATIONS.md "Store
+# mode: credentials in Azure Key Vault"); allow its egress to the vault and to
+# the Entra token endpoint. One external store at a time: set vault.addr or
+# azure.vaultUrl, not both.
 secretStore:
-  # "pg" (sealed in Postgres under the age key) or "vaultkv" (store mode).
+  # "pg" (sealed in Postgres under the age key), "vaultkv" or "azurekv" (store
+  # mode).
   backend: pg
   vault:
     # https:// address of Vault. Required for vaultkv; set with backend pg it
@@ -233,6 +239,31 @@ secretStore:
     maxVersions: 1
     # The Vault client trusts the system roots plus trustedCA (below), in a
     # TLS config of its own.
+  azure:
+    # https://<vault>.vault.azure.net. Required for azurekv; set with backend
+    # pg it lets this install READ rows written in store mode (a migration
+    # back). A vault dedicated to Wardyn; wardynd's identity needs Key Vault
+    # Secrets Officer on it.
+    vaultUrl: ""
+    # "workload-identity" (AKS): the chart labels the pod
+    # azure.workload.identity/use=true and annotates the service account with
+    # azure.workload.identity/client-id, so the webhook projects a token that
+    # wardynd exchanges for an Entra token (a federated credential on the
+    # identity, no client secret; with serviceAccount.create=false, annotate
+    # your own service account). "managed-identity": a node's IMDS.
+    auth: workload-identity
+    tenantId: ""
+    # The app registration's or user-assigned identity's client id.
+    clientId: ""
+    # Entra authority host; empty = the public cloud's.
+    authorityHost: ""
+    # Start of every secret name (empty = the release namespace).
+    prefix: ""
+    # Versions a secret holds before the next write starts a new name.
+    maxVersions: 100
+    # "auto": purge after a delete when the vault allows it; "never": leave
+    # deleted secrets for the vault's soft-delete retention.
+    purge: auto
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default

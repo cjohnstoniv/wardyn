@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -68,8 +69,10 @@ func extErr(ref string, err error) error {
 }
 
 // putExternal writes the value to the external store, then points the row at
-// it. If the row cannot be written, a value the row never pointed to is
-// removed again rather than orphaned.
+// it. If the row cannot be written, a value in an object the row never
+// pointed to is removed again rather than orphaned. When the row moves to a
+// new object (azurekv's generation rollover), the old one is removed after the
+// row points away from it.
 func (s *Store) putExternal(ctx context.Context, name string, value []byte) error {
 	ref := rowRef(s.owner, name)
 	prev, err := s.currentRef(ctx, name)
@@ -87,15 +90,32 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, updated_at=now()`,
 		s.owner, name, extVersion, s.ext.Name()+":"+loc,
 	)
+	newObject := secretstore.RefObject(loc) != secretstore.RefObject(prev)
 	if err == nil {
+		if prev != "" && newObject {
+			s.removeOld(ctx, name, prev)
+		}
 		return nil
 	}
-	if loc != prev {
-		if derr := s.ext.Delete(context.WithoutCancel(ctx), s.owner, name, loc); derr != nil {
-			return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not (%w), and removing the value failed too (%v) — `wardynd -reconcile` lists it", ref, s.ext.Name(), err, derr)
-		}
+	if !newObject {
+		// The same object the row already points to: it now holds the new
+		// value, which is what the row reads.
+		return fmt.Errorf("pg secretstore: put %s: the value reached %s, but updating the row failed: %w", ref, s.ext.Name(), err)
+	}
+	if derr := s.ext.Delete(context.WithoutCancel(ctx), s.owner, name, loc); derr != nil {
+		return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not (%w), and removing the value failed too (%v) — `wardynd -reconcile` lists it", ref, s.ext.Name(), err, derr)
 	}
 	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it was removed again: %w", ref, s.ext.Name(), err)
+}
+
+// removeOld removes the object a row pointed to before a Put moved it. The Put
+// has succeeded by then, so a failure is logged, not returned: the old object
+// is one `wardynd -reconcile` lists.
+func (s *Store) removeOld(ctx context.Context, name, prev string) {
+	if err := s.ext.Delete(context.WithoutCancel(ctx), s.owner, name, prev); err != nil {
+		slog.Warn("pg secretstore: a replaced value's old object was not removed; `wardynd -reconcile` lists it",
+			slog.String("secret", rowRef(s.owner, name)), slog.String("store", s.ext.Name()), slog.Any("err", err))
+	}
 }
 
 // currentRef is the ref this view's own row points to in the configured
@@ -322,7 +342,7 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		rep.Checked++
 		// A row points at loc whether or not its value is live: a soft-deleted
 		// value behind a row is dangling, not an orphan as well.
-		pointed[loc] = true
+		pointed[secretstore.RefObject(loc)] = true
 		err := s.ext.Check(ctx, e.ownedBy, e.name, loc)
 		switch {
 		case errors.Is(err, secretstore.ErrUnavailable):
@@ -336,7 +356,7 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		return rep, fmt.Errorf("pg secretstore: reconcile list %s: %w", s.ext.Name(), err)
 	}
 	for _, f := range found {
-		if !pointed[f.Ref] {
+		if !pointed[secretstore.RefObject(f.Ref)] {
 			rep.Orphans = append(rep.Orphans, f)
 		}
 	}
