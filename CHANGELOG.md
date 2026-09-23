@@ -59,9 +59,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   wires as files and renders no `secretKeyRef` env. A `WARDYN_*_FILE` in `env`/`extraEnv` counts as
   wired in every render check, and `extraVolumes`/`extraVolumeMounts` carry a CSI volume. Examples
   are in `docs/OPERATIONS.md`, "Secrets from files (Vault Agent / CSI)". THREAT-MODEL residual 49
-  records the related risk: `WARDYN_AGE_KEY` guards every stored credential **and** up to four boot
-  keys in the same store, so the age key plus a read of the database yields all of them; splitting
-  those keys is planned for 0.8.
+  records the related risk: `WARDYN_AGE_KEY` guards every stored credential **and** up to five boot
+  keys in the same store (the internal CA above among them), so the age key plus a read of the
+  database yields all of them; splitting those keys is planned for 0.8.
 
 ### Fixed
 

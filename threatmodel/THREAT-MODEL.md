@@ -1885,7 +1885,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     with envelope encryption, the input the local KEK is HKDF-derived from.
     Two things are stored under it in the same table. First, every credential
     kept in the secret store: model API keys, forge tokens, SSH keys, captured
-    AWS SSO sessions. Second, up to four process-global keys that
+    AWS SSO sessions. Second, up to five process-global keys that
     `loadOrCreateSecret` (`cmd/wardynd/main.go`) mints on first use:
     - the embedded-identity ES256 signing key (`wardyn-signing-key`), always
       present, which signs every run-identity token (SVID) and the ground-truth
@@ -1895,14 +1895,20 @@ hiding them would repeat the failure mode we are designed to avoid.
     - the SSH gateway host key (`wardyn-ssh-host-key`), only when
       `WARDYN_SSH_LISTEN` is set;
     - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when
-      `WARDYN_UI_SANDBOX_LISTEN` is set.
+      `WARDYN_UI_SANDBOX_LISTEN` is set;
+    - the internal CA for the control-plane → proxy hop (`wardyn-internal-ca`,
+      certificate and private key; `cmd/wardynd/internal_tls.go`), on every
+      install whose `WARDYN_CONTROL_PLANE_URL` is https, which is every install
+      but a loopback-only one. With it, an attacker on the proxies' network path
+      can impersonate wardynd to a run's proxy (B6).
 
     An attacker who holds the age key and a read of that table (the DSN, a
     backup or a replica) therefore holds all of it at once. That means every
     stored credential in cleartext and run-identity tokens the broker accepts.
     Wherever those features are on, it also means a console session forged for
-    any human (admin included), forged UI relay cookies and the SSH gateway's
-    identity. The age key alone, without the ciphertext, decrypts nothing.
+    any human (admin included), forged UI relay cookies, the SSH gateway's
+    identity and a serving certificate every run's proxy accepts. The age key
+    alone, without the ciphertext, decrypts nothing.
 
     **Not under the age key:** the admin token, the OIDC and directory client
     secrets, and the DSN. These boot secrets are read from env or their
