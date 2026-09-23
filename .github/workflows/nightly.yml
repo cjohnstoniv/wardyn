@@ -536,8 +536,19 @@ jobs:
   # CI home of the guided first-run and of scripts/test-reset-all-sandbox-reap.sh.
   # A new lane joins this list; scripts/test-repo-guards.sh (in `make
   # test-scripts`) fails the build if one does not.
+  #
+  # kind-sso-walk is the SECOND deliberate exemption (see NOTIFY_EXEMPT in
+  # scripts/test-repo-guards.sh, which enforces this list stays honest about
+  # both): unlike every lane named below, it has never once been green on a
+  # dispatch (0/4 as of #511 F2 — sso-member-recovery.spec.ts case I times out
+  # provisioning a fresh sign-in capture on the hosted runner's own kind
+  # cluster, a still-open, uncharacterised root cause). Wiring an
+  # always-failing lane in here would make this job's body's "every one of
+  # them was green when wired" claim false and its "real regression, not known
+  # noise" promise worthless for every OTHER lane sharing the same issue.
+  # Re-add it once a dispatch is green (#511 F2's own fix direction).
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -559,7 +570,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build) or kind-sso-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, or buildx-smoke (multi-arch build)." \
               "" \
               "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
               "" \

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -90,20 +91,24 @@ func headingSlug(text string) string {
 }
 
 // citedSymbolBodies returns, for one cited file, the source text a citation into
-// it is allowed to look at, keyed by symbol.
+// it is allowed to look at, keyed by symbol; literals, the emitting-position
+// string constants found in that same symbol's body (see
+// stringLiteralsExcludingReaders); and fileLiterals, the same but unscoped —
+// every emitting-position string literal anywhere in the file, for a bare-path
+// citation (which names no symbol to scope to).
 //
-// For Go that is the symbol's OWN BODY and nothing else: the braces of a func or
-// method, or the spec of a package-level const/var/type. Deliberately not the
-// doc comment and not the signature — a comment that mentions an action is not
-// an emit of it, and the file-wide search this replaces is exactly how a
-// citation could name the wrong function and still resolve.
+// For Go, the symbol's body is the braces of a func or method, or the spec of a
+// package-level const/var/type — deliberately not the doc comment and not the
+// signature, so a comment that mentions an action is not an emit of it, and the
+// file-wide search this replaced is exactly how a citation could name the wrong
+// function and still resolve.
 //
 // For markdown the unit is the heading's SECTION: the heading line down to the
 // next heading of the same or a higher level. A doc has no symbols, and the
 // section is the smallest thing a reader can be sent to that still contains the
-// claim.
-func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
-	out := map[string]string{}
+// claim; markdown has no Go tokens, so literals and fileLiterals are both nil.
+func citedSymbolBodies(rel string, src []byte) (bodies map[string]string, literals map[string][]string, fileLiterals []string, err error) {
+	bodies = map[string]string{}
 	if strings.HasSuffix(rel, ".md") {
 		lines := strings.Split(string(src), "\n")
 		for i, line := range lines {
@@ -121,18 +126,18 @@ func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
 			}
 			slug := headingSlug(m[2])
 			if slug != "" {
-				if _, dup := out[slug]; !dup {
-					out[slug] = strings.Join(lines[i:end], "\n")
+				if _, dup := bodies[slug]; !dup {
+					bodies[slug] = strings.Join(lines[i:end], "\n")
 				}
 			}
 		}
-		return out, nil
+		return bodies, nil, nil, nil
 	}
 
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, rel, src, 0)
-	if err != nil {
-		return nil, err
+	f, ferr := parser.ParseFile(fset, rel, src, 0)
+	if ferr != nil {
+		return nil, nil, nil, ferr
 	}
 	span := func(from, to token.Pos) string {
 		a, b := fset.Position(from).Offset, fset.Position(to).Offset
@@ -141,6 +146,7 @@ func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
 		}
 		return string(src[a:b])
 	}
+	literals = map[string][]string{}
 	for _, d := range f.Decls {
 		switch v := d.(type) {
 		case *ast.FuncDecl:
@@ -149,24 +155,78 @@ func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
 				name = receiverTypeName(v.Recv.List[0].Type) + "." + name
 			}
 			if v.Body == nil {
-				out[name] = "" // declared without a body: resolvable, never evidence
+				bodies[name] = "" // declared without a body: resolvable, never evidence
 				continue
 			}
-			out[name] = span(v.Body.Lbrace, v.Body.Rbrace)
+			bodies[name] = span(v.Body.Lbrace, v.Body.Rbrace)
+			literals[name] = stringLiteralsExcludingReaders(v.Body)
 		case *ast.GenDecl:
 			for _, sp := range v.Specs {
 				switch s := sp.(type) {
 				case *ast.ValueSpec:
 					for _, n := range s.Names {
-						out[n.Name] = span(s.Pos(), s.End())
+						bodies[n.Name] = span(s.Pos(), s.End())
+						literals[n.Name] = stringLiteralsExcludingReaders(s)
 					}
 				case *ast.TypeSpec:
-					out[s.Name.Name] = span(s.Pos(), s.End())
+					bodies[s.Name.Name] = span(s.Pos(), s.End())
+					literals[s.Name.Name] = stringLiteralsExcludingReaders(s)
 				}
 			}
 		}
 	}
-	return out, nil
+	return bodies, literals, stringLiteralsExcludingReaders(f), nil
+}
+
+// stringLiteralsExcludingReaders walks node and returns the unquoted value of
+// every string BasicLit found — except one used merely to READ or DISPATCH ON
+// an action rather than emit it: the operand of a `==`/`!=` comparison
+// (`ev.Action != "egress.deny"`), or a switch's case expression. A doc comment
+// or a line comment is never visited at all, because a comment is not part of
+// the expression tree — which is what makes this immune to a wildcard prefix
+// quoted only in prose (`// e.g. "egress."`), the false positive a raw
+// substring scan of the source text could not tell apart from a real emit.
+//
+// This is deliberately NOT "is this the argument to an audit-emitting call":
+// that would need to know every such call by name, and go stale exactly like
+// the citations this guard exists to keep honest. "Not a comparison and not a
+// dispatch" is the cheap, call-agnostic half of "probably an emit" — sufficient
+// to fail on both false positives this guard was found vacuous against
+// (AuditFilter's doc-comment example and handleObservedEgress's read-only
+// filter), without hand-listing every real emit site.
+func stringLiteralsExcludingReaders(node ast.Node) []string {
+	var out []string
+	var ancestors []ast.Node
+	excluded := func(lit *ast.BasicLit) bool {
+		if len(ancestors) == 0 {
+			return false
+		}
+		switch p := ancestors[len(ancestors)-1].(type) {
+		case *ast.BinaryExpr:
+			return p.Op == token.EQL || p.Op == token.NEQ
+		case *ast.CaseClause:
+			for _, e := range p.List {
+				if e == ast.Expr(lit) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	ast.Inspect(node, func(n ast.Node) bool {
+		if n == nil {
+			ancestors = ancestors[:len(ancestors)-1]
+			return true
+		}
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING && !excluded(lit) {
+			if v, uerr := strconv.Unquote(lit.Value); uerr == nil {
+				out = append(out, v)
+			}
+		}
+		ancestors = append(ancestors, n)
+		return true
+	})
+	return out
 }
 
 // receiverTypeName is the bare type name a method hangs off — the `Server` in
@@ -244,22 +304,59 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 	docLines := strings.Split(string(raw), "\n")
 	constHolders := constNamesFor(parseAuditTree(t, root))
 
-	srcCache := map[string]string{}             // cited path -> whole file
-	bodyCache := map[string]map[string]string{} // cited path -> symbol -> body
-	load := func(rel string) (string, map[string]string, error) {
-		if s, ok := srcCache[rel]; ok {
-			return s, bodyCache[rel], nil
+	// citedSource is one cited file's parse, cached by path: the whole text (for
+	// the plain-literal / anchor substring checks, which have no vacuous-prefix
+	// problem), the per-symbol body text, and the per-symbol / whole-file
+	// emitting-position string literals a wildcard row's prefix is checked
+	// against (see stringLiteralsExcludingReaders).
+	type citedSource struct {
+		text         string
+		bodies       map[string]string
+		literals     map[string][]string
+		fileLiterals []string
+	}
+	cache := map[string]citedSource{}
+	load := func(rel string) (citedSource, error) {
+		if s, ok := cache[rel]; ok {
+			return s, nil
 		}
 		b, rerr := os.ReadFile(filepath.Join(root, rel))
 		if rerr != nil {
-			return "", nil, rerr
+			return citedSource{}, rerr
 		}
-		bodies, perr := citedSymbolBodies(rel, b)
+		bodies, literals, fileLiterals, perr := citedSymbolBodies(rel, b)
 		if perr != nil {
-			return "", nil, fmt.Errorf("parse %s: %w", rel, perr)
+			return citedSource{}, fmt.Errorf("parse %s: %w", rel, perr)
 		}
-		srcCache[rel], bodyCache[rel] = string(b), bodies
-		return srcCache[rel], bodies, nil
+		s := citedSource{text: string(b), bodies: bodies, literals: literals, fileLiterals: fileLiterals}
+		cache[rel] = s
+		return s, nil
+	}
+	// hasEmittedPrefix reports whether any of vals — a symbol's or a file's
+	// emitting-position string literals — starts with prefix. The ONLY check a
+	// wildcard row's prefix gets: never a raw substring scan of the source text,
+	// which a quoted prefix sitting in a comment or a reader's comparison
+	// operand would also satisfy (see stringLiteralsExcludingReaders's doc).
+	hasEmittedPrefix := func(vals []string, prefix string) bool {
+		for _, v := range vals {
+			if strings.HasPrefix(v, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	// wildcardMatches is the one place a wildcard row's prefix gets checked. Go
+	// source: literals only (hasEmittedPrefix), never text. Markdown: markdown has
+	// no Go tokens to walk (citedSymbolBodies returns nil literals for a .md
+	// path), so a quoted prefix in the section's own prose is the only signal
+	// available — the same raw-substring check every OTHER citation kind still
+	// uses, and there is no false-positive risk symmetric to the Go case because
+	// there is no "emit" for a comment to be confused with in prose.
+	wildcardMatches := func(path string, text string, literals []string, prefix string) bool {
+		if strings.HasSuffix(path, ".md") {
+			return strings.Contains(text, `"`+prefix)
+		}
+		return hasEmittedPrefix(literals, prefix)
 	}
 
 	rowsChecked, citationsChecked := 0, 0
@@ -287,19 +384,17 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 		// string on the wire — the real Action is "kind."+suffix — so match the
 		// prefix, not the asterisk.
 		prefix := strings.TrimSuffix(actionLiteral, "*")
-		searchTerm := prefix
-		if strings.HasSuffix(actionLiteral, "*") {
-			// The bare prefix ("egress.") is also the Go package qualifier, so
-			// strings.Contains(body, "egress.") is satisfied by a mere MENTION of
-			// the egress package — a comment saying "forging egress./..." passed
-			// this check with no emit anywhere nearby (docs/AUDIT-ACTIONS.md:238
-			// re-pointed at Server.handleGroundtruthEvents, whose only match was
-			// exactly that comment). Require the prefix to appear as an actual Go
-			// string literal, quote included: "egress."+string(dl.Decision) and
-			// "egress.allow" both contain `"egress.`, but a bare-word mention of
-			// the package never does.
-			searchTerm = `"` + prefix
-		}
+		// The bare prefix ("egress.") is also the Go package qualifier, and a raw
+		// substring scan of the source text is satisfied by a mere MENTION of the
+		// package — a comment saying "forging egress./..." passed with no emit
+		// anywhere nearby, and so did a plain != comparison reading the action
+		// rather than emitting it (the docs/AUDIT-ACTIONS.md `egress.*` row
+		// re-pointed, in a scratch copy, at Server.handleGroundtruthEvents and at
+		// Server.handleObservedEgress in turn — both passed vacuously). A wildcard
+		// row is therefore never checked with strings.Contains at all: only
+		// hasEmittedPrefix, against the cited symbol's actual emitting-position
+		// string literals.
+		wildcard := strings.HasSuffix(actionLiteral, "*")
 		// The names any constant holding this action goes by, so an emit that
 		// passes `ruleSourcePrivateIP` counts as spelling builtin:private-ip.
 		holders := constHolders[prefix]
@@ -350,13 +445,18 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 			for _, path := range cellBarePaths {
 				rowHasCitation = true
 				citationsChecked++
-				body, _, gerr := load(path)
+				src, gerr := load(path)
 				if gerr != nil {
 					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s, but %s could not be read: %v",
 						docLineNo, actionLiteral, path, path, gerr)
 					continue
 				}
-				if strings.Contains(body, searchTerm) {
+				body := src.text
+				matched := strings.Contains(body, prefix)
+				if wildcard {
+					matched = wildcardMatches(path, body, src.fileLiterals, prefix)
+				}
+				if matched {
 					continue
 				}
 				found := false
@@ -380,7 +480,7 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 
 			for _, c := range cellCitations {
 				path, spec := c[0], c[1]
-				_, bodies, gerr := load(path)
+				src, gerr := load(path)
 				if gerr != nil {
 					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s#%s, but %s could not be read: %v",
 						docLineNo, actionLiteral, path, spec, path, gerr)
@@ -388,7 +488,7 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 				}
 				for _, sym := range strings.Split(spec, ",") {
 					citationsChecked++
-					body, ok := bodies[sym]
+					body, ok := src.bodies[sym]
 					if !ok {
 						t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s#%s, but %s declares no such top-level "+
 							"symbol — a method is cited as Type.Method; re-point the citation at the symbol that "+
@@ -396,7 +496,11 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 							docLineNo, actionLiteral, path, sym, path)
 						continue
 					}
-					if strings.Contains(body, searchTerm) {
+					matched := strings.Contains(body, prefix)
+					if wildcard {
+						matched = wildcardMatches(path, body, src.literals[sym], prefix)
+					}
+					if matched {
 						continue
 					}
 					found := false
