@@ -247,7 +247,7 @@ func (i *index) changes(held map[string]bool) ([]Change, []string, error) {
 	}
 	slices.SortFunc(w.out, func(a, b Change) int {
 		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Mode, b.Mode),
-			cmp.Compare(a.Size, b.Size), strings.Compare(a.OID, b.OID))
+			cmp.Compare(a.size, b.size), strings.Compare(a.OID, b.OID))
 	})
 	return w.out, slices.Sorted(maps.Keys(w.bases)), nil
 }
@@ -525,7 +525,7 @@ func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) erro
 }
 
 func (w *walker) leaf(path string, e treeEntry) error {
-	return w.record(Change{Path: path, Mode: e.mode, Size: w.idx.blobSize(e.oid), OID: e.oid})
+	return w.record(Change{Path: path, Mode: e.mode, size: w.idx.blobSize(e.oid), OID: e.oid})
 }
 
 // uncarried reports a directory whose tree object the pack does not hold. Its
@@ -535,7 +535,7 @@ func (w *walker) leaf(path string, e treeEntry) error {
 // one left untouched. So it is reported, at its own path — the root is "" —
 // as an opaque entry carrying its tree's id, never skipped.
 func (w *walker) uncarried(prefix, oid string) error {
-	return w.record(Change{Path: strings.TrimSuffix(prefix, "/"), Mode: ModeUncarried, Size: -1, OID: oid})
+	return w.record(Change{Path: strings.TrimSuffix(prefix, "/"), Mode: ModeUncarried, size: -1, OID: oid})
 }
 
 func (w *walker) record(c Change) error {

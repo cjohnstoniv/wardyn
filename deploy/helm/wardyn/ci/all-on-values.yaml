@@ -200,3 +200,18 @@ affinity:
               operator: In
               values:
                 - amd64
+
+# Verbatim pod volumes / wardynd mounts (#596), shaped as the Secrets Store CSI
+# volume docs/OPERATIONS.md "Secrets from files" describes. Rendered only; no
+# WARDYN_*_FILE points at it here, so the env-mode assertions above still hold.
+extraVolumes:
+  - name: boot-secrets-csi
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: wardyn-boot
+extraVolumeMounts:
+  - name: boot-secrets-csi
+    mountPath: /mnt/secrets-store
+    readOnly: true
