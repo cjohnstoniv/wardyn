@@ -59,17 +59,18 @@ prs_json="$(gh pr list --repo "$REPO" --state open --limit 200 \
   --json number,headRefName,baseRefName,isDraft)"
 
 # ── 1. stacked-base retarget check ──────────────────────────────────────────
-# A PR is "stacked" when its base is neither main/master nor a release/**
-# branch. If that base name is not among the currently-open PRs' own head
-# branches, the PR it was stacked on has merged or closed, and this one
-# should have been retargeted to main — flag it rather than assume the
-# author noticed.
+# A PR is "stacked" when its base is neither main/master, a release/** branch,
+# nor a feature/** branch (ci.yml runs on feature/** too, and those are
+# live, long-lived integration branches with no PR of their own). If that
+# base name is not among the currently-open PRs' own head branches, the PR it
+# was stacked on has merged or closed, and this one should have been
+# retargeted to main — flag it rather than assume the author noticed.
 stacked_findings=0
 open_heads="$(printf '%s' "$prs_json" | jq -r '.[].headRefName')"
 while IFS=$'\t' read -r num base; do
   [ -z "$num" ] && continue
   case "$base" in
-    main|master|release/*) continue ;;
+    main|master|release/*|feature/*) continue ;;
   esac
   if ! grep -qxF "$base" <<<"$open_heads"; then
     echo "::warning::PR #$num is stacked on '$base', which is not an open PR's branch (merged or closed) — retarget to main"

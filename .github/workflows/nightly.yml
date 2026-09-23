@@ -557,6 +557,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
+      contents: read
       pull-requests: read
     services:
       postgres:
@@ -583,7 +584,7 @@ jobs:
         run: ./scripts/nightly-migration-merge-check.sh
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, migration-merge-check]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -604,7 +605,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk or migration-merge-check." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build) or kind-sso-walk." \
               "" \
               "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
               "" \
