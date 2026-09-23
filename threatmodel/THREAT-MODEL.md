@@ -2609,7 +2609,21 @@ residuals particular to holding:
   path is matched as though anything could lie beneath it; the list of
   content-writing routes is closed, so a route Azure DevOps adds later is
   outside it until someone adds it — writes the capability catalogue does not
-  recognise are already refused as unclassified.
+  recognise are already refused as unclassified. Routes are judged on the
+  EFFECTIVE method (`X-HTTP-Method-Override` applied, as the service applies
+  it), and on a content resource any write verb is content: an override can
+  turn a push into something ParsePush does not read, never into a non-write.
+- **Content-free pull-request actions still pass.** A reviewer's vote
+  (`PUT …/pullrequests/{id}/reviewers/{reviewerId}`) and a pull-request status
+  (`POST …/pullrequests/{id}/statuses`) carry no content and are left to the
+  capability gate, so a run holding the capability can satisfy the last policy
+  a pull request was waiting on and let a merge a human already set to
+  auto-complete go through. What merges is the pull request's source branch,
+  and every commit on it came in through a governed door — a git push or a REST
+  push judged by these rules — so nothing ungoverned enters; the residual is
+  WHEN an armed merge lands, not WHAT it carries. Creating or updating a pull
+  request so that it completes, or sets auto-complete, is refused while the run
+  has push rules.
 - **The GitHub App and `git_pat` lanes have no REST door.** Their brokered
   credentials never reach the sandbox, their broker routes admit only the three
   smart-HTTP endpoints (`validGitRest`), `api.github.com` is denied to a

@@ -83,21 +83,25 @@ func ClassifyContent(req Request) (ContentTarget, error) {
 		return ContentTarget{}, nil
 	}
 	if r.res == "pullrequests" {
-		return pullRequestContent(method, req, ContentTarget{})
+		return pullRequestContent(method, req, ContentTarget{}, r.at(4))
 	}
 	if r.res != "repositories" || r.at(3) == "" {
 		return ContentTarget{}, nil
 	}
 	t := ContentTarget{RepoPath: strings.Join(append(slices.Clone(r.segs[:r.apis]), "_git", r.at(3)), "/")}
+	// method is the EFFECTIVE method (X-HTTP-Method-Override applied), and
+	// every write to these resources is content whatever verb it arrives as:
+	// only a POST to pushes has a body ParsePush knows how to read, so any
+	// other verb there is refused as opaque rather than waved through.
 	switch res := r.at(4); {
 	case res == "pushes" && method == http.MethodPost:
 		t.Write = ContentPush
-	case slices.Contains(gitOpaqueContentResources, res):
+	case res == "pushes" || slices.Contains(gitOpaqueContentResources, res):
 		t.Write = ContentOpaque
 	case res == "refs" && method == http.MethodPost:
 		return refContent(req, t)
 	case res == "pullrequests":
-		return pullRequestContent(method, req, t)
+		return pullRequestContent(method, req, t, r.at(6))
 	}
 	return t, nil
 }
@@ -126,10 +130,12 @@ func refContent(req Request, t ContentTarget) (ContentTarget, error) {
 
 // pullRequestContent: completing a pull request merges its source into the
 // target branch, content the request does not show — whether it completes now
-// (status "completed") or sets auto-complete to do so later. Creating,
-// commenting on or abandoning one writes no content.
-func pullRequestContent(method string, req Request, t ContentTarget) (ContentTarget, error) {
-	if method == http.MethodDelete || method == http.MethodPost {
+// (status "completed") or sets auto-complete to do so later, and whether that
+// is asked of an existing pull request or of one being created. Only the pull
+// request object itself carries those fields; sub is the segment after its id
+// (threads, reviewers, statuses, …), whose writes carry no content.
+func pullRequestContent(method string, req Request, t ContentTarget, sub string) (ContentTarget, error) {
+	if method == http.MethodDelete || sub != "" {
 		return t, nil
 	}
 	body, err := peekBody(req)
