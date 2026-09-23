@@ -22,6 +22,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -297,13 +298,15 @@ type Options struct {
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
-	// TLSClientConfig is the TLS config for BOTH the forwarding and the
-	// control-plane transports. Production sets it from Config.TrustedCAPEM
-	// (system roots plus the operator's corporate CA bundle — see
-	// NewServer); nil means system roots alone. Tests use it to trust an
-	// httptest TLS server standing in for an HTTPS upstream.
+	// TLSClientConfig is the EGRESS transport's TLS config. Production sets it
+	// from Config.TrustedCAPEM (system roots plus the operator's corporate CA
+	// bundle — see NewServer); nil means system roots alone. Tests use it to
+	// trust an httptest TLS server standing in for an HTTPS upstream.
 	TLSClientConfig *tls.Config
-	Now             func() time.Time
+	// ControlTLS pins the control-plane transport to wardynd's internal CA
+	// (hoptls.ClientConfig). nil pins an EMPTY pool: https fails closed.
+	ControlTLS *tls.Config
+	Now        func() time.Time
 }
 
 // vettedIPKey carries the pre-resolved, policy-checked dial target through the
@@ -498,6 +501,10 @@ func newProxy(opts Options) *Proxy {
 	p.transport = mkTransport(egressDial)
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.controlTransport = mkTransport(directDial)
+	if opts.ControlTLS == nil {
+		opts.ControlTLS, _ = hoptls.ClientConfig("")
+	}
+	p.controlTransport.TLSClientConfig = opts.ControlTLS.Clone()
 	// localClient uses the CONTROL transport: local-route forwards to the control
 	// plane carry the vetted dial target on the request context so the host is
 	// never re-resolved (same TOCTOU guard), and they NEVER chain through the

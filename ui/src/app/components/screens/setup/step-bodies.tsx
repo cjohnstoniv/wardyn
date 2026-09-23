@@ -27,6 +27,7 @@ import { CONFIG_STEPS, DEMO_EGRESS_IDS, DEMO_SECRETS_IDS, STEP_LABEL, stepOrder,
 import { statusTone, statusWord } from "../../../lib/workspace-status";
 import { AccessPanel, type AccessLoadState } from "./access-panel";
 import { UserDrivesCard } from "./user-drives-card";
+import { SignInHelpCard } from "./sign-in-help-card";
 import type { AccessResponse } from "../../../lib/types";
 
 // Shared check-row primitives (Review + the Corporate network step).
@@ -440,6 +441,8 @@ export function DeploymentStep({
         state={accessState ?? "loading"}
         onReload={onReloadAccess ?? (() => {})}
       />
+      {/* #484 — under Role mappings: what a refused person is told to do. */}
+      <SignInHelpCard />
     </div>
   );
 }

@@ -74,6 +74,7 @@ func TestBrokerDecisionRows(t *testing.T) {
 					Resolver: publicResolver{}, Dial: splitDial(upstreamAddr(mint.srv), forge),
 					ControlPlaneURL: "https://wardynd.test:8080", RunToken: newTokenSource("RUNTOK"),
 					TLSClientConfig: testInsecureTLSConfig,
+					ControlTLS:      testInsecureTLSConfig,
 					GitGrants:       map[string]uuid.UUID{"octocat/hello-world": uuid.New()},
 				})
 			}},
@@ -86,6 +87,7 @@ func TestBrokerDecisionRows(t *testing.T) {
 					Resolver: publicResolver{}, Dial: splitDial(upstreamAddr(mint.srv), forge),
 					ControlPlaneURL: "https://wardynd.test:8080", RunToken: newTokenSource("RUNTOK"),
 					TLSClientConfig: testInsecureTLSConfig,
+					ControlTLS:      testInsecureTLSConfig,
 					PATGrants:       map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}},
 				})
 			}},
@@ -99,7 +101,7 @@ func TestBrokerDecisionRows(t *testing.T) {
 					}},
 					Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
 					Resolver: publicResolver{}, Dial: splitDial(forge, forge),
-					RunToken: newTokenSource("RUNTOK"), TLSClientConfig: testInsecureTLSConfig,
+					RunToken: newTokenSource("RUNTOK"), TLSClientConfig: testInsecureTLSConfig, ControlTLS: testInsecureTLSConfig,
 					ADOGrants: adoGrantsByHost{"dev.azure.com": {Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}}},
 				})
 			}},
