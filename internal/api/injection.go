@@ -266,6 +266,12 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// A person's own model-provider key resolves from the namespace dispatch
+	// recorded on its own grant, strictly — see resolveProviderKeyInjection.
+	if s.resolveProviderKeyInjection(w, r, claims, minted, grantID) {
+		return
+	}
+
 	// bedrock-api-key is the ONE stored name whose namespace the ROSTER decides,
 	// so the owner-fallback read below never resolves it: it resolves from the
 	// namespace dispatch recorded on its own grant, or not at all — see

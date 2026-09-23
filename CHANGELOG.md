@@ -42,6 +42,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pin is not exempt. A run launched on a workspace by id (`workspace_id`, the CLI's `--workspace`)
   chooses like any other.
 
+- **Key and endpoint providers dispatch from the run owner's own credential (#528).** A run that
+  chose an Anthropic key, OpenAI key or custom endpoint provider launches: dispatch re-reads the
+  provider and authors one grant, the owner's own `wardyn-provider-<uid>-key` on the provider's
+  host (the vendor's, or its route-through or endpoint address, exactly allowlisted), and hands the
+  sidecar that run's own upstream (`BaseURL`+`Path` for the harness's dialect) instead of the boot
+  gateways. The injection sink resolves the key only from a grant recording the run's own subject,
+  and only from that namespace. Create, Review and dispatch refuse, naming the provider, when the
+  caller's own key or token is not stored, and dispatch also when the provider is gone, off, no
+  longer serves the agent or the block cannot be read. Once a provider block is set, a model run
+  never reaches the legacy lanes: no AI integration folds (`integration_id` is refused), no
+  declared-mechanism check, no managed or host-mounted subscription, and every other model
+  credential in its policy is dropped and audited; a run no provider serves launches with no model
+  credential and says so. Record sessions choose a provider the same way.
+
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0069_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to
   at create time, so every `scanRun`-bound reader — `GetRun`, `ListRuns`, the run detail and list

@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"reflect"
@@ -440,50 +441,34 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 	}
 }
 
-// TestRunCreateIgnoresUnservingModelProviders pins "a block that serves no
-// provider for this agent changes nothing": the same run created under no block
-// and under one whose providers serve only another agent (with a roster
-// default there) comes back the same, modulo its own identity. A block that
-// does serve the agent chooses a provider (run_model_provider.go).
-func TestRunCreateIgnoresUnservingModelProviders(t *testing.T) {
-	// The answer as a whole — status and body, a refusal included — minus the
-	// run's own identity, which differs on every create.
-	create := func(site types.SiteConfig) map[string]any {
-		h := newHarness(t)
-		cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: site})
-		cfg.Broker = h.broker
-		cfg.Runner = &fakeRunner{}
-		cfg.Secrets = &memSecrets{m: map[string][]byte{}}
-		cfg.MaskRegistry = secretmask.NewRegistry()
-		w := do(t, New(cfg), http.MethodPost, "/api/v1/runs", adminToken, `{"task":"echo hi","agent":"claude-code"}`)
-		var run map[string]any
-		if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
-			t.Fatal(err)
-		}
-		for _, k := range []string{"id", "created_at", "updated_at", "spiffe_id"} {
-			delete(run, k)
-		}
-		run["http_status"] = w.Code
-		return run
-	}
+// TestRunCreateUnderAnUnservingProviderBlock pins the transition (#528): once
+// a model-provider block is set, a model run of an agent no provider serves is
+// on no legacy lane — it launches with the no-provider advisory, and a roster
+// row's declared mechanism no longer refuses it. A block that does serve the
+// agent chooses a provider (run_model_provider.go).
+func TestRunCreateUnderAnUnservingProviderBlock(t *testing.T) {
 	providers := providerBlock(keyProvider("codex", "codex-cli"))
 	row := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}
-	codex := types.AgentProvider{ID: "codex-cli", Mechanism: types.AgentMechanismOpenAIAPIKey}
-	withDefault := codex
-	withDefault.DefaultProvider = "codex"
+	codex := types.AgentProvider{ID: "codex-cli", Mechanism: types.AgentMechanismOpenAIAPIKey, DefaultProvider: "codex"}
 	for _, tc := range []struct {
-		name              string
-		today, configured types.SiteConfig
+		name string
+		site types.SiteConfig
 	}{
-		{"no roster", types.SiteConfig{}, types.SiteConfig{ModelProviders: providers}},
-		{"a roster whose other agent gains a default", types.SiteConfig{AgentProviders: agentBlock(row, codex)},
-			types.SiteConfig{ModelProviders: providers, AgentProviders: agentBlock(row, withDefault)}},
+		{"no roster", types.SiteConfig{ModelProviders: providers}},
+		{"a roster declaring the legacy mechanism", types.SiteConfig{ModelProviders: providers, AgentProviders: agentBlock(row, codex)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if a, b := create(tc.today), create(tc.configured); !reflect.DeepEqual(a, b) {
-				ja, _ := json.Marshal(a)
-				jb, _ := json.Marshal(b)
-				t.Errorf("run create changed under a provider block:\ntoday      %s\nconfigured %s", ja, jb)
+			h := newHarness(t)
+			cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: tc.site})
+			cfg.Broker = h.broker
+			cfg.Runner = &fakeRunner{}
+			cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+			cfg.MaskRegistry = secretmask.NewRegistry()
+			w := do(t, New(cfg), http.MethodPost, "/api/v1/runs", adminToken, `{"task":"echo hi","agent":"claude-code"}`)
+			var got createRunResponse
+			_ = json.Unmarshal(w.Body.Bytes(), &got)
+			if w.Code != http.StatusCreated || !slices.Contains(got.Warnings, fmt.Sprintf(mpAccessNoProvider, "claude-code")) {
+				t.Errorf("create = %d %s\nwant 201 carrying the no-provider advisory", w.Code, w.Body.String())
 			}
 		})
 	}

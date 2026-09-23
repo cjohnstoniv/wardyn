@@ -514,6 +514,11 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 		// outage, and dispatch reads the roster again on the way to the sandbox.
 		return true
 	}
+	// Under a model-provider block the run's provider decides its lane, and
+	// enforceRunModelProvider already judged it (and its credential).
+	if sc.ModelProviders != nil {
+		return true
+	}
 	row, declared := agentProviderFor(sc, req.Agent)
 	if !declared && out == nil {
 		return true

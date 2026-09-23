@@ -351,9 +351,10 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// secret-store read and let the rail describe a lane the gate did not judge.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
 	// The model-provider choice, where launch makes it (runs.go). Review has no
-	// run row to freeze the choice onto, so it discards it — Review's job is
-	// only to answer the refusal launch would.
-	if _, ok := s.enforceRunModelProvider(w, r, req, wsRefs); !ok {
+	// run row to freeze the choice onto; it keeps it only for the model-access
+	// row below, which under a provider block is the provider's verdict.
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, wsRefs)
+	if !ok {
 		return
 	}
 	var modelCred modelCredentialFacts
@@ -373,7 +374,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a false "missing model access" blocker on every CI exec job's --dry-run.
 	var llmAccess *composeLLMAccess
 	if req.TaskMode != "exec" {
-		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject)
+		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject, mpChoice)
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)
