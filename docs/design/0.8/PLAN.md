@@ -539,9 +539,13 @@ deny, uninspectable, too large. Phase two: a held `push_content` approval kind a
 - Phase two's approval kind is admin-decidable only, because a member approving their own
   workflow-file edit is exactly the exfiltration the self-approval rule stops; unattended runs deny
   outright rather than holding for a human who is not there.
-- The brokered app lane is always governed; the token lane only behind its branch-namespace
-  switch, which is what makes that lane parse at all; the key lane never, because it is an opaque
-  tunnel — a medium-risk row warns when rules are set and the only git grant is a key.
+- Both brokered lanes are governed, on one trigger — the run's policy carries a rule — and
+  neither waits on a branch-namespace switch. The token lane terminates and holds the whole
+  request either way, so gating what a push may contain on a switch about where it may land
+  would leave a policy reading as governed while enforcing nothing, and the `no-thin`
+  advertisement follows the enforcement onto that lane so its rules are not a false-refusal
+  machine. The key lane is never governed, because it is an opaque tunnel — a medium-risk row
+  warns when rules are set and the only git grant is a key.
 
 **Risks.** A short delta buffer yields a plausible tree, so the reconstructed size is checked
 against the delta header; and "push any branch" must not silently disable content rules.

@@ -132,6 +132,15 @@ type bootFlags struct {
 	// above — never a SiteConfig field, never agent-reachable.
 	anthropicBaseURL *string
 	openaiBaseURL    *string
+	// demoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL (see
+	// internal/api/llm_gateway.go's ValidateDemoVideoBaseURL): an
+	// operator-run mirror re-pointing the Getting Started demo episodes for
+	// an air-gapped deployment, where github.com is unreachable. Empty
+	// (default) = the two hardcoded GitHub hosts, byte-identical to today.
+	// Same posture class as anthropicBaseURL/openaiBaseURL above —
+	// control-plane-authored, never a SiteConfig field, never
+	// agent-reachable.
+	demoVideoBaseURL *string
 	// anthropicGatewayHeader / anthropicGatewayFormat (WARDYN_ANTHROPIC_GATEWAY_HEADER
 	// / _FORMAT) and their OpenAI pair below are the injection header name and
 	// value format a gateway configured via anthropicBaseURL/openaiBaseURL wants
@@ -330,6 +339,7 @@ func parseBootFlags() *bootFlags {
 		daemonNoProxy:           flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-spelled bypass list for WARDYN_DAEMON_PROXY_URL (host, .suffix, CIDR, *). wardynd auto-appends three hosts: KUBERNETES_SERVICE_HOST, the WARDYN_AWS_SSO_ENDPOINT_OVERRIDE host, and the WARDYN_OIDC_INTERNAL_ISSUER host. Ignored when the proxy URL is unset"),
 		anthropicBaseURL:        flagEnv("anthropic-base-url", "WARDYN_ANTHROPIC_BASE_URL", "", "operator-set internal model gateway base URL (https://, RFC1918/CGNAT literal allowed) re-pointing Anthropic's brokered upstream instead of api.anthropic.com. Empty (default) = the public host, byte-identical to today. Covers the api-key lane AND subscription/Wardyn-managed runs: setting this sends the operator's live OAuth token to the configured gateway instead of only ever api.anthropic.com. The harness-login (claude setup-token) lane is exempt and always stays on the public host"),
 		openaiBaseURL:           flagEnv("openai-base-url", "WARDYN_OPENAI_BASE_URL", "", "same as -anthropic-base-url, for OpenAI's api-key lane (api.openai.com)"),
+		demoVideoBaseURL:        flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "operator-run mirror base URL (https://, no userinfo, no query/fragment) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) = the two hardcoded GitHub hosts, byte-identical to today. Published on /healthz; the console reads it to build each episode's download URL and the CSP's media-src names its origin"),
 		anthropicGatewayHeader:  flagEnv("anthropic-gateway-header", "WARDYN_ANTHROPIC_GATEWAY_HEADER", "", "injection header name -anthropic-base-url's gateway wants instead of x-api-key. Empty (default) = x-api-key, byte-identical to today. Must be a valid HTTP header token; a malformed value refuses boot"),
 		anthropicGatewayFormat:  flagEnv("anthropic-gateway-format", "WARDYN_ANTHROPIC_GATEWAY_FORMAT", "", `value format -anthropic-base-url's gateway wants instead of the bare key ("%s"), e.g. "Bearer %s". Empty (default) = the bare key, byte-identical to today. Must contain exactly one %s and no other verb; a malformed value refuses boot`),
 		openaiGatewayHeader:     flagEnv("openai-gateway-header", "WARDYN_OPENAI_GATEWAY_HEADER", "", "same as -anthropic-gateway-header, for OpenAI's gateway (default Authorization)"),

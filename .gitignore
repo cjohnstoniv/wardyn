@@ -142,6 +142,10 @@ ds-bundle/
 # CHANGELOG.md and sign-in-copy.ts's header comment — ships for the same
 # reason people-access-prompt.md does.
 !/docs/design/signin-first-contact-canon.md
+# demo-video-source-canon.md is the frozen strings table for #145's two source
+# twins (episodes.ts) — a permanent doc, not a mock round, same shape as
+# CONSOLE-RULES.md above.
+!/docs/design/demo-video-source-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 

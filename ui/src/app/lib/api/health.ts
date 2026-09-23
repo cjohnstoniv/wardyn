@@ -324,6 +324,13 @@ export const health = {
     // has to be answerable pre-auth). Wire mirror only; not read client-side
     // yet. Absent on an older daemon.
     version?: string;
+    // WARDYN_DEMO_VIDEO_BASE_URL (internal/api/healthz.go), already validated
+    // at boot: the operator-run mirror the Getting Started demo episodes
+    // stream from on an air-gapped deployment, where github.com is
+    // unreachable. "" (the default, unset) or absent (an older daemon) both
+    // mean "no mirror" — lib/demo-videos.ts's episodeUrl falls back to its
+    // own hardcoded GitHub base either way.
+    demo_video_base_url?: string;
   }> {
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call

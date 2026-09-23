@@ -672,6 +672,18 @@ type Config struct {
 	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
 	// cookie that cannot be signed must never be issued.
 	UISessionKey []byte
+	// DemoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL, validated at boot by
+	// ValidateDemoVideoBaseURL (same seven-rule shape as an internal model
+	// gateway: https://, no userinfo, no query/fragment). It re-points the
+	// Getting Started demo episodes at an operator-run mirror for an
+	// air-gapped deployment, where github.com is unreachable — both the
+	// download URL episodeUrl's /healthz-reading caller builds and the CSP's
+	// media-src this base's host is echoed into (cspMediaSrc,
+	// security_headers.go). Empty (the default) = the two hardcoded GitHub
+	// hosts, byte-identical to today. Control-plane-authored only, same trust
+	// boundary as TrustedCAPEM/LLMGateways above — never a SiteConfig field,
+	// never agent-reachable.
+	DemoVideoBaseURL string
 }
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
