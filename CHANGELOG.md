@@ -38,7 +38,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
-- **Docs caught up with `POST /runs` answering before dispatch completes (#118).** `POST /runs`
+- **Docs caught up with `POST /runs` answering before dispatch completes (#121, #118).** `POST /runs`
   answers when the run row exists; every refusal is still synchronous with no run created; a
   dispatch failure ends FAILED with a failure hint; a restart mid-dispatch is reaped after the
   undispatched grace period with the reconciler's reason; and 0.7 CLI, SDK and curl callers need no
