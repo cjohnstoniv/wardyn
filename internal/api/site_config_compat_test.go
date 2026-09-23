@@ -95,7 +95,7 @@ func TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName(t *testing.T) {
 		})
 	}
 
-	// THE ANTI-FORGETTING HALF, and the reason this is a rule rather than a
+	// The anti-forgetting half, and the reason this is a rule rather than a
 	// list of hand-rescued fields: the NEXT key added to types.SiteConfig has
 	// the same footgun. Every key must sit on one declared side of the v0.6.6
 	// line.

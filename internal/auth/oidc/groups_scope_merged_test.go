@@ -181,7 +181,7 @@ func TestLoginWarnsWhenTheMERGEDMapNeedsTheGroupsScope(t *testing.T) {
 			wantWarn:        false,
 		},
 		{
-			// The ENTRA PATH: no `groups` scope advertised, claim emitted
+			// The Entra path: no `groups` scope advertised, claim emitted
 			// without one. Neither half of the warning may ever fire here.
 			name:            "provider advertises no groups scope (the Entra shape)",
 			scopesSupported: entraShape,

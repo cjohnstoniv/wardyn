@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The eviction SEAM, END TO END.
+// The eviction seam, end to end.
 //
 // The pieces are pinned elsewhere: the runner package proves a k8s pod evicted
 // out from under a run reads TERMINAL (internal/runner/k8s/terminal_pod_test.go,

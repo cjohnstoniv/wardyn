@@ -22,7 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The MITM'S upstream LEG speaks the scheme its entry names (walk-3).
+// The MITM's upstream leg speaks the scheme its entry names (walk-3).
 //
 // Terminating the tunnel is not optional for Phase B: the sandbox holds a
 // placeholder, not a credential, so the real token can only be substituted into
@@ -342,7 +342,7 @@ func TestCompileMITMHosts_PlaintextIsPortScoped(t *testing.T) {
 
 // the path/query pin
 
-// The injected session rides one request shape, NOT ONE HOST.
+// The injected session rides one request shape, not one host.
 //
 // Before this, the resolved header went on whatever the sandbox sent to the
 // portal host. That includes `POST /logout`, which AWS documents as invalidating

@@ -192,7 +192,7 @@ func TestADONames_StructureStaysRefused(t *testing.T) {
 	}
 }
 
-// An AZURE DEVOPS server host takes the name rule only when a provider row
+// An Azure DevOps server host takes the name rule only when a provider row
 // names it: nothing on the wire tells a TFS host from any other forge, so the
 // row is the only fact available. Without one, its escapes are refused as
 // every other forge's are.

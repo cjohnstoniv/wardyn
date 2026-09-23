@@ -1602,7 +1602,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 			reason: driveRefusalBackendElsewhere,
 		},
 		{name: "the home directory is missing from the share", build: shareStore, reason: driveRefusalHomeMissing},
-		// The four ARMS the table never exercised (R1 F310). Every one of them
+		// The four arms the table never exercised (R1 F310). Every one of them
 		// is a reachable deployment failure whose whole point is that an
 		// operator sees it, and not one of them had ever emitted its own series
 		// in a test — so the reason constant, the WARN and the counter could
@@ -1691,7 +1691,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 				t.Errorf("wardyn_drive_refusals_total{reason=%q} = %d, want 1 (counters: %v)",
 					tc.reason, got, srv.metrics.driveRefusals)
 			}
-			// The LOG LINE, carrying the reason so the two agree.
+			// The log line, carrying the reason so the two agree.
 			if !strings.Contains(buf.String(), `reason=`+tc.reason) {
 				t.Errorf("slog = %q, want a WARN naming reason=%s", buf.String(), tc.reason)
 			}

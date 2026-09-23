@@ -174,7 +174,7 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 		})
 	}
 
-	// The GETTER'S fourth consumer, on its own terms (F287). GET
+	// The getter's fourth consumer, on its own terms (F287). GET
 	// .../env-as-code left classMember because its emitted files render the
 	// operator's authored environment whole — the FROM line naming the internal
 	// registry coordinate the workspace reads blank, the site-config artifact

@@ -52,7 +52,7 @@ type driveCRUDStore struct {
 	// listErrOnce makes listErr a TRANSIENT blip on ListUserDrives: it fails
 	// once and the store is healthy again.
 	//
-	// Why A one-SHOT EXISTS AT ALL. The drive-write path takes TWO
+	// Why a one-shot exists at all. The drive-write path takes two
 	// ListUserDrives reads — driveHostRootNesting's, then driveRehomeGuard's —
 	// and each answers 500 on its own. A permanently failing list therefore
 	// cannot tell them apart: the nesting gate's 500 arm could be deleted
@@ -383,7 +383,7 @@ func TestCreateUserDriveWritesAndAudits(t *testing.T) {
 // TestUserDriveWriteAuditIsTheWholeRow is the drive.write payload asserted BY
 // VALUE on a host_path drive — the shape where the row actually carries a claim.
 //
-// WHAT KEY-PRESENCE CANNOT SEE. Checking only that eight keys EXIST, over a
+// What key-presence cannot see. Checking only that eight keys exist, over a
 // docker_volume fixture whose host_root is "" even on a pass, lets `"host_root":
 // "REDACTED"`, a hard-coded `"backend"`, an always-true `"writable"` and a target
 // of uuid.Nil all survive — and

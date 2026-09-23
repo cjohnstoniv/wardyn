@@ -484,7 +484,7 @@ func TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot(t *testing.T) {
 		if !strings.Contains(err.Error(), "denied user drive") {
 			t.Errorf("error should identify the denied drive, got: %v", err)
 		}
-		// Names the drive and the directory, NEVER THE PATHS. Every driver
+		// Names the drive and the directory, never the paths. Every driver
 		// refusal becomes the run's failure_hint, which the run's CREATOR reads,
 		// and both roots plus the bind source are the operator's filesystem
 		// layout — the same disclosure driveAuditTarget masks off the audit row

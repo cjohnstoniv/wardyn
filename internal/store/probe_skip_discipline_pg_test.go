@@ -3,7 +3,7 @@
 
 package store_test
 
-// The SKIP discipline for this PACKAGE'S probes, derived rather than declared.
+// The skip discipline for this package's probes, derived rather than declared.
 //
 // A test that skips produces `--- SKIP` -> `ok` -> exit 0, scripts/test-report.sh
 // graded on the exit code alone, and nothing inspected the JSON stream for

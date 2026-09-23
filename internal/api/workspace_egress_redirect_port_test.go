@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestSubstituteArtifactEgress_LiteralIPToIsPortScoped.
+// TestSubstituteArtifactEgress_LiteralIPToIsPortScoped is the F106 regression.
 // substituteArtifactEgress adds the redirect's To port-qualified, because a
 // bare allowlist entry matches on every port: Policy.AllowsLiteralIP answers
 // true from allowedExact before it ever consults the port-qualified map, so

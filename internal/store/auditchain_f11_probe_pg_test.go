@@ -274,13 +274,14 @@ func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 }
 
 // TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean pins rule 3 in
-// auditChainWalk: a DB admin who disables/drops the 0047 trigger (or inserts in replica mode)
-// appends a row with NULL prev_hash/row_hash AFTER the chain's genesis. If
-// the sweep treated every NULL-hash row as "legacy" with no positional
-// constraint (a bare `WHERE row_hash IS NOT NULL` + the Legacy count), then,
-// since the trigger's head lookup skips NULL rows, the chain would simply
-// step over the forged row and verify clean. Legacy rows are a PREFIX; a
-// NULL-hash row with seq > first_seq is a finding — rule 3 in auditChainWalk.
+// auditChainWalk: a DB admin who disables/drops the 0047 trigger (or inserts
+// in replica mode) appends a row with NULL prev_hash/row_hash AFTER the
+// chain's genesis. If the sweep treated every NULL-hash row as "legacy" with
+// no positional constraint (a bare `WHERE row_hash IS NOT NULL` + the Legacy
+// count), then, since the trigger's head lookup skips NULL rows, the chain
+// would simply step over the forged row and verify clean. Legacy rows are a
+// PREFIX; a NULL-hash row with seq > first_seq is a finding — rule 3 in
+// auditChainWalk.
 func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool)

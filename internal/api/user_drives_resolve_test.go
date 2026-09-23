@@ -309,7 +309,7 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
-	// The second READ'S FAIL-CLOSED ARM, which had no fixture at all.
+	// The second read's fail-closed arm, which had no fixture at all.
 	//
 	// driveWithUnusableGroups asks the store twice and must fail closed on BOTH:
 	// once for the caller's own drive, once for "does ANY group-tier allocation

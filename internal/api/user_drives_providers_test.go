@@ -30,7 +30,7 @@ func providerSiteConfig(disabled bool, maxSizeMiB int) types.SiteConfig {
 // TestDriveWritesMeetTheOrgSwitchAndTheCeiling walks the two admin write doors
 // against storage.user_drive.
 //
-// Both refusals are 422 AND NEITHER IS A 403, which is the whole classification:
+// Both refusals are 422 and neither is a 403, which is the whole classification:
 // nobody was denied by a profile. The org switch says this install offers no
 // drives at all, and the ceiling says the deployment will not hold a drive that
 // big — in decodeUserDriveRequest's own words, "a 400 says you wrote this wrong,

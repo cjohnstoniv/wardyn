@@ -128,7 +128,7 @@ func TestAuthorBedrockSSOInjection_EndpointOverrideDropsRequireTLS(t *testing.T)
 	if injections[0].Rule.RequireTLS {
 		t.Error("RequireTLS stayed true under the endpoint override — the plain-http fake serves no TLS, so the run would be refused rather than credentialed")
 	}
-	// The OVERRIDE'S own PORT (security NIT-2). Authored at 443 the tunnel is
+	// The override's own port (security NIT-2). Authored at 443 the tunnel is
 	// never terminated and the header is never injected — the fake lane would
 	// carry a placeholder to a 401 with nothing in the proxy to say why.
 	// …AND IN THE SCHEME THE OVERRIDE NAMES (walk-3). The proxy TERMINATES this

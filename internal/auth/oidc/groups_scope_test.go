@@ -134,7 +134,7 @@ func TestBootWarnsWhenAGroupsScopeIsAdvertisedButNotRequested(t *testing.T) {
 			wantWarn:        false,
 		},
 		{
-			// The ENTRA PATH, and the row that keeps this from being noise:
+			// The Entra path, and the row that keeps this from being noise:
 			// Entra advertises no `groups` scope and emits the claim without
 			// one, so an App-Role/group-keyed map there is correct as written.
 			name:            "not advertised (the Entra shape), map keyed on a claim",

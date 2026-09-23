@@ -100,7 +100,7 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 		t.Errorf("run.drive.mount actor = %q, want %q — a member ticked a checkbox, dispatch resolved it into an object",
 			ev.ActorType, types.ActorSystem)
 	}
-	// The ROW'S one rendered detail, and the one field whose reader is not the
+	// The row's one rendered detail, and the one field whose reader is not the
 	// operator. The console's Audit tab draws a row from time, actor, action and
 	// Target and reads nothing out of Data, and auditScope lets a run's CREATOR
 	// read their own run's rows — so for a SHARE a target of

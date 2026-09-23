@@ -250,7 +250,7 @@ func TestAuthorADOEntraInjection_Golden(t *testing.T) {
 	}
 }
 
-// A missing per-RUN CA IS A REFUSAL, not a blind tunnel.
+// A missing per-run CA is a refusal, not a blind tunnel.
 func TestAuthorADOEntraInjection_RefusesWithoutCertificateAuthority(t *testing.T) {
 	for name, ca := range map[string][2]string{"no cert": {"", "KEY"}, "no key": {"CERT", ""}} {
 		st := &adoTestStore{}
@@ -291,7 +291,7 @@ func TestAuthorADOEntraInjection_RefusesUnissuableConfigurations(t *testing.T) {
 	}
 }
 
-// An unconfigured deployment is byte-FOR-BYTE UNCHANGED: the lane resolves to
+// An unconfigured deployment is byte-for-byte unchanged: the lane resolves to
 // nothing, and the dispatch call with the lane off returns every input as it
 // was and writes no grant.
 func TestADOEntraLane_UnconfiguredDeploymentIsUnchanged(t *testing.T) {

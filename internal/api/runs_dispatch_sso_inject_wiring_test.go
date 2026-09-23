@@ -180,7 +180,7 @@ func TestDispatchWiring_SwitchOffIsThePreviousBehaviour(t *testing.T) {
 	}
 }
 
-// A run dispatched under `on` KEEPS ITS LANE when the flag flips to `off`
+// A run dispatched under `on` keeps its lane when the flag flips to `off`
 // (Codex #5 / the plan's on->off restart case). The switch is read ONCE, at
 // dispatch; the resolver and the capture-side resolution never consult it, so a
 // HELD run's grant still resolves and its hold still works after the flip.

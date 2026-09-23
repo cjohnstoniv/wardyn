@@ -399,7 +399,7 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 		})
 	}
 
-	// The DENY LIST RUNS on the resolved PATH, so listing a denied tree as a
+	// The deny list runs on the resolved path, so listing a denied tree as a
 	// root buys nothing: ValidateMountSource resolves the source and re-runs
 	// deniedSource on what it found, which is why ParseUserDriveHostRoots warns
 	// that such a root matches NOTHING rather than treating it as an escape

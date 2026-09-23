@@ -27,7 +27,7 @@ var adoNamePairs = []struct{ project, repo, path string }{
 	{"100% Done", "Half 50%", "100%25%20Done/_git/Half%2050%25"},
 }
 
-// A spaced repository clones, FETCHES AND PUSHES THROUGH THE BROKER: the real
+// A spaced repository clones, fetches and pushes through the broker: the real
 // agent-run rewrite, the real proxy, and a real git http-backend behind a fake
 // that looks the repository up by its literal names, as Azure DevOps does.
 func TestADONames_GitBrokerCloneFetchPush(t *testing.T) {
@@ -105,7 +105,7 @@ func TestADONames_HeldPushAsksByName(t *testing.T) {
 	h.finish(t)
 }
 
-// A spelling the REST GATE refuses is refused at the git door TOO — a trailing
+// A spelling the REST gate refuses is refused at the git door too — a trailing
 // dot or an edge space the service trims away, an escaped separator, a double
 // encoding — rather than keyed there as a second repository whose sticky deny
 // the real one would not inherit.

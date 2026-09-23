@@ -1308,7 +1308,7 @@ func containsPrefix(env []string, prefix string) bool {
 	return false
 }
 
-// TestSSHGateway_MixedChannelTypesShareOneCap.
+// TestSSHGateway_MixedChannelTypesShareOneCap is B2′.
 //
 // TestSSHGateway_MaxSessionsPerRunEnforced above exercises "session" channels
 // ONLY. This proves that "direct-tcpip" (-L forwards) draws on the SAME

@@ -360,7 +360,7 @@ func TestHarnessLogin_SupersedePrecedesTheQuota(t *testing.T) {
 // lands after the winner's. The second pass is what closes it, and it has to do
 // so WITHOUT an in-process mutex, which is not a lock on the second replica.
 //
-// What is pinned, EXACTLY: the interleaving where a pass SEES BOTH ROWS — both
+// What is pinned, exactly: the interleaving where a pass sees both rows — both
 // are in the store before either second pass runs. That is the ordinary
 // double-click, and the passes are run in each order because the property is
 // that the answer does not depend on which finishes first. It is NOT a universal
