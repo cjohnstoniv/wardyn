@@ -37,6 +37,7 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request) (policyRequest,
 	if req.Name == "" {
 		return policyRequest{}, "name is required"
 	}
+	canonicalizeWorkspaceRepos(req.Spec.WorkspaceRepos)
 	if err := validatePolicySpec(req.Spec); err != nil {
 		return policyRequest{}, "invalid policy spec: " + err.Error()
 	}

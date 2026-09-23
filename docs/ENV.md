@@ -516,6 +516,8 @@ repository.
 | `WARDYN_LIVE_ADO_ORG` | string | (none) | Azure DevOps test organisation |
 | `WARDYN_LIVE_ADO_PROJECT` | string | (none) | Project in that organisation |
 | `WARDYN_LIVE_ADO_REPO` | string | (none) | Repository the member can read |
+| `WARDYN_LIVE_ADO_SPACED_PROJECT` | string | `Payments Platform` | Project whose name carries a space, for LL2's second run |
+| `WARDYN_LIVE_ADO_SPACED_REPO` | string | `Card Auth (v2).Service` | Repository in that project, for LL2's second run |
 | `WARDYN_LIVE_AWS_SSO_START_URL` | URL | (none) | IAM Identity Center start URL (LL4) |
 | `WARDYN_LIVE_AWS_SSO_REGION` | string | (none) | IAM Identity Center region (LL3, LL4) |
 | `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in is a skip |

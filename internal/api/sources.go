@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -98,7 +99,22 @@ func canonicalSourceIdentity(kind types.SourceKind, locator, ref string) (string
 // "MyGroup/MyRepo.git" back, not "mygroup/myrepo.git". A bare "<org>/<name>"
 // GitHub slug has no host component in the string itself and passes through
 // unchanged.
+//
+// An Azure DevOps address takes canonicalRepoAddress's path instead of a
+// url.Parse/String round trip: that round trip re-escapes by Go's rules ("("
+// becomes %28, "é" becomes %C3%A9), a second spelling of the same repository
+// that repoLocatorPathSafe then refused outright.
 func canonicalRepoLocator(locator string) string {
+	if c, ok := adoscope.CanonicalRepoURL(locator); ok {
+		// CanonicalRepoURL keeps everything before the path verbatim, so the
+		// scheme and host are lowercased here, userinfo left alone.
+		if i := strings.Index(c, "://"); i >= 0 {
+			end := i + 3 + strings.IndexByte(c[i+3:], '/')
+			host := max(i+3, strings.LastIndexByte(c[:end], '@')+1)
+			return strings.ToLower(c[:i+3]) + c[i+3:host] + strings.ToLower(c[host:end]) + c[end:]
+		}
+		return c
+	}
 	if strings.Contains(locator, "://") {
 		if u, err := url.Parse(locator); err == nil && u.Host != "" {
 			u.Scheme = strings.ToLower(u.Scheme)
@@ -391,12 +407,20 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 }
 
 // lastPathSegment names a source from its locator when the caller didn't:
-// the trailing path/slug segment, or the locator itself when there is none.
+// the trailing path/slug segment, or the locator itself when there is none. An
+// Azure DevOps repository is named by its decoded name — "Card Auth
+// (v2).Service", never "Card%20Auth%20(v2).Service".
 func lastPathSegment(locator string) string {
 	if locator == "" {
 		return locator
 	}
-	return path.Base(locator)
+	base := path.Base(locator)
+	if _, ado := adoscope.CanonicalRepoURL(locator); ado {
+		if name, err := adoscope.UnescapeName(base); err == nil {
+			return name
+		}
+	}
+	return base
 }
 
 // overridesBySourceID indexes existing's per-source Overrides by source id —

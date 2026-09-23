@@ -114,6 +114,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	canonicalizeRunRepos(&req)
 	// THE ORDER OF THE FIVE GATES BELOW IS CREATE'S OWN ORDER, and it is
 	// load-bearing rather than tidy (R9). The structural parity guard
 	// (TestPreflightMirrorsLaunchGates) can see the gate SET but not the

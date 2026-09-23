@@ -29,6 +29,7 @@ import {
 import { Field, OptionCard } from "../wardyn/form-primitives";
 import { useMemberLocalDirRoot, useOperator } from "../wardyn/operator-context";
 import { getErrorMessage } from "../../lib/format";
+import { adoRepoName } from "../../lib/scm-provider";
 import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../lib/workspace-copy";
@@ -47,11 +48,12 @@ type SourceKind = "repo" | "local_dir" | "ephemeral";
 type ImageChoice = "auto" | "pinned";
 
 // Best-effort basename off a repo slug/URL or a local path — good enough to
-// pre-fill Name; the operator can always type over it.
+// pre-fill Name; the operator can always type over it. An Azure DevOps
+// repository pre-fills with its own name, never its URL escapes.
 function baseNameFrom(value: string): string {
   const cleaned = value.trim().replace(/\.git$/, "").replace(/\/+$/, "");
   const parts = cleaned.split(/[/:]/).filter(Boolean);
-  return parts[parts.length - 1] ?? "";
+  return adoRepoName(cleaned) ?? parts[parts.length - 1] ?? "";
 }
 
 function deriveName(kind: SourceKind, sourceValue: string): string {

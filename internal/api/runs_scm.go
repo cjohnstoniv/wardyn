@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"unicode"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/gitremote"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -89,15 +91,25 @@ const repo400LocatorShape = "%s is not a repository address — a repository add
 // traversable SHAPES are refused instead, at parseCloneTarget (the one place
 // every admission door resolves a clone URL) and again at the write doors.
 //
-// Refused: any "%" (an address needs no escaping, and RawPath is exactly how
-// %2F sneaks a second segment past a decoded compare), any "\" (a segment
-// separator to some clients), and any empty, "." or ".." path segment.
+// Refused: any "%" (RawPath is exactly how %2F sneaks a second segment past a
+// decoded compare), any "\" (a segment separator to some clients), and any
+// empty, "." or ".." path segment. The ONE exception to the first is an Azure
+// DevOps address already in its canonical spelling (canonicalRepoAddress):
+// project and repository names there legitimately carry spaces and escapes,
+// and adoscope's name rule has refused every escape that decodes to structure
+// before this is reached — so the decoded compare and the raw path cannot
+// disagree about where a segment ends.
 // A locator with no path at all is not this function's business — it is
 // unclonable for other reasons and nothing about it traverses.
 func repoLocatorPathSafe(raw string) bool {
 	s := strings.TrimSpace(raw)
-	if strings.ContainsAny(s, `%\`) {
+	if strings.Contains(s, `\`) {
 		return false
+	}
+	if strings.Contains(s, "%") {
+		if c, ok := adoscope.CanonicalRepoURL(s); !ok || c != s {
+			return false
+		}
 	}
 	path := s
 	if i := strings.Index(s, "://"); i >= 0 {
@@ -118,6 +130,51 @@ func repoLocatorPathSafe(raw string) bool {
 		}
 	}
 	return true
+}
+
+// canonicalRepoAddress is the ONE stored spelling of a repository address. An
+// Azure DevOps address has each path segment rewritten by adoscope's name rule
+// — so a project typed "Payments Platform", pasted "Payments%20Platform" or
+// escaped wholesale by a client library is one string — and anything else is
+// returned exactly as given. Every door that AUTHORS a repository address calls
+// this before it validates, so every gate, the run row and WARDYN_REPOS read
+// one spelling; a value it cannot canonicalise keeps its spelling and meets the
+// same refusals it always did.
+func canonicalRepoAddress(s string) string {
+	if c, ok := adoscope.CanonicalRepoURL(s); ok {
+		return c
+	}
+	return s
+}
+
+// canonicalizeRunRepos puts every repository address a create-run body names
+// into its stored spelling, before any gate reads one. Both run doors (launch
+// and preflight) call it straight after decoding.
+func canonicalizeRunRepos(req *createRunRequest) {
+	req.Repo = canonicalRepoAddress(req.Repo)
+	req.DevcontainerRepo = canonicalRepoAddress(req.DevcontainerRepo)
+	if req.InlinePolicy != nil {
+		canonicalizeWorkspaceRepos(req.InlinePolicy.WorkspaceRepos)
+	}
+}
+
+// canonicalizeWorkspaceRepos is canonicalRepoAddress over a spec's
+// workspace_repos, in place.
+func canonicalizeWorkspaceRepos(repos []types.WorkspaceRepo) {
+	for i := range repos {
+		repos[i].Repo = canonicalRepoAddress(repos[i].Repo)
+	}
+}
+
+// repoDirName is the directory name for a clone whose address ends in leaf:
+// the leaf decoded by adoscope's name rule where it decodes (an Azure DevOps
+// repository is named "Card Auth (v2).Service", not its escapes), with each run
+// of whitespace made "-" so the name stays repoFieldSafe.
+func repoDirName(leaf string) string {
+	if name, err := adoscope.UnescapeName(leaf); err == nil {
+		leaf = name
+	}
+	return strings.Join(strings.FieldsFunc(leaf, unicode.IsSpace), "-")
 }
 
 // repoCloneURL derives a git clone URL from a (already sanitized) repo slug.
@@ -229,7 +286,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 			}
 		}
 		if dest == "" {
-			name := strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git")
+			name := repoDirName(strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git"))
 			if name == "" {
 				name = "repo"
 			}

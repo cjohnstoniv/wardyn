@@ -179,7 +179,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // FINDING (git-tab.tsx's addRow default, not fixed here — see this
     // lane's report): a freshly-added Azure DevOps row defaults its base URL
     // to "https://dev.azure.com" — ZERO path segments — which the server
-    // refuses outright (workspace_providers.go: "dev.azure.com is shared by
+    // refuses outright (workspace_providers_baseurl.go: "dev.azure.com is shared by
     // every org on the planet, so the organization segment is REQUIRED
     // there"). Saving the row exactly as "Add provider" leaves it is a
     // guaranteed 400, with no client-side hint that the default itself is

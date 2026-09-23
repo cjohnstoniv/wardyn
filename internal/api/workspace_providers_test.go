@@ -260,6 +260,19 @@ func TestBaseURLClientMirrorParity(t *testing.T) {
 		{"https://localhost/acme", types.GitProviderGitHub, true},
 		{"https://github.com/acme%2Fevil", types.GitProviderGitHub, true},
 		{"https://github.com/%60id%60", types.GitProviderGitHub, true},
+		// An Azure DevOps row scoped to a project whose name has a space (#485):
+		// typed or escaped, it is the project's one canonical path. An escape hiding
+		// structure or decoding to a shell metacharacter is still refused, and a
+		// GitHub row takes no escape at all.
+		{"https://tfs.corp.example/Payments Platform", types.GitProviderAzureDevOps, false},
+		{"https://tfs.corp.example/Payments%20Platform", types.GitProviderAzureDevOps, false},
+		{"https://acme.visualstudio.com/Caf%C3%A9%20%C3%89quipe", types.GitProviderAzureDevOps, false},
+		{"https://tfs.corp.example/Payments%20Platform", types.GitProviderGitHub, true},
+		{"https://tfs.corp.example/a%2Fb", types.GitProviderAzureDevOps, true},
+		{"https://tfs.corp.example/a%252Fb", types.GitProviderAzureDevOps, true},
+		{"https://tfs.corp.example/%60id%60", types.GitProviderAzureDevOps, true},
+		{"https://tfs.corp.example/R%26D", types.GitProviderAzureDevOps, true},
+		{"https://tfs.corp.example/p%20", types.GitProviderAzureDevOps, true},
 		{"not a url", types.GitProviderGitHub, true},
 	} {
 		block := &types.WorkspaceProviders{Git: []types.GitProvider{
