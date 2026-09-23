@@ -15,7 +15,7 @@
 // "New run" lives in the app shell top bar.
 import * as React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { FilterX, LayoutGrid, RotateCw, Rows3, Search } from "lucide-react";
+import { FilterX, Hexagon, LayoutGrid, RotateCw, Rows3, Search } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, ApprovalRequest, SetupStatus } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
@@ -36,8 +36,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
-import { useRole } from "../wardyn/operator-context";
-import { useConsoleMode } from "../wardyn/console-view";
+import { usePrincipal, useRole } from "../wardyn/operator-context";
+import { OpenInUserView, useConsoleMode } from "../wardyn/console-view";
+import { ownerLabel } from "../wardyn/copy/console-view";
 import { cn } from "../ui/utils";
 import { BoardSkeleton, CardGrid, RunActions, RunCard, SectionHeading } from "./runs/run-card";
 import { TitleGroup } from "./runs/title-group";
@@ -441,6 +442,12 @@ export function RunsScreen() {
             }
           />
         </div>
+      ) : trueEmpty && view === "admin" ? (
+        // M-7 (modes-b §1): the admin monitor has no New run, and every door
+        // the first-run funnel offers starts a run, which is a User-view act.
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <EmptyState icon={Hexagon} title="No runs yet" />
+        </div>
       ) : trueEmpty && role !== "admin" ? (
         /* X3-F4: RunsFirstRun is the OPERATOR's funnel — a host-barrier readout
            a member's redacted status renders blank, over steps their role cannot
@@ -600,6 +607,7 @@ function RunsTable({
   // other fact here instead of overloading Run ID's row.
   const view = useConsoleMode();
   const cols = view === "admin" ? 8 : 7;
+  const principal = usePrincipal();
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <Table className="min-w-[960px]">
@@ -631,6 +639,7 @@ function RunsTable({
             const run = row;
             const terminal = isTerminalRunState(run.state);
             const attachable = !!run.interactive && run.state === "RUNNING";
+            const own = !!principal && run.created_by === principal;
             return (
               // Same nested-interactive-widget issue as the board's RunCard
               // (role="button" wrapping the real per-row action buttons) —
@@ -680,9 +689,13 @@ function RunsTable({
                 </TableCell>
                 {view === "admin" && (
                   <TableCell>
-                    <span className="block max-w-[170px] truncate text-xs text-muted-foreground" title={run.created_by}>
-                      {run.created_by}
-                    </span>
+                    {/* The admin's own row: "(you)", and the switch link (QM-7). */}
+                    <div className="flex items-center gap-2">
+                      <span className="block max-w-[170px] truncate text-xs text-muted-foreground" title={run.created_by}>
+                        {ownerLabel(run.created_by, own)}
+                      </span>
+                      {own && <OpenInUserView runId={run.id} className="h-7 shrink-0" />}
+                    </div>
                   </TableCell>
                 )}
                 <TableCell>

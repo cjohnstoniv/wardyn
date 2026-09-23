@@ -83,12 +83,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and its band's way out reads **Exit preview**.
 - **Admin run monitoring (#638).** `/admin/runs` shows every run's owner and the same "Every
   run, live…" description regardless of the admin's own role; `/runs` (the User view) now always
-  reads "Your runs · N", even for an admin who switched down. The `/admin/runs/:id` monitor
+  reads "Your runs · N", even for an admin who switched down. `/admin/runs` offers no New run
+  (its empty board says only "No runs yet") and no relaunch in a run's menu, and marks the
+  admin's own runs "(you)" with an **Open in user view** link. The `/admin/runs/:id` monitor
   drops the relaunch button, the Connect-via-SSH tile and every personal credential door — even
-  on the admin's own run, which gets the not-yours sentence and an **Open in user view** link
-  instead, on both the run cockpit's own sign-in row and the `/admin/approvals` queue card. The
-  shared-credential sign-in stays reachable from the admin view. Kill and hold decisions, and the
-  super-admin-only break-glass take-over, are unchanged.
+  on the admin's own run, which gets the same **Open in user view** link instead: on the run
+  cockpit's sign-in row (with the not-yours sentence), in a credential failure's block, and on
+  the `/admin/approvals` queue card. The link switches the session to the User view on an SSO
+  install and says so if that fails. The shared-credential sign-in stays reachable from the
+  admin view. Kill and hold decisions, and the super-admin-only break-glass take-over, are
+  unchanged. Record's own sign-in door, in the Admin view's workspace page, is unchanged here; it
+  moves with Record's connection line in #637.
 - **Console view routing: the Admin view lives under `/admin/*` (#632).** Every admin screen is
   also mounted at `/admin/…`, and `/account` opens today's Settings. A user who opens an
   Admin-view page gets a refusal page instead of the screen; an SSO admin in the User view is

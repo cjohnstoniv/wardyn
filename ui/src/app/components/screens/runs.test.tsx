@@ -42,7 +42,9 @@ vi.mock("./new-run/new-run-dialog", () => ({
 }));
 
 import { RunsScreen } from "./runs";
-import { RoleProvider, type Role } from "../wardyn/operator-context";
+import { OperatorProvider, RoleProvider, type Role } from "../wardyn/operator-context";
+import { RUN } from "../wardyn/copy";
+import { OPEN_IN_USER_VIEW } from "../wardyn/copy/console-view";
 import { AttentionPublisherProvider } from "../../lib/attention-context";
 import { baseStatus } from "../../lib/test-fixtures";
 import { DEMOS } from "./demos/demo-catalog";
@@ -861,5 +863,85 @@ describe("RunsScreen — a lapsed session's 401 never floats unhandled (loadSetu
     // setupStatus stays null on a reject, same as "not answered yet" — never
     // the no-barrier banner off a read that never actually answered.
     expect(screen.queryByText(/no sandbox barrier/i)).toBeNull();
+  });
+});
+
+// M-7 (modes-b §1: "Monitor, kill, decide. No New run and no relaunch. The
+// admin's own run carries only a switch link.") — pinned on the route, since the
+// screen keys all of it on the view it is mounted under.
+describe("RunsScreen — /admin/runs is a monitor (M-7)", () => {
+  const finished: AgentRun = { ...run, state: "COMPLETED" };
+  const theirs: AgentRun = { ...run, id: "run-2", task: "Bump the lockfile", created_by: "bob@corp" };
+
+  function renderAdmin(path: string) {
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <RoleProvider role="admin">
+          <OperatorProvider operator principal="me">
+            <RunsScreen />
+          </OperatorProvider>
+        </RoleProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  async function openKebab() {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("button", { name: /run actions/i }));
+    await screen.findByRole("menuitem", { name: /open detail/i });
+  }
+
+  it("a finished run's kebab offers no relaunch on /admin/runs", async () => {
+    listRunsMock.mockResolvedValue([finished]);
+    renderAdmin("/admin/runs");
+    await openKebab();
+    expect(screen.queryByRole("menuitem", { name: RUN.CLONE_CTA })).not.toBeInTheDocument();
+  });
+
+  it("negative control: the same admin on /runs keeps the relaunch", async () => {
+    listRunsMock.mockResolvedValue([finished]);
+    renderAdmin("/runs");
+    await openKebab();
+    expect(screen.getByRole("menuitem", { name: RUN.CLONE_CTA })).toBeInTheDocument();
+  });
+
+  it("an admin with no runs gets no New run, nor any other door that starts one", async () => {
+    listRunsMock.mockResolvedValue([]);
+    renderAdmin("/admin/runs");
+    expect(await screen.findByText("No runs yet")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /new run/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /new run|try it without a repo|guided tour/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/available on this host/)).not.toBeInTheDocument();
+  });
+
+  it("the board marks the admin's own card (you) with the switch link; someone else's gets neither", async () => {
+    listRunsMock.mockResolvedValue([run, theirs]);
+    renderAdmin("/admin/runs");
+    const cards = await screen.findAllByTestId("run-card");
+    const mine = cards.find((c) => within(c).queryByText(run.task))!;
+    const other = cards.find((c) => within(c).queryByText(theirs.task))!;
+    expect(within(mine).getByText("me (you)")).toBeInTheDocument();
+    expect(within(mine).getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeInTheDocument();
+    expect(within(other).getByText("bob@corp")).toBeInTheDocument();
+    expect(within(other).queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
+  });
+
+  it("the table marks the admin's own row the same way", async () => {
+    listRunsMock.mockResolvedValue([run, theirs]);
+    renderAdmin("/admin/runs");
+    await userEvent.click(await screen.findByRole("button", { name: "Table" }));
+    const mine = screen.getByRole("row", { name: new RegExp(run.task) });
+    const other = screen.getByRole("row", { name: new RegExp(theirs.task) });
+    expect(within(mine).getByText("me (you)")).toBeInTheDocument();
+    expect(within(mine).getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeInTheDocument();
+    expect(within(other).queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
+  });
+
+  it("the user view never marks a card or offers the switch link", async () => {
+    listRunsMock.mockResolvedValue([run]);
+    renderAdmin("/runs");
+    await screen.findByText(run.task);
+    expect(screen.queryByText("me (you)")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
   });
 });

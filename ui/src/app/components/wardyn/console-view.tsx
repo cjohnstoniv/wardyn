@@ -11,6 +11,7 @@ import { useRoleResolved } from "./operator-context";
 import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
 import {
   CONSOLE_VIEW,
+  OPEN_IN_USER_VIEW,
   VIEW_ADMIN_TOKEN,
   VIEW_REFUSAL,
   VIEW_TO_ADMIN,
@@ -152,6 +153,46 @@ export async function switchView(to: ConsoleView, target: string, noCredential =
   }
   viewChannel()?.postMessage(to);
   window.location.assign(target);
+}
+
+/** M-7 (§4.6, QM-7): what the Admin view gives in place of a personal door on
+ *  the admin's own run — that run, in the User view. ViewSwitch's rule: a
+ *  single-operator install only navigates; an SSO session flips its clamp
+ *  first, and says so when that fails. The admin token is not a person and has
+ *  no User view, so it gets nothing. Stops the click, since the rows it sits in
+ *  open the run in this view. */
+export function OpenInUserView({ runId, className }: { runId: string; className?: string }) {
+  const access = useViewAccess();
+  const navigate = useNavigate();
+  const [busy, setBusy] = React.useState(false);
+  const [failed, setFailed] = React.useState(false);
+  if (access === "admin-only") return null;
+  const target = `/runs/${encodeURIComponent(runId)}`;
+  const go = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (access === "url") {
+      navigate(target);
+      return;
+    }
+    setBusy(true);
+    setFailed(false);
+    switchView("user", target).catch(() => {
+      setBusy(false);
+      setFailed(true);
+    });
+  };
+  return (
+    <>
+      <Button size="sm" variant="outline" className={className} disabled={busy} onClick={go}>
+        {OPEN_IN_USER_VIEW}
+      </Button>
+      {failed && (
+        <span role="alert" className="text-xs text-danger">
+          {CONSOLE_VIEW.SWITCH_FAILED}
+        </span>
+      )}
+    </>
+  );
 }
 
 function ViewNotice({ title, body, children }: { title?: string; body: string; children: React.ReactNode }) {

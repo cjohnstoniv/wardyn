@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
 import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
@@ -47,14 +48,17 @@ function reauthRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
 // The viewer, named: every row below is OWNED BY alice@corp, so the default
 // principal is alice's — the "owner" cell each of these cases was written for.
 // A case that means a different viewer passes one: the door is the VIEWER's
-// own sign-in, and only the row's owner can resolve it.
+// own sign-in, and only the row's owner can resolve it. The router is for the
+// Admin view's switch link (OpenInUserView navigates).
 function mount(operator: boolean, principal = "alice@corp", adminView = false) {
   return render(
-    <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
-      <ModelAccessProvider status={null} onRefresh={() => {}}>
-        <LiveApprovals runId="r1" adminView={adminView} />
-      </ModelAccessProvider>
-    </OperatorProvider>,
+    <MemoryRouter>
+      <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
+        <ModelAccessProvider status={null} onRefresh={() => {}}>
+          <LiveApprovals runId="r1" adminView={adminView} />
+        </ModelAccessProvider>
+      </OperatorProvider>
+    </MemoryRouter>,
   );
 }
 

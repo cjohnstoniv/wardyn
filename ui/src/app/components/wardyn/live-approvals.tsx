@@ -35,8 +35,7 @@ import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
-import { switchView } from "./console-view";
-import { OPEN_IN_USER_VIEW } from "./copy/console-view";
+import { OpenInUserView } from "./console-view";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
@@ -171,9 +170,10 @@ export function LiveApprovals({
   // shape if it defaulted to undefined instead.
   run = null,
   // M-7 (admin-member-modes-design.md §4.6): the admin monitor's own mount
-  // (run-detail.tsx) passes true — every other mount is a user-mode sandbox
-  // (Record, a demo) or has no admin twin at all, so the default keeps them
-  // exactly as they were.
+  // (run-detail.tsx) passes true. The demo runner is a user act (D5). Record
+  // (record-pane.tsx) is an Admin-view sandbox (QM-10) and still passes
+  // nothing: its door moves with its dependency line and switch link in M-6
+  // (#637).
   adminView = false,
 }: {
   runId: string;
@@ -866,16 +866,7 @@ function ReauthRow({
           {REAUTH_ROW.action}
         </Button>
       )}
-      {ownRow && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 shrink-0"
-          onClick={() => switchView("user", `/runs/${encodeURIComponent(runId)}`)}
-        >
-          {OPEN_IN_USER_VIEW}
-        </Button>
-      )}
+      {ownRow && <OpenInUserView runId={runId} className="h-7 shrink-0" />}
     </div>
   );
 }

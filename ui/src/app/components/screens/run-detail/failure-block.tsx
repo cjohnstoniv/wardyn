@@ -37,6 +37,7 @@ import { Mono } from "../../wardyn/code-block";
 import { MODEL_ACCESS_RUN_DOOR } from "../../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor } from "../../wardyn/model-access-context";
 import { usePrincipal } from "../../wardyn/operator-context";
+import { OpenInUserView } from "../../wardyn/console-view";
 import { formatElapsed } from "../run-detail-summary-header";
 
 // Copy change (M7): the two labels, the action, and the four reason bodies.
@@ -137,9 +138,9 @@ export function RunFailureBlock({
   onGoAudit: () => void;
   /** M-7 (admin-member-modes-design.md §4.6): the admin monitor carries no
    *  credential door, even on the admin's own run — this block's failure
-   *  sentence stays, but its sign-in button never renders there. Defaults
-   *  false for the block's other mount (the user cockpit, the only one
-   *  today). */
+   *  sentence stays, but its sign-in button never renders there; on the
+   *  admin's own per-user lane the switch link back to it does instead
+   *  (QM-7). Defaults false: the user cockpit. */
   adminView?: boolean;
 }) {
   const ending = runEndingFromAudit(run.state, audit);
@@ -162,14 +163,12 @@ export function RunFailureBlock({
   //    repairs nothing for that run (round-2 general S5). An empty principal is
   //    /me unresolved or a deployment with no OIDC — never matched against an
   //    equally empty created_by.
-  const showDoor =
-    !adminView &&
-    credential &&
-    ending.mechanism === "bedrock_sso" &&
-    door.bedrockSSO &&
-    door.actionable &&
-    !!principal &&
-    run.created_by === principal;
+  const ownSignIn = credential && ending.mechanism === "bedrock_sso" && !!principal && run.created_by === principal;
+  const showDoor = !adminView && ownSignIn && door.bedrockSSO && door.actionable;
+  // The admin view's stand-in on the admin's own run: the switch link, on the
+  // per-user lane only (the shared lane's sign-in is the admin's own control,
+  // and never a User-view door).
+  const showSwitch = adminView && ownSignIn && door.perUser;
   // One primary recovery action per state per screen: while this block carries
   // the button the shell strip keeps its sentence and drops its own.
   useClaimModelAccessDoor(showDoor);
@@ -256,6 +255,12 @@ export function RunFailureBlock({
             {AGENTS.SIGN_IN_AWS}
           </Button>
           <span className="text-xs leading-relaxed text-muted-foreground">{MODEL_ACCESS_RUN_DOOR.NOTE}</span>
+        </div>
+      )}
+
+      {showSwitch && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <OpenInUserView runId={run.id} />
         </div>
       )}
 

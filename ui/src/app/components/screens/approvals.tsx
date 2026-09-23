@@ -48,8 +48,7 @@ import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
 import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
-import { switchView, useConsoleMode } from "../wardyn/console-view";
-import { OPEN_IN_USER_VIEW } from "../wardyn/copy/console-view";
+import { OpenInUserView, useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import {
@@ -763,13 +762,7 @@ function PendingCard({
           reauthCanAct ? (
             <ReauthAction />
           ) : reauthOwnRow ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => switchView("user", `/runs/${encodeURIComponent(item.run_id)}`)}
-            >
-              {OPEN_IN_USER_VIEW}
-            </Button>
+            <OpenInUserView runId={item.run_id} />
           ) : null
         ) : (
           <>
