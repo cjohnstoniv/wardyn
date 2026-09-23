@@ -38,6 +38,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`wardynd -h` reads like a product, and the hybrid-boot org control-plane check now runs before
+  migration (#197).** Every flag's usage string was rewritten to say what it does, its default and
+  its unit, with internal ids and version history dropped; no flag was added, removed or renamed.
+  `validateHybridPosture` (`WARDYN_ORG_URL`/`WARDYN_ORG_ENROLMENT_TOKEN`) is flag-only and now
+  validates beside `validateConfig`, before `connectAndMigrate`, instead of after secrets, identity,
+  the broker and the runner are already up; `validateMemberModePosture` stays at its later point
+  since it needs local mode's resolved state and whether OIDC actually came up.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and

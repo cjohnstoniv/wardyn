@@ -115,20 +115,6 @@ func validateHybridPosture(orgURL, enrolToken string, memberMode, allowPlaintext
 	return nil
 }
 
-// checkMemberAndHybridBootPosture runs validateMemberModePosture then
-// validateHybridPosture in sequence, folded into ONE function call so run()
-// (cmd/wardynd/main.go) gains no extra `if err != nil` branch for the second,
-// adjacent refusal — gocyclo's function-complexity gate is already at its
-// ceiling there. The two validators stay separate on purpose (see
-// validateHybridPosture's own doc comment on why it does not extend
-// validateMemberModePosture); this is only the call site folded together.
-func checkMemberAndHybridBootPosture(memberMode, localMode, oidcConfigured bool, orgURL, enrolToken string, allowPlaintextListen bool) error {
-	if err := validateMemberModePosture(memberMode, localMode, oidcConfigured); err != nil {
-		return err
-	}
-	return validateHybridPosture(orgURL, enrolToken, memberMode, allowPlaintextListen)
-}
-
 // validateSSOOnlyPosture enforces WARDYN_SSO_ONLY's precondition: SSO must
 // actually be the ONLY way in before the daemon may claim it is — and before
 // /healthz's sso_only bit, which the sign-in screen reads to drop the
@@ -379,6 +365,27 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 			"use e.g. \"https://run-{run}.ui.example.com\", or unset it for the documented shared-origin mode", originTemplate)
 	}
 	return nil
+}
+
+// validateBootPosture runs every FLAG-ONLY boot-time validator — one that
+// depends on nothing db.Migrate, secrets, identity, the broker or the runner
+// resolve — in one call, right beside validateConfig in run() and before
+// connectAndMigrate. Folded into one function, not one `if err != nil` branch
+// per validator, for the same reason the deleted checkMemberAndHybridBootPosture
+// wrapper existed: run()'s gocyclo budget (.golangci.yml) is already at its
+// ceiling, and a misconfigured posture belongs at the FIRST validation step,
+// not discovered after the daemon has done real work.
+//
+// validateMemberModePosture stays OUT of this list on purpose: it needs
+// lm.enabled (local mode's RESOLVED fact, not the raw flag — local mode
+// auto-enables) and feats.authn != nil (OIDC actually configured, which a
+// failed OIDC discovery leaves nil), and neither exists this early in boot.
+// It is still called directly, at its own later point in run().
+func validateBootPosture(f *bootFlags, posture tlsPosture) error {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
+		return err
+	}
+	return validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen)
 }
 
 // subscriptionInjectPosture decides whether this deployment may resolve a SHARED
