@@ -149,8 +149,22 @@ describe("HarnessLoginPane — the consent gate", () => {
   it("AWS keeps its start-URL gate and now states what happens next above it", () => {
     render(<HarnessLoginPane provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByLabelText(/aws access portal start url/i)).toBeInTheDocument();
-    expect(screen.getByText(/verification page/i)).toBeInTheDocument();
+    expect(screen.getByText(/verification page/i)).toHaveTextContent(`“${SIGNIN_PROGRESS.OPEN("AWS")}” opens it`);
     expect(harnessLoginMock).not.toHaveBeenCalled();
+  });
+
+  // #628: nothing opens on Start any more, so the intro and blurb promise the
+  // Open button, never a tab that "opens" by itself.
+  it("the Claude intro and blurb name the Open button, never a tab that opens on its own", async () => {
+    harnessLoginMock.mockReturnValue(new Promise<string>(() => {}));
+    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
+    const intro = screen.getByTestId("login-intro");
+    expect(intro).toHaveTextContent(`“${SIGNIN_PROGRESS.OPEN("Claude")}” opens it in a new tab`);
+    expect(intro).not.toHaveTextContent(/A new tab opens/);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    const pane = screen.getByTestId("harness-login-pane");
+    expect(pane).toHaveTextContent(`open it with “${SIGNIN_PROGRESS.OPEN("Claude")}”`);
+    expect(pane).not.toHaveTextContent(/opens the Claude login page in a new tab/);
   });
 
   // Under a per_user agent row the server signs in against the ROW's stored

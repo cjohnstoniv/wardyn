@@ -139,7 +139,7 @@ document's scope, since none of the four named surfaces open it.
 | `doneMarker` | `wardyn: aws sso credential captured` |
 | `failMarker` | `wardyn: aws sso credential rejected:` |
 | `expects[0]` | A sandboxed login run starts and a terminal appears here, running `aws sso login` — with no credential to start from. |
-| `expects[1]` | A browser tab opens the AWS verification page: enter the short code the terminal shows and approve with your IAM Identity Center login. |
+| `expects[1]` | When the AWS verification page is ready, “Open AWS sign-in” opens it in a new tab: enter the code shown beside the button and approve with your IAM Identity Center login. (#628: the tab opens only from that button.) |
 | `expects[2]` | The SSO session is uploaded from inside the sandbox and stored write-only; Bedrock runs exchange it for short-lived role credentials. |
 | `blurb`, `startURLManaged=false` | Give Wardyn your organization’s AWS access portal URL and it opens a sandbox, writes a minimal `~/.aws/config` holding just that URL and the configured SSO region (no credential — the sandbox has none to start with), and runs `aws sso login` for you. It prints a verification URL and a short user code — open the link in any browser, enter the code, and approve. Wardyn then captures the SSO session automatically so later Bedrock runs can exchange it for short-lived role credentials — with no host `~/.aws` mount and no static keys. |
 | `blurb`, `startURLManaged=true` | Same body, opening clause replaced with `login-pane-copy.ts#AWS_BLURB_MANAGED_OPENING` ("Your admin set your organization's AWS access portal; there is nothing to enter.") followed by "Wardyn". |
