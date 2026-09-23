@@ -16,7 +16,7 @@
 // credential gets no sentence at all (F4), and an unread /healthz makes no
 // promise either way (F3).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { useState, type ReactNode } from "react";
@@ -957,6 +957,8 @@ describe("RunRail — failure lines are announced (#459)", () => {
     renderRail({ launchError: "the server's launch sentence" });
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(RAIL.LAUNCH_ERROR_LABEL);
+    // #497: the prefix is spoken only, never visible text.
+    expect(within(alert).getByText(RAIL.LAUNCH_ERROR_LABEL)).toHaveClass("sr-only");
     expect(alert).toHaveTextContent("the server's launch sentence");
     // The sentence itself is unchanged and visible — only the prefix hides.
     expect(screen.getByText("the server's launch sentence")).toBeVisible();
@@ -966,6 +968,7 @@ describe("RunRail — failure lines are announced (#459)", () => {
     renderRail({ preflightError: "the server's preflight sentence" });
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(RAIL.PREFLIGHT_ERROR_LABEL);
+    expect(within(alert).getByText(RAIL.PREFLIGHT_ERROR_LABEL)).toHaveClass("sr-only");
     expect(alert).toHaveTextContent("the server's preflight sentence");
   });
 

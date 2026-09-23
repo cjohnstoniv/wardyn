@@ -15,7 +15,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   rail's step buttons (both the full and icon-only compact rail), disabled a refused
   move but said why only in a tooltip a keyboard or touch user never sees. The reason
   now renders as visible text next to the control (the icon-only compact rail, with no
-  room for a caption, carries it in the button's accessible name instead).
+  room for a caption, carries it in the button's accessible name and keeps the tooltip).
+  A New Run preflight error with no message no longer reads "Preflight failed Preflight
+  failed." to a screen reader; it now says "No reason was given."
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

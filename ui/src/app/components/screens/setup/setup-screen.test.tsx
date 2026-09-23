@@ -371,7 +371,9 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       const done = screen.getByRole("button", { name: /^done with this one$/i });
       expect(done).toBeDisabled();
       expect(done).not.toHaveAttribute("title");
-      expect(screen.getAllByText(/one probe/i).length).toBeGreaterThan(0);
+      // Scoped to the button's own wrapper: the same words also appear in the
+      // step body, which would pass this check with the footer hint gone.
+      expect(within(done.parentElement!).getByText(/one probe/i)).toBeInTheDocument();
       // Back to required steps is never gated by refuseNext, same as every
       // other Back button in this shell.
       expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeEnabled();

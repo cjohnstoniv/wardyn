@@ -153,8 +153,9 @@ describe("PhaseRail", () => {
   // no-oped (a dead click, not a disabled one). Wired identically on both
   // rails (compact + full). #497: the reason is never title-only — the full
   // rail shows it as visible text, the icon-only compact rail (no room for a
-  // caption) folds it into the button's accessible name instead.
-  it("F3-F3: a step refused by refuseNext renders disabled, its reason visible/accessible — never a title, on both rails", () => {
+  // caption) folds it into the button's accessible name and keeps the title
+  // for a sighted mouse user (in the lg band it is the only rail rendered).
+  it("F3-F3: a step refused by refuseNext renders disabled, its reason visible/accessible — never title-only, on both rails", () => {
     cleanup();
     const refuseNext = (next: SetupStepId) =>
       next === "workspaces" || next === "review" ? "Prove network access first." : undefined;
@@ -171,10 +172,13 @@ describe("PhaseRail", () => {
     const fullRail = within(navs[navs.length - 1]);
     const compactRail = within(navs[0]);
     for (const rail of [fullRail, compactRail]) {
-      const workspaces = rail.getByRole("button", { name: /workspaces/i });
-      expect(workspaces).toBeDisabled();
-      expect(workspaces).not.toHaveAttribute("title");
+      expect(rail.getByRole("button", { name: /workspaces/i })).toBeDisabled();
     }
+    expect(fullRail.getByRole("button", { name: /workspaces/i })).not.toHaveAttribute("title");
+    expect(compactRail.getByRole("button", { name: /workspaces/i })).toHaveAttribute(
+      "title",
+      "Prove network access first.",
+    );
     // Full rail: the reason is its own visible line under the badge (both
     // refused steps render one — hence getAllByText, not getByText).
     expect(fullRail.getAllByText("Prove network access first.").length).toBeGreaterThan(0);

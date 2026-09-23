@@ -116,7 +116,7 @@ export function PhaseRail({
   // which is also what the selector returns before status lands.
   order?: SetupStepId[];
   // F3-F3: the SAME crossing predicate the footer's Next button already
-  // renders disabled+titled (setup-screen.tsx's refuseSelect) — without this a
+  // renders disabled with a visible reason (setup-screen.tsx's refuseSelect) — without this a
   // rail click past an ungated corp_network read as a live, clickable step
   // whose onSelect just silently no-ops (a dead click, not a disabled one).
   // Undefined means "nothing is refused" (every existing caller/test).
@@ -146,11 +146,10 @@ export function PhaseRail({
               // #459/#497: the refusal reason is never title-only — a
               // disabled control can't surface a tooltip. This icon-only
               // rail has no room for visible caption text, so the reason
-              // goes into the accessible name below instead; the always-
-              // visible full rail (the same steps, one breakpoint away)
-              // carries the reason as page text. `title` keeps naming the
-              // icon on hover only when the step isn't refused.
-              title={refusal ? undefined : label}
+              // goes into the accessible name below. In the lg band only
+              // this rail renders (the full rail is hidden there), so the
+              // title stays too, for a sighted mouse user.
+              title={refusal ?? label}
               className={cn(
                 "flex size-8 items-center justify-center rounded-full border transition-colors",
                 active ? "border-primary bg-primary/10" : "border-transparent hover:bg-muted",
