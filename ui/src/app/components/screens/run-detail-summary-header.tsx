@@ -22,7 +22,13 @@ import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy"
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
-import { isTerminalStatusReason, PENDING_NO_DETAIL, statusDetailChip, statusDetailSentence } from "./run-status-detail";
+import {
+  CHIP_QUEUED,
+  isTerminalStatusReason,
+  PENDING_NO_DETAIL,
+  statusDetailChip,
+  statusDetailSentence,
+} from "./run-status-detail";
 
 
 // Exported for the failure block (run-detail/failure-block.tsx), which states
@@ -129,8 +135,13 @@ export function SummaryHeader({
   // falls through to the ordinary STARTING/PENDING derivation, which
   // supersedes it.
   const pendingQueued = run.state === "PENDING" && !run.status_detail?.trim();
+  // SF-25: the chip below is the SHORT register, same as every STARTING/PENDING
+  // reason (statusDetailChip) — PENDING_NO_DETAIL is the header chip's `title`
+  // tooltip's sentence, never the chip's own truncatable text (max-w-[160px]
+  // truncates the 42-character sentence to a fragment, the same failure this
+  // chip's own doc comment already warns statusDetailChip exists to avoid).
   const statusChip = pendingQueued
-    ? PENDING_NO_DETAIL
+    ? CHIP_QUEUED
     : run.state === "STARTING" || run.state === "PENDING"
       ? statusDetailChip(run.status_detail, run.status_reason)
       : "";

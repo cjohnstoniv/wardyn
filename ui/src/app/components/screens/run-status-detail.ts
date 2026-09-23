@@ -94,6 +94,12 @@ export const CHIP_WAITING_FOR_MACHINE = "Waiting for a machine";
 export const CHIP_IMAGE_PULL_FAILED = "Image pull failed";
 export const CHIP_BAD_IMAGE_REF = "Bad image reference"; // nothing was pulled for InvalidImageName, so "Image pull failed" would be false
 export const CHIP_CONTAINER_WONT_START = "Container won't start";
+// SF-25: PENDING_NO_DETAIL's own short register — the chip that renders it
+// (run-detail-summary-header.tsx) is the same max-w-[160px] truncating chip
+// every other CHIP_* constant above exists for; the 42-character sentence
+// truncated to "Queued — Wardyn is ge…", losing the one thing a chip this
+// narrow can say. The sentence still rides the title (free width).
+export const CHIP_QUEUED = "Queued";
 
 // Parsing
 

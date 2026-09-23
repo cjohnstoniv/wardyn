@@ -22,6 +22,7 @@ import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
 import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import {
+  CHIP_QUEUED,
   CHIP_SETTING_UP,
   CHIP_WAITING_FOR_MACHINE,
   PENDING_NO_DETAIL,
@@ -475,7 +476,11 @@ describe("SummaryHeader — PENDING's own queued sentence (#125)", () => {
         <SummaryHeader run={pending({ status_detail: "" })} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByText(PENDING_NO_DETAIL)).toBeInTheDocument();
+    // SF-25: the chip's own visible text is the SHORT register (it truncates
+    // at max-w-[160px], where the 42-character sentence read as a fragment);
+    // the full sentence still rides the chip's title, where width is free.
+    expect(screen.getByText(CHIP_QUEUED)).toBeInTheDocument();
+    expect(screen.getByText(CHIP_QUEUED).closest("[title]")).toHaveAttribute("title", PENDING_NO_DETAIL);
   });
 
   it("a real stage line replaces the queued sentence the moment one lands", () => {
