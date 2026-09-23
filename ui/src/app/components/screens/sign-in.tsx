@@ -27,7 +27,11 @@ import {
   withLimit,
 } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
-import { SIGNIN } from "../../lib/people-access-copy";
+// Imported from sign-in-copy.ts, not people-access-copy.ts: this screen is the
+// module's only eager entry point (rendered before the router), and that
+// module's other tables belong to the lazy People step / role-mappings
+// editor. See sign-in-copy.ts's comment (#498).
+import { SIGNIN } from "../../lib/sign-in-copy";
 import { usePoll } from "../../lib/use-poll";
 
 // How often the gate re-asks /healthz for `sso` (R4/F027). Slower than the

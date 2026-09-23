@@ -34,7 +34,10 @@ import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primiti
 import { usePrincipal } from "../../wardyn/operator-context";
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
-import { RUN, RUN_COCKPIT, RUNS_WAIT } from "../../wardyn/copy";
+import { RUN, RUNS_WAIT } from "../../wardyn/copy";
+// THE LEAF, not wardyn/copy/run-cockpit's RUN_COCKPIT: this card is on the
+// eager graph and that table is the (lazy) /runs/:id cockpit's (#498).
+import { RUN_WAIT } from "../../wardyn/copy/run-wait";
 // THE LEAF, not wardyn/model-access-copy: this card is on the eager graph and
 // that module is lazy-side (see lib/reauth-waiting-copy.ts).
 import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
@@ -258,8 +261,8 @@ export function RunCard({
                        fail-closed direction the cockpit's door takes. */
                     waitingReauth(s.pending, !!principal && run.created_by === principal)
                   : s.held
-                    ? RUN_COCKPIT.waitingHeld(s.pending)
-                    : RUN_COCKPIT.waiting(s.pending)}
+                    ? RUN_WAIT.waitingHeld(s.pending)
+                    : RUN_WAIT.waiting(s.pending)}
           </span>
         )}
         <span className="ml-auto flex items-center gap-2.5">
