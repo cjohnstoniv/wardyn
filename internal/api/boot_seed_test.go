@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -106,6 +107,32 @@ func TestApplyDispatchModeEnv_ToolApprovals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestApplyDispatchModeEnv_ApprovalExpiryAfter is RL-1's dispatch-env
+// contract: a hold-mode run's sandbox carries the SAME ceiling the
+// approval-expiry sweeper actually expires a PENDING approval at
+// (WARDYN_APPROVAL_EXPIRY_AFTER), so agent-run and wardyn-toolgate can size
+// their own waits from it instead of a hardcoded literal — never emitted for
+// a non-hold run, the same "don't emit a wire default nobody asked for" shape
+// TestApplyDispatchModeEnv_ToolApprovals already pins for its own var.
+func TestApplyDispatchModeEnv_ApprovalExpiryAfter(t *testing.T) {
+	run := types.AgentRun{ID: uuid.New()}
+
+	t.Run("hold carries the ceiling as a Go duration string", func(t *testing.T) {
+		env := map[string]string{}
+		applyDispatchModeEnv(env, run, dispatchParams{ToolApprovals: "hold", ApprovalExpiryAfter: 72 * time.Hour})
+		if got, want := env["WARDYN_APPROVAL_EXPIRY_AFTER"], "72h0m0s"; got != want {
+			t.Errorf("Env[WARDYN_APPROVAL_EXPIRY_AFTER] = %q, want %q", got, want)
+		}
+	})
+	t.Run("no hold, no ceiling in the sandbox env", func(t *testing.T) {
+		env := map[string]string{}
+		applyDispatchModeEnv(env, run, dispatchParams{ApprovalExpiryAfter: 72 * time.Hour})
+		if _, ok := env["WARDYN_APPROVAL_EXPIRY_AFTER"]; ok {
+			t.Errorf("Env[WARDYN_APPROVAL_EXPIRY_AFTER] set on a non-hold run: %q", env["WARDYN_APPROVAL_EXPIRY_AFTER"])
+		}
+	})
 }
 
 // TestCreateRun_ToolApprovals_Validation covers C1's closed-enum + codex-cli

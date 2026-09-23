@@ -684,6 +684,16 @@ type Config struct {
 	// boundary as TrustedCAPEM/LLMGateways above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// ApprovalExpiryAfter is WARDYN_APPROVAL_EXPIRY_AFTER (cmd/wardynd's own
+	// approval-expiry-after sweeper flag, threaded through so dispatch can
+	// mirror it): the ceiling a PENDING approval — including a tool_call hold —
+	// actually lives to before the sweeper expires it. A hold-mode run's
+	// sandbox env carries it (applyDispatchModeEnv) as the SAME ceiling
+	// wardyn-toolgate defaults its own -deadline to (RL-1), so an operator who
+	// raises this past its 24h default gets a toolgate that actually waits the
+	// raised budget instead of giving up at the old literal. Zero defaults to
+	// 24h in New, matching the sweeper's own default.
+	ApprovalExpiryAfter time.Duration
 }
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
@@ -894,6 +904,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.UISessionTTL <= 0 {
 		cfg.UISessionTTL = defaultUISessionTTL
+	}
+	if cfg.ApprovalExpiryAfter <= 0 {
+		cfg.ApprovalExpiryAfter = defaultApprovalExpiryAfter
 	}
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()

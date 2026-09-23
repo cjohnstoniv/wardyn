@@ -468,6 +468,11 @@ func run() error {
 		UIOriginTemplate: *f.uiOriginTemplate,
 		UISessionTTL:     *f.uiSessionTTL,
 		UISessionKey:     feats.uiSessionKey,
+		// RL-1: the same ceiling the approval-expiry sweeper (below) actually
+		// expires a PENDING approval at, mirrored onto a hold-mode run's own
+		// sandbox env so wardyn-toolgate's -deadline and MCP_TOOL_TIMEOUT track
+		// it instead of their own hardcoded literal.
+		ApprovalExpiryAfter: *f.approvalExpiryAfter,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.

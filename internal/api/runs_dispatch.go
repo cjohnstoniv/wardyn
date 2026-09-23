@@ -46,16 +46,23 @@ type dispatchParams struct {
 	// that defaults to the weaker posture is a control whose default is "off by
 	// omission", and the omission is invisible.
 	PATBroker        bool
-	GitPATGrants     map[string]string          // {host: grant_id} for non-GitHub PAT hosts
-	SSHGrants        map[string]string          // {host: grant_id} for SSH clone hosts
-	Injections       []runner.InjectionGrant    // proxy-side credential injections
-	Interactive      bool                       // idle box for `wardyn attach` (no agent exec, no completion watcher)
-	TaskMode         string                     // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
-	InteractiveStart string                     // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
-	SeedAutoTools    bool                       // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
-	ToolApprovals    string                     // "hold" routes an AUTONOMOUS run's tool calls to a Wardyn approval instead of running unsupervised. "" / "auto" = today's skip-permissions. Non-interactive runs only.
-	BedrockRef       *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
-	ExtraEnv         map[string]string          // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
+	GitPATGrants     map[string]string       // {host: grant_id} for non-GitHub PAT hosts
+	SSHGrants        map[string]string       // {host: grant_id} for SSH clone hosts
+	Injections       []runner.InjectionGrant // proxy-side credential injections
+	Interactive      bool                    // idle box for `wardyn attach` (no agent exec, no completion watcher)
+	TaskMode         string                  // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
+	InteractiveStart string                  // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
+	SeedAutoTools    bool                    // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
+	ToolApprovals    string                  // "hold" routes an AUTONOMOUS run's tool calls to a Wardyn approval instead of running unsupervised. "" / "auto" = today's skip-permissions. Non-interactive runs only.
+	// ApprovalExpiryAfter mirrors Config.ApprovalExpiryAfter (dispatchRun sets
+	// it from s.cfg) — the SAME ceiling the approval-expiry sweeper actually
+	// expires a PENDING approval at. Carried onto the sandbox env only when
+	// ToolApprovals=="hold" (WARDYN_APPROVAL_EXPIRY_AFTER, applyDispatchModeEnv)
+	// so wardyn-toolgate's -deadline default and agent-run's MCP_TOOL_TIMEOUT
+	// track the real ceiling instead of their own hardcoded literal (RL-1).
+	ApprovalExpiryAfter time.Duration
+	BedrockRef          *types.WorkspaceBedrockRef // picked workspace's Bedrock region/model override; nil => global config
+	ExtraEnv            map[string]string          // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
 	// Toolchains is the requirements-driven subset of the toolchain-fidelity
 	// env this run needs (runToolchainNeeds over its workspaces' profiles).
 	// nil = the run has NO workspace context (ad-hoc/BYO/scan/login/composer
@@ -228,6 +235,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// shape: one authoritative write, read by both the env half below and the
 	// ProxyConfig half further down, with no second variable to fall out of step.
 	p.PATBroker = !s.cfg.DisableGitPATBroker
+	// The same ceiling the approval-expiry sweeper actually expires a PENDING
+	// approval at, mirrored to a hold-mode run's own sandbox (see the field
+	// doc above) — set here rather than by each caller, for the same "one
+	// authoritative write" reason PATBroker is.
+	p.ApprovalExpiryAfter = s.cfg.ApprovalExpiryAfter
 	// And the same stamp for the grants themselves, for the same reason. A
 	// git_pat grant for a BROKERED forge is withheld from the sandbox and audited
 	// as withheld (dropBrokeredGrants, below) — but ProxyConfig.PATGrants was

@@ -673,6 +673,15 @@ echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 #     live in the C0 spike, claude 2.1.234).
 #   CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0   a human decision can take hours; the
 #     stdio idle timer must not turn patience into a deny.
+#   MCP_TOOL_TIMEOUT   claude's own overall cap on one MCP tool call, default
+#     ~27.8h. Sized from WARDYN_APPROVAL_EXPIRY_AFTER (dispatch's mirror of the
+#     SAME ceiling the approval-expiry sweeper actually expires the approval
+#     at) so raising that ceiling past claude's default actually lets the tool
+#     call wait it out, instead of claude killing the call out from under a
+#     wardyn-toolgate that is still correctly waiting (RL-1). Unset (dispatch
+#     sent no ceiling, or it did not parse) leaves claude's own default alone.
+#     wardyn-toolgate reads the SAME var for its own -deadline default — one
+#     ceiling, inherited by both, never passed twice.
 #   --setting-sources user   load NO project or local settings (#358). Claude
 #     Code resolves permissions.allow rules BEFORE it consults the prompt tool,
 #     so a rule in the workspace's .claude/settings.json (a checkout the agent
@@ -688,6 +697,10 @@ if [[ "${WARDYN_TOOL_APPROVALS:-}" == "hold" ]]; then
     printf '{"mcpServers":{"gate":{"command":"wardyn-toolgate"}}}\n' > "$HOME/.wardyn/toolgate-mcp.json"
     echo "agent-run: tool-approval hold — gated tool use parks on Wardyn approvals" >&2
     export CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0
+    if mcp_tool_timeout_ms=$(go_duration_to_ms "${WARDYN_APPROVAL_EXPIRY_AFTER:-}") && [[ -n "$mcp_tool_timeout_ms" ]]; then
+        export MCP_TOOL_TIMEOUT="$mcp_tool_timeout_ms"
+        echo "agent-run: MCP_TOOL_TIMEOUT=${MCP_TOOL_TIMEOUT}ms (from WARDYN_APPROVAL_EXPIRY_AFTER=${WARDYN_APPROVAL_EXPIRY_AFTER})" >&2
+    fi
     exec claude -p "$task" --output-format text \
         --permission-mode manual --setting-sources user \
         --mcp-config "$HOME/.wardyn/toolgate-mcp.json" --strict-mcp-config \

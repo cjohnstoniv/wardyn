@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A tool-call hold could be denied early even though an operator had raised the approval
+  ceiling past 24h (RL-1, #566).** `wardyn-toolgate`'s `-deadline` and a hold-mode run's
+  `MCP_TOOL_TIMEOUT` were both hardcoded, so raising `WARDYN_APPROVAL_EXPIRY_AFTER` on the
+  daemon no longer changed how long a parked tool call actually waited. Dispatch now mirrors
+  that ceiling onto the sandbox env, `wardyn-toolgate` defaults its deadline from it, and
+  `agent-run` sizes `MCP_TOOL_TIMEOUT` to match. `wardyn-toolgate` also polls once more right
+  after its deadline elapses, catching a decision that landed in the same window its last poll
+  interval had already slept past.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

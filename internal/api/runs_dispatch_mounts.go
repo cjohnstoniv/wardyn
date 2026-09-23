@@ -12,12 +12,19 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// defaultApprovalExpiryAfter is Config.ApprovalExpiryAfter's fallback when
+// unset (New, server.go) — mirrors cmd/wardynd's own approval-expiry-after
+// sweeper default (boot_flags.go) so a Config built without going through
+// wardynd's flags (every test harness, notably) agrees with production.
+const defaultApprovalExpiryAfter = 24 * time.Hour
 
 // buildRunMounts assembles the sandbox bind mounts.
 //
@@ -402,6 +409,13 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// matter what the request said.
 	if !p.Interactive && p.ToolApprovals == "hold" {
 		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
+		// The same ceiling the approval-expiry sweeper actually expires a
+		// PENDING approval at (Config.ApprovalExpiryAfter — see the field's
+		// doc). agent-run's hold branch reads it to size MCP_TOOL_TIMEOUT and
+		// wardyn-toolgate defaults -deadline from it (RL-1): without this, a
+		// tool call's wait is bounded by their own hardcoded literals instead
+		// of the operator's real, possibly-raised, ceiling.
+		sandboxEnv["WARDYN_APPROVAL_EXPIRY_AFTER"] = p.ApprovalExpiryAfter.String()
 	}
 	if p.FirstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = p.FirstGitHubGrantID.String()
