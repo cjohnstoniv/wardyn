@@ -489,6 +489,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 	@echo "Running file-size gate (scripts/check-file-size.sh)..."
 	./scripts/check-file-size.sh
+	@echo "Running fixture-date gate (scripts/check-fixture-dates.sh)..."
+	./scripts/check-fixture-dates.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
@@ -520,6 +522,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-desktop-profile.sh
 	./scripts/test-e2e-lane-kill-tree.sh
+	./scripts/test-fixture-dates.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
