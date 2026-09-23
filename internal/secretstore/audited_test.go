@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -47,6 +48,17 @@ func (f *fallbackStore) Get(ctx context.Context, name string) ([]byte, error) {
 		return v, nil
 	}
 	return nil, fmt.Errorf("absent: %w", ErrNotFound)
+}
+
+// countingStore counts the Gets that reach the store.
+type countingStore struct {
+	Store
+	gets int
+}
+
+func (c *countingStore) Get(ctx context.Context, name string) ([]byte, error) {
+	c.gets++
+	return c.Store.Get(ctx, name)
 }
 
 type recorded struct{ got []types.AuditEvent }
@@ -130,12 +142,76 @@ func TestAuditedStaysSilentForASiteThatRecordsItsOwnRead(t *testing.T) {
 	if len(rec.got) != 0 {
 		t.Fatalf("the decorator recorded %+v for a SiteAudited read; the site's own event would make two", rec.got)
 	}
-	if *row != (Row{Store: "fake", Owner: "carol", Name: "k", Ref: "fake:carol/k"}) {
+	if *row != (Row{Store: "fake", Owner: "carol", Name: "k", Ref: "fake:carol/k", Found: true}) {
 		t.Errorf("site row = %+v, want the row the Get read", *row)
 	}
 
 	// A purpose set under a site mark takes the read back.
 	if _, err := st.For("carol").Get(WithPurpose(ctx, PurposeStatus), "k"); err != nil || len(rec.got) != 1 {
 		t.Fatalf("Get = %v, recorded %d; the innermost mark decides", err, len(rec.got))
+	}
+}
+
+// A Get whose caller set no purpose is refused before the store is read, and
+// the attempt is on the record as a failure that says so — never a success
+// with an empty purpose (rule 23: the guard pins the marks statically; this is
+// the runtime backstop for a path it cannot see).
+func TestAuditedRefusesAReadWithNoPurpose(t *testing.T) {
+	rec := &recorded{}
+	inner := &countingStore{Store: &fallbackStore{rows: map[[2]string][]byte{{"", "k"}: []byte("secret-value")}}}
+	st := Audited(inner, rec)
+
+	for _, ctx := range []context.Context{t.Context(), WithPurpose(t.Context(), "")} {
+		v, err := st.Get(ctx, "k")
+		if err == nil || errors.Is(err, ErrNotFound) || v != nil {
+			t.Fatalf("unmarked Get = %q, %v; want a refusal that is not not-found", v, err)
+		}
+		if !strings.Contains(err.Error(), `"k"`) || strings.Contains(err.Error(), "secret-value") {
+			t.Errorf("refusal %q must name the row and never carry the value", err)
+		}
+	}
+	if inner.gets != 0 {
+		t.Errorf("the store was read %d times for an unmarked Get", inner.gets)
+	}
+	if len(rec.got) != 2 {
+		t.Fatalf("recorded %d events for two refused reads, want 2", len(rec.got))
+	}
+	ev := rec.got[0]
+	want := map[string]string{"purpose": "unmarked", "owner": "", "store": "fake"}
+	if d := dataOf(t, ev); ev.Outcome != "failure" || ev.Target != "k" || fmt.Sprint(d) != fmt.Sprint(want) {
+		t.Errorf("recorded %+v with data %v, want a failure for k with %v", ev, d, want)
+	}
+}
+
+// The row's owner and ref are text a database writer controls: each is bounded
+// and stripped of non-printing runes before it reaches an audit sink.
+func TestAuditedBoundsRowTextFromTheStore(t *testing.T) {
+	long := strings.Repeat("r", 4*auditTextMax)
+	row := Row{Store: "pg", Owner: "eve\nforged\u202e", Name: "k\r", Ref: long, Found: true}
+	rec := &recorded{}
+	RecordRead(t.Context(), rec, PurposeStatus, "eve", row, nil)
+
+	d := dataOf(t, rec.got[0])
+	for _, s := range []string{d["row_owner"], d["ref"], rec.got[0].Target} {
+		if strings.ContainsFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) {
+			t.Errorf("recorded %q with a non-printing rune", s)
+		}
+	}
+	if d["row_owner"] != "eve?forged?" || rec.got[0].Target != "k?" {
+		t.Errorf("row_owner = %q, target = %q", d["row_owner"], rec.got[0].Target)
+	}
+	if len(d["ref"]) > auditTextMax+len("…") {
+		t.Errorf("ref recorded at %d bytes, want at most %d", len(d["ref"]), auditTextMax+len("…"))
+	}
+}
+
+// A row the store found carries row_owner even when it has no ref (a legacy v0
+// row the boot conversion read); one it did not find carries neither.
+func TestRowAuditDataNamesTheOwnerOfEveryFoundRow(t *testing.T) {
+	if d := (Row{Store: "pg", Owner: "bob", Name: "k", Found: true}).AuditData(); fmt.Sprint(d) != fmt.Sprint(map[string]string{"store": "pg", "row_owner": "bob"}) {
+		t.Errorf("found v0 row = %v", d)
+	}
+	if d := (Row{Store: "pg", Name: "k"}).AuditData(); fmt.Sprint(d) != fmt.Sprint(map[string]string{"store": "pg"}) {
+		t.Errorf("unfound row = %v", d)
 	}
 }

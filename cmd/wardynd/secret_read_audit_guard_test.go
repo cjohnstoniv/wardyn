@@ -16,12 +16,16 @@ package main
 // secretstore.Store, or an interface secretstore.Store satisfies) in every
 // non-test package outside internal/secretstore, and requires its context
 // argument to be marked — a WithPurpose or SiteAudited call, or a variable
-// assigned from one in the same function. An unmarked Get makes its enclosing
-// function need a marked context from every caller; the walk climbs the static
-// references until each path is marked. A function nobody references (an HTTP
-// handler, a method only an interface calls) is where an unmarked path ends,
-// and fails the guard. Every function that calls SiteAudited must itself record
-// a "secret.read".
+// assigned from one in the same function — or to be one of the function's own
+// parameters (directly, or through a context.With* call on it). A parameter
+// makes every caller pass a marked context in that position; the walk climbs
+// the static calls until each path is marked. A context from anywhere else
+// (context.Background(), a field, a closure's parameter) fails the guard, as
+// does a path that reaches a reference that is not a call, or a function
+// nothing references (an HTTP handler, a method only an interface calls): a
+// caller's mark counts only if it is the context the Get receives. Every
+// function that calls SiteAudited must itself record a "secret.read". Audited
+// also refuses an unmarked Get at run time; this guard finds it before then.
 
 import (
 	"encoding/json"
@@ -53,18 +57,32 @@ type listedPkg struct {
 	GoFiles                 []string
 }
 
-// secretRef is one static reference to a function: from which function, and
-// whether it is a call whose context argument is marked.
+// Where a context argument comes from: a mark, the enclosing function's
+// parameter i (i >= 0), or anything else.
+const (
+	ctxOther  = -2
+	ctxMarked = -1
+	ctxNone   = -3 // a variable already being classified (a self-assignment)
+)
+
+// secretRef is one static reference to a function: from which function, and,
+// when it is a call, where each argument's context comes from (nil otherwise).
 type secretRef struct {
-	from   string
-	pos    string
-	marked bool
+	from string
+	pos  string
+	args []int
+}
+
+// getSite is one Get call and where its context comes from.
+type getSite struct {
+	pos string
+	ctx int
 }
 
 type secretReadScan struct {
 	fset      *token.FileSet
 	storeType *types.Interface
-	getSites  map[string][]secretRef // enclosing function -> its Get calls
+	getSites  map[string][]getSite   // enclosing function -> its Get calls
 	refs      map[string][]secretRef // function -> references to it
 	siteMarks map[string]string      // function calling SiteAudited -> its position
 	emitters  map[string]bool        // function whose body holds the literal "secret.read"
@@ -127,48 +145,123 @@ func (s *secretReadScan) isStore(t types.Type) bool {
 	return ok && types.Implements(s.storeType, iface)
 }
 
-// markedVars are the variables a function assigns from a mark call.
-func markedVars(info *types.Info, body *ast.BlockStmt) map[types.Object]bool {
-	vars := map[types.Object]bool{}
-	ast.Inspect(body, func(n ast.Node) bool {
-		as, ok := n.(*ast.AssignStmt)
-		if !ok || len(as.Rhs) != 1 || len(as.Lhs) == 0 {
-			return true
+// ctxScope classifies the context arguments inside one function declaration.
+type ctxScope struct {
+	info    *types.Info
+	params  map[types.Object]int
+	assigns map[types.Object][]ast.Expr // nil entry: assigned from something untracked
+}
+
+func newCtxScope(info *types.Info, fd *ast.FuncDecl) *ctxScope {
+	c := &ctxScope{info: info, params: map[types.Object]int{}, assigns: map[types.Object][]ast.Expr{}}
+	i := 0
+	for _, f := range fd.Type.Params.List {
+		if len(f.Names) == 0 {
+			i++
 		}
-		call, ok := as.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if k := calleeKey(info, call); k != guardWithPurpose && k != guardSiteAudited {
-			return true
-		}
-		if id, ok := as.Lhs[0].(*ast.Ident); ok {
-			if obj := info.ObjectOf(id); obj != nil {
-				vars[obj] = true
+		for _, n := range f.Names {
+			if obj := info.Defs[n]; obj != nil {
+				c.params[obj] = i
 			}
+			i++
+		}
+	}
+	assign := func(lhs []ast.Expr, rhs []ast.Expr) {
+		for j, l := range lhs {
+			id, ok := l.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			obj := info.ObjectOf(id)
+			if obj == nil {
+				continue
+			}
+			var e ast.Expr
+			if len(rhs) == len(lhs) || j == 0 && len(rhs) == 1 {
+				e = rhs[min(j, len(rhs)-1)]
+			}
+			c.assigns[obj] = append(c.assigns[obj], e)
+		}
+	}
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			assign(v.Lhs, v.Rhs)
+		case *ast.ValueSpec:
+			if len(v.Values) > 0 {
+				lhs := make([]ast.Expr, len(v.Names))
+				for j, name := range v.Names {
+					lhs[j] = name
+				}
+				assign(lhs, v.Values)
+			}
+		case *ast.RangeStmt:
+			assign([]ast.Expr{v.Key, v.Value}, nil)
 		}
 		return true
 	})
-	return vars
+	return c
 }
 
-func ctxMarked(info *types.Info, vars map[types.Object]bool, call *ast.CallExpr) bool {
-	if len(call.Args) == 0 {
-		return false
-	}
-	switch a := ast.Unparen(call.Args[0]).(type) {
+// class says where e, a context expression, comes from. A variable assigned
+// from a mark anywhere in the function counts as marked; otherwise one
+// assignment from anything but a parameter makes it ctxOther.
+func (c *ctxScope) class(e ast.Expr, seen map[types.Object]bool) int {
+	switch a := ast.Unparen(e).(type) {
 	case *ast.CallExpr:
-		k := calleeKey(info, a)
-		return k == guardWithPurpose || k == guardSiteAudited
+		switch k := calleeKey(c.info, a); {
+		case k == guardWithPurpose || k == guardSiteAudited:
+			return ctxMarked
+		case strings.HasPrefix(k, "context.") && len(a.Args) > 0:
+			return c.class(a.Args[0], seen)
+		}
 	case *ast.Ident:
-		return vars[info.ObjectOf(a)]
+		obj := c.info.ObjectOf(a)
+		if obj == nil {
+			return ctxOther
+		}
+		if seen[obj] {
+			return ctxNone
+		}
+		seen[obj] = true
+		defer delete(seen, obj)
+		out, ok := c.params[obj]
+		if !ok {
+			out = ctxNone
+		}
+		for _, rhs := range c.assigns[obj] {
+			k := ctxOther
+			if rhs != nil {
+				k = c.class(rhs, seen)
+			}
+			switch {
+			case k == ctxMarked:
+				return ctxMarked
+			case k == ctxOther:
+				out = ctxOther
+			case k >= 0 && out == ctxNone:
+				out = k
+			}
+		}
+		if out == ctxNone {
+			return ctxOther
+		}
+		return out
 	}
-	return false
+	return ctxOther
+}
+
+func (c *ctxScope) args(call *ast.CallExpr) []int {
+	out := make([]int, len(call.Args))
+	for i, a := range call.Args {
+		out[i] = c.class(a, map[types.Object]bool{})
+	}
+	return out
 }
 
 func (s *secretReadScan) scanFunc(info *types.Info, fd *ast.FuncDecl) {
 	from := funcKey(info.Defs[fd.Name])
-	vars := markedVars(info, fd.Body)
+	sc := newCtxScope(info, fd)
 	callOf := map[*ast.Ident]*ast.CallExpr{}
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		switch v := n.(type) {
@@ -177,7 +270,7 @@ func (s *secretReadScan) scanFunc(info *types.Info, fd *ast.FuncDecl) {
 				s.emitters[from] = true
 			}
 		case *ast.CallExpr:
-			s.scanCall(info, vars, from, v, callOf)
+			s.scanCall(info, sc, from, v, callOf)
 		case *ast.Ident:
 			to := funcKey(info.Uses[v])
 			if to == "" || to == from || strings.HasPrefix(to, guardStorePkg+".") {
@@ -185,7 +278,7 @@ func (s *secretReadScan) scanFunc(info *types.Info, fd *ast.FuncDecl) {
 			}
 			r := secretRef{from: from, pos: s.fset.Position(v.Pos()).String()}
 			if call := callOf[v]; call != nil {
-				r.marked = ctxMarked(info, vars, call)
+				r.args = sc.args(call)
 			}
 			s.refs[to] = append(s.refs[to], r)
 		}
@@ -195,7 +288,7 @@ func (s *secretReadScan) scanFunc(info *types.Info, fd *ast.FuncDecl) {
 
 // scanCall records a Get site or a mark call, and notes which identifier names
 // the callee so the identifier's reference knows it is a call.
-func (s *secretReadScan) scanCall(info *types.Info, vars map[types.Object]bool, from string, call *ast.CallExpr, callOf map[*ast.Ident]*ast.CallExpr) {
+func (s *secretReadScan) scanCall(info *types.Info, sc *ctxScope, from string, call *ast.CallExpr, callOf map[*ast.Ident]*ast.CallExpr) {
 	fun := ast.Unparen(call.Fun)
 	switch f := fun.(type) {
 	case *ast.IndexExpr:
@@ -209,9 +302,11 @@ func (s *secretReadScan) scanCall(info *types.Info, vars map[types.Object]bool, 
 	case *ast.SelectorExpr:
 		callOf[f.Sel] = call
 		if sel := info.Selections[f]; sel != nil && f.Sel.Name == "Get" && sel.Kind() == types.MethodVal && s.isStore(sel.Recv()) {
-			s.getSites[from] = append(s.getSites[from], secretRef{
-				from: from, pos: s.fset.Position(call.Pos()).String(), marked: ctxMarked(info, vars, call),
-			})
+			g := getSite{pos: s.fset.Position(call.Pos()).String(), ctx: ctxOther}
+			if len(call.Args) > 0 {
+				g.ctx = sc.class(call.Args[0], map[types.Object]bool{})
+			}
+			s.getSites[from] = append(s.getSites[from], g)
 		}
 	}
 	switch calleeKey(info, call) {
@@ -231,7 +326,7 @@ func scanSecretReads(t *testing.T, root string) *secretReadScan {
 	}
 	s := &secretReadScan{
 		fset:      token.NewFileSet(),
-		getSites:  map[string][]secretRef{},
+		getSites:  map[string][]getSite{},
 		refs:      map[string][]secretRef{},
 		siteMarks: map[string]string{},
 		emitters:  map[string]bool{},
@@ -281,16 +376,21 @@ func scanSecretReads(t *testing.T, root string) *secretReadScan {
 	return s
 }
 
-// unmarkedPaths climbs from each unmarked Get through the functions whose
-// callers do not mark the context, and returns, per Get, the first path that
-// reaches a function nothing marks — one line per Get, so fixing one path never
-// hides another Get's.
+// unmarkedPaths climbs from each Get whose context is a parameter through the
+// callers that pass it along, and returns, per Get, the first path that ends
+// anywhere but a mark — one line per Get, so fixing one path never hides
+// another Get's.
 func (s *secretReadScan) unmarkedPaths() []string {
 	var bad []string
 	for fn, sites := range s.getSites {
 		for _, g := range sites {
-			if !g.marked {
-				if line := s.firstUnmarked(fn, "Get at "+g.pos+" in "+fn); line != "" {
+			why := "Get at " + g.pos + " in " + fn
+			switch g.ctx {
+			case ctxMarked:
+			case ctxOther:
+				bad = append(bad, why+" — its context is neither marked nor a parameter of "+fn)
+			default:
+				if line := s.firstUnmarked(fn, g.ctx, why); line != "" {
 					bad = append(bad, line)
 				}
 			}
@@ -300,24 +400,38 @@ func (s *secretReadScan) unmarkedPaths() []string {
 	return bad
 }
 
-func (s *secretReadScan) firstUnmarked(start, why string) string {
-	chain := map[string]string{start: why}
-	queue := []string{start}
+// ctxNeed is a function whose parameter arg must arrive marked.
+type ctxNeed struct {
+	fn  string
+	arg int
+}
+
+func (s *secretReadScan) firstUnmarked(start string, arg int, why string) string {
+	first := ctxNeed{start, arg}
+	chain := map[ctxNeed]string{first: why}
+	queue := []ctxNeed{first}
 	for len(queue) > 0 {
-		fn := queue[0]
+		n := queue[0]
 		queue = queue[1:]
-		refs := s.refs[fn]
+		refs := s.refs[n.fn]
 		if len(refs) == 0 {
-			return chain[fn] + " — nothing that references it marks the context"
+			return chain[n] + " — nothing that references it marks the context"
 		}
 		for _, r := range refs {
+			at := chain[n] + " <- " + r.from + " (" + r.pos + ")"
 			switch {
-			case r.marked:
 			case r.from == "":
-				return chain[fn] + " <- package-level reference at " + r.pos
-			case chain[r.from] == "":
-				chain[r.from] = chain[fn] + " <- " + r.from + " (" + r.pos + ")"
-				queue = append(queue, r.from)
+				return chain[n] + " <- package-level reference at " + r.pos
+			case r.args == nil:
+				return at + " — not a call, so the context cannot be followed"
+			case n.arg >= len(r.args) || r.args[n.arg] == ctxOther:
+				return at + " — passes a context that is neither marked nor its own parameter"
+			case r.args[n.arg] >= 0:
+				next := ctxNeed{r.from, r.args[n.arg]}
+				if _, ok := chain[next]; !ok {
+					chain[next] = at
+					queue = append(queue, next)
+				}
 			}
 		}
 	}

@@ -91,10 +91,11 @@ func (s *Server) oauthProviderForSentinel(secretName string) (provider subscript
 type injectionResponse = types.ResolvedInjection
 
 // withStoreRow adds the row a SiteAudited read reported — its store, ref and
-// owner — to a site's secret.read data. A read that found no row adds nothing.
+// owner (secretstore.Row.AuditData) — to a site's secret.read data. A read that
+// found no row adds nothing.
 func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
-	if row.Ref != "" {
-		data["store"], data["ref"], data["row_owner"] = row.Store, row.Ref, row.Owner
+	for k, v := range row.AuditData() {
+		data[k] = v
 	}
 	return data
 }

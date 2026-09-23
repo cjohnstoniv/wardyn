@@ -58,7 +58,7 @@ func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretsto
 			return nil, fmt.Errorf("pg secretstore: v0 conversion ABORTED after %d of %d rows (nothing committed; the store is still v0 and older wardynd can still read it): %s %w",
 				i, len(all), rowRef(e.ownedBy, e.name), err)
 		}
-		converted = append(converted, secretstore.Row{Store: s.Name(), Owner: e.ownedBy, Name: e.name})
+		converted = append(converted, secretstore.Row{Store: s.Name(), Owner: e.ownedBy, Name: e.name, Found: true})
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("pg secretstore: convert commit (%d rows, nothing committed): %w", len(all), err)

@@ -136,6 +136,9 @@ func TestPG_BootConvertsV0BeforeBootKeysAreRead(t *testing.T) {
 		if d["purpose"] == "boot" && !strings.HasPrefix(d["ref"], "local:") {
 			t.Errorf("boot read records ref %q, want the row's local kek_id", d["ref"])
 		}
+		if _, ok := d["row_owner"]; !ok {
+			t.Errorf("%s read records no row_owner: %v", d["purpose"], d)
+		}
 		purposes = append(purposes, d["purpose"])
 	}
 	if strings.Join(purposes, ",") != "migrate,boot" {
