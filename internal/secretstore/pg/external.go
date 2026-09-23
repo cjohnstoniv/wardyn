@@ -320,14 +320,15 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 			continue
 		}
 		rep.Checked++
+		// A row points at loc whether or not its value is live: a soft-deleted
+		// value behind a row is dangling, not an orphan as well.
+		pointed[loc] = true
 		err := s.ext.Check(ctx, e.ownedBy, e.name, loc)
 		switch {
 		case errors.Is(err, secretstore.ErrUnavailable):
 			return rep, fmt.Errorf("pg secretstore: reconcile aborted at %s: %w", ref, err)
 		case err != nil:
 			rep.Dangling = append(rep.Dangling, fmt.Sprintf("%s: %v", ref, err))
-		default:
-			pointed[loc] = true
 		}
 	}
 	found, err := s.ext.Walk(ctx)

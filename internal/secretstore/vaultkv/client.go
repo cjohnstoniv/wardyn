@@ -34,6 +34,11 @@ const (
 // before the call counts as transient (design §2.3a.2).
 const retries = 3
 
+// reloginEvery bounds the logins a 401/403 triggers. A revoked policy answers
+// 403 to every call, and each login is a Kubernetes TokenReview and a line in
+// both audit logs.
+const reloginEvery = 30 * time.Second
+
 // client is a minimal Vault HTTP API client: stdlib only, its own TLS config,
 // one token it keeps alive. It never logs or returns a request body, so a
 // value it writes can never reach an error or a log line.
@@ -50,6 +55,9 @@ type client struct {
 	token     string
 	ttl       time.Duration
 	renewable bool
+
+	loginMu   sync.Mutex // serialises relogin; guards reloginAt
+	reloginAt time.Time
 }
 
 // vaultError is a non-2xx answer. status 0 is a transport failure.
@@ -154,18 +162,31 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 }
 
 // call makes one API call with the current token. A 401/403 re-authenticates
-// once and retries (a rotated token file, an expired login); a transient
+// (a rotated token file, an expired login) and retries once; a transient
 // failure is retried with backoff. The HTTP status is returned alongside a
 // nil error only for 2xx and 404, which callers interpret.
 func (c *client) call(ctx context.Context, method, path string, in, out any) (int, error) {
 	status, err := c.retrying(ctx, method, path, in, out, true)
 	if s := statusOf(err); s == http.StatusForbidden || s == http.StatusUnauthorized {
-		if aerr := c.login(ctx); aerr != nil {
+		if aerr := c.relogin(ctx); aerr != nil {
 			return status, fmt.Errorf("%w (re-authenticating after it failed too: %v)", err, aerr)
 		}
 		status, err = c.retrying(ctx, method, path, in, out, true)
 	}
 	return status, err
+}
+
+// relogin logs in again at most once per reloginEvery. Inside the window the
+// caller retries with the token the last login fetched; a call that met the
+// 403 while that login was in flight waits for it.
+func (c *client) relogin(ctx context.Context) error {
+	c.loginMu.Lock()
+	defer c.loginMu.Unlock()
+	if time.Since(c.reloginAt) < reloginEvery {
+		return nil
+	}
+	c.reloginAt = time.Now()
+	return c.login(ctx)
 }
 
 func (c *client) retrying(ctx context.Context, method, path string, in, out any, authed bool) (int, error) {

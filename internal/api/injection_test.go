@@ -213,6 +213,9 @@ func TestInternalInjection_FailsClosed(t *testing.T) {
 	if rr.Code != http.StatusFailedDependency || !strings.Contains(rr.Body.String(), "wardyn secret set") {
 		t.Fatalf("missing secret: status = %d body=%s", rr.Code, rr.Body.String())
 	}
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"not-found"`) {
+		t.Fatalf("missing secret: audit data = %s, want the not-found reason", ev.Data)
+	}
 
 	// No auth => 401.
 	if rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), "", ""); rr.Code != http.StatusUnauthorized {
@@ -244,6 +247,10 @@ func TestInternalInjection_StoreUnavailableIsDistinctFromMissing(t *testing.T) {
 	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
 	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "couldn't reach the service") {
 		t.Fatalf("store unavailable: status = %d body=%s, want 503", rr.Code, rr.Body.String())
+	}
+	// Wardyn's own audit tells the outage apart too, not only the status.
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"store-unavailable"`) {
+		t.Fatalf("store unavailable: audit data = %s, want the store-unavailable reason", ev.Data)
 	}
 }
 

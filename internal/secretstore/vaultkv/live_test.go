@@ -8,10 +8,10 @@ package vaultkv
 // WARDYN_TEST_VAULT_TOKEN_FILE a file holding a token that may mount engines,
 // write policies and create tokens (a dev server's root token). The test
 // mounts its own KV v2 engine, writes the least-privilege policy the docs
-// give (no destroy/ or undelete/ stanza), and runs everything as a child
-// token holding only that policy — so a capability word the docs got wrong
-// fails here. With WARDYN_TEST_PG set it also runs the conformance suite
-// through the pg store in store mode.
+// give (no destroy/ or undelete/ stanza, no delete on data/), and runs
+// everything as a child token holding only that policy — so a capability word
+// the docs got wrong fails here. With WARDYN_TEST_PG set it also runs the
+// conformance suite through the pg store in store mode.
 
 import (
 	"bytes"
@@ -75,7 +75,7 @@ func (a liveAdmin) childToken(policy, ttl string) string {
 // livePolicy is the documented least-privilege policy (docs/OPERATIONS.md),
 // with the prefix spelled out instead of templated on the Kubernetes alias.
 func livePolicy(mount, prefix string) string {
-	return fmt.Sprintf(`path "%[1]s/data/%[2]s/*" { capabilities = ["create", "update", "read", "delete"] }
+	return fmt.Sprintf(`path "%[1]s/data/%[2]s/*" { capabilities = ["create", "update", "read"] }
 path "%[1]s/metadata/%[2]s/*" { capabilities = ["create", "update", "read", "delete", "list"] }
 `, mount, prefix)
 }
@@ -163,7 +163,7 @@ func TestLive_VaultKV(t *testing.T) {
 	})
 
 	t.Run("walk_lists_every_kind", func(t *testing.T) {
-		for _, r := range [][2]string{{"", "wardyn-signing-key"}, {"", "operator-key"}, {"bob", "nested/name"}} {
+		for _, r := range [][2]string{{"", "wardyn-signing-key"}, {"", "operator-key"}, {"bob", "pat"}} {
 			if _, err := s.Put(ctx, r[0], r[1], "", []byte("v"), false); err != nil {
 				t.Fatal(err)
 			}
@@ -176,7 +176,7 @@ func TestLive_VaultKV(t *testing.T) {
 		for _, e := range got {
 			seen[e.Owner+"|"+e.Name] = true
 		}
-		for _, want := range []string{"|wardyn-signing-key", "|operator-key", "bob|nested/name"} {
+		for _, want := range []string{"|wardyn-signing-key", "|operator-key", "bob|pat"} {
 			if !seen[want] {
 				t.Errorf("Walk missed %q (got %v)", want, got)
 			}

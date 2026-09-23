@@ -5,7 +5,9 @@ package vaultkv
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -173,7 +175,7 @@ func TestPathScheme(t *testing.T) {
 			t.Errorf("owner %q leaked a path separator: %q", in[0], got)
 		}
 	}
-	for _, bad := range []string{"", "..", "a/../b", "a//b", "a b", "k%2f"} {
+	for _, bad := range []string{"", "..", "a/b", "a/../b", "a//b", "a b", "k%2f"} {
 		if _, err := s.rel("", bad); err == nil {
 			t.Errorf("rel accepted name %q", bad)
 		}
@@ -198,11 +200,61 @@ func TestGet_RefusesARefThatIsNotDerived(t *testing.T) {
 	}
 }
 
-// Rule 16, second half: the value's own metadata must name the row.
+// Rule 16, second half: the value's own metadata must name the row, key by
+// key. A value copied between two of one person's names keeps the owner and
+// changes only the name; a wardyn-format this wardynd does not write is a
+// value it does not know how to read.
 func TestGet_RefusesMetadataThatNamesAnotherRow(t *testing.T) {
+	for key, other := range map[string]string{
+		metaOwner: "mallory", metaName: "other-pat", metaKind: "platform", metaFormat: "v3",
+	} {
+		t.Run(key, func(t *testing.T) {
+			f := newFakeVault(t)
+			s := newFakeStore(t, f)
+			ref, err := s.Put(t.Context(), "alice", "pat", "", []byte("v"), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rel, _ := s.rel("alice", "pat")
+			f.mu.Lock()
+			f.kv[rel].custom[key] = other
+			f.mu.Unlock()
+			if v, err := s.Get(t.Context(), "alice", "pat", ref); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("Get with %s=%q = (%q, %v); want a refusal naming %s", key, other, v, err, key)
+			}
+			if err := s.Check(t.Context(), "alice", "pat", ref); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("Check with %s=%q = %v; want a refusal naming %s", key, other, err, key)
+			}
+		})
+	}
+}
+
+// Rule 17 for a boot key: data at the path in any other shape than Wardyn's
+// (no "value" key) is a refusal, never zero bytes a caller could mint over.
+func TestGet_RefusesADataMapWithNoValue(t *testing.T) {
 	f := newFakeVault(t)
 	s := newFakeStore(t, f)
-	ref, err := s.Put(t.Context(), "alice", "pat", "", []byte("v"), false)
+	ref, err := s.Put(t.Context(), "", "wardyn-signing-key", "", []byte("key"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, _ := s.rel("", "wardyn-signing-key")
+	f.mu.Lock()
+	f.kv[rel].versions[f.kv[rel].current] = map[string]string{"password": "x"}
+	f.mu.Unlock()
+	v, err := s.Get(t.Context(), "", "wardyn-signing-key", ref)
+	if err == nil || errors.Is(err, secretstore.ErrNotFound) || errors.Is(err, secretstore.ErrUnavailable) ||
+		!strings.Contains(err.Error(), "not in Wardyn's format") {
+		t.Fatalf("Get of a data map with no value = (%q, %v); want a definitive refusal", v, err)
+	}
+}
+
+// A Put never writes over a path whose value is bound to another row (a
+// tampered or orphaned value): it refuses, naming the path.
+func TestPut_RefusesAPathBoundToAnotherRow(t *testing.T) {
+	f := newFakeVault(t)
+	s := newFakeStore(t, f)
+	ref, err := s.Put(t.Context(), "alice", "pat", "", []byte("v1"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,11 +262,14 @@ func TestGet_RefusesMetadataThatNamesAnotherRow(t *testing.T) {
 	f.mu.Lock()
 	f.kv[rel].custom[metaOwner] = "mallory"
 	f.mu.Unlock()
-	if v, err := s.Get(t.Context(), "alice", "pat", ref); err == nil || !strings.Contains(err.Error(), "metadata") {
-		t.Fatalf("Get with mismatched custom_metadata = (%q, %v); want a refusal", v, err)
+	if _, err := s.Put(t.Context(), "alice", "pat", ref, []byte("v2"), false); err == nil || !strings.Contains(err.Error(), s.ref(rel)) {
+		t.Fatalf("Put over a value bound to another owner = %v; want a refusal naming %s", err, s.ref(rel))
 	}
-	if err := s.Check(t.Context(), "alice", "pat", ref); err == nil {
-		t.Fatal("Check passed a value whose metadata names another owner")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e := f.kv[rel]
+	if got := e.versions[e.current]["value"]; got != base64.StdEncoding.EncodeToString([]byte("v1")) || e.custom[metaOwner] != "mallory" {
+		t.Fatalf("the refused Put changed the path: value %q, owner metadata %q", got, e.custom[metaOwner])
 	}
 }
 
@@ -253,9 +308,49 @@ func TestPut_CheckAndSetAndCreateOnly(t *testing.T) {
 	}
 	rel, _ := s.rel("", "k")
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if n := len(f.kv[rel].versions); n != 1 {
+		f.mu.Unlock()
 		t.Fatalf("versions kept = %d, want 1 (max_versions=1: a replaced value does not linger)", n)
+	}
+	f.mu.Unlock()
+	// Soft-deleted at Vault, the path holds no live value, so a create lands.
+	if _, err := s.c.call(t.Context(), http.MethodDelete, s.mount+"/data/"+rel, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Check(t.Context(), "", "k", ref); err == nil {
+		t.Fatal("Check passed a soft-deleted current version")
+	}
+	if _, err := s.Put(t.Context(), "", "k", "", []byte("v4"), true); err != nil {
+		t.Fatalf("createOnly after a soft delete: %v", err)
+	}
+	if v, err := s.Get(t.Context(), "", "k", ref); err != nil || string(v) != "v4" {
+		t.Fatalf("Get after the re-create = (%q, %v), want v4", v, err)
+	}
+}
+
+// A revoked policy answers 403 to every call. Each answer stays definitive,
+// and the logins it triggers are bounded: one per reloginEvery, not one per
+// call (each is a TokenReview and a line in both audit logs).
+func TestRevokedPolicy_ReloginIsBounded(t *testing.T) {
+	f := newFakeVault(t)
+	s := newFakeStore(t, f)
+	ref, err := s.Put(t.Context(), "", "k", "", []byte("v"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.revoked = true
+	f.mu.Unlock()
+	for range 3 {
+		_, err := s.Get(t.Context(), "", "k", ref)
+		if err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "403") {
+			t.Fatalf("Get under a revoked policy = %v; want a definitive 403", err)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.logins != 2 {
+		t.Fatalf("logins = %d; want 2 (the boot login and one re-login for three denied reads)", f.logins)
 	}
 }
 
