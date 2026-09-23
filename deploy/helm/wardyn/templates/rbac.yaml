@@ -21,7 +21,12 @@ canary,driver}.go. In particular:
     between two sentences Wardyn wrote — and a Role without this verb (an
     operator-written one under k8s.rbac.create=false) makes the read fail
     closed: pulls read as ContainerCreating, as before. Never in the
-    ClusterRole: that would be every namespace's Events.
+    ClusterRole: that would be every namespace's Events. Under
+    k8s.allowRunsInReleaseNamespace=true this verb reads every co-tenant
+    workload's Events in that namespace (a fieldSelector is not something RBAC
+    enforces); that is accepted as part of the same namespace blast radius the
+    render-time fail below already names (exec into and delete any pod, create
+    or delete any Secret there).
   - pods/exec: BOTH create and get. session.go's newExecutor builds a
     FallbackExecutor that tries the websocket transport FIRST (SPDY only on
     upgrade failure) — and the websocket leg issues an HTTP GET against the

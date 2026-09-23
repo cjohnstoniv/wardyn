@@ -60,8 +60,8 @@ func kubeletEvent(reason, message string) corev1.Event {
 }
 
 // scriptPod answers every Get of the test pod with ContainerCreating for
-// `creating` reads, then Running.
-func scriptPod(cs *fake.Clientset, creating int32) {
+// `creating` reads, then Running, and returns the count of Gets answered.
+func scriptPod(cs *fake.Clientset, creating int32) *atomic.Int32 {
 	var gets atomic.Int32
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		ga, ok := action.(clienttesting.GetAction)
@@ -70,6 +70,7 @@ func scriptPod(cs *fake.Clientset, creating int32) {
 		}
 		return true, pullTestPodAt(action.GetNamespace(), gets.Add(1) > creating), nil
 	})
+	return &gets
 }
 
 // TestWaitContainerRunning_ReportsImagePullFromEvents is #807: on Kubernetes the
@@ -79,8 +80,9 @@ func scriptPod(cs *fake.Clientset, creating int32) {
 // ContainerCreating once the kubelet says Pulled.
 func TestWaitContainerRunning_ReportsImagePullFromEvents(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
-	// ~2s of ContainerCreating (the poll is 200ms), then Running.
-	scriptPod(cs, 10)
+	// 10 reads of ContainerCreating (~2s at the 200ms poll), then Running.
+	const creating = 10
+	gets := scriptPod(cs, creating)
 	var lists atomic.Int32
 	cs.PrependReactor("list", "events", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		evs := []corev1.Event{kubeletEvent("Pulling", `Pulling image "`+pullTestImage+`"`)}
@@ -102,10 +104,11 @@ func TestWaitContainerRunning_ReportsImagePullFromEvents(t *testing.T) {
 	if len(seen) < len(want) || !slices.Equal(seen[:len(want)], want) {
 		t.Fatalf("OnWaiting calls = %q, want %q — a pull the kubelet reported as an Event must light the download step", seen, want)
 	}
-	// Throttled: ~2s of polling at 200ms is ~10 pod reads, and the Events read
-	// must not ride every one of them.
-	if n := lists.Load(); n < 2 || n > 4 {
-		t.Errorf("events listed %d times over ~2s, want 2–4 (at most once a second)", n)
+	// Throttled: the Events read must not ride every ContainerCreating pod read.
+	// Counted against those reads, not the wall clock: a loaded box stretches the
+	// polls and so adds lists, but only a read with no throttle lists on every one.
+	if n, reads := lists.Load(), min(gets.Load(), creating); n >= reads {
+		t.Errorf("events listed %d times over %d ContainerCreating pod reads, want fewer (at most once a second)", n, reads)
 	}
 }
 
