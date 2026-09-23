@@ -213,56 +213,56 @@ describe("RunCard — two-row anatomy", () => {
   });
 });
 
-// #160 — isHeld's stale-hold ceiling (lib/types/approvals.ts): a tool_call or
-// credential_reauth row older than 60 minutes stops counting as a live hold.
-// This pins the RUNS BOARD call site (approvalSignals -> RunCard); the
-// cockpit command bar's call site is pinned in run-detail.test.tsx.
-describe("RunCard — a stale hold degrades the card's own claim (#160)", () => {
-  const staleToolCall: RunSignals = approvalSignals([
+// #509 — a PENDING tool_call/credential_reauth row is live until the SERVER
+// says otherwise (its own state), never a client elapsed-time guess: the
+// sandbox stays parked on it for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h
+// default). This pins the RUNS BOARD call site (approvalSignals -> RunCard);
+// the cockpit command bar's call site is pinned in run-detail.test.tsx.
+describe("RunCard — a PENDING hold stays held until the server's own state says otherwise (#509)", () => {
+  const twoHourOldToolCall: RunSignals = approvalSignals([
     {
       id: "a1",
       run_id: "run_3b7f10c4aa99",
       kind: "tool_call",
       requested_scope: { tool: "Bash", cmd: "rm -rf build" },
       state: "PENDING",
-      requested_at: new Date(Date.now() - 90 * 60_000).toISOString(),
+      requested_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
     },
   ]);
 
-  it("offers Open, not Review, once the hold is stale", () => {
-    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), staleToolCall);
-    expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+  it("a PENDING tool_call 2 hours old — past the old 60-minute ceiling — still says Review and the live sentence", () => {
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), twoHourOldToolCall);
+    expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+    expect(screen.getByText("1 waiting · sandbox held")).toBeInTheDocument();
   });
 
-  it("says a neutral 'was held', not the live warning sentence", () => {
-    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), staleToolCall);
-    expect(screen.getByText("Was held — check the run")).toBeInTheDocument();
-    expect(screen.queryByText(/sandbox held/)).not.toBeInTheDocument();
-  });
-
-  // The DELIBERATE LIMIT: only the derived claim degrades. The run's own
-  // wire state, via RunStateBadge, still reads exactly what it is — restyling
-  // it would invent a new tone for a state that has not changed.
+  // The DELIBERATE LIMIT: only the derived claim would ever degrade. The
+  // run's own wire state, via RunStateBadge, still reads exactly what it is —
+  // restyling it would invent a new tone for a state that has not changed.
   it("leaves RunStateBadge alone — the wire state still reads Awaiting confirmation", () => {
-    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), staleToolCall);
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), twoHourOldToolCall);
     expect(screen.getByText("Awaiting confirmation")).toBeInTheDocument();
   });
 
-  it("a FRESH tool_call hold (same kind, well inside the ceiling) still says Review and the live sentence", () => {
-    const fresh = approvalSignals([
-      {
-        id: "a1",
-        run_id: "run_3b7f10c4aa99",
-        kind: "tool_call",
-        requested_scope: { tool: "Bash", cmd: "rm -rf build" },
-        state: "PENDING",
-        requested_at: new Date().toISOString(),
-      },
-    ]);
-    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), fresh);
-    expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
-    expect(screen.getByText("1 waiting · sandbox held")).toBeInTheDocument();
+  // A row the server has ACTUALLY decided or expired never reaches the card
+  // at all: approvalSignals only ever joins PENDING rows (board-groups.ts), so
+  // a decided/EXPIRED tool_call carries no pending count and no hold.
+  it("a decided or server-expired tool_call is not held — it never produces a signal for the run", () => {
+    for (const state of ["APPROVED", "DENIED", "EXPIRED", "CANCELLED"] as const) {
+      const signals = approvalSignals([
+        {
+          id: "a1",
+          run_id: "run_3b7f10c4aa99",
+          kind: "tool_call",
+          requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+          state,
+          requested_at: new Date().toISOString(),
+        },
+      ]);
+      renderCard(run({ state: "COMPLETED" }), signals);
+      expect(screen.queryByText(/sandbox held/)).not.toBeInTheDocument();
+    }
   });
 });
 

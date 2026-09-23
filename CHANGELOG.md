@@ -12,6 +12,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
   so a write still finishing from the failed attempt can never interleave with the resend (#368).
+- **The Runs board declared a still-live `tool_call`/`credential_reauth` hold dead after a
+  60-minute client-side ceiling, while `wardyn-toolgate` keeps the agent parked on it for up to
+  `WARDYN_APPROVAL_EXPIRY_AFTER` (24h default).** An operator back from lunch saw the group chip
+  say "1 was held", the card swap Review for Open, and the cockpit drop "sandbox held" — for a run
+  whose agent was still frozen waiting for exactly that decision (#509). A PENDING row is now live
+  until the server's own state says otherwise; "was held" is reserved for a row the server has
+  actually moved to EXPIRED.
 
 ### Added
 
