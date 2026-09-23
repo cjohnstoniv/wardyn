@@ -1878,6 +1878,45 @@ hiding them would repeat the failure mode we are designed to avoid.
     **Metadata stays in the clear:** who holds which named credential, and since
     when, is readable to anyone who can read the table.
 
+49. **One age key guards every stored credential AND the daemon's own
+    signing keys: one key, one shared blast radius.** `WARDYN_AGE_KEY` (or
+    `WARDYN_AGE_KEY_FILE`) is the root of all Postgres secret-store encryption
+    (`internal/secretstore/pg`): the age identity rows are encrypted under, or,
+    with envelope encryption, the input the local KEK is HKDF-derived from.
+    Two things are stored under it in the same table. First, every credential
+    kept in the secret store: model API keys, forge tokens, SSH keys, captured
+    AWS SSO sessions. Second, up to four process-global keys that
+    `loadOrCreateSecret` (`cmd/wardynd/main.go`) mints on first use:
+    - the embedded-identity ES256 signing key (`wardyn-signing-key`), always
+      present, which signs every run-identity token (SVID) and the ground-truth
+      sensor token;
+    - the OIDC session-cookie HMAC key (`wardyn-session-key`), only when an
+      OIDC issuer is configured;
+    - the SSH gateway host key (`wardyn-ssh-host-key`), only when
+      `WARDYN_SSH_LISTEN` is set;
+    - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when
+      `WARDYN_UI_SANDBOX_LISTEN` is set.
+
+    An attacker who holds the age key and a read of that table (the DSN, a
+    backup or a replica) therefore holds all of it at once. That means every
+    stored credential in cleartext and run-identity tokens the broker accepts.
+    Wherever those features are on, it also means a console session forged for
+    any human (admin included), forged UI relay cookies and the SSH gateway's
+    identity. The age key alone, without the ciphertext, decrypts nothing.
+
+    **Not under the age key:** the admin token, the OIDC and directory client
+    secrets, and the DSN. These boot secrets are read from env or their
+    `_FILE` twin, and each is its own blast radius (the admin token is full
+    API admin by itself).
+
+    `-rotate-age-key` re-encrypts every row, or rewraps every row's data key,
+    under a new identity. It does not re-key the boot keys: their plaintext
+    survives a rotation, so a compromise that happened before the rotation
+    still covers them.
+
+    **Planned for 0.8:** separate the boot keys from the credential store's
+    key, so that one compromise no longer yields both.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto. Raised

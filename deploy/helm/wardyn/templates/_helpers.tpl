@@ -104,18 +104,35 @@ control plane its refusal exists to prevent — an empty token is not a token,
 and internal/api/http.go's adminAuth reads it as unconfigured. extraEnv wins
 over env when both name the same variable, matching the order deployment.yaml
 appends them in.
+
+A secret setting's <name>_FILE twin (cmd/wardynd resolveSecretFiles — a path
+wardynd reads the value from) counts as the variable being set, returned as the
+literal "<file>": the value exists, in a file a Vault Agent, CSI or your own
+volume delivers, and every refusal that asks "is WARDYN_ADMIN_TOKEN wired?"
+must hear yes. No non-secret name this is called with has a _FILE twin.
+Naming BOTH forms is a render failure, because wardynd refuses to boot on it
+(resolveSecretFiles) — the pod would apply cleanly and crash-loop.
 */}}
 {{- define "wardyn.envValue" -}}
 {{- $ctx := .ctx -}}
 {{- $name := .name -}}
 {{- $env := $ctx.Values.env | default dict -}}
 {{- $v := "" -}}
+{{- $file := "" -}}
 {{- if hasKey $env $name -}}{{- $v = get $env $name | toString | trim -}}{{- end -}}
+{{- if hasKey $env (printf "%s_FILE" $name) -}}{{- $file = get $env (printf "%s_FILE" $name) | toString | trim -}}{{- end -}}
 {{- range $ctx.Values.extraEnv | default list -}}
 {{- if eq (.name | default "") $name -}}
 {{- if .valueFrom -}}{{- $v = "<valueFrom>" -}}{{- else -}}{{- $v = .value | default "" | toString | trim -}}{{- end -}}
 {{- end -}}
+{{- if eq (.name | default "") (printf "%s_FILE" $name) -}}
+{{- if .valueFrom -}}{{- $file = "<valueFrom>" -}}{{- else -}}{{- $file = .value | default "" | toString | trim -}}{{- end -}}
 {{- end -}}
+{{- end -}}
+{{- if and $v $file -}}
+{{- fail (printf "wardyn: %s and %s_FILE are both set in env/extraEnv — pick one. wardynd refuses to boot with both forms of a secret set, so this would apply cleanly and then crash-loop." $name $name) -}}
+{{- end -}}
+{{- if $file -}}{{- $v = "<file>" -}}{{- end -}}
 {{- $v -}}
 {{- end -}}
 

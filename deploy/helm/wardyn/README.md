@@ -291,6 +291,45 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
+## Boot secrets as files (Vault Agent / CSI)
+
+By default the chart hands wardynd its DSN, admin token and age key as
+`env.valueFrom.secretKeyRef`. Two things a security review often asks for rule
+that out: secrets delivered dynamically at runtime, and no pod with a secret in
+an env var (cloud posture scanners flag it). Every secret-carrying wardynd
+setting therefore has a `<VAR>_FILE` twin holding a **path**; wardynd reads the
+file once at boot. Setting a variable both ways refuses boot (and the render),
+and so does an empty, unreadable, group- or world-writable file, or one
+wardynd's own non-root uid owns that others can read.
+
+**Same Secrets, as files.** `secretFiles.enabled=true` projects the Secrets
+the chart already wires (either DSN mode above, `auth.adminToken`, the age
+key) into one read-only volume at `secretFiles.mountPath` (default
+`/etc/wardyn/secrets`, mode `0440`, readable through
+`podSecurityContext.fsGroup`) and sets `WARDYN_PG_DSN_FILE`,
+`WARDYN_ADMIN_TOKEN_FILE` and `WARDYN_AGE_KEY_FILE` instead. No secretKeyRef
+env is rendered. It is **off by default** because it needs a wardynd image
+that reads `*_FILE` (0.7.12 or later): an older pinned `image.tag`/`image.digest`
+would boot with no DSN. Turning it on for an existing install changes only the
+delivery.
+
+```bash
+helm upgrade wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" -n wardyn \
+  --reuse-values --set secretFiles.enabled=true
+```
+
+**Vault Agent injector or Secrets Store CSI.** Point `env.WARDYN_<NAME>_FILE`
+at the path the agent or CSI volume writes, and leave the matching chart
+source empty. For the DSN that means `postgres.dsn.secretRef.name=""`, since
+it has a non-empty default. A CSI volume goes in through `extraVolumes` /
+`extraVolumeMounts`. The chart counts a `_FILE` entry in `env`/`extraEnv` as
+that secret being wired: it satisfies the auth and age-key render checks, and
+naming it beside the chart's own source is refused. The non-chart secrets
+(`WARDYN_OIDC_CLIENT_SECRET`, `WARDYN_DIRECTORY_CLIENT_SECRET`,
+`WARDYN_AUDIT_SINKS`, `WARDYN_PG_MIGRATE_DSN`) take the same route. Full Vault
+Agent and CSI examples:
+[docs/OPERATIONS.md "Secrets from files"](../../../docs/OPERATIONS.md#secrets-from-files-vault-agent--csi).
+
 ## Multi-user (admin/member RBAC)
 
 > This is the multi-user path. Admins read on; a member joining this
@@ -1049,6 +1088,12 @@ See `values.yaml` for all options. Key settings:
   secret-bearing variables docs/ENV.md marks 🔒: `WARDYN_OIDC_CLIENT_SECRET`,
   and `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM
   `bearer_token`).
+- `secretFiles.enabled` / `secretFiles.mountPath`: deliver the chart-wired DSN,
+  admin token and age key as files instead of env. Off by default. See
+  [Boot secrets as files](#boot-secrets-as-files-vault-agent--csi).
+- `extraVolumes` / `extraVolumeMounts`: pod volumes and wardynd mounts, rendered
+  verbatim. Use them for a Secrets Store CSI volume or your own Secret volume
+  behind a `WARDYN_*_FILE` path.
 - `persistence.enabled`: decides the recording store — `WARDYN_RECORDING_STORE=fs`
   with `WARDYN_RECORDING_DIR=<mountPath>/recordings` when on, `WARDYN_RECORDING_STORE=off`
   (no recording, no replay) when off. wardynd's own default directory writes to the

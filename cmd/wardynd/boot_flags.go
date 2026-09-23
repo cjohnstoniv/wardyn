@@ -463,6 +463,16 @@ func parseBootFlags() *bootFlags {
 	if *f.bedrockAWSProfile == "" {
 		*f.bedrockAWSProfile = envOr("AWS_PROFILE", "")
 	}
+
+	// <VAR>_FILE twins resolve here, with the rest of the flag/env reading,
+	// so every caller — -rotate-age-key included — sees one resolved value. A
+	// bad file is a malformed setting like a bad flag, so it exits here the way
+	// flag.Parse does, with main's own fatal line (run() has no cyclomatic
+	// budget left for another early return).
+	if err := resolveSecretFiles(secretFileSettings(f)); err != nil {
+		slog.Error("wardynd: fatal", slog.Any("err", err))
+		os.Exit(1)
+	}
 	return f
 }
 

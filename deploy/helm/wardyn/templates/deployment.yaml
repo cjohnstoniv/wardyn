@@ -41,6 +41,28 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
 {{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
+{{- /*
+secretFiles mode: the three Secrets the chart already wires (DSN, admin token,
+age key) are projected into ONE read-only volume and wardynd gets
+WARDYN_*_FILE paths instead of secretKeyRef env (cmd/wardynd resolveSecretFiles).
+Same Secrets, same keys — only the delivery changes, so env mode (the default)
+renders byte-identically to before this existed. A DSN delivered as
+env.WARDYN_PG_DSN_FILE (Vault Agent / CSI) leaves both postgres.dsn fields empty,
+which is why the DSN entry is conditional at all (secret.yaml refuses the rest).
+*/ -}}
+{{- $sf := .Values.secretFiles | default dict -}}
+{{- $filesDir := $sf.mountPath | default "/etc/wardyn/secrets" -}}
+{{- $chartDSN := or .Values.postgres.dsn.secretRef.name .Values.postgres.dsn.value -}}
+{{- $chartToken := or .Values.auth.adminToken.secretRef.name .Values.auth.adminToken.value -}}
+{{- $ageSecret := "" -}}
+{{- $ageItem := "age-key" -}}
+{{- if $ageRef.name -}}
+{{- $ageSecret = $ageRef.name -}}
+{{- $ageItem = $ageRef.key | default "age-key" -}}
+{{- else if or .Values.secrets.ageKeyFromSecret (and .Values.secrets.ageKey (not .Values.postgres.dsn.secretRef.name)) -}}
+{{- $ageSecret = include "wardyn.secretName" . -}}
+{{- end -}}
+{{- $bootFiles := and $sf.enabled (or $chartDSN $chartToken $ageSecret) -}}
 {{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
 {{- $digest := .Values.image.digest | default "" -}}
 {{- if and $digest (not (hasPrefix "sha256:" $digest)) -}}
@@ -170,6 +192,13 @@ spec:
             - -allow-multi-instance
             {{- end }}
           env:
+            {{- if and $chartDSN $sf.enabled }}
+            # secretFiles.enabled: every chart-wired secret below is a PATH into
+            # the read-only boot-secrets volume, never a value in the pod spec
+            # or the process environment.
+            - name: WARDYN_PG_DSN_FILE
+              value: {{ printf "%s/pg-dsn" $filesDir | quote }}
+            {{- else if $chartDSN }}
             # DSN is the only required input; pulled from the (external or
             # chart-created) Secret so it never appears in the pod spec.
             - name: WARDYN_PG_DSN
@@ -177,7 +206,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "wardyn.secretName" . }}
                   key: {{ .Values.postgres.dsn.key }}
-            {{- if or .Values.auth.adminToken.secretRef.name .Values.auth.adminToken.value }}
+            {{- end }}
+            {{- if and $chartToken $sf.enabled }}
+            - name: WARDYN_ADMIN_TOKEN_FILE
+              value: {{ printf "%s/admin-token" $filesDir | quote }}
+            {{- else if $chartToken }}
             # Admin bearer token. Unset (and no OIDC) => every API route 401s
             # while /healthz still reports Ready, so secret.yaml fails the render
             # instead of shipping a control plane that serves nothing.
@@ -198,7 +231,10 @@ spec:
             - name: WARDYN_SSO_ONLY
               value: "true"
             {{- end }}
-            {{- if $ageRef.name }}
+            {{- if and $ageSecret $sf.enabled }}
+            - name: WARDYN_AGE_KEY_FILE
+              value: {{ printf "%s/age-key" $filesDir | quote }}
+            {{- else if $ageRef.name }}
             # age secret-store identity, wired from a SEPARATE Secret this
             # chart never creates or otherwise references — for an operator-
             # owned Secret (e.g. one a Postgres operator manages and would
@@ -425,6 +461,14 @@ spec:
               mountPath: /etc/wardyn/trusted-ca
               readOnly: true
             {{- end }}
+            {{- if $bootFiles }}
+            - name: boot-secrets
+              mountPath: {{ $filesDir }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -442,6 +486,40 @@ spec:
         - name: trusted-ca
           configMap:
             name: {{ include "wardyn.fullname" . }}-trusted-ca
+        {{- end }}
+        {{- if $bootFiles }}
+        # 0440, not 0400: the files are root-owned, and the kubelet makes them
+        # readable through podSecurityContext.fsGroup — wardynd (uid 65532)
+        # reads them via that group. The kubelet adds group-read under fsGroup
+        # regardless, so 0440 is simply the mode the pod actually sees.
+        - name: boot-secrets
+          projected:
+            defaultMode: 0440
+            sources:
+              {{- if $chartDSN }}
+              - secret:
+                  name: {{ include "wardyn.secretName" . }}
+                  items:
+                    - key: {{ .Values.postgres.dsn.key }}
+                      path: pg-dsn
+              {{- end }}
+              {{- if $chartToken }}
+              - secret:
+                  name: {{ include "wardyn.authSecretName" . }}
+                  items:
+                    - key: {{ .Values.auth.adminToken.key }}
+                      path: admin-token
+              {{- end }}
+              {{- if $ageSecret }}
+              - secret:
+                  name: {{ $ageSecret }}
+                  items:
+                    - key: {{ $ageItem }}
+                      path: age-key
+              {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
