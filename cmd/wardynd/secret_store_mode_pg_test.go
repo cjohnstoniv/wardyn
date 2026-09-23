@@ -242,6 +242,54 @@ func TestMigrateMode_AuditsAnAbort(t *testing.T) {
 	}
 }
 
+// A migration that succeeds records one secret.read per value it moved, with
+// purpose migrate and never the value, then one secret.migrate with the count.
+func TestMigrateMode_AuditsEveryReadThenTheMove(t *testing.T) {
+	pool := envelopeDB(t)
+	id, _ := age.GenerateX25519Identity()
+	ext := &memExternal{vals: map[string][]byte{}}
+	s, err := newSecretStore(t.Context(), pool, id.String(), "", ext, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{}
+	for _, w := range []struct{ owner, name, value string }{
+		{"", "k1", "value-one"}, {"", "k2", "value-two"}, {"alice", "k1", "value-alice"},
+	} {
+		if err := s.For(w.owner).Put(t.Context(), w.name, []byte(w.value)); err != nil {
+			t.Fatal(err)
+		}
+		values[w.owner+"/"+w.name] = w.value
+	}
+	rec := &capturingRecorder{}
+	if err := migrateMode(t.Context(), s.(*secretstorepg.Store), rec, vaultkv.Name); err != nil {
+		t.Fatalf("migrateMode: %v", err)
+	}
+	if len(rec.got) != 4 {
+		t.Fatalf("migration recorded %d audit rows, want 3 secret.read + 1 secret.migrate: %+v", len(rec.got), rec.got)
+	}
+	for _, ev := range rec.got[:3] {
+		var d map[string]any
+		if ev.Action != "secret.read" || ev.Outcome != "success" || json.Unmarshal(ev.Data, &d) != nil || d["purpose"] != "migrate" {
+			t.Fatalf("read row = %s %s %s, want a secret.read success with purpose migrate", ev.Action, ev.Outcome, ev.Data)
+		}
+		for _, v := range values {
+			if strings.Contains(string(ev.Data), v) || strings.Contains(ev.Target, v) {
+				t.Fatalf("read row carries the value %q: %s", v, ev.Data)
+			}
+		}
+	}
+	last := rec.got[3]
+	var d map[string]any
+	if last.Action != "secret.migrate" || last.Outcome != "success" || json.Unmarshal(last.Data, &d) != nil ||
+		d["count"] != float64(3) || d["from"] != "pg" || d["to"] != vaultkv.Name {
+		t.Fatalf("last row = %s %s %s, want secret.migrate success, count 3, from pg, to vaultkv", last.Action, last.Outcome, last.Data)
+	}
+	if len(ext.vals) != 3 {
+		t.Fatalf("%d values reached the external store, want 3", len(ext.vals))
+	}
+}
+
 // -reconcile lists every owner and name in the store, so it leaves one
 // audit row with its counts.
 func TestReconcileMode_Audits(t *testing.T) {
