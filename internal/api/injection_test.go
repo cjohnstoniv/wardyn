@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -216,6 +217,33 @@ func TestInternalInjection_FailsClosed(t *testing.T) {
 	// No auth => 401.
 	if rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), "", ""); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("no auth: status = %d, want 401", rr.Code)
+	}
+}
+
+// unavailableSecrets is a store whose external backend cannot answer.
+type unavailableSecrets struct{ *memSecrets }
+
+func (unavailableSecrets) Get(context.Context, string) ([]byte, error) {
+	return nil, fmt.Errorf("vault GET wardyn/data/x: 503: %w", secretstore.ErrUnavailable)
+}
+func (u unavailableSecrets) For(string) secretstore.Store { return u }
+
+// A store that did not answer is a distinct 503, never the 424 that means the
+// credential is gone (design §2.3a.4): the two must not be confused by the
+// proxy or the person reading the run's failure.
+func TestInternalInjection_StoreUnavailableIsDistinctFromMissing(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	h.srv.cfg.Secrets = unavailableSecrets{sec}
+	h.srv.router = h.srv.routes()
+	token := h.mintRunToken(t, uuid.New())
+	h.broker.minted = broker.Minted{
+		Kind:      types.GrantAPIKey,
+		JTI:       "j3",
+		Injection: &egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", SecretName: "anthropic-api-key"},
+	}
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "couldn't reach the service") {
+		t.Fatalf("store unavailable: status = %d body=%s, want 503", rr.Code, rr.Body.String())
 	}
 }
 

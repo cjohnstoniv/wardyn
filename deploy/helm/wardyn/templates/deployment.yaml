@@ -215,6 +215,40 @@ spec:
                   name: {{ include "wardyn.secretName" . }}
                   key: age-key
             {{- end }}
+            {{- with .Values.secretStore }}
+            {{- if and .backend (ne .backend "pg") }}
+            - name: WARDYN_SECRET_STORE
+              value: {{ .backend | quote }}
+            {{- end }}
+            {{- if and .vault .vault.addr }}
+            # Store mode's Vault client (docs/OPERATIONS.md "Store mode").
+            - name: WARDYN_VAULT_ADDR
+              value: {{ .vault.addr | quote }}
+            {{- with .vault.namespace }}
+            - name: WARDYN_VAULT_NAMESPACE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: WARDYN_VAULT_AUTH
+              value: {{ .vault.auth | quote }}
+            {{- if eq .vault.auth "kubernetes" }}
+            - name: WARDYN_VAULT_AUTH_MOUNT
+              value: {{ .vault.authMount | quote }}
+            - name: WARDYN_VAULT_ROLE
+              value: {{ .vault.role | quote }}
+            - name: WARDYN_VAULT_K8S_TOKEN_FILE
+              value: "/var/run/secrets/wardyn-vault/token"
+            {{- else }}
+            - name: WARDYN_VAULT_TOKEN_FILE
+              value: {{ .vault.tokenFile | quote }}
+            {{- end }}
+            - name: WARDYN_VAULT_KV_MOUNT
+              value: {{ .vault.kvMount | quote }}
+            - name: WARDYN_VAULT_KV_PREFIX
+              value: {{ .vault.kvPrefix | default $.Release.Namespace | quote }}
+            - name: WARDYN_VAULT_KV_MAX_VERSIONS
+              value: {{ .vault.maxVersions | quote }}
+            {{- end }}
+            {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_RECORDING_STORE") }}
             # persistence.enabled is the SINGLE recording switch it is documented
             # to be: on => the per-pod `fs` store on the persistent volume (path
@@ -416,6 +450,11 @@ spec:
               mountPath: /etc/wardyn/trusted-ca
               readOnly: true
             {{- end }}
+            {{- if eq (include "wardyn.vaultProjectedToken" .) "true" }}
+            - name: wardyn-vault-token
+              mountPath: /var/run/secrets/wardyn-vault
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -433,6 +472,18 @@ spec:
         - name: trusted-ca
           configMap:
             name: {{ include "wardyn.fullname" . }}-trusted-ca
+        {{- end }}
+        {{- if eq (include "wardyn.vaultProjectedToken" .) "true" }}
+        # A token for Vault alone: its audience is Vault's, so it is useless
+        # against the API server, and the kubelet refreshes it in place
+        # (wardynd re-reads it at every login).
+        - name: wardyn-vault-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.secretStore.vault.tokenAudience | quote }}
+                  expirationSeconds: {{ .Values.secretStore.vault.tokenExpirationSeconds }}
+                  path: token
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
