@@ -13,8 +13,9 @@ GITLEAKS_VERSION     ?= v8.30.1
 # Scan range for `make gitleaks`: the commit under test's own history, not
 # every ref the checkout fetched (gitleaks' default is `--all`, which with
 # fetch-depth: 0 means one branch's finding reds main and every PR — see the
-# gitleaks target below).
-GITLEAKS_LOG_OPTS    ?= HEAD --full-history
+# gitleaks target below). Passing --log-opts replaces gitleaks' whole default
+# `--full-history --all --diff-filter=tuxdb`, so the diff filter is restated.
+GITLEAKS_LOG_OPTS    ?= HEAD --full-history --diff-filter=tuxdb
 GO_LICENSES_VERSION  ?= v1.6.0
 SYFT_VERSION         ?= v1.46.0
 GOLANGCI_LINT_VERSION ?= v2.12.2
@@ -531,9 +532,10 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 
 # Secret scan over the commit-under-test's full history (NOT gitleaks-action,
 # whose default scan range is only the triggering diff — see ci.yml's
-# gitleaks-job comment). --log-opts scopes gitleaks' own default (`git log
-# --full-history --all`) to HEAD only, so one branch's accepted fixture never
-# reds a DIFFERENT branch's gate just because the checkout fetched it too.
+# gitleaks-job comment). --log-opts replaces gitleaks' own default (`git log
+# --full-history --all --diff-filter=tuxdb`); GITLEAKS_LOG_OPTS keeps all of it
+# but `--all`, so the scan walks HEAD only and one branch's accepted fixture
+# never reds a DIFFERENT branch's gate just because the checkout fetched it too.
 gitleaks: ## Scan HEAD's full git history for committed secrets
 	@echo "Scanning git history (--log-opts=\"$(GITLEAKS_LOG_OPTS)\") for secrets with gitleaks $(GITLEAKS_VERSION)..."
 	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml --log-opts="$(GITLEAKS_LOG_OPTS)" -v

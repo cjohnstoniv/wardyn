@@ -714,9 +714,10 @@ jobs:
   #     gitleaks-action: the action's default scan range is only the triggering
   #     push/PR diff even with fetch-depth: 0, which silently made the "full
   #     history" claim false. Do not swap back without fixing its scan range.
-  #     `--log-opts="HEAD --full-history"` (Makefile's GITLEAKS_LOG_OPTS) scopes
-  #     gitleaks' own default of `--all` to HEAD only — with fetch-depth: 0
-  #     fetching every remote branch, `--all` meant one open branch's accepted
+  #     `--log-opts="HEAD --full-history --diff-filter=tuxdb"` (Makefile's
+  #     GITLEAKS_LOG_OPTS) restates gitleaks' own default log options minus
+  #     `--all`, so the scan walks HEAD only — with fetch-depth: 0 fetching
+  #     every remote branch, `--all` meant one open branch's accepted
   #     finding reds every OTHER branch's gate too (T-05). One-off accepted
   #     test/dev-fixture secrets are allowlisted by commit fingerprint in
   #     .gitleaksignore; a fixture that recurs across commits (a mask test

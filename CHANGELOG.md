@@ -38,11 +38,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The `gates (gitleaks)` CI check was not hermetic: with `fetch-depth: 0` fetching every remote
   branch, gitleaks' default scan range (`--all`) meant an accepted finding on someone else's open
   branch could red every other PR's gate too. `make gitleaks` now scans only the commit under
-  test's own history (`--log-opts="HEAD --full-history"`). The two test-fixture false positives
-  that used to need a fresh `.gitleaksignore` fingerprint on every touching commit
-  (`pat_broker_mask_test.go`'s minted PAT, the secret-store's AAD label constant) are now a
-  path/regex allowlist in `.gitleaks.toml` instead, which matches regardless of commit; a repo
-  guard refuses any other fingerprint that recurs a fourth time for the same finding (#665).
+  test's own history (`--log-opts="HEAD --full-history --diff-filter=tuxdb"`). The fixture
+  false positives that used to need a fresh `.gitleaksignore` fingerprint on every touching
+  commit (`pat_broker_mask_test.go`'s minted PAT, the secret-store's AAD label constant, the
+  install test's stub age key and admin token, the runbook's quoted age recipient and
+  `secrets.allowEphemeralAgeKey` flag) are now a path/regex allowlist in `.gitleaks.toml`
+  instead, which matches regardless of commit; a repo guard refuses a `.gitleaksignore` that
+  pins the same file and rule on a fourth commit (#665).
 
 ### Changed
 

@@ -25,9 +25,9 @@
 #   8. docker-compose.yaml's WARDYN_OIDC_ROLE_MAP stays a plain passthrough,
 #      and deploy/compose/.env.example still seeds the demo/member pair for a
 #      fresh install (R-03).
-#   9. .gitleaksignore never lets the same (path, rule, line) recur a fourth
-#      time — a fingerprint that churns that often is a recurring fixture,
-#      which belongs in .gitleaks.toml's path/regex allowlist instead (T-05).
+#   9. .gitleaksignore never pins the same (path, rule) on a fourth commit — a
+#      finding that recurs that often is a recurring fixture, which belongs in
+#      .gitleaks.toml's path/regex allowlist instead (T-05).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -254,18 +254,19 @@ fi
 
 # ── 10. .gitleaksignore fingerprint churn cap — T-05 ─────────────────────────
 # Each fingerprint line is `commit:path:rule:line`. A one-off accepted finding
-# gets one entry; a fixture that keeps re-triggering (a mask test that mints a
-# fresh fake token per commit, a constant whose line moves) churns a NEW
-# fingerprint every time its commit changes, for the SAME (path, rule, line).
-# Three is the line: a fourth means it belongs in .gitleaks.toml's path/regex
-# allowlist instead, which matches regardless of commit (see the pat_broker_
-# mask_test.go / secretAADLabel entries already moved there).
+# is pinned on one commit; a fixture that keeps re-triggering (a mask test that
+# mints a fresh fake token, a constant on a line that keeps moving, a backport
+# of either) gains a NEW fingerprint on every commit that touches it, often at
+# a different line. So the count is distinct commits per (path, rule), line
+# ignored: three is the limit, and a fourth means it belongs in .gitleaks.toml's
+# path/regex allowlist instead, which matches regardless of commit (see the
+# entries already moved there, listed at the end of .gitleaksignore).
 gitleaksignore_churn="$(grep -oE '^[0-9a-f]{40}:[^:]+:[^:]+:[0-9]+' .gitleaksignore | \
-    awk -F: '{print $2":"$3":"$4}' | sort | uniq -c | awk '$1 > 3')"
+    awk -F: '{print $2":"$3" "$1}' | sort -u | awk '{print $1}' | uniq -c | awk '$1 > 3')"
 if [ -z "$gitleaksignore_churn" ]; then
-    ok ".gitleaksignore has no (path, rule, line) fingerprint recurring more than 3 times"
+    ok ".gitleaksignore pins no (path, rule) on more than 3 commits"
 else
-    bad ".gitleaksignore has a (path, rule, line) recurring 4+ times — move it to .gitleaks.toml's path/regex allowlist instead of adding another per-commit fingerprint:
+    bad ".gitleaksignore pins a (path, rule) on 4+ commits — move it to .gitleaks.toml's path/regex allowlist instead of adding another per-commit fingerprint:
 $gitleaksignore_churn"
 fi
 

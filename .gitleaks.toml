@@ -34,6 +34,22 @@ regexes = [
     # one. It has churned a new .gitleaksignore fingerprint on every commit
     # that touches its line; the value itself never changes.
     '''wardyn/secret/v1''',
+    # scripts/test-install-sh-trust.sh's install fixtures (also in
+    # deploy/helm/wardyn/ci/all-on-values.yaml and cmd/wardynd/main_test.go):
+    # a STUB age key — "STUB" cannot follow the separator in a real one, since
+    # B is not in the bech32 alphabet — and a 0-9a-f cycle standing in for a
+    # "real-shaped admin token to keep". Both recurred across five commits.
+    '''AGE-SECRET-KEY-1STUB''',
+    '''a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718''',
+    # The k8s day-2 runbook (docs/OPERATIONS.md) quotes wardynd's
+    # ephemeral-age-identity warning, which prints the PUBLIC recipient
+    # (age1…) — public by construction. It also quotes the Helm chart's
+    # age-key preflight fail message (deploy/helm/wardyn/templates/secret.yaml),
+    # whose remediation text names the values flag
+    # `secrets.allowEphemeralAgeKey=true` — a chart value name, not key
+    # material.
+    '''public_recipient=age1''',
+    '''secrets\.allowEphemeralAgeKey=''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped
