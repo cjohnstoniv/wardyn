@@ -183,11 +183,28 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 
 // envEnabled reports whether an operator env-toggle named by env is truthy
 // (1/true/yes/on, case-insensitive; 0/false/no/off is false), via
-// cliutil.EnvBool — the one boolean parser every WARDYN_* read goes through
-// (#202). Unset/empty is false; a value that is neither is a boot refusal
-// (envFatal exits 2), never a silent false the way this used to swallow one.
+// cliutil.EnvBool (#202). Unset/empty is false. It runs per request, so the
+// name must be listed in envToggles: that list is what makes a garbage value
+// a boot refusal instead of an exit 2 on the first request that reads it.
 func envEnabled(env string) bool {
 	return cliutil.EnvBool(env, false)
+}
+
+// envAllowAgentTelemetry lets agent-CLI telemetry through; see buildBaseSandboxEnv.
+const envAllowAgentTelemetry = "WARDYN_ALLOW_AGENT_TELEMETRY"
+
+// envToggles names every switch this package reads with envEnabled.
+// TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
+var envToggles = []string{envEgressSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry}
+
+// ValidateEnvToggles reads each envToggles switch once, so a value that is
+// neither truthy nor falsey exits 2 at boot, in every auth mode, rather than
+// killing the daemon mid-request later. cmd/wardynd calls it right after flag
+// parsing.
+func ValidateEnvToggles() {
+	for _, name := range envToggles {
+		cliutil.EnvBool(name, false)
+	}
 }
 
 // noProxyFor builds the sandbox's NO_PROXY: the CONFIGURED proxy host plus
@@ -271,7 +288,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 	// the approval queue shows only task-relevant egress. An operator who WANTS
 	// agent telemetry sets WARDYN_ALLOW_AGENT_TELEMETRY (1/true/yes/on) to omit
 	// these; default-unset keeps the suppression on.
-	if !envEnabled("WARDYN_ALLOW_AGENT_TELEMETRY") {
+	if !envEnabled(envAllowAgentTelemetry) {
 		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 		env["DISABLE_TELEMETRY"] = "1"
 	}

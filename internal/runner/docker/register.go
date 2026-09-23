@@ -49,9 +49,9 @@ func init() {
 			InternalNetwork: os.Getenv("WARDYN_INTERNAL_NETWORK"),
 			// Fail closed by default when the host can't enforce resource caps;
 			// WARDYN_ALLOW_UNENFORCEABLE_CAPS=true (trusted host) downgrades to a
-			// warn. cliutil.EnvBool, not a literal "1" compare (#202): the same
-			// truthy token set every other WARDYN_* bool accepts, and a garbage
-			// value now exits 2 at boot instead of silently staying off.
+			// warn. cliutil.EnvBool, not a literal "1" compare (#202): the shared
+			// 1/true/yes/on token set, and a garbage value exits 2 at boot
+			// instead of silently staying off.
 			AllowUnenforceableCaps: cliutil.EnvBool("WARDYN_ALLOW_UNENFORCEABLE_CAPS", false),
 			ConfinementRuntimes:    d.ConfinementRuntimes,
 			// The deployment's host_path user-drive ceiling, parsed once at

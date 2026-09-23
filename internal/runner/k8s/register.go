@@ -24,9 +24,9 @@ func init() {
 			ProxyImage:          d.ProxyImage,
 			ImagePullSecret:     os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
 			ConfinementRuntimes: d.ConfinementRuntimes,
-			// cliutil.EnvBool, not a literal "1" compare (#202): the same truthy
-			// token set every other WARDYN_* bool accepts, and a garbage value
-			// now exits 2 at boot instead of silently staying off.
+			// cliutil.EnvBool, not a literal "1" compare (#202): the shared
+			// 1/true/yes/on token set, and a garbage value exits 2 at boot
+			// instead of silently staying off.
 			AllowUnenforcedNetPol: cliutil.EnvBool("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL", false),
 			AckAmbientDefaultDeny: cliutil.EnvBool("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY", false),
 		})

@@ -60,13 +60,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
   snapshot through a context memo. A build with no store now refuses a widening kind at every door.
 - **`WARDYN_ALLOW_UNENFORCEABLE_CAPS`, `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` and
-  `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` now parse through the same `cliutil.EnvBool`
-  every other `WARDYN_*` boolean uses, instead of comparing against the literal string
+  `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` now parse through the shared `cliutil.EnvBool`
+  that `wardynd`'s other booleans use, instead of comparing against the literal string
   `1`.** `true`/`yes`/`on` now enable each switch (previously silently ignored — only
   `1` worked), and a value that is neither truthy nor falsey now fails boot with an
   error naming the variable, instead of being silently treated as off. A deployment
   that set one of these to `true` and got no effect was hitting this bug, not a
   disabled feature (#202).
+- **`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_ALLOW_MEMBER_ENV_SECRET` and
+  `WARDYN_ALLOW_AGENT_TELEMETRY` now refuse a bad value at boot.** A value that is
+  neither truthy nor falsey (`treu`, say) used to be read silently as off; `wardynd` now
+  exits 2 at startup naming the variable, in every auth mode. Accepted values are
+  unchanged (#202).
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
