@@ -518,6 +518,14 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 		return s.denyMemberField(w, r, "runs.task_mode", "governance_profile", fmt.Sprintf(
 			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name))
 	}
+	// The same door through an interactive run: a task with interactive_start
+	// unset or "shell" is run by the image as `bash -lc` at boot, before anyone
+	// attaches. Same predicate as the autonomy gate and dispatch, so the limit
+	// and the seed cannot disagree; `!= "agent"` keeps an unknown value refused.
+	if ceiling.Limits.DenyTaskModeExec && req.InteractiveStart != "agent" && interactiveBootSeed(requestIsInteractive(req), req.Task) != "" {
+		return s.denyMemberField(w, r, "runs.interactive_start", "governance_profile", fmt.Sprintf(
+			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name))
+	}
 	// Post-coercion, and that is the whole gate. req.Interactive is still the RAW
 	// field here — this function runs before the empty-task→interactive coercion
 	// — so reading it directly would be evaded by simply omitting the task, which

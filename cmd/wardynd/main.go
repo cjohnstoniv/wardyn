@@ -407,6 +407,7 @@ func run() error {
 		RunnerTarget:              runnerTarget,
 		UIDir:                     *f.uiDir,
 		ControlPlaneURL:           *f.controlURL,
+		ControlPlaneCAPEM:         feats.hop.caCertPEM(),
 		RecordingStore:            feats.recStore,
 		OIDC:                      feats.authn,
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
@@ -497,7 +498,7 @@ func run() error {
 	startUISandboxGateway(rootCtx, f, posture, srv)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last.
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan)
+	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, feats.hop)
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved
