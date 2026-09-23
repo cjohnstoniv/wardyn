@@ -443,8 +443,11 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "requested_scope may not name a lane")
 		return
 	}
-	if body.Kind == types.ApprovalPushContent && !s.admitPushContentRaise(w, r, claims.RunID, body.RequestedScope) {
-		return
+	if body.Kind == types.ApprovalPushContent {
+		var ok bool
+		if body.RequestedScope, ok = s.admitPushContentRaise(w, r, claims, body.RequestedScope); !ok {
+			return
+		}
 	}
 
 	// Per-run cap, checked BEFORE the raise. Fail CLOSED on a count

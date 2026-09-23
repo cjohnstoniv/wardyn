@@ -931,12 +931,17 @@ match always wins: a path both lists match is refused and nothing is asked.
   request stays in the console; pushing the same commits again waits on that
   same request rather than raising another.
 - **What an approval covers.** The approval's `requested_scope` is
-  `{"repo","branch","acts_as","paths","paths_total","commits","paths_digest"}`:
+  `{"repo","branch","acts_as","acts_as_kind","acts_as_label","paths","paths_total","commits","paths_digest"}`:
   the repository as the run's grant names it (`github.com/<owner>/<repo>`, or
   `<host>/<path>` on the `git_pat` lane —
   `dev.azure.com/<org>/<project>/_git/<repo>` for Azure DevOps); the ref the
   push updates (several are joined by `, `); the credential it authenticates
-  with, as `<grant kind>:<grant id>`; the first ten matched paths, sorted, and
+  with, as `<grant kind>:<grant id>`, and — set by the control plane from the
+  run's own grants, never taken from the sidecar — which lane that credential
+  is (`acts_as_kind`: `github_app`, `git_pat` or `ado_entra`) and whose it is
+  (`acts_as_label`: the run's owner for the GitHub App and for a `git_pat`
+  whose secret is in the owner's own namespace, `operator` for the operator's
+  shared secret); the first ten matched paths, sorted, and
   how many matched in all; the object ids the push sets its refs to, sorted;
   and a SHA-256 over **every** matched path, sorted and NUL-terminated. The
   scope is the dedup key — two identical pushes are one request — and commits

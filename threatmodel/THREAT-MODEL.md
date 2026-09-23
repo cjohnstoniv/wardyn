@@ -2556,7 +2556,10 @@ residuals particular to holding:
 
 - **The admin decides on paths, not content.** The card names the repository,
   the ref, the credential, up to ten matched paths, the count and the commit
-  ids; it does not show a diff. An admin who approves without reading the
+  ids; it does not show a diff. Who the credential belongs to (`acts_as_kind`,
+  `acts_as_label`) is resolved by the control plane from the run's own grants
+  (`Server.pushActsAs`) and a raise that carries its own is refused, so a
+  sidecar cannot put a different name on the card. An admin who approves without reading the
   commits on the forge approves whatever they carry at those paths.
 - **Deny beats review, and oversize or unreadable never holds.** A path both
   lists match is refused (`inspectPush` evaluates the review list only when no
