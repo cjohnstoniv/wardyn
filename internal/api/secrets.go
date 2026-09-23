@@ -515,7 +515,7 @@ func secretOwnerAuditData(owner string, known bool) json.RawMessage {
 // existing UI callers are unchanged): the operator namespace, or one
 // member's own rows with ?owner=. For a MEMBER it narrows to the
 // operator-owned names an eligible grant in the operator's ceiling actually
-// PAIRS with (memberVisibleOperatorSecretNames), closing a name-enumeration
+// PAIRS with (userVisibleOperatorSecretNames), closing a name-enumeration
 // gap the flat namespace had — capSeamAllowed(capSecret, n) alone
 // passed everything through whenever that capability was unenforced (the
 // default), so a member could list every operator secret's name regardless
@@ -538,7 +538,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	names := mine
 	if !s.isOperator(ctx) {
-		names, err = s.memberVisibleOperatorSecretNames(ctx)
+		names, err = s.userVisibleOperatorSecretNames(ctx)
 		if err != nil {
 			// writeCeilingErrorPrefixed, not a hand-pasted prefix: the
 			// stale-snapshot arm has to reach the member with the REMEDY
@@ -583,11 +583,11 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"names": names, "mine": mine})
 }
 
-// memberVisibleOperatorSecretNames is handleListSecrets' member-facing
+// userVisibleOperatorSecretNames is handleListSecrets' member-facing
 // `names`: the reserved-filtered OPERATOR secret names an eligible grant in
 // THIS CALLER'S ceiling actually pairs
 // with a host — storedSecretGrantPairing is the same extraction
-// filterMemberGrants uses to decide whether a MEMBER's own inline grant is
+// filterUserGrants uses to decide whether a MEMBER's own inline grant is
 // eligible-listed — narrowed further by the existing capSeamAllowed(capSecret,
 // …) gate once an operator enforces it. Ceiling-pairing is unconditional
 // (closes the name-enumeration gap regardless of enforcement); the capability
@@ -598,9 +598,9 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 // profile that narrows a member's eligible grants has to narrow the menu with
 // it — otherwise the console offers names their own run would then drop, which
 // reads as a bug and teaches members to ignore the list. It uses the SAME
-// grant list filterMemberGrants enforces, so what is shown and what is
+// grant list filterUserGrants enforces, so what is shown and what is
 // accepted cannot drift.
-func (s *Server) memberVisibleOperatorSecretNames(ctx context.Context) ([]string, error) {
+func (s *Server) userVisibleOperatorSecretNames(ctx context.Context) ([]string, error) {
 	ceiling, cerr := s.effectiveCeiling(ctx)
 	if cerr != nil {
 		return nil, cerr
@@ -622,7 +622,7 @@ func (s *Server) memberVisibleOperatorSecretNames(ctx context.Context) ([]string
 			paired[knownHostsRef] = true
 		}
 	}
-	// The same batch narrowMemberInlinePolicy uses. N here is OPERATOR-controlled
+	// The same batch narrowUserInlinePolicy uses. N here is OPERATOR-controlled
 	// (the deployment's stored secret names, intersected with the ceiling's
 	// paired grants) rather than caller-controlled, so this was hygiene and not
 	// the availability defect capBatch was written for — but it is the identical

@@ -41,7 +41,7 @@ import (
 // mistyped must not silently become a ceiling that bounds a different tree.
 //
 // THREE root values are permitted but WARNED about, the same allow-and-warn
-// posture MemberMountPolicy.bootWarnings takes — and they are warned about for
+// posture UserMountPolicy.bootWarnings takes — and they are warned about for
 // OPPOSITE reasons, which is why they do not share a sentence:
 //
 //   - the daemon's own $HOME is far too WIDE: every dotfile tree that home
@@ -115,7 +115,7 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 //
 // A WARNING, NOT A REFUSAL, the same allow-and-warn posture the surrounding
 // ceiling parsing takes (see the three-case doc above and
-// MemberMountPolicy.bootWarnings): an operator may have deliberately opened a
+// UserMountPolicy.bootWarnings): an operator may have deliberately opened a
 // tree to both, and a refusal at boot would take a running deployment down on
 // upgrade over a posture it already has. What was missing was the operator ever
 // being told.
@@ -125,10 +125,10 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 // Every member ceiling is compared, the shared list and each per-principal
 // override alike — a per-member override REPLACES the shared list, so it is a
 // ceiling in its own right and can overlap on its own.
-func MountCeilingOverlapWarnings(member MemberMountPolicy, driveRoots []string) []string {
+func MountCeilingOverlapWarnings(member UserMountPolicy, driveRoots []string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, m := range memberCeilingRoots(member) {
+	for _, m := range userCeilingRoots(member) {
 		for _, d := range driveRoots {
 			d = filepath.Clean(d)
 			var msg string
@@ -157,10 +157,10 @@ func MountCeilingOverlapWarnings(member MemberMountPolicy, driveRoots []string) 
 	return out
 }
 
-// memberCeilingRoots is every distinct root that bounds SOME member's mounts:
+// userCeilingRoots is every distinct root that bounds SOME member's mounts:
 // the shared list plus each per-principal override, which replaces rather than
 // extends it and is therefore its own ceiling.
-func memberCeilingRoots(member MemberMountPolicy) []string {
+func userCeilingRoots(member UserMountPolicy) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(roots []string) {
@@ -233,14 +233,14 @@ func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 			return fmt.Errorf("host_root %q could not be resolved on this host (a drive's host root must be a directory that exists here): %w", hostRoot, err)
 		}
 		// The member rule's DOTFILE deny-list, on the RESOLVED path — the same
-		// segments ValidateMemberMountSource refuses (.ssh, .aws, .claude, .kube,
+		// segments ValidateUserMountSource refuses (.ssh, .aws, .claude, .kube,
 		// .config/gh, …). ValidateMountSource above denies whole system trees; it
 		// says nothing about a credential directory inside an ordinary home, and
 		// a share whose mount point is one — or a symlink that lands in one — is
 		// exactly the shape THREAT-MODEL's host_path residual claims is bounded
 		// by "the dotfile deny-list matches the real path". Without this the
 		// claim was true of member mounts only.
-		if seg := deniedMemberSegment(real); seg != "" {
+		if seg := deniedUserSegment(real); seg != "" {
 			return fmt.Errorf("host_root %q resolves to %q, which is or traverses %q — a credential directory is never a drive's host root",
 				hostRoot, real, seg)
 		}

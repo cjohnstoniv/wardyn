@@ -391,7 +391,7 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
   await expect(page.getByText(BANNER)).toBeVisible({ timeout: 60_000 });
 
   await expect.poll(async () => (await me(page)).operator, { timeout: 30_000 }).toBe(false);
-  expect((await me(page)).member_mode).toBe(true);
+  expect((await me(page)).user_view).toBe(true);
 
   // The flag is enforced SERVER-SIDE: writing a secret into ANOTHER principal's
   // namespace is an operator act, and this session no longer has that authority.

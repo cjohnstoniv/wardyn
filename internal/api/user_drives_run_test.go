@@ -198,7 +198,7 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 }
 
 // TestSeedRequestDriveOperatorSkipsTheDoor pins the exemption named in
-// denyMemberDrive: the DOOR does not apply to an operator, and RESOLUTION still
+// denyUserDrive: the DOOR does not apply to an operator, and RESOLUTION still
 // runs for them. An operator whose drive resolves gets it — drives are
 // per-principal, not per-tier.
 func TestSeedRequestDriveOperatorSkipsTheDoor(t *testing.T) {
@@ -818,7 +818,7 @@ func TestSeedRequestDriveTruncatedGroupsIs403(t *testing.T) {
 }
 
 // TestSeedRequestDriveDoorPrecedesTheResolver pins the ORDER inside
-// seedRequestDrive, and the SCOPING of denyMemberDrive — two properties the
+// seedRequestDrive, and the SCOPING of denyUserDrive — two properties the
 // door's own test cannot state, because it runs on a store that answers.
 //
 // The order is load-bearing in the direction that produces the RIGHT sentence.
@@ -1063,7 +1063,7 @@ func TestMeUserDrive(t *testing.T) {
 	})
 
 	t.Run("an operator is never reported as denied", func(t *testing.T) {
-		// The door keys on isOperator exactly as denyMemberDrive does, so a
+		// The door keys on isOperator exactly as denyUserDrive does, so a
 		// profile that happens to carry DenyUserDrive never renders a closed
 		// door for a caller it does not bind.
 		cs := &capStore{
@@ -1215,7 +1215,7 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 
 	t.Run("the door: 403 on both", func(t *testing.T) {
 		// And the counterfactual the placement guards: preflight runs
-		// denyMemberRequest FIRST, so the ceiling it hands seedRequestDrive is
+		// denyUserRequest FIRST, so the ceiling it hands seedRequestDrive is
 		// the SAME one create resolved — a preflight that passed a zero ceiling
 		// would preview an open door for a run the door will refuse.
 		srv, _, rec := govEscapeFixture(t, assignedStore(limitsProfile("contractors",
@@ -1236,7 +1236,7 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 		// direction. The recorder was returned and thrown away here, so
 		// preflight could have audited every dry run, or none, and this test —
 		// the one test about preflight and the drive door — would not have
-		// noticed either way. It DOES audit: the door is denyMemberField from
+		// noticed either way. It DOES audit: the door is denyUserField from
 		// inside the shared path, so a refused dry run writes exactly the row a
 		// refused launch writes. That contradicts handlePreflightRun's own
 		// "persists nothing", which is now corrected rather than the behaviour,

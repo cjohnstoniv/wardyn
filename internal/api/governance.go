@@ -762,7 +762,7 @@ func ceilingErrorStatus(err error) int {
 // grounds — "the alternative buys latency at the cost of the one property
 // that matters here, which is that no site can forget to ask." Latency was
 // never the real cost: three independent, untransacted reads per member
-// create (denyMemberGovernance, resolveRunPolicy, filterMemberGrants) plus
+// create (denyUserGovernance, resolveRunPolicy, filterUserGrants) plus
 // dispatch's fourth can return DIFFERENT ANSWERS if a security admin narrows
 // a profile mid-request, and resolveRunPolicy asserts the opposite in words
 // ("a create must never resolve two different ceilings for one request").
@@ -771,7 +771,7 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 	// One ceiling per request. The memo is checked first and filled on the way
 	// out, so every site in one request sees the SAME answer. A member create
 	// alone takes THREE independent, uncached, untransacted reads
-	// (denyMemberGovernance -> resolveRunPolicy -> filterMemberGrants) plus
+	// (denyUserGovernance -> resolveRunPolicy -> filterUserGrants) plus
 	// dispatch a fourth, so without the memo a security admin narrowing a
 	// profile mid-flight — the incident-response
 	// action — could land a run whose egress was clamped under the PRE-narrowing

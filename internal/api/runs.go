@@ -329,7 +329,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// run is narrower than what the caller asked for, and launch is the ONLY
 	// place a member sees that — preflight, which carries the same notes, is
 	// never called by the console. The strings are
-	// narrowMemberInlinePolicy's/filterMemberGrants' own: they name the kind
+	// narrowUserInlinePolicy's/filterUserGrants' own: they name the kind
 	// and the dropped VALUE (a host, a secret NAME), never a secret value.
 	warnings := withUnpublishedImageWarning(append(policyWarns, s.warnWorkspaceCollision(r, runID, workspacePath)...), req.Agent, s.cfg.AgentImages)
 	if taskWarning != "" {
@@ -463,7 +463,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		writeError(w, code, "workspace_id: "+seedErr.Error())
 		return nil, false
 	}
-	if s.denyMemberSeededImage(w, r, seededImageOwner, req.Image) {
+	if s.denyUserSeededImage(w, r, seededImageOwner, req.Image) {
 		return nil, false
 	}
 	if msg := s.validateImageBuildRequest(*req); msg != "" {
@@ -497,7 +497,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 	if s.admitRepoSources(w, r, repos...) {
 		return nil, false
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
+	if s.denyUserWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
 		return nil, false
 	}
 	if gate && s.gitCredentialRefusal(w, r, repos...) {

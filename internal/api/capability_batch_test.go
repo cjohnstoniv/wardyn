@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// countingCapStore counts the three capability reads narrowMemberInlinePolicy's
+// countingCapStore counts the three capability reads narrowUserInlinePolicy's
 // loops can make, so the assertion below is a COUNT rather than a stopwatch —
 // a wall-clock threshold on a shared CI box is a flake, while "how many round
 // trips did one request make" is the actual defect and is exact.
@@ -96,12 +96,12 @@ func (c *countingCapStore) total() int64 {
 
 // TestCapBatch_StoreReadsAreFlatInCallerInput is the pin for the growth law.
 //
-// narrowMemberInlinePolicy called capSeamAllowed once per allowed_domains entry,
+// narrowUserInlinePolicy called capSeamAllowed once per allowed_domains entry,
 // and capSeamAllowed makes two uncached Postgres round trips (three when the
 // caller's group snapshot is unanswerable). spec.AllowedDomains is the REQUEST
 // BODY's list and nothing on this path caps or de-duplicates it before the loop:
 // validatePolicySpec's count caps have no allowed_domains arm AND run after
-// boundMemberSpec, and composer.Clamp's intersection preserves duplicates of a
+// boundUserSpec, and composer.Clamp's intersection preserves duplicates of a
 // permitted entry and is skipped entirely under a ceiling with allow_all_egress.
 //
 // MEASURED before the fix, against a real store.PG over loopback with an empty
@@ -125,7 +125,7 @@ func TestCapBatch_StoreReadsAreFlatInCallerInput(t *testing.T) {
 			domains[i] = "api.anthropic.com" // one legal entry, repeated: nothing dedupes it
 		}
 		spec := types.RunPolicySpec{AllowedDomains: domains}
-		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, stale), "", &spec); err != nil {
+		if _, _, err := srv.narrowUserInlinePolicy(govMemberCtx([]string{"eng"}, stale), "", &spec); err != nil {
 			t.Fatalf("n=%d stale=%v: %v", n, stale, err)
 		}
 		return cs.total(), len(spec.AllowedDomains)
@@ -164,7 +164,7 @@ func TestCapBatch_StoreReadsAreFlatInCallerInput(t *testing.T) {
 		h := newHarness(t)
 		srv := New(baseTestConfig(h, cs))
 		spec := types.RunPolicySpec{}
-		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
+		if _, _, err := srv.narrowUserInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
 			t.Fatal(err)
 		}
 		if got := cs.total(); got != 0 {
@@ -176,7 +176,7 @@ func TestCapBatch_StoreReadsAreFlatInCallerInput(t *testing.T) {
 // TestCapBatch_CPUIsFlatInCallerInput is the second half of the growth law, and
 // the half 0.7 shipped OPEN: the store round trips were made flat and the CPU
 // was not. capBatch.allowed walked the caller's WHOLE grant set for every value,
-// `continue`-ing past every row of another kind, and narrowMemberInlinePolicy
+// `continue`-ing past every row of another kind, and narrowUserInlinePolicy
 // called it once per allowed_domains ENTRY — a list taken verbatim from the
 // request body, which nothing on this path caps or de-duplicates. So one
 // authenticated member's POST /runs/preflight bought O(len(AllowedDomains) x
@@ -215,7 +215,7 @@ func TestCapBatch_CPUIsFlatInCallerInput(t *testing.T) {
 			domains[i] = "granted-7.example.com" // one legal entry, repeated: nothing dedupes it
 		}
 		spec := types.RunPolicySpec{AllowedDomains: domains}
-		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
+		if _, _, err := srv.narrowUserInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
 			t.Fatalf("n=%d: %v", n, err)
 		}
 		if len(spec.AllowedDomains) != n {
@@ -241,7 +241,7 @@ func TestCapBatch_CPUIsFlatInCallerInput(t *testing.T) {
 		h := newHarness(t)
 		srv := New(baseTestConfig(h, &countingCapStore{grants: grants}))
 		spec := types.RunPolicySpec{AllowedDomains: []string{"granted-1.example.com", "granted-2.example.com", "granted-1.example.com"}}
-		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
+		if _, _, err := srv.narrowUserInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
 			t.Fatal(err)
 		}
 		if len(spec.AllowedDomains) != 3 {

@@ -59,8 +59,8 @@ func (s *flakyCeilingStore) GetSiteConfig(context.Context) (types.SiteConfig, er
 // ceiling reads per create cannot disagree" — given an implementing mechanism.
 //
 // It had none. A member create took THREE independent, uncached, untransacted
-// reads of governance_assignments (denyMemberGovernance -> resolveRunPolicy ->
-// filterMemberGrants) and dispatch a fourth, while resolveRunPolicy's own
+// reads of governance_assignments (denyUserGovernance -> resolveRunPolicy ->
+// filterUserGrants) and dispatch a fourth, while resolveRunPolicy's own
 // comment asserted "a create must never resolve two different ceilings for one
 // request" and governance.go's called the repetition "PF-13's accepted double
 // resolution", justified purely on latency. Two in-tree comments, opposite

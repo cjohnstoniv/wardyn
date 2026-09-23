@@ -1081,9 +1081,9 @@ test("F (member-preview): an admin previews the state a member is in before they
   await dexSignIn(page, ADMIN_EMAIL);
   expect((await me(page)).operator).toBe(true);
   // The menu item is GRANTED by the server, not decided by the console: /me
-  // publishes member_preview_available and it is true only under a per_user
+  // publishes user_preview_available and it is true only under a per_user
   // roster row — which this deployment has.
-  expect((await me(page)).member_preview_available, "the walk's roster row is per_user; the preview must be offered").toBe(
+  expect((await me(page)).user_preview_available, "the walk's roster row is per_user; the preview must be offered").toBe(
     true,
   );
 
@@ -1100,7 +1100,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   await page.locator("header").getByRole("button").last().click();
   await page.getByRole("menuitem", { name: MEMBER_MODE.MENU_NEW }).click();
   await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeVisible({ timeout: 60_000 });
-  await expect.poll(async () => (await me(page)).member_mode_no_credential, { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => (await me(page)).user_view_no_credential, { timeout: 30_000 }).toBe(true);
 
   // The state every new member is in, and the one the plain toggle structurally
   // cannot show: it clamps the role and leaves the subject alone, so every

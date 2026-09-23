@@ -52,7 +52,7 @@ type bootFlags struct {
 	// operator authority lives elsewhere (an org IdP / MDM): it refuses to start
 	// unless that is actually true. The four member*Roots knobs bound what a
 	// member may bind into a sandbox from their own machine — parsed by
-	// runner.ParseMemberMountPolicy, which fails boot closed on a malformed value
+	// runner.ParseUserMountPolicy, which fails boot closed on a malformed value
 	// and returns the O4 posture warnings.
 	memberMode          *bool
 	memberRoots         *string
@@ -413,7 +413,7 @@ func parseBootFlags() *bootFlags {
 		// provenance, and flipping that off by default would silently narrow
 		// egress for every existing workspace on upgrade. An operator in a
 		// higher-trust posture (repo content is reviewed, or the exfil risk
-		// inline_policy.go's filterMemberGrants comment names matters more than
+		// inline_policy.go's filterUserGrants comment names matters more than
 		// the convenience) opts in here.
 		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before applyWorkspaceRequirements auto-adds it at launch — a scan_seeded egress host (the workspace scanner reading untrusted repo content) is skipped instead. Mirrors the operator_set-only gate the SECRET side has always applied unconditionally. ON by default since 0.7; set false to restore pre-0.7 behavior, where any enabled egress requirement was auto-added regardless of provenance."),
 		gitPATBroker:       flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", "never-resident git_pat lane: `on` (default) mints a non-GitHub forge's PAT PROXY-SIDE and injects it on the outbound leg, so the credential never enters the sandbox — the posture github_token has always had. `off` restores pre-0.7 behavior, where the in-sandbox credential helper mints the PAT into the agent's process. Off is an escape hatch for a forge that misbehaves under the broker's insteadOf rewrite, not a supported posture."),

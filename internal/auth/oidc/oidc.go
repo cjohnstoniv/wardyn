@@ -339,7 +339,7 @@ type Session struct {
 	MemberMode bool `json:"mm,omitempty"`
 	// MemberModeNoCredential (0.7.5, field report finding 3) is the SECOND
 	// posture of the same mode: "view as a NEW member — one who has not signed
-	// in yet". Meaningful only with MemberMode; SetMemberMode writes it as
+	// in yet". Meaningful only with MemberMode; SetUserView writes it as
 	// `on && noCredential`, so turning the mode off clears it by construction
 	// and it can never be set on its own.
 	//

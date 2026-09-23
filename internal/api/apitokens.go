@@ -259,7 +259,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// would silently become an admin one — a credential outliving the mode that
 	// created it. See internal/api/membermode.go.
 	if oidc.MemberModeFromContext(ctx) {
-		writeError(w, http.StatusConflict, memberModeMintRefusal)
+		writeError(w, http.StatusConflict, userViewMintRefusal)
 		return
 	}
 	name := strings.TrimSpace(req.Name)

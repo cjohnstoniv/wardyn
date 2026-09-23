@@ -158,7 +158,7 @@ func redactPolicyForRead(p types.RunPolicy, operator bool) types.RunPolicy {
 // gets the same redaction without a fake wrapper row.
 func redactSpecForRead(spec types.RunPolicySpec, operator bool) types.RunPolicySpec {
 	if !operator {
-		spec = redactSpecForMember(spec)
+		spec = redactSpecForUser(spec)
 	}
 	li := spec.LLMInspection
 	if li == nil || len(li.WorkspaceSecretValues) == 0 {
@@ -185,7 +185,7 @@ func redactPoliciesForRead(ps []types.RunPolicy, operator bool) []types.RunPolic
 // member reaches because the ceiling is what clamps them.
 var memberSecretScopeKeys = []string{"secret_name", "key_secret_ref", "known_hosts_secret_ref"}
 
-// redactSpecForMember strips the two operator-only details a policy spec
+// redactSpecForUser strips the two operator-only details a policy spec
 // carries out of a MEMBER-reachable read: the host filesystem paths behind
 // workspace_mounts[].source (the blessed ~/.claude credential mount among
 // them) and the stored-secret names on the eligible grants. Everything else —
@@ -195,7 +195,7 @@ var memberSecretScopeKeys = []string{"secret_name", "key_secret_ref", "known_hos
 // Copies before it edits: the default policy is server config held for the
 // process's whole life, so an in-place edit here would redact it permanently
 // for the operator too.
-func redactSpecForMember(spec types.RunPolicySpec) types.RunPolicySpec {
+func redactSpecForUser(spec types.RunPolicySpec) types.RunPolicySpec {
 	if len(spec.WorkspaceMounts) > 0 {
 		mounts := slices.Clone(spec.WorkspaceMounts)
 		for i := range mounts {

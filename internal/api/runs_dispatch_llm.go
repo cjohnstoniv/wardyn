@@ -604,7 +604,7 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 // namespace the key was read from. Any other injection naming it — a stored
 // policy's, a recorded profile that captured an earlier run's grant — carries
 // no record of THIS run's choice, and the sink refuses it, which would fail the
-// proxy's startup. Every drop is audited, as filterMemberGrants' and
+// proxy's startup. Every drop is audited, as filterUserGrants' and
 // persistRunGrants' are, so an operator whose policy named the key can see why
 // that injection is gone.
 func (s *Server) dropUnauthoredBedrockBearerInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant) []runner.InjectionGrant {

@@ -382,7 +382,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// A governance LIMIT is a refusal, not a fault: 403, the same status
-		// denyMemberGovernance answers when the identical limit refuses the
+		// denyUserGovernance answers when the identical limit refuses the
 		// identical principal's ordinary run. Both limits map here — the quota
 		// one too, even though the create path answers it 422 — because 422 on
 		// this route would mean "your request is malformed", and the request is

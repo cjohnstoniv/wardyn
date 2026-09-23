@@ -15,11 +15,11 @@
 // The whole design of this seam is one table, and each row is a decision that
 // could have gone the other way:
 //
-//	the profile's door is shut       403 + authz.denied   denyMemberField
+//	the profile's door is shut       403 + authz.denied   denyUserField
 //	the group snapshot is unreadable 403 groups_snapshot_stale
-//	everything else                  422, NO audit        denyMemberRunQuota
+//	everything else                  422, NO audit        denyUserRunQuota
 //
-// The 403/422 split is the one denyMemberRunQuota already draws and it is about
+// The 403/422 split is the one denyUserRunQuota already draws and it is about
 // the CALLER, not the severity: a door refusal says "you asked for something
 // you may not have", which is an authorization event a SIEM should see. "No
 // drive is allocated to you" says the caller is perfectly authorized and there
@@ -113,7 +113,7 @@ const (
 //
 // It exists because five of the six arms recorded nothing. A refused drive was
 // a 422 to the member and silence everywhere else: no audit row (the profile
-// DOOR has one, denyMemberDrive's authz.denied, and it is the only arm that
+// DOOR has one, denyUserDrive's authz.denied, and it is the only arm that
 // did), no log line, no metric, and no request log either — routes.go wires
 // RequestID and Recoverer and no logger. So the failure mode the runbook itself
 // predicts — "Wardyn does not mkdir on a share, a missing home is a 422 at run
@@ -173,7 +173,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 			fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
 		return nil, false
 	}
-	if s.denyMemberDrive(w, r, ceiling) {
+	if s.denyUserDrive(w, r, ceiling) {
 		return nil, false
 	}
 	// The SAME resolver /me and the admin preview run. A store failure is an
@@ -201,15 +201,15 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 
 // driveDoorProfile names the governance profile whose DenyUserDrive DOOR is
 // shut for this caller, or "" when the door is open. ONE predicate, read by
-// the enforcement path (denyMemberDrive's 403) and the display path
+// the enforcement path (denyUserDrive's 403) and the display path
 // (userDriveDeniedByProfile, the /me field) alike: this is an authz rule, and
 // two spellings of one authz rule is one place a widening can hide.
 //
 // Keyed on ceiling.Profile != nil, the scoping rule every limit in
-// denyMemberGovernance follows: an UNASSIGNED member has no profile, so there
+// denyUserGovernance follows: an UNASSIGNED member has no profile, so there
 // is no door, and a deployment that has never authored one is unaffected.
 //
-// And on !isOperator, which is belt to that braces. denyMemberRequest already
+// And on !isOperator, which is belt to that braces. denyUserRequest already
 // short-circuits an operator before it resolves a ceiling at all, so the zero
 // governanceCeiling an operator carries here has a nil Profile — but the
 // operator exemption is the kind of property that should be readable at the
@@ -255,18 +255,18 @@ func driveDeniedByProfileMsg(profile string) string {
 	return fmt.Sprintf("mounting a user drive is not allowed by your governance profile %q. Launch without drive.", profile)
 }
 
-// denyMemberDrive is the DOOR at the enforcement site: 403 with an authz.denied
-// row, target `runs.drive`, reason `governance_profile` — the denyMemberField
+// denyUserDrive is the DOOR at the enforcement site: 403 with an authz.denied
+// row, target `runs.drive`, reason `governance_profile` — the denyUserField
 // shape the two other profile refusals take, and no new value in the closed
 // reason enum.
-func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
+func (s *Server) denyUserDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
 	profile, shut := s.driveDoorProfile(r.Context(), ceiling)
 	if !shut {
 		return false
 	}
 	// The mock round's frozen member copy, reproduced byte-exact: the console
 	// never rewords a server refusal, so this line is where that string ships.
-	return s.denyMemberField(w, r, "runs.drive", "governance_profile", driveDeniedByProfileMsg(profile))
+	return s.denyUserField(w, r, "runs.drive", "governance_profile", driveDeniedByProfileMsg(profile))
 }
 
 // driveIsMountableHere is the pair of refusals that are about the DEPLOYMENT

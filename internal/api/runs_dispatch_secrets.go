@@ -121,7 +121,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 
 // envAllowMemberEnvSecret opts a deployment IN to letting MEMBERS hold
 // env_secret grants. DEFAULT CLOSED: unset means a member's env_secret grant is
-// dropped by filterMemberGrants even when the operator's ceiling lists the exact
+// dropped by filterUserGrants even when the operator's ceiling lists the exact
 // (name, secret) pairing. An operator's own runs are unaffected — the ceiling
 // authority is never clamped by its own ceiling.
 const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"

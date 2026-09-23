@@ -343,7 +343,7 @@ func TestInlinePolicy_EgressHostNarrowing(t *testing.T) {
 // operator's eligible list and this member's own secret grants.
 func TestInlinePolicy_SecretNarrowing(t *testing.T) {
 	// An operator ceiling that eligible-lists the EXACT pairing, so
-	// filterMemberGrants keeps it and the capability is the only thing left.
+	// filterUserGrants keeps it and the capability is the only thing left.
 	pairing := apiKeyGrantSpec("api.anthropic.com", "anthropic-api-key")
 	ceiling := types.RunPolicySpec{
 		MinConfinementClass: types.CC2,
@@ -454,7 +454,7 @@ func TestInlinePolicy_PreflightDoesNotAudit(t *testing.T) {
 func denyRequest(t *testing.T, srv *Server, req createRunRequest) (bool, int) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	_, denied := srv.denyMemberRequest(w, memberRequest(t), req)
+	_, denied := srv.denyUserRequest(w, memberRequest(t), req)
 	return denied, w.Code
 }
 
@@ -529,8 +529,8 @@ func TestDenyMemberRequest_ImageWidens(t *testing.T) {
 				if code != http.StatusForbidden {
 					t.Fatalf("status = %d, want 403", code)
 				}
-				if reasons := auditReasons(t, h.srv, "authz.denied"); !slices.Equal(reasons, []string{"byoi_member"}) {
-					t.Fatalf("authz.denied reasons = %v, want [byoi_member] (the reason OPERATIONS already documents)", reasons)
+				if reasons := auditReasons(t, h.srv, "authz.denied"); !slices.Equal(reasons, []string{"byoi_user"}) {
+					t.Fatalf("authz.denied reasons = %v, want [byoi_user] (the reason OPERATIONS already documents)", reasons)
 				}
 			}
 		})
@@ -612,7 +612,7 @@ func TestDenyMemberRequest_WorkspaceRefusedOnBothDoors(t *testing.T) {
 }
 
 // TestInlinePolicy_WorkspaceNarrowing: the OTHER door to the same room.
-// denyMemberRequest gates req.workspace_id, but an inline_policy naming an
+// denyUserRequest gates req.workspace_id, but an inline_policy naming an
 // onboarded repo URL reached referencedWorkspaces all the same — and with it
 // that workspace's admin-authored egress, secret grants and base image. The
 // entry is DROPPED, not refused, exactly as an ungranted egress host is:
@@ -731,7 +731,7 @@ func TestDenyMemberRequest_OperatorsAreExempt(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).
 		WithContext(withOIDCGroups(operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin), nil))
-	if _, denied := h.srv.denyMemberRequest(w, r, createRunRequest{Image: "ghcr.io/acme/agent:1", WorkspaceID: &ws}); denied {
+	if _, denied := h.srv.denyUserRequest(w, r, createRunRequest{Image: "ghcr.io/acme/agent:1", WorkspaceID: &ws}); denied {
 		t.Fatalf("admin denied: %d %s", w.Code, w.Body.String())
 	}
 }
@@ -759,7 +759,7 @@ func listSecretNames(t *testing.T, srv *Server, sess *http.Cookie) []string {
 // launch gate would drop.
 //
 // Both fixture names are ceiling-paired (0.7, migration 0050:
-// memberVisibleOperatorSecretNames' unconditional pairing gate, tested on its
+// userVisibleOperatorSecretNames' unconditional pairing gate, tested on its
 // own in secrets_test.go) so this suite tests capSecret's OWN narrowing in
 // isolation, on top of a ceiling that already offers everything — a member
 // seeing NEITHER name because the ceiling pairs neither is a different,

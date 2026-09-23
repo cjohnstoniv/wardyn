@@ -174,7 +174,7 @@ const (
 
 // maxAllowedDomainsPerSpec bounds allowed_domains, the last per-spec list that
 // had no count cap at all. Every entry is work: the proxy matches against it per
-// request, and on the MEMBER path narrowMemberInlinePolicy asks the capability
+// request, and on the MEMBER path narrowUserInlinePolicy asks the capability
 // seam about each one, so an unbounded list was an unbounded amount of work
 // bought with one request body. maxJSONBody left room for ~52k entries of
 // "api.anthropic.com", and POST /runs/preflight persists nothing, so it was
@@ -191,7 +191,7 @@ const maxAllowedDomainsPerSpec = 256
 // validateAllowedDomainsCount is the count half of allowed_domains validation,
 // split out because it has to run at TWO points on the member path: here, inside
 // validatePolicySpec (the chokepoint every ingest funnels through), and earlier
-// in resolveRunPolicy, BEFORE boundMemberSpec narrows the spec — the narrowing
+// in resolveRunPolicy, BEFORE boundUserSpec narrows the spec — the narrowing
 // is itself the expensive per-entry work, and validatePolicySpec runs after it.
 // One message, so the 400 an admin sees and the 400 a member sees are the same
 // sentence.
@@ -311,10 +311,10 @@ func validateUIAppPath(p string) error {
 // Deliberately NO count cap on the list itself, unlike allowed_domains.
 // deny_paths only ever NARROWS what a push may touch — more entries can never
 // widen anything — and nothing does an expensive per-entry lookup on it the
-// way narrowMemberInlinePolicy does for allowed_domains (see
+// way narrowUserInlinePolicy does for allowed_domains (see
 // maxAllowedDomainsPerSpec's own doc): the same reasoning denied_domains
 // already rests on, which likewise carries no count cap. That matters
-// concretely here: boundMemberSpec validates the CLAMPED spec, not just what
+// concretely here: boundUserSpec validates the CLAMPED spec, not just what
 // a member typed, and composer.Clamp's push_rules union
 // (clamp.go:clampPushRules) can legally produce a deny_paths longer than
 // either the operator's ceiling or the member's own proposal authored on its

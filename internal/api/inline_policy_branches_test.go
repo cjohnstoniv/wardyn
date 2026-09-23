@@ -21,7 +21,7 @@ import (
 // memberBoundStore is the smallest store that lets BOTH member branches of
 // resolveRunPolicy run: a governance profile (so ceiling.Profile != nil, which
 // is what scopes the stored branch), a stored policy row for the member to
-// select by id, and the capability reads narrowMemberInlinePolicy performs.
+// select by id, and the capability reads narrowUserInlinePolicy performs.
 type memberBoundStore struct {
 	store.Store
 	profile *types.GovernanceProfile
@@ -71,7 +71,7 @@ func memberBoundFixture(t *testing.T, memberSpec types.RunPolicySpec) (*Server, 
 	h := newHarness(t)
 	policyID := uuid.New()
 	// The ceiling ALLOWS the api_key kind, for exactly one pairing. That is what
-	// makes the fixture exercise stage 2 (filterMemberGrants) rather than
+	// makes the fixture exercise stage 2 (filterUserGrants) rather than
 	// stopping at stage 1: composer.Clamp drops out-of-ceiling grant KINDS, so a
 	// ceiling with no eligible grants at all would never let a pairing reach the
 	// check this test is about.
@@ -127,7 +127,7 @@ func dropAudits(t *testing.T, events []types.AuditEvent) []map[string]any {
 // verbatim — and the CLAMP, the DROPS and the AUDIT must come out identical.
 //
 // It is the pin for folding the two hand-copied bounding pipelines into
-// boundMemberSpec: two copies could drift into a member smuggling through one
+// boundUserSpec: two copies could drift into a member smuggling through one
 // route what the other refuses, and that drift is invisible to any test that
 // exercises only one branch.
 func TestMemberBounding_InlineAndStoredBranchesAgree(t *testing.T) {
@@ -204,7 +204,7 @@ func TestMemberBounding_InlineAndStoredBranchesAgree(t *testing.T) {
 // actually sent. Folding the branches must not start telling someone who named
 // a stored row that their "inline_policy" was invalid.
 func TestMemberBounding_ErrorPrefixStaysPerBranch(t *testing.T) {
-	// A covered grant kind whose scope will not decode: filterMemberGrants
+	// A covered grant kind whose scope will not decode: filterUserGrants
 	// returns 422 here rather than dropping with a warning.
 	malformed := types.RunPolicySpec{
 		MinConfinementClass: types.CC2,

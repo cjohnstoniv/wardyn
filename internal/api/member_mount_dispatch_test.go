@@ -17,12 +17,12 @@ import (
 )
 
 // The member mount posture END TO END: create-run resolves it
-// (memberMountPosture), dispatch stamps it onto the SandboxSpec the driver
+// (userMountPosture), dispatch stamps it onto the SandboxSpec the driver
 // actually receives, and the run-create re-check refuses a source that has since
 // fallen outside the roots. The helper-level unit is
 // TestMemberMountPosture_Resolve (workspace_owner_test.go); these tests exist
 // because that one stays green with every production wire cut — a refactor that
-// drops `MemberMounts: s.memberMountPosture(...)` from handleCreateRun,
+// drops `UserMounts: s.userMountPosture(...)` from handleCreateRun,
 // launchRecordRun or the SandboxSpec literal silently deletes the bind-time
 // TOCTOU defense, which is the whole point of §c check 2.
 //
@@ -37,14 +37,14 @@ const memberCredsSource = "/var/lib/wardyn/claude-creds"
 // memberDispatchHarness is ownerHarness (OIDC on, real workspace list) plus the
 // two things a DISPATCH assertion needs: a runner that captures the SandboxSpec
 // and the operator ceiling that blesses the subscription credential mount.
-func memberDispatchHarness(t *testing.T, mounts runner.MemberMountPolicy) (*Server, *ownerStore, *fakeRunner) {
+func memberDispatchHarness(t *testing.T, mounts runner.UserMountPolicy) (*Server, *ownerStore, *fakeRunner) {
 	t.Helper()
 	st := newOwnerStore()
 	h := newHarness(t)
 	cfg := baseTestConfig(h, st)
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Broker = h.broker
-	cfg.MemberMounts = mounts
+	cfg.UserMounts = mounts
 	fr := &fakeRunner{}
 	cfg.Runner = fr
 	cfg.DefaultPolicy = types.RunPolicySpec{
@@ -103,14 +103,14 @@ func memberOwnedWorkspace(st *ownerStore, owner, path string) uuid.UUID {
 // lives under no member root.
 func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 	root, project := memberProjectRoot(t)
-	srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
+	srv, st, fr := memberDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 
 	spec := createMemberRun(t, srv, fr, member, memberOwnedWorkspace(st, ownerMemberSub, project))
 
-	if len(spec.MemberMountRoots) != 1 || spec.MemberMountRoots[0] != root {
-		t.Fatalf("spec.MemberMountRoots = %v, want %v — without this the driver never re-resolves the bind at ContainerCreate time (design §c check 2)",
-			spec.MemberMountRoots, []string{root})
+	if len(spec.UserMountRoots) != 1 || spec.UserMountRoots[0] != root {
+		t.Fatalf("spec.UserMountRoots = %v, want %v — without this the driver never re-resolves the bind at ContainerCreate time (design §c check 2)",
+			spec.UserMountRoots, []string{root})
 	}
 	if m := mountFor(t, spec, composerWorkspaceTarget); !m.MemberAuthored {
 		t.Errorf("the member's own local_dir bind %q is not stamped MemberAuthored; the driver would skip the within-root re-check", m.Source)
@@ -126,13 +126,13 @@ func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 // be satisfied by threading them onto every run.
 func TestMemberMountPosture_OperatorRunUnstamped(t *testing.T) {
 	root, project := memberProjectRoot(t)
-	srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
+	srv, st, fr := memberDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	spec := createMemberRun(t, srv, fr, admin, memberOwnedWorkspace(st, "", project))
 
-	if spec.MemberMountRoots != nil {
-		t.Errorf("spec.MemberMountRoots = %v, want nil for an operator-owned workspace (today's driver path)", spec.MemberMountRoots)
+	if spec.UserMountRoots != nil {
+		t.Errorf("spec.UserMountRoots = %v, want nil for an operator-owned workspace (today's driver path)", spec.UserMountRoots)
 	}
 	for _, m := range spec.Mounts {
 		if m.MemberAuthored {
@@ -142,7 +142,7 @@ func TestMemberMountPosture_OperatorRunUnstamped(t *testing.T) {
 }
 
 // TestCreateRun_MemberSourceOutsideRootsIs422 is the run-create re-check
-// (validateWorkspaceSources -> memberMountAllowed): the workspace was onboarded
+// (validateWorkspaceSources -> userMountAllowed): the workspace was onboarded
 // while its dir was inside the roots, the operator has since narrowed them, and
 // the next run against it must be refused at the door — not dispatched and left
 // for the driver to catch.
@@ -151,7 +151,7 @@ func TestCreateRun_MemberSourceOutsideRootsIs422(t *testing.T) {
 	// A different root tree entirely: the workspace's dir is no longer inside
 	// anything the operator allows.
 	_, stranded := memberProjectRoot(t)
-	srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
+	srv, st, fr := memberDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	wsID := memberOwnedWorkspace(st, ownerMemberSub, stranded)
 
@@ -188,7 +188,7 @@ func TestLaunchRecordRun_ThreadsMemberMountPosture(t *testing.T) {
 	fr := &fakeRunner{}
 	cfg.Runner = fr
 	cfg.Broker = h.broker
-	cfg.MemberMounts = runner.MemberMountPolicy{Roots: []string{root}}
+	cfg.UserMounts = runner.UserMountPolicy{Roots: []string{root}}
 	srv := New(cfg)
 
 	if _, _, err := srv.launchRecordRun(context.Background(), "admin@corp.example", ws, "record", "record", false); err != nil {
@@ -198,9 +198,9 @@ func TestLaunchRecordRun_ThreadsMemberMountPosture(t *testing.T) {
 		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}
 	spec := fr.lastSpec
-	if len(spec.MemberMountRoots) != 1 || spec.MemberMountRoots[0] != root {
-		t.Fatalf("record session spec.MemberMountRoots = %v, want %v — an admin-launched session over a MEMBER's dir still gates on the member's roots",
-			spec.MemberMountRoots, []string{root})
+	if len(spec.UserMountRoots) != 1 || spec.UserMountRoots[0] != root {
+		t.Fatalf("record session spec.UserMountRoots = %v, want %v — an admin-launched session over a MEMBER's dir still gates on the member's roots",
+			spec.UserMountRoots, []string{root})
 	}
 	if m := mountFor(t, spec, composerWorkspaceTarget); !m.MemberAuthored {
 		t.Errorf("record session: the member's local_dir bind %q is not stamped MemberAuthored", m.Source)

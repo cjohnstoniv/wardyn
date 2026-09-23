@@ -45,7 +45,7 @@ const (
 	// not a thing to hand out one row at a time.
 	capImage = "image"
 	// capAgent NARROWS: it bounds which agent/harness a member may launch —
-	// req.Agent, the member's own free-text choice, gated at denyMemberRequest.
+	// req.Agent, the member's own free-text choice, gated at denyUserRequest.
 	// Values are the exact `--agent` string plus `*`.
 	//
 	// DELIBERATELY narrowing rather than widening, and the direction is decided
@@ -70,7 +70,7 @@ const (
 	// appears on ("a capability bounds what a member chose, never what an admin
 	// pre-authorized", permissions-copy.ts PERM.DOCTRINE) and would let one `all`
 	// deny row strip the site's model access deployment-wide. So the gate lives
-	// at denyMemberRequest, on the one member-authored input, and never inside
+	// at denyUserRequest, on the one member-authored input, and never inside
 	// resolveRunIntegration — which operator callers reach too.
 	capIntegration = "integration"
 	// capWorkspaceProvider NARROWS: it bounds which git provider row a member's
@@ -501,7 +501,7 @@ func capValueOverlaps(kind, grantValue, want string) bool {
 // A run's egress allowlist is NOT a handful: it is
 // spec.AllowedDomains, taken verbatim from the request body, and nothing on the
 // member create/preflight path caps or de-duplicates it before
-// narrowMemberInlinePolicy loops over it — validatePolicySpec's count caps
+// narrowUserInlinePolicy loops over it — validatePolicySpec's count caps
 // (maxToolRulesPerPolicy, maxUIAppsPerPolicy) have no allowed_domains arm, and
 // composer.Clamp's intersection keeps duplicates of a permitted entry (its
 // partition appends every element that passes) and is skipped outright under a
@@ -516,7 +516,7 @@ func capValueOverlaps(kind, grantValue, want string) bool {
 // After: 2 round trips (3 stale), flat in N.
 //
 // Not a cache, deliberately, and that distinction is the whole reason this is
-// safe: the batch lives for ONE narrowMemberInlinePolicy call and is discarded,
+// safe: the batch lives for ONE narrowUserInlinePolicy call and is discarded,
 // so a grant revoked between requests still binds on the next one. Caching
 // across requests is the HA blocker capAllowed's own comment names, and nothing
 // here reaches for it.
@@ -686,7 +686,7 @@ type ownedSecretMemoKey struct{}
 // maxAllowedDomainsPerSpec capped that list — but the member pipeline's OTHER
 // caller-sized list, spec.eligible_grants, has no count cap at all and bought an
 // unmemoized For(owner).List per grant at THREE sites in one request:
-// filterMemberGrants' 6c own-key arm, narrowMemberInlinePolicy's ownership
+// filterUserGrants' 6c own-key arm, narrowUserInlinePolicy's ownership
 // exemption (twice per grant, secret_ref and known_hosts_ref) and
 // validateInlineSecretRefs' unknown-name arm. Measured on this tree with a
 // counting store double: 3N+1 owner-scoped reads for N grants, N chosen entirely

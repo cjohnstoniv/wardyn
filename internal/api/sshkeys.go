@@ -60,7 +60,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// member" would come back admin and outlive the mode that made it. See
 	// internal/api/membermode.go.
 	if oidc.MemberModeFromContext(r.Context()) {
-		writeError(w, http.StatusConflict, memberModeMintRefusal)
+		writeError(w, http.StatusConflict, userViewMintRefusal)
 		return
 	}
 	var req addSSHKeyRequest

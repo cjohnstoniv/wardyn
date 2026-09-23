@@ -232,7 +232,7 @@ const (
 	modelAccessPinContradictedAction = "Your stored AWS session is for account %s / role %s; this row now allows %s / %s — sign in again."
 	// harnessCredentialAWSPinMismatchDetail is the OPERATOR's half of the same
 	// fact, on the harness_credential_aws checklist row (members never see the
-	// checklist — redactSetupStatusForMember empties it). It exists because the
+	// checklist — redactSetupStatusForUser empties it). It exists because the
 	// expired_signin arm it shares says "expired at <ts> and cannot be renewed",
 	// which of this credential is simply false.
 	harnessCredentialAWSPinMismatchDetail = "Your captured AWS SSO session names an AWS account and role this agent's roster row no longer allows, so Bedrock runs using it are refused before they start."
@@ -254,8 +254,8 @@ const harnessLoginMechanismPrincipalRefusal = "this deployment gives each person
 
 // refuseHarnessLoginMechanismPrincipal writes the 422 refusal for a per_user
 // row reached by the shared admin-bearer-token principal, audits it — the
-// SIBLING refusals in this same function, denyMemberField/
-// denyMemberCapability, both audit — this is the one refusal on the
+// SIBLING refusals in this same function, denyUserField/
+// denyUserCapability, both audit — this is the one refusal on the
 // credential-capture route an operator's own CI job hits with no error
 // budget, and a row is how they find out it stopped capturing — and returns
 // false so authorizeHarnessLogin can `return types.AgentProvider{}, s.refuse...(w, r)`.
@@ -273,7 +273,7 @@ func (s *Server) refuseHarnessLoginMechanismPrincipal(w http.ResponseWriter, r *
 // deployment fact (does SOME model path exist on this install) and cannot answer
 // a per-person question. Redaction-safe by construction: a state name, a wire
 // mechanism value and a member-facing sentence — no secret names, no topology,
-// no AWS access portal URL. redactSetupStatusForMember therefore KEEPS it.
+// no AWS access portal URL. redactSetupStatusForUser therefore KEEPS it.
 //
 // Absent (a zero State) when there is nothing per-principal to say: no roster
 // declares a lane for this agent AND no captured session exists. The console
@@ -298,7 +298,7 @@ type SetupModelAccess struct {
 	// the reader's own clock, and relativeTime in the strip; it needs the
 	// instant to do either.
 	//
-	// Safe for a member only because memberModelAccess builds a FRESH struct
+	// Safe for a member only because userModelAccess builds a FRESH struct
 	// that drops it — the leak that function exists to close was this same
 	// instant republished one field over. Pinned:
 	// TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember.
@@ -312,7 +312,7 @@ type SetupModelAccess struct {
 	PinMismatch bool `json:"-"`
 	// PerUser says whether this answer is about a credential this principal
 	// owns. IN-PROCESS only (json:"-"): it is not a fact the console renders, it
-	// is what memberModelAccess needs to decide whether a member may be told a
+	// is what userModelAccess needs to decide whether a member may be told a
 	// deadline or offered a sign-in at all. False is `shared` AND legacy open
 	// mode — in both, the graded blob is the OPERATOR's.
 	PerUser bool `json:"-"`
@@ -341,8 +341,8 @@ const (
 	causeTokenExpiring = "token_expiring"
 )
 
-// memberModelAccess is the member-facing projection of a model-access answer,
-// applied by redactSetupStatusForMember.
+// userModelAccess is the member-facing projection of a model-access answer,
+// applied by redactSetupStatusForUser.
 //
 // Under `shared` (and legacy open mode) a member owns nothing here. The blob
 // setupModelAccess graded is the OPERATOR's, so every state that asks the
@@ -361,7 +361,7 @@ const (
 // and carries no timestamp). A deadline or a sign-in action is reserved for a
 // principal who owns the credential: the operator, or a member under `per_user`
 // (PerUser, untouched here).
-func memberModelAccess(ma SetupModelAccess) SetupModelAccess {
+func userModelAccess(ma SetupModelAccess) SetupModelAccess {
 	// Fail-safe, not a reachable path today (a real human is never the
 	// mechanism principal): without this early return the default arm below
 	// would rewrite an unknown state to `live`, which is a worse lie than

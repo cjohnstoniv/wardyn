@@ -133,7 +133,7 @@ type admitDoor struct {
 	name string
 	// memberReachable is false for a door only an operator can open — POST
 	// /sources is operatorOnly, and devcontainer_repo is refused from a member by
-	// denyMemberRequest before admission is reached.
+	// denyUserRequest before admission is reached.
 	memberReachable bool
 	fire            func(t *testing.T, sc types.SiteConfig, repo string, operator bool) (*Server, *httptest.ResponseRecorder)
 }
@@ -174,7 +174,7 @@ func admitWorkspaceDoor(name string, fire func(t *testing.T, srv *Server, st *ow
 		memberReachable: true,
 		fire: func(t *testing.T, sc types.SiteConfig, repo string, operator bool) (*Server, *httptest.ResponseRecorder) {
 			t.Helper()
-			srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+			srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 			st.siteConfig = sc
 			session := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 			if operator {
@@ -885,7 +885,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 	}
 
 	t.Run("POST /workspaces", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.siteConfig = admitLegacySite()
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admitAdminSession(t),
 			`{"name":"app","sources":[{"type":"repo","source":`+quote(admitUnclaimed)+`}]}`)
@@ -901,7 +901,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 	})
 
 	t.Run("PUT /workspaces/{id} — an edit is how a source MOVES onto a legacy host", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.siteConfig = admitLegacySite()
 		sess := admitAdminSession(t)
 		created := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", sess,
@@ -925,7 +925,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 	})
 
 	t.Run("POST /sources", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.siteConfig = admitLegacySite()
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/sources", admitAdminSession(t),
 			`{"kind":"repo","locator":`+quote(admitUnclaimed)+`}`)
@@ -950,7 +950,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 	// ORDINARY admission says nothing: a repo on a provider row is not news, and
 	// a trail that records every clone is a trail nobody reads (B5).
 	t.Run("a repo on a row is not audited", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.siteConfig = admitLegacySite()
 		doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admitAdminSession(t),
 			`{"name":"app","sources":[{"type":"repo","source":`+quote(admitOnRow)+`}]}`)
@@ -1011,7 +1011,7 @@ func flagsOf(sources []types.WorkspaceSource) []*bool {
 // provider" from the SERVER's verdict, on the list and the single row alike —
 // one document, one projection.
 func TestAdmittedProjectionOnBothReads(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	st.siteConfig = admitSite()
 	admin := admitAdminSession(t)
 	id := st.put(types.Workspace{Sources: []types.WorkspaceSource{
@@ -1050,7 +1050,7 @@ func TestAdmittedProjectionOnBothReads(t *testing.T) {
 // asserted by EQUALITY against the pre-feature document rather than by eyeballing
 // a missing field.
 func TestAdmittedProjectionAbsentInLegacyOpenMode(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	admin := admitAdminSession(t)
 	id := st.put(types.Workspace{Sources: []types.WorkspaceSource{
 		{Type: types.WorkspaceSourceTypeRepo, Source: admitOnRow},
@@ -1067,7 +1067,7 @@ func TestAdmittedProjectionAbsentInLegacyOpenMode(t *testing.T) {
 // TestAdmittedIsNeverTakenFromAWriteBody: the projection is the server's, so a
 // client round-tripping a GET cannot persist a provider verdict.
 func TestAdmittedIsNeverTakenFromAWriteBody(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	st.siteConfig = admitSite()
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", admitAdminSession(t),
 		`{"name":"app","sources":[{"type":"repo","source":"`+admitOffRow+`","admitted":true}]}`)

@@ -6,12 +6,13 @@
 import { test, expect, gotoConsole, sidebarLink } from "./fixtures";
 import { MEMBER_MODE } from "../src/app/components/wardyn/member-mode-banner";
 
-// "View as member" (0.7.4, P2) — the CLIENT half.
+// The user view (0.7.4, P2, as "view as member"; renamed in 0.8 —
+// docs/OPERATIONS.md's "Renamed in 0.8" appendix) — the CLIENT half.
 //
 // The seeded e2e backend authenticates every spec with a bare admin bearer
 // token, and isOperator reads "no session role to demote" for a caller with no
-// OIDC human session — so POST /me/member-mode answers 400 here by design, and
-// there is no genuine member-mode session to reach through this harness. The
+// OIDC human session — so POST /me/view answers 400 here by design, and
+// there is no genuine user-view session to reach through this harness. The
 // /me splice is the same mockMemberRole idiom fixtures.ts documents (route.fetch
 // + patch + refulfill), extended to the new field, and the POST is intercepted
 // so the toggle's REQUEST BODY is asserted rather than its server effect.
@@ -21,8 +22,8 @@ import { MEMBER_MODE } from "../src/app/components/wardyn/member-mode-banner";
 // is the kind-sso walk (lane sso-test-path, W5), not this file. That walk is the
 // only place a real session cookie exists.
 
-/** Splices member_mode (and the tier fields the server clamps with it) onto the
- *  real /me, so the console believes it is an admin in member mode. */
+/** Splices user_view (and the tier fields the server clamps with it) onto the
+ *  real /me, so the console believes it is an admin in the user view. */
 async function mockMemberMode(
   page: import("@playwright/test").Page,
   noCredential = false,
@@ -30,8 +31,8 @@ async function mockMemberMode(
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
-    json.member_mode = true;
-    json.member_mode_no_credential = noCredential;
+    json.user_view = true;
+    json.user_view_no_credential = noCredential;
     json.role = "user";
     json.operator = false;
     json.security_operator = false;
@@ -52,29 +53,29 @@ async function mockSSOAdmin(page: import("@playwright/test").Page): Promise<void
     // The second entry is server-gated (0.7.5): /me only says "available" under
     // a per_user roster row, and the seeded e2e backend has no such row — so the
     // splice is what puts the console in the deployment shape this case is about.
-    json.member_preview_available = true;
+    json.user_preview_available = true;
     await route.fulfill({ response, json });
   });
 }
 
-/** Captures POST /me/member-mode's body and answers 200 without touching the
+/** Captures POST /me/view's body and answers 200 without touching the
  *  server (which would refuse this bearer-token caller a session it cannot
  *  clamp). Returns the array the bodies land in. */
 async function captureToggle(page: import("@playwright/test").Page): Promise<unknown[]> {
   const bodies: unknown[] = [];
-  await page.route("**/api/v1/me/member-mode", async (route) => {
+  await page.route("**/api/v1/me/view", async (route) => {
     bodies.push(route.request().postDataJSON());
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ member_mode: true }),
+      body: JSON.stringify({ user_view: true }),
     });
   });
   return bodies;
 }
 
 test.describe("member mode — the banner is the way out", () => {
-  test("the banner states the mode, names the ceilings, and Exit posts enabled:false", async ({ page }) => {
+  test("the banner states the mode, names the ceilings, and Exit posts view:admin", async ({ page }) => {
     await mockMemberMode(page);
     const bodies = await captureToggle(page);
     await gotoConsole(page);
@@ -92,10 +93,10 @@ test.describe("member mode — the banner is the way out", () => {
     }
 
     await page.getByRole("button", { name: MEMBER_MODE.EXIT }).click();
-    await expect.poll(() => bodies).toEqual([{ enabled: false }]);
+    await expect.poll(() => bodies).toEqual([{ view: "admin" }]);
   });
 
-  test("the account menu offers 'View as member' to an admin, and posts enabled:true", async ({ page }) => {
+  test("the account menu offers 'View as member' to an admin, and posts view:user", async ({ page }) => {
     await mockSSOAdmin(page);
     const bodies = await captureToggle(page);
     await gotoConsole(page);
@@ -106,7 +107,7 @@ test.describe("member mode — the banner is the way out", () => {
     const item = page.getByRole("menu").getByText(MEMBER_MODE.MENU);
     await expect(item).toBeVisible();
     await item.click();
-    await expect.poll(() => bodies).toEqual([{ enabled: true }]);
+    await expect.poll(() => bodies).toEqual([{ view: "user" }]);
   });
 
   // 0.7.5, field report finding 3. The preview is the posture that can show the
@@ -127,9 +128,9 @@ test.describe("member mode — the banner is the way out", () => {
     const preview = menu.getByText(MEMBER_MODE.MENU_NEW);
     await expect(preview).toBeVisible();
     await preview.click();
-    // The key rides ONLY the new posture: a 0.7.4 replica decodes this body
-    // strictly, so the plain toggle above must keep sending {enabled} alone.
-    await expect.poll(() => bodies).toEqual([{ enabled: true, no_credential: true }]);
+    // The key rides ONLY the new posture: the server decodes this body
+    // strictly, so the plain toggle above must keep sending {view} alone.
+    await expect.poll(() => bodies).toEqual([{ view: "user", no_credential: true }]);
   });
 
   test("the new-member preview paints its own banner and its own ceilings", async ({ page }) => {

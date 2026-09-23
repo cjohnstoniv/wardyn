@@ -245,7 +245,7 @@ func TestDispatchEphemeralDisk_CeilingReassertCarriesTheClamp(t *testing.T) {
 //
 // Dispatch binds MaxEphemeralDiskMiB for every lane; a member meets it first in
 // the Review rail and POST /runs/preflight, both of which run their spec through
-// boundMemberSpec → composer.Clamp. The two share one min() (composer.CapDiskMiB),
+// boundUserSpec → composer.Clamp. The two share one min() (composer.CapDiskMiB),
 // so what is left to get wrong — and what this pins — is the THREADING: the
 // member bounding pipeline takes the whole resolved ceiling precisely so the
 // limit beside the spec reaches the clamp instead of a silent zero.
@@ -260,11 +260,11 @@ func TestBoundMemberSpec_PreviewsTheGovernanceEphemeralLimit(t *testing.T) {
 		Profile: &types.GovernanceProfile{Name: "sized"},
 		Limits:  types.GovernanceLimits{MaxEphemeralDiskMiB: 2048},
 	}
-	spec, warns, ok := h.srv.boundMemberSpec(context.Background(), httptest.NewRecorder(), r,
+	spec, warns, ok := h.srv.boundUserSpec(context.Background(), httptest.NewRecorder(), r,
 		types.RunPolicySpec{MinConfinementClass: types.CC2, Resources: &types.ResourceLimits{DiskMiB: 8192}},
 		ceiling, "invalid inline_policy: ", true)
 	if !ok {
-		t.Fatal("boundMemberSpec refused the spec")
+		t.Fatal("boundUserSpec refused the spec")
 	}
 	if spec.Resources == nil || spec.Resources.DiskMiB != 2048 {
 		t.Fatalf("previewed disk_mib = %v, want the same 2048 the run gets", spec.Resources)

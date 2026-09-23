@@ -38,11 +38,11 @@ func memberRoot(t *testing.T) (string, string) {
 // gate that refuses everything would pass every case below.
 func TestMemberMount_AllowsProjectUnderRoot(t *testing.T) {
 	root, project := memberRoot(t)
-	p := MemberMountPolicy{Roots: []string{root}}
-	if err := p.ValidateMemberMount("alice", project, false); err != nil {
+	p := UserMountPolicy{Roots: []string{root}}
+	if err := p.ValidateUserMount("alice", project, false); err != nil {
 		t.Fatalf("read-only project dir under the root = %v, want allowed", err)
 	}
-	if err := p.ValidateMemberMount("alice", root, false); err != nil {
+	if err := p.ValidateUserMount("alice", root, false); err != nil {
 		t.Fatalf("the root itself = %v, want allowed", err)
 	}
 }
@@ -60,8 +60,8 @@ func TestMemberMount_SymlinkEscape(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("symlinks unavailable on this platform: %v", err)
 	}
-	p := MemberMountPolicy{Roots: []string{root}}
-	err := p.ValidateMemberMount("alice", link, false)
+	p := UserMountPolicy{Roots: []string{root}}
+	err := p.ValidateUserMount("alice", link, false)
 	if err == nil {
 		t.Fatal("a symlink inside the root pointing outside every root was ALLOWED; the within-root test must run on the EvalSymlinks result, not the lexical path")
 	}
@@ -80,8 +80,8 @@ func TestMemberMount_SymlinkToDeniedPrefix(t *testing.T) {
 	if err := os.Symlink("/etc", link); err != nil {
 		t.Skipf("symlinks unavailable on this platform: %v", err)
 	}
-	p := MemberMountPolicy{Roots: []string{root}}
-	if err := p.ValidateMemberMount("alice", link, false); err == nil {
+	p := UserMountPolicy{Roots: []string{root}}
+	if err := p.ValidateUserMount("alice", link, false); err == nil {
 		t.Fatal("a symlink to /etc inside a member root was ALLOWED")
 	}
 }
@@ -91,9 +91,9 @@ func TestMemberMount_SymlinkToDeniedPrefix(t *testing.T) {
 // literal form, and a pre-cleaned one lands outside every root.
 func TestMemberMount_TraversalEscape(t *testing.T) {
 	root, _ := memberRoot(t)
-	p := MemberMountPolicy{Roots: []string{root}}
+	p := UserMountPolicy{Roots: []string{root}}
 
-	if err := p.ValidateMemberMount("alice", root+"/../../etc", false); err == nil {
+	if err := p.ValidateUserMount("alice", root+"/../../etc", false); err == nil {
 		t.Error("uncleaned traversal path was ALLOWED")
 	}
 	// The lexically-cleaned form of the same intent: a real directory that sits
@@ -102,7 +102,7 @@ func TestMemberMount_TraversalEscape(t *testing.T) {
 	if err := os.MkdirAll(sibling, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := p.ValidateMemberMount("alice", sibling, false); err == nil {
+	if err := p.ValidateUserMount("alice", sibling, false); err == nil {
 		t.Error("a cleaned path outside every root was ALLOWED")
 	}
 }
@@ -117,7 +117,7 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve tempdir: %v", err)
 	}
-	p := MemberMountPolicy{Roots: []string{home}}
+	p := UserMountPolicy{Roots: []string{home}}
 
 	for _, rel := range []string{
 		".ssh", ".aws", ".claude", ".wardyn", ".gnupg", ".docker", ".kube",
@@ -129,7 +129,7 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatalf("mkdir %s: %v", rel, err)
 		}
-		if err := p.ValidateMemberMount("alice", dir, false); err == nil {
+		if err := p.ValidateUserMount("alice", dir, false); err == nil {
 			t.Errorf("%s under a $HOME-wide root was ALLOWED; the dotfile deny-list is the only thing bounding a too-wide root", rel)
 		}
 	}
@@ -138,7 +138,7 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 	if err := os.MkdirAll(ok, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := p.ValidateMemberMount("alice", ok, false); err != nil {
+	if err := p.ValidateUserMount("alice", ok, false); err != nil {
 		t.Errorf("an ordinary project dir under the same root = %v, want allowed", err)
 	}
 	// ".config" and ".git" alone are ordinary project contents — only the two
@@ -147,7 +147,7 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 	if err := os.MkdirAll(plain, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := p.ValidateMemberMount("alice", plain, false); err != nil {
+	if err := p.ValidateUserMount("alice", plain, false); err != nil {
 		t.Errorf("a non-credential .config subdir = %v, want allowed (only .config/gh is denied)", err)
 	}
 }
@@ -157,11 +157,11 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 // operator deny-list alone.
 func TestMemberMount_NoRootsFailsClosed(t *testing.T) {
 	_, project := memberRoot(t)
-	var p MemberMountPolicy // the zero value IS the default deployment
+	var p UserMountPolicy // the zero value IS the default deployment
 	if p.Configured() {
 		t.Fatal("the zero policy reports Configured()")
 	}
-	err := p.ValidateMemberMount("alice", project, false)
+	err := p.ValidateUserMount("alice", project, false)
 	if err == nil {
 		t.Fatal("a member mount was allowed with NO roots configured; must fail closed")
 	}
@@ -172,13 +172,13 @@ func TestMemberMount_NoRootsFailsClosed(t *testing.T) {
 
 // TestMemberMount_AdditiveForOperators is matrix row 7: the BIND-time entry
 // point with nil roots is the operator path, which must be untouched — the
-// driver only calls it when SandboxSpec.MemberMountRoots is non-nil, and this
+// driver only calls it when SandboxSpec.UserMountRoots is non-nil, and this
 // pins that a nil-roots call is a refusal rather than a silent allow, so a
 // wiring mistake in the other direction fails closed too.
 func TestMemberMount_AdditiveForOperators(t *testing.T) {
 	_, project := memberRoot(t)
-	if err := ValidateMemberMountSource(project, nil); err == nil {
-		t.Error("ValidateMemberMountSource with nil roots ALLOWED the source; it must refuse, leaving nil-means-operator to the CALLER's branch")
+	if err := ValidateUserMountSource(project, nil); err == nil {
+		t.Error("ValidateUserMountSource with nil roots ALLOWED the source; it must refuse, leaving nil-means-operator to the CALLER's branch")
 	}
 	// And the operator's own gate keeps allowing what it always allowed.
 	if err := ValidateMountSource(project); err != nil {
@@ -192,8 +192,8 @@ func TestMemberMount_AdditiveForOperators(t *testing.T) {
 // waving through a path the allowlist was never evaluated against.
 func TestMemberMount_MissingSourceFailsClosed(t *testing.T) {
 	root, _ := memberRoot(t)
-	p := MemberMountPolicy{Roots: []string{root}}
-	if err := p.ValidateMemberMount("alice", filepath.Join(root, "does-not-exist"), false); err == nil {
+	p := UserMountPolicy{Roots: []string{root}}
+	if err := p.ValidateUserMount("alice", filepath.Join(root, "does-not-exist"), false); err == nil {
 		t.Fatal("an unresolvable member source was ALLOWED; the root allowlist cannot be asserted about a path this process cannot see")
 	}
 }
@@ -204,29 +204,29 @@ func TestMemberMount_MissingSourceFailsClosed(t *testing.T) {
 func TestMemberMount_PerPrincipalReplacesShared(t *testing.T) {
 	shared, sharedProject := memberRoot(t)
 	own, ownProject := memberRoot(t)
-	p := MemberMountPolicy{
+	p := UserMountPolicy{
 		Roots:            []string{shared},
 		RootsByPrincipal: map[string][]string{"alice": {own}},
 	}
 
-	if err := p.ValidateMemberMount("alice", ownProject, false); err != nil {
+	if err := p.ValidateUserMount("alice", ownProject, false); err != nil {
 		t.Errorf("alice in her own root = %v, want allowed", err)
 	}
-	if err := p.ValidateMemberMount("alice", sharedProject, false); err == nil {
+	if err := p.ValidateUserMount("alice", sharedProject, false); err == nil {
 		t.Error("alice reached the SHARED root while holding her own map entry; per-member must REPLACE, not union")
 	}
 	// A principal with no entry still gets the shared list.
-	if err := p.ValidateMemberMount("bob", sharedProject, false); err != nil {
+	if err := p.ValidateUserMount("bob", sharedProject, false); err != nil {
 		t.Errorf("bob (no map entry) in the shared root = %v, want allowed", err)
 	}
 	// Lookup is case-insensitive on the principal, like every other identity
 	// match in this codebase.
-	if err := p.ValidateMemberMount("ALICE", sharedProject, false); err == nil {
+	if err := p.ValidateUserMount("ALICE", sharedProject, false); err == nil {
 		t.Error("principal matching is case-SENSITIVE; a differently-cased sub would silently fall back to the shared list")
 	}
 	// An explicitly-empty entry means "this member mounts nothing".
 	p.RootsByPrincipal["carol"] = []string{}
-	if err := p.ValidateMemberMount("carol", sharedProject, false); err == nil {
+	if err := p.ValidateUserMount("carol", sharedProject, false); err == nil {
 		t.Error("an empty per-member entry fell back to the shared list; it must mean 'no roots'")
 	}
 }
@@ -241,11 +241,11 @@ func TestMemberMount_WritableAllowlist(t *testing.T) {
 	}
 
 	// Default (no writable roots): read-only is fine, writable is refused.
-	base := MemberMountPolicy{Roots: []string{root}}
-	if err := base.ValidateMemberMount("alice", project, false); err != nil {
+	base := UserMountPolicy{Roots: []string{root}}
+	if err := base.ValidateUserMount("alice", project, false); err != nil {
 		t.Fatalf("read-only = %v, want allowed", err)
 	}
-	err := base.ValidateMemberMount("alice", project, true)
+	err := base.ValidateUserMount("alice", project, true)
 	if err == nil {
 		t.Fatal("writable was allowed with NO writable roots configured; the default is no writable member mounts at all")
 	}
@@ -254,36 +254,36 @@ func TestMemberMount_WritableAllowlist(t *testing.T) {
 	}
 
 	// Writable inside the allowlist: allowed.
-	allowed := MemberMountPolicy{Roots: []string{root}, WritableRoots: []string{root}}
-	if err := allowed.ValidateMemberMount("alice", project, true); err != nil {
+	allowed := UserMountPolicy{Roots: []string{root}, WritableRoots: []string{root}}
+	if err := allowed.ValidateUserMount("alice", project, true); err != nil {
 		t.Errorf("writable inside the writable root = %v, want allowed", err)
 	}
 
 	// Writable OUTSIDE the allowlist (readable, but not writable): refused.
 	other, otherProject := memberRoot(t)
-	split := MemberMountPolicy{Roots: []string{root, other}, WritableRoots: []string{root}}
-	if err := split.ValidateMemberMount("alice", otherProject, false); err != nil {
+	split := UserMountPolicy{Roots: []string{root, other}, WritableRoots: []string{root}}
+	if err := split.ValidateUserMount("alice", otherProject, false); err != nil {
 		t.Errorf("read-only in the second root = %v, want allowed", err)
 	}
-	if err := split.ValidateMemberMount("alice", otherProject, true); err == nil {
+	if err := split.ValidateUserMount("alice", otherProject, true); err == nil {
 		t.Error("writable outside every writable root was ALLOWED")
 	}
 
 	// DENY WINS: a carve-out inside a writable root pins that subtree read-only.
-	carved := MemberMountPolicy{
+	carved := UserMountPolicy{
 		Roots: []string{root}, WritableRoots: []string{root}, WritableDeny: []string{vendored},
 	}
-	if err := carved.ValidateMemberMount("alice", project, true); err != nil {
+	if err := carved.ValidateUserMount("alice", project, true); err != nil {
 		t.Errorf("writable on the parent = %v, want allowed (the deny covers only the carve-out)", err)
 	}
-	derr := carved.ValidateMemberMount("alice", vendored, true)
+	derr := carved.ValidateUserMount("alice", vendored, true)
 	if derr == nil {
 		t.Fatal("writable inside a writable-DENY carve-out was allowed; deny must win over allow")
 	}
 	if !strings.Contains(derr.Error(), "writable-deny") {
 		t.Errorf("error = %v, want the deny-carve-out refusal", derr)
 	}
-	if err := carved.ValidateMemberMount("alice", vendored, false); err != nil {
+	if err := carved.ValidateUserMount("alice", vendored, false); err != nil {
 		t.Errorf("READ-ONLY inside the writable-deny carve-out = %v, want allowed — the deny bounds writability, not readability", err)
 	}
 }
@@ -302,13 +302,13 @@ func TestParseMemberMountPolicy_FailsClosed(t *testing.T) {
 		{name: "relative deny root", deny: "rw"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, _, err := ParseMemberMountPolicy(tc.roots, tc.rootsMap, tc.writable, tc.deny); err == nil {
+			if _, _, err := ParseUserMountPolicy(tc.roots, tc.rootsMap, tc.writable, tc.deny); err == nil {
 				t.Error("parse accepted a malformed value; boot must fail closed")
 			}
 		})
 	}
 
-	p, warns, err := ParseMemberMountPolicy("/srv/projects, /srv/scratch", `{"Alice@corp.example": ["/srv/alice"]}`, "/srv/projects", "/srv/projects/vendor")
+	p, warns, err := ParseUserMountPolicy("/srv/projects, /srv/scratch", `{"Alice@corp.example": ["/srv/alice"]}`, "/srv/projects", "/srv/projects/vendor")
 	if err != nil {
 		t.Fatalf("valid config: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestParseMemberMountPolicy_FailsClosed(t *testing.T) {
 // about, not refused (matching the LocalMode unspecified-bind precedent). The
 // warning is the only signal an operator gets, so its absence would be silent.
 func TestParseMemberMountPolicy_WarnsOnWideRoots(t *testing.T) {
-	_, warns, err := ParseMemberMountPolicy("/", "", "", "")
+	_, warns, err := ParseUserMountPolicy("/", "", "", "")
 	if err != nil {
 		t.Fatalf("root=/ must WARN, not refuse: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestParseMemberMountPolicy_WarnsOnWideRoots(t *testing.T) {
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	_, warns, err = ParseMemberMountPolicy(home, "", "", "")
+	_, warns, err = ParseUserMountPolicy(home, "", "", "")
 	if err != nil {
 		t.Fatalf("root=$HOME must WARN, not refuse: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestParseMemberMountPolicy_WarnsOnWideRoots(t *testing.T) {
 	}
 
 	// A per-member entry gets the same scrutiny as the shared list.
-	_, warns, err = ParseMemberMountPolicy("", `{"alice": ["/"]}`, "", "")
+	_, warns, err = ParseUserMountPolicy("", `{"alice": ["/"]}`, "", "")
 	if err != nil {
 		t.Fatalf("per-member root=/ must WARN, not refuse: %v", err)
 	}
@@ -381,12 +381,12 @@ func TestMemberBootWarnings_MatchWithinAnyRootReality(t *testing.T) {
 		{"home-is-wide-open", home, under},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, warns, err := ParseMemberMountPolicy(tc.root, "", "", "")
+			_, warns, err := ParseUserMountPolicy(tc.root, "", "", "")
 			if err != nil {
-				t.Fatalf("ParseMemberMountPolicy(%q): %v", tc.root, err)
+				t.Fatalf("ParseUserMountPolicy(%q): %v", tc.root, err)
 			}
 			if len(warns) == 0 {
-				t.Fatalf("ParseMemberMountPolicy(%q) warned about nothing", tc.root)
+				t.Fatalf("ParseUserMountPolicy(%q) warned about nothing", tc.root)
 			}
 			got := strings.Join(warns, "\n")
 			if !strings.Contains(got, "WARDYN_MEMBER_WORKSPACE_ROOTS") {

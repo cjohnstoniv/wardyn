@@ -255,7 +255,7 @@ func orgEphemeralOf(siteCfg types.SiteConfig) types.EphemeralProvider {
 // PREVIEW (dryRun) gets the WHOLE dispatch expression, org fill and org clamp
 // included, so POST /runs/preflight reports the number the run will get. LAUNCH
 // gets the clamp half only, and there it is a provable no-op: composer.Clamp (or
-// the stored arm's boundMemberSpec) already applied the same profile min(), and
+// the stored arm's boundUserSpec) already applied the same profile min(), and
 // applyEphemeralDisk applies all of it again at dispatch. The FILL is dispatch's
 // alone — written into a spec that goes on to launch it would reach the driver
 // as a POLICY-AUTHORED size and be refused at create on every overlay2-over-ext4

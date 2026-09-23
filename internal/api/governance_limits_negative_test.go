@@ -26,7 +26,7 @@ func govLimitsBody(limits string) string {
 //
 // NOTHING DOWNSTREAM MIS-ENFORCES a negative — composer.CapDiskMiB needs a
 // positive ceiling, driveSizeCeiling.bound treats <= 0 as unlimited, and
-// denyMemberRunQuota returns on limit <= 0 — which is why this is a write-boundary
+// denyUserRunQuota returns on limit <= 0 — which is why this is a write-boundary
 // fix and not a runtime one: a stored -5 renders in the profile editor as a cap
 // that binds nothing, and the API is the door the console's own nonNegativeInt
 // cannot cover (a hand-made PUT never passes through it).

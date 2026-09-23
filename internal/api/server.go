@@ -326,20 +326,20 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
-	// MemberMounts is the operator/MDM-set posture for MEMBER-authored local_dir
+	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_MEMBER_WORKSPACE_ROOTS + _MAP + WARDYN_MEMBER_WRITABLE_ROOTS
-	// + _DENY, parsed at boot by runner.ParseMemberMountPolicy). The ZERO VALUE
+	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE
 	// — the default — means a member may not onboard a host directory at all
 	// (repos and operator-owned workspaces are unaffected), which is the
 	// fail-closed posture the section-(c) threat model requires. It bounds ONLY
 	// mounts on a member-OWNED workspace; an operator's mounts are never
 	// narrowed by it. See internal/runner/member_mount.go.
-	MemberMounts runner.MemberMountPolicy
+	UserMounts runner.UserMountPolicy
 	// UserDriveHostRoots is the operator/MDM-set ceiling over admin-authored
 	// host_path USER DRIVES (WARDYN_USER_DRIVE_HOST_ROOTS, parsed at boot by
 	// runner.ParseUserDriveHostRoots). The ZERO VALUE — the default — means NO
 	// host_path drive may be authored at all, the same fail-closed posture
-	// MemberMounts takes above and for the same reason: a drive's host root is
+	// UserMounts takes above and for the same reason: a drive's host root is
 	// authored in the database and bound into OTHER PEOPLE's sandboxes, so its
 	// ceiling has to live where a console compromise cannot reach it.
 	//

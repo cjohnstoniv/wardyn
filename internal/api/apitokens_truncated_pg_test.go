@@ -192,7 +192,7 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 		t.Errorf("403 body does not name the condition: %s", body)
 	}
 	// The same refusal must reach a run create, the lane that actually spends
-	// the ceiling (denyMemberRequest in runs_create_validate.go). No Runner is
+	// the ceiling (denyUserRequest in runs_create_validate.go). No Runner is
 	// wired, so a
 	// non-403 here means the ceiling resolved and the create went on to fail
 	// LATER for an unrelated reason — which is exactly the widening.
@@ -260,9 +260,9 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 // answers "allowed".
 //
 // The seam under test is capAllowed itself, reached through the real
-// apiTokenAuth context — the same path authorizeMemberDecision in approvals.go
-// (member decides an egress approval), narrowMemberInlinePolicy in
-// inline_policy.go and memberVisibleOperatorSecretNames in secrets.go take.
+// apiTokenAuth context — the same path authorizeUserDecision in approvals.go
+// (member decides an egress approval), narrowUserInlinePolicy in
+// inline_policy.go and userVisibleOperatorSecretNames in secrets.go take.
 // None of those seams is preceded by an effectiveCeiling call, so on a
 // deployment with
 // group DENY grants but no group governance assignments there is no 403

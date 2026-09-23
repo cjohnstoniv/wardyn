@@ -45,6 +45,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Server rename sweep: "view as member" is the user view (#617).** The route is
+  `POST /me/view {"view":"user"|"admin"}` (a clean break — `POST /me/member-mode`'s
+  `{"enabled":bool}` shape is not aliased); `/me` reports `user_view`, `user_view_no_credential`
+  and `user_preview_available` in place of `member_mode`, `member_mode_no_credential` and
+  `member_preview_available`. The audit action is `auth.user_view` (dual-emitted alongside
+  `auth.member_mode` for one minor for SIEM stability, removed in 0.9); the `authz.denied`
+  marker is `user_view`; the BYOI refusal reason is `byoi_user`. `runner.MemberMountPolicy` is
+  `UserMountPolicy` and 29 more `*Member*` server functions (`denyMember*`, `filterMemberGrants`,
+  `SetMemberMode`, …) are renamed to their `*User*` counterparts. See docs/OPERATIONS.md's
+  "Renamed in 0.8" appendix for the full old-name/new-name table; no user-facing copy changed.
 - **Sign-in derives a user type (#609).** A `WARDYN_OIDC_ROLE_MAP` value, a People row or
   `WARDYN_OIDC_DEFAULT_ROLE` may now name a user type id (`pm-group=portfolio-manager`); the
   session carries that type beside the tier. Among the types a person matches, the highest

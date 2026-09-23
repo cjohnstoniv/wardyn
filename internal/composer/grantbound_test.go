@@ -68,7 +68,7 @@ func TestClampGrantsBoundsByPairingNotKind(t *testing.T) {
 
 	// A proposal whose pairing NO ceiling entry names falls back to the meet of
 	// every same-kind grant — the strictest bound, never an arbitrary one. It is
-	// still kept (the pairing gate is filterMemberGrants' job, not the clamp's),
+	// still kept (the pairing gate is filterUserGrants' job, not the clamp's),
 	// but it cannot pick up the permissive forge's posture on the way through.
 	var warns []string
 	unpaired := sshKeyGrant(t, "git.elsewhere.example", "other_key", false, 3600)

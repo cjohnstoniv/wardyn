@@ -37,7 +37,7 @@ func TestFilterMemberGrants_ReHeaderedGrantDropped(t *testing.T) {
 		"different header": apiKeyRuleGrant("api.corp.example", "corp-key", "anthropic-version", "%s"),
 		"different format": apiKeyRuleGrant("api.corp.example", "corp-key", "x-api-key", "Bearer %s"),
 	} {
-		kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{g})
+		kept, warns, code, err := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{g})
 		if code != 0 || err != nil {
 			t.Fatalf("%s: code=%d err=%v, want (0,nil) — dropped, not errored", name, code, err)
 		}
@@ -52,13 +52,13 @@ func TestFilterMemberGrants_ReHeaderedGrantDropped(t *testing.T) {
 	// The operator's OWN authored rule still passes, header/format and all —
 	// and so does the same rule written with the fields left empty, which
 	// injectionRuleFromScope resolves to the same Authorization/"Bearer %s".
-	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{blessed}); len(kept) != 1 {
+	if kept, _, _, _ := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{blessed}); len(kept) != 1 {
 		t.Errorf("the operator's own authored rule: kept=%d, want 1", len(kept))
 	}
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
 		apiKeyRuleGrant("api.corp.example", "corp-key", "", ""),
 	}}
-	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil,
+	if kept, _, _, _ := h.srv.filterUserGrants(context.Background(), "", nil,
 		[]types.GrantSpec{apiKeyRuleGrant("api.corp.example", "corp-key", "Authorization", "Bearer %s")}); len(kept) != 1 {
 		t.Errorf("defaulted header/format must equal the explicit Authorization/\"Bearer %%s\": kept=0, want 1")
 	}

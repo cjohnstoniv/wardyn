@@ -203,11 +203,11 @@ func TestMemberPreview_SharedRosterDowngradesToThePlainMode(t *testing.T) {
 	putScopedSSOBlob(t, sec, "", awsSSOTestFixedNow.Add(time.Hour), "operator-access-token")
 	admin := memberPreviewSessionAs(t, memberPreviewAdminSub, oidc.RoleAdmin, false, false)
 
-	if me := meBody(t, srv, admin); me["member_preview_available"] != false {
-		t.Errorf("/me member_preview_available = %v on a shared roster, want false", me["member_preview_available"])
+	if me := meBody(t, srv, admin); me["user_preview_available"] != false {
+		t.Errorf("/me user_preview_available = %v on a shared roster, want false", me["user_preview_available"])
 	}
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", admin, `{"enabled":true,"no_credential":true}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","no_credential":true}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("toggle = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -215,20 +215,20 @@ func TestMemberPreview_SharedRosterDowngradesToThePlainMode(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode toggle response: %v", err)
 	}
-	if body["member_mode"] != true || body["member_mode_no_credential"] != false {
-		t.Errorf("toggle response = %v, want member_mode true and no_credential FALSE on a shared roster", body)
+	if body["user_view"] != true || body["user_view_no_credential"] != false {
+		t.Errorf("toggle response = %v, want user_view true and no_credential FALSE on a shared roster", body)
 	}
 	cookies := w.Result().Cookies()
 	if len(cookies) != 1 {
 		t.Fatalf("the toggle wrote %d cookies, want 1", len(cookies))
 	}
 	me := meBody(t, srv, cookies[0])
-	if me["member_mode"] != true || me["member_mode_no_credential"] != false {
-		t.Errorf("/me = member_mode:%v no_credential:%v, want true/false", me["member_mode"], me["member_mode_no_credential"])
+	if me["user_view"] != true || me["user_view_no_credential"] != false {
+		t.Errorf("/me = user_view:%v no_credential:%v, want true/false", me["user_view"], me["user_view_no_credential"])
 	}
-	rows := audit.find("auth.member_mode")
+	rows := audit.find("auth.user_view")
 	if len(rows) != 1 {
-		t.Fatalf("auth.member_mode rows = %d, want 1", len(rows))
+		t.Fatalf("auth.user_view rows = %d, want 1", len(rows))
 	}
 	datum := map[string]any{}
 	if err := json.Unmarshal(rows[0].Data, &datum); err != nil {
@@ -246,19 +246,19 @@ func TestMemberPreview_SharedRosterDowngradesToThePlainMode(t *testing.T) {
 	// THE CONTROL: the same request on a per_user roster IS granted.
 	perUser, _, perUserSec, _ := memberPreviewSrv(t)
 	putScopedSSOBlob(t, perUserSec, memberPreviewAdminSub, awsSSOTestFixedNow.Add(time.Hour), "admin-access-token")
-	if me := meBody(t, perUser, admin); me["member_preview_available"] != true {
-		t.Errorf("/me member_preview_available = %v on a per_user roster, want true", me["member_preview_available"])
+	if me := meBody(t, perUser, admin); me["user_preview_available"] != true {
+		t.Errorf("/me user_preview_available = %v on a per_user roster, want true", me["user_preview_available"])
 	}
-	w = doSSO(t, perUser, http.MethodPost, "/api/v1/me/member-mode", admin, `{"enabled":true,"no_credential":true}`)
+	w = doSSO(t, perUser, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","no_credential":true}`)
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode toggle response: %v", err)
 	}
-	if body["member_mode_no_credential"] != true {
+	if body["user_view_no_credential"] != true {
 		t.Errorf("per_user toggle response = %v, want the posture GRANTED", body)
 	}
 }
 
-// TestMemberPreview_RealMemberIsNeverGrantedThePosture is F4. SetMemberMode
+// TestMemberPreview_RealMemberIsNeverGrantedThePosture is F4. SetUserView
 // writes a real member no cookie at all, so echoing their request would report
 // and AUDIT a posture nobody is in — and would make this row's own
 // docs/AUDIT-ACTIONS.md sentence false.
@@ -266,7 +266,7 @@ func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
 	srv, audit, _, _ := memberPreviewSrv(t)
 	member := memberPreviewSessionAs(t, "sub-real-member", oidc.RoleUser, false, false)
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true,"no_credential":true}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", member, `{"view":"user","no_credential":true}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("member toggle = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -274,12 +274,12 @@ func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode toggle response: %v", err)
 	}
-	if body["member_mode_no_credential"] != false {
-		t.Errorf("a real member's request echoed member_mode_no_credential:%v, want false — no cookie was written", body["member_mode_no_credential"])
+	if body["user_view_no_credential"] != false {
+		t.Errorf("a real member's request echoed user_view_no_credential:%v, want false — no cookie was written", body["user_view_no_credential"])
 	}
-	rows := audit.find("auth.member_mode")
+	rows := audit.find("auth.user_view")
 	if len(rows) != 1 {
-		t.Fatalf("auth.member_mode rows = %d, want 1", len(rows))
+		t.Fatalf("auth.user_view rows = %d, want 1", len(rows))
 	}
 	datum := map[string]any{}
 	if err := json.Unmarshal(rows[0].Data, &datum); err != nil {
@@ -292,8 +292,8 @@ func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
 		t.Errorf("real_role = %v, want member", datum["real_role"])
 	}
 	// A member is never offered the control either.
-	if me := meBody(t, srv, member); me["member_preview_available"] != false {
-		t.Errorf("/me member_preview_available = %v for a member, want false", me["member_preview_available"])
+	if me := meBody(t, srv, member); me["user_preview_available"] != false {
+		t.Errorf("/me user_preview_available = %v for a member, want false", me["user_preview_available"])
 	}
 }
 
@@ -337,8 +337,8 @@ func TestMemberPreview_HarnessLoginRefused409(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("harness-login in the preview = %d, want 409: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), memberPreviewSignInRefusal) {
-		t.Errorf("body = %q, want %q", w.Body.String(), memberPreviewSignInRefusal)
+	if !strings.Contains(w.Body.String(), userViewPreviewSignInRefusal) {
+		t.Errorf("body = %q, want %q", w.Body.String(), userViewPreviewSignInRefusal)
 	}
 	if rows := audit.find("harness.login.started"); len(rows) != 0 {
 		t.Errorf("a refused sign-in stamped %d harness.login.started row(s)", len(rows))
@@ -360,7 +360,7 @@ func TestMemberPreview_HarnessLoginRefused409(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("shared roster in the preview = %d, want the member's own 403: %s", w.Code, w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), memberPreviewSignInRefusal) {
+	if strings.Contains(w.Body.String(), userViewPreviewSignInRefusal) {
 		t.Error("the preview refusal replaced the member's own harness_login_not_per_user answer")
 	}
 }
@@ -373,7 +373,7 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 	srv, audit, _, _ := memberPreviewSrv(t)
 	admin := memberPreviewSessionAs(t, memberPreviewAdminSub, oidc.RoleAdmin, false, false)
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", admin, `{"enabled":true,"no_credential":true}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","no_credential":true}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("enter the preview = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -381,7 +381,7 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode toggle response: %v", err)
 	}
-	if body["member_mode"] != true || body["member_mode_no_credential"] != true {
+	if body["user_view"] != true || body["user_view_no_credential"] != true {
 		t.Errorf("toggle response = %v, want both flags true", body)
 	}
 	on := w.Result().Cookies()
@@ -390,13 +390,13 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 	}
 
 	me := meBody(t, srv, on[0])
-	if me["member_mode"] != true || me["member_mode_no_credential"] != true {
-		t.Errorf("/me = member_mode:%v no_credential:%v, want true/true", me["member_mode"], me["member_mode_no_credential"])
+	if me["user_view"] != true || me["user_view_no_credential"] != true {
+		t.Errorf("/me = user_view:%v no_credential:%v, want true/true", me["user_view"], me["user_view_no_credential"])
 	}
 
-	rows := audit.find("auth.member_mode")
+	rows := audit.find("auth.user_view")
 	if len(rows) != 1 {
-		t.Fatalf("auth.member_mode rows = %d, want 1", len(rows))
+		t.Fatalf("auth.user_view rows = %d, want 1", len(rows))
 	}
 	enter := map[string]any{}
 	if err := json.Unmarshal(rows[0].Data, &enter); err != nil {
@@ -408,7 +408,7 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 
 	// The exit clears both, and its datum carries no marker — every row a 0.7.4
 	// deployment could write stays byte-identical.
-	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", on[0], `{"enabled":false}`)
+	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/view", on[0], `{"view":"admin"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("exit = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -417,13 +417,13 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 		t.Fatalf("the exit wrote %d cookies, want 1", len(off))
 	}
 	me = meBody(t, srv, off[0])
-	if me["member_mode"] != false || me["member_mode_no_credential"] != false {
-		t.Errorf("/me after the exit = member_mode:%v no_credential:%v, want false/false",
-			me["member_mode"], me["member_mode_no_credential"])
+	if me["user_view"] != false || me["user_view_no_credential"] != false {
+		t.Errorf("/me after the exit = user_view:%v no_credential:%v, want false/false",
+			me["user_view"], me["user_view_no_credential"])
 	}
-	rows = audit.find("auth.member_mode")
+	rows = audit.find("auth.user_view")
 	if len(rows) != 2 {
-		t.Fatalf("auth.member_mode rows = %d after the exit, want 2", len(rows))
+		t.Fatalf("auth.user_view rows = %d after the exit, want 2", len(rows))
 	}
 	exit := map[string]any{}
 	if err := json.Unmarshal(rows[1].Data, &exit); err != nil {

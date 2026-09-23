@@ -21,7 +21,7 @@ import (
 var authzDeniedReasons = []string{
 	"admin_surface",
 	"attach_ticket_foreign_run",
-	"byoi_member",
+	"byoi_user",
 	"capability_" + capAgent,
 	"capability_" + capEgressHost,
 	"capability_" + capIntegration,
@@ -44,19 +44,19 @@ var authzDeniedReasons = []string{
 // window that starts at an "authz.denied" literal, because `reason` is a field
 // several OTHER actions carry too (approval.second_human.bypass's
 // admin_token_break_glass, source.scan's no_facts_uploaded). The rest are the
-// helpers that feed authz.denied and nothing else: denyMemberField writes the
-// event, denyMemberCapability delegates to it, and a capDrop is what
+// helpers that feed authz.denied and nothing else: denyUserField writes the
+// event, denyUserCapability delegates to it, and a capDrop is what
 // inline_policy's per-reason authz.denied loop iterates.
 var (
 	reasonInWindow    = regexp.MustCompile(`"reason":\s*"([a-z0-9_]+)"(\s*\+)?`)
 	reasonCapInWindow = regexp.MustCompile(`"reason":\s*"capability_"\s*\+\s*(cap[A-Za-z]+)`)
 	reasonHelperKinds = []*regexp.Regexp{
 		regexp.MustCompile(`capDrop\{reason:\s*"capability_"\s*\+\s*(cap[A-Za-z]+)`),
-		regexp.MustCompile(`denyMemberCapability\(w, r, (cap[A-Za-z]+),`),
+		regexp.MustCompile(`denyUserCapability\(w, r, (cap[A-Za-z]+),`),
 	}
 	reasonHelperLiterals = []*regexp.Regexp{
 		regexp.MustCompile(`capDrop\{reason:\s*"([a-z0-9_]+)"(\s*\+)?`),
-		regexp.MustCompile(`denyMemberField\(w, r, [^,]+, "([a-z0-9_]+)"(\s*\+)?`),
+		regexp.MustCompile(`denyUserField\(w, r, [^,]+, "([a-z0-9_]+)"(\s*\+)?`),
 		// authzDeniedDatum (membermode.go) BUILDS the Data map, so at every
 		// site wired through it the reason arrives as an argument and there is
 		// no `"reason":` key on the emit line for the window scanner to find.

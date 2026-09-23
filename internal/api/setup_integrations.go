@@ -122,7 +122,7 @@ func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present 
 	return out
 }
 
-// memberSafeIntegration is the ONE projection of an integration row for a
+// userSafeIntegration is the ONE projection of an integration row for a
 // non-operator, used by both routes that publish these rows: GET /integrations
 // and GET /setup/status.
 //
@@ -150,9 +150,9 @@ func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present 
 // very response whose secrets[] had been emptied to withhold it. The cell's
 // ANSWER is not the leak and is kept (a member must still learn the capability
 // is unusable); the derived TEXT is scrubbed of anything the projection
-// withheld — see memberSafeCapabilities.
-func memberSafeIntegration(in SetupIntegration) SetupIntegration {
-	in.Capabilities = memberSafeCapabilities(in.Capabilities, in.Integration)
+// withheld — see userSafeCapabilities.
+func userSafeIntegration(in SetupIntegration) SetupIntegration {
+	in.Capabilities = userSafeCapabilities(in.Capabilities, in.Integration)
 	in.Secrets = nil
 	in.Egress = nil
 	in.Config = nil
@@ -160,7 +160,7 @@ func memberSafeIntegration(in SetupIntegration) SetupIntegration {
 	return in
 }
 
-// memberSafeCapabilities is the anti-forgetting half of the projection: a
+// userSafeCapabilities is the anti-forgetting half of the projection: a
 // member-visible DERIVED string may not restate a datum the projection
 // withheld. Rather than allowlisting today's reason sentences (which the canon
 // pass rewrites) or teaching this file which reasons happen to interpolate a
@@ -176,10 +176,10 @@ func memberSafeIntegration(in SetupIntegration) SetupIntegration {
 // member-facing form of every case here — the credential this cell needs is not
 // usable, and which credential it is belongs to the operator.
 //
-// Non-mutating, like memberSafeIntegrations: both publishing routes share one
+// Non-mutating, like userSafeIntegrations: both publishing routes share one
 // value computed per request, so editing the slice in place would reach an
 // operator's copy.
-func memberSafeCapabilities(caps []Capability, in types.Integration) []Capability {
+func userSafeCapabilities(caps []Capability, in types.Integration) []Capability {
 	if len(caps) == 0 {
 		return caps
 	}
@@ -205,7 +205,7 @@ func memberSafeCapabilities(caps []Capability, in types.Integration) []Capabilit
 // member-facing copy.
 const reasonCredentialWithheld = "no credential configured"
 
-// withheldIntegrationValues lists the strings memberSafeIntegration drops from
+// withheldIntegrationValues lists the strings userSafeIntegration drops from
 // a row: the credential refs, the egress entries (and their bare hosts, since a
 // reason may name the host without the ":port" the entry carries), the
 // operator's config values and the docs link. Empty and 1-2 character values
@@ -234,11 +234,11 @@ func withheldIntegrationValues(in types.Integration) []string {
 	return out
 }
 
-// memberDropsIntegration reports whether a row must be dropped from a
+// userDropsIntegration reports whether a row must be dropped from a
 // member's view ENTIRELY, rather than merely projected by
-// memberSafeIntegration. A DERIVED git_host row's identity IS an internal
+// userSafeIntegration. A DERIVED git_host row's identity IS an internal
 // hostname (gitHostRows, integrations.go: id="git_host:"+host, name=host) —
-// memberSafeIntegration's Secrets/Egress/Config/Docs nulling never touches
+// userSafeIntegration's Secrets/Egress/Config/Docs nulling never touches
 // id/name, so the host would still publish through them unchanged. The
 // launch card never lets a member pick a git_host row directly (source
 // control is chosen through the workspace's own repo field, not this list),
@@ -250,25 +250,25 @@ func withheldIntegrationValues(in types.Integration) []string {
 // A STORED git_host row is left alone: an operator who explicitly PUTs one
 // (adopting a derived row, or authoring one from scratch) has deliberately
 // published that identity, same as any other stored row's id/name.
-func memberDropsIntegration(in SetupIntegration) bool {
+func userDropsIntegration(in SetupIntegration) bool {
 	return in.Source == "legacy" && in.Kind == types.IntegrationKindGitHost
 }
 
-// memberSafeIntegrations projects a whole list, leaving the caller's slice
+// userSafeIntegrations projects a whole list, leaving the caller's slice
 // untouched — both call sites share a value computed once per request
 // (integrationsWithCapabilitiesUsing), so editing in place would redact an
-// operator's own copy. Rows memberDropsIntegration names are omitted
-// entirely; every other row is projected by memberSafeIntegration.
-func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
+// operator's own copy. Rows userDropsIntegration names are omitted
+// entirely; every other row is projected by userSafeIntegration.
+func userSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 	if len(rows) == 0 {
 		return rows
 	}
 	out := make([]SetupIntegration, 0, len(rows))
 	for _, in := range rows {
-		if memberDropsIntegration(in) {
+		if userDropsIntegration(in) {
 			continue
 		}
-		out = append(out, memberSafeIntegration(in))
+		out = append(out, userSafeIntegration(in))
 	}
 	return out
 }
@@ -276,7 +276,7 @@ func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 // handleListIntegrations returns the effective integration set (stored ∪
 // legacy-derived) with each row's live capabilities. Read-only, humanOrAdmin.
 //
-// Projected for a non-operator (memberSafeIntegration): a secret name IS a
+// Projected for a non-operator (userSafeIntegration): a secret name IS a
 // credential ref, the same reason GET /site-config is operatorOnly, so a
 // member may not read secrets[].secret_name or the internal egress hosts
 // through this route either, even though the identical rows sit behind that
@@ -291,7 +291,7 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 	present := s.presentSecretNamesFor(r.Context(), s.secretOwnerFromRequest(r))
 	rows := s.integrationsWithCapabilities(r.Context(), present)
 	if !s.isOperator(r.Context()) {
-		rows = memberSafeIntegrations(rows)
+		rows = userSafeIntegrations(rows)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"integrations": rows})
 }
@@ -500,7 +500,7 @@ type SetupHarnessTool struct {
 	// whose credential it uses, empty when no block exists or no row names this
 	// agent. They are the MEMBER-SAFE half of the agent policy: a lane name and
 	// "shared"/"per_user" carry no host, no secret name and never the AWS access
-	// portal URL, which is why redactSetupStatusForMember keeps them — a member
+	// portal URL, which is why redactSetupStatusForUser keeps them — a member
 	// deciding whether to sign in has to be able to see that their org captures
 	// credentials per person.
 	Mechanism        string `json:"mechanism,omitempty"`

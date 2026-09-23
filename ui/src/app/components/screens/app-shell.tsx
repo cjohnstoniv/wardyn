@@ -193,9 +193,9 @@ function useMeta(): [ShellMeta, () => void] {
           userDrive: me?.user_drive ?? null,
           userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
           userDriveUnavailable: me?.user_drive_unavailable ?? "",
-          memberMode: me?.member_mode ?? false,
-          memberModeNoCredential: me?.member_mode_no_credential ?? false,
-          memberPreviewAvailable: me?.member_preview_available ?? false,
+          memberMode: me?.user_view ?? false,
+          memberModeNoCredential: me?.user_view_no_credential ?? false,
+          memberPreviewAvailable: me?.user_preview_available ?? false,
           runner: h.runner ?? "",
           networkPolicy: h.network_policy ?? "",
         });

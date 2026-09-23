@@ -188,7 +188,7 @@ func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 // Step 2 must stay ahead of step 3. Run rule 4 (a scope on a non-egress_domain
 // kind -> 400) before the ownership check and a member can distinguish "a
 // credential approval exists on someone else's run" (400) from "no such
-// approval" (404) — exactly the existence oracle authorizeMemberDecision's own
+// approval" (404) — exactly the existence oracle authorizeUserDecision's own
 // comment goes out of its way to close, and that docs/OPERATIONS.md states as
 // policy.
 // Everything the scope rules add is therefore behind a 404 for a caller who has
@@ -266,7 +266,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// diverge below, where rule 4 may load the approval alone and leave the run
 	// unread for `always` to fetch.
 	// Rule 3b, BEFORE the member gate but AFTER ownership. The plan's promise is
-	// 409 on every tier that can SEE the row; behind authorizeMemberDecision a
+	// 409 on every tier that can SEE the row; behind authorizeUserDecision a
 	// member who owned the run got that gate's flat 404 instead, so the answer
 	// to "why was I refused" depended on who asked about a verb that applies to
 	// nobody.
@@ -287,7 +287,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		return
 	}
 
-	ap, run, loaded, ok := s.authorizeMemberDecision(w, r, id)
+	ap, run, loaded, ok := s.authorizeUserDecision(w, r, id)
 	if !ok {
 		return
 	}
@@ -550,7 +550,7 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 	return body, true
 }
 
-// authorizeMemberDecision is decide's step 2, the MEMBER GATE — the whole of
+// authorizeUserDecision is decide's step 2, the MEMBER GATE — the whole of
 // it, so that "everything after this point has proven ownership" is a single
 // call a reviewer can check rather than a block they must read to the end of.
 // An OPERATOR passes through having read nothing from the store, which is why
@@ -572,7 +572,7 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 //
 // Then, and only then, the egress_host capability: which hosts a member may
 // decide FOR THEMSELVES. Ordered last on purpose — see the block itself.
-func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.ApprovalRequest, types.AgentRun, bool, bool) {
+func (s *Server) authorizeUserDecision(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.ApprovalRequest, types.AgentRun, bool, bool) {
 	var (
 		ap  types.ApprovalRequest
 		run types.AgentRun
@@ -902,7 +902,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// approval exists, is egress_domain, and is on a run they own, so a 403
 	// discloses nothing they do not already know — while a 404 would read as
 	// "your own approval vanished". Do not "fix" this back.
-	if !s.isSecurityOperator(r.Context()) { // LOCKSTEP with authorizeMemberDecision; see http.go
+	if !s.isSecurityOperator(r.Context()) { // LOCKSTEP with authorizeUserDecision; see http.go
 		writeError(w, http.StatusForbidden, "decision_scope always is operator-only")
 		// Audited, like every other member denial on this path (the capability
 		// refusal above and the four-eyes one below both write this row): a

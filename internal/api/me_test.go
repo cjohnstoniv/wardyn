@@ -32,7 +32,7 @@ func (s *countingSiteStore) GetSiteConfig(ctx context.Context) (types.SiteConfig
 }
 
 // TestHandleMe_MemberPollPerformsNoSiteConfigRead pins the SHORT-CIRCUIT in
-// member_preview_available.
+// user_preview_available.
 //
 // The key ANDs "this deployment keeps a credential per person" (a roster read)
 // with "this caller is an admin" (a context read). Evaluating the roster first
@@ -68,8 +68,8 @@ func TestHandleMe_MemberPollPerformsNoSiteConfigRead(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatalf("decode /me: %v", err)
 		}
-		if body["member_preview_available"] != false {
-			t.Errorf("member_preview_available = %#v, want false for a member", body["member_preview_available"])
+		if body["user_preview_available"] != false {
+			t.Errorf("user_preview_available = %#v, want false for a member", body["user_preview_available"])
 		}
 		if n := st.siteReads.Load(); n != 1 {
 			t.Errorf("a member's /me made %d site-config read(s), want 1 (the user-drive org switch alone) — "+
@@ -91,8 +91,8 @@ func TestHandleMe_MemberPollPerformsNoSiteConfigRead(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatalf("decode /me: %v", err)
 		}
-		if body["member_preview_available"] != true {
-			t.Errorf("member_preview_available = %#v, want true on a per_user roster", body["member_preview_available"])
+		if body["user_preview_available"] != true {
+			t.Errorf("user_preview_available = %#v, want true on a per_user roster", body["user_preview_available"])
 		}
 		if n := st.siteReads.Load(); n < 2 {
 			t.Errorf("the admin's /me made %d site-config read(s) — the availability answer "+
@@ -163,7 +163,7 @@ func TestHandleMe_MemberLocalDirRoot(t *testing.T) {
 	}
 
 	t.Run("operator: always null", func(t *testing.T) {
-		s := &Server{cfg: Config{MemberMounts: runner.MemberMountPolicy{Roots: []string{"/home/agent-projects"}}}}
+		s := &Server{cfg: Config{UserMounts: runner.UserMountPolicy{Roots: []string{"/home/agent-projects"}}}}
 		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 		w := httptest.NewRecorder()
 		s.handleMe(w, r)
@@ -192,7 +192,7 @@ func TestHandleMe_MemberLocalDirRoot(t *testing.T) {
 	})
 
 	t.Run("member with a configured root: hint string", func(t *testing.T) {
-		s := &Server{cfg: Config{MemberMounts: runner.MemberMountPolicy{Roots: []string{"/home/agent-projects"}}}}
+		s := &Server{cfg: Config{UserMounts: runner.UserMountPolicy{Roots: []string{"/home/agent-projects"}}}}
 		ctx, _ := memberCtx()
 		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil).WithContext(ctx)
 		w := httptest.NewRecorder()
@@ -208,7 +208,7 @@ func TestHandleMe_MemberLocalDirRoot(t *testing.T) {
 	})
 
 	t.Run("member with a per-principal root REPLACING the shared list", func(t *testing.T) {
-		s := &Server{cfg: Config{MemberMounts: runner.MemberMountPolicy{
+		s := &Server{cfg: Config{UserMounts: runner.UserMountPolicy{
 			Roots:            []string{"/shared/root"},
 			RootsByPrincipal: map[string][]string{"sub-bob": {"/bob/only"}},
 		}}}

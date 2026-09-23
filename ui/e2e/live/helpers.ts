@@ -126,9 +126,9 @@ export async function me(page: Page): Promise<{
   principal?: string;
   email?: string;
   operator?: boolean;
-  member_mode?: boolean;
-  member_mode_no_credential?: boolean;
-  member_preview_available?: boolean;
+  user_view?: boolean;
+  user_view_no_credential?: boolean;
+  user_preview_available?: boolean;
 }> {
   return page.evaluate(async () => {
     const r = await fetch("/api/v1/me", { credentials: "include" });

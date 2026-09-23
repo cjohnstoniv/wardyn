@@ -27,7 +27,7 @@ package oidc
 
 import "net/http"
 
-// SetMemberMode flips this request's session into or out of "view as member"
+// SetUserView flips this request's session into or out of "view as member"
 // mode, writes the re-encoded cookie to w, and returns the session's STAMPED
 // role — what the mode pauses.
 //
@@ -76,7 +76,7 @@ import "net/http"
 // for the same reason the mode bit does — a real member has no credential of
 // their own to hide from themselves, and the doors that key on the preview
 // would refuse them their own sign-in.
-func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on, noCredential bool) (stampedRole string, err error) {
+func (a *Authenticator) SetUserView(w http.ResponseWriter, r *http.Request, on, noCredential bool) (stampedRole string, err error) {
 	sess, err := a.decodeSession(r)
 	if err != nil {
 		return "", err

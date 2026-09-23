@@ -464,7 +464,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	//   - the member CLAMP is deliberately skipped, for the reason just given;
 	//   - the LIMITS axis is applied BELOW, in this function. It is read nowhere
 	//     else that this lane passes through: dispatch never reads it, and
-	//     denyMemberGovernance/denyMemberRunQuota sit on POST /runs.
+	//     denyUserGovernance/denyUserRunQuota sit on POST /runs.
 	//     The scoping rule, stated once here the way ceilingForDispatch states
 	//     the deny axis's, so it cannot be re-decided per call site: the Limits
 	//     axis binds POST /runs and this lane, and this lane binds it by
@@ -736,7 +736,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// the launcher. The zero posture for an operator-owned workspace (today's
 		// path) — and even for a member's, it gates that workspace's OWN binds
 		// only, never the session's operator-staged credential mounts.
-		MemberMounts: s.memberMountPosture([]types.Workspace{ws}),
+		UserMounts: s.userMountPosture([]types.Workspace{ws}),
 		// The pre-dispatch llmMode guess above
 		// cannot see the Wardyn-managed subscription lane at all — correct it
 		// below against what dispatch ACTUALLY resolved.

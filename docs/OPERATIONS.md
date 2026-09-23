@@ -36,6 +36,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Toolchain-fidelity environment](#toolchain-fidelity-environment)
 - [Recommended builds on compose](#recommended-builds-on-compose)
 - [Rotating the age key](#rotating-the-age-key)
+- [Renamed in 0.8](#renamed-in-08)
 - [Upgrades](#upgrades)
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [One replica, by construction](#one-replica-by-construction)
@@ -2170,7 +2171,7 @@ admin walking the member path, not an incident.
 | `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`), and also raised in-handler by `resolveAlwaysTarget` for `decision_scope=always` on a route that lives on the member group — the same predicate on a route a member may legally reach. The `403` body is byte-identical to `admin_surface`'s on purpose, so a refusal never maps which tier a route sits on; only this reason distinguishes them, which is what lets a rule tell "a member hit an admin route" from "a member hit a security-tier route" | ⛔ `403` |
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
 | `attach_ticket_foreign_run` | a caller who is not the super admin — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
-| `byoi_member` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
+| `byoi_user` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | 🟡 drop |
@@ -2253,6 +2254,10 @@ classified admin/member/owner/anonymous/internal before it can ship;
 per-user roles or multi-org depth — not the governance itself.
 
 ## Exercising member mode as an admin
+
+*Route and field names below predate the 0.8 rename sweep — see [Renamed in
+0.8](#renamed-in-08) for the current route (`POST /me/view`), `/me` keys and
+audit action; this section's own copy is repointed in #620.*
 
 You have an admin session and you want to see what a member sees. There are two
 ways, they answer different questions, and they compose.
@@ -4583,6 +4588,41 @@ is the **only** key that reads the store. Save it before doing anything else.
 
 Whatever you do, **back the key up off-host.** Rotation re-encrypts what is there;
 it cannot recover a key you have already lost.
+
+## Renamed in 0.8
+
+The non-admin tier's name changed from `member` to `user` across 0.7's tier-rename
+work (#608), and 0.8 follows it with a matching server rename sweep (#617) —
+mechanical, no behaviour change, and never a wire alias: an integration built
+against the old names gets a `404`/`400` on 0.8, not a warning. History is not
+rewritten — an audit row written before 0.8 keeps its pre-0.8 action and field
+names forever; only what the server emits GOING FORWARD changed.
+
+| Surface | Pre-0.8 | 0.8 |
+|---|---|---|
+| The toggle ("view as member"/the user view) | `POST /me/member-mode {"enabled":bool}` | `POST /me/view {"view":"user"\|"admin"}` |
+| `/me` fields | `member_mode`, `member_mode_no_credential`, `member_preview_available` | `user_view`, `user_view_no_credential`, `user_preview_available` |
+| Audit action | `auth.member_mode` | `auth.user_view` — **dual-emitted** alongside `auth.member_mode` (identical `Data`) for one minor (0.8.x, OD-18), so a dashboard or SIEM rule still filtering on the old name keeps seeing rows; the compat row is removed in 0.9 |
+| `authz.denied` datum | `member_mode: true` | `user_view: true` — a clean rename, not dual-emitted (it lives inside `authz.denied`'s own row, which is not itself renamed) |
+| `authz.denied` reason | `byoi_member` | `byoi_user` |
+| Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots` | `UserMountPolicy`, `SandboxSpec.UserMountRoots` |
+| Go: `internal/api`/`internal/auth/oidc` | `denyMember*`, `filterMemberGrants`, `narrowMemberInlinePolicy`, `redactSetupStatusForMember`, `redactSpecForMember`, `memberModelAccess`, `memberSafeIntegration(s)`, `memberMountPosture`, `SetMemberMode`, `handleSetMemberMode`, and the rest of the ~30 `*Member*` functions the CHANGELOG entry for #617 names | their `*User*` counterparts (`denyUser*`, `filterUserGrants`, …, `SetUserView`, `handleSetUserView`) |
+
+**Not renamed in this pass** — each is a separate, later issue, so the old name
+is still correct until its own PR lands:
+- The `WARDYN_MEMBER_*` env vars (`WARDYN_MEMBER_MODE`, the workspace-root
+  family, `WARDYN_ALLOW_MEMBER_ENV_SECRET`) — #616, aliased one minor after it
+  lands, same pattern as the `member` role alias below.
+- `docs/MEMBERS.md`, the People/Getting-Started copy, and the rest of this
+  file's own "view as member" prose (the section right above, "Exercising
+  member mode as an admin") — #620, the docs pass.
+- The console's own "View as member" control names and copy (`MemberModeBanner`,
+  `MemberModeMenuItem`, the `MEMBER_MODE` strings) — mock-gated, #618 (UT-7a).
+- `RoleMember`/`oidc.LegacyRoleMemberWarning` and the `member` role-map value
+  itself, which keep working and warn through 0.8.x by design (see "A chart
+  that still says `=member`" below) — removed in 0.9, not renamed now.
+- The `classMember` route-classification identifier (`internal/api`'s authz
+  matrix) — a tier classification, not this feature; out of scope.
 
 ## Upgrades
 

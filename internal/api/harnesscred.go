@@ -709,7 +709,7 @@ const (
 // aws-sso image: what a grant bounds is which agent's runs a member may launch,
 // and the credential this captures is for the row's agent.
 //
-// The login lane never passes denyMemberRequest: there is no policy, image,
+// The login lane never passes denyUserRequest: there is no policy, image,
 // workspace or integration in this request to narrow.
 //
 // Returns ok=false when it has already written the refusal.
@@ -735,10 +735,10 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 		return row, scope, true
 	}
 	if !perUser {
-		return types.AgentProvider{}, awsSSOScope{}, !s.denyMemberField(w, r, "setup.harness_login",
+		return types.AgentProvider{}, awsSSOScope{}, !s.denyUserField(w, r, "setup.harness_login",
 			"harness_login_not_per_user", harnessLoginNotPerUserRefusal)
 	}
-	if s.denyMemberCapability(w, r, capAgent, row.ID, "setup.harness_login",
+	if s.denyUserCapability(w, r, capAgent, row.ID, "setup.harness_login",
 		fmt.Sprintf(harnessLoginAgentRefusal, row.ID)) {
 		return types.AgentProvider{}, awsSSOScope{}, false
 	}

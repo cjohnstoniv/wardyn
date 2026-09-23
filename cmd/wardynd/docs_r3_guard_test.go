@@ -192,7 +192,7 @@ func bedrockReservedSecretNames(t *testing.T) []string {
 func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
 	targets := denyMemberFieldTargets(t, "governance_profile")
 	if len(targets) < 5 {
-		t.Fatalf("found %d denyMemberField targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
+		t.Fatalf("found %d denyUserField targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
 	}
 	row := opsTableRow(t, readDoc(t, "docs/OPERATIONS.md"), "governance_profile")
 	for _, target := range targets {
@@ -211,7 +211,7 @@ func denyMemberFieldTargets(t *testing.T, reason string) []string {
 	if err != nil {
 		t.Fatalf("read internal/api: %v", err)
 	}
-	re := regexp.MustCompile(`denyMemberField\(w, r, "([a-z_.]+)", "` + regexp.QuoteMeta(reason) + `"`)
+	re := regexp.MustCompile(`denyUserField\(w, r, "([a-z_.]+)", "` + regexp.QuoteMeta(reason) + `"`)
 	var out []string
 	for _, e := range entries {
 		name := e.Name()

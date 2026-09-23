@@ -67,7 +67,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// reads /healthz before anyone is authenticated. The capability enumeration
 		// below is NOT "admin-gated on /setup/status" — that endpoint is
 		// classMember, and the class list is member-visible there too; what
-		// redactSetupStatusForMember withholds is the operator DETAIL (driver name,
+		// redactSetupStatusForUser withholds is the operator DETAIL (driver name,
 		// per-class substrates, the ephemeral-disk enforcement word). What keeps
 		// THIS endpoint honest is that it composes its body field by field, so a
 		// field added to the setup status never appears here by accident.

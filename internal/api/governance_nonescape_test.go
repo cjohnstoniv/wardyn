@@ -358,7 +358,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 	//	7a: a KIND the profile does not carry at all — composer.Clamp's job.
 	//	7b: a kind the profile DOES carry, paired with a DIFFERENT operator
 	//	    secret. Clamp keeps same-kind grants, so this one reaches
-	//	    filterMemberGrants — the seam that had to be re-pointed from
+	//	    filterUserGrants — the seam that had to be re-pointed from
 	//	    Config.DefaultPolicy to the caller's own ceiling. The deployment
 	//	    eligible-lists the pairing, so nothing but the profile can drop it.
 	t.Run("row 7a: a grant KIND the profile does not carry", func(t *testing.T) {
@@ -383,7 +383,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 			govProfile: blessed, govTier: types.CapabilitySubjectGroup, govHasGroupTier: true,
 		})
 		// The deployment blesses BOTH pairings, so composer.Clamp keeps the kind
-		// and the ONLY gate left is filterMemberGrants reading the right list.
+		// and the ONLY gate left is filterUserGrants reading the right list.
 		srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{
 			{Kind: types.GrantAPIKey, Scope: apiKeyScope(t, "api.anthropic.com", "profile-blessed-key"), TTLSeconds: 300},
 			{Kind: types.GrantAPIKey, Scope: apiKeyScope(t, "api.anthropic.com", govCorpSecret), TTLSeconds: 300},
@@ -861,7 +861,7 @@ func TestStoredPolicyClampCounterfactual(t *testing.T) {
 		profile := govProfile("walled")
 		// The profile carries the api_key KIND but a DIFFERENT pairing, so
 		// composer.Clamp keeps the stored row's grant and the drop has to come
-		// from filterMemberGrants — which is the point: clampGrants passes
+		// from filterUserGrants — which is the point: clampGrants passes
 		// same-kind pairings through verbatim, so Clamp alone would hand this
 		// member the operator secret the stored row named.
 		profile.Ceiling.EligibleGrants = []types.GrantSpec{{
@@ -882,7 +882,7 @@ func TestStoredPolicyClampCounterfactual(t *testing.T) {
 			t.Errorf("min_confinement_class = %q, want the profile's CC2", got.MinConfinementClass)
 		}
 		// The grant-bearing half, which is the reason Clamp alone is not enough:
-		// the profile carries no eligible grants, so filterMemberGrants must
+		// the profile carries no eligible grants, so filterUserGrants must
 		// drop the pairing the stored row carried verbatim.
 		for _, g := range got.EligibleGrants {
 			if strings.Contains(string(g.Scope), govCorpSecret) {
