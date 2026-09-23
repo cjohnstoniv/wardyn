@@ -86,6 +86,23 @@ describe("SignInHelpCard (#484)", () => {
     expect(screen.queryByText(SIGNIN_HELP.EMPTY_NOTE)).not.toBeInTheDocument();
   });
 
+  it("folds separators to spaces and drops invisible format characters as they arrive", async () => {
+    renderCard();
+    const text = await screen.findByLabelText(SIGNIN_HELP.TEXT_LABEL);
+    await userEvent.click(text);
+    await userEvent.paste("a\u2028b\u2029c\u202ed\u200be");
+    expect(text).toHaveValue("a b cde");
+  });
+
+  it("accepts a helpdesk link with a query string", async () => {
+    renderCard();
+    await userEvent.type(await screen.findByLabelText(SIGNIN_HELP.TEXT_LABEL), "x");
+    const link = "https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc";
+    await userEvent.type(screen.getByLabelText(SIGNIN_HELP.URL_LABEL), link);
+    expect(screen.getByRole("button", { name: SIGNIN_HELP.SAVE })).toBeEnabled();
+    expect(screen.getByRole("link", { name: SIGNIN_HELP.LINK_LABEL })).toHaveAttribute("href", link);
+  });
+
   it("counts characters, not UTF-16 units", () => {
     expect(helpTextLength("é😀")).toBe(2);
   });

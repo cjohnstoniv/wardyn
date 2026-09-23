@@ -2144,10 +2144,13 @@ alone: no role, an email domain that isn't allowed, too many groups to list, and
 a missing `email_verified` claim. Timeouts and configuration errors get nothing.
 **Both are public by design:** the anonymous `/healthz` publishes them, because
 the reader has, by definition, not signed in — so name your request process, not
-your internal systems. The text is plain text (at most 1,000 characters, no
-line breaks or other control characters; quotes are fine) and is rendered as
-text, never markup; the link must be `http://` or `https://` and always reads
-"Request access". A write outside those bounds is refused with a 400 naming the
+your internal systems. The text is plain text (at most 1,000 characters; no
+line breaks, control characters, line/paragraph separators or invisible format
+characters such as bidi overrides and zero-width spaces; quotes are fine) and is
+rendered as text, never markup. The link must be an `http://` or `https://`
+address with a real host name — no spaces, no `user:pass@`, none of those
+hidden characters, a query string is fine — and always reads "Request access".
+Every write records both values in the clear on `site_config.write`. A write outside those bounds is refused with a 400 naming the
 field, and a stored value that no longer passes is dropped from `/healthz`
 rather than published. Like the provider blocks, a body that does not name a
 field carries the stored value forward; name it as `""` to clear it.

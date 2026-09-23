@@ -667,7 +667,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(page.getByText(SIGNIN_HELP.EMPTY_NOTE)).toBeVisible();
 
     await text.fill(`Ask in #it-helpdesk — it's quick.`);
-    await link.fill("https://it.corp.example/request");
+    await link.fill("https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc");
     await expect(page.getByText("33 / 1000")).toBeVisible();
     await expect(page.getByTestId("sign-in-help").getByRole("link", { name: SIGNIN_HELP.LINK_LABEL })).toBeVisible();
     await save.click();
@@ -675,7 +675,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
 
     const published = await (await page.request.get("/healthz")).json();
     expect(published.sign_in_help_text).toBe(`Ask in #it-helpdesk — it's quick.`);
-    expect(published.sign_in_help_url).toBe("https://it.corp.example/request");
+    expect(published.sign_in_help_url).toBe("https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc");
 
     await page.reload();
     await expect(text).toHaveValue(`Ask in #it-helpdesk — it's quick.`);

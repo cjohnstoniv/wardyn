@@ -31,10 +31,13 @@ import { Field } from "../../wardyn/form-primitives";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { SignInHelp } from "../../wardyn/sign-in-help";
 
-// The server refuses any control character (validateSignInHelp), line breaks
-// included — the text renders as one paragraph. A paste with line breaks is
-// folded to spaces as it arrives rather than refused at Save.
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
+// The server refuses control characters (line breaks included), line/paragraph
+// separators and invisible format characters (validateSignInHelp) — the text
+// renders as one plain paragraph. A paste carrying them is cleaned as it
+// arrives rather than refused at Save: breaks and controls fold to spaces,
+// format characters (bidi overrides, zero-width spaces) are dropped.
+const BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+const FORMAT = /\p{Cf}/gu;
 // A courtesy only: the server's validSiteURL is the gate.
 const HTTP_URL = /^https?:\/\/[^\s/?#]+/i;
 
@@ -154,7 +157,7 @@ export function SignInHelpCard() {
               rows={3}
               onChange={(e) => {
                 setTyping(true);
-                setText(e.target.value.replace(CONTROL, " "));
+                setText(e.target.value.replace(BREAKS, " ").replace(FORMAT, ""));
               }}
             />
           </Field>

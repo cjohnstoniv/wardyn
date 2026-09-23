@@ -75,13 +75,32 @@ func TestValidateSignInHelp(t *testing.T) {
 		{"tab: refused", "a\tb", "", errSignInHelpTextControl},
 		{"DEL: refused", "a\x7fb", "", errSignInHelpTextControl},
 		{"C1 control (U+0085 NEL): refused", "a\u0085b", "", errSignInHelpTextControl},
+		{"bidi override (U+202E): refused", "abc\u202edef", "", errSignInHelpTextControl},
+		{"zero-width space (U+200B): refused", "a\u200bb", "", errSignInHelpTextControl},
+		{"line separator (U+2028): refused", "a\u2028b", "", errSignInHelpTextControl},
+		{"paragraph separator (U+2029): refused", "a\u2029b", "", errSignInHelpTextControl},
 		{"https url: ok", "", "https://it.corp.example/request?app=wardyn", nil},
 		{"http url: ok", "", "http://helpdesk.corp.example/", nil},
+		// The defect #489's review found: an ordinary helpdesk query string.
+		{"& in the query: ok", "", "https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc", nil},
+		{"upper-case scheme and host, port, fragment: ok", "", "HTTPS://IT.Corp.Example:8443/a?b=c&d=e#f", nil},
 		{"javascript: refused", "", "javascript:alert(1)", errSignInHelpURLScheme},
 		{"data: refused", "", "data:text/html,hi", errSignInHelpURLScheme},
 		{"ftp: refused", "", "ftp://files.corp.example/", errSignInHelpURLScheme},
 		{"no scheme: refused", "", "it.corp.example/request", errSignInHelpURLScheme},
-		{"no host: refused", "", "https://", errSignInHelpURLScheme},
+		{"scheme-relative //host: refused", "", "//it.corp.example/request", errSignInHelpURLScheme},
+		{"no host: refused", "", "https://", errSignInHelpURLMalformed},
+		{"opaque https:host: refused", "", "https:it.corp.example", errSignInHelpURLMalformed},
+		{"dotless host: refused", "", "https://intranet/request", errSignInHelpURLMalformed},
+		{"userinfo: refused", "", "https://user:pass@it.corp.example/", errSignInHelpURLMalformed},
+		{"userinfo host confusion: refused", "", "https://it.corp.example@evil.example/", errSignInHelpURLMalformed},
+		{"leading space: refused", "", " https://it.corp.example/", errSignInHelpURLMalformed},
+		{"inner space: refused", "", "https://it.corp.example/a b", errSignInHelpURLMalformed},
+		{"leading control before javascript: refused", "", "\x01javascript:alert(1)", errSignInHelpURLMalformed},
+		{"tab inside: refused", "", "https://it.corp.example/\tx", errSignInHelpURLMalformed},
+		{"zero-width space in host: refused", "", "https://it.corp\u200b.example/", errSignInHelpURLMalformed},
+		{"bidi override: refused", "", "https://it.corp.example/\u202eevil", errSignInHelpURLMalformed},
+		{"over 2048 bytes: refused", "", "https://it.corp.example/" + strings.Repeat("a", 2048), errSignInHelpURLMalformed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := validateSignInHelp(tc.text, tc.url); got != tc.want {
@@ -100,9 +119,11 @@ func TestHandlePutSiteConfig_SignInHelpRefusals(t *testing.T) {
 		{"1001 characters", `{"sign_in_help_text":"` + strings.Repeat("a", 1001) + `"}`,
 			"sign_in_help_text: longer than 1,000 characters — it renders under a refusal on the sign-in page"},
 		{"line break", `{"sign_in_help_text":"one\ntwo"}`,
-			"sign_in_help_text: contains a line break or control character — it renders as one plain paragraph on the sign-in page"},
+			"sign_in_help_text: contains a line break, control character or invisible formatting character — it renders as one plain paragraph on the sign-in page"},
 		{"bad scheme", `{"sign_in_help_url":"javascript:alert(1)"}`,
 			"sign_in_help_url: must be an http:// or https:// address — it is shown to people who have not signed in"},
+		{"malformed", `{"sign_in_help_url":"https://user@it.corp.example/"}`,
+			"sign_in_help_url: must be a plain web address with a real host name — no spaces, sign-in details or hidden characters — it is shown to people who have not signed in"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeSiteConfigStore{}
@@ -140,6 +161,36 @@ func TestHandlePutSiteConfig_SignInHelpCarryForward(t *testing.T) {
 	if fake.putSeen.SignInHelpText != "" || fake.putSeen.SignInHelpURL != "" {
 		t.Errorf("naming the pair as empty did not clear it: %+v", fake.putSeen)
 	}
+}
+
+// site_config.write carries the pair in the clear — public by design, so the
+// log holds nothing /healthz does not already publish — and an '&' link saves.
+func TestHandlePutSiteConfig_SignInHelpAudited(t *testing.T) {
+	fake := &fakeSiteConfigStore{}
+	srv, audit := newSiteConfigHarness(t, fake)
+	const link = "https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc"
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken,
+		`{"sign_in_help_text":"Ask in #it-helpdesk.","sign_in_help_url":"`+link+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	for _, ev := range audit.events {
+		if ev.Action != "site_config.write" {
+			continue
+		}
+		var d struct {
+			Text string `json:"sign_in_help_text"`
+			URL  string `json:"sign_in_help_url"`
+		}
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		if d.Text != "Ask in #it-helpdesk." || d.URL != link {
+			t.Errorf("site_config.write datum = %+v, want the saved pair", d)
+		}
+		return
+	}
+	t.Fatal("no site_config.write event")
 }
 
 // healthzHelpStore answers the two reads /healthz makes.

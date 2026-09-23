@@ -39,7 +39,7 @@ strings; this table is where a reviewer checks them. It supersedes the `sso_rbac
 | `SIGNIN_HELP.APPLIES_NOTE` | Shown on the four refusals a person can't clear themselves: no role, an email domain that isn't allowed, too many groups to list, and a missing email claim. | card preview |
 | `SIGNIN_HELP_LINK_LABEL` | Request access | sign-in page and card preview (`people-access-copy.ts`; the card re-exports it as `SIGNIN_HELP.LINK_LABEL`) |
 | refusal: too long | sign_in_help_text: longer than 1,000 characters — it renders under a refusal on the sign-in page | `PUT /site-config` 400 (`validateSignInHelp`) |
-| refusal: bad URL | sign_in_help_url: must be an http:// or https:// address — it is shown to people who have not signed in | `PUT /site-config` 400 |
+| refusal: bad URL | sign_in_help_url: must be an http:// or https:// address — it is shown to people who have not signed in | `PUT /site-config` 400, scheme failures only |
 
 ## Implementation strings (not in the mock)
 
@@ -47,7 +47,8 @@ These strings cover the card's save mechanics. The mock did not draw them.
 
 | Id | String |
 |---|---|
-| refusal: control character | sign_in_help_text: contains a line break or control character — it renders as one plain paragraph on the sign-in page |
+| refusal: control character | sign_in_help_text: contains a line break, control character or invisible formatting character — it renders as one plain paragraph on the sign-in page |
+| refusal: malformed URL | sign_in_help_url: must be a plain web address with a real host name — no spaces, sign-in details or hidden characters — it is shown to people who have not signed in |
 | `SIGNIN_HELP.SAVE` | Save |
 | `SIGNIN_HELP.SAVED_TOAST` | Sign-in help saved. |
 | `SIGNIN_HELP.SAVE_ERROR` | Couldn't save the sign-in help. |

@@ -813,6 +813,10 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		// ENABLED rows, so a roster narrowed by an MDM push is reviewable
 		// from the audit log alone.
 		"agent_providers": enabledAgentProviderCount(saved),
+		// The sign-in help pair (#484), in the clear: /healthz publishes both
+		// to anyone, so the log can hold what every signed-out reader sees.
+		"sign_in_help_text": saved.SignInHelpText,
+		"sign_in_help_url":  saved.SignInHelpURL,
 	}
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
