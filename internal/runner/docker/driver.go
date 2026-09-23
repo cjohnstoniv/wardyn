@@ -184,6 +184,7 @@ const mainProcCastDir = "/tmp/wardyn-rec"
 // present the runner.Runner surface to the control plane.
 var _ substrate.Substrate = (*Driver)(nil)
 var _ runner.SandboxEnder = (*Driver)(nil)
+var _ runner.ProxyStopper = (*Driver)(nil)
 var _ runner.Freezer = (*Driver)(nil)
 
 // New constructs a Driver against the host Docker daemon. API-version negotiation

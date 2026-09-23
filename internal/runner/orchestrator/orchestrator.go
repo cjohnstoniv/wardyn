@@ -397,6 +397,20 @@ func (o *Orchestrator) EndSandbox(ctx context.Context, ref string) error {
 	return ender.EndSandbox(ctx, ref)
 }
 
+// StopProxy forwards a lost run's proxy removal to ref's substrate when it can
+// keep the rest of the sandbox. The route is kept, as for EndSandbox.
+func (o *Orchestrator) StopProxy(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	stopper, ok := s.(runner.ProxyStopper)
+	if !ok {
+		return runner.ErrEndUnsupported
+	}
+	return stopper.StopProxy(ctx, ref)
+}
+
 // FreezeSandbox forwards a pause to ref's substrate when it implements
 // runner.Freezer (Docker/runc today). The route is kept: the sandbox still
 // exists, paused, and Thaw/Stop/Kill must still find its substrate.

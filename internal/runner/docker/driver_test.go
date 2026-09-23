@@ -1212,6 +1212,34 @@ func TestEndSandbox_StopsTheAgentKeepsItAndRemovesTheProxy(t *testing.T) {
 	}
 }
 
+// TestStopProxy_RemovesOnlyTheProxy is a run lost to a control-plane outage
+// on Docker: the proxy sidecar, the agent's only network path, is removed,
+// while the agent container keeps running so a proxy-only revive can pick it
+// up. A second stop is a no-op.
+func TestStopProxy_RemovesOnlyTheProxy(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+
+	for i := range 2 {
+		if err := d.StopProxy(ctx, sb.Ref); err != nil {
+			t.Fatalf("StopProxy #%d: %v", i+1, err)
+		}
+	}
+	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
+		t.Error("the proxy sidecar was not removed")
+	}
+	if agent := f.containers[sb.Ref]; agent == nil || agent.removed || agent.state == nil || !agent.state.Running {
+		t.Fatalf("agent after StopProxy = %+v; want it still running", agent)
+	}
+}
+
 // TestFreezeSandbox_PausesTheAgentOnly is runner Freeze/Thaw on Docker
 // (runner.Freezer, long-holds design rev 4 §3.1): FreezeSandbox pauses the
 // agent container and leaves the proxy sidecar untouched (it must keep

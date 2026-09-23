@@ -377,14 +377,21 @@ func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: stop agent: %w", err)
 	}
+	return d.StopProxy(ctx, ref)
+}
+
+// StopProxy removes the agent ref's proxy sidecar and nothing else
+// (runner.ProxyStopper): the agent keeps running with no network path. Fails
+// closed like EndSandbox.
+func (d *Driver) StopProxy(ctx context.Context, ref string) error {
 	id, err := runIDFromAgentName(ref)
 	if err != nil {
 		res, ierr := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 		if ierr != nil || res.Container.Config == nil {
-			return fmt.Errorf("docker: end of agent %s: %w", ref, errTeardownUnresolved)
+			return fmt.Errorf("docker: proxy of agent %s: %w", ref, errTeardownUnresolved)
 		}
 		if id, err = parseRunID(res.Container.Config.Labels[labelRun]); err != nil {
-			return fmt.Errorf("docker: end of agent %s: %w", ref, errTeardownUnresolved)
+			return fmt.Errorf("docker: proxy of agent %s: %w", ref, errTeardownUnresolved)
 		}
 	}
 	if _, err := d.cli.ContainerRemove(ctx, proxyContainerName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {

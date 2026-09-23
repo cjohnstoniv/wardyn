@@ -177,9 +177,12 @@ export interface AgentRun {
   governance_profile_id?: string;
   // Set when the run lost its sandbox but is kept (migration 0070, #568):
   // "ended" = its end passed, so it is stopped with no network and its files
-  // stay for the ended-run grace. The run stays RUNNING meanwhile.
+  // stay for the ended-run grace. "reboot" = its container exited under it
+  // and is kept stopped; "outage" = its token lapsed, so its proxy was removed
+  // and its agent left running with no network (#574). The run stays RUNNING
+  // meanwhile.
   lost_at?: string;
-  lost_reason?: "ended";
+  lost_reason?: "ended" | "reboot" | "outage";
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that

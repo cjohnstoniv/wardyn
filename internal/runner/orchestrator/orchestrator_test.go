@@ -495,6 +495,40 @@ func TestOrchestrator_EndSandbox(t *testing.T) {
 	}
 }
 
+// proxyStoppingSubstrate is a fakeSubstrate that can remove a proxy alone.
+type proxyStoppingSubstrate struct {
+	*fakeSubstrate
+	proxyStops []string
+}
+
+func (p *proxyStoppingSubstrate) StopProxy(_ context.Context, ref string) error {
+	p.rec(&p.proxyStops, ref)
+	return nil
+}
+
+// TestOrchestrator_StopProxy: a lost run's proxy removal reaches a substrate
+// that can do it and keeps the route; one that cannot (Kubernetes) answers
+// ErrEndUnsupported, which the control plane turns into a full teardown.
+func TestOrchestrator_StopProxy(t *testing.T) {
+	ctx := context.Background()
+	oci := &proxyStoppingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	o := New(oci)
+	if err := o.StopProxy(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("StopProxy: %v", err)
+	}
+	if err := o.KillSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("KillSandbox after StopProxy: %v", err)
+	}
+	if len(oci.proxyStops) != 1 || len(oci.kills) != 1 {
+		t.Errorf("proxy stops %v kills %v; want the stop forwarded and the route kept", oci.proxyStops, oci.kills)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if err := k8s.StopProxy(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Errorf("StopProxy on a substrate that cannot keep a sandbox = %v, want ErrEndUnsupported", err)
+	}
+}
+
 // freezingSubstrate is a fakeSubstrate that can pause/resume the agent.
 type freezingSubstrate struct {
 	*fakeSubstrate

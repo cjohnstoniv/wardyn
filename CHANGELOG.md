@@ -107,6 +107,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `false` until that pause path is verified. Kubernetes does not implement `Freezer`; a router in
   front of one answers `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is
   #572.
+- **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
+  agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
+  suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its
+  agent stopped, its proxy removed, its pending approvals cancelled (`run_lost`) and its broker
+  credentials revoked. A run whose token has not been renewed for over an hour and five minutes (the
+  control plane was down past the proxy's renew window, after which the proxy gives up renewing but
+  used to keep forwarding allowlisted egress on a dead identity, unaudited) is now found at boot and
+  on every sweep: an interactive one is kept with `lost_reason: "outage"`, its proxy removed so it
+  has no egress while its agent keeps running; a headless one is failed and torn down. A lost run is
+  kept until its end plus `WARDYN_ENDED_RUN_GRACE` (`run.lost.expired`), or until it is killed when
+  it has no end; an outage run's agent is stopped once its end passes. Anything that cannot be kept
+  fails closed and is torn down (an outage run as `FAILED`): a headless run, one past its end and
+  grace, a substrate that cannot keep a sandbox (Kubernetes), or a proxy that cannot be removed. Every renew now stamps
+  the run and hands out its token only once the stamp lands; a kept (ended or lost) run's renew
+  answers 403. Audited as `run.lost`. Migration `0071_agent_runs_token_renewed` adds
+  `token_renewed_at`, starting every existing run with a fresh stamp so none is read as lapsed at
+  upgrade.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

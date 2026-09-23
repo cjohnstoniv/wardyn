@@ -646,9 +646,20 @@ type SandboxEnder interface {
 	EndSandbox(ctx context.Context, ref string) error
 }
 
-// ErrEndUnsupported is EndSandbox's answer from a router whose substrate for
-// ref cannot keep a stopped sandbox.
+// ErrEndUnsupported is EndSandbox's (and StopProxy's) answer from a router
+// whose substrate for ref cannot keep a stopped (or lost) sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
+
+// ProxyStopper is an OPTIONAL Runner capability: remove a sandbox's proxy
+// sidecar and leave its agent running (a run lost to a control-plane outage,
+// long-holds design rev 4 §4 row 2). The agent keeps its processes and files
+// but has no network path, because the proxy was its only one. Idempotent on
+// a missing proxy; an unresolvable ref is an error, never a success that left
+// the proxy up. A router in front of a substrate without it returns
+// ErrEndUnsupported.
+type ProxyStopper interface {
+	StopProxy(ctx context.Context, ref string) error
+}
 
 // Freezer is an OPTIONAL Runner capability: pause and resume the AGENT
 // container in place, without stopping it (runner Freeze/Thaw, long-holds

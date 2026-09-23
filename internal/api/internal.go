@@ -838,11 +838,35 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusForbidden, "run is terminal")
 		return
 	}
+	// A kept run (ended or lost) has no proxy on purpose; only a revive gives
+	// it one, with a token of its own. Nothing may carry its identity forward.
+	if runIsKept(run) {
+		s.auditRenewDenied(r, claims, "run_lost:"+string(run.LostReason))
+		writeError(w, http.StatusForbidden, "run is lost")
+		return
+	}
 
 	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return
+	}
+	// The stamp is what the lapsed-token sweep reads (run_lost.go), so it is
+	// written after the mint and the token is handed out only once it lands: a
+	// stamp can then never be older than the token the proxy holds. A failed
+	// stamp is retryable, like a store blip on the read above; a run marked
+	// lost since that read is refused.
+	if loser, ok := s.cfg.Store.(store.RunLoser); ok {
+		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID)
+		if serr != nil {
+			writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "stamp run token renewed", serr))
+			return
+		}
+		if !stamped {
+			s.auditRenewDenied(r, claims, "run_lost")
+			writeError(w, http.StatusForbidden, "run is lost")
+			return
+		}
 	}
 
 	// Honest trail: the provider records its own identity.mint for the new token;

@@ -116,9 +116,19 @@ var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 // LostReason says why a kept run lost its sandbox (AgentRun.LostReason).
 type LostReason string
 
-// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
-// and kept for the ended-run grace.
-const LostEnded LostReason = "ended"
+const (
+	// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
+	// and kept for the ended-run grace.
+	LostEnded LostReason = "ended"
+	// LostReboot is an interactive run whose agent container exited under it
+	// (a host reboot, a Docker Desktop restart, a long suspend) but still
+	// exists: kept with its files and its proxy removed.
+	LostReboot LostReason = "reboot"
+	// LostOutage is an interactive run whose run token lapsed because the
+	// control plane was unreachable past the token's life: its proxy is removed
+	// so it has no egress, and its agent is left running.
+	LostOutage LostReason = "outage"
+)
 
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
@@ -267,10 +277,10 @@ type AgentRun struct {
 	RunLimits           RunLimits  `json:"run_limits"`
 	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
 	// LostAt / LostReason mark a run that lost its sandbox but is KEPT: its
-	// agent is stopped and its proxy gone, so it has no network, while its
-	// files stay. The run keeps its RunState (RUNNING, so it still holds a quota
-	// slot); only a kill or the ended-run grace makes it terminal. Nil / "" is a
-	// live run. Migration 0070.
+	// proxy is gone, so it has no network, while its files stay (its agent is
+	// stopped too, except for LostOutage). The run keeps its RunState
+	// (RUNNING, so it still holds a quota slot); only a kill or the ended-run
+	// grace makes it terminal. Nil / "" is a live run. Migration 0070.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are

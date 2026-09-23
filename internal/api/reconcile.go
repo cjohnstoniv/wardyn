@@ -132,7 +132,11 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// `wardyn support-bundle`. A ticker was rejected separately: the primitive
 	// calls ListRuns unpaged and probes every terminal run carrying a ref, so its
 	// cost grows with run history forever and it would need leader election.
-	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
+	//
+	// sweepLapsedRunTokens runs after sweepRunWatchers: a run whose container a
+	// reboot stopped is then marked lost (reboot), which says its agent needs
+	// starting again, before the same downtime marks it lost (outage).
+	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.sweepLapsedRunTokens(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
 }
 
 // auditK8sNetpolIfUnenforced writes one boot-time audit row, "k8s.netpol_unenforced",
@@ -436,6 +440,11 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 		// attach a watcher that retries and only gives up after a bounded error run.
 		// Only a definitive terminal STATE finalizes here.
 		if serr == nil && isTerminalRunState(st.State) {
+			// An interactive run whose container exited under it (a reboot) is
+			// kept, not finalized (run_lost.go).
+			if s.keepRebootedRun(ctx, run, st) {
+				continue
+			}
 			final := types.RunFailed
 			if st.ExitCode != nil && *st.ExitCode == 0 {
 				final = types.RunCompleted
@@ -523,6 +532,10 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 				// apart and the end is a minute late at worst.
 				if err := s.sweepRunLeases(ctx); err != nil {
 					slog.WarnContext(ctx, "wardynd: run lease sweep", slog.Any("err", err))
+				}
+				// A run whose token lapsed loses its proxy within a tick.
+				if err := s.sweepLapsedRunTokens(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: lapsed run token sweep", slog.Any("err", err))
 				}
 			}()
 		}
@@ -661,6 +674,9 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				tick.Reset(baseInterval)
 			}
 			if isTerminalRunState(st.State) {
+				if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil && s.keepRebootedRun(ctx, run, st) {
+					return
+				}
 				final := types.RunFailed
 				if st.ExitCode != nil && *st.ExitCode == 0 {
 					final = types.RunCompleted
