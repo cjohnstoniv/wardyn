@@ -873,8 +873,11 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 // lets Anthropic reject it on the wire if it has been revoked (fail closed at
 // the sink, surfaced as a run failure + an aging warning in setup status).
 type managedCredProvider struct {
-	store    secretstore.Store
 	provider string
+	// get reads the stored blob; found=false is "not connected". The boot
+	// provider reads the operator's row, a per-person one its owner's own row
+	// through the strict read (ownerSubscriptionToken).
+	get func(ctx context.Context) (raw []byte, found bool, err error)
 }
 
 // NewManagedCredProvider builds a managed subscription provider over store for a
@@ -884,21 +887,27 @@ func NewManagedCredProvider(store secretstore.Store, provider string) subscripti
 	if store == nil {
 		return nil
 	}
-	return &managedCredProvider{store: store, provider: provider}
+	// store is the operator-wide managed credential (the caller passes the raw,
+	// unscoped store) — not per-principal.
+	return &managedCredProvider{provider: provider, get: func(ctx context.Context) ([]byte, bool, error) {
+		raw, err := store.Get(ctx, harnessCredSecretName(provider))
+		if errors.Is(err, secretstore.ErrNotFound) {
+			return nil, false, nil
+		}
+		return raw, err == nil, err
+	}}
 }
 
-func (p *managedCredProvider) read() (subscription.Token, error) {
-	// p.store is the operator-wide managed credential (NewManagedCredProvider's
-	// caller passes the raw, unscoped store) — not per-principal.
-	raw, err := p.store.Get(context.Background(), harnessCredSecretName(p.provider))
-	if errors.Is(err, secretstore.ErrNotFound) {
-		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)
-	}
+func (p *managedCredProvider) read(ctx context.Context) (subscription.Token, error) {
+	raw, found, err := p.get(ctx)
 	if err != nil {
 		// A store-layer failure (decrypt/age-key mismatch, backend down) is NOT
 		// "not connected" — surface it distinctly so the sink fails closed on a
 		// real error rather than silently reading as "unconfigured".
 		return subscription.Token{}, fmt.Errorf("read managed %s credential: %w", p.provider, err)
+	}
+	if !found {
+		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)
 	}
 	var blob managedCredBlob
 	if uerr := json.Unmarshal(raw, &blob); uerr != nil {
@@ -915,10 +924,10 @@ func (p *managedCredProvider) read() (subscription.Token, error) {
 
 // Current returns the managed token (no refresh — see type doc).
 func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, error) {
-	return p.read()
+	return p.read(ctx)
 }
 
 // Peek is identical to Current here (no refresh side effect to avoid).
 func (p *managedCredProvider) Peek() (subscription.Token, error) {
-	return p.read()
+	return p.read(context.Background())
 }

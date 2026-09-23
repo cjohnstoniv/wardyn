@@ -30,12 +30,14 @@ const (
 	mpRunBadID           = "model_provider: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters"
 )
 
-// providerKindDispatched is the kinds whose dispatch arm has landed. A chosen
-// provider of any other kind is refused at create rather than dispatched down
-// the legacy lane chain, which would serve it from a credential it did not
-// choose. ponytail: empty until MP-7 (keys, endpoint), MP-8 (subscription) and
-// MP-9 (Bedrock) add their arms; MP-9 deletes the map.
-var providerKindDispatched = map[types.ModelProviderKind]bool{}
+// providerKindDispatched is the kinds whose dispatch arm has landed
+// (resolveProviderTransport). A chosen provider of any other kind is refused
+// at create rather than dispatched down the legacy lane chain, which would
+// serve it from a credential it did not choose. ponytail: MP-7 (keys,
+// endpoint) and MP-9 (Bedrock) add the rest; MP-9 deletes the map.
+var providerKindDispatched = map[types.ModelProviderKind]bool{
+	types.ModelProviderAnthropicSubscription: true,
+}
 
 // runProviderChoice is chooseModelProvider's answer. chosen=false with no
 // refusal is "no provider serves this harness": the run launches on today's
@@ -129,10 +131,10 @@ func providerRefusal(id, state string) runProviderChoice {
 // refuses rather than ignores. wsRefs[0] is the primary workspace, the one
 // whose pin a run inherits (foldRunIntegration reads the same one).
 //
-// Every provider this chooses is refused for now (providerKindDispatched), so
-// a run on a deployment that configured providers never reaches the legacy lane
-// chain with a choice it would not honour. Writes its own refusal and returns
-// ok=false once it has.
+// A provider whose kind has no dispatch arm yet is refused
+// (providerKindDispatched), so a run on a deployment that configured providers
+// never reaches the legacy lane chain with a choice it would not honour.
+// Writes its own refusal and returns ok=false once it has.
 //
 // The returned runProviderChoice is launch's (runs.go) only source for
 // AgentRun.ModelProviderID and the run.create audit snapshot (#527) — Review
@@ -194,6 +196,18 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	case choice.chosen && !providerKindDispatched[choice.provider.Kind]:
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpRunNotYet, choice.provider.ID))
 		return runProviderChoice{}, false
+	case choice.chosen && choice.provider.Kind == types.ModelProviderAnthropicSubscription:
+		// The liveness dispatch re-checks, answered here too so a person who
+		// is not signed in is told before a run exists.
+		refusal, err := s.providerSubscriptionRefusal(ctx, choice.provider, runIdentitySubject(ctx, principalFromRequest(r)))
+		if err != nil {
+			writeServerError(w, r, "read model provider credential", err)
+			return runProviderChoice{}, false
+		}
+		if refusal != "" {
+			writeError(w, http.StatusUnprocessableEntity, refusal)
+			return runProviderChoice{}, false
+		}
 	}
 	return choice, true
 }

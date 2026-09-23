@@ -269,8 +269,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A chosen provider's arm alone credentials the run, so the roster's
+	// declared-mechanism gate, which grades the legacy lanes, does not apply.
 	var modelCred modelCredentialFacts
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
+	if !mpChoice.chosen && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
 		return
 	}
 
@@ -397,7 +399,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
-	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject)...)
+	if !mpChoice.chosen {
+		warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject)...)
+	}
 
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and

@@ -284,6 +284,12 @@ func (s *Server) anthropicGatewayHostPort() string {
 	if !ok {
 		return ""
 	}
+	return gatewayHostPort(base)
+}
+
+// gatewayHostPort is gatewayHost with its port attached (default 443), or ""
+// when base has no host.
+func gatewayHostPort(base string) string {
 	u, err := url.Parse(base)
 	if err != nil || u.Hostname() == "" {
 		return ""

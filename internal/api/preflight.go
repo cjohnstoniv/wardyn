@@ -353,11 +353,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// The model-provider choice, where launch makes it (runs.go). Review has no
 	// run row to freeze the choice onto, so it discards it — Review's job is
 	// only to answer the refusal launch would.
-	if _, ok := s.enforceRunModelProvider(w, r, req, wsRefs); !ok {
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, wsRefs)
+	if !ok {
 		return
 	}
 	var modelCred modelCredentialFacts
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
+	if !mpChoice.chosen && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
 		return
 	}
 

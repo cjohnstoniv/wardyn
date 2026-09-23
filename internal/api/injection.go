@@ -128,6 +128,15 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// PER-PERSON CLAUDE SUBSCRIPTION: a wardyn-provider-<uid>-oauth sentinel
+	// resolves to the run owner's own Claude sign-in for the provider the run
+	// chose — see resolveProviderSubscriptionInjection. The posture 403 below is
+	// keyed by sentinel name: it guards the two legacy SHARED sentinels only,
+	// so a per-owner name never reaches it (MP-4b retires it).
+	if s.resolveProviderSubscriptionInjection(w, r, claims, minted, grantID) {
+		return
+	}
+
 	// SUBSCRIPTION / MANAGED path: the sentinel secret name resolves to a LIVE
 	// Anthropic OAuth access token (the resident host token, or the Wardyn-managed
 	// captured setup-token) rather than a stored secret. The token lives only in

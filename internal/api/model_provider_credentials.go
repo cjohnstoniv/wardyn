@@ -30,7 +30,7 @@ import (
 // sign-in, -sso for an AWS sign-in. Keyed by the provider's server-minted UID,
 // never its admin-chosen ID, so a provider deleted and re-added under the same
 // ID starts with nobody's credential.
-const providerSecretPrefix = "wardyn-provider-"
+const providerSecretPrefix = types.ModelProviderSecretPrefix
 
 const (
 	providerKeyPart   = "key"

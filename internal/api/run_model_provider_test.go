@@ -239,7 +239,7 @@ func TestRunModelProviderPersistsOnTheRow(t *testing.T) {
 	site := types.SiteConfig{ModelProviders: providerBlock(provider)}
 	srv := providerRunFixture(t, site, &capStore{}, nil)
 
-	// providerKindDispatched is empty until MP-7 lands its first arm; a real PR
+	// providerKindDispatched lacks the key kinds until MP-7 lands them; a real PR
 	// flips this bit permanently, a test flips it for the span of one call.
 	providerKindDispatched[provider.Kind] = true
 	defer delete(providerKindDispatched, provider.Kind)

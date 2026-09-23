@@ -42,6 +42,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pin is not exempt. A run launched on a workspace by id (`workspace_id`, the CLI's `--workspace`)
   chooses like any other.
 
+- **A run on a Claude subscription model provider uses its owner's own sign-in (#529).** A run
+  that chose an `anthropic_subscription` provider is dispatched on that provider alone: the run
+  owner's own Claude sign-in (`wardyn-provider-<uid>-oauth`, read strictly from their own
+  namespace, never the operator's) is injected proxy-side on `api.anthropic.com` or the provider's
+  route-through host, the sandbox holding only an inert sentinel; the host `~/.claude` mount, the
+  operator's managed token, Bedrock and the operator's API key never credential it. It works on
+  Kubernetes and with SSO: the shared-subscription posture refusal now applies only to the two
+  legacy shared sentinels. Create, Review and dispatch refuse, naming the provider, a run whose
+  owner is not signed in to Claude for it, whose install cannot hold or build a sign-in (no secret
+  store, or the Claude sign-in image does not resolve), or whose caller is the admin token under
+  SSO; dispatch also refuses a provider since deleted, turned off, or no longer serving the agent.
+  The injection sink re-reads the provider by UID on every resolve and serves only the run token's
+  own subject, the provider's own host, and a run still on that provider. A stored, inline or
+  recorded grant naming a sign-in sentinel is dropped at dispatch (`run.injection.dropped`, reason
+  `provider_signin_not_dispatch_authored`), and Record Mode leaves one out of a profile. Nobody can
+  sign in to a provider yet (#533), so until then such runs are refused at create.
+
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0069_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to
   at create time, so every `scanRun`-bound reader — `GetRun`, `ListRuns`, the run detail and list
