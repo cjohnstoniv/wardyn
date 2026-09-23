@@ -3,8 +3,8 @@
 This is the mock round for the 0.8 console-residue batch named by #157: findings from the 0.7.6/0.7.7
 readiness reviews that had no design artefact and whose review packages no longer exist anywhere, so
 the finding text is only recoverable from `CHANGELOG.md`, `ROADMAP.md` and commit bodies. Twelve
-findings were named as residue; seven have no surviving description at all and are struck from the
-roadmap rather than guessed at (see §7 for the id mapping). This document covers the five the changelog and roadmap still
+findings were named as residue; seven have no surviving description of their follow-up delta and are
+struck from the roadmap rather than guessed at (see §7 for the id mapping). This document covers the five the changelog and roadmap still
 describe, plus the unsaved-changes guard, which shipped (#217) ahead of the frozen tables that were
 supposed to precede it.
 
@@ -240,14 +240,19 @@ ones against `ROADMAP.md`, so no id in that line is left unexplained:
 | F069-a | struck — no surviving description |
 | F051-a/F092-a | struck — no surviving description |
 
-Seven ids are struck, not six. The base findings each `-followup`/`-panes`/`-control`/`-copy` id
-extends shipped in commit `71738a7d` (R4-F141: a side fetch that fails no longer claims the control
-plane is down; R4-F142: the tile fill rule; R4-F143: a stalled 101 becomes a failed attempt; R4-F004: a
-failed recording fetch is reported as a failure) — that base behavior is not in question. What has no
-surviving description in `CHANGELOG.md` or a recoverable commit body is the *follow-up delta* each of
-the seven struck ids named beyond that base fix (plus the sign-in gate's three-way probe in `App.tsx`,
-Settings' unread proxy posture, and the drives allocations truncation note, none of which map to a
-roadmap id in the batch above), which is why they are struck rather than guessed at here.
+Seven ids are struck, not six. The base findings each `-followup`/`-panes`/`-control`/`-copy`/`-a` id
+extends shipped across two commits, not one. R4-F141 (a side fetch that fails no longer claims the
+control plane is down), R4-F142 (the tile fill rule), R4-F143 (a stalled 101 becomes a failed attempt)
+and R4-F004 (a failed recording fetch is reported as a failure) shipped in commit `71738a7d`. F027-a,
+F069-a and F051-a/F092-a extend a different base, shipped in commit `ddf0fc8d3`: "a daemon 5xx is not
+'signed out' — probeAuth answers three ways" (F027, the sign-in gate's three-way probe in `App.tsx`),
+"Settings states no proxy posture it could not read" (F069, Settings' unread proxy posture), and "a
+bounded allocations page says so" plus "§7.3 records the allocations truncation note" (F092, the
+drives allocations truncation note) — alongside "the two preview fields ... the console drops" (F051,
+whose dropped-fields subject overlaps §4/F093). That base behavior is not in question in either commit.
+What has no surviving description in `CHANGELOG.md` or a recoverable commit body is the *follow-up
+delta* each of the seven struck ids named beyond its own base fix, which is why they are struck rather
+than guessed at here.
 
 This document does not itself edit `ROADMAP.md`: #170, the reconcile issue, is already closed, so the
 strike above is applied at release reconciliation (PLAN.md:425) reading this table, not by this commit.
