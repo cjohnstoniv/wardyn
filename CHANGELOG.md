@@ -81,11 +81,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `GET /me/capabilities` gains `kinds_version`, which goes up whenever the set of capability kinds
   changes.
 - **New admin read: `GET /permissions/explain` (#739).** For one named `user`, `group` or (once
-  user types land) `user_type` subject, it answers every capability kind's state — everyone, this
-  subject, blocked, admins only, or the reserved "not available" — at the default plus any
-  specific resource an admin has already written a grant for. It is the data the upcoming user
-  type editor's "What this type gets" screen reads; today it also answers for any existing user or
-  group. `security_admin` and admin only, like the rest of `/permissions`.
+  user types land) `user_type` subject, it answers each capability kind's state — everyone, this
+  subject, blocked, admins only, or not available — at the default plus any specific resource an
+  admin has already written a grant for. Each state is the grant resolver's own answer, including
+  the kind's enforcement switch and any broader deny that covers the resource. It reads only the
+  rows that name that exact subject or `all`: it does not look up a user's groups, so a group deny
+  that blocks the person does not show on their grid, and an allow written for `all` shows as
+  "this subject". It is the data the upcoming user type editor's "What this type gets" screen
+  reads. `security_admin` and admin only, like the rest of `/permissions`.
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
