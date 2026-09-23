@@ -15,6 +15,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **An admin editor with unsaved work now guards against losing it, and Settings joins the
+  sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
+  its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away
+  in-app opens a "Leave without saving?" confirm (closing or reloading the tab triggers the
+  browser's own `beforeunload` prompt instead), shared via one hook
+  (`ui/src/app/lib/use-unsaved-guard.tsx`) and one registry (`ui/src/app/lib/unsaved-registry.ts`).
+  The 412 save-conflict banner (`saved-elsewhere-banner.tsx`) now reads "Someone else saved this
+  first" and its "Copy my changes" puts the WHOLE document on the clipboard, not just the changed
+  fields, with a select-the-text fallback if the clipboard write fails. Settings joins the sidebar
+  as a LAST, admin-only entry under a hairline divider — the account menu keeps its own entry too,
+  for every role.
+
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

@@ -521,6 +521,34 @@ describe("SidebarNav (member role — B3)", () => {
       labels,
     );
   });
+
+  // #460 (Q460-1): Settings joined the sidebar (#217) as an admin-only entry
+  // — a member's own three-item nav stays exactly as small as B3 pins above.
+  // The account menu keeps its own entry for BOTH roles (Q460-2, TopBar's own
+  // describe block below has the general Demos-gating precedent for that
+  // menu) — this is Settings's own pin that it didn't move.
+  it("Settings sits last in the admin sidebar", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    const links = screen.getAllByRole("link");
+    expect(links.at(-1)!.textContent).toMatch(/^Settings/);
+  });
+
+  it("Settings is absent from a member's sidebar", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("member");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.queryByRole("link", { name: /^Settings/ })).toBeNull();
+  });
+
+  it("a member still reaches Settings from the account menu", async () => {
+    const user = userEvent.setup();
+    renderTopBar("member");
+    await user.click(screen.getAllByRole("button").at(-1)!);
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: /Settings/ })).toBeInTheDocument();
+  });
 });
 
 // Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the

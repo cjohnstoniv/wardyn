@@ -222,6 +222,33 @@ describe("ProvidersScreen", () => {
     ]);
   });
 
+  // #460 — the dirty chip: beside the screen's own title (PageHeader) and
+  // beside the Git/Storage Segmented tab labels (they share this one draft),
+  // the same fact the bottom-of-tab marker already carried. Gone again once
+  // the draft matches what Save just wrote back.
+  it("shows the dirty chip once the draft differs from what loaded, and clears it after Save", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"h0"',
+    });
+    putWorkspaceProvidersMock.mockResolvedValue({
+      providers: {
+        git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme", "https://git.corp.example/team"] }],
+      },
+      etag: '"h1"',
+      sourcesNoLongerAdmitted: 0,
+    });
+    renderScreen();
+    const row = await screen.findByTestId("provider-row-github");
+    expect(screen.queryAllByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toHaveLength(0);
+
+    await userEvent.type(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS), "{Enter}https://git.corp.example/team");
+    expect(screen.getAllByText(PROVIDERS_DRAFT.UNSAVED_MARKER).length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await waitFor(() => expect(screen.queryAllByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toHaveLength(0));
+  });
+
   // F4-F3: the banner must not SWAP the whole tab body — that would discard
   // an edit typed moments before the 412 and make it unreadable. The draft
   // stays MOUNTED (the edited textarea survives), and the banner's ONE

@@ -277,12 +277,23 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // Save providers is STILL on screen — the draft is still there to save.
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeVisible();
 
-    // #217 — the changed field, as readable text (never the whole draft as
-    // JSON): the banner shows it before Copy is even pressed, then Copy
-    // confirms with a toast once it is.
-    await expect(page.getByText(/base_urls.*acme.*→.*acme.*corp\.example/s)).toBeVisible();
+    // #460 (Q460-3) — reversed from #217's "changed fields only" rule: the
+    // banner shows the WHOLE document (the edited row included), and Copy my
+    // changes puts exactly that on the clipboard, never just the diff. The
+    // <pre> is the banner's own preview — the same text also appears in the
+    // (still-mounted) textarea and the row's collapsed summary, so this is
+    // scoped to it rather than page.getByText, which would hit all three.
+    const documentPreview = page.locator("pre");
+    await expect(documentPreview).toContainText("https://github.com/acme");
+    await expect(documentPreview).toContainText("https://git.corp.example/team");
     await page.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY }).click();
     await expect(page.getByText(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST)).toBeVisible();
+    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    const clipboardDraft = JSON.parse(clipboardText);
+    const githubRow = (clipboardDraft.git as { base_urls?: string[] }[]).find((g) =>
+      (g.base_urls ?? []).includes("https://github.com/acme"),
+    );
+    expect(githubRow?.base_urls).toEqual(["https://github.com/acme", "https://git.corp.example/team"]);
 
     // Discard mine and reload is still there, now beside Copy, not the only
     // exit.
@@ -306,7 +317,10 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await expect(row).toBeVisible();
     await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
     // The dirty marker beside Save — the same fact the guard is armed on.
-    await expect(page.getByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toBeVisible();
+    // #460 added the same "Unsaved changes" chip in three more places
+    // (PageHeader, Git tab, Storage tab), so this targets the beside-Save
+    // marker by its own testid rather than the now-ambiguous text.
+    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_DRAFT.UNSAVED_MARKER);
 
     await sidebarLink(page, "Settings").click();
     const dialog = page.getByRole("alertdialog");

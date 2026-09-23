@@ -404,7 +404,12 @@ function SidebarNav({
   // Same gate as the account menu's own Settings entry (TopBar below): hidden
   // only while identity is settled but unknown, when the shell paints no
   // route at all for it to open.
-  const settingsReachable = !(meta.resolved && !meta.identityResolved);
+  //
+  // #460 (Q460-1): admin only, in the SIDEBAR specifically — a member's own
+  // three-item nav (navItemsForRole below) stays exactly as small as it was;
+  // /settings is still reachable for a member, just from the account menu
+  // (TopBar's own unconditional entry), not from here.
+  const settingsReachable = !(meta.resolved && !meta.identityResolved) && meta.role !== "member";
   return (
     <>
       <nav className="space-y-0.5">
