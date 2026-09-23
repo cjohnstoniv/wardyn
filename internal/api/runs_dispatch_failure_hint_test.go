@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -93,5 +94,55 @@ func TestDispatchGrantWriteFailure_HintCarriesNoDriverText(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// recordHintStore is recordAbortStore keeping the two hints a failed record
+// launch writes: the record card's and the run's.
+type recordHintStore struct {
+	*recordAbortStore
+	cards []RecordTaskResult
+	hints []string
+}
+
+func (s *recordHintStore) SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, key string, raw json.RawMessage, only string) (types.Workspace, bool, error) {
+	var res RecordTaskResult
+	_ = json.Unmarshal(raw, &res)
+	s.cards = append(s.cards, res)
+	return s.recordAbortStore.SetWorkspaceRecordResult(ctx, id, key, raw, only)
+}
+
+func (s *recordHintStore) SetRunFailureHint(_ context.Context, _ uuid.UUID, hint string) error {
+	s.hints = append(s.hints, hint)
+	return nil
+}
+
+// #445, record lane: a record launch whose grant write fails after CreateRun
+// aborts through abort() and release(). The record card and the run's failure
+// hint are both member-visible, so neither may carry the store's text.
+func TestLaunchRecordRun_GrantWriteFailure_HintsCarryNoDriverText(t *testing.T) {
+	h := newHarness(t)
+	fake := &recordHintStore{recordAbortStore: &recordAbortStore{
+		ws:       types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned},
+		grantErr: errors.New(driverText),
+	}}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = &fakeRunner{}
+	cfg.Broker = h.broker
+	// The api-key branch, whose CreateGrant then fails (as in
+	// TestLaunchRecordRun_CreateGrantFailureFinalizesRun).
+	cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}}
+	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
+	srv := New(cfg)
+
+	if _, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", fake.ws, "build", "build", false); err == nil {
+		t.Fatal("launchRecordRun went ahead after the grant write failed")
+	}
+	if len(fake.hints) != 1 || fake.hints[0] != "the workspace import step could not start" {
+		t.Errorf("run failure hints = %q, want exactly the fixed sentence", fake.hints)
+	}
+	last := fake.cards[len(fake.cards)-1]
+	if last.Status != recordStatusFailed || last.FailureHint != "launch failed: the run could not be recorded" {
+		t.Errorf("record card = %q / %q, want failed with the fixed sentence", last.Status, last.FailureHint)
 	}
 }

@@ -14,8 +14,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   dispatch could not record the Azure DevOps, AWS SSO, subscription or Bedrock bearer credential
   grant, the run's failure hint (and the Azure DevOps refusal's audit detail) carried the store's
   own error, database host and SQLSTATE included. The hint is now a fixed sentence and the real
-  error goes to the daemon log; the same holds for a lost agent exec-id write and a failed per-run
-  CA. The driver-text guard now also watches `failAndRevoke` and `refuseADOEntraDispatch`.
+  error goes to the daemon log; the same holds for a lost agent exec-id write, a failed per-run CA
+  and a record session that could not launch (its card and its run's hint). The driver-text guard
+  now also watches `failAndRevoke` and `refuseADOEntraDispatch`.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
