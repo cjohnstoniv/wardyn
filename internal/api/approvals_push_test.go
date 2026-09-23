@@ -219,7 +219,7 @@ func TestDispatchStampsUnattended(t *testing.T) {
 		fr := &fakeRunner{}
 		srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 		run.Task = ""
-		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
+		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
 			RunToken: "run-token", Image: "wardyn/claude-code:latest", Interactive: interactive,
 		})
 		if got := fr.lastSpec.ProxyConfig.Unattended; got == interactive {
