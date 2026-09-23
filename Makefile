@@ -524,6 +524,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-install-sh.sh
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
+	./scripts/test-nightly-migration-merge-check.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
 	./scripts/test-reset-capture-hint.sh

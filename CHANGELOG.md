@@ -76,6 +76,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A regression fixture pins `scripts/nightly-migration-merge-check.sh` (#864).**
+  `make test-scripts` now runs `scripts/test-nightly-migration-merge-check.sh`,
+  covering a clean candidate set, two PRs claiming the same migration prefix, a
+  PR whose prefix is at or below `origin/main`'s max, the binary search that
+  isolates and drops a single bad PR out of several good ones, and the
+  difference between a conflict under `internal/db/migrations` (fails the job)
+  and a union-mergeable conflict elsewhere, such as `CHANGELOG.md` (does not).
 - **Migration-numbering collision gates (#667).** `make lint` now runs
   `scripts/check-migration-numbers.sh`: a new migration file must use a numeric
   prefix greater than every prefix already on the branch it targets
