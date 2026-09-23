@@ -3201,10 +3201,13 @@ Two independent controls sit on the brokered git lanes (`github_token`,
   `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, off by default for `git_pat`) —
   see [docs/ENV.md](ENV.md) for both rows.
 - **WHAT a push may touch.** `push_rules` (`deny_paths`,
-  `max_inspect_pack_mib`) — a policy field, not an env var, set per run or
-  clamped by an operator ceiling exactly like any other policy field. See
-  [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec) for the field
-  reference, the pattern language, and what the inspector can and cannot see.
+  `max_inspect_pack_mib`) — a policy field, not an env var, set per run. An
+  operator ceiling that sets `push_rules` is a floor, not a cap: an unset
+  proposal inherits it wholesale, `deny_paths` is unioned with the ceiling's,
+  and `max_inspect_pack_mib` is capped only when the ceiling's value is
+  non-zero. See [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec) for
+  the field reference, the pattern language, and what the inspector can and
+  cannot see.
 
 The residuals an operator should plan for:
 
@@ -3221,11 +3224,20 @@ The residuals an operator should plan for:
   `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`; `push_rules` applies to every
   `git_pat` push whatever that switch is set to. Neither changes the PAT
   itself: it keeps whatever scope the operator issued it with.
-- **A first push to a new branch over-reports its changed paths.** Under
+- **A first push to a new branch enumerates the whole new tree.** Under
   branch-namespace confinement the pushed commit's parent stays on the forge,
-  so the broker enumerates the whole new tree rather than diffing it — a
-  legitimate rename, restore or directory move reads the same as an add. See
-  "What the rules see, and what they do not" in
+  so the pack holds nothing to diff against: every root file is named whether
+  changed or not, and every untouched directory, symlink or submodule arrives
+  as an opaque entry. When the forge is GitHub, a matched entry the pack does
+  not carry is compared with the parent commit's trees through GitHub's REST
+  API (the run's own credential for the lane, trees only), and a legitimate
+  rename, restore or directory move passes — only an add, change, move or
+  restore under a denied path is refused. That comparison cannot run on a
+  `git_pat` grant to a non-GitHub forge, when no parent counts, or when a
+  read fails, times out or needs more than 64 reads — there, any matched
+  entry the pack does not carry refuses the push, including every root file.
+  So `deny_paths: ["Makefile"]` on a GitLab PAT refuses every push to a repo
+  that has a Makefile. See "What the rules see, and what they do not" in
   [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec).
 
 ### Internal hosts
