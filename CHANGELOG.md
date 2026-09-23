@@ -27,6 +27,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A run chooses its model provider (#526).** `model_provider` on `POST /runs` and
+  `/runs/preflight`, and `wardyn run --model-provider`, name the provider a run uses; unset, it is
+  the primary workspace's pin (`llm_cred.provider_ref`, new beside `integration_ref`), else the
+  agent's default, else the one provider serving the agent. A named provider that is missing, off,
+  not serving the agent or not granted is refused naming it, never swapped for another — a
+  disabled default too, even with one other candidate left — and so is a choice between several
+  with no default. With a provider block, every chosen provider is refused for now ("provider
+  dispatch for that kind is not yet available on this build") until its kind's dispatch lands; a
+  block serving no provider for the agent leaves the run on today's path, and `model_provider`
+  with no block, or on a run that calls no model, is refused rather than ignored. New capability
+  kind `model_provider` bounds the request, the pin and the default alike (reason
+  `capability_model_provider`, target `runs.model_provider`); unlike `integration`, a workspace
+  pin is not exempt.
+
 - **Each person's own model-provider credential, strictly namespaced (#525).** `PUT` and
   `DELETE /model-providers/{id}/credential` store and remove the caller's own key or token for a
   key or endpoint provider, under `wardyn-provider-<uid>-key` in their own namespace — admins

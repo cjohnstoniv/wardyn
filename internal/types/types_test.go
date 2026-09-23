@@ -433,8 +433,10 @@ func TestWorkspaceLLMCredDecode(t *testing.T) {
 		})
 	}
 
-	// Round-trip: the current shape survives marshal -> unmarshal unchanged.
-	in := WorkspaceLLMCred{IntegrationRef: "acme-anthropic"}
+	// Round-trip: the current shape survives marshal -> unmarshal unchanged,
+	// the model-provider pin included (a decoder that dropped it would read
+	// every pinned workspace back as unpinned).
+	in := WorkspaceLLMCred{IntegrationRef: "acme-anthropic", ProviderRef: "corp-gateway"}
 	b, err := json.Marshal(in)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

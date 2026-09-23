@@ -125,6 +125,9 @@ export interface RecordResult {
 // api.setWorkspaceLLMCred (edit).
 export interface WorkspaceLLMCred {
   integration_ref?: string;
+  // The model provider (GET /model-providers id) a run on this workspace uses
+  // unless it chooses one itself. internal/types/workspace.go ProviderRef.
+  provider_ref?: string;
 }
 
 // The tier-1 source library and tier-2 image catalog wire rows (Source,

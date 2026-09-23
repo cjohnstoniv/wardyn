@@ -33,16 +33,26 @@ type workspaceRequest = client.WorkspaceRequest
 
 // validateWorkspaceLLMCred checks an operator-supplied cred binding: a NAME
 // only — whether the named Integration actually exists/resolves is
-// resolveWorkspaceIntegration's job (llmcred.go). nil, or an empty
-// IntegrationRef (clears the binding), is always valid.
+// resolveWorkspaceIntegration's job (llmcred.go), and whether the named
+// provider admits a run is enforceRunModelProvider's. nil, or empty refs
+// (clears the binding), is always valid.
 func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
-	if c == nil || c.IntegrationRef == "" {
+	if c == nil {
 		return ""
 	}
-	if !repoFieldSafe(c.IntegrationRef) {
+	if c.IntegrationRef != "" && !repoFieldSafe(c.IntegrationRef) {
 		return fmt.Sprintf(repoField400Charset, "llm_cred.integration_ref")
 	}
+	if c.ProviderRef != "" && !modelProviderIDPattern.MatchString(c.ProviderRef) {
+		return fmt.Sprintf("llm_cred.provider_ref: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters", c.ProviderRef)
+	}
 	return ""
+}
+
+// llmCredBinds reports whether c binds anything — the shape a write stores
+// rather than clears.
+func llmCredBinds(c *types.WorkspaceLLMCred) bool {
+	return c != nil && (c.IntegrationRef != "" || c.ProviderRef != "")
 }
 
 // defaultEphemeralTarget is the composition floor's in-sandbox scratch path
@@ -469,7 +479,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// believes the workspace is bound to the integration they named.
 	// owner != "" IS the member test (secretOwnerFromRequest is "" for an
 	// operator), so this is the same ownership stamp the line above reads.
-	if owner != "" && req.LLMCred != nil && req.LLMCred.IntegrationRef != "" {
+	if owner != "" && llmCredBinds(req.LLMCred) {
 		s.denyMemberField(w, r, "workspaces.llm_cred", "admin_surface",
 			"llm_cred is operator-only — an admin binds a workspace's model/harness credential "+
 				"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding")
@@ -837,7 +847,7 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 			if msg := validateWorkspaceLLMCred(&req); msg != "" {
 				return nil, msg
 			}
-			if req.IntegrationRef == "" {
+			if !llmCredBinds(&req) {
 				return nil, "" // nil clears the binding
 			}
 			return &req, ""
@@ -846,11 +856,11 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 			return s.cfg.Store.SetWorkspaceLLMCred(ctx, id, cred)
 		},
 		func(cred *types.WorkspaceLLMCred) map[string]any {
-			ref := ""
+			var c types.WorkspaceLLMCred
 			if cred != nil {
-				ref = cred.IntegrationRef
+				c = *cred
 			}
-			return map[string]any{"integration_ref": ref}
+			return map[string]any{"integration_ref": c.IntegrationRef, "provider_ref": c.ProviderRef}
 		})
 }
 

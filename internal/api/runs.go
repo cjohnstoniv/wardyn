@@ -257,6 +257,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// model credential is the captured-AWS-SSO lane — resolving it a second
 	// way here would risk the two surfaces disagreeing about whether a run
 	// carries the advisory.
+	// The model-provider choice first: with a provider block, it is the run's
+	// provider that decides its lane, and one this build cannot dispatch yet is
+	// refused here rather than handed to the lane chain below.
+	if !s.enforceRunModelProvider(w, r, req, wsRefs) {
+		return
+	}
 	var modelCred modelCredentialFacts
 	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
 		return

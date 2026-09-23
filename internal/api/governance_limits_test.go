@@ -648,6 +648,28 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	}
 }
 
+// TestMemberWorkspaceProviderRefRefused is G4's gate over the model-provider
+// pin: a provider_ref alone is as much an operator binding as an
+// integration_ref, and a member's create carrying one is refused, not stored.
+func TestMemberWorkspaceProviderRefRefused(t *testing.T) {
+	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
+		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember),
+		`{"name":"mine","llm_cred":{"provider_ref":"corp-gateway"}}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("member create with llm_cred.provider_ref = %d, want 403: %s", w.Code, w.Body.String())
+	}
+	if all, _ := st.ListWorkspaces(context.Background()); len(all) != 0 {
+		t.Errorf("workspaces = %+v, want none — the refusal must precede the write", all)
+	}
+	w = doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
+		ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin),
+		`{"name":"bad","llm_cred":{"provider_ref":"Corp Gateway"}}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "llm_cred.provider_ref") {
+		t.Errorf("operator create with an unreadable provider_ref = %d %s, want a 400 naming the field", w.Code, w.Body.String())
+	}
+}
+
 // ─── §K: the two 0.7 capability kinds (PF-32, PF-33) ──────────────────────────
 
 // govMemberSub is the member every §K test below launches as — the same

@@ -440,10 +440,12 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 	}
 }
 
-// TestRunCreateIgnoresModelProviders pins "nothing in dispatch changes": the
-// same run created under no block and under a configured block (with a roster
-// default) comes back the same, modulo its own identity.
-func TestRunCreateIgnoresModelProviders(t *testing.T) {
+// TestRunCreateIgnoresUnservingModelProviders pins "a block that serves no
+// provider for this agent changes nothing": the same run created under no block
+// and under one whose providers serve only another agent (with a roster
+// default there) comes back the same, modulo its own identity. A block that
+// does serve the agent chooses a provider (run_model_provider.go).
+func TestRunCreateIgnoresUnservingModelProviders(t *testing.T) {
 	// The answer as a whole — status and body, a refusal included — minus the
 	// run's own identity, which differs on every create.
 	create := func(site types.SiteConfig) map[string]any {
@@ -464,17 +466,18 @@ func TestRunCreateIgnoresModelProviders(t *testing.T) {
 		run["http_status"] = w.Code
 		return run
 	}
-	providers := providerBlock(endpointProvider(), keyProvider("anthropic", "claude-code"))
+	providers := providerBlock(keyProvider("codex", "codex-cli"))
 	row := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}
-	withDefault := row
-	withDefault.DefaultProvider = "corp-gateway"
+	codex := types.AgentProvider{ID: "codex-cli", Mechanism: types.AgentMechanismOpenAIAPIKey}
+	withDefault := codex
+	withDefault.DefaultProvider = "codex"
 	for _, tc := range []struct {
 		name              string
 		today, configured types.SiteConfig
 	}{
 		{"no roster", types.SiteConfig{}, types.SiteConfig{ModelProviders: providers}},
-		{"a roster that gains a default", types.SiteConfig{AgentProviders: agentBlock(row)},
-			types.SiteConfig{ModelProviders: providers, AgentProviders: agentBlock(withDefault)}},
+		{"a roster whose other agent gains a default", types.SiteConfig{AgentProviders: agentBlock(row, codex)},
+			types.SiteConfig{ModelProviders: providers, AgentProviders: agentBlock(row, withDefault)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if a, b := create(tc.today), create(tc.configured); !reflect.DeepEqual(a, b) {

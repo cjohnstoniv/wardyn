@@ -350,6 +350,10 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// grading residency from a second resolution would both cost another
 	// secret-store read and let the rail describe a lane the gate did not judge.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
+	// The model-provider choice, where launch makes it (runs.go).
+	if !s.enforceRunModelProvider(w, r, req, wsRefs) {
+		return
+	}
 	var modelCred modelCredentialFacts
 	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
 		return

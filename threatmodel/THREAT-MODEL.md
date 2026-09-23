@@ -405,9 +405,9 @@ lane — is §5.1a's disclosed TOCTOU residual; the guard itself still runs ther
 
 ### 4.3 Capability grants (v0.6) — the mechanism
 
-Seven closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
-and it grew by two in v0.7 and one in v0.7.2. Six NARROW what a member could
-already do:
+Eight closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
+and it grew by two in v0.7, one in v0.7.2 and one in 0.8. Seven NARROW what a
+member could already do:
 `egress_host` (the hosts on their inline policy, and which host they may decide an
 `egress_domain` approval for), `secret` (which secret names an inline policy may
 reference, and which names `GET /secrets` lists back), `workspace` (which
@@ -431,6 +431,12 @@ claims and refuses anyway (disabled, or a base path that did not match) is still
 the row the grant would name. Its member refusal names the
 provider KIND only — never a base URL, because `GET /workspace-providers` is a
 security-tier door precisely because base URLs name corporate topology.
+0.8's `model_provider` bounds which model provider a person's run may use —
+the one they name, the one a workspace pins and the agent's default alike
+(`enforceRunModelProvider`, create and Review). It deliberately does NOT carry
+`integration`'s pin exemption: every model credential is the person's own, so
+a pin is no admin grant of access, and a pin naming an ungranted provider
+refuses the run rather than falling through to another provider.
 `image` WIDENS — without both its switch on and an exact-ref grant a member cannot
 name a custom image at all. `devcontainer_repo` is deliberately not a kind and
 stays unconditionally admin-only: it executes attacker-authored build
