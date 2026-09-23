@@ -222,10 +222,15 @@ func TestAgentPolicyDispatchFailsTheRunWhenCapabilitiesAreUnknown(t *testing.T) 
 	if st.state != types.RunFailed {
 		t.Errorf("run state = %s, want FAILED", st.state)
 	}
-	for _, want := range []string{"capabilities could not be read", "autonomy level L1", "connection refused"} {
+	for _, want := range []string{"capabilities could not be confirmed", "autonomy level L1"} {
 		if !strings.Contains(st.failureHint, want) {
 			t.Errorf("failure hint = %q, want it to say %q", st.failureHint, want)
 		}
+	}
+	// SF-12: the driver's own error text (here, a Docker daemon message) is
+	// audited, never handed to the member as their FailureHint.
+	if strings.Contains(st.failureHint, "connection refused") {
+		t.Errorf("failure hint = %q, must not carry the driver's own error text", st.failureHint)
 	}
 	if data != nil {
 		t.Errorf("run.agent_policy %+v recorded for a run that never launched", *data)

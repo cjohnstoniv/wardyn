@@ -266,9 +266,16 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
 	agentPolicy, apErr := s.agentPolicyFor(ctx, run)
 	if apErr != nil {
+		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
+		// driver/substrate text (a Docker daemon socket error, a k8s API
+		// error) — logged here for the operator, never handed to the member
+		// as their FailureHint (the #445 class SD-4's guard exists to catch).
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "this run was not launched: "+apErr.Error())
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, fmt.Sprintf(
+			"this run was not launched: its runner's capabilities could not be confirmed, "+
+				"so whether it can deliver this run's managed settings (autonomy level %s) is unknown",
+			run.AutonomyLevel))
 		return
 	}
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
