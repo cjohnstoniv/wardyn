@@ -19,6 +19,7 @@ import {
   stepBadges,
   stepDone,
   stepOrder,
+  walkableDemos,
   type CorpNetworkState,
 } from "./steps";
 import { DEMOS } from "../demos/demo-catalog";
@@ -193,10 +194,11 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["ssh-briefly-resident", "The one that touches disk — briefly"],
       ["github-app-broker", "A token the sandbox never even sees"],
       ["sts-fail-closed", "No identity, no credential"],
-      // "Your work" is `providers` (org policy over git hosts and storage
-      // ceilings, before Workspaces per the ORDER test §9.1) then workspaces
-      // — the tier-1/2 library steps (Directories & repos, Base images) are
-      // retired; sources-library.tsx/image-catalog.tsx are gone.
+      // "Code and workspaces" (was "Your work", renamed M-6/QM-8) is
+      // `providers` (org policy over git hosts and storage ceilings, before
+      // Workspaces per the ORDER test §9.1) then workspaces — the tier-1/2
+      // library steps (Directories & repos, Base images) are retired;
+      // sources-library.tsx/image-catalog.tsx are gone.
       ["providers", "Providers"],
       ["workspaces", "Workspaces"],
       ["review", "Review"],
@@ -207,46 +209,25 @@ describe("frozen contract — ids, labels, headings, order", () => {
     expect(STEP_HEADING.integrations).toBe("Secrets");
   });
 
-  it("pins STEP_ORDER to the phase walk (essentials -> egress demos -> secrets demos -> your work -> finish)", () => {
+  it("pins STEP_ORDER to the phase walk (essentials -> code and workspaces -> finish) — no demos (M-6/D5)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
       "people",
       "corp_network",
       "integrations",
-      "sealed-box",
-      "fail-then-approve",
-      "held-at-the-door",
-      "lines-that-cant-be-crossed",
-      "denied-however-spelled",
-      "agent-in-the-box",
-      "record-a-policy",
-      "once-or-for-good",
-      "write-only-by-design",
-      "key-never-in-the-box",
-      "authorized-not-issued",
-      "rest-api-token",
-      "pat-stdout-only",
-      "ssh-briefly-resident",
-      "github-app-broker",
-      "sts-fail-closed",
       "providers",
       "workspaces",
       "review",
     ]);
-    expect(STEP_ORDER).toHaveLength(23);
+    expect(STEP_ORDER).toHaveLength(7);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
-    // Getting Started is the ONE demos surface: every catalog demo is a
-    // sub-step, in catalog order, split into the two sections by `Demo.section`
-    // alone — never a hand-kept list that can drift from the catalog.
+    expect(PHASES.find((p) => p.id === "work")?.label).toBe("Code and workspaces");
+    // M-6 (D5): a demo is a sandbox run, a user act — the admin funnel walks
+    // none of them any more, though the catalog itself (DEMO_STEP_IDS) is
+    // unchanged; User Getting Started (member-getting-started.tsx) walks it
+    // instead via the same DEMOS/section filter demoStepsIn used here.
     expect(DEMO_STEP_IDS).toEqual(DEMOS.map((d) => d.id));
-    expect([
-      ...(PHASES.find((p) => p.id === "demos_egress")?.steps ?? []),
-      ...(PHASES.find((p) => p.id === "demos_secrets")?.steps ?? []),
-    ]).toEqual([...DEMO_STEP_IDS]);
-    expect(PHASES.find((p) => p.id === "demos_secrets")?.label).toBe("Secrets demos");
-    // write-only-by-design leads the secrets section: it is how the operator
-    // stores the secret every granted demo below it gates on.
-    expect(PHASES.find((p) => p.id === "demos_secrets")?.steps[0]).toBe("write-only-by-design");
+    expect(STEP_ORDER.some((id) => (DEMO_STEP_IDS as readonly string[]).includes(id))).toBe(false);
   });
 
   it("corp_network is required, not optional — proof of internet access gates Next", () => {
@@ -275,31 +256,50 @@ describe("people badge/done", () => {
 });
 
 // stepOrder(status) — the WALK, as opposed to STEP_ORDER's full contract.
-describe("stepOrder — conditional demo steps drop out of the walk when unmet", () => {
-  const secretName = DEMOS.find((d) => d.needsSecret)!.needsSecret!;
-  const withSecret = (names: string[]) => baseStatus({ secrets: { present: names, github_app: false } });
-
+// Since M-6 (D5) it walks no demo id at all — PHASES doesn't offer any —
+// so its own pin is just that null still returns the full (now demo-free)
+// order for the ?step= initializer.
+describe("stepOrder — the admin funnel's walk (no demos, since M-6/D5)", () => {
   it("null status (pre-load) returns the FULL order — the ?step= initializer validates against it", () => {
     expect(stepOrder(null)).toEqual(STEP_ORDER);
   });
 
-  it("drops the needsModel step without a model and the needsSecret steps without the secret", () => {
-    const order = stepOrder(baseStatus());
+  it("never contains a demo id, met or not", () => {
+    const order = stepOrder(
+      baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }),
+    );
+    for (const id of DEMO_STEP_IDS) expect(order).not.toContain(id);
+  });
+});
+
+// walkableDemos(status) — the gate that moved WITH the demos to User Getting
+// Started (member-getting-started.tsx): the same needsModel/needsSecret
+// precondition stepOrder used to filter the admin funnel's walk by.
+describe("walkableDemos — conditional demos are offered only once their precondition is met", () => {
+  const secretName = DEMOS.find((d) => d.needsSecret)!.needsSecret!;
+  const withSecret = (names: string[]) => baseStatus({ secrets: { present: names, github_app: false } });
+  const ids = (status: SetupStatus | null) => walkableDemos(status).map((d) => d.id);
+
+  it("null status (not yet loaded) offers nothing", () => {
+    expect(walkableDemos(null)).toEqual([]);
+  });
+
+  it("drops the needsModel demo without a model and the needsSecret demos without the secret", () => {
+    const order = ids(baseStatus());
     expect(order).not.toContain("agent-in-the-box");
     // EVERY needsSecret demo drops — derived, so a new gated demo is covered
     // automatically (was: only the two original ids pinned by hand).
     for (const d of DEMOS.filter((x) => x.needsSecret)) {
       expect(order).not.toContain(d.id);
     }
-    // The unconditional demos, and everything outside the demos, always stay.
+    // The unconditional demos always stay, in catalog order.
     expect(order).toContain("write-only-by-design");
     expect(order).toContain("record-a-policy");
-    // A filter, not a re-order: what survives keeps STEP_ORDER's sequence.
-    expect(order).toEqual(STEP_ORDER.filter((id) => order.includes(id)));
+    expect(order).toEqual(DEMOS.filter((d) => order.includes(d.id)).map((d) => d.id));
   });
 
   it("restores the granted secrets demos once the secret is stored", () => {
-    const order = stepOrder(withSecret([secretName]));
+    const order = ids(withSecret([secretName]));
     expect(order).toContain("key-never-in-the-box");
     expect(order).toContain("authorized-not-issued");
     // …and still not the harness demo: a secret is not a model.
@@ -307,11 +307,11 @@ describe("stepOrder — conditional demo steps drop out of the walk when unmet",
   });
 
   it("a different secret name doesn't unlock them — the ref is by NAME", () => {
-    expect(stepOrder(withSecret(["some-other-key"]))).not.toContain("key-never-in-the-box");
+    expect(ids(withSecret(["some-other-key"]))).not.toContain("key-never-in-the-box");
   });
 
   it("restores the harness demo once a model is connected", () => {
-    const order = stepOrder(
+    const order = ids(
       baseStatus({ providers: [{ tool: "claude", installed: true, logged_in: true, auth_mode: "subscription" }] }),
     );
     expect(order).toContain("agent-in-the-box");

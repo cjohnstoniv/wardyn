@@ -56,7 +56,10 @@ async function mockAccessGet(page: Page, body: unknown): Promise<void> {
 }
 
 async function gotoPeopleStep(page: Page): Promise<void> {
-  await page.goto("/setup?step=people");
+  // The People step is admin-funnel-only, which since M-6/D1 lives at
+  // /admin/setup — plain /setup is the User Getting Started now, even for
+  // this harness's single-operator (D1) session.
+  await page.goto("/admin/setup?step=people");
   await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible();
 }
 

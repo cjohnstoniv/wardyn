@@ -367,7 +367,9 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     expect(enabledCount).toBeGreaterThan(0);
 
     await gotoConsole(page);
-    await navToRoute(page, "/setup");
+    // The funnel step lives at /admin/setup since M-6/D1 — plain /setup is
+    // the User Getting Started now, even for this harness's admin session.
+    await navToRoute(page, "/admin/setup");
     const stepBtn = page.getByRole("button", { name: new RegExp(`^${PROVIDERS.STEP_LABEL}`) });
     await expect(stepBtn).toBeVisible();
     await expect(stepBtn).toContainText(PROVIDERS.STEP_BADGE_READY(enabledCount));

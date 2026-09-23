@@ -52,6 +52,13 @@ export const MEMBER_GETTING_STARTED = {
   // AGENTS.SIGN_IN_AWS so a lookup by the visible name still finds it (pinned in
   // member-getting-started.test.tsx).
   SIGN_IN_AWS_ARIA_SUMMARY: "Sign in to AWS — from What's set up for you",
+  // M-6 (D5, admin-member-modes-design.md §4.8): demos are sandbox runs, a
+  // user act, so they moved here from the admin funnel — same section labels
+  // (SETUP.PHASE_DEMOS_*, modes-b.html), reused rather than retyped, since
+  // both name the exact same two Demo.section groups (demo-catalog.ts).
+  DEMOS_EGRESS_TITLE: "Egress demos",
+  DEMOS_SECRETS_TITLE: "Secrets demos",
+  DEMO_OPEN: "Open",
 } as const;
 
 // DRAFT (M2 canon pending) — X3-F4, the MEMBER's empty runs board. The operator

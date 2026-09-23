@@ -15,6 +15,10 @@ export const CONSOLE_VIEW = {
   EYEBROW_ADMIN: "Admin view",
   TITLE_ADMIN: "Wardyn admin",
   TITLE_USER: "Wardyn",
+  // Packet M-B (QM-7, modes-b.html): a link straight to the same object in
+  // User view — the admin's own rows (M-7, not built here) and the Record
+  // dependency line (M-6, §4.6) both reuse this one string.
+  OPEN_IN_USER: "Open in user view",
 } as const;
 
 export const NAV = {

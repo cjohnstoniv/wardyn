@@ -19,7 +19,7 @@
 // truth; a Save/Remove inside YourModelKey calls back to re-fetch it, so both
 // readings flip together instead of drifting after a write.
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   FolderOpen,
@@ -65,6 +65,15 @@ import { EpisodeRow } from "./episode-card";
 import { YourModelKey, modelKeyProvider } from "./your-model-key";
 import { modelKeyState, ownKeyApplies } from "./model-key-state";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
+import { DEMOS, type Demo } from "../demos/demo-catalog";
+import { walkableDemos } from "../setup/steps";
+
+// M-6 (D5, admin-member-modes-design.md §4.8): a demo is a sandbox run, a
+// user act, so it renders here now — reusing the funnel's own DemoDetail
+// (setup/demos-step.tsx) unchanged; lazy, same reasoning setup-screen.tsx
+// used to lazy-load it: each demo pulls AttachTerminal → xterm, and this page
+// should not pay for that until a demo is actually opened.
+const DemoDetail = React.lazy(() => import("../setup/demos-step"));
 
 type Variant = "default" | "outline";
 
@@ -94,6 +103,7 @@ function modelAccessChip(
 }
 
 export function MemberGettingStarted() {
+  const [searchParams] = useSearchParams();
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [retryTick, setRetryTick] = React.useState(0);
   // The member's own AWS sign-in pane (C4.3) — opens IN PLACE under the card,
@@ -276,6 +286,26 @@ export function MemberGettingStarted() {
   // the member terminal), then the core "watch first" set.
   const memberEpisodes = EPISODES.filter((e) => e.audience === "member");
   const coreEpisodes = EPISODES.filter((e) => e.path === "core");
+
+  // M-6 (D5): the same two Demo.section groups the admin funnel used to walk
+  // (setup/steps.ts's PHASES, before M-6), gated by the same precondition
+  // that used to drop an unmet one from that walk (walkableDemos — needsModel
+  // without a connected model, needsSecret without that secret stored).
+  // KNOWN GAP: internal/api/setup.go's redactSetupStatusForMember always
+  // zeroes secrets.present for a non-operator, so a needsSecret demo (five of
+  // the eight "secrets" ones) reads unmet — and so never offered — for every
+  // member, even once an admin has stored the org secret it needs. Closing
+  // that needs a server-side change to what a member's own /setup/status can
+  // prove, which is out of this UI-only PR's scope; filed as a follow-up
+  // rather than silently claimed fixed here.
+  const walkable = new Set(walkableDemos(status).map((d) => d.id));
+  const egressDemos = DEMOS.filter((d) => d.section === "egress" && walkable.has(d.id));
+  const secretsDemos = DEMOS.filter((d) => d.section === "secrets" && walkable.has(d.id));
+  // /demos and a shared link both redirect into a `?step=<id>` deep link
+  // (App.tsx) — honor it here the same way the funnel used to: open that one
+  // demo's row, silently ignoring an id this page doesn't offer (unmet
+  // precondition, or not a real demo id) rather than erroring.
+  const deepLinkedDemoId = searchParams.get("step");
 
   return (
     <div className="mx-auto w-full max-w-[880px] px-6 py-8">
@@ -588,6 +618,39 @@ export function MemberGettingStarted() {
         </SectionCard>
       </div>
 
+      {egressDemos.length > 0 && (
+        <div className="mt-10">
+          <SectionLabel>{T.DEMOS_EGRESS_TITLE}</SectionLabel>
+          <div className="mt-2">
+            {egressDemos.map((d) => (
+              <DemoRow
+                key={d.id}
+                demo={d}
+                barrierReady={!!strongest}
+                githubAppReady={status ? !!status.secrets.github_app : true}
+                defaultOpen={d.id === deepLinkedDemoId}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+      {secretsDemos.length > 0 && (
+        <div className="mt-6">
+          <SectionLabel>{T.DEMOS_SECRETS_TITLE}</SectionLabel>
+          <div className="mt-2">
+            {secretsDemos.map((d) => (
+              <DemoRow
+                key={d.id}
+                demo={d}
+                barrierReady={!!strongest}
+                githubAppReady={status ? !!status.secrets.github_app : true}
+                defaultOpen={d.id === deepLinkedDemoId}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {memberEpisodes.length > 0 && (
         <div className="mt-10">
           <SectionLabel>{EP.MEMBER_YOUR_PATH}</SectionLabel>
@@ -606,6 +669,59 @@ export function MemberGettingStarted() {
               <EpisodeRow key={e.id} episode={e} />
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// M-6 (D5) — one demo row: title + Open/Close, the same "opens IN PLACE
+// below the row" shape EpisodeRow (episode-card.tsx) already uses for
+// episodes on this same page. `barrierReady`/`githubAppReady` mirror what
+// setup-screen.tsx used to pass DemoDetail; `onJump` is a no-op here — the
+// funnel's "finish the Environment step first" hand-off names a step this
+// page doesn't have (the barrier is an admin fact, never a member's to set),
+// so with no barrier this row can only say so, not send anyone anywhere.
+// `onDemoLaunched` is likewise a no-op: useDemoRuns (demo-runner.tsx) already
+// writes the durable per-browser "launched" signal on its own; nothing on
+// this page currently reads it back into a done marker.
+function DemoRow({
+  demo,
+  barrierReady,
+  githubAppReady,
+  defaultOpen = false,
+}: {
+  demo: Demo;
+  barrierReady: boolean;
+  githubAppReady: boolean;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  return (
+    <div className="border-b border-border py-3 last:border-b-0">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground">{demo.title}</span>
+        {open ? (
+          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+            {EP.CLOSE}
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+            {T.DEMO_OPEN}
+          </Button>
+        )}
+      </div>
+      {open && (
+        <div className="mt-3">
+          <React.Suspense fallback={<p className="text-sm text-muted-foreground">Loading demo…</p>}>
+            <DemoDetail
+              demo={demo}
+              barrierReady={barrierReady}
+              githubAppReady={githubAppReady}
+              onJump={() => {}}
+              onDemoLaunched={() => {}}
+            />
+          </React.Suspense>
         </div>
       )}
     </div>

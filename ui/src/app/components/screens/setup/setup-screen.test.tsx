@@ -91,7 +91,6 @@ vi.mock("../../wardyn/live-approvals", () => ({
 }));
 
 import { SetupScreen, setupDismissed, dismissSetup } from "./setup-screen";
-import { DEMOS } from "../demos/demo-catalog";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import { DRIVES } from "../../../lib/user-drives-copy";
 
@@ -249,10 +248,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   });
 
   // The same coverage the old linear walk gave each optional step — reached
-  // from the rail now, since Next no longer passes through any of them. This
-  // fixture has no model and no stored secret, so the harness demo
-  // (needsModel) is dropped from the rail entirely; the TEACH+GATE demo
-  // (github-app-broker) stays offered with a disabled Start.
+  // from the rail now, since Next no longer passes through any of them.
+  // M-6 (D5) moved every demo out of this funnel entirely (see
+  // member-getting-started.test.tsx for their new coverage), so this walk
+  // covers only the three real optional-config steps now.
   it("reaches every optional step from the rail, each with the optional-step footer, none on the required walk", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
@@ -276,30 +275,13 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^done with this one$/i })).toBeInTheDocument();
 
-    // Egress demos — the first proves the lazily-loaded detail body mounts.
-    // 10s, not RTL's 1000ms default: this is the ONE find in the suite that
-    // waits on the React.lazy(() => import("./demos-step")) boundary
-    // (setup-screen.tsx), and that chunk drags in demo-screen/xterm. Vite
-    // transforms it on first demand — ~200ms alone, but deterministically
-    // past a second when all 79 test files transform in parallel.
-    await user.click(within(nav).getByRole("button", { name: /^the sealed box/i }));
-    expect(await screen.findByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
-    expect(
-      await screen.findByText(/set up a sandbox like this yourself/i, undefined, { timeout: 10_000 }),
-    ).toBeInTheDocument();
-
-    // TEACH+GATE: no GitHub App in this fixture — the demo is still offered
-    // (reachable from the rail), a disabled Start card, not a missing step.
-    await user.click(within(nav).getByRole("button", { name: /a token the sandbox never even sees/i }));
-    expect(
-      await screen.findByRole("heading", { name: /a token the sandbox never even sees/i }),
-    ).toBeInTheDocument();
-    expect(await screen.findByTestId("demo-needs-github-app")).toBeInTheDocument();
-    expect(screen.getByTestId("demo-start-github-app-broker")).toBeDisabled();
-
-    // The harness demo (needsModel, no model connected here) is DROPPED
-    // entirely — not offered on the rail at all.
+    // No demo is offered by this rail any more (M-6/D5) — not even the
+    // TEACH+GATE one, which used to stay reachable with a disabled Start
+    // regardless of readiness.
+    expect(within(nav).queryByRole("button", { name: /^the sealed box/i })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: /a token the sandbox never even sees/i })).not.toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: /the agent in the box/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/demos/i)).not.toBeInTheDocument();
 
     // Workspace providers — its body is the card, zero teal.
     await user.click(within(nav).getByRole("button", { name: /^providers/i }));
@@ -340,80 +322,21 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await screen.findByRole("heading", { name: /^network$/i })).toBeInTheDocument();
   });
 
-  // The corp gate is CROSSING-based, and demo targets are exempt. /demos
-  // redirects into a demo step and every episode cold-opens on one: if the
-  // corrector bounced those to Network, a shared demo link would never open
-  // its demo. Nothing unsafe opens — a demo gates its own Start on
-  // barrierReady, which this fixture's no_runner host fails anyway.
-  describe("the crossing gate — demo links open, click-past still can't happen", () => {
-    it("a cold ?step=<demo> deep link opens the demo instead of bouncing to Network", async () => {
-      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sealed-box");
-      expect(await screen.findByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
-      // The gate is genuinely still unproven — this is an exemption, not a pass.
-      expect(screen.queryByRole("heading", { name: /^network$/i })).not.toBeInTheDocument();
-    });
-
-    // nextGate is produced only ON corp_network, so the last demo's Next must
-    // render DISABLED rather than enabled with its click bare-returning into
-    // nothing. The shell asks the same predicate selectStep does, so it
-    // renders disabled and says why.
-    // #213 — a demo's footer is the optional-step pair now, not a numbered
-    // Next: "Done with this one" targets Review, and it must render DISABLED
-    // (with the gate's reason as its title) rather than a dead-enabled
-    // button whose click silently no-ops.
-    it("a demo's 'Done with this one' is DISABLED, with the gate's reason as its title — never a dead-enabled button", async () => {
-      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sts-fail-closed");
-      await screen.findByRole("heading", { name: /no identity, no credential/i });
-      expect(screen.queryByRole("button", { name: /^next:/i })).not.toBeInTheDocument();
-      const done = screen.getByRole("button", { name: /^done with this one$/i });
-      expect(done).toBeDisabled();
-      expect(done.getAttribute("title")).toMatch(/one probe/i);
-      // Back to required steps is never gated by refuseNext, same as every
-      // other Back button in this shell.
-      expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeEnabled();
-    });
-
-    it("HIGH-1: from a demo, Back into Integrations works while Workspaces stays gated", async () => {
-      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sealed-box");
-      await screen.findByRole("heading", { name: /the sealed box/i });
-      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
-      const nav = within(navs[navs.length - 1]);
-
-      // Forward past the gate is still refused — the part that matters.
-      await user.click(nav.getByRole("button", { name: /^workspaces/i }));
-      expect(screen.getByRole("heading", { name: /the sealed box/i })).toBeInTheDocument();
-
-      // Backwards is free (the accepted trade: Integrations is optional, and a
-      // target-index-based gate would dead-end the operator on this demo).
-      await user.click(nav.getByRole("button", { name: /^secrets/i }));
-      expect(await screen.findByRole("heading", { name: /^secrets$/i })).toBeInTheDocument();
-    });
-  });
-
-  // The walk is stepOrder(status): a demo whose needsSecret is unmet is not
-  // a step, so the rail can't offer it and a link to it can't strand the
-  // operator on a step no consumer can find an index for.
-  describe("conditional demo steps — the walk follows the stored secret", () => {
-    const granted = DEMOS.find((d) => d.needsSecret)!;
-
-    it("a ?step= link to an unmet needsSecret demo re-corrects to the nearest surviving step", async () => {
-      renderScreen(<SetupScreen onDone={() => {}} />, `/setup?step=${granted.id}`);
-      // Falls BACK, never forward: write-only-by-design is the step that tells
-      // the operator how to store the very secret this one is waiting on.
-      expect(await screen.findByRole("heading", { name: /write-only, even for you/i })).toBeInTheDocument();
-      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
-      expect(within(navs[navs.length - 1]).queryByRole("button", { name: new RegExp(granted.title, "i") })).toBeNull();
-    });
-
-    it("with the secret stored, the same link opens the demo and the rail offers it", async () => {
-      getSetupStatusMock.mockResolvedValue(
-        baseStatus({ secrets: { present: [granted.needsSecret!], github_app: false } }),
-      );
-      renderScreen(<SetupScreen onDone={() => {}} />, `/setup?step=${granted.id}`);
-      expect(
-        await screen.findByRole("heading", { name: new RegExp(granted.title, "i") }),
-      ).toBeInTheDocument();
-    });
+  // M-6 (D5): every demo left this funnel for User Getting Started
+  // (member-getting-started.test.tsx now owns their walkable/gated
+  // coverage). A demo id is no longer a real step here at all — the old
+  // "crossing gate exemption for a demo link" and "needsSecret demo
+  // re-corrects to the nearest surviving step" describe blocks tested
+  // exactly that carve-out, which retired with the demos themselves. What's
+  // left to prove at this layer is the ordinary case every other bogus
+  // `?step=` id already gets (see "opens the step named by ?step=" above):
+  // a demo id validates against nothing in stepOrder any more, so it falls
+  // back to the funnel's first step, same as any other unknown id — never a
+  // 500, never a stuck deep link.
+  it("a ?step=<demo> deep link is just another unknown id now — falls back to the first step", async () => {
+    renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sealed-box");
+    expect(await screen.findByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /the sealed box/i })).not.toBeInTheDocument();
   });
 
   // loadSecrets must be folded into the SAME recheck every "Re-check" here

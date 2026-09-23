@@ -9,12 +9,17 @@
 // pushed past the 1000-line file gate) purely by seam — these take props and
 // render, they read none of the pane's state.
 
-import { Info, ShieldCheck } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Info, ShieldCheck, TriangleAlert } from "lucide-react";
 import type { RecordResult } from "../../../lib/types";
 import type { SessionStage } from "./session-helpers";
+import type { ConsoleView } from "../../wardyn/console-view";
+import { CONSOLE_VIEW } from "../../wardyn/copy/console-view";
+import { RECORD } from "../../../lib/workspace-copy";
 import { Chip } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { CopyButton } from "../../wardyn/copy-button";
+import { Button } from "../../ui/button";
 
 // Same table+one-Chip idiom as primitives.tsx's runStateMeta: one row per
 // SessionStage instead of a 42-line if-chain of near-identical Chips.
@@ -132,6 +137,47 @@ export function HonestyNote({ text }: { text: string }) {
       <Info className="mt-0.5 size-3 shrink-0" />
       <span>{text}</span>
     </p>
+  );
+}
+
+// RecordPane's model-access note (a session runs the agent, so it uses the
+// configured provider). M-6/QM-10: in the Admin view the not-ready line
+// states the REAL dependency — the admin's own connection, made only in the
+// User view — instead of pointing at Admin-view Getting Started, which
+// cannot configure it; the User view's own copy is unchanged.
+export function ModelAccessNote({ modelReady, view }: { modelReady: boolean; view: ConsoleView }) {
+  if (modelReady) {
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted-foreground">
+        <Info className="mt-0.5 size-4 shrink-0 text-primary" />
+        <p>
+          Sessions run with your configured model provider (injected proxy-side — nothing sensitive
+          stays resident) so the agent can make changes.
+        </p>
+      </div>
+    );
+  }
+  if (view === "admin") {
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
+        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+        <div className="space-y-2">
+          <p>{RECORD.NEEDS_OWN_CONNECTION}</p>
+          <Button asChild size="sm" variant="outline" className="h-7">
+            <Link to="/account">{CONSOLE_VIEW.OPEN_IN_USER}</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
+      <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+      <p>
+        No model provider is configured, so an agent won&apos;t reach a model in a session — set one up
+        in Getting started. You can still record plain build/test sessions.
+      </p>
+    </div>
   );
 }
 

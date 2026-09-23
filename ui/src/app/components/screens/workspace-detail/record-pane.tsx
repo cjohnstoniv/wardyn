@@ -34,7 +34,8 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { ConfinementClass, RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
-import { AuthModeLine, DetectedHints, HonestyNote, stageChip } from "./record-pane-chips";
+import { useConsoleMode } from "../../wardyn/console-view";
+import { AuthModeLine, DetectedHints, HonestyNote, ModelAccessNote, stageChip } from "./record-pane-chips";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -157,6 +158,8 @@ export function RecordPane({
   // super-only /policies: the control is gated where its call lives, so this
   // pane never shows a security admin a live button the server refuses.
   const securityOperator = useSecurityOperator();
+  // M-6/QM-10: which not-ready copy the model-access note below shows.
+  const view = useConsoleMode();
   const sessions = recordSessions(ws);
   const orphans = orphanedVerifySessions(ws);
   // The record sandbox runs under the strongest class the host supports
@@ -198,24 +201,7 @@ export function RecordPane({
         off-policy host is <strong>blocked live</strong> and one click to approve.
       </p>
 
-      {/* Model-access note: a session runs the agent, so it uses the configured provider. */}
-      {modelReady ? (
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted-foreground">
-          <Info className="mt-0.5 size-4 shrink-0 text-primary" />
-          <p>
-            Sessions run with your configured model provider (injected proxy-side — nothing sensitive
-            stays resident) so the agent can make changes.
-          </p>
-        </div>
-      ) : (
-        <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <p>
-            No model provider is configured, so an agent won&apos;t reach a model in a session — set one up
-            in Getting started. You can still record plain build/test sessions.
-          </p>
-        </div>
-      )}
+      <ModelAccessNote modelReady={modelReady} view={view} />
 
       <OpenEgressBanner tier={tier} />
 

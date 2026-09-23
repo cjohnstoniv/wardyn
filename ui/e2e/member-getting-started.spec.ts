@@ -294,10 +294,15 @@ test.describe("member Getting Started (mocked /me role)", () => {
   });
 });
 
-// Sibling negative control: the SAME route, unspliced (the harness's real
-// admin session) — the operator funnel, and none of the
-// member-only section titles.
-test.describe("admin session at /setup (unmocked — negative control)", () => {
+// Sibling negative control, updated for M-6 (admin-member-modes-design.md
+// §4.8/§6, D1): the SAME route, unspliced (the harness's real admin
+// session) — since M-6 the mode is the URL, not the caller's role
+// (onboarding-screen.tsx's own header comment), and D1 (single-operator: an
+// admin bearer, no SSO) says the URL is the ONLY thing that ever decided it
+// here. So the sole admin at plain /setup now gets the SAME User Getting
+// Started page a member would, never the operator funnel — which still
+// renders, unchanged, at /admin/setup.
+test.describe("admin session at /setup and /admin/setup (unmocked — D1: the URL decides)", () => {
   test.beforeEach(async ({ page }) => {
     // Past the welcome hero, straight to the funnel's own step heading — same
     // seed demos.spec.ts uses for a deep link into /setup.
@@ -310,26 +315,28 @@ test.describe("admin session at /setup (unmocked — negative control)", () => {
     });
   });
 
-  test("the admin still sees the barrier step, and no member sections", async ({ page }) => {
+  test("plain /setup shows the same User Getting Started a member gets, never the operator funnel", async ({
+    page,
+  }) => {
     await gotoConsole(page);
     await navToRoute(page, "/setup");
 
-    await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
-
     for (const title of MEMBER_SECTION_TITLES) {
-      await expect(page.getByRole("heading", { name: title })).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: title })).toBeVisible();
     }
+    await expect(page.getByRole("heading", { name: "Pick your barrier" })).toHaveCount(0);
   });
 
-  // Negative control for the member-cold-load fix above: an admin's cold
-  // /setup load is UNCHANGED — it still fires the admin-only site-config read
-  // (this suite's beforeEach seeds wardyn-onboarding-seen so the load lands
-  // straight on the funnel's barrier step, same as the sibling test above).
-  test("a plain admin cold page.goto(\"/setup\") still requests /api/v1/site-config", async ({ page }) => {
+  // Negative control: /admin/setup is still the operator funnel, and still
+  // fires the admin-only site-config read a plain /setup load no longer does
+  // (member-getting-started.tsx never reads it).
+  test("a plain admin cold page.goto(\"/admin/setup\") still shows the funnel and requests /api/v1/site-config", async ({
+    page,
+  }) => {
     const requests: string[] = [];
     page.on("request", (req) => requests.push(req.url()));
 
-    await page.goto("/setup");
+    await page.goto("/admin/setup");
     await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
 
     expect(requests.some((u) => new URL(u).pathname === "/api/v1/site-config")).toBe(true);

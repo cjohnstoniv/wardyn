@@ -67,6 +67,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Getting Started splits by view (#637).** The Admin view funnel drops its "Egress demos" and
+  "Secrets demos" phases, renames "Your work" to "Code and workspaces", and its Finish step now
+  offers a **Switch to user view** button — the admin's own model connection and first run live
+  there. The User view's own Getting Started gains those same demos as two new sections, and the
+  Record control's "no model provider" note, in the Admin view, now says Record runs on the
+  admin's own connection and links **Open in user view** to `/account`. Which page renders (the
+  funnel vs. the User view's own) is now decided by the URL, not the caller's role, matching every
+  other split screen — a single-operator install sees the funnel only at `/admin/setup`, and the
+  User view's Getting Started everywhere else, `/setup` included.
 - **The Console view switch, and per-view chrome (#634).** Beside the wordmark, an admin with both
   views gets an **Admin view** | **User view** switch. On SSO it asks the unsaved-changes guard
   first, flips the session's existing clamp (`POST /me/member-mode`), tells the other tabs, and

@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import type { ProfileObservations, RecordResult, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -74,31 +75,39 @@ function renderPane(
   // every test in this file. `securityOperator` defaults to `operator`, so
   // every existing call site keeps exactly the viewer it had.
   securityOperator = operator,
+  // M-6/QM-10: which console view the not-ready model-access note reads for
+  // — defaulted to User view (today's unchanged "set one up in Getting
+  // started" copy) so every existing call site in this file keeps the exact
+  // viewer it had; record-pane.test.tsx's own new Admin-view case passes
+  // "/admin/workspaces/ws-1" explicitly.
+  route = "/workspaces/ws-1",
 ) {
   return render(
-    // 0.7 §B: the pane moved to useSecurityOperator (record + promote-egress
-    // are securityOps), so the fixture's `operator=false` viewer must be a
-    // MEMBER on both predicates — a security admin CAN drive this pane, which
-    // is the point of the move. `securityOperator` defaults to `operator` so
-    // every existing caller is unchanged, and splits for the SECURITY-ADMIN
-    // persona (operator=false, securityOperator=true) — the caller F031 is
-    // about, whose approve-hosts write lands on operatorOnly.
-    <OperatorProvider operator={operator} securityOperator={securityOperator}>
-      <RecordPane
-        ws={ws(over)}
-        notice={null}
-        launch={launch}
-        busyTask={null}
-        modelReady={modelReady}
-        hostClasses={hostClasses}
-        onRecord={handlers.onRecord ?? noop}
-        onReplayConfined={handlers.onReplayConfined ?? noop}
-        onDoneRecording={handlers.onDoneRecording ?? noop}
-        onPromoteEgress={handlers.onPromoteEgress ?? noop}
-        onApproveHosts={handlers.onApproveHosts ?? noop}
-        onOpenProfile={handlers.onOpenProfile ?? noop}
-      />
-    </OperatorProvider>,
+    <MemoryRouter initialEntries={[route]}>
+      {/* 0.7 §B: the pane moved to useSecurityOperator (record + promote-egress
+          are securityOps), so the fixture's `operator=false` viewer must be a
+          MEMBER on both predicates — a security admin CAN drive this pane, which
+          is the point of the move. `securityOperator` defaults to `operator` so
+          every existing caller is unchanged, and splits for the SECURITY-ADMIN
+          persona (operator=false, securityOperator=true) — the caller F031 is
+          about, whose approve-hosts write lands on operatorOnly. */}
+      <OperatorProvider operator={operator} securityOperator={securityOperator}>
+        <RecordPane
+          ws={ws(over)}
+          notice={null}
+          launch={launch}
+          busyTask={null}
+          modelReady={modelReady}
+          hostClasses={hostClasses}
+          onRecord={handlers.onRecord ?? noop}
+          onReplayConfined={handlers.onReplayConfined ?? noop}
+          onDoneRecording={handlers.onDoneRecording ?? noop}
+          onPromoteEgress={handlers.onPromoteEgress ?? noop}
+          onApproveHosts={handlers.onApproveHosts ?? noop}
+          onOpenProfile={handlers.onOpenProfile ?? noop}
+        />
+      </OperatorProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -135,6 +144,19 @@ describe("RecordPane — header, open-egress banner, model note", () => {
   it("warns when no model path is ready", () => {
     renderPane({}, {}, false);
     expect(screen.getByText(/no model provider is configured/i)).toBeInTheDocument();
+  });
+
+  // M-6 (QM-10/§4.6): in the Admin view the not-ready line states the REAL
+  // dependency (the admin's own connection, made in the User view) instead
+  // of pointing at Admin-view Getting Started, which cannot configure it.
+  it("in the Admin view, states the Record-runs-on-your-own-connection dependency and links to User view", () => {
+    renderPane({}, {}, false, true, null, null, true, "/admin/workspaces/ws-1");
+    expect(
+      screen.getByText("Record uses your own model connection — connect it in the user view."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/no model provider is configured/i)).not.toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "Open in user view" });
+    expect(link).toHaveAttribute("href", "/account");
   });
 
   // Once a session has actually launched, the server's own
@@ -598,18 +620,20 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
 
   it("disables Replay confined only for the busy session (busyTask keys off verifyKeyOf)", () => {
     render(
-      <RecordPane
-        ws={ws({ record_results: { "build-test": learning } })}
-        notice={null}
-        busyTask="verify:build-test"
-        modelReady
-        onRecord={noop}
-        onReplayConfined={noop}
-        onDoneRecording={noop}
-        onPromoteEgress={noop}
-        onApproveHosts={noop}
-        onOpenProfile={noop}
-      />,
+      <MemoryRouter>
+        <RecordPane
+          ws={ws({ record_results: { "build-test": learning } })}
+          notice={null}
+          busyTask="verify:build-test"
+          modelReady
+          onRecord={noop}
+          onReplayConfined={noop}
+          onDoneRecording={noop}
+          onPromoteEgress={noop}
+          onApproveHosts={noop}
+          onOpenProfile={noop}
+        />
+      </MemoryRouter>,
     );
     expect(screen.getByRole("button", { name: /^replay confined$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /re-record/i })).toBeEnabled();
