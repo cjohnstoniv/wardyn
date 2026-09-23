@@ -159,9 +159,9 @@ describe("PushContentCard — held (#181)", () => {
 
 // Review finding 2 — HELD_NOTE only holds while the proxy's own bounded
 // window (isHeld's push_content arm, lib/types/approvals.ts) is still open;
-// past it the card flips to HELD_OPEN on its own, via a timer, not only on
+// past it the card flips to HELD_EXPIRED on its own, via a timer, not only on
 // the next poll tick.
-describe("PushContentCard — the held note flips to HELD_OPEN at the window end", () => {
+describe("PushContentCard — the held note flips to HELD_EXPIRED at the window end", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -169,20 +169,20 @@ describe("PushContentCard — the held note flips to HELD_OPEN at the window end
     vi.useRealTimers();
   });
 
-  it("shows HELD_NOTE for a fresh row and HELD_OPEN once the 600s ceiling passes, with no poll/re-render forced from outside", () => {
+  it("shows HELD_NOTE for a fresh row and HELD_EXPIRED once the 600s ceiling passes, with no poll/re-render forced from outside", () => {
     render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />);
     expect(screen.getByText(PUSH.HELD_NOTE)).toBeInTheDocument();
-    expect(screen.queryByText(PUSH.HELD_OPEN)).not.toBeInTheDocument();
+    expect(screen.queryByText(PUSH.HELD_EXPIRED)).not.toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(600_001);
     });
 
-    expect(screen.getByText(PUSH.HELD_OPEN)).toBeInTheDocument();
+    expect(screen.getByText(PUSH.HELD_EXPIRED)).toBeInTheDocument();
     expect(screen.queryByText(PUSH.HELD_NOTE)).not.toBeInTheDocument();
   });
 
-  it("shows HELD_OPEN immediately for a row already past the window", () => {
+  it("shows HELD_EXPIRED immediately for a row already past the window", () => {
     const past = new Date(Date.now() - 601_000).toISOString();
     render(
       <PushContentCard
@@ -194,7 +194,7 @@ describe("PushContentCard — the held note flips to HELD_OPEN at the window end
         onDeny={vi.fn()}
       />,
     );
-    expect(screen.getByText(PUSH.HELD_OPEN)).toBeInTheDocument();
+    expect(screen.getByText(PUSH.HELD_EXPIRED)).toBeInTheDocument();
   });
 
   it("clears its timer on unmount (no act() warning, no leaked timer)", () => {
