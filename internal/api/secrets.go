@@ -222,6 +222,17 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// auditRowNotWritten is rule 18's audit for Wardyn's own writes (a captured or
+// refreshed sign-in, a pasted credential), as handlePutSecret does it for the
+// API's: a store-mode Put whose value reached the external store but whose
+// row was not written, so the store may already serve the new value.
+func (s *Server) auditRowNotWritten(ctx context.Context, err error, actorType types.ActorType, actor, owner, name string) {
+	if errors.Is(err, secretstore.ErrRowNotWritten) {
+		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "secret.write", name, "failure",
+			withSecretOwner(map[string]any{"reason": "row"}, owner, true)))
+	}
+}
+
 // admitSecretCount is the secretsMaxPerOwner check, sited immediately before
 // the Put so nothing between them can change the count.
 //

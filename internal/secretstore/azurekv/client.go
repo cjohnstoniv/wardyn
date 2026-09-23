@@ -121,20 +121,16 @@ func statusOf(err error) int {
 	return -1
 }
 
-// tokenError is a failure to get an Entra token. At boot it fails the start.
-// At runtime it is transient (design §2.3a.3) unless the endpoint refused the
-// identity itself (oauthError.revoked): a deleted or revoked federated
-// credential is definitive at once, as a revoked vault role is (rule 21).
+// tokenError is a failure to get an Entra token. At boot it fails the start;
+// at runtime it is transient, whatever the endpoint answered (design §2.3a.3).
+// Entra answers invalid_client for passing conditions too (AADSTS700024, an
+// assertion outside its valid time, while the kubelet refreshes it), so a
+// refusal rides the K8 grace; the vault's own 401/403 is the definitive
+// revocation signal (rule 21).
 type tokenError struct{ err error }
 
-func (e *tokenError) Error() string { return "entra token: " + e.err.Error() }
-func (e *tokenError) Unwrap() []error {
-	var oe *oauthError
-	if errors.As(e.err, &oe) && oe.revoked() {
-		return []error{e.err}
-	}
-	return []error{secretstore.ErrUnavailable, e.err}
-}
+func (e *tokenError) Error() string   { return "entra token: " + e.err.Error() }
+func (e *tokenError) Unwrap() []error { return []error{secretstore.ErrUnavailable, e.err} }
 
 // oauthError is a token endpoint's non-2xx answer: its status and OAuth error
 // code, and the first line of its description (never the request).
@@ -148,18 +144,6 @@ func (e *oauthError) Error() string {
 		return fmt.Sprintf("token endpoint %d", e.status)
 	}
 	return fmt.Sprintf("token endpoint %d: %s: %s", e.status, e.code, e.desc)
-}
-
-// revoked reports a refusal of the identity or its grant (RFC 6749 §5.2, as
-// Entra answers a deleted app, a removed federated credential or a subject
-// that no longer matches), which no retry fixes. A 429, a 5xx and every other
-// code stay transient.
-func (e *oauthError) revoked() bool {
-	switch e.code {
-	case "invalid_client", "invalid_grant", "unauthorized_client", "invalid_scope":
-		return e.status == http.StatusBadRequest || e.status == http.StatusUnauthorized
-	}
-	return false
 }
 
 // httpsURL parses setting's value and refuses plain http:// to anything but
@@ -220,7 +204,7 @@ func newClient(cfg Config) (*client, error) {
 		}
 	case AuthManagedIdentity:
 		// Link-local and never proxied: a proxy would see the token.
-		c.imdsHTTP = &http.Client{Transport: &http.Transport{Proxy: nil}}
+		c.imdsHTTP = &http.Client{Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	default:
 		return nil, fmt.Errorf("WARDYN_AZURE_AUTH %q is not %q or %q", cfg.Auth, AuthWorkloadIdentity, AuthManagedIdentity)
 	}

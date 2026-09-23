@@ -10,6 +10,7 @@ import (
 	"hash/crc32"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -78,6 +79,8 @@ func extErr(ref string, err error) error {
 // (azurekv's generation rollover), the old one is removed after the row
 // points away from it.
 func (s *Store) putExternal(ctx context.Context, name string, value []byte) error {
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
 	ref := rowRef(s.owner, name)
 	tx, err := beginReadCommitted(ctx, s.pool)
 	if err != nil {
@@ -121,6 +124,18 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 		return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not (%w: %w), and removing the value failed too (%v) — `wardynd -reconcile` lists it", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err, derr)
 	}
 	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it was removed again: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
+}
+
+// bounded bounds one store-mode write, the wait for the row's lock included,
+// at six times the per-call timeout: it holds a pooled connection and the lock
+// for its whole store conversation, which an outage (retries, Retry-After,
+// purge waits) would otherwise stretch to minutes.
+func (s *Store) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	t := s.extTimeout
+	if t <= 0 {
+		t = 5 * time.Second
+	}
+	return context.WithTimeout(ctx, 6*t)
 }
 
 // lockRow takes the row's store-mode write lock (db.SecretRowLockClass) for
@@ -267,11 +282,13 @@ func (s *Store) atTarget(target string, e envelope) bool {
 // failure there leaves an orphan the error names, never a row pointing at
 // nothing. soft reports an old copy the store kept soft-deleted.
 func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRead func(owner, name string)) (moved, soft bool, err error) {
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
 	tx, err := beginReadCommitted(ctx, s.pool)
 	if err != nil {
 		return false, false, fmt.Errorf("begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if err := lockRow(ctx, tx, owner, name); err != nil {
 		return false, false, err
 	}

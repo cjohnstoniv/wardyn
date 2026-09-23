@@ -70,10 +70,11 @@ type kvSecret struct {
 	deletedAt int64        // unix seconds, once soft-deleted
 }
 
-// tokenAnswer is a forced token-endpoint answer: a status and OAuth error code.
+// tokenAnswer is a forced token-endpoint answer: a status, OAuth error code
+// and description ("forced" when empty).
 type tokenAnswer struct {
-	status int
-	code   string
+	status     int
+	code, desc string
 }
 
 type kvVersion struct {
@@ -200,7 +201,11 @@ func (f *fakeKV) exchange(w http.ResponseWriter, r *http.Request) {
 	if len(f.tokenForce) > 0 {
 		a := f.tokenForce[0]
 		f.tokenForce = f.tokenForce[1:]
-		kvReply(w, a.status, map[string]any{"error": a.code, "error_description": "forced"})
+		desc := a.desc
+		if desc == "" {
+			desc = "forced"
+		}
+		kvReply(w, a.status, map[string]any{"error": a.code, "error_description": desc})
 		return
 	}
 	if r.PostForm.Get("grant_type") != "client_credentials" ||

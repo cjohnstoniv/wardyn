@@ -90,6 +90,7 @@ type Config struct {
 type Store struct {
 	c           *client
 	prefix      string
+	ours        *regexp.Regexp // a secret name this install derives
 	maxVersions int
 	purge       bool
 	now         func() time.Time
@@ -129,7 +130,8 @@ func build(cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{c: c, prefix: prefix, maxVersions: cfg.MaxVersions, purge: cfg.Purge == PurgeAuto, now: time.Now, pollEvery: time.Second}, nil
+	ours := regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + `-(platform|operator|people)-[0-9a-f]{32}-g[0-9a-z]+$`)
+	return &Store{c: c, prefix: prefix, ours: ours, maxVersions: cfg.MaxVersions, purge: cfg.Purge == PurgeAuto, now: time.Now, pollEvery: time.Second}, nil
 }
 
 // Name implements secretstore.External.
@@ -288,7 +290,7 @@ func (s *Store) Put(ctx context.Context, owner, name, prev string, value []byte,
 		_, err := s.c.call(ctx, http.MethodPut, "secrets/"+sn, body, nil)
 		if statusOf(err) == http.StatusConflict && attempt < 3 {
 			// Purge the deleted secret and reuse the name, or move on.
-			if attempt > 0 || !s.purge || s.purgeDeleted(ctx, sn, true) != nil {
+			if attempt > 0 || !s.purge || s.purgeDeleted(ctx, sn, true, putPolls) != nil {
 				gen = s.newGen(gen)
 			}
 			older = nil
@@ -298,7 +300,9 @@ func (s *Store) Put(ctx context.Context, owner, name, prev string, value []byte,
 			return "", err
 		}
 		if err := s.disable(ctx, sn, older); err != nil {
-			return "", fmt.Errorf("the new value is written to %s, but an earlier version is still enabled (the next save retries): %w", sn, err)
+			// older is only ever non-empty in the row's own generation, so the
+			// new value is already the one a Get of the row reads (rule 18).
+			return "", fmt.Errorf("the new value is written to %s and served, but an earlier version is still enabled (the next save retries): %w: %w", sn, secretstore.ErrRowNotWritten, err)
 		}
 		return s.ref(sn, len(older)+1), nil
 	}
@@ -428,7 +432,7 @@ func (s *Store) Delete(ctx context.Context, owner, name, ref string) error {
 	}
 	rep := secretstore.DeleteReport{Store: Name, RecoverableDays: deleted.Attributes.RecoverableDays}
 	if s.purge {
-		if err := s.purgeDeleted(ctx, sn, status != http.StatusNotFound); err != nil {
+		if err := s.purgeDeleted(ctx, sn, status != http.StatusNotFound, deletePolls); err != nil {
 			slog.Warn("azurekv: the credential is soft-deleted but was not purged; the organisation can recover it until the vault's retention ends",
 				slog.String("secret", sn), slog.Int("recoverable_days", rep.RecoverableDays), slog.Any("err", err))
 		} else {
@@ -439,12 +443,19 @@ func (s *Store) Delete(ctx context.Context, owner, name, ref string) error {
 	return nil
 }
 
+// How many times a purge re-checks a soft delete still in progress. A Put
+// holds the row's lock and a database connection while it waits, so it gives
+// up sooner, and takes a new generation instead.
+const (
+	putPolls    = 3
+	deletePolls = 10
+)
+
 // purgeDeleted purges the deleted secret secretName; nothing to purge is
 // success. A soft delete finishes asynchronously: with pending (the caller has
 // just deleted it, or the vault said a deleted secret holds the name) a 404
-// or a 409 means "still being deleted", and it waits, bounded, and retries.
-func (s *Store) purgeDeleted(ctx context.Context, secretName string, pending bool) error {
-	const polls = 10
+// or a 409 means "still being deleted", and it waits, up to polls re-checks.
+func (s *Store) purgeDeleted(ctx context.Context, secretName string, pending bool, polls int) error {
 	for i := 0; ; i++ {
 		status, err := s.c.call(ctx, http.MethodDelete, "deletedsecrets/"+secretName, nil, nil)
 		switch {
@@ -491,7 +502,7 @@ func (s *Store) walk(ctx context.Context, next string, deleted bool) ([]secretst
 		}
 		for _, b := range page.Value {
 			sn := b.ID[strings.LastIndex(b.ID, "/")+1:]
-			if !strings.HasPrefix(strings.ToLower(sn), s.prefix+"-") || b.Tags[tagFormat] != "v2" {
+			if !s.ours.MatchString(strings.ToLower(sn)) || b.Tags[tagFormat] != "v2" {
 				continue
 			}
 			e := secretstore.ExternalEntry{Owner: b.Tags[tagOwner], Name: b.Tags[tagName], Ref: s.c.host + "/" + strings.ToLower(sn), SoftDeleted: deleted}

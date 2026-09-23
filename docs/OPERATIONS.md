@@ -4711,7 +4711,20 @@ to move from Vault to Key Vault, migrate to local first.
 **Use a vault dedicated to Wardyn** (Microsoft's "a vault per application"
 advice), and give wardynd's identity **Key Vault Secrets Officer** on it and
 nothing else. Every read is a `SecretGet` in the vault's `AuditEvent` log, with
-wardynd's identity and the secret's URI.
+wardynd's identity and the secret's URI. Secrets Officer also grants backup,
+restore and recover, which Wardyn never calls; the least-privilege alternative
+is a custom role with exactly these `dataActions`:
+
+```
+Microsoft.KeyVault/vaults/secrets/getSecret/action
+Microsoft.KeyVault/vaults/secrets/setSecret/action
+Microsoft.KeyVault/vaults/secrets/readMetadata/action
+Microsoft.KeyVault/vaults/secrets/update/action
+Microsoft.KeyVault/vaults/secrets/delete
+Microsoft.KeyVault/vaults/secrets/purge/action
+```
+
+Leave out `purge/action` to withhold purge (see "Removing a credential" below).
 
 **Names, versions and the owner check.** Key Vault names cannot hold `/`, `@`,
 `.` or `_`, so a secret's name is derived from its row, one per owner and name:
@@ -4733,7 +4746,9 @@ credential wait for each other across replicas. Once the name holds
 `WARDYN_AZURE_KV_MAX_VERSIONS` versions (default 100, well under the 500 at
 which Key Vault's backup of a secret fails; the vault's own count decides, not
 the pointer row), the next write starts a new generation, a fresh name, and
-the old generation is deleted. Each write is one transaction in the vault's
+the old generation is deleted. A read that loaded the row just before such a
+write committed can find the old name already deleted: it is refused once, with
+no grace, and the next read follows the row to the new name. Each write is one transaction in the vault's
 secret-create limit (300 per 10 seconds, shared with key and certificate
 imports), plus a version listing and one update per version it disables.
 
@@ -4765,15 +4780,18 @@ else the system roots, in a TLS config of its own; `http://` is refused except
 to a loopback host. The default NetworkPolicy denies wardynd's egress: allow
 the vault and `login.microsoftonline.com` in `networkPolicy.egress.extra`.
 
-**When Key Vault is unavailable.** A 429, a 5xx, a timeout or a token
-endpoint that does not answer is transient (each call retried three times
-first, honouring `Retry-After`); a 401 fetches a new token at most once every
-30 s; a 403, a secret that is gone or disabled, or a binding that does not
-match is definitive, and so is a token endpoint that refuses wardynd's
-identity (`invalid_client`, `invalid_grant`, `unauthorized_client` or
-`invalid_scope`: a deleted identity, or a removed or mismatched federated
-credential). Revoking wardynd's role at the vault bites at once; removing its
-federated credential bites when it next fetches a token, within the hour.
+**When Key Vault is unavailable.** A 429, a 5xx, a timeout or any token
+endpoint failure is transient (each call retried three times first, honouring
+`Retry-After`). A token endpoint refusal is transient too: Entra answers
+`invalid_client` for passing conditions (`AADSTS700024`, a projected token
+outside its valid time while the kubelet refreshes it), so it rides the
+15-minute grace. A 401 fetches a new token at most once every 30 s; a 403, a
+secret that is gone or disabled, or a binding that does not match is
+definitive. Revoking wardynd's role at the vault bites at once; removing its
+federated credential bites when its cached token expires (within the hour) and
+the vault then refuses the call. A write, the wait for the credential's lock
+included, gives up after six times `WARDYN_SECRET_STORE_TIMEOUT` (30 s by
+default), so an outage never holds a database connection longer.
 
 **Removing a credential, and the erasure horizon.** Removal is a soft delete
 of the secret (every version), then, with `WARDYN_AZURE_KV_PURGE=auto` (the

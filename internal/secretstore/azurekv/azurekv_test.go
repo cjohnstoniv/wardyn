@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -107,6 +109,29 @@ func TestManagedIdentity_AsksIMDSWithTheMetadataHeader(t *testing.T) {
 	}
 }
 
+// The IMDS client never follows a redirect: the token it would be handed
+// would come from wherever the link-local endpoint pointed.
+func TestManagedIdentity_DoesNotFollowARedirect(t *testing.T) {
+	f := newFakeKV(t)
+	cfg := fakeConfig(f, "")
+	cfg.Auth, cfg.TenantID = AuthManagedIdentity, ""
+	s, err := build(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirect := httptest.NewServer(http.RedirectHandler(f.srv.URL+"/metadata/identity/oauth2/token", http.StatusFound))
+	t.Cleanup(redirect.Close)
+	s.c.imds = redirect.URL + "/metadata/identity/oauth2/token"
+	if _, err := s.c.accessToken(t.Context()); err == nil {
+		t.Fatal("a redirected IMDS answer produced a token")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.imdsCalls != 0 {
+		t.Fatalf("the redirect was followed (%d IMDS calls)", f.imdsCalls)
+	}
+}
+
 // A 401 fetches a new token and retries, at most once per refreshEvery.
 func TestUnauthorized_RefreshesTheTokenBounded(t *testing.T) {
 	f := newFakeKV(t)
@@ -166,10 +191,11 @@ func TestClassification(t *testing.T) {
 	}
 }
 
-// At runtime a token endpoint that fails is transient, but one that refuses
-// the identity itself (a deleted or revoked federated credential) is
-// definitive at once, as a revoked vault role is (rule 21).
-func TestTokenEndpoint_RevokedIdentityIsDefinitive(t *testing.T) {
+// At runtime every token endpoint failure is transient (design §2.3a.3), a
+// refusal included: Entra answers invalid_client for passing conditions too
+// (AADSTS700024, an assertion outside its valid time). The vault's own
+// 401/403 is the definitive signal (rule 21).
+func TestTokenEndpoint_FailureIsTransient(t *testing.T) {
 	f := newFakeKV(t)
 	s := newFakeStore(t, f)
 	ref, err := s.Put(t.Context(), "", "k", "", []byte("v"), false)
@@ -177,29 +203,26 @@ func TestTokenEndpoint_RevokedIdentityIsDefinitive(t *testing.T) {
 		t.Fatal(err)
 	}
 	busy := func(status int, code string) []tokenAnswer { // every attempt, retries included
-		return []tokenAnswer{{status, code}, {status, code}, {status, code}, {status, code}}
+		return []tokenAnswer{{status, code, ""}, {status, code, ""}, {status, code, ""}, {status, code, ""}}
 	}
-	for _, c := range []struct {
-		answers   []tokenAnswer
-		transient bool
-	}{
-		{[]tokenAnswer{{401, "invalid_client"}}, false},
-		{[]tokenAnswer{{400, "invalid_grant"}}, false},
-		{[]tokenAnswer{{400, "unauthorized_client"}}, false},
-		{[]tokenAnswer{{400, "invalid_scope"}}, false},
-		{busy(503, "temporarily_unavailable"), true},
-		{busy(429, ""), true},
-		{busy(500, "invalid_client"), true},
+	for _, answers := range [][]tokenAnswer{
+		{{400, "invalid_client", "AADSTS700024: Client assertion is not within its valid time range."}},
+		{{401, "invalid_client", "AADSTS700027: Client assertion failed signature validation."}},
+		{{400, "invalid_grant", ""}},
+		{{400, "unauthorized_client", ""}},
+		{{400, "invalid_scope", ""}},
+		busy(503, "temporarily_unavailable"),
+		busy(429, ""),
+		busy(500, "invalid_client"),
 	} {
 		s.c.mu.Lock()
 		s.c.refreshAt = time.Time{} // the next call exchanges
 		s.c.mu.Unlock()
 		f.mu.Lock()
-		f.tokenForce = c.answers
+		f.tokenForce = answers
 		f.mu.Unlock()
-		_, err := s.Get(t.Context(), "", "k", ref)
-		if err == nil || errors.Is(err, secretstore.ErrUnavailable) != c.transient {
-			t.Errorf("token endpoint %v: Get = %v; transient want %v", c.answers[0], err, c.transient)
+		if _, err := s.Get(t.Context(), "", "k", ref); !errors.Is(err, secretstore.ErrUnavailable) {
+			t.Errorf("token endpoint %v: Get = %v; want transient", answers[0], err)
 		}
 	}
 }
@@ -244,10 +267,12 @@ func TestGet_RefusesARefThatIsNotDerived(t *testing.T) {
 	}
 	host, rest, _ := strings.Cut(bobRef, "/")
 	sn, _, _ := strings.Cut(rest, "#")
+	elsewhere := "other.vault.example/" + s.stem("alice", "pat") + "-g" + strconv.FormatInt(1<<40, 36) + "#1"
 	calls := f.count("GET")
 	for _, ref := range []string{
 		bobRef,                        // another owner's value
-		"other.vault.example/" + rest, // another vault
+		"other.vault.example/" + rest, // another owner's value in another vault
+		elsewhere,                     // alice's own name in another vault
 		host + "/" + sn,               // no count
 		host + "/" + sn + "#0",        // a count that was never written
 		host + "/" + sn + "#01",       // not canonical
@@ -267,24 +292,34 @@ func TestGet_RefusesARefThatIsNotDerived(t *testing.T) {
 	}
 }
 
-// The value's own tags are the second check (rule 16).
+// The value's own tags are the second check (rule 16): each binding tag is
+// checked, by Get and by Check.
 func TestGet_RefusesTagsNamingAnotherRow(t *testing.T) {
-	f := newFakeKV(t)
-	s := newFakeStore(t, f)
-	ref, err := s.Put(t.Context(), "alice", "pat", "", []byte("v"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.mu.Lock()
-	for _, sec := range f.secrets {
-		sec.versions[len(sec.versions)-1].tags[tagOwner] = "bob"
-	}
-	f.mu.Unlock()
-	if _, err := s.Get(t.Context(), "alice", "pat", ref); err == nil || !strings.Contains(err.Error(), "wardyn-owner") {
-		t.Fatalf("Get with the tags naming bob = %v; want a refusal naming the tag", err)
-	}
-	if err := s.Check(t.Context(), "alice", "pat", ref); err == nil {
-		t.Fatal("Check accepted tags naming another row")
+	for tag, other := range map[string]string{
+		tagOwner:  "bob",
+		tagName:   "other-pat",
+		tagKind:   "operator",
+		tagFormat: "v1",
+	} {
+		t.Run(tag, func(t *testing.T) {
+			f := newFakeKV(t)
+			s := newFakeStore(t, f)
+			ref, err := s.Put(t.Context(), "alice", "pat", "", []byte("v"), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			for _, sec := range f.secrets {
+				sec.versions[len(sec.versions)-1].tags[tag] = other
+			}
+			f.mu.Unlock()
+			if _, err := s.Get(t.Context(), "alice", "pat", ref); err == nil || !strings.Contains(err.Error(), tag) {
+				t.Errorf("Get with %s %q = %v; want a refusal naming the tag", tag, other, err)
+			}
+			if err := s.Check(t.Context(), "alice", "pat", ref); err == nil || !strings.Contains(err.Error(), tag) {
+				t.Errorf("Check with %s %q = %v; want a refusal naming the tag", tag, other, err)
+			}
+		})
 	}
 }
 
@@ -475,6 +510,58 @@ func TestPut_DeletedNameConflict(t *testing.T) {
 	}
 }
 
+// A new version whose predecessors could not be disabled is already the one
+// the row reads: the Put says so as ErrRowNotWritten (rule 18), so it is
+// audited.
+func TestPut_DisableFailureIsRowNotWritten(t *testing.T) {
+	f := newFakeKV(t)
+	s := newFakeStore(t, f)
+	ctx := t.Context()
+	ref, err := s.Put(ctx, "", "k", "", []byte("old"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.after = func(r *http.Request) { // the PATCH after the new version is refused
+		if r.Method == http.MethodPut {
+			f.mu.Lock()
+			f.force, f.after = []int{http.StatusForbidden}, nil
+			f.mu.Unlock()
+		}
+	}
+	f.mu.Unlock()
+	if _, err := s.Put(ctx, "", "k", ref, []byte("new"), false); !errors.Is(err, secretstore.ErrRowNotWritten) {
+		t.Fatalf("Put with the disable refused = %v; want ErrRowNotWritten", err)
+	}
+	if v, err := s.Get(ctx, "", "k", ref); err != nil || string(v) != "new" {
+		t.Fatalf("Get through the unchanged row = (%q, %v); want the new value", v, err)
+	}
+}
+
+// A Put holds the row's lock while it waits for a soft delete to finish, so it
+// waits less than a Delete does, then takes a new generation.
+func TestPut_WaitsBrieflyForADeleteInProgress(t *testing.T) {
+	f := newFakeKV(t)
+	s := newFakeStore(t, f)
+	ctx := t.Context()
+	ref, err := s.Put(ctx, "", "k", "", []byte("old"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sn, _, _, _ := s.parse("", "k", ref)
+	f.mu.Lock()
+	f.deleted[sn], f.deleting[sn] = f.secrets[sn], 100 // still being deleted
+	delete(f.secrets, sn)
+	f.mu.Unlock()
+	next, err := s.Put(ctx, "", "k", ref, []byte("new"), false)
+	if err != nil || secretstore.RefObject(next) == secretstore.RefObject(ref) {
+		t.Fatalf("Put over a name still being deleted = (%q, %v); want a new generation", next, err)
+	}
+	if n := f.count("DELETE /deletedsecrets/"); n != 4 {
+		t.Fatalf("the Put checked the delete %d times; want 4 (a Delete checks 11)", n)
+	}
+}
+
 func TestPut_RefusesAValueKeyVaultCannotHold(t *testing.T) {
 	s := newFakeStore(t, newFakeKV(t))
 	if _, err := s.Put(t.Context(), "", "k", "", make([]byte, maxValue+1), false); err == nil || !strings.Contains(err.Error(), "at most") {
@@ -555,9 +642,11 @@ func TestWalk_ListsThisInstallAndStaysOnTheVault(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	other := newFakeStore(t, f, func(c *Config) { c.Prefix = "ns2" })
-	if _, err := other.Put(ctx, "", "op", "", []byte("v"), false); err != nil {
-		t.Fatal(err)
+	for _, prefix := range []string{"ns2", "ns1-prod"} { // another install, one whose prefix starts with ours
+		other := newFakeStore(t, f, func(c *Config) { c.Prefix = prefix })
+		if _, err := other.Put(ctx, "", "op", "", []byte("v"), false); err != nil {
+			t.Fatal(err)
+		}
 	}
 	got, err := s.Walk(ctx)
 	if err != nil {

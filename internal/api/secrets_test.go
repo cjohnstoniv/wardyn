@@ -777,3 +777,45 @@ func TestPutSecret_RowFailureIsAudited(t *testing.T) {
 		t.Fatalf("secret.write = (%s, %s, %s); want a failure on npm-token with reason row", ev.Outcome, ev.Target, ev.Data)
 	}
 }
+
+// Rule 18 covers Wardyn's own writes too: a captured or refreshed sign-in
+// whose row was not written is audited as the API's write is.
+func TestInternalWrite_RowFailureIsAudited(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	srv.cfg.Secrets = rowFailingSecrets{sec}
+	ctx := context.Background()
+	for _, c := range []struct {
+		write  func() error
+		target string
+		data   string
+	}{
+		{func() error { return srv.storeADOEntraBlob(ctx, "alice", "ado-1", adoEntraBlob{}) },
+			adoEntraSecretName("ado-1"), `{"reason":"row","secret_owner":"alice"}`},
+		{func() error { return srv.storeAWSSSOBlob(ctx, awsSSOScope{perUser: true, owner: "bob"}, awsSSOBlob{}) },
+			harnessCredSecretName(awsSSOProvider), `{"reason":"row","secret_owner":"bob"}`},
+		{func() error { return srv.storeAWSSSOBlob(ctx, awsSSOScope{}, awsSSOBlob{}) },
+			harnessCredSecretName(awsSSOProvider), `{"reason":"row"}`},
+	} {
+		if err := c.write(); !errors.Is(err, secretstore.ErrRowNotWritten) {
+			t.Fatalf("%s: write = %v; want ErrRowNotWritten", c.target, err)
+		}
+		ev := lastAuditEvent(t, h.audit.events, "secret.write")
+		if ev.Outcome != "failure" || ev.Target != c.target || ev.ActorType != types.ActorSystem || string(ev.Data) != c.data {
+			t.Fatalf("secret.write = (%s, %s, %s, %s); want a system failure on %s with %s", ev.ActorType, ev.Outcome, ev.Target, ev.Data, c.target, c.data)
+		}
+	}
+}
+
+// The operator's pasted harness credential is audited by who pasted it.
+func TestHarnessCredentialPaste_RowFailureIsAudited(t *testing.T) {
+	h, srv := harnessCredSrv(t, rowFailingSecrets{&memSecrets{m: map[string][]byte{}}})
+	if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
+		`{"token":"sk-ant-oat01-row-will-fail"}`); w.Code != http.StatusInternalServerError {
+		t.Fatalf("paste = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	ev := lastAuditEvent(t, h.audit.events, "secret.write")
+	if ev.Outcome != "failure" || ev.Target != harnessCredSecretName("anthropic") || string(ev.Data) != `{"reason":"row"}` {
+		t.Fatalf("secret.write = (%s, %s, %s); want a failure on the harness credential with reason row", ev.Outcome, ev.Target, ev.Data)
+	}
+}

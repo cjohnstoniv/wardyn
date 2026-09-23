@@ -447,3 +447,30 @@ func TestReconcile_ReportsBothSidesAndDeletesNothing(t *testing.T) {
 		t.Fatal("reconcile changed something")
 	}
 }
+
+// A store-mode write is bounded as a whole, at six times
+// WARDYN_SECRET_STORE_TIMEOUT: a stalling vault cannot hold the row's lock and
+// a database connection for minutes.
+func TestStoreMode_WriteIsBounded(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeKV(t)
+	st, err := secretstore.New(Name, secretstore.Deps{Pool: pool, External: newFakeStore(t, f), ExternalTimeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if err := st.Put(ctx, "k", []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.after = func(*http.Request) { time.Sleep(time.Second) } // every vault answer stalls
+	f.mu.Unlock()
+	start := time.Now()
+	err = st.Put(ctx, "k", []byte("two"))
+	if took := time.Since(start); err == nil || took > 900*time.Millisecond {
+		t.Fatalf("Put against a stalling vault = %v after %v; want a failure within the 300ms budget", err, took)
+	}
+	f.mu.Lock()
+	f.after = nil
+	f.mu.Unlock()
+}

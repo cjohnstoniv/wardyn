@@ -4,6 +4,8 @@
 package secretstore
 
 import (
+	"time"
+
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -19,6 +21,10 @@ type Deps struct {
 	Pool        *pgxpool.Pool
 	AgeIdentity age.Identity
 	External    External
+	// ExternalTimeout is WARDYN_SECRET_STORE_TIMEOUT, the bound on each call
+	// to External (0: its 5 s default); a store-mode write is bounded at six
+	// times it.
+	ExternalTimeout time.Duration
 }
 
 // Constructor builds a Store from Deps.

@@ -27,7 +27,7 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags) (sec
 	if err != nil {
 		return nil, err
 	}
-	return buildSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, ext)
+	return buildSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, ext, *f.vault.timeout)
 }
 
 // buildSecretStore constructs the secret store and readies its rows
@@ -38,7 +38,7 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags) (sec
 // lives in the organisation's store, and a missing key only matters while
 // local rows remain, which convertSecretStore refuses by name. ext is the
 // configured external client, or nil.
-func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, ext secretstore.External) (secretstore.Store, error) {
+func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, ext secretstore.External, extTimeout time.Duration) (secretstore.Store, error) {
 	storeMode := storeName != "" && storeName != "pg"
 	var id *age.X25519Identity
 	var err error
@@ -67,7 +67,7 @@ func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName
 			return nil, fmt.Errorf("parse age identity: %w", err)
 		}
 	}
-	deps := secretstore.Deps{Pool: pool, External: ext}
+	deps := secretstore.Deps{Pool: pool, External: ext, ExternalTimeout: extTimeout}
 	if id != nil {
 		// A typed nil in the interface would read as "a key is configured".
 		deps.AgeIdentity = id
