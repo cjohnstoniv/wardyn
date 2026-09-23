@@ -15,6 +15,7 @@ import {
 } from "./fixtures";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
 import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
 // U-15: the starting sentence is a constant in a CSS-free module now — this
 // spec used to re-type its opening clause, so a reworded wait could move on
@@ -65,7 +66,7 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 // funnel/Settings-card test below already does, via the card's own link.
 async function gotoProviders(page: Page): Promise<void> {
   await gotoConsole(page);
-  await navToRoute(page, "/settings");
+  await navToRoute(page, "/admin/settings");
   const card = page.getByTestId("providers-card");
   await expect(card).toBeVisible();
   await card.getByText(PROVIDERS.CARD_OPEN).click();
@@ -126,7 +127,7 @@ test.describe("providers — legacy open mode, with no rows at all", () => {
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
 
     // Settings card: zero enabled rows reads CARD_EMPTY, never a bare "0".
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("providers-card");
     await expect(card).toBeVisible();
     await expect(card.getByText(PROVIDERS.CARD_LEAD)).toBeVisible();
@@ -331,7 +332,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // The unmounted draft never reached the server — the next test's read of
     // the stored document must see the ORIGINAL row, not this edit.
     await page.reload();
-    await navToRoute(page, "/providers");
+    await navToRoute(page, "/admin/providers");
     const reloaded = page.getByTestId("provider-row-github");
     await expect(reloaded).toBeVisible();
     await expect(reloaded.locator("textarea")).toHaveValue("https://github.com/acme");
@@ -352,7 +353,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // The GET still succeeds for real (the harness's bearer stays admin),
     // so the route itself renders.
     await gotoConsole(page);
-    await navToRoute(page, "/providers");
+    await navToRoute(page, "/admin/providers");
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
     const saveBtn = page.getByRole("button", { name: PROVIDERS.SAVE_CTA });
     await expect(saveBtn).toBeVisible();
@@ -371,7 +372,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await expect(stepBtn).toBeVisible();
     await expect(stepBtn).toContainText(PROVIDERS.STEP_BADGE_READY(enabledCount));
 
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("providers-card");
     await expect(card).toBeVisible();
     await expect(card.getByText(PROVIDERS.CARD_PROVIDERS(enabledCount))).toBeVisible();
@@ -388,7 +389,7 @@ test.describe("providers — the door is SUPER's alone", () => {
     // for !operator) — a security admin's OWN authority over providers is
     // nothing (unlike drives, there is no governance-profile door for this
     // registry), so neither of the two entry points offers it.
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await expect(page.getByTestId("providers-card")).toHaveCount(0);
 
     // Reaching /providers directly: GET is operatorOnly, so a real security
@@ -399,7 +400,7 @@ test.describe("providers — the door is SUPER's alone", () => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "forbidden" }) });
     });
-    await navToRoute(page, "/providers");
+    await navToRoute(page, "/admin/providers");
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
     // No form of any kind — no tabs, no Save, no rows.
@@ -408,21 +409,29 @@ test.describe("providers — the door is SUPER's alone", () => {
     await expect(page.getByRole("button", { name: PROVIDERS.GIT_TITLE })).toHaveCount(0);
   });
 
-  test("a member sees no nav, no card, and a 403 door if they reach the URL directly", async ({ page }) => {
+  // M-1b: /providers is deleted — only /admin/providers exists now, so a
+  // member reaching it directly hits the admin-view REFUSAL page
+  // (console-view.tsx) before anything is fetched, not the screen's own
+  // inline OPERATOR_ONLY_REASON (that still covers the security-admin case
+  // above, whose SSO tier passes the view gate but not the server's operator
+  // check).
+  test("a member sees no nav, no card, and the admin-view refusal page if they reach the URL directly", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
 
     // A member has no Settings screen at all (MEMBER_NAV_PATHS never lists
     // it, app-shell.tsx), so there is no card to check there — the negative
     // worth pinning is the route itself.
+    let fetched = false;
     await page.route("**/api/v1/workspace-providers", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "forbidden" }) });
+      fetched = true;
+      await route.fallback();
     });
-    await navToRoute(page, "/providers");
-    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
-    await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
+    await navToRoute(page, "/admin/providers");
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toHaveCount(0);
+    expect(fetched).toBe(false);
   });
 });
 
@@ -493,14 +502,14 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("Connected for a live caller", async ({ page }) => {
     await splicePerUserBedrock(page, "live");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await expect(page.locator("#lane-bedrock")).toContainText("Connected");
   });
 
   test("not-Connected + Sign in with SSO for an expired caller", async ({ page }) => {
     await splicePerUserBedrock(page, "expired_signin");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const bedrockLane = page.locator("#lane-bedrock");
     await expect(bedrockLane).not.toContainText("Connected");
     await bedrockLane.click();
@@ -517,7 +526,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("not_applicable: NOT connected, no borrowed badge — neutral per-person detail instead", async ({ page }) => {
     await splicePerUserBedrock(page, "not_applicable");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const bedrockLane = page.locator("#lane-bedrock");
     await expect(bedrockLane).not.toContainText("Connected");
     await bedrockLane.click();
@@ -536,7 +545,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("not_applicable: the Sign in with SSO door is ABSENT, not merely disabled", async ({ page }) => {
     await splicePerUserBedrock(page, "not_applicable");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByRole("button", { name: "Sign in with SSO" })).toHaveCount(0);
   });
@@ -546,7 +555,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("opening the dialog shows the managed-portal note, never the dead start-URL prompt", async ({ page }) => {
     await splicePerUserBedrock(page, "live");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -558,7 +567,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   // row) is UNCHANGED — it still asks for the org's access portal URL.
   test("unspliced control: the ordinary Settings sign-in still prompts for the start URL", async ({ page }) => {
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     // U2-01 (blind round 2, lens-U2): this daemon is the finding's own
     // reproduction — scripts/e2e-backend.sh sets WARDYN_BEDROCK_REGION and
     // WARDYN_BEDROCK_MODEL and NO credential of any kind (no bearer key, no
@@ -595,7 +604,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     });
 
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await page.getByRole("button", { name: /start login/i }).click();
@@ -625,7 +634,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
         route.fulfill({ json: { id: runId, task: "harness login", state: "PENDING", interactive: true } }),
       );
       await gotoConsole(page);
-      await navToRoute(page, "/settings");
+      await navToRoute(page, "/admin/settings");
       await page.locator("#lane-bedrock").click();
       await page.getByRole("button", { name: "Sign in with SSO" }).click();
     }
@@ -658,7 +667,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
         route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
       );
       await gotoConsole(page);
-      await navToRoute(page, "/settings");
+      await navToRoute(page, "/admin/settings");
       await page.locator("#lane-bedrock").click();
       await page.getByRole("button", { name: "Sign in with SSO" }).click();
     }
@@ -669,7 +678,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
       // `await`, this proves it by never opening at all.
       await page.route("**/api/v1/setup/harness-login", () => {});
       await gotoConsole(page);
-      await navToRoute(page, "/settings");
+      await navToRoute(page, "/admin/settings");
       await page.locator("#lane-bedrock").click();
       await page.getByRole("button", { name: "Sign in with SSO" }).click();
 
@@ -768,7 +777,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
       const pageErrors: Error[] = [];
       page.on("pageerror", (e) => pageErrors.push(e));
       await gotoConsole(page);
-      await navToRoute(page, "/settings");
+      await navToRoute(page, "/admin/settings");
       await page.locator("#lane-bedrock").click();
       await page.getByRole("button", { name: "Sign in with SSO" }).click();
 
@@ -843,7 +852,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     );
 
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await page.getByRole("button", { name: /start login/i }).click();
@@ -868,7 +877,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("spliced control: an explicit shared row also still prompts for the start URL", async ({ page }) => {
     await spliceBedrockRow(page, "shared", null);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
@@ -966,7 +975,7 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
   test("editable on a per_user bearer row", async ({ page }) => {
     await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/account");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByLabel("Bedrock bearer key")).toBeEditable();
   });
@@ -974,7 +983,7 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
   test("still disabled on a shared row", async ({ page }) => {
     await mockMemberBedrockRowRedacted(page, "shared", "bedrock_bearer", false);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/account");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByLabel("Bedrock bearer key")).toBeDisabled();
   });
@@ -986,7 +995,7 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
   test("Save leads to Replace and Disconnect for a member, reading the redacted body", async ({ page }) => {
     await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/account");
     await page.locator("#lane-bedrock").click();
 
     const field = page.getByLabel("Bedrock bearer key");

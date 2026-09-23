@@ -285,21 +285,24 @@ const NAV_ITEMS: NavItem[] = [
     badge: "approvals",
   },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
-  { to: "/policies", label: "Policies", icon: UserCog },
+  // M-1b: these five live only under /admin/* now (the plain paths are
+  // deleted) — their own screen isn't in the User view at all, so there's no
+  // twin redirect to lean on the way Runs/Approvals/Workspaces/Secrets do.
+  { to: "/admin/policies", label: "Policies", icon: UserCog },
   // Governance (0.7) sits BETWEEN Policies and Permissions so the three read as
   // one narrowing sequence: the deployment ceiling, the ceilings assigned over
   // it, then the grants layered inside one (mock Q1). Not in MEMBER_NAV_PATHS —
   // a member never sees it, and there is no member governance route; its own
   // routes are securityOps server-side.
-  { to: "/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
+  { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
   // Permissioning (0.6 pillar 2) sits beside Policies: both answer "what is
   // allowed here", one for runs and one for the humans launching them. It is
   // admin-only — deliberately NOT in MEMBER_NAV_PATHS below, and every route
   // behind it is operatorOnly server-side.
-  { to: "/permissions", label: "Permissions", icon: Users },
+  { to: "/admin/permissions", label: "Permissions", icon: Users },
   { to: "/secrets", label: "Secrets", icon: Lock },
-  { to: "/audit", label: "Audit", icon: ScrollText },
-  { to: "/recordings", label: "Recordings", icon: Play },
+  { to: "/admin/audit", label: "Audit", icon: ScrollText },
+  { to: "/admin/recordings", label: "Recordings", icon: Play },
 ];
 
 // Member console (B3): a member launches/governs only THEIR OWN runs — nav is
@@ -415,6 +418,10 @@ function SidebarNav({
   // only while identity is settled but unknown, when the shell paints no
   // route at all for it to open.
   const settingsReachable = !(meta.resolved && !meta.identityResolved);
+  // M-1b: /settings is deleted — Settings now lives at /admin/settings, Your
+  // account at /account (both still mount the unsplit SettingsScreen until
+  // M-5 splits it).
+  const settingsTarget = meta.role === "member" ? "/account" : "/admin/settings";
   return (
     <>
       <nav className="space-y-0.5">
@@ -456,7 +463,11 @@ function SidebarNav({
             reachable from the rail, not only the account menu (which keeps
             its own entry too, so no muscle memory breaks). */}
         {settingsReachable && (
-          <SidebarSettingsLink navLinkClass={navLinkClass} onClick={guardedClick("/settings", onNavigate)} />
+          <SidebarSettingsLink
+            to={settingsTarget}
+            navLinkClass={navLinkClass}
+            onClick={guardedClick(settingsTarget, onNavigate)}
+          />
         )}
       </nav>
 

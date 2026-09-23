@@ -66,7 +66,7 @@ export default function FirstRunDemoGrid({
               {needsModel ? (
                 <p className="text-xs text-muted-foreground">
                   Needs a model provider ·{" "}
-                  <Link to="/settings" className="font-medium text-primary hover:underline">
+                  <Link to="/account" className="font-medium text-primary hover:underline">
                     Connect →
                   </Link>
                 </p>

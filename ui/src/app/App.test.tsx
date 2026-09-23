@@ -288,21 +288,21 @@ describe("roleCanReach — pure (M2)", () => {
 
   // M3: MEMBER_REACHABLE_PREFIXES must be the member REACHABLE set, not
   // merely the member NAV set — /secrets (self-service WRITE/DELETE since
-  // migration 0050) and /settings + /ssh-keys (rendered in the account menu
+  // migration 0050) and /account + /ssh-keys (rendered in the account menu
   // for every role) have no sidebar entry but ARE reachable, or a member's
   // own mid-session 401 on any of the three would bounce to /runs instead of
-  // restoring.
+  // restoring. M-1b: /settings is deleted; /account is its member-side twin.
   it("M3: a member reaches the three self-service routes with no sidebar entry", () => {
     expect(roleCanReach("/secrets", "member")).toBe(true);
-    expect(roleCanReach("/settings", "member")).toBe(true);
+    expect(roleCanReach("/account", "member")).toBe(true);
     expect(roleCanReach("/ssh-keys", "member")).toBe(true);
   });
 
   // Negative control: a route with no special tier (neither member-scoped
   // nor operator-only) is reachable by any non-member role.
   it("neg: an ungated route is reachable by admin and security_admin alike", () => {
-    expect(roleCanReach("/policies", "admin")).toBe(true);
-    expect(roleCanReach("/policies", "security_admin")).toBe(true);
+    expect(roleCanReach("/admin/policies", "admin")).toBe(true);
+    expect(roleCanReach("/admin/policies", "security_admin")).toBe(true);
   });
 });
 

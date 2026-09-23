@@ -32,7 +32,7 @@ test.describe.configure({ mode: "serial" });
 test.describe("Settings — Host card (X2-F1)", () => {
   test("renders this host's deployment facts, operator-only rows included", async ({ page }) => {
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
 
     const hostCard = page
       .locator("section")
@@ -56,7 +56,7 @@ test.describe("Settings — Host card (X2-F1)", () => {
   test("a member sees no Internet row and no Corporate proxy landing", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/account");
 
     await expect(page.getByRole("heading", { name: "Host", level: 3 })).toBeVisible();
     // Fix pass (review F3): the Host h3 above paints immediately, before the
@@ -91,7 +91,7 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict (X2-F1
     });
 
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.getByRole("button", { name: "Corporate proxy & egress" }).click();
 
     await expect(page).toHaveURL(/\/setup\?step=corp_network/);
@@ -132,7 +132,7 @@ test.describe("Settings — Model provider Connect / Replace / Disconnect (X2-F3
     page,
   }) => {
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
 
     await page.getByRole("radio", { name: "API key" }).click();
     const field = page.getByLabel("Anthropic API key");
@@ -182,14 +182,7 @@ test.describe("Settings — Model provider Connect / Replace / Disconnect (X2-F3
   });
 });
 
-test.describe("Settings — /integrations redirects (X2-F23)", () => {
-  test("both /integrations and /integrations/:id land on /settings", async ({ page }) => {
-    await page.goto("/integrations");
-    await expect(page).toHaveURL(/\/settings$/);
-    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
-
-    await page.goto("/integrations/anthropic");
-    await expect(page).toHaveURL(/\/settings$/);
-    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
-  });
-});
+// M-1b: /integrations and /integrations/:id are deleted, clean break, no
+// alias (admin-member-modes-design.md §2.3) — the redirect this described no
+// longer exists, so the describe block goes with it rather than being
+// repointed to a route it would no longer prove anything about.

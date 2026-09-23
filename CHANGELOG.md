@@ -38,6 +38,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Console path re-point: the pre-split routes are deleted (#633).** `/policies`, `/governance`,
+  `/permissions`, `/audit`, `/recordings`, `/drives`, `/providers`, `/settings` and
+  `/integrations(/:id)` are gone, clean break, no alias — each lives only at its `/admin/*` twin
+  now (`/ssh-keys` stays until M-5). Every in-app link, the sidebar's Policies/Governance/
+  Permissions/Audit/Recordings entries, the account-menu and sidebar Settings links (which now
+  land on `/admin/settings` for an admin tier and `/account` for a member), the "New policy",
+  "Drives", "Providers", "open full Audit" and "Recordings library" links, and the Azure DevOps
+  connection anchor (`/account#azure-devops`) are re-pointed to match. A stale bookmark or link
+  falls through to the console's ordinary catch-all.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and

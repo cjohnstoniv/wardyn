@@ -567,7 +567,7 @@ export function NewRunScreen() {
                       {savedPolicies.length === 0 && (
                         <p className="text-xs text-muted-foreground">
                           No saved policies yet ·{" "}
-                          <Link to="/policies" className="font-medium text-info hover:underline">
+                          <Link to="/admin/policies" className="font-medium text-info hover:underline">
                             New policy →
                           </Link>
                         </p>

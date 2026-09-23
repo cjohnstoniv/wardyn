@@ -37,7 +37,7 @@ const RUNS_ERROR = "Couldn't load the list of runs.";
 
 async function openRecordings(page: Page): Promise<void> {
   await gotoConsole(page);
-  await navToRoute(page, "/recordings");
+  await navToRoute(page, "/admin/recordings");
   await expect(page.getByRole("heading", { name: "Recordings" })).toBeVisible();
 }
 
@@ -125,7 +125,7 @@ test.describe("Recordings library", () => {
       }
       return route.continue();
     });
-    await navToRoute(page, "/recordings");
+    await navToRoute(page, "/admin/recordings");
 
     await expect(page.getByText(RUNS_ERROR)).toBeVisible();
     await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
@@ -345,7 +345,7 @@ test.describe("Recordings paging (#159)", () => {
   test("more available — the note and the Load more text link appear, never a total", async ({ page }) => {
     await gotoConsole(page);
     await mockPagedRuns(page, () => ({ runs: [fakeRun("rec-a"), fakeRun("rec-b")], truncated: true }));
-    await navToRoute(page, "/recordings");
+    await navToRoute(page, "/admin/recordings");
     await expect(page.getByRole("heading", { name: "Recordings" })).toBeVisible();
 
     await expect(page.getByText("2 recordings loaded so far — there are more on the server.")).toBeVisible();
@@ -366,7 +366,7 @@ test.describe("Recordings paging (#159)", () => {
       if (offset === 0) return { runs: [fakeRun("rec-a"), fakeRun("rec-b")], truncated: true };
       return { runs: [fakeRun("rec-c")], truncated: false, delayMs: 600 };
     });
-    await navToRoute(page, "/recordings");
+    await navToRoute(page, "/admin/recordings");
     await page.getByRole("button", { name: "Load 100 more" }).click();
 
     const loading = page.getByRole("button", { name: "Loading…" });
@@ -383,7 +383,7 @@ test.describe("Recordings paging (#159)", () => {
       if (offset === 0) return { runs: [fakeRun("rec-a"), fakeRun("rec-b")], truncated: true };
       return { runs: [fakeRun("rec-c")], truncated: false };
     });
-    await navToRoute(page, "/recordings");
+    await navToRoute(page, "/admin/recordings");
     await page.getByRole("button", { name: "Load 100 more" }).click();
 
     await expect(page.getByText("All 3 recordings are loaded.")).toBeVisible();
@@ -401,7 +401,7 @@ test.describe("Recordings paging (#159)", () => {
       }
       return { runs: [fakeRun("rec-c")], truncated: false };
     });
-    await navToRoute(page, "/recordings");
+    await navToRoute(page, "/admin/recordings");
     await page.getByRole("button", { name: "Load 100 more" }).click();
 
     await expect(page.getByText("Couldn't load more recordings")).toBeVisible();
@@ -429,7 +429,7 @@ test.describe("Recordings paging (#159)", () => {
       fakeRun("rec-echo", { task: "search-me task" }),
     ];
     await mockPagedRuns(page, () => ({ runs: rows, truncated: true }));
-    await navToRoute(page, "/recordings");
+    await navToRoute(page, "/admin/recordings");
     await expect(page.getByRole("heading", { name: "Recordings" })).toBeVisible();
 
     await page.getByPlaceholder(/Search tasks, repos, run IDs/).fill("search-me");

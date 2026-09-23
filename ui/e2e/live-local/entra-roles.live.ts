@@ -89,7 +89,7 @@ test("the admin signs in by redirect and sees the admin nav", async ({
     "the admin identity did not resolve as an operator",
   ).toBe(true);
   await page.goto(new URL("/runs", BASE).toString());
-  await expect(page.locator('nav a[href="/permissions"]')).toBeVisible();
+  await expect(page.locator('nav a[href="/admin/permissions"]')).toBeVisible();
 });
 
 test("a member signs in by redirect and does not see the admin nav", async ({
@@ -103,7 +103,7 @@ test("a member signs in by redirect and does not see the admin nav", async ({
   );
   await page.goto(new URL("/runs", BASE).toString());
   await expect(page.locator('nav a[href="/runs"]')).toBeVisible();
-  await expect(page.locator('nav a[href="/permissions"]')).toHaveCount(0);
+  await expect(page.locator('nav a[href="/admin/permissions"]')).toHaveCount(0);
 });
 
 test("an identity with no Wardyn role is refused", async ({ browser }) => {
