@@ -4518,7 +4518,7 @@ concurrent starts do not race. There are no `down` migrations and no downgrade
 path — a rollback to an older wardynd against a migrated database is unsupported.
 
 **Upgrading from 0.7.11 or earlier converts every stored secret, once, and it
-cannot be undone without the backup.** `0069_secret_envelope_v1` adds the envelope columns, and
+cannot be undone without the backup.** `0065_secret_envelope_v1` adds the envelope columns, and
 the first boot of 0.7.12 or later re-seals every existing (pre-envelope,
 age-encrypted) row of
 `secrets` as envelope v1 — before it reads its own boot keys, which live in the
