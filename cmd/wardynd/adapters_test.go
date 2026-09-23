@@ -250,7 +250,7 @@ func TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak(t *testing.T) {
 
 // TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies is
 // W20-groundtruth-mapper-2: a run-less audit row (ev.RunID == nil —
-// policy.inline, secret.*, an admin action) used to bypass masking ENTIRELY,
+// policy.inline.apply, secret.*, an admin action) used to bypass masking ENTIRELY,
 // because the old guard (`m.reg != nil && ev.RunID != nil`) short-circuited
 // the whole block whenever RunID was nil. It must still be masked against the
 // PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered via

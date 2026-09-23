@@ -184,8 +184,8 @@ func TestInternalInjection_RejectsSplittingHeaderName(t *testing.T) {
 				t.Errorf("header %q: secret was read despite the refusal", bad)
 			}
 		}
-		if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "invalid-header-name") {
-			t.Errorf("header %q: audit data = %s, want the invalid-header-name reason", bad, ev.Data)
+		if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "invalid_header_name") {
+			t.Errorf("header %q: audit data = %s, want the invalid_header_name reason", bad, ev.Data)
 		}
 	}
 }
@@ -517,8 +517,8 @@ func TestInternalInjection_RefusesSentinelForNonAnthropicHost(t *testing.T) {
 					t.Fatalf("%s -> host %q: a successful secret.read was recorded for a refused injection", sentinel, host)
 				}
 			}
-			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "oauth-host-not-anthropic") {
-				t.Fatalf("%s -> host %q: audit data = %s, want the oauth-host-not-anthropic reason", sentinel, host, ev.Data)
+			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "oauth_host_not_anthropic") {
+				t.Fatalf("%s -> host %q: audit data = %s, want the oauth_host_not_anthropic reason", sentinel, host, ev.Data)
 			}
 			// The token must not have been resolved (provider.Current rotates the
 			// operator's own resident credentials) nor registered for masking.

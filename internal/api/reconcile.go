@@ -135,7 +135,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
 }
 
-// auditK8sNetpolIfUnenforced writes one boot-time audit row, "k8s.netpol_unenforced",
+// auditK8sNetpolIfUnenforced writes one boot-time audit row, "k8s.netpol.fail",
 // the moment k8sNetpolVerdict grades this runner "unenforced" or "acknowledged" —
 // the two verdicts under which every sandbox runs without a proven default-deny
 // NetworkPolicy. Silent on "enforced" and on every non-k8s driver (empty
@@ -155,7 +155,7 @@ func (s *Server) auditK8sNetpolIfUnenforced(ctx context.Context) {
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/reconcile",
-		"k8s.netpol_unenforced", driver, "failure",
+		"k8s.netpol.fail", driver, "failure",
 		mustJSON(map[string]any{"verdict": verdict, "driver": driver})))
 }
 
@@ -248,7 +248,7 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 			continue
 		}
 		s.revokeRunCascade(ctx, run.ID)
-		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan_sweep") {
+		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep") {
 			continue // still stuck; audited above, ref stays set for the next boot
 		}
 		if serr := s.cfg.Store.SetSandboxRef(ctx, run.ID, ""); serr != nil {

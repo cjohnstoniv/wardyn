@@ -232,7 +232,7 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	// (5) the host pin, checked for the LIVE and the DEAD path alike: a grant
 	// pointing somewhere else must be refused, never held.
 	if !hostEqual(minted.Injection.Host, ssoPortalHost(snapshot.Region, s.cfg.AWSSSOEndpointOverride)) {
-		return fail(http.StatusForbidden, "sso-host-not-portal", credentialReauthHostPinRefusal,
+		return fail(http.StatusForbidden, "sso_host_not_portal", credentialReauthHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
 	}
 

@@ -260,7 +260,7 @@ Honest limits (by design, not hidden):
   opt back into forwarding those unmapped events (`run_id` NULL,
   `correlation=unmapped`) for full-host detection coverage.
 - **Host eBPF is blind inside CC3/Kata guests.** For such runs the sidecar emits
-  a one-time `kernel.sensor.blind` event so the gap is visible. Set
+  a one-time `kernel.sensor.bypass` event so the gap is visible. Set
   `WARDYN_GROUNDTRUTH_BLIND_RUNS=<run-id>,...` to record it at sidecar boot.
 - **`kernel.network.connect` needs a kernel that reports container egress.**
   On WSL2 + Docker Desktop (kernel `*-microsoft-standard-WSL2`, Tetragon

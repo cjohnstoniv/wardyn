@@ -66,15 +66,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
-- **Audit action names are imperative and two or three segments, closing 21 past-tense outliers
-  (#205).** `<noun>[.<sub>].<verb>` throughout `docs/AUDIT-ACTIONS.md`'s vocabulary — no more
-  `capability.grant.created` beside `policy.create`. See "Upgrading" below for the full old → new
-  table. The `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`
-  (`family:kebab`, exactly one colon, matching every other `rule_source`). `secret.read`'s
-  `host-not-organisation` refusal reason (the per-person Azure DevOps host pin) is now
-  `host_not_organisation`, matching the other 18 ADO reasons' snake_case. The
-  `wardyn_egress_denies_total` metric's `HELP` text no longer promises a `reason` label the series
-  does not carry — the series itself is unchanged, still one unlabeled counter.
+- **Audit action names follow one grammar (#205).** Every action in `docs/AUDIT-ACTIONS.md` is now
+  `<noun>[.<sub>].<verb>`: two or three segments, ending in a verb from the closed list in that
+  page's new "Grammar" section. `TestAuditActionsDoc_Grammar` holds every action row, and every
+  suffix a wildcard family row names, to it. 61 names changed: 21 past-tense ones
+  (`capability.grant.created` → `capability.grant.create`), 37 that ended in a noun, an adjective or
+  a compound segment (`run.policy.effective` → `run.policy.resolve`, `ssh.auth` →
+  `ssh.authenticate`), and the three four-segment `run.workspace.requirement.*` names. The five
+  per-lane egress-union actions became one `run.egress.add` carrying `kind`; `run.ssh.drop`,
+  `run.git_pat.drop`, `run.provider.admit` and `workspace.provider.admit` carry `reason`.
+  `authz.denied` is the one listed exception. See "Upgrading" below. The page also gains a
+  Consumers column naming what inside Wardyn reads each action back. The
+  `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`, and the
+  same test now checks every `rule_source` row is `family:kebab`. `secret.read`'s eight kebab-case
+  refusal reasons are snake_case, like the rest of its reasons. The `wardyn_egress_denies_total`
+  metric's `HELP` text no longer promises a `reason` label the series does not carry — the series
+  itself is unchanged, still one unlabeled counter.
 - **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
   is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
   set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
@@ -169,7 +176,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `member`,
   and it never gains the admin override: the sign-in re-stamp leaves its role alone, a CHECK
   refuses a capped row that reads `admin`, and the SSH gateway refuses the override for it
-  (`ssh.auth` reason "capped key (registered in the user view): no admin override"). It still
+  (`ssh.authenticate` reason "capped key (registered in the user view): no admin override"). It still
   reaches its owner's own runs. `ssh_key.add` carries `capped: true` for such a key. Keys
   registered outside the user view behave exactly as before, and `POST /me/tokens` still refuses
   in the mode. See `docs/SSH.md#bounds`.
@@ -188,7 +195,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   settings are not loaded; managed settings still are. This is an interim fix. The agent can still
   write its own user-level `~/.claude/settings.json`; THREAT-MODEL.md §5 states that residual, and
   #333's managed settings close it.
-- **An unauthenticated caller that rotated its source address wrote one `auth.fail` audit row per
+- **An unauthenticated caller that rotated its source address wrote one `auth.failed` (now `auth.fail`) audit row per
   refused request.** The 0.7.2 coalescer keyed a streak on the peer IP, so every change of address
   closed the streak and opened a new one: a bad-token drip from ten addresses, one a second, recorded
   120 rows in two minutes, as many as the rate limiter allows (#347). A streak is now keyed on the
@@ -436,7 +443,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   in flight (a concurrent one is 429), every accepted row's claim re-checks from the stored row, and
   a value Postgres cannot store is a 400 the forwarder stops on rather than a 500 it retries.
   Failure rows are coalesced like `auth.fail`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
-  (failures) and `device.audit.chain_reset`.
+  (failures) and `device.chain.reset`.
 
 - **`wardyn drive` reads and replaces admin-registered drives from the CLI.** `wardyn drive get`
   prints every drive and allocation as JSON; `wardyn drive apply <file>` (or stdin, `-`) upserts what
@@ -537,7 +544,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   checks must be re-run on every version bump. The level rides the sandbox as
   `WARDYN_AUTONOMY_LEVEL`, and the document is delivered root-owned at
   `/etc/claude-code/managed-settings.json` through the runner's managed-files contract. A new
-  `run.agent_policy` audit row records which document was generated for which run and whether it was
+  `run.agent_policy.write` audit row records which document was generated for which run and whether it was
   `delivered`, written once the agent's container exists. On Docker, such a run fails with the
   driver's reason as its hint when the image runs as root or leaves `/etc` writable, since either
   would let the agent replace the file. A run whose runner's capabilities cannot be read fails rather
@@ -882,13 +889,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A runner without managed-file delivery runs a gated claude-code run without its managed
   settings.** When the runner does not advertise `Capabilities.ManagedFiles`, an `L0`–`L2`
   claude-code run is not refused: it launches under its CLI-flag levers alone, gets no file, and its
-  `run.agent_policy` row records `delivered:false` with the reason, and the create response carries a
+  `run.agent_policy.write` row records `delivered:false` with the reason, and the create response carries a
   warning saying so. Handing that runner the file anyway would place a ceiling the agent could
   rewrite.
 - **On the exec-less krun runtime, a run's managed settings are placed but not vouched for.** libkrun
   runs the guest as root and does not apply the image's `USER`, while the file's immutability depends
   on the agent not being root, and this is not yet verified on a krun host. By ruling, such a run
-  still gets the file, but its `run.agent_policy` row records `delivered:false` with the reason
+  still gets the file, but its `run.agent_policy.write` row records `delivered:false` with the reason
   "unverified on this runtime: libkrun may run the guest as root", and the create response carries the
   same warning as any undelivered run.
 - **An AWS SSO account/role pin does not invalidate a capture already in flight.** A roster edit
@@ -905,16 +912,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Upgrading
 
-- **21 audit action names changed (#205), clean break, no alias period.** Wardyn has no users yet
+- **61 audit action names changed (#205), clean break, no alias period.** Wardyn has no users yet
   (owner ruling, #205/#203/#206), so a consumer keyed on an old name — a SIEM rule, a saved filter,
   a dashboard query — starts missing rows the moment this ships; there is no dual-emission window to
-  catch it during. The full old → new table is `docs/AUDIT-ACTIONS.md`'s "Renamed in 0.8" appendix
-  (e.g. `capability.grant.created` → `capability.grant.create`, `auth.failed` → `auth.fail`,
-  `harness.login.started` → `harness.login.start`). `authz.denied` is unchanged — still the one
-  documented exception, held back for its own reviewed change rather than riding this one. The
-  `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`, and
-  `secret.read`'s `host-not-organisation` refusal reason is now `host_not_organisation`; a consumer
-  matching either old spelling needs the same update.
+  catch it during. Rows written before the upgrade keep the name they were written with, so a query
+  that spans the upgrade has to name both. The full old → new table is `docs/AUDIT-ACTIONS.md`'s
+  "Renamed in 0.8" appendix (e.g. `auth.failed` → `auth.fail`, `egress.pending` → `egress.hold`,
+  `kernel.sensor.heartbeat` → `kernel.sensor.ping`, `run.workspace.egress` → `run.egress.add` with
+  `kind: workspace`). `authz.denied` is unchanged. The egress proxy's wire values moved with the
+  names (a held decision is sent as `hold`, a failed or opaque LLM scan as `fail` or `bypass`), so
+  run the proxy image from the same release as `wardynd`. The `egress.decisions.dropped:<n>`
+  `rule_source` value is now `egress:dropped-decisions-<n>`, and `secret.read`'s refusal reasons are
+  snake_case (`host-not-organisation` → `host_not_organisation`, `sso-host-not-portal` →
+  `sso_host_not_portal`, and six more the appendix lists); a consumer matching an old spelling needs
+  the same update.
 
 ## [0.7.12] — 2026-09-23
 

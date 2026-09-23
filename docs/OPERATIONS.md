@@ -937,7 +937,7 @@ admits an SSH clone of ANY org on that host, with the deployment's
 `ssh-key-<host>` secret. That is a documented ceiling of 0.7.2, not an
 oversight, and it is never silent: the `/providers` screen says it under the
 row's lanes, and run create puts it on the 201 as a warning (with a
-`run.provider.ssh_host_level` audit row) whenever a path-scoped row admits an
+`run.provider.admit` audit row) whenever a path-scoped row admits an
 SSH repository. **The remedy is the row's own `lanes` list** — drop `ssh` from a
 path-scoped row and its addresses bind again, over the one transport that
 carries a path. Dot-segment and percent-encoded paths do NOT reach this
@@ -1230,7 +1230,7 @@ role at all — local-mode callers are *always* admins
 (`Server.requireOperator`'s own doc says so), so the unclamped branch above is the
 default there. An `inline_policy` the developer submits is bounded by nothing
 `WARDYN_DEFAULT_POLICY` sets, and setting one is one ordinary API call. What still
-holds: the unclamped spec lands on the audit feed as `policy.inline` before
+holds: the unclamped spec lands on the audit feed as `policy.inline.apply` before
 `run.create` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)), egress still has no route off
 the sandbox except `wardyn-proxy`, and the session is still recorded. A governance
 control, not a containment boundary against the operator holding the laptop. Full
@@ -2289,7 +2289,7 @@ exactly where a member lands: the member nav, the member Getting Started, a
 A persistent banner says so on every screen and carries the way back out
 (**Exit member mode**). Every audit row the session writes still names **your
 own sub** — this is not impersonation, and there is no way to become anybody
-else. The transition itself is audited as `auth.member_mode`
+else. The transition itself is audited as `auth.member_mode.set`
 (`enabled`, `real_role`, and `no_credential` on the preview below), and each `403` an **admin-tier gate** raises while the
 mode is on carries `member_mode: true` on its `authz.denied` row — the two
 middleware chokepoints and every in-handler refusal that raises the same two
@@ -2318,7 +2318,7 @@ a member who has not signed in meets, and `POST /setup/harness-login` answers
 `409` — *"Exit member mode to sign in to AWS — the capture would land on your
 own identity."* Nothing is deleted: your session sits untouched in the store
 and comes back the moment you exit. The transition is audited as
-`auth.member_mode` with `no_credential: true` beside `enabled` and `real_role`.
+`auth.member_mode.set` with `no_credential: true` beside `enabled` and `real_role`.
 
 Inside the preview, **signing in is refused** — `POST /setup/harness-login`
 answers `409` while the posture is on, deliberately: the preview shows a new
@@ -4355,7 +4355,7 @@ footing as the GitHub ref-ruleset check ([TRY-IT.md](TRY-IT.md)): the check is
 real. Each launches a throwaway, one-shot confined sandbox, makes an actual
 outbound request through it — the same path a real run's egress takes — and tears
 it down. Both are **admin-only** (a member 403s) and **audited**
-(`site_config.test_proxy` / `site_config.test_redirect`); the audit row carries
+(`site_config.proxy.test` / `site_config.redirect.test`); the audit row carries
 the host(s) probed and the outcome, never the proxy URL, which may legitimately
 carry a credential.
 
@@ -4499,7 +4499,7 @@ minimal-reach posture, so:
   the daemon process and are never written to Postgres, never to the audit log.
   Individual searches are deliberately **not** audited — one row per keystroke
   would make the append-only log a record of every name an admin ever typed.
-  Connector **failures** are audited (`directory.search_fail`), with the
+  Connector **failures** are audited (`directory.search.fail`), with the
   provider, the failing operation and the upstream status — never the query.
 - **Retracting it is one variable.** Unset `WARDYN_DIRECTORY_PROVIDER` and
   restart: the connector is gone, the endpoint answers `503

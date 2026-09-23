@@ -213,9 +213,9 @@ func TestDispatch_BrokeredGitPATDropIsAuditedAndNeverReachesTheSandbox(t *testin
 	if v, ok := fr.lastSpec.Env["WARDYN_GIT_PAT_GRANTS"]; ok {
 		t.Errorf("the sandbox was handed WARDYN_GIT_PAT_GRANTS=%q on a brokered run — the agent can mint a resident GitHub PAT", v)
 	}
-	ev := findAudit(audit.events, run.ID, "run.git_pat.brokered_forge", "failure")
+	ev := findAudit(audit.events, run.ID, "run.git_pat.drop", "failure")
 	if ev == nil {
-		t.Fatalf("the git_pat drop was SILENT: no run.git_pat.brokered_forge event; events=%s", auditDump(audit.events, run.ID))
+		t.Fatalf("the git_pat drop was SILENT: no run.git_pat.drop event; events=%s", auditDump(audit.events, run.ID))
 	}
 	if !strings.Contains(string(ev.Data), "github.com") {
 		t.Errorf("audit event does not name the dropped host: %s", ev.Data)

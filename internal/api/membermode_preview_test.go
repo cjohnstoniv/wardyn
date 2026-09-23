@@ -226,9 +226,9 @@ func TestMemberPreview_SharedRosterDowngradesToThePlainMode(t *testing.T) {
 	if me["member_mode"] != true || me["member_mode_no_credential"] != false {
 		t.Errorf("/me = member_mode:%v no_credential:%v, want true/false", me["member_mode"], me["member_mode_no_credential"])
 	}
-	rows := audit.find("auth.member_mode")
+	rows := audit.find("auth.member_mode.set")
 	if len(rows) != 1 {
-		t.Fatalf("auth.member_mode rows = %d, want 1", len(rows))
+		t.Fatalf("auth.member_mode.set rows = %d, want 1", len(rows))
 	}
 	datum := map[string]any{}
 	if err := json.Unmarshal(rows[0].Data, &datum); err != nil {
@@ -277,9 +277,9 @@ func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
 	if body["member_mode_no_credential"] != false {
 		t.Errorf("a real member's request echoed member_mode_no_credential:%v, want false — no cookie was written", body["member_mode_no_credential"])
 	}
-	rows := audit.find("auth.member_mode")
+	rows := audit.find("auth.member_mode.set")
 	if len(rows) != 1 {
-		t.Fatalf("auth.member_mode rows = %d, want 1", len(rows))
+		t.Fatalf("auth.member_mode.set rows = %d, want 1", len(rows))
 	}
 	datum := map[string]any{}
 	if err := json.Unmarshal(rows[0].Data, &datum); err != nil {
@@ -394,9 +394,9 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 		t.Errorf("/me = member_mode:%v no_credential:%v, want true/true", me["member_mode"], me["member_mode_no_credential"])
 	}
 
-	rows := audit.find("auth.member_mode")
+	rows := audit.find("auth.member_mode.set")
 	if len(rows) != 1 {
-		t.Fatalf("auth.member_mode rows = %d, want 1", len(rows))
+		t.Fatalf("auth.member_mode.set rows = %d, want 1", len(rows))
 	}
 	enter := map[string]any{}
 	if err := json.Unmarshal(rows[0].Data, &enter); err != nil {
@@ -421,9 +421,9 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 		t.Errorf("/me after the exit = member_mode:%v no_credential:%v, want false/false",
 			me["member_mode"], me["member_mode_no_credential"])
 	}
-	rows = audit.find("auth.member_mode")
+	rows = audit.find("auth.member_mode.set")
 	if len(rows) != 2 {
-		t.Fatalf("auth.member_mode rows = %d after the exit, want 2", len(rows))
+		t.Fatalf("auth.member_mode.set rows = %d after the exit, want 2", len(rows))
 	}
 	exit := map[string]any{}
 	if err := json.Unmarshal(rows[1].Data, &exit); err != nil {

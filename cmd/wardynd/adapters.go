@@ -458,7 +458,7 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	ev.Target = store.CapAuditTarget(ev.Target)
 	if m.reg != nil {
 		// A run-less event (ev.RunID == nil —
-		// policy.inline, secret.*, an admin action) must still fall back to the
+		// policy.inline.apply, secret.*, an admin action) must still fall back to the
 		// PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered
 		// via AddGlobal) rather than bypass masking entirely — the guard here
 		// is `m.reg != nil` alone, never also `ev.RunID != nil`. The uuid.Nil

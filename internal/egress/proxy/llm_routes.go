@@ -481,7 +481,7 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 	case overrideAction != "":
 		s.Action = overrideAction
 	case serr != nil || (res.Skipped && res.SkipReason == "parse_error"):
-		s.Action = "error"
+		s.Action = "fail"
 	case (res.Skipped || res.FindingsCapped) && len(res.Findings) > 0 &&
 		(res.FindingsCapped || res.SkipReason == "findings_capped" ||
 			res.SkipReason == "scan_budget" || res.SkipReason == "attachment_decode_error"):
@@ -892,12 +892,12 @@ func isBedrockHost(h string) bool {
 // `bedrock-runtime-fips.us-gov-{west,east}-1.amazonaws.com`) and the whole
 // agent family, including `bedrock-agent-runtime` — the InvokeAgent DATA
 // plane, i.e. prompt-bearing model traffic. Missing any of them costs
-// honesty, not just coverage: proxy.go emits the one-time `llm.scan.blind`
+// honesty, not just coverage: proxy.go emits the one-time `llm.scan.bypass`
 // coverage row only under isLLMHost, so an unrecognised label leaves a
 // CONNECT to that endpoint opaque AND unflagged — an audit trail showing an
 // egress.allow and no blind row anywhere, which reads as "no model tunnel
 // happened", against a THREAT-MODEL.md that says those tunnels "stay opaque
-// and flagged llm.scan.blind". It also mislabels the MITM decision row for
+// and flagged llm.scan.bypass". It also mislabels the MITM decision row for
 // such a host as corp-artifact rather than model traffic.
 //
 // The enumeration is deliberately exhaustive-by-name rather than a
@@ -932,7 +932,7 @@ func (p *Proxy) emitLLMDecision(r *http.Request, host string, port int, decision
 	p.sink.emit(log)
 }
 
-// emitLLMBlindOnce emits a single llm.scan.blind signal per LLM host: an
+// emitLLMBlindOnce emits a single llm.scan.bypass signal per LLM host: an
 // inspection-enabled run reached host over an opaque CONNECT tunnel that cannot
 // be inspected (no TLS-MITM yet). The CONNECT itself is allowed separately; this
 // is purely the honest coverage signal so audit never implies inspection that
@@ -969,7 +969,7 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 	if len(p.blindHosts) >= maxBlindHosts {
 		p.blindMu.Unlock()
 		p.sink.dropped.Add(1)
-		slog.Warn("llm.scan.blind coverage suppressed: per-run blind-host cap reached",
+		slog.Warn("llm.scan.bypass coverage suppressed: per-run blind-host cap reached",
 			"host", h, "cap", maxBlindHosts, "rule_source", ruleSourceLLMBlind)
 		return
 	}
@@ -990,7 +990,7 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 			Scanned:  false,
 			Coverage: coverageOpaque,
 			Mode:     string(p.scanner.Mode()),
-			Action:   "blind",
+			Action:   "bypass",
 		},
 	})
 }

@@ -594,7 +594,7 @@ func (s *Server) resolveRunIntegration(ctx context.Context, owner, integrationID
 // (applyIntegrationCreds) plus, for a resident_host subscription, the ceiling
 // mount via applyLLMCredMount (THE single subscription gate) — returning what
 // was applied so the caller can decide whether to audit. The create path
-// (runs.go) emits the run.workspace.creds audit itself, once the run id is
+// (runs.go) emits the run.workspace_cred.resolve audit itself, once the run id is
 // minted, so the fold can run ABOVE the confinement floor (SPINE-2) and
 // preflight can call the SAME fold and discard the result.
 //

@@ -156,7 +156,7 @@ func TestCreateRun_InlineLocalMountRejectedUnlessOnboarded(t *testing.T) {
 
 // TestCreateRun_MemberInlineClamped pins item 5: a member's inline_policy is
 // clamped to DefaultPolicy BEFORE resolution/validation; an admin's identical
-// request is not. Observed via the policy.inline audit event's
+// request is not. Observed via the policy.inline.apply audit event's
 // min_confinement_class field, which resolveRunPolicy records right after
 // clamping — BEFORE the no-Store harness's later CreateRun panic (see the
 // file's "accepted past validation" 500-sentinel doc comment above), so the
@@ -178,7 +178,7 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
 	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC2) {
-		t.Fatalf("member: policy.inline min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
+		t.Fatalf("member: policy.inline.apply min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
 	}
 
 	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
@@ -186,27 +186,27 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
 	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC1) {
-		t.Fatalf("admin: policy.inline min_confinement_class = %q, want %q (unclamped)", got, types.CC1)
+		t.Fatalf("admin: policy.inline.apply min_confinement_class = %q, want %q (unclamped)", got, types.CC1)
 	}
 }
 
 // lastInlinePolicyConfinement returns the min_confinement_class of the LAST
-// policy.inline audit event in events, failing the test if there is none.
+// policy.inline.apply audit event in events, failing the test if there is none.
 func lastInlinePolicyConfinement(t *testing.T, events []types.AuditEvent) string {
 	t.Helper()
 	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Action != "policy.inline" {
+		if events[i].Action != "policy.inline.apply" {
 			continue
 		}
 		var d struct {
 			MinConfinementClass string `json:"min_confinement_class"`
 		}
 		if err := json.Unmarshal(events[i].Data, &d); err != nil {
-			t.Fatalf("decode policy.inline data: %v", err)
+			t.Fatalf("decode policy.inline.apply data: %v", err)
 		}
 		return d.MinConfinementClass
 	}
-	t.Fatal("no policy.inline audit event recorded")
+	t.Fatal("no policy.inline.apply audit event recorded")
 	return ""
 }
 
@@ -347,7 +347,7 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	// Pair a REAL operator secret (seeded) with an attacker-controlled but
 	// allowlisted host. CC2 (like TestCreateRun_MemberInlineClamped) stops the run
 	// at the confinement gate on this daemonless harness — AFTER resolveRunPolicy
-	// records policy.inline — so the audit shows the resolved grant count, and the
+	// records policy.inline.apply — so the audit shows the resolved grant count, and the
 	// admin's kept grant clears validateInlineSecretRefs (the secret exists).
 	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"api_key","scope":{"host":"attacker.example","secret_name":"anthropic-api-key"}}]}}`
 
@@ -361,7 +361,7 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
 	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 0 {
-		t.Fatalf("member: policy.inline eligible_grants = %d, want 0 (exfil pairing dropped)", got)
+		t.Fatalf("member: policy.inline.apply eligible_grants = %d, want 0 (exfil pairing dropped)", got)
 	}
 
 	// Operator (ceiling authority) is unclamped - their grant is kept.
@@ -370,27 +370,27 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
 	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 1 {
-		t.Fatalf("admin: policy.inline eligible_grants = %d, want 1 (unclamped)", got)
+		t.Fatalf("admin: policy.inline.apply eligible_grants = %d, want 1 (unclamped)", got)
 	}
 }
 
 // lastInlinePolicyGrantCount returns the eligible_grants count of the LAST
-// policy.inline audit event in events, failing the test if there is none.
+// policy.inline.apply audit event in events, failing the test if there is none.
 func lastInlinePolicyGrantCount(t *testing.T, events []types.AuditEvent) int {
 	t.Helper()
 	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Action != "policy.inline" {
+		if events[i].Action != "policy.inline.apply" {
 			continue
 		}
 		var d struct {
 			EligibleGrants int `json:"eligible_grants"`
 		}
 		if err := json.Unmarshal(events[i].Data, &d); err != nil {
-			t.Fatalf("decode policy.inline data: %v", err)
+			t.Fatalf("decode policy.inline.apply data: %v", err)
 		}
 		return d.EligibleGrants
 	}
-	t.Fatal("no policy.inline audit event recorded")
+	t.Fatal("no policy.inline.apply audit event recorded")
 	return 0
 }
 

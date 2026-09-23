@@ -592,7 +592,7 @@ func TestTestGapsDocReflectsCoverpkgCoverage(t *testing.T) {
 }
 
 // TestAuditActionsDocNamesTheDroppedDecisionSummary (F067) pins the
-// egress.* row to the synthetic egress.decisions.dropped marker
+// egress.* row to the synthetic egress:dropped-decisions-<n> marker
 // droppedSummaryLog posts on buffer overflow — a Deny with an empty target
 // that lands as an ordinary egress.deny row.
 func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
@@ -777,12 +777,12 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 // unparsed body.
 func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 	body := funcBody(t, readSrc(t, "internal", "egress", "proxy", "llm_routes.go"), "scanSummaryFrom")
-	if !strings.Contains(body, `s.Action = "error"`) {
-		t.Fatalf(`scanSummaryFrom no longer assigns s.Action = "error" — re-derive AUDIT-ACTIONS.md's suffix list before trusting this guard`)
+	if !strings.Contains(body, `s.Action = "fail"`) {
+		t.Fatalf(`scanSummaryFrom no longer assigns s.Action = "fail" — re-derive AUDIT-ACTIONS.md's suffix list before trusting this guard`)
 	}
 
 	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
-	mustSay(t, doc, "docs/AUDIT-ACTIONS.md", "`llm.scan.error`")
+	mustSay(t, doc, "docs/AUDIT-ACTIONS.md", "`llm.scan.fail`")
 
 	comment := readSrc(t, "internal", "egress", "egress.go")
 	if i := strings.Index(comment, `Action     string        `+"`json:\"action\"`"); i < 0 {
@@ -792,8 +792,8 @@ func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 		if end := strings.Index(line, "\n"); end >= 0 {
 			line = line[:end]
 		}
-		if !strings.Contains(line, `"error"`) {
-			t.Errorf("egress.ScanSummary.Action's enumeration comment omits \"error\": %q", line)
+		if !strings.Contains(line, `"fail"`) {
+			t.Errorf("egress.ScanSummary.Action's enumeration comment omits \"fail\": %q", line)
 		}
 	}
 }

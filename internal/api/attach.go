@@ -377,7 +377,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// memory for the session's lifetime and written once at close, which is fine
 	// for human-length interactive sessions but is not a streaming sink — past
 	// maxSessionCastBytes the recording keeps its head and drops the rest, and
-	// says so in the session.recording audit.
+	// says so in the session.recording.write audit.
 	sessionID := uuid.New().String()
 	castTee, finishRecording := s.newSessionRecorder(run, sessionID, opts)
 
@@ -424,7 +424,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// observer so is a write to a FOREIGN socket — never on this goroutine.
 	releaseAttach(releaseHolder)
 
-	// Persist the recording (best-effort) and emit session.recording when one was
+	// Persist the recording (best-effort) and emit session.recording.write when one was
 	// actually written. finishRecording is a no-op when recording is disabled.
 	// Use the daemon-lifetime BaseCtx (not the request ctx, which is typically
 	// cancelled the instant the WebSocket closes) so the provenance write + audit
@@ -647,7 +647,7 @@ func runIsUnrecordable(run types.AgentRun) bool {
 //     works unchanged in headless/no-store mode.
 //   - finish flushes the masker tail and persists the buffered asciicast to the
 //     RecordingStore under a per-run+session key (so it never clobbers the batch
-//     run's cast or a concurrent attach), then emits a session.recording audit
+//     run's cast or a concurrent attach), then emits a session.recording.write audit
 //     event. It is best-effort: a persist failure is audited as a failure but
 //     never fails the detach.
 //
@@ -676,7 +676,7 @@ func runIsUnrecordable(run types.AgentRun) bool {
 //
 // ponytail: past the cap the recording keeps its HEAD and drops the rest —
 // smallest thing that keeps a valid, replayable artifact plus an honest
-// truncated:true in the session.recording audit. A ring buffer that keeps the
+// truncated:true in the session.recording.write audit. A ring buffer that keeps the
 // TAIL instead is the upgrade path if operators ask for the end of long
 // sessions; a streaming sink is the one after that.
 const maxSessionCastBytes = 8 << 20
@@ -756,7 +756,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 			outcome = "failure"
 			data["error"] = err.Error()
 		}
-		s.recordAudit(ctx, s.auditEvent(&runID, principalType, principal, "session.recording",
+		s.recordAudit(ctx, s.auditEvent(&runID, principalType, principal, "session.recording.write",
 			key, outcome, mustJSON(data)))
 	}
 

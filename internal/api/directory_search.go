@@ -151,7 +151,7 @@ func (s *Server) auditDirectoryFailure(r *http.Request, err error) {
 	}
 	actorType, actor := actorFromRequest(r)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-		"directory.search_fail", r.URL.Path, "failure", mustJSON(data)))
+		"directory.search.fail", r.URL.Path, "failure", mustJSON(data)))
 }
 
 // directoryProviderName is the fallback stamped on a failure audit when the

@@ -182,12 +182,12 @@ _v03_run_py /tmp/_demo_v03a.$$ <<'PYEOF'
 # dialed — so a DENY, and nothing that ever asked a human.
 sealed_deny = rows("sealed-box", "egress.deny", host="example.com")
 out("V03A_SEALED_DENY", bool(sealed_deny))
-out("V03A_SEALED_QUIET", not rows("sealed-box", "egress.pending", "approval.decide")
+out("V03A_SEALED_QUIET", not rows("sealed-box", "egress.hold", "approval.decide")
                          and not rows("sealed-box", "egress.allow", host="example.com"))
 
 # --- fail-then-approve: deny_with_review. The arc IS the order — held, decided
 # on camera, and the retry actually landed.
-p = t0(rows("fail-then-approve", "egress.pending", host="example.com"))
+p = t0(rows("fail-then-approve", "egress.hold", host="example.com"))
 d = t0(decides("fail-then-approve", "example.com", "APPROVED"))
 a = t0(rows("fail-then-approve", "egress.allow", host="example.com"))
 out("V03A_FTA_PENDING", bool(p))
@@ -197,7 +197,7 @@ out("V03A_FTA_ORDER", bool(p and d and a and p < d < a))
 
 # --- held-at-the-door: wait_for_review. NOTE — verified against the live
 # rehearsal (2026-08-24): a wait_for_review request is held IN FLIGHT and emits
-# NO egress.pending row; the first row is the approval.decide. So the beat is
+# NO egress.hold row; the first row is the approval.decide. So the beat is
 # graded on decide → allow, not on a pending that never exists.
 # Two audit writers (the proxy's egress row, the approver's decide row) land within
 # ~300 ms of each other in either order — join them causally instead: the allow row
@@ -224,7 +224,7 @@ out("V03A_LINES_HARD", not [e for e in rows("lines-that-cant-be-crossed", "egres
 # ALLOW is a failure.
 meta = rows("lines-that-cant-be-crossed", "egress.deny", host="169.254.169.254")
 out("V03A_LINES_META", ((meta[0].get("data") or {}).get("rule_source") or "?") if meta else "none")
-out("V03A_LINES_QUIET", not rows("lines-that-cant-be-crossed", "egress.pending", "approval.decide"))
+out("V03A_LINES_QUIET", not rows("lines-that-cant-be-crossed", "egress.hold", "approval.decide"))
 
 # --- write-only-by-design: the in-sandbox read-back probe is UNAUDITED — it
 # goes --noproxy '*' straight at the proxy's brokered router, which 404s an
@@ -252,7 +252,7 @@ while read -r k v; do
   case "$k" in
     V03A_SEALED_DENY)  [[ "$v" == True ]] && ok "sealed-box: example.com denied on the record" || bad "sealed-box: no egress.deny for example.com — test one's refusal never happened" ;;
     V03A_SEALED_QUIET) [[ "$v" == True ]] && ok "sealed-box: nothing asked, nothing allowed — always-deny means no prompt" || bad "sealed-box: an approval was raised or example.com got through — always_deny asks nobody, ever" ;;
-    V03A_FTA_PENDING)  [[ "$v" == True ]] && ok "fail-then-approve: example.com went pending" || bad "fail-then-approve: no egress.pending for example.com — deny_with_review never raised the question" ;;
+    V03A_FTA_PENDING)  [[ "$v" == True ]] && ok "fail-then-approve: example.com went pending" || bad "fail-then-approve: no egress.hold for example.com — deny_with_review never raised the question" ;;
     V03A_FTA_DECIDE)   [[ "$v" == True ]] && ok "fail-then-approve: approved on camera" || bad "fail-then-approve: no approval.decide APPROVED for example.com — the decision beat never happened" ;;
     V03A_FTA_ALLOW)    [[ "$v" == True ]] && ok "fail-then-approve: the retry got through" || bad "fail-then-approve: no egress.allow for example.com — the retry after the approval never landed" ;;
     V03A_FTA_ORDER)    [[ "$v" == True ]] && ok "fail-then-approve: pending → approved → allowed, in that order" || bad "fail-then-approve: the three rows are out of order — 'the only thing that changed was the decision' is not what the trail says" ;;
@@ -313,16 +313,16 @@ rec = dests("record-a-policy", "egress.allow")
 want = ["pypi.org", "registry.npmjs.org", "example.com"]
 out("V03B_REC_ALL", all(h in rec for h in want))
 out("V03B_REC_MISSING", ",".join(h for h in want if h not in rec) or "-")
-out("V03B_REC_QUIET", not rows("record-a-policy", "egress.pending", "approval.decide"))
+out("V03B_REC_QUIET", not rows("record-a-policy", "egress.hold", "approval.decide"))
 syn = rows("record-a-policy", "run.record.synthesize")
 out("V03B_REC_SYNTH", bool(syn))
 out("V03B_REC_PROPOSED", ",".join(sorted((syn[-1].get("data") or {}).get("allowed_domains") or [])) if syn else "-")
 
 # --- once-or-for-good: THE re-raise. A `once` grant spends itself on the single
 # connection it was raised for, so the THIRD attempt must ask again — a second
-# egress.pending strictly after the decision. Its absence means the demo taught
+# egress.hold strictly after the decision. Its absence means the demo taught
 # the opposite of its own lesson on camera.
-op = [at(e) for e in rows("once-or-for-good", "egress.pending", host="example.com")]
+op = [at(e) for e in rows("once-or-for-good", "egress.hold", host="example.com")]
 od = decides("once-or-for-good", "example.com", "APPROVED")
 odt = t0(od)
 oa = t0(rows("once-or-for-good", "egress.allow", host="example.com"))
@@ -344,7 +344,7 @@ while read -r k v; do
     V03B_REC_PROPOSED)    printf '    proposed allowlist: %s\n' "$v" ;;
     V03B_ONCE_SCOPE)      [[ "$v" == True ]] && ok "once-or-for-good: approved with decision_scope=once" || bad "once-or-for-good: no approval.decide with decision_scope=once — the caret menu picked the wrong scope, so the whole demo is a plain run-scope approval" ;;
     V03B_ONCE_ORDER)      [[ "$v" == True ]] && ok "once-or-for-good: held → approved once → through" || bad "once-or-for-good: pending → decide → allow are not in that order — the Once-approved retry never landed" ;;
-    V03B_ONCE_RERAISE)    [[ "$v" == True ]] && ok "once-or-for-good: a SECOND egress.pending after the decision — Once spent itself" || bad "THE RE-RAISE NEVER HAPPENED — no second egress.pending for example.com after the once decision; the demo silently taught that Once lasts the run" ;;
+    V03B_ONCE_RERAISE)    [[ "$v" == True ]] && ok "once-or-for-good: a SECOND egress.hold after the decision — Once spent itself" || bad "THE RE-RAISE NEVER HAPPENED — no second egress.hold for example.com after the once decision; the demo silently taught that Once lasts the run" ;;
     V03B_ONCE_PENDINGS)   printf '    example.com pendings: %s (expect >= 2)\n' "$v" ;;
   esac
 done < /tmp/_demo_v03b.$$
@@ -440,16 +440,16 @@ _v03_run_py /tmp/_demo_v03d.$$ <<'PYEOF'
 D2 = "ssh-briefly-resident"
 # The ssh_key grant's scope names github.com, but ssh is re-originated through
 # the proxy's CONNECT lane: the server UNIONS ssh.github.com:443 onto the run's
-# allowlist (run.ssh.egress) and the sandbox dials THAT. Port 22 is never
+# allowlist (run.egress.add, kind=ssh) and the sandbox dials THAT. Port 22 is never
 # reached — which is the point of "briefly resident", and the reason this
 # episode can film a real ssh handshake at all.
-un = rows(D2, "run.ssh.egress")
+un = [e for e in rows(D2, "run.egress.add") if (e.get("data") or {}).get("kind") == "ssh"]
 added = (un[0].get("data") or {}).get("added_domains") if un else []
 out("V03D_SSH_UNION", "ssh.github.com:443" in (added or []))
 out("V03D_SSH_ADDED", ",".join(added or []) or "-")
 out("V03D_SSH_ALLOW", bool(rows(D2, "egress.allow", host="ssh.github.com", port=443)))
 # No EGRESS row may name github.com itself (the mint's scope legitimately does).
-bare = [e for e in rows(D2, "egress.allow", "egress.deny", "egress.pending")
+bare = [e for e in rows(D2, "egress.allow", "egress.deny", "egress.hold")
         if host_of(e) == "github.com" or (e.get("data") or {}).get("port") == 22]
 out("V03D_SSH_NO_22", not bare)
 out("V03D_SSH_BARE", ",".join(sorted({host_of(e) for e in bare})) or "-")
@@ -458,7 +458,7 @@ out("V03D_SSH_MINT", any((e.get("data") or {}).get("scope", {}).get("key_secret_
 PYEOF
 while read -r k v; do
   case "$k" in
-    V03D_SSH_UNION) [[ "$v" == True ]] && ok "ssh: run.ssh.egress unioned ssh.github.com:443 onto the allowlist" || bad "ssh: no run.ssh.egress adding ssh.github.com:443 — the CONNECT lane was never opened, so the handshake beat could not have run" ;;
+    V03D_SSH_UNION) [[ "$v" == True ]] && ok "ssh: run.egress.add unioned ssh.github.com:443 onto the allowlist" || bad "ssh: no run.egress.add adding ssh.github.com:443 — the CONNECT lane was never opened, so the handshake beat could not have run" ;;
     V03D_SSH_ADDED) printf '    unioned domains: %s\n' "$v" ;;
     V03D_SSH_ALLOW) [[ "$v" == True ]] && ok "ssh: ssh.github.com:443 allowed — the re-originated handshake really went out" || bad "ssh: no egress.allow for ssh.github.com:443 — the ssh command never reached GitHub" ;;
     V03D_SSH_NO_22) [[ "$v" == True ]] && ok "ssh: nothing ever dialed github.com:22 — port 22 stayed shut" || bad "ssh: an egress decision names github.com / port 22 — the sandbox dialed the bare ssh port, which the allowlist does not carry" ;;

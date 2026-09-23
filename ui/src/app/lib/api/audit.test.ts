@@ -28,7 +28,7 @@ describe("egressFromAudit", () => {
     const out = egressFromAudit([
       ev({ id: "a", action: "egress.allow", target: "api.anthropic.com:443" }),
       ev({ id: "d", action: "egress.deny", target: "evil.example.com:443" }),
-      ev({ id: "p", action: "egress.pending", target: "pkg.example.com:443" }),
+      ev({ id: "p", action: "egress.hold", target: "pkg.example.com:443" }),
     ]);
     expect(out.map((d) => d.decision)).toEqual(["allow", "deny", "pending"]);
   });
@@ -56,7 +56,7 @@ describe("egressFromAudit", () => {
   });
 
   it("falls back to an em-dash when neither domain nor target is present", () => {
-    const [d] = egressFromAudit([ev({ action: "egress.pending", target: undefined })]);
+    const [d] = egressFromAudit([ev({ action: "egress.hold", target: undefined })]);
     expect(d.domain).toBe("—");
   });
 
@@ -140,7 +140,7 @@ describe("demoAuditRows", () => {
 });
 
 // listAudit's `action` param — run-detail issues a SECOND, filtered
-// fetch (?run_id=&action=session.recording) so the recording picker's index
+// fetch (?run_id=&action=session.recording.write) so the recording picker's index
 // doesn't compete with every other action for the shared 1000-row cap on a
 // chatty run's (oldest-first) audit trail.
 describe("listAudit — action filter reaches the wire (W21-S1-5)", () => {
@@ -154,10 +154,10 @@ describe("listAudit — action filter reaches the wire (W21-S1-5)", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await audit.listAudit("run_1", "session.recording");
+    await audit.listAudit("run_1", "session.recording.write");
     const url1 = String(fetchMock.mock.calls[0][0]);
     expect(url1).toContain("run_id=run_1");
-    expect(url1).toContain("action=session.recording");
+    expect(url1).toContain("action=session.recording.write");
 
     await audit.listAudit("run_1");
     const url2 = String(fetchMock.mock.calls[1][0]);

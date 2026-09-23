@@ -760,7 +760,7 @@ func (s *Server) reclaimProbeRun(ctx context.Context, runID uuid.UUID) {
 		return
 	}
 	if applied, _ := s.casRunState(ctx, runID, run.State, types.RunKilled); applied {
-		s.finalizeRunTail(ctx, runID, run.SandboxRef, "site_config.test_probe",
+		s.finalizeRunTail(ctx, runID, run.SandboxRef, "site_config.probe.kill",
 			"failure", map[string]any{"reason": "probe wait timed out; run reclaimed"})
 	}
 }
@@ -901,7 +901,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	}
 	resp := classifyProxyProbe(res, subj, s.cfg.ControlPlaneURL)
 	resp.Warning = s.probeRecordingWarning(ctx, resp.State, runID)
-	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_proxy",
+	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.proxy.test",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
 			"state": resp.State, "target_host": strings.Join(hosts, ", "), "elapsed_ms": resp.ElapsedMS,
 			"custom_target": custom != "", "intercepted": resp.Intercepted,
@@ -980,7 +980,7 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 	}
 	resp := classifyRedirectProbe(res, toHost, fromHost, s.cfg.ControlPlaneURL)
 	resp.Warning = s.probeRecordingWarning(ctx, resp.State, runID)
-	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_redirect",
+	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.redirect.test",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
 			"state": resp.State, "to_host": toHost, "from_host": fromHost, "elapsed_ms": resp.ElapsedMS,
 		})))

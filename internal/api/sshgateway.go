@@ -159,7 +159,7 @@ func (s *Server) sshServerConfig(signer ssh.Signer) *ssh.ServerConfig {
 		PublicKeyCallback: s.sshAuth,
 		// VerifiedPublicKeyCallback runs ONLY after golang.org/x/crypto/ssh has
 		// verified a real signature over the offered key (see sshVerifiedAuth's
-		// doc) — this is where ssh.auth success is now audited, not sshAuth.
+		// doc) — this is where ssh.authenticate success is now audited, not sshAuth.
 		VerifiedPublicKeyCallback: s.sshVerifiedAuth,
 		MaxAuthTries:              sshMaxAuthTries,
 	}
@@ -206,10 +206,10 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // (DELETE /api/v1/me/ssh-keys/{fingerprint}) or re-registered. The ceiling is
 // stated in docs/SSH.md §Bounds, OPERATIONS.md and THREAT-MODEL.md's SSH
 // gateway residual — it is the documented shape of the feature, not an
-// oversight. An override is recorded as such: the ssh.auth success event
+// oversight. An override is recorded as such: the ssh.authenticate success event
 // carries override:true whenever the owner check did not match.
 //
-// Every REJECTION is audited under ssh.auth right here — including an
+// Every REJECTION is audited under ssh.authenticate right here — including an
 // unknown key or an unparseable/unknown run id — so a scan against the
 // gateway leaves a trail. SUCCESS is deliberately NOT audited here:
 // golang.org/x/crypto/ssh calls PublicKeyCallback on the UNSIGNED "query"
@@ -217,7 +217,7 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // signed attempt this callback still runs BEFORE the signature is verified —
 // so a caller who merely KNOWS a victim's registered public key (never the
 // matching private key) could reach this function, get approved, and —
-// before this fix — walk away with a forged ssh.auth success row attributed
+// before this fix — walk away with a forged ssh.authenticate success row attributed
 // to that victim, having proven nothing. The *ssh.Permissions returned on
 // approval here are therefore PROVISIONAL; sshVerifiedAuth
 // (VerifiedPublicKeyCallback) records the success audit, and the ssh package
@@ -288,7 +288,7 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 
 	// Provisional approval ONLY — no success audit here, see the function doc:
 	// the client has not yet proven it holds the private key for this offer.
-	// sshVerifiedAuth records ssh.auth success, and only after
+	// sshVerifiedAuth records ssh.authenticate success, and only after
 	// ssh.ServerConfig has verified a real signature over this key. The
 	// override verdict rides along in Extensions for the same reason principal
 	// and run_id do: it was resolved from store state HERE, and the verified
@@ -314,7 +314,7 @@ func sshRoleFresh(checkedAt *time.Time, now time.Time, ttl time.Duration) bool {
 }
 
 func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata, runID *uuid.UUID, actor, fingerprint, reason string) {
-	ev := s.auditEvent(runID, types.ActorHuman, actor, "ssh.auth", fingerprint, "failure",
+	ev := s.auditEvent(runID, types.ActorHuman, actor, "ssh.authenticate", fingerprint, "failure",
 		mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = conn.RemoteAddr().String()
 	s.recordAudit(ctx, ev)
@@ -352,7 +352,7 @@ func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms
 	if perms.Extensions["override"] == "true" {
 		data = mustJSON(map[string]any{"override": true})
 	}
-	ev := s.auditEvent(&runID, types.ActorHuman, perms.Extensions["principal"], "ssh.auth", ssh.FingerprintSHA256(key), "success", data)
+	ev := s.auditEvent(&runID, types.ActorHuman, perms.Extensions["principal"], "ssh.authenticate", ssh.FingerprintSHA256(key), "success", data)
 	ev.SourceIP = conn.RemoteAddr().String()
 	s.recordAudit(ctx, ev)
 	return perms, nil
@@ -453,7 +453,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 // "session" refusal and a "direct-tcpip" refusal drawing on one counter is the
 // property being recorded.
 func (s *Server) sshAuditChannelRejected(ctx context.Context, runID uuid.UUID, principal, channelType string) {
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel_reject",
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
 		runID.String(), "failure", mustJSON(map[string]any{
 			"channel_type": channelType,
 			"reason":       "per-run concurrent channel cap",

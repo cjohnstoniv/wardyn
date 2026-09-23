@@ -147,7 +147,7 @@ func TestHandleHarnessLogin_ReturnsBeforeTheSandboxIsUp(t *testing.T) {
 
 	released = true
 	close(gr.gate)
-	waitForAuditRows(t, audit, "run.interactive", 1)
+	waitForAuditRows(t, audit, "run.interactive.start", 1)
 	waitForAuditRows(t, audit, "harness.login.start", 1)
 }
 

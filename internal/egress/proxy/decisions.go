@@ -115,7 +115,7 @@ func (s *decisionSink) mirror(log egress.DecisionLog) {
 }
 
 // dropReportInterval bounds how often the worker flushes a synthetic
-// egress.decisions.dropped summary when it is IDLE (drops accrued but no traffic
+// egress:dropped-decisions-<n> summary when it is IDLE (drops accrued but no traffic
 // to piggyback on). Under active traffic drops surface at the next flush, so
 // this only bounds the idle case.
 const dropReportInterval = 30 * time.Second
@@ -157,7 +157,7 @@ func (s *decisionSink) run() {
 	}
 }
 
-// reportDropped posts a synthetic egress.decisions.dropped audit event when the
+// reportDropped posts a synthetic egress.deny (rule_source egress:dropped-decisions-<n>) when the
 // drop counter has advanced since *reported, so the auditor learns that N egress
 // decisions were NOT individually recorded — rather than only learning the total
 // at shutdown. It runs on the worker goroutine and reuses post(), so it never

@@ -114,7 +114,7 @@ console/API path, without touching a single MDM-managed file.
 **What still holds when that happens:**
 
 - **It is on the record.** The unclamped inline spec is written to the audit
-  feed as `policy.inline`, followed by `run.create`
+  feed as `policy.inline.apply`, followed by `run.create`
   ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)) — and `WARDYN_AUDIT_SINKS` fans both to
   the org SIEM, tagged with the device serial and the operator principal. A
   developer who widens their own ceiling produces evidence that they did, on a
@@ -327,7 +327,7 @@ policy-authored `disk_mib` is **refused at container create**, because a promise
 cap must not silently evaporate; an org-default-FILLED size instead **runs
 uncapped with a warning** — a `slog.Warn` carrying `enforcement: none`, the same
 word the admin setup status reports for this host's disk cap. The bit that tells
-the two cases apart is on the run's own record: `run.policy.effective` carries
+the two cases apart is on the run's own record: `run.policy.resolve` carries
 `disk_mib_filled`, so a reader can see whether the number came from the request
 or from the org.
 

@@ -30,7 +30,7 @@ import (
 // refuses a raw value on any write) is looked up in the secret store and
 // appended to WorkspaceSecretValues on THIS dispatch's local policy copy only
 // — never a stored/ceiling spec, never re-read, never logged (the
-// run.policy.effective audit above redacts it to a count).
+// run.policy.resolve audit above redacts it to a count).
 //
 // Belt-and-braces: every resolved value is ALSO registered with the
 // run's mask registry, so a verbatim leak into PTY capture, a session
@@ -49,7 +49,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		return
 	}
 	if s.cfg.Secrets == nil {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.secrets_resolve",
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.resolve",
 			run.ID.String(), "failure", mustJSON(map[string]any{
 				"reason": "no secret store configured", "names": li.WorkspaceSecretNames,
 			})))
@@ -115,7 +115,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 	if len(reserved) > 0 {
 		data["reserved_skipped"] = reserved
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.secrets_resolve",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.resolve",
 		run.ID.String(), outcome, mustJSON(data)))
 }
 

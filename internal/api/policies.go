@@ -144,7 +144,7 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 // value (an operator authors workspace_secret_names instead — see
 // types.LLMInspectionSpec), so a stored row should never carry one — but a READ
 // path must never re-expose it if that invariant is ever violated (a migration,
-// a direct DB edit, ...). Mirrors the run.policy.effective audit redaction
+// a direct DB edit, ...). Mirrors the run.policy.resolve audit redaction
 // (runs_dispatch.go) — same shape, different chokepoint. Does not mutate p's
 // own LLMInspection (a fresh copy is substituted), so a caller holding the
 // original is never surprised by an in-place edit.

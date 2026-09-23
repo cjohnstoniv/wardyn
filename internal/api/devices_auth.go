@@ -353,7 +353,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		// A genesis row after a recorded chain: a purge on the laptop. Accepted,
 		// because refusing would strand every later row, and made evidence here
 		// because a developer with root can purge.
-		ev := s.auditEvent(nil, types.ActorSystem, deviceActor(d.ID), "device.audit.chain_reset", d.ID.String(), "success",
+		ev := s.auditEvent(nil, types.ActorSystem, deviceActor(d.ID), "device.chain.reset", d.ID.String(), "success",
 			mustJSON(map[string]any{"prior_seq": d.LastSeq, "prior_row_hash": d.LastRowHash, "accepted": res.Accepted}))
 		ev.SourceIP = r.RemoteAddr
 		s.recordAudit(r.Context(), ev)

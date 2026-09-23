@@ -16,7 +16,7 @@ import (
 
 // TestBlindCapSuppressionIsAccountedNotSilent pins F066: emitLLMBlindOnce
 // bounds its per-run dedup set at maxBlindHosts, and past that cap the
-// llm.scan.blind coverage row — the ONLY honest report that an
+// llm.scan.bypass coverage row — the ONLY honest report that an
 // inspection-enabled run reached a model host over a tunnel nothing could look
 // into (internal/api/healthz.go delegates coverage reporting to this stream) —
 // is not emitted. Silence there reads as "no uninspected model tunnel

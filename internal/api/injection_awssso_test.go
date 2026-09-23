@@ -336,7 +336,7 @@ func TestResolveAWSSSOInjection_HostPinRefusesAnotherHost(t *testing.T) {
 	if strings.Contains(w.Body.String(), reauthToken) {
 		t.Fatal("the refusal body echoed the session token")
 	}
-	if !f.audit.hasReason("secret.read", "sso-host-not-portal") {
+	if !f.audit.hasReason("secret.read", "sso_host_not_portal") {
 		t.Error("no secret.read failure naming the host pin")
 	}
 }

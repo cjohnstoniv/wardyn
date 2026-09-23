@@ -225,7 +225,7 @@ func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
 }
 
 // auditAttachDenied records an authorization REFUSAL in the ?ticket= attach
-// lane. The sibling SSH gateway audits every one of its rejections (ssh.auth
+// lane. The sibling SSH gateway audits every one of its rejections (ssh.authenticate
 // failure, sshgateway.go) precisely so a scan against it leaves a trail; this
 // lane audited none of its own, so ticket-probing the WebSocket route was
 // invisible in the system of record — the one lane where that matters most,

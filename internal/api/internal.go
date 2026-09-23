@@ -57,11 +57,11 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 
-	// A synthetic "blind" decision is PURELY an LLM-inspection coverage signal
+	// A synthetic "bypass" decision is PURELY an LLM-inspection coverage signal
 	// (an opaque CONNECT to a model host that could not be inspected). Emit only
-	// the llm.scan.blind degradation event — not a duplicate egress.allow for
+	// the llm.scan.bypass degradation event — not a duplicate egress.allow for
 	// the tunnel, which the real CONNECT decision already recorded.
-	if dl.Scan != nil && dl.Scan.Action == "blind" {
+	if dl.Scan != nil && dl.Scan.Action == "bypass" {
 		s.recordLLMScanAudit(r.Context(), runID, claims.SPIFFEID, r.RemoteAddr, dl.Scan, dl.Request.Host)
 		writeJSON(w, http.StatusAccepted, nil)
 		return
@@ -152,7 +152,7 @@ func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor,
 	switch sc.Action {
 	case "block":
 		outcome = "denied"
-	case "error":
+	case "fail":
 		outcome = "failure"
 	}
 	// finding_count is the number of findings the scan PRODUCED before the cap

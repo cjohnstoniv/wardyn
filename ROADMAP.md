@@ -444,7 +444,7 @@ private-endpoint Kubernetes estate.
   transition CANCELS its outstanding approvals (migration `0062`) instead of
   leaving live Approve/Deny buttons on a dead run; the audit trail stops evicting
   itself (a self-inflicted renew loop backs off and gives up, and identical
-  consecutive `auth.fail` rows fold into one summary row carrying a count);
+  consecutive `auth.failed` rows fold into one summary row carrying a count);
   a private-IP denial is answered once per run rather than once per retry; and the
   `cidrs` docs trap is inverted — empty is the right default.
 - **Console and refusal copy ships DRAFT.** Every new `400`/`412`/`422` body and
@@ -943,7 +943,7 @@ shipped behavior; none is scheduled.
   never reads the human's role LIVE at connect time, unlike the web
   terminal's `requireOperator` gate — SSH carries no session for that gate to
   read — so a demotion can still ride an unexpired stamp for up to one TTL
-  window. Overrides are audited distinctly (`ssh.auth` carries
+  window. Overrides are audited distinctly (`ssh.authenticate` carries
   `override:true`), and the ceiling is documented, not silently assumed away,
   in `docs/SSH.md`'s Bounds section and `threatmodel/THREAT-MODEL.md`
   residual #15.

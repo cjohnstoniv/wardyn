@@ -768,20 +768,20 @@ func integFixture(t *testing.T, cs *capStore, rows []types.Integration, wss []ty
 	return New(cfg), audit
 }
 
-// foldedIntegrationRef reads the run.workspace.creds audit event — the durable
+// foldedIntegrationRef reads the run.workspace_cred.resolve audit event — the durable
 // record that a model-access binding actually folded into the run — and returns
 // the integration it named, or "" when nothing bound.
 func foldedIntegrationRef(t *testing.T, audit *recRecorder) string {
 	t.Helper()
 	for _, ev := range audit.snapshot() {
-		if ev.Action != "run.workspace.creds" {
+		if ev.Action != "run.workspace_cred.resolve" {
 			continue
 		}
 		var d struct {
 			IntegrationRef string `json:"integration_ref"`
 		}
 		if err := json.Unmarshal(ev.Data, &d); err != nil {
-			t.Fatalf("unmarshal run.workspace.creds data: %v", err)
+			t.Fatalf("unmarshal run.workspace_cred.resolve data: %v", err)
 		}
 		return d.IntegrationRef
 	}

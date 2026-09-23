@@ -138,17 +138,17 @@ func TestSSHGateway_CappedKeyNeverOverrides(t *testing.T) {
 			deadline := time.Now().Add(time.Second)
 			for ev == nil && time.Now().Before(deadline) {
 				for _, e := range h.audit.snapshot() {
-					if e.Action == "ssh.auth" && e.Outcome == "failure" && e.Actor == tc.actor {
+					if e.Action == "ssh.authenticate" && e.Outcome == "failure" && e.Actor == tc.actor {
 						ev = &e
 					}
 				}
 				time.Sleep(5 * time.Millisecond)
 			}
 			if ev == nil {
-				t.Fatalf("no ssh.auth failure for %s; events=%s", tc.actor, auditDump(h.audit.snapshot(), otherRun))
+				t.Fatalf("no ssh.authenticate failure for %s; events=%s", tc.actor, auditDump(h.audit.snapshot(), otherRun))
 			}
 			if reason := auditData(t, *ev)["reason"]; reason != "capped key (registered in the user view): no admin override" {
-				t.Errorf("ssh.auth failure reason = %v, want the capped-key reason", reason)
+				t.Errorf("ssh.authenticate failure reason = %v, want the capped-key reason", reason)
 			}
 		})
 	}

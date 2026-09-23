@@ -222,7 +222,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
       <FocusMode
         ctx={ctx({
           egress,
-          // B3: one of the four rows above is an egress.pending EVENT, and one
+          // B3: one of the four rows above is an egress.hold EVENT, and one
           // approval is held right now. They agree here so the other
           // assertions stay readable; the case where they DISAGREE — which is
           // the bug — is the next test.
@@ -256,11 +256,11 @@ describe("Focus mode — the bottom strip states the facts", () => {
   });
 
   // B3 — the SECOND copy of the lying count (the first is the Egress widget's
-  // own chip). The audit trail is append-only, so the egress.pending row for a
+  // own chip). The audit trail is append-only, so the egress.hold row for a
   // hold that was approved an hour ago is still there and always will be:
   // deriving "held" from it made the strip claim a hold on a run holding
   // nothing. allow/deny still come from the rows, because those ARE settled.
-  it("states the LIVE held count, not the egress.pending rows in the trail", () => {
+  it("states the LIVE held count, not the egress.hold rows in the trail", () => {
     render(<FocusMode ctx={ctx({ egress, heldCount: 0 })} onExit={() => {}} />);
 
     expect(strip().getByText(RUN_COCKPIT.held(0))).toBeInTheDocument();

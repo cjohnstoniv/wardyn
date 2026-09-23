@@ -355,7 +355,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 		detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
 		mode = "aws-dir-mount"
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.bedrock.configure",
 		run.ID.String(), "success", mustJSON(map[string]any{
 			"region": b.region, "model": b.model, "hosts": b.egressHosts,
 			// The EFFECTIVE data-plane host — a WARDYN_BEDROCK_BASE_URL
@@ -539,7 +539,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 		injections = append(injections, runner.InjectionGrant{GrantID: subGrantID, Rule: rule})
 	}
 	unionAllowedDomains(policy, []string{anthropicAPIHost})
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.subscription_inject",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.subscription.inject",
 		run.ID.String(), "success", mustJSON(map[string]any{
 			"host": anthropicAPIHost, "tls_mitm": true, "source": injectSource, "detail": detail,
 		})))

@@ -107,7 +107,7 @@ Alongside the [session and API-token revocation procedure](OPERATIONS.md#per-use
   opening more channels into the same running sandbox. Include foreign runs
   reached through an admin override when determining which runs are affected.
 
-The `ssh_key.add`, `ssh_key.delete`, and `ssh.auth` events help identify the
+The `ssh_key.add`, `ssh_key.delete`, and `ssh.authenticate` events help identify the
 registered keys and accessed runs; see [Audit actions](AUDIT-ACTIONS.md).
 
 ## 2. Connect
@@ -380,7 +380,7 @@ the clear until retention deletes it.
 
 **Auth.** Registered public keys only — no password, no keyboard-interactive.
 `MaxAuthTries` is bounded per connection; an unknown key or a malformed
-username (anything that isn't a run id) is rejected and audited (`ssh.auth`,
+username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
 `outcome=failure`), so a scan against the gateway leaves a trail.
 
 **Owner-or-admin, and the admin half is a bounded-stale stamp — weaker than
@@ -420,7 +420,7 @@ stored with `capped = true` (migration `0070_ssh_key_view_capped`) and role
 (`RefreshSSHKeyRoles`) refreshes its `role_checked_at` but leaves its role
 `member`, the database refuses a capped row that reads `admin`, and the gateway
 refuses the override for a capped key before it reads the role. The refusal is
-audited as `ssh.auth`, `outcome=failure`, reason "capped key (registered in the
+audited as `ssh.authenticate`, `outcome=failure`, reason "capped key (registered in the
 user view): no admin override". The key still reaches its owner's own runs. A
 break-glass key that reaches other people's runs is registered outside the
 user view. The `ssh_key.add` audit row marks a capped key with `capped: true`.
@@ -444,12 +444,12 @@ visible without reading the database: Settings → SSH keys badges the row
 **Admin override**. That badge reflects the STORED `role` only — it does not
 currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,
 so a badged key can still be refused by the gateway once its stamp goes stale;
-the audit log (`ssh.auth`, `outcome=failure`, reason "admin override stale")
+the audit log (`ssh.authenticate`, `outcome=failure`, reason "admin override stale")
 is the authoritative signal for that, not the badge. It is still a
 self-service view only — there is no console listing of another human's keys,
 for the same reason the API has none.
 
-An override connection is audited distinctly: the `ssh.auth` success event
+An override connection is audited distinctly: the `ssh.authenticate` success event
 carries `override:true` in its data whenever the owner check did NOT match
 and the admin-role check is what let the connection through — so "who used
 the override, and when" is a normal audit-log query, not something you have
@@ -484,10 +484,10 @@ shell.
 `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing
 else the client's shell happens to export reaches the sandbox.
 
-**Audit actions**: `ssh.auth` (every attempt, including failures),
+**Audit actions**: `ssh.authenticate` (every attempt, including failures),
 `session.attach` with `transport:ssh` in its data (the shell path — same
 action name the browser terminal uses, so both show up together in a run's
-timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp` (`bytes` transferred),
+timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp.transfer` (`bytes` transferred),
 `ssh.forward` (`port`, `bytes`). This is the source of record for these four;
 [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
 every other audit action in the system and points back here for these.

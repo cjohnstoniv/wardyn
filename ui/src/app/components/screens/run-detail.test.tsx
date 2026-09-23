@@ -245,7 +245,7 @@ describe("RunDetailScreen — F1-F2 a stale recording fetch never overwrites a l
         time: new Date().toISOString(),
         actor_type: "human",
         actor: "alice",
-        action: "session.recording",
+        action: "session.recording.write",
         target: "run-1~session-a",
         outcome: "success",
       },
@@ -254,7 +254,7 @@ describe("RunDetailScreen — F1-F2 a stale recording fetch never overwrites a l
         time: new Date().toISOString(),
         actor_type: "human",
         actor: "bob",
-        action: "session.recording",
+        action: "session.recording.write",
         target: "run-1~session-b",
         outcome: "success",
       },
@@ -294,7 +294,7 @@ describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker c
     time: "2026-01-01T00:04:00Z",
     actor_type: "human",
     actor: "alice",
-    action: "session.recording",
+    action: "session.recording.write",
     target: "run-1~session-a",
     outcome: "success",
   };
@@ -368,7 +368,7 @@ describe("RunDetailScreen — F6-F2 the exit code survives a truncated audit tra
           },
         ]);
       }
-      if (action === "run.kill" || action === "run.autostop" || action === "session.recording") {
+      if (action === "run.kill" || action === "run.autostop" || action === "session.recording.write") {
         return Promise.resolve([]);
       }
       return Promise.resolve(noise);

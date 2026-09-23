@@ -685,8 +685,8 @@ type ApprovalDecision struct {
 //	                  kernel.process.exec    — observed execve
 //	                  kernel.network.connect — observed outbound TCP connect
 //	                  kernel.file.write      — observed write to a sensitive path
-//	                  kernel.sensor.heartbeat— sensor liveness (run_id NULL)
-//	                  kernel.sensor.blind    — host eBPF blind to a run (CC3/Kata)
+//	                  kernel.sensor.ping     — sensor liveness (run_id NULL)
+//	                  kernel.sensor.bypass   — host eBPF blind to a run (CC3/Kata)
 //
 // Data shape for the kernel.* (ebpf) stream. audit_events.data is JSONB, so
 // this requires NO schema change — it is a documented convention over the

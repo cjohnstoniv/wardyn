@@ -115,7 +115,7 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade) dispatchCeiling 
 	}
 }
 
-// effectivePolicyDatum is the run.policy.effective snapshot: the audited policy
+// effectivePolicyDatum is the run.policy.resolve snapshot: the audited policy
 // plus one fact about it that is not a policy field.
 //
 // The spec is EMBEDDED, so the JSON object stays byte-for-byte the policy
@@ -159,7 +159,7 @@ type effectivePolicyDatum struct {
 // an admin-authored STORED policy, and resourceLimitsToRunner is a pure mapper
 // with neither the ceiling nor the site config in scope. Dispatch is the one seam
 // holding all three — after every widening phase, before resourceLimitsToRunner
-// and before the run.policy.effective envelope, which is what discloses the
+// and before the run.policy.resolve envelope, which is what discloses the
 // effective number to every caller. A profile's own clamp is additionally
 // disclosed in run.ceiling.reassert below.
 //
@@ -502,7 +502,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	}
 	// ALWAYS audited when a profile applies, even with nothing to drop: "which
 	// ceiling did this run actually run under" is the question the envelope at
-	// run.policy.effective cannot answer (it records a policy, not whose walls
+	// run.policy.resolve cannot answer (it records a policy, not whose walls
 	// they are), and the drops themselves are invisible there — injections and
 	// broker grants ride ProxyConfig, not the spec. A profile with an EMPTY
 	// denied_domains is exactly where that question is hardest to answer any
@@ -520,7 +520,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	// The SIZE half of the profile, present only when the profile sets one — so a
 	// profile written before 0.7.2 produces a byte-identical row. applyEphemeralDisk
 	// ran just above this phase, so ephemeral_disk_mib is the effective number the
-	// sandbox gets; run.policy.effective discloses it to everyone, and this says
+	// sandbox gets; run.policy.resolve discloses it to everyone, and this says
 	// whose ceiling shaped it.
 	if c.maxEphemeralDiskMiB > 0 {
 		data["max_ephemeral_disk_mib"] = c.maxEphemeralDiskMiB

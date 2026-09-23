@@ -119,7 +119,7 @@ func (s *uiMemStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, limit 
 	return out, nil
 }
 
-// putEffectivePolicy seeds the run.policy.effective envelope dispatch writes —
+// putEffectivePolicy seeds the run.policy.resolve envelope dispatch writes —
 // the gateway's only source for which apps a run really declared.
 func (s *uiMemStore) putEffectivePolicy(runID uuid.UUID, spec types.RunPolicySpec) {
 	data, _ := json.Marshal(spec)
@@ -127,7 +127,7 @@ func (s *uiMemStore) putEffectivePolicy(runID uuid.UUID, spec types.RunPolicySpe
 	defer s.mu.Unlock()
 	s.events = append(s.events, types.AuditEvent{
 		ID: uuid.New(), Time: time.Now(), RunID: &runID,
-		Action: "run.policy.effective", Outcome: "success", Data: data,
+		Action: "run.policy.resolve", Outcome: "success", Data: data,
 	})
 }
 
@@ -471,7 +471,7 @@ func TestUIGateway_EnterRequiresDeclaredApp(t *testing.T) {
 		t.Fatalf("refusal does not name the policy field: %s", rec.Body.String())
 	}
 
-	// A run with no run.policy.effective envelope at all (never dispatched, or
+	// A run with no run.policy.resolve envelope at all (never dispatched, or
 	// the audit store unavailable) must fail closed the same way.
 	bare := types.AgentRun{ID: uuid.New(), CreatedBy: h.owner, State: types.RunRunning, SandboxRef: "sandbox-3"}
 	h.store.putRun(bare)
@@ -850,7 +850,7 @@ func TestUIGateway_AuditsAuthAndSessionWithoutContent(t *testing.T) {
 	h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"bogus"}})
 
 	got := strings.Join(h.audit.actions(), " ")
-	for _, want := range []string{"ui.auth/success", "ui.auth/denied", "ui.open/success"} {
+	for _, want := range []string{"ui.authorize/success", "ui.authorize/denied", "ui.open/success"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("audit %q missing %q", got, want)
 		}

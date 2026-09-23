@@ -431,7 +431,7 @@ func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec ty
 // Note: agent_runs.policy_id has NO foreign key, so a delete always succeeds even
 // while runs still reference the policy — those runs keep a dangling policy_id.
 // The run's authorization envelope survives regardless: dispatch records the
-// fully-widened spec as a run.policy.effective event in the append-only audit log.
+// fully-widened spec as a run.policy.resolve event in the append-only audit log.
 func (s PG) DeletePolicy(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM run_policies WHERE id=$1`, id)
 	if err != nil {
@@ -762,7 +762,7 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 
 // LatestAuditEventByAction returns the most recent audit event whose action
 // equals the given action, or ErrNotFound when none exists. Used by /healthz to
-// find the latest kernel.sensor.heartbeat that drives the eBPF ground-truth
+// find the latest kernel.sensor.ping that drives the eBPF ground-truth
 // health state (so the stream reports healthy only while beats are arriving).
 //
 // Most recent by `time`, picked out of a seq-ordered window, and both halves

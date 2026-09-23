@@ -337,14 +337,14 @@ SQL
   # UI's workspace-wizard/picker render against.
   api POST /api/v1/workspaces '{"name":"payments","sources":[{"type":"local_dir","path":"/home/me/projects/payments"}]}' >/dev/null 2>&1 || true
   # Run detail's UI-apps lane (docs/UI-SANDBOXES.md) reads ui_apps off the
-  # run.policy.effective envelope DISPATCH records (effectiveUIApps) — and the
+  # run.policy.resolve envelope DISPATCH records (effectiveUIApps) — and the
   # `none` runner never dispatches, so the envelope goes in here exactly as
   # dispatch would write it. Attached to the RUNNING fixture rather than a new
   # run on purpose: the lane is owner-and-RUNNING-only, and the seeded run
   # count is load-bearing for other specs (runs, recording).
   psql_e2e >/dev/null 2>&1 <<'SQL' || true
 INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.effective', id::text, 'success',
+SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.resolve', id::text, 'success',
        '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb
 FROM agent_runs WHERE task = 'e2e fixture 2';
 SQL

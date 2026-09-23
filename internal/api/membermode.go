@@ -157,7 +157,7 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 		datum["no_credential"] = true
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"auth.member_mode", "/api/v1/me/member-mode", "success", mustJSON(datum)))
+		"auth.member_mode.set", "/api/v1/me/member-mode", "success", mustJSON(datum)))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"member_mode": req.Enabled, "member_mode_no_credential": noCred,
 	})

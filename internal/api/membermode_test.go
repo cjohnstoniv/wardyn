@@ -327,16 +327,16 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST on = %d: %s", w.Code, w.Body.String())
 	}
-	ev := lastAuditEvent(t, h.audit.events, "auth.member_mode")
+	ev := lastAuditEvent(t, h.audit.events, "auth.member_mode.set")
 	if ev.Actor != memberModeAdminSub {
-		t.Errorf("auth.member_mode actor = %q, want %q", ev.Actor, memberModeAdminSub)
+		t.Errorf("auth.member_mode.set actor = %q, want %q", ev.Actor, memberModeAdminSub)
 	}
 	if ev.Outcome != "success" {
-		t.Errorf("auth.member_mode outcome = %q, want success", ev.Outcome)
+		t.Errorf("auth.member_mode.set outcome = %q, want success", ev.Outcome)
 	}
 	var data map[string]any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
-		t.Fatalf("decode auth.member_mode data: %v", err)
+		t.Fatalf("decode auth.member_mode.set data: %v", err)
 	}
 	if data["enabled"] != true {
 		t.Errorf("data.enabled = %v, want true", data["enabled"])
@@ -651,7 +651,7 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 
 	// The audit row is still written — the request WAS made and answered, and
 	// real_role records the tier it was made from.
-	ev := lastAuditEvent(t, h.audit.events, "auth.member_mode")
+	ev := lastAuditEvent(t, h.audit.events, "auth.member_mode.set")
 	if data := auditData(t, ev); data["real_role"] != oidc.RoleMember {
 		t.Errorf("real_role = %v, want %q", data["real_role"], oidc.RoleMember)
 	}
