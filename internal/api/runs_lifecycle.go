@@ -744,9 +744,11 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 // is cancelled, retryQuick bails on ctx.Done() without revoking the identity,
 // and the run.kill row itself fails to write. Nothing on the ordinary paths
 // revisits that state: the idle reaper lists RUNNING and the next supersede
-// selects non-terminal runs only — only SweepTerminalSandboxes (below) can
-// retry a stranded terminal run's teardown, and it is a primitive an operator
-// has to wire up, not something that runs on its own. killRunCascade wraps
+// selects non-terminal runs only. What does come back to it is
+// sweepOrphanedSandboxes (reconcile.go), at boot and every undispatchedGrace:
+// it tears down a terminal run's labelled containers, but writes no run.kill
+// row and revokes nothing — refuseTerminalRun (internal_live_run.go) is what
+// shuts every /internal door to the stranded token meanwhile. killRunCascade wraps
 // ONE shared context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 // around this call and claimKillTransition's together, so handleKillRun's
 // synchronous cascade keeps the single 30s budget it always had; its

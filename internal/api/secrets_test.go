@@ -707,3 +707,115 @@ func TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
 		t.Errorf("secret.delete owner_known = (%v, present=%v), want false", known, present)
 	}
 }
+
+// reportingSecrets is memSecrets whose Delete reports as an external store
+// does when the vault kept the value soft-deleted.
+type reportingSecrets struct {
+	*memSecrets
+	rep secretstore.DeleteReport
+}
+
+func (r reportingSecrets) For(owner string) secretstore.Store {
+	return reportingSecrets{r.memSecrets.For(owner).(*memSecrets), r.rep}
+}
+
+func (r reportingSecrets) Delete(ctx context.Context, name string) error {
+	secretstore.ReportDelete(ctx, r.rep)
+	return r.memSecrets.Delete(ctx, name)
+}
+
+// secret.delete carries what an external store kept (design §2.3a.3): not
+// purged, and for how many days the organisation can recover it.
+func TestDeleteSecret_AuditSaysWhatTheStoreKept(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{"npm-token": []byte("v")}}
+	h, srv := secretsRBACServer(t, sec)
+	srv.cfg.Secrets = reportingSecrets{sec, secretstore.DeleteReport{Store: "azurekv", Purged: false, RecoverableDays: 90}}
+	srv.router = srv.routes()
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/npm-token", admin, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d: %s", w.Code, w.Body.String())
+	}
+	var data map[string]any
+	if err := json.Unmarshal(lastAuditEvent(t, h.audit.events, "secret.delete").Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["store"] != "azurekv" || data["purged"] != false || data["recoverable_days"] != float64(90) {
+		t.Fatalf("secret.delete data = %v; want store azurekv, purged false, recoverable_days 90", data)
+	}
+	if _, present := data["secret_owner"]; present {
+		t.Fatal("an operator delete carries secret_owner")
+	}
+}
+
+// rowFailingSecrets is memSecrets whose Put fails as store mode does when the
+// value reached the external store but its row was not written.
+type rowFailingSecrets struct{ *memSecrets }
+
+func (r rowFailingSecrets) For(owner string) secretstore.Store {
+	return rowFailingSecrets{r.memSecrets.For(owner).(*memSecrets)}
+}
+
+func (rowFailingSecrets) Put(context.Context, string, []byte) error {
+	return fmt.Errorf("pg secretstore: put: the new value is live in azurekv, but updating the row failed: %w: %w",
+		secretstore.ErrRowNotWritten, errors.New("row refused"))
+}
+
+// Rule 18: a failure between the store write and the row write is audited, as
+// a secret.write failure with reason "row", and never carries the value.
+func TestPutSecret_RowFailureIsAudited(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	srv.cfg.Secrets = rowFailingSecrets{sec}
+	srv.router = srv.routes()
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+	const value = "npm-row-failure-value-000000"
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/npm-token", admin, `{"value":"`+value+`"}`); w.Code != http.StatusInternalServerError {
+		t.Fatalf("PUT = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	ev := lastAuditEvent(t, h.audit.events, "secret.write")
+	if ev.Outcome != "failure" || ev.Target != "npm-token" || string(ev.Data) != `{"reason":"row"}` {
+		t.Fatalf("secret.write = (%s, %s, %s); want a failure on npm-token with reason row", ev.Outcome, ev.Target, ev.Data)
+	}
+}
+
+// Rule 18 covers Wardyn's own writes too: a captured or refreshed sign-in
+// whose row was not written is audited as the API's write is.
+func TestInternalWrite_RowFailureIsAudited(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	srv.cfg.Secrets = rowFailingSecrets{sec}
+	ctx := context.Background()
+	for _, c := range []struct {
+		write  func() error
+		target string
+		data   string
+	}{
+		{func() error { return srv.storeADOEntraBlob(ctx, "alice", "ado-1", adoEntraBlob{}) },
+			adoEntraSecretName("ado-1"), `{"reason":"row","secret_owner":"alice"}`},
+		{func() error { return srv.storeAWSSSOBlob(ctx, awsSSOScope{perUser: true, owner: "bob"}, awsSSOBlob{}) },
+			harnessCredSecretName(awsSSOProvider), `{"reason":"row","secret_owner":"bob"}`},
+		{func() error { return srv.storeAWSSSOBlob(ctx, awsSSOScope{}, awsSSOBlob{}) },
+			harnessCredSecretName(awsSSOProvider), `{"reason":"row"}`},
+	} {
+		if err := c.write(); !errors.Is(err, secretstore.ErrRowNotWritten) {
+			t.Fatalf("%s: write = %v; want ErrRowNotWritten", c.target, err)
+		}
+		ev := lastAuditEvent(t, h.audit.events, "secret.write")
+		if ev.Outcome != "failure" || ev.Target != c.target || ev.ActorType != types.ActorSystem || string(ev.Data) != c.data {
+			t.Fatalf("secret.write = (%s, %s, %s, %s); want a system failure on %s with %s", ev.ActorType, ev.Outcome, ev.Target, ev.Data, c.target, c.data)
+		}
+	}
+}
+
+// The operator's pasted harness credential is audited by who pasted it.
+func TestHarnessCredentialPaste_RowFailureIsAudited(t *testing.T) {
+	h, srv := harnessCredSrv(t, rowFailingSecrets{&memSecrets{m: map[string][]byte{}}})
+	if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
+		`{"token":"sk-ant-oat01-row-will-fail"}`); w.Code != http.StatusInternalServerError {
+		t.Fatalf("paste = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	ev := lastAuditEvent(t, h.audit.events, "secret.write")
+	if ev.Outcome != "failure" || ev.Target != harnessCredSecretName("anthropic") || string(ev.Data) != `{"reason":"row"}` {
+		t.Fatalf("secret.write = (%s, %s, %s); want a failure on the harness credential with reason row", ev.Outcome, ev.Target, ev.Data)
+	}
+}

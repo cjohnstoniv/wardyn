@@ -142,7 +142,8 @@ type Config struct {
 	Approvals ApprovalService
 	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
 	// ceiling on how long any request waits for a decision. A run's captured
-	// wait (captureRunLimits) never exceeds it. 0 means unknown here.
+	// wait (captureRunLimits) never exceeds it. 0 means unknown here. Dispatch
+	// also mirrors it onto a hold-mode run's sandbox (approval_expiry.go, RL-1).
 	ApprovalExpiryAfter time.Duration
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
@@ -538,8 +539,14 @@ type Config struct {
 	// AgeKeyDurable reports whether the secret store's age key was SUPPLIED
 	// (WARDYN_AGE_KEY/-age-key non-empty) vs ephemerally generated at boot. When
 	// false, stored secrets are unreadable after a restart — surfaced by
-	// /setup/status as a durability warning. Computed at boot in cmd/wardynd.
+	// /setup/status as a durability warning. Computed at boot in cmd/wardynd;
+	// true in store mode, where no local key holds anything.
 	AgeKeyDurable bool
+	// SecretStoreExternal describes the organisation's store that every
+	// credential is written to in store mode ("Vault at vault.example:8200"),
+	// or "" in local mode. Set, /setup/status shows store_external instead of
+	// the age-key row.
+	SecretStoreExternal string
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
 	// posture. Computed at boot in cmd/wardynd (listenIsLoopback).

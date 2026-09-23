@@ -144,7 +144,7 @@ func TestCeilingRefusalCarriesItsRemedy(t *testing.T) {
 	}
 	// The canonical mapping, unchanged.
 	w := httptest.NewRecorder()
-	writeCeilingError(w, errGroupsSnapshotStale)
+	writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), errGroupsSnapshotStale)
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), remedy) {
 		t.Errorf("writeCeilingError = %d %s, want 403 naming the remedy", w.Code, w.Body.String())
 	}

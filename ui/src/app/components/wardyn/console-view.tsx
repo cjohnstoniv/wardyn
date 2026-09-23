@@ -59,8 +59,9 @@ export function useViewAccess(): ViewAccess {
   return React.useContext(ViewAccessContext);
 }
 
-// The User-view pages the rules act on (§2.3). Every other user-side path is a
-// pre-split route that M-1b deletes; until then it is left exactly as it was.
+// The User-view pages the rules act on (§2.3). Every other user-side path was
+// a pre-split route; M-1b deleted them, so it now falls to the ordinary
+// catch-all like any other unmatched path.
 const TWIN = /^\/(runs(\/(?!new$)[^/]+)?|approvals|workspaces(\/[^/]+)?|secrets)$/;
 const USER_ONLY = /^\/(runs\/new|account|setup)$/;
 

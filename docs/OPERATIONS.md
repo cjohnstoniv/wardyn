@@ -876,6 +876,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
+| `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
@@ -902,7 +903,7 @@ a row above or a filed entry here.
 
 On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
 can be set to per-user sign-in instead of one shared PAT — see
-[docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
+[docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the
 row's fields, and what a member sees.
 
 A deployment carries at most **one enabled** row on the `entra` lane: each person signs in to one
@@ -921,7 +922,7 @@ org→desktop channel MDM already delivers as `/etc/wardyn/site-config.json`
 new plumbing and no DDL. It also means **two doors write them**, and the grid
 below is what tells them apart.
 
-| | Dedicated endpoints (the console's `/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
+| | Dedicated endpoints (the console's `/admin/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
 |---|---|---|
 | **Route** | `GET`/`PUT /workspace-providers`, `GET`/`PUT /agent-providers` — both verbs admin-only, for the reason the tier table above gives: a base URL names corporate topology and an `sso_start_url` names the org's IdP | `PUT /site-config`, admin-only, a **full-document replace** of everything except integrations |
 | **Writes what** | exactly one block, replaced whole; `{}` is the clear form | the whole document, provider blocks included when the body NAMES them |
@@ -935,7 +936,7 @@ SSH clone URL carries no path a base URL can be compared against
 (`git@github.com:acme/x.git` is not `/acme/x`), so a row scoped to one org
 admits an SSH clone of ANY org on that host, with the deployment's
 `ssh-key-<host>` secret. That is a documented ceiling of 0.7.2, not an
-oversight, and it is never silent: the `/providers` screen says it under the
+oversight, and it is never silent: the `/admin/providers` screen says it under the
 row's lanes, and run create puts it on the 201 as a warning (with a
 `run.provider.ssh_host_level` audit row) whenever a path-scoped row admits an
 SSH repository. **The remedy is the row's own `lanes` list** — drop `ssh` from a
@@ -958,7 +959,7 @@ an `azure_devops` provider row names it.
 
 **On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
 `/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the
-developer IS the admin and can open `/providers` — an MDM file that NAMES a
+developer IS the admin and can open `/admin/providers` — an MDM file that NAMES a
 provider block overwrites a local console edit within five minutes, and one that
 omits it leaves the edit standing. See
 [DESKTOP.md § Posture switches are env vars, never site-config](DESKTOP.md#posture-switches-are-env-vars-never-site-config).
@@ -2715,10 +2716,10 @@ writable, though a row stored under an earlier release still loads, still sits i
 `azure_openai` is gone as a kind.
 
 **Settings** (account menu) is the one surface for these — a Model provider card,
-a radio group over concrete lanes; the standalone `/integrations` page is deleted
-and redirects there. **The Git host card retired in 0.7.2.** Its three git
+a radio group over concrete lanes; the standalone `/integrations` page is deleted.
+**The Git host card retired in 0.7.2.** Its three git
 credential lanes (GitHub App, PAT, SSH key) now render INSIDE the provider row
-they apply to, on the Workspace Providers screen (`/providers`); Settings keeps a
+they apply to, on the Workspace Providers screen (`/admin/providers`); Settings keeps a
 card in its place that summarizes the provider policy and links there. The lanes
 are the same radio group over the same concrete lanes — what changed is that
 "which git hosts this org clones from" and "how a run authenticates to them"
@@ -4274,7 +4275,11 @@ token to the configured gateway proxy-side (TLS-MITM, exactly as it is sent to
 `api.anthropic.com` today) instead of only ever the public host — see
 [CHANGELOG.md](../CHANGELOG.md). The harness-login (`claude setup-token`) lane
 is exempt and always stays on the public host: that flow mints the OAuth token
-itself and must not be redirected.
+itself and must not be redirected. With a gateway configured, a resident
+subscription credential is mounted only when the run's own policy reaches the
+**gateway** (its host, or a `*.` wildcard covering it, judged as the proxy will
+judge the CONNECT); an `api.anthropic.com` or `*.anthropic.com` entry no longer
+counts, because the run never dials the vendor host.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`
@@ -4839,6 +4844,249 @@ is the **only** key that reads the store. Save it before doing anything else.
 
 Whatever you do, **back the key up off-host.** Rotation re-encrypts what is there;
 it cannot recover a key you have already lost.
+
+## Store mode: credentials in Vault
+
+With `WARDYN_SECRET_STORE=vaultkv`, every stored credential's value lives in
+your organisation's Vault KV v2 engine (OpenBao is a supported, API-compatible
+endpoint), and Wardyn keeps only a pointer row in Postgres: owner, name, when,
+and where in Vault (`enc_version` 2, `kek_id` `vaultkv:<mount>/<path>`, no
+ciphertext). Wardyn does no at-rest cryptography for such a row, and holds no
+key: once every row is in Vault, `WARDYN_AGE_KEY` is unset. Every read is one
+Vault read, so it appears in your Vault audit device (with the path and the
+token's entity; values HMAC'd) as well as in Wardyn's audit log. Wardyn's own
+boot keys (signing, session, UI-session, SSH host) live there too.
+
+**Paths.** Under the mount (`WARDYN_VAULT_KV_MOUNT`, default `wardyn`) and the
+install's prefix (`WARDYN_VAULT_KV_PREFIX`; the chart sets the release
+namespace):
+
+```
+<prefix>/platform/<name>               Wardyn's boot keys
+<prefix>/operator/<name>               operator-namespace credentials
+<prefix>/people/<owner>/<name>         a person's credentials; <owner> is the
+                                       principal in base32hex, lowercase, unpadded
+```
+
+Each value is `{"value": "<base64>"}` with `custom_metadata`
+`wardyn-owner`, `wardyn-name`, `wardyn-kind` and `wardyn-format`, and
+`max_versions` `WARDYN_VAULT_KV_MAX_VERSIONS` (default 1, so a replaced value
+does not linger). A read derives the path from the row's owner and name and
+refuses a row that points anywhere else, then refuses a value whose metadata
+names another row: a pointer moved by a database writer reads nothing.
+Removing a credential is `DELETE metadata/<path>`, every version at once.
+Paths carry the owner and name, so they reach your Vault audit log.
+
+**Policy.** Least privilege, templated so another install in another namespace
+cannot read this one's paths. There is no `destroy/` or `undelete/` stanza and
+no `delete` on `data/`: Wardyn never calls any of them. `read` on
+`wardyn/config` lets wardynd check at boot that a KV v2 engine is mounted at
+`WARDYN_VAULT_KV_MOUNT`: a mistyped mount, or an engine not yet enabled, fails
+boot instead of the first write.
+
+```hcl
+# <accessor> is the Kubernetes auth mount's accessor (vault auth list)
+path "wardyn/config" {
+  capabilities = ["read"]
+}
+path "wardyn/data/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
+  capabilities = ["create", "update", "read"]
+}
+path "wardyn/metadata/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
+  capabilities = ["create", "update", "read", "delete", "list"]
+}
+```
+
+With token-file authentication (compose, VMs) there is no Kubernetes alias to
+template on: write the install's `WARDYN_VAULT_KV_PREFIX` literally, as
+`wardyn/data/<prefix>/*` and `wardyn/metadata/<prefix>/*`, and give each
+install its own policy.
+
+Until a second role for the boot keys lands (`WARDYN_VAULT_ROLE_PLATFORM`,
+CS-12b), one role writes both `platform/` and `people/`: whoever holds
+Wardyn's Vault token can create, update and delete the boot keys and every
+person's credentials alike.
+
+**Authentication.** There is no Vault token in an environment variable, by
+design.
+
+- *Kubernetes* (`WARDYN_VAULT_AUTH=kubernetes`, the default). The chart
+  projects a dedicated service-account token with audience `vault` at
+  `/var/run/secrets/wardyn-vault/token` (`secretStore.vault.*` in
+  `values.yaml`). Configure the role to match:
+
+  ```sh
+  vault write auth/kubernetes/role/wardyn \
+      bound_service_account_names=<the chart's service account> \
+      bound_service_account_namespaces=<the release namespace> \
+      audience=vault policies=wardyn-kv token_ttl=1h
+  ```
+- *Token file* (`WARDYN_VAULT_AUTH=token-file`), for compose and VMs: a
+  Vault Agent sink or a CSI file at `WARDYN_VAULT_TOKEN_FILE`, re-read
+  when Vault answers 403. `deploy/compose/docker-compose.vault.yaml` is
+  the compose overlay.
+
+wardynd logs in at boot and **refuses to start if it cannot**, renews its token
+at two thirds of its TTL, and logs in again if a renewal fails. TLS uses
+`WARDYN_VAULT_CACERT_FILE`, else `WARDYN_TRUSTED_CA_FILE`, else the system
+roots, in a TLS config of its own; `http://` is refused except to a loopback
+host.
+
+**When Vault is unavailable.** A sealed, throttled or unreachable Vault (a 429, a
+5xx, a timeout; each call retried three times first) is *transient*: the
+credential sink answers the proxy 503, "Wardyn couldn't reach the service that
+holds this run's credential", distinct from a missing credential's 424. (No
+last-good grace period rides out a transient failure yet.)
+A 401 or 403, a value that is gone, or a binding that does not match is
+*definitive*: revoking Wardyn's Vault role bites at once. (A 401 or 403 makes
+wardynd log in again, or re-read its token file, at most once every 30 s.)
+**Do not restart wardynd during a Vault outage**: its boot keys are in Vault,
+so it will wait for Vault rather than boot.
+
+**Moving an install to Vault, and back.** Online, one row per transaction, safe
+while a daemon serves; idempotent and resumable.
+
+```sh
+# 0. Boot this version once with your WARDYN_AGE_KEY (it converts any
+#    pre-envelope rows), and take the Postgres dump (see Backup).
+# 1. Configure WARDYN_VAULT_* and WARDYN_SECRET_STORE=vaultkv, keep
+#    WARDYN_AGE_KEY set, and restart: new writes go to Vault, old rows still read.
+# 2. Move the rest:
+wardynd -migrate-secrets -to=vaultkv
+#    INFO wardynd: stored secrets migrated to=vaultkv moved=7 soft_deleted=0
+# 3. Unset WARDYN_AGE_KEY and restart. Boot refuses, naming the command above,
+#    while any local row remains.
+```
+
+`-to=local` moves every row back (it needs `WARDYN_AGE_KEY`); each value is
+removed from Vault once its row holds it locally. Each run writes one
+`secret.migrate` audit row and one `secret.read` per value it moved. A
+migration never overwrites a value already at the target path: if one is there
+(a write landing at the same moment, or a leftover), it stops and names the row.
+
+**Checking both sides.** `wardynd -reconcile` lists the pointer rows and the
+Vault paths side by side and reports pointers whose value is gone and values no
+row points to. It reads metadata only, deletes nothing, and exits non-zero when
+it finds either. A crash between the two writes of a Put or a Delete is what
+produces one; neither leaks a value to anyone.
+
+**Erasure horizon.** A removed credential is gone from Vault at once (all
+versions); what survives is your Vault storage's own snapshots and backups,
+under your retention. **Backup** in store mode is the Postgres dump plus your
+Vault's own backup: the dump alone holds pointers, not values.
+
+## Store mode: credentials in Azure Key Vault
+
+With `WARDYN_SECRET_STORE=azurekv`, every stored credential's value lives in
+your organisation's Azure Key Vault as a secret, and Wardyn keeps only a
+pointer row in Postgres (`enc_version` 2, `kek_id`
+`azurekv:<vault-host>/<secret name>#<n>`, no ciphertext). Everything the Vault
+section above says about pointer rows, the boot keys, `-migrate-secrets` (here
+`-to=azurekv|local`), `-reconcile`, and transient versus definitive failures
+applies unchanged. No Azure SDK is involved: the Entra token exchange and the
+Key Vault calls are plain HTTPS. One external store is configured at a time;
+to move from Vault to Key Vault, migrate to local first.
+
+**Use a vault dedicated to Wardyn** (Microsoft's "a vault per application"
+advice), and give wardynd's identity **Key Vault Secrets Officer** on it and
+nothing else. Every read is a `SecretGet` in the vault's `AuditEvent` log, with
+wardynd's identity and the secret's URI. Secrets Officer also grants backup,
+restore and recover, which Wardyn never calls; the least-privilege alternative
+is a custom role with exactly these `dataActions`:
+
+```
+Microsoft.KeyVault/vaults/secrets/getSecret/action
+Microsoft.KeyVault/vaults/secrets/setSecret/action
+Microsoft.KeyVault/vaults/secrets/readMetadata/action
+Microsoft.KeyVault/vaults/secrets/update/action
+Microsoft.KeyVault/vaults/secrets/delete
+Microsoft.KeyVault/vaults/secrets/purge/action
+```
+
+Leave out `purge/action` to withhold purge (see "Removing a credential" below).
+
+**Names, versions and the owner check.** Key Vault names cannot hold `/`, `@`,
+`.` or `_`, so a secret's name is derived from its row, one per owner and name:
+
+```
+<prefix>-<platform|operator|people>-<32 hex of SHA-256(owner, name)>-g<generation>
+```
+
+`<prefix>` is `WARDYN_AZURE_KV_PREFIX` (the chart sets the release namespace).
+Each value is the base64 of the bytes (content type
+`application/octet-stream;base64`, at most 18 KiB) with tags `wardyn-owner`,
+`wardyn-name`, `wardyn-kind` and `wardyn-format`. A read derives the name from
+the row's owner and name and refuses a row that points to any other name or
+vault, then refuses a value whose tags name another row. A replace is a new
+**version** of the same name, and every earlier version is **disabled**: Key
+Vault cannot delete old versions. A write lists the versions before it writes
+and disables only those, so it never disables a newer one, and writes to one
+credential wait for each other across replicas. Once the name holds
+`WARDYN_AZURE_KV_MAX_VERSIONS` versions (default 100, well under the 500 at
+which Key Vault's backup of a secret fails; the vault's own count decides, not
+the pointer row), the next write starts a new generation, a fresh name, and
+the old generation is deleted. A read that loaded the row just before such a
+write committed can find the old name already deleted: it is refused once, with
+no grace, and the next read follows the row to the new name. Each write is one transaction in the vault's
+secret-create limit (300 per 10 seconds, shared with key and certificate
+imports), plus a version listing and one update per version it disables.
+
+**Authentication.** There is no client secret, by design.
+
+- *Workload identity* on AKS (`WARDYN_AZURE_AUTH=workload-identity`, the
+  default). With `secretStore.azure.*` set, the chart labels the pod
+  `azure.workload.identity/use: "true"` and annotates the service account with
+  `azure.workload.identity/client-id`; the webhook projects a token and sets
+  `AZURE_FEDERATED_TOKEN_FILE`, which wardynd re-reads at every exchange.
+  Add a federated credential for the chart's service account:
+
+  ```sh
+  az identity federated-credential create --name wardyn \
+      --identity-name <identity> --resource-group <group> \
+      --issuer "$(az aks show -n <cluster> -g <group> --query oidcIssuerProfile.issuerUrl -o tsv)" \
+      --subject system:serviceaccount:<namespace>:<the chart's service account> \
+      --audience api://AzureADTokenExchange
+  az role assignment create --role "Key Vault Secrets Officer" \
+      --assignee <the identity's client id> --scope <the vault's resource id>
+  ```
+- *Managed identity* on a VM (`WARDYN_AZURE_AUTH=managed-identity`): the
+  instance metadata service, never through a proxy. `WARDYN_AZURE_CLIENT_ID`
+  selects a user-assigned identity.
+
+wardynd gets a token at boot and **refuses to start if it cannot**, then keeps
+it until five minutes before it expires. TLS uses `WARDYN_TRUSTED_CA_FILE`,
+else the system roots, in a TLS config of its own; `http://` is refused except
+to a loopback host. The default NetworkPolicy denies wardynd's egress: allow
+the vault and `login.microsoftonline.com` in `networkPolicy.egress.extra`.
+
+**When Key Vault is unavailable.** A 429, a 5xx, a timeout or any token
+endpoint failure is transient (each call retried three times first, honouring
+`Retry-After`). A token endpoint refusal is transient too: Entra answers
+`invalid_client` for passing conditions (`AADSTS700024`, a projected token
+outside its valid time while the kubelet refreshes it), so it rides the
+15-minute grace. A 401 fetches a new token at most once every 30 s; a 403, a
+secret that is gone or disabled, or a binding that does not match is
+definitive. Revoking wardynd's role at the vault bites at once; removing its
+federated credential bites when its cached token expires (within the hour) and
+the vault then refuses the call. A write, the wait for the credential's lock
+included, gives up after six times `WARDYN_SECRET_STORE_TIMEOUT` (30 s by
+default), so an outage never holds a database connection longer.
+
+**Removing a credential, and the erasure horizon.** Removal is a soft delete
+of the secret (every version), then, with `WARDYN_AZURE_KV_PURGE=auto` (the
+default), a purge. Withholding purge is your choice: purge protection on the
+vault, or a custom role without the purge permission. Then the purge is
+refused, the secret stays soft-deleted, and the `secret.delete` audit row says
+`purged: false` with `recoverable_days`, the vault's retention (7 to 90 days,
+fixed when the vault was created). `WARDYN_AZURE_KV_PURGE=never` never purges.
+Until then your organisation can recover the value; ask the vault's operators
+to purge it sooner. `wardynd -reconcile` lists each soft-deleted value no
+row points to, with the days until the vault purges it (a listing, not a
+failure), and `-migrate-secrets -to=local` counts the old copies it left
+soft-deleted (`soft_deleted` in its log line and `secret.migrate` row). Wardyn
+never recovers a deleted secret: a credential removed and added again within
+the retention reuses the name after a purge, or takes a new generation. After the purge, what survives is your vault's own
+backups. **Backup** in store mode is the Postgres dump plus the vault's.
 
 ## Upgrades
 
@@ -5971,13 +6219,13 @@ driver, not a guess:
   at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed
   target prefixes). Nothing is mounted at `/home/agent` itself, because a volume there would
   shadow each image's baked `.bashrc`, swallow the reserved drive target `/home/agent/drive`, and
-  hide the read-only `~/.claude` bind the subscription path mounts. **Risk carried by the cache
-  volume specifically:** an `emptyDir` at `/home/agent/.cache` shadows the full image's
-  pre-created, agent-owned `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`) with a
-  fresh directory whose ownership the kubelet decides — `FSGroup` is only applied to a pod with a
-  drive attached (`internal/runner/k8s/drives.go`), so a run with `disk_mib` set and no drive can
-  get a root-owned mount the uid-1000 agent cannot write into; only the conformance "Cache" fill
-  target, run against a real cluster, catches this. **What the proof
+  hide the read-only `~/.claude` bind the subscription path mounts. **The cache volume starts
+  cold:** an `emptyDir` at `/home/agent/.cache` shadows the full image's pre-created
+  `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`), so the Go build cache is
+  rebuilt from empty. The mount is writable without `FSGroup`: the kubelet creates an `emptyDir`
+  root-owned but `0777`, the same mode `/tmp` and `/home/agent/work` have been written through by
+  the uid-1000 agent since 0.7.5; the conformance "Cache" fill target writes it against a real
+  cluster. **What the proof
   does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
   runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and
   Kata. The live kind SSO walk separately exercises a real `agent-run` boot — the aws-sso sign-in
