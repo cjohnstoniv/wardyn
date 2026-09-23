@@ -4573,7 +4573,12 @@ it cannot recover a key you have already lost.
 Migrations are **forward-only**. `internal/db` records each applied filename in
 `schema_migrations` and applies anything new on boot, under an advisory lock so
 concurrent starts do not race. There are no `down` migrations and no downgrade
-path — a rollback to an older wardynd against a migrated database is unsupported.
+path — a rollback to an older wardynd against a migrated database is unsupported,
+and wardynd itself refuses it: a boot that finds a `schema_migrations` row it does
+not ship stops before writing anything, naming the newest unknown file. That covers
+`helm rollback` and a pinned older image, not only `install.sh`. Restore the dump.
+`WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass past the refusal; it does
+not make the older binary understand the newer schema.
 
 **Upgrading to 0.7 signs every SSO human out, once.** The session payload gained
 a codec version and `decodeSession` requires an exact match

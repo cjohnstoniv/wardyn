@@ -72,6 +72,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **An older wardynd now refuses a database a newer one migrated (#675).** Boot used to skip the
+  migrations it knew and never look at the ones it did not, so `helm rollback` or a pinned older
+  image booted over a schema whose one-way conversions it could not read. Boot now stops before
+  writing anything, naming the newest `schema_migrations` file this binary does not ship; restore
+  the pre-upgrade dump. `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass. Saving the site
+  config or a governance profile also keeps top-level keys this binary does not know, so a key a
+  newer wardynd wrote — a governance limit, where absent means no limit — is no longer dropped.
+
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's

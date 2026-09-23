@@ -831,9 +831,10 @@ func (s PG) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 
 // PutSiteConfig upserts the single operator-wide site config row and returns
 // the persisted value. The `singleton` primary key (CHECKed true) makes a
-// second row impossible at the schema level; a write always REPLACES the whole
-// document (no partial merge — the API layer decodes and validates the full
-// document before calling this).
+// second row impossible at the schema level; a write REPLACES every key
+// types.SiteConfig declares (no partial merge — the API layer decodes and
+// validates the full document before calling this) and keeps any key it does
+// not, which only a newer wardynd could have written (declaredJSONKeys).
 func (s PG) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -842,10 +843,11 @@ func (s PG) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.Site
 	const q = `
 		INSERT INTO site_config (singleton, config, updated_at)
 		VALUES (true, $1, now())
-		ON CONFLICT (singleton) DO UPDATE SET config = EXCLUDED.config, updated_at = now()
+		ON CONFLICT (singleton) DO UPDATE
+			SET config = (site_config.config - $2::text[]) || EXCLUDED.config, updated_at = now()
 		RETURNING config`
 	var out []byte
-	if err := s.Pool.QueryRow(ctx, q, raw).Scan(&out); err != nil {
+	if err := s.Pool.QueryRow(ctx, q, raw, declaredJSONKeys(cfg)).Scan(&out); err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: put site config: %w", err)
 	}
 	var saved types.SiteConfig

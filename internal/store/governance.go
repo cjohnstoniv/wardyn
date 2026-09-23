@@ -65,10 +65,12 @@ func (s PG) UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfi
 		VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT (id) DO UPDATE
 			SET name = EXCLUDED.name, ceiling = EXCLUDED.ceiling,
-			    limits = EXCLUDED.limits, updated_at = now()
+			    limits = (governance_profiles.limits - $6::text[]) || EXCLUDED.limits, updated_at = now()
 		RETURNING ` + governanceProfileCols
+	// limits keeps the keys types.GovernanceLimits does not declare: a limit a
+	// newer wardynd set must survive this binary's edit (declaredJSONKeys).
 	out, err := scanGovernanceProfile(s.Pool.QueryRow(ctx, q,
-		p.ID, p.Name, ceilingJSON, limitsJSON, p.CreatedBy))
+		p.ID, p.Name, ceilingJSON, limitsJSON, p.CreatedBy, declaredJSONKeys(p.Limits)))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
