@@ -339,23 +339,29 @@ The organisation side of hybrid enrolment ([PLAN.md](design/0.8/PLAN.md), "Hybri
 an admin mints a single-use enrolment token, a laptop's first boot trades it for a `wdd_` device
 credential, and the device then pushes its own chained audit rows upward. The rows the organisation
 writes ABOUT a device (the actions below) name it `system` / `device:<id>`. A FEDERATED row — one the
-device pushed — is different: its `actor`, `actor_type`, `action`, `target` and `outcome` are the
-device's CLAIMS, so a laptop's `human` row stays `human`, and what marks it as forwarded is
-`data.device_origin` (`mergeDeviceOrigin` in internal/store/store_devices.go): the device id, its local
-seq, the hashes it claimed and the `source_ip` it claimed. There is no action of its own, so no filter
-keyed on `action` has to learn about federated rows — and a filter that must tell them apart keys on
-`data.device_origin`. Two fields are never the device's to choose: `source_ip` is the peer the
-organisation saw the push arrive from, and a row whose `run_id` names one of the organisation's own
-runs refuses the whole batch. Every accepted row's claim recomputes from the stored row alone
-(`FederatedClaimHashSQL` in internal/store/store_devices.go; a data-less claim is named by
-`device_origin.data_null`), so a claim that could only be stored by changing it — data that is not
-an object or null, a top-level `device_origin` key of its own, a target the laptop's own cap would
-have shortened — is refused. A device-route authentication refusal is `auth.failed` with Actor
-`wardyn/deviceAuth` (see Auth).
+device pushed — is different: its `actor_type`, `action`, `target` and `outcome` are the device's
+CLAIMS, so a laptop's `human` row stays `human`, and it is marked as forwarded three ways. Its `actor`
+is `device:<id>/<claimed actor>` (`FederatedActor` in internal/store/store_devices.go), so no filter or
+rule keyed on an organisation principal matches a laptop's claim to be that principal. Its
+`data.device_origin` (`mergeDeviceOrigin`) holds the device id, its local seq, the hashes it
+claimed and the `actor` and `source_ip` it claimed. And every audit read and the NDJSON export
+carry a top-level `device_id` on it (absent on the organisation's own rows), and filter on
+`?origin=device` or `?origin=organisation` — a row counts as forwarded only when the `actor` prefix
+and `data.device_origin.device_id` name the same device (`FederatedDeviceID`). There is no action of
+its own, so no filter keyed on `action` has to learn about federated rows. Three fields are never
+the device's to choose: `actor` as above, `source_ip` is the peer the organisation saw the push
+arrive from, and a row whose `run_id` names one of the organisation's own runs refuses the whole
+batch. Every accepted row's claim recomputes from the stored row alone (`FederatedClaimHashSQL` in
+internal/store/store_devices.go; a data-less claim is named by `device_origin.data_null`), so a
+claim that could only be stored by changing it — data that is not an object or null, a top-level
+`device_origin` key of its own, a `device_id` of its own, a target the laptop's own cap would have
+shortened — is refused. A device-route authentication refusal is
+`auth.failed` with Actor `wardyn/deviceAuth` (see Auth).
 
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
 | `device.enrolment_token.create` | An admin mints a single-use enrolment token for one named laptop (`POST /admin/devices/enrolment-tokens`). `target` is the token row's id — never the token, which is returned once and stored only as a hash | `device_name`, `expires_at` | `internal/api/devices.go#Server.handleMintEnrolmentToken` | internal |
+| `device.enrolment_token.revoke` | An admin or security admin cancels an enrolment token before any laptop redeems it (`DELETE /admin/devices/enrolment-tokens/{id}`); a later redemption answers as an unknown token does. `target` is the token row's id. A token already redeemed, revoked or expired is a 404 and writes no row | `device_name`, `minted_by` | `internal/api/devices.go#Server.handleRevokeEnrolmentToken` | internal |
 | `device.enrol` | **success**: a laptop redeemed an enrolment token and was issued its device credential — actor `device:<id>`, `target` the new device id, `source_ip` the TCP peer. **failure**: the anonymous route refused a redemption — actor `wardyn/deviceEnrol`, `target` the path; `reason` is `invalid_enrolment_token` (unknown, expired and already-used are deliberately one reason) or `device_create_failed` (the token was spent but the device row was not written — re-mint). Failure rows are bounded the way `auth.failed` is: identical consecutive refusals (same `reason`, same path — deliberately NOT the peer, which an anonymous caller can rotate) fold into the streak's first row plus one summary row carrying `count`, `first_seen`, `last_seen` (`WARDYN_AUDIT_COALESCE_WINDOW`), and every row written pays the same process-wide bucket as `auth.failed`, whose folds and drops count in `wardyn_auth_failed_suppressed_total`; the route itself is limited per peer (an IPv6 peer by its /64), and a 429 writes no row | success: `name`, `enrolment_token_id`, `minted_by`; failure: `reason`; a summary adds `count`, `first_seen`, `last_seen` | `internal/api/devices_auth.go#Server.handleDeviceEnrol,Server.auditEnrolFailure` | internal |
 | `device.revoke` | An admin or security admin revokes a device (`DELETE /admin/devices/{id}`); its next push or heartbeat answers 401. A second revoke is a 404 and writes no row | `name` | `internal/api/devices.go#Server.handleRevokeDevice` | internal |
 | `device.audit.ingest` | FAILURES ONLY: an authenticated device's audit push was refused, nothing was stored and its cursor did not move. `reason` is closed: `invalid_body` (unreadable or not a strict array of rows), `batch_too_large` (over 500 rows), `invalid_row` (seq not strictly increasing, an `actor_type`/`outcome` outside the enum, a claim that could not re-check from the stored row, or a value Postgres cannot represent — a `\u0000` escape, a NUL in text), `chain_mismatch` (a claimed hash does not recompute, or the batch does not attach to the head this organisation recorded — answered 422), `org_run` (a row's `run_id` names one of this organisation's own runs — answered 422), `revoked` (the device was revoked after its request was authenticated — answered 401, as its next request is), `store_error`. A successful push writes no row of its own: the rows it carried are the record. Bounded per device: identical consecutive refusals from one device (same `reason`) fold into one streak with a summary row, and every row written pays that device's own bucket (5, then one a minute), so a laptop replaying a refused batch costs two rows however long it retries; folds and drops count in `wardyn_device_ingest_failures_suppressed_total`. A second push from a device whose previous push is still in progress is answered 429 and writes no row | `reason`, `rows` (submitted count), `acked_seq` (this organisation's recorded cursor for the device); a summary carries `reason`, `count`, `first_seen`, `last_seen` | `internal/api/devices_auth.go#Server.auditIngestFailure` | internal |

@@ -128,6 +128,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   guards over the result, and names every PR that breaks them. It also flags
   any open PR stacked on a branch that is no longer open (merged or closed) and
   so should have been retargeted to `main`.
+- **Boot secrets from files: a `<VAR>_FILE` twin for every secret-carrying `wardynd` setting
+  (#596).** `WARDYN_PG_DSN`, `WARDYN_PG_MIGRATE_DSN`, `WARDYN_ADMIN_TOKEN`, `WARDYN_AGE_KEY`,
+  `WARDYN_OIDC_CLIENT_SECRET`, `WARDYN_DIRECTORY_CLIENT_SECRET`, `WARDYN_AUDIT_SINKS` and
+  `WARDYN_ORG_ENROLMENT_TOKEN` each accept a `_FILE` path. `wardynd` reads the file once at boot,
+  so a Vault Agent injector, the Secrets Store CSI driver or a projected Secret volume can deliver
+  the value without it entering the process environment. Setting a variable both ways refuses boot,
+  and the chart refuses to render it. Boot is also refused on an unreadable or empty file, a group-
+  or world-writable one, or one wardynd's own non-root uid owns that others can read. The error
+  names the variable and the path, never the content. One trailing newline is trimmed. The chart's new `secretFiles.enabled`
+  (off by default) mounts the Secrets it already wires as files and renders no `secretKeyRef` env.
+  A `WARDYN_*_FILE` in `env`/`extraEnv` counts as wired in every render check, and
+  `extraVolumes`/`extraVolumeMounts` carry a CSI volume. Examples are in `docs/OPERATIONS.md`,
+  "Secrets from files (Vault Agent / CSI)".
 - **Admins can tell a refused person what to do next (#484).** The People step has a new
   "When someone can't sign in" card: a short plain-text message (up to 1,000 characters) and an
   optional `http(s)` link, saved as the site-config fields `sign_in_help_text` and
@@ -242,6 +255,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `secretStore.vault.*` values, a compose token-file overlay, a setup row naming the store, and
   docs/OPERATIONS.md "Store mode: credentials in Vault" go with it. Tested against a fake Vault
   and live against Vault OSS 2.1.1 and OpenBao 2.6.2, including Kubernetes auth on kind.
+- **A row an enrolled laptop forwarded could read as the organisation's own.** A federated audit row
+  kept the device's claimed `actor`, so a `wdd_` device credential could append
+  `human` / `<an org admin>` / `governance.profile.update` rows that nothing but an unread
+  `data.device_origin` told apart (#506). The stored actor is now `device:<id>/<claimed actor>` (the
+  claim stays in `data.device_origin.actor`, and the device's hash still re-checks from the stored
+  row), every audit read and the NDJSON export carry a top-level `device_id` on forwarded rows, and
+  `GET /audit` and `/audit/export` take `?origin=device|organisation`.
+- **An enrolment token can be cancelled before it is redeemed (#506).** `GET
+  /admin/devices/enrolment-tokens` lists the tokens still redeemable (never the token or its hash)
+  and `DELETE /admin/devices/enrolment-tokens/{id}` revokes one, audited as
+  `device.enrolment_token.revoke` — admin or `security_admin`, and on the CLI as `wardyn device
+  enrol-token-list` / `enrol-token-revoke <id>`. A leaked token no longer stays redeemable for its
+  full 72 hours.
 - **Secret-carrying boot settings no longer have to live in environment variables (#596).** Cloud
   posture scanners flag a pod with a secret in its env, and a "secrets delivered at runtime"
   control rules it out. The `_FILE` twins and the chart's `secretFiles.enabled` close both.

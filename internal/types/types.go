@@ -733,6 +733,12 @@ type AuditEvent struct {
 	SourceIP  string          `json:"source_ip,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 
+	// DeviceID names the enrolled device that forwarded this row, and is nil
+	// on every row the organisation wrote itself. Derived on read from the
+	// stored row (store.FederatedDeviceID), never a column and never taken
+	// from a caller: a device that claims one is refused.
+	DeviceID *uuid.UUID `json:"device_id,omitempty"`
+
 	// PrevHash/RowHash are the tamper-evidence chain (migration 0047):
 	// RowHash = SHA-256(PrevHash || canonical serialization of the fields
 	// above), hex, computed BY POSTGRES in the audit_events BEFORE INSERT

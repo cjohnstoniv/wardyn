@@ -310,6 +310,23 @@ func (c *Client) RevokeDevice(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/admin/devices/"+id.String(), nil, nil)
 }
 
+// ListDeviceEnrolmentTokens returns every enrolment token still redeemable —
+// minted, not yet redeemed, revoked or expired — newest first, never the token
+// itself (admin or security_admin). GET /api/v1/admin/devices/enrolment-tokens.
+func (c *Client) ListDeviceEnrolmentTokens(ctx context.Context) ([]DeviceEnrolmentToken, error) {
+	var out []DeviceEnrolmentToken
+	err := c.do(ctx, http.MethodGet, "/api/v1/admin/devices/enrolment-tokens", nil, &out)
+	return out, err
+}
+
+// RevokeDeviceEnrolmentToken cancels a token that has not been redeemed yet, so
+// no laptop can trade it for a device credential (admin or security_admin). 404
+// for one already redeemed, revoked, expired or unknown.
+// DELETE /api/v1/admin/devices/enrolment-tokens/{id}.
+func (c *Client) RevokeDeviceEnrolmentToken(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/admin/devices/enrolment-tokens/"+id.String(), nil, nil)
+}
+
 // ListSSHKeys returns the caller's own registered SSH gateway keys — the
 // gateway's entire trust root (docs/SSH.md §1). There is no admin view of
 // another principal's keys. GET /api/v1/me/ssh-keys.
