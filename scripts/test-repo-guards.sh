@@ -25,6 +25,9 @@
 #   8. docker-compose.yaml's WARDYN_OIDC_ROLE_MAP stays a plain passthrough,
 #      and deploy/compose/.env.example still seeds the demo/member pair for a
 #      fresh install (R-03).
+#   9. .gitleaksignore never grows a 4th un-scoped per-commit fingerprint for
+#      the same path — that's a churning fixture that belongs in
+#      .gitleaks.toml's path-scoped [allowlist] instead (SF-15).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -248,6 +251,29 @@ if grep -qE '^WARDYN_OIDC_ROLE_MAP=demo@wardyn\.local=admin,member@wardyn\.local
 else
     bad "deploy/compose/.env.example no longer carries an UNCOMMENTED WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=member row — a fresh compose stack would lose the second identity the member-mode rider added, and this is the ONLY safe place for it (R-03: a docker-compose.yaml runtime default would apply to upgrades too)"
 fi
+
+# ── 9. .gitleaksignore fingerprint churn — a fixture whose flagged value
+#      changes every commit (a uuid-suffixed fake token, say) mints a fresh
+#      commit fingerprint AT THE SAME file:line every time, so .gitleaksignore
+#      grows one entry per commit forever instead of being fixed once. Grouped
+#      by path:line, not just path — a file legitimately allowlisted at
+#      several distinct static lines (docs/OPERATIONS.md, say) is not churn.
+#      Past a 4th fingerprint for the same file:line, it belongs in
+#      .gitleaks.toml's path-scoped [allowlist] instead (SF-15) — this guard
+#      refuses to let a new one accumulate un-scoped the way
+#      internal/egress/proxy/pat_broker_mask_test.go's did.
+churn_fail=0
+gitleaksignore_lines="$(grep -v '^#' .gitleaksignore | grep -v '^[[:space:]]*$' | awk -F: '{print $2":"$4}' | sort -u)"
+for pl in $gitleaksignore_lines; do
+    p="${pl%:*}"
+    count="$(grep -v '^#' .gitleaksignore | grep -v '^[[:space:]]*$' | awk -F: -v pl="$pl" '$2":"$4==pl' | wc -l)"
+    [ "$count" -ge 4 ] || continue
+    esc_p="$(printf '%s' "$p" | sed 's/\./\\./g')"
+    grep -qF -- "$esc_p" .gitleaks.toml && continue   # already path-scoped: redundant fingerprints, not churn
+    bad ".gitleaksignore: '$pl' carries $count per-commit fingerprints at the same line and is not in .gitleaks.toml's path-scoped [allowlist] — a fixture whose flagged value changes every commit belongs there instead (SF-15), not a growing pile of fingerprints"
+    churn_fail=1
+done
+if [ "$churn_fail" = 0 ]; then ok "no .gitleaksignore path has un-scoped fingerprint churn (>=4 entries)"; fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

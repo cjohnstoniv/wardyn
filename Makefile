@@ -13,6 +13,7 @@ GITLEAKS_VERSION     ?= v8.30.1
 GO_LICENSES_VERSION  ?= v1.6.0
 SYFT_VERSION         ?= v1.46.0
 GOLANGCI_LINT_VERSION ?= v2.12.2
+ACTIONLINT_VERSION    ?= v1.7.12
 # Throwaway local registry for the real-daemon envbuild smoke test (U064). Pinned
 # by tag like the other daemon images CI pulls (postgres:17, alpine:latest).
 ENVBUILD_REGISTRY_IMAGE ?= registry:2
@@ -490,6 +491,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 	./scripts/check-file-size.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
+	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
+	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
 # The shell half of the test suite: each of these pins a fixed regression in
 # scripts/ that no Go test can see (up.sh's reset warnings, the compose
@@ -526,9 +529,14 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 
 # Secret scan over full git history (NOT gitleaks-action, whose default scan
 # range is only the triggering diff — see ci.yml's gitleaks-job comment).
-gitleaks: ## Scan the FULL git history for committed secrets
-	@echo "Scanning full git history for secrets with gitleaks $(GITLEAKS_VERSION)..."
-	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml -v
+# --log-opts scopes the scan to THIS branch's own history: gitleaks' default
+# (no --log-opts) is `git log --full-history --all`, which also scans every
+# other fetched branch (fetch-depth: 0 fetches all of them) — an unmerged
+# branch's own finding then reds every unrelated PR and main alike (#372/G6).
+GITLEAKS_LOG_OPTS ?= HEAD --full-history
+gitleaks: ## Scan this branch's own git history for committed secrets
+	@echo "Scanning git history (log-opts: $(GITLEAKS_LOG_OPTS)) for secrets with gitleaks $(GITLEAKS_VERSION)..."
+	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml --log-opts="$(GITLEAKS_LOG_OPTS)" -v
 
 # Every Go dependency licence must be on licenses/ALLOWED-LICENSES.txt.
 #
