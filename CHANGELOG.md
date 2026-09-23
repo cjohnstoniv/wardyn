@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
+  that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
+  explaining there is no per-person connection to show. The capability card's consent door now
+  reads "Connect Azure DevOps" (matching its destination) and lands on the Settings card's own
+  anchor, which takes focus on arrival; a decide's `busy` state now tracks which button was
+  pressed, so Approve and Deny no longer spin together on a single click (#458).
 - **Sign-in first contact: honest loading state, no jargon (#457).** Before the console has ever
   heard back from `/healthz`, the sign-in screen used to guess — rendering a token field and a
   disabled "Sign in with SSO" stub that might be wrong for a moment. It now shows only "Checking

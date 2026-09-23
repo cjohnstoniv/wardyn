@@ -53,7 +53,10 @@ export function ApprovalsTab({
   // for the security tier (approvals.go:392).
   const securityOperator = useSecurityOperator();
   const principal = usePrincipal();
-  const [adoBusyId, setAdoBusyId] = React.useState<string | null>(null);
+  // The id of the row currently deciding, and which of its two actions
+  // (#458) — see AdoCapabilityCard's own `busy` doc for why a single
+  // boolean isn't enough.
+  const [adoBusy, setAdoBusy] = React.useState<{ id: string; action: "approve" | "deny" } | null>(null);
   const [pushBusyId, setPushBusyId] = React.useState<string | null>(null);
   if (approvals.length === 0) {
     return (
@@ -92,16 +95,16 @@ export function ApprovalsTab({
               securityOperator={securityOperator}
               viewerPrincipal={principal}
               run={run}
-              busy={adoBusyId === a.id}
+              busy={adoBusy?.id === a.id ? adoBusy.action : null}
               onApprove={async (opts) => {
-                setAdoBusyId(a.id);
+                setAdoBusy({ id: a.id, action: "approve" });
                 await onAdoDecide(a.id, true, opts);
-                setAdoBusyId(null);
+                setAdoBusy(null);
               }}
               onDeny={async (opts) => {
-                setAdoBusyId(a.id);
+                setAdoBusy({ id: a.id, action: "deny" });
                 await onAdoDecide(a.id, false, opts);
-                setAdoBusyId(null);
+                setAdoBusy(null);
               }}
             />
           );

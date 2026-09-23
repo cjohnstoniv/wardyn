@@ -66,6 +66,7 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { APPROVALS } from "../../lib/approvals-copy";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
   RECORDING_DISABLED_DESC,
@@ -313,12 +314,12 @@ export function RunDetailScreen() {
       const args = decisionArgs(scope, until);
       if (decide.action === "approve") await approvalsApi.approve(decide.id, reason, ...args);
       else await approvalsApi.deny(decide.id, reason, ...args);
-      toast.success(decide.action === "approve" ? "Request approved" : "Request denied");
+      toast.success(decide.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       setDecide(null);
       load(false);
       return true;
     } catch (err) {
-      toast.error(decide.action === "approve" ? "Failed to approve" : "Failed to deny", {
+      toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
       return false;
@@ -336,10 +337,10 @@ export function RunDetailScreen() {
     try {
       if (approve) await approvalsApi.approve(id, "approved", ...opts);
       else await approvalsApi.deny(id, "denied", ...opts);
-      toast.success(approve ? "Request approved" : "Request denied");
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       load(false);
     } catch (err) {
-      toast.error(approve ? "Failed to approve" : "Failed to deny", { description: getErrorMessage(err) });
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(err) });
     }
   };
 

@@ -35,6 +35,7 @@ import {
   type AutonomyRubric,
   type AutonomyRubricRowKey,
 } from "./api/governance";
+import { GOVERNANCE_NAV_TITLE } from "./nav-copy";
 
 // §7.1 — reused canon, referenced never re-frozen
 //
@@ -96,8 +97,9 @@ export const GOVERNANCE = {
   // ---- §7.2 the profiles block ----
   // TITLE is ONE string for two places — the NAV_ITEMS label and the screen
   // heading — the way every other nav entry already works. There is no second
-  // "Governance profiles" label.
-  TITLE: "Governance",
+  // "Governance profiles" label. Lives in nav-copy.ts (see its own comment)
+  // so app-shell's eager sidebar isn't the reason this whole table ships early.
+  TITLE: GOVERNANCE_NAV_TITLE,
   LEAD: "Named ceilings, assigned to people and groups. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
   PROFILES_TITLE: "Profiles",
   PROFILES_LEAD:
