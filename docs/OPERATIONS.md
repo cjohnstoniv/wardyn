@@ -903,6 +903,11 @@ can be set to per-user sign-in instead of one shared PAT — see
 [docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
 row's fields, and what a member sees.
 
+A deployment carries at most **one enabled** row on the `entra` lane: each person signs in to one
+Azure DevOps organisation. Both write doors refuse a second enabled one with a 400
+(`git[N].lanes: git[M] already carries the "entra" lane …`); a disabled second row is accepted,
+and enabling it later is refused the same way.
+
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
 ephemeral/drive storage ceilings) and `agent_providers` (which agents this

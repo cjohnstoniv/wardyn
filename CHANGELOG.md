@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
+  enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
+  complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
+  provider-policy doors (`PUT /workspace-providers` and `PUT /site-config`) now answer 400 naming
+  the two rows; disable one of them to save. A disabled second row is still accepted.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
