@@ -428,7 +428,7 @@ user view. The `ssh_key.add` audit row marks a capped key with `capped: true`.
 **Upgrading from 0.5 (or from pre-`0046`): your existing key is a `user`
 key, and even an `admin`-stamped key loses the override until it is
 refreshed.** `role` is stamped at registration, and migration `0043`
-backfilled every pre-0.6 row as `member` (`0073` renames it `user`) — the fail-closed value, because
+backfilled every pre-0.6 row as `member` (`0074` renames it `user`) — the fail-closed value, because
 nothing in the schema knows what role a pre-0.6 registrant actually held, and
 guessing `admin` would hand every key already in the deployment a cross-user
 reach it was never granted. Migration `0046` adds a second fail-closed

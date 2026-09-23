@@ -2256,7 +2256,7 @@ ages past the TTL — whichever comes first; deleting the key (`DELETE
 lever. Strictly weaker than the web terminal's live `requireOperator` gate, but no
 longer unboundedly so. The same TTL is why **an admin upgrading from 0.5 (or pre-`0046`)
 does not get the override on the key they already have until it is refreshed**:
-`0043` backfills every pre-existing row as `member` (fail-closed; `0073` renames it `user`) and `0046`
+`0043` backfills every pre-existing row as `member` (fail-closed; `0074` renames it `user`) and `0046`
 backfills `role_checked_at` as `NULL`, which `sshAuth` treats as infinitely
 stale. A member's key never satisfies the override, and neither does a key an
 admin registered while in the user view, which is stored capped (migration
@@ -5043,7 +5043,7 @@ and `user_drives` itself was `0054`'s table — created inside the already-shipp
 0.7 line, not this upgrade's own batch — so an install carried forward from a
 released 0.7.x hits the identical ownership requirement on its next upgrade —
 as does `0069`, which adds the envelope columns to `secrets` (`0001`'s table),
-and `0070`, which adds `ssh_public_keys.capped` (`0033`'s table). `0073` does
+and `0070`, which adds `ssh_public_keys.capped` (`0033`'s table). `0074` does
 too: it renames the stored `member` tier to `user`, re-adding the role CHECK on
 `api_tokens` (`0045`'s table), moving the role default there and on
 `ssh_public_keys` (`0033`'s, whose `0070` cap it re-creates), and altering

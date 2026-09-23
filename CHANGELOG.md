@@ -68,7 +68,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **The non-admin tier is renamed `member` → `user` (#608).** `/me.role`, a role-map value and
   `WARDYN_OIDC_DEFAULT_ROLE` now read `admin`, `security_admin` or `user`, and the console's
-  People step offers "User". Migration `0073_user_tier_rename` rewrites every stored `member`:
+  People step offers "User". Migration `0074_user_tier_rename` rewrites every stored `member`:
   People-page rows become `user` on the built-in `standard` type (a new `role_mappings.user_type`
   column, which a type cannot be deleted out from under), and the role snapshots on API tokens,
   SSH keys and attach tickets become `user`; the `role_mappings` and `api_tokens` CHECKs refuse

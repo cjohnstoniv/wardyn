@@ -14,7 +14,7 @@ import (
 // database holding a 0.7 row in each of the four places "member" was stored,
 // then checks no column still holds it and neither CHECK takes it back.
 func TestPG_TierRenameRewritesEveryStoredMember(t *testing.T) {
-	const renameFloor = "0073"
+	const renameFloor = "0074"
 	pool, schema := partialSchemaPool(t, renameFloor)
 	ctx := context.Background()
 
