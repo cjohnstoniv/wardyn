@@ -180,6 +180,10 @@ export interface AgentRun {
   // stay for the ended-run grace. The run stays RUNNING meanwhile.
   lost_at?: string;
   lost_reason?: "ended";
+  // When the re-clamp of a tightened profile last moved this run's end
+  // (migration 0071, #573): the run page's "Your admin shortened the limit"
+  // banner. Cleared when a person moves the end again.
+  end_tightened_at?: string;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that

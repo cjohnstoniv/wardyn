@@ -519,6 +519,11 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 				if err := s.sweepRunWatchers(ctx); err != nil {
 					slog.WarnContext(ctx, "wardynd: run watcher sweep", slog.Any("err", err))
 				}
+				// A tightened profile reaches its live runs on this cadence,
+				// before the lease reads their ends.
+				if err := s.sweepRunLimits(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: run limits re-clamp", slog.Any("err", err))
+				}
 				// The lease rides this cadence too: its warnings are minutes
 				// apart and the end is a minute late at worst.
 				if err := s.sweepRunLeases(ctx); err != nil {

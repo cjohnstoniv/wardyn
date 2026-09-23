@@ -273,6 +273,10 @@ type AgentRun struct {
 	// live run. Migration 0070.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
+	// EndTightenedAt is when the re-clamp of a tightened profile last moved
+	// this run's end (RL-8), for the run page's "Your admin shortened the
+	// limit" banner. A person moving the end clears it. Migration 0071.
+	EndTightenedAt *time.Time `json:"end_tightened_at,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
