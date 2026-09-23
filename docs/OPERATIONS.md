@@ -868,6 +868,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, the one model-access lane each may use, whether that credential is shared or captured per person, and the AWS access portal every person signs in against. Both verbs, for the sibling row's reason: the block names the org's model-provider choices and its identity provider. A member is served a narrower document instead — the `enabled`/`mechanism`/`credential_source` fields on `GET /setup/status`'s harness rows, which carry no portal URL | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
@@ -903,6 +904,11 @@ On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row'
 can be set to per-user sign-in instead of one shared PAT — see
 [docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
 row's fields, and what a member sees.
+
+A deployment carries at most **one enabled** row on the `entra` lane: each person signs in to one
+Azure DevOps organisation. Both write doors refuse a second enabled one with a 400
+(`git[N].lanes: git[M] already carries the "entra" lane …`); a disabled second row is accepted,
+and enabling it later is refused the same way.
 
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
@@ -2252,8 +2258,10 @@ longer unboundedly so. The same TTL is why **an admin upgrading from 0.5 (or pre
 does not get the override on the key they already have until it is refreshed**:
 `0043` backfills every pre-existing row as `member` (fail-closed) and `0046`
 backfills `role_checked_at` as `NULL`, which `sshAuth` treats as infinitely
-stale. A member's key never satisfies the override (`docs/SSH.md`'s Bounds
-section; `threatmodel/THREAT-MODEL.md` residual #15). See
+stale. A member's key never satisfies the override, and neither does a key an
+admin registered while in the user view, which is stored capped (migration
+`0070_ssh_key_view_capped`; `docs/SSH.md`'s Bounds section;
+`threatmodel/THREAT-MODEL.md` residual #15). See
 [ROADMAP.md](../ROADMAP.md) for what's queued.
 
 **None of this governance is a paid tier.** The admin/member split, the capability
@@ -2337,11 +2345,17 @@ else. Everything outside model access is untouched too: `GET /me` still returns
 the admin's own user-drive allocation, and their own runs, workspaces and
 secrets are still theirs (ceilings 1 and 2).
 
-Two doors REFUSE instead of clamping, both with `409`: minting an API token
-(`POST /me/tokens`) and registering an SSH key (`POST /me/ssh-keys`). Both
-credentials carry a role stamp that is re-derived from your REAL role at your
-next sign-in, so one minted "as a member" would quietly become an admin
+Minting an API token (`POST /me/tokens`) REFUSES instead of clamping, with
+`409`: a token carries a role stamp that is re-derived from your REAL role at
+your next sign-in, so one minted "as a member" would quietly become an admin
 credential that outlives the mode. Exit first.
+
+Registering an SSH key (`POST /me/ssh-keys`) is allowed in the mode, and the key
+is stored **capped** (migration `0070_ssh_key_view_capped`): it is a member key
+for good. Your sign-in re-stamp leaves its role at `member`, and the SSH
+gateway never grants it the admin override, even while you are an admin. It
+reaches your own runs and nothing else. A break-glass key that reaches other
+people's runs is registered outside the mode.
 
 > **It shows you what a member SEES. It is not proof that a member is
 > REFUSED.** Four ceilings, all deliberate:
@@ -2356,8 +2370,8 @@ credential that outlives the mode. Exit first.
 >    member mode still holds the admin override on other people's runs over SSH.
 >    By the identical argument, any `wdn_` API token you already hold keeps its
 >    own stamped role (the token lane replays the DB row, never the session), as
->    does the deployment admin bearer token. The `409` mint doors stop NEW
->    credentials; they cannot reach into old ones. Your browser session is
+>    does the deployment admin bearer token. The `409` token door and the
+>    capped key door stop NEW credentials; they cannot reach into old ones. Your browser session is
 >    clamped; another credential of yours is a different session.
 > 3. **Rolling upgrades.** The flag rides the existing session cookie with no
 >    codec bump (a bump would sign every live session out mid-rollout, which is
@@ -5256,13 +5270,14 @@ because PostgreSQL requires ownership for `ALTER TABLE` and for
 `CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade. Every 0.6.x release ships
 through `0049`, so this path applies `0050`–`0062`, and most of it is exactly
 this shape: `0050` (secrets), `0052` and `0060` (api_tokens, created back in
-`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065` (approvals and
+`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065`, `0072` (approvals and
 `agent_runs`, both created in `0001`) are
 `ALTER TABLE` on tables an earlier release created — `0050` also drops and
 re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
 (`0062` widens `approvals.state` with `CANCELLED`, `0064` widens
 `approvals.kind` with `credential_reauth`), `0063` adds the
-`agent_runs.status_detail` column and `0065` adds `agent_runs.autonomy_level` — and `0056`, `0057` and `0058` are three successive
+`agent_runs.status_detail` column, `0065` adds `agent_runs.autonomy_level` and `0072` adds the
+run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `governance_profile_id`) — and `0056`, `0057` and `0058` are three successive
 `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)
@@ -5270,7 +5285,8 @@ The same shape recurs one release later: `0067` adds `user_drives.object_scheme`
 and `user_drives` itself was `0054`'s table — created inside the already-shipped
 0.7 line, not this upgrade's own batch — so an install carried forward from a
 released 0.7.x hits the identical ownership requirement on its next upgrade —
-as does `0069`, which adds the envelope columns to `secrets` (`0001`'s table).
+as does `0069`, which adds the envelope columns to `secrets` (`0001`'s table),
+and `0070`, which adds `ssh_public_keys.capped` (`0033`'s table).
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does
