@@ -8,7 +8,10 @@
 // the proxy is holding its next credential exchange while the credential's
 // owner signs in again. It is a REQUEST, never a decision — see
 // canDecideApproval below and internal/types/types.go ApprovalCredentialReauth.
-export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth";
+// push_content (#181/#494): a brokered git push matched push_rules.
+// require_review_paths and is parked at the proxy for an admin's decision —
+// see PushContentScope below and internal/types/push_content.go.
+export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth" | "push_content";
 
 // CANCELLED is the terminal state a run's own end writes: the run reached
 // COMPLETED/FAILED/STOPPED/KILLED while this approval was still PENDING, so
@@ -216,6 +219,32 @@ export function isAdoConsentRequest(
   );
 }
 
+// The canonical scope of a push_content approval — mirrors
+// internal/types/push_content.go's PushContentScope exactly. ActsAsKind/
+// ActsAsLabel are SERVER-SET (the control plane resolves and stamps them
+// before the row is stored); a raise that carried either is refused, so
+// every row this console ever reads has both. Commits is present on the
+// wire but MUST NEVER be rendered as "commits": for an Azure DevOps REST
+// push it is the SHA-256 of the request body, not an object id (see
+// push_content.go's own field doc).
+export interface PushContentScope {
+  repo: string;
+  branch: string;
+  acts_as: string;
+  paths: string[];
+  paths_total: number;
+  commits: string[];
+  paths_digest: string;
+  acts_as_kind: "github_app" | "git_pat" | "ado_entra";
+  acts_as_label: string;
+}
+
+export function isPushContentRequest(
+  a: Pick<ApprovalRequest, "kind" | "requested_scope">,
+): a is ApprovalRequest & { requested_scope: PushContentScope } {
+  return a.kind === "push_content";
+}
+
 // canDecideApproval's ADO carve-out: authorizeMemberDecision
 // (internal/api/approvals.go) lets the run's OWNER decide their own run's
 // escalation, on top of the security-operator tier ownsRunOrAdmin
@@ -237,6 +266,10 @@ export function isHeld(a: ApprovalRequest): boolean {
   // the egress lane — so without this it would read as a passive pending and
   // the run would show no hold while a model call was parked.
   if (a.kind === "credential_reauth") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
+  // A push_content row is the SAME shape: git is parked on the open
+  // connection for as long as the row stays PENDING (push_hold.go), and it
+  // carries no first_use mode either — PENDING alone IS the hold.
+  if (a.kind === "push_content") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
   if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
   const requestedAt = Date.parse(a.requested_at);
   if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
@@ -250,6 +283,6 @@ export function isHeld(a: ApprovalRequest): boolean {
 // own HOLD_TIMEOUT_MS it is a passive pending, not a stale hold, because
 // nothing ever promised the connection would still be parked.
 export function isStaleHold(a: ApprovalRequest): boolean {
-  if (a.kind !== "tool_call" && a.kind !== "credential_reauth") return false;
+  if (a.kind !== "tool_call" && a.kind !== "credential_reauth" && a.kind !== "push_content") return false;
   return isStale(a.requested_at, STALE_HOLD_CEILING_MS);
 }

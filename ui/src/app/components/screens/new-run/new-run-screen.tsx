@@ -371,6 +371,12 @@ export function NewRunScreen() {
   const specForRules = useSaved ? selectedPolicy?.spec : merged?.spec;
   const toolRules = React.useMemo(() => (specForRules ? toolRulesSummary(specForRules) : null), [specForRules]);
   const hasAdditions = !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
+  // #181 — same source as toolRules above; a shell command has no
+  // specForRules at all (RunRail's pushRulesIsSet reads undefined as "no
+  // section"). `unattended` mirrors isInteractive's own doc: a shell command
+  // is unattended by definition, and so is an agent run left on batch mode.
+  const pushRules = specForRules?.push_rules;
+  const unattended = !isInteractive;
 
   // Editing the spec text DETACHES a picked saved policy: the body on screen is
   // no longer the stored one, and launching by reference would ship a policy
@@ -697,6 +703,8 @@ export function NewRunScreen() {
             !isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals !== "hold"
           }
           toolRules={toolRules}
+          pushRules={pushRules}
+          unattended={unattended}
           launch={{
             onLaunch: launch,
             disabled: launchDisabled,

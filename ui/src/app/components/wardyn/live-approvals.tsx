@@ -26,11 +26,13 @@ import {
   isAdoCapabilityRequest,
   isAdoConsentRequest,
   isHeld,
+  isPushContentRequest,
   type ApprovalRequest,
   type ApprovalScope,
   type DecisionOptions,
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
+import { PushContentCard } from "./push-content-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
@@ -276,6 +278,10 @@ export function LiveApprovals({
               // where the sign-in belongs — the same
               // decision-visible-where-it-happens rule the rows above follow.
               a.kind === "credential_reauth" ||
+              // #181 — a held push parks the sandbox live, exactly like a
+              // tool_call hold: git is waiting on the open connection for as
+              // long as this row stays PENDING (push_hold.go).
+              a.kind === "push_content" ||
               (a.kind === "credential" && credentialKind(a.requested_scope) === "api_key")),
         ),
       );
@@ -341,6 +347,25 @@ export function LiveApprovals({
     try {
       if (approve) await api.approve(a.id, reasonApprove, ...opts);
       else await api.deny(a.id, reasonDeny, ...opts);
+      await refresh();
+    } catch (e) {
+      toast.error(approve ? "Approve failed" : "Deny failed", { description: getErrorMessage(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // decidePush — the push_content card's own decide path (#181), used
+  // instead of decide() above for the opposite reason decideAdo is: this kind
+  // takes NO decision_scope at all (decide's rule 4 refuses one on
+  // push_content — approvals_push.go), so it cannot go through
+  // decisionArgs()'s omit-for-"run" convention either — that convention still
+  // sends a body, just an empty options list; this card never builds one.
+  const decidePush = async (a: ApprovalRequest, approve: boolean) => {
+    setBusy(a.id);
+    try {
+      if (approve) await api.approve(a.id, reasonApprove);
+      else await api.deny(a.id, reasonDeny);
       await refresh();
     } catch (e) {
       toast.error(approve ? "Approve failed" : "Deny failed", { description: getErrorMessage(e) });
@@ -468,6 +493,23 @@ export function LiveApprovals({
               busy={busy === a.id}
               onApprove={(opts: [DecisionOptions]) => decideAdo(a, true, opts)}
               onDeny={(opts: [DecisionOptions]) => decideAdo(a, false, opts)}
+            />
+          );
+        }
+        // #181 — a held push gets its own card too, the same reason the ADO
+        // escalation does above: it needs fields the strip's plain row can't
+        // show. `run` is `AdoCardRun | null`, a strict superset of the card's
+        // own `PushCardRun` (state only) — structurally assignable as-is.
+        if (isPushContentRequest(a) && a.state === "PENDING") {
+          return (
+            <PushContentCard
+              key={a.id}
+              item={a}
+              securityOperator={securityOperator}
+              run={run}
+              busy={busy === a.id}
+              onApprove={() => decidePush(a, true)}
+              onDeny={() => decidePush(a, false)}
             />
           );
         }

@@ -138,6 +138,10 @@ ds-bundle/
 # link to the design document, so it has to be in the repo they link from.
 !/docs/design/0.8/
 !/docs/design/first-contact-prototype/
+# held-push-canon.md records #181's frozen strings + the packet-7 mock
+# answers, cited by the push_content approval card — ships like any other
+# frozen copy table above.
+!/docs/design/held-push-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 

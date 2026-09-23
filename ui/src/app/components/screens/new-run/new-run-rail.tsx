@@ -22,10 +22,13 @@ import type {
   ConfinementClass,
   ModelCredential,
   PreflightResult,
+  PushRulesSpec,
   RunPolicySpec,
   SCMAccess,
   SetupHarnessTool,
 } from "../../../lib/types";
+import { pushRulesIsSet } from "../../../lib/types";
+import { PUSH } from "../../wardyn/copy/push";
 import { Button } from "../../ui/button";
 import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
@@ -66,6 +69,12 @@ interface RunRailProps {
   showHoldNote: boolean;
   /** The run's tool_rules in one line, or null when it has none. */
   toolRules: string | null;
+  /** The run's push_rules, from the SAME spec toolRules reads — the section
+   *  renders only when pushRulesIsSet(pushRules) (#181). */
+  pushRules?: PushRulesSpec;
+  /** True for a batch/non-interactive run — nobody is here to answer a held
+   *  push, so PUSH.RAIL_UNATTENDED joins the section when it renders at all. */
+  unattended: boolean;
   launch: {
     onLaunch: () => void;
     /** useDeferredBusy: disabled the instant it fires. */
@@ -333,6 +342,8 @@ export function RunRail({
   startup,
   showHoldNote,
   toolRules,
+  pushRules,
+  unattended,
   launch,
   preflight,
   agentRow,
@@ -548,6 +559,20 @@ export function RunRail({
         {toolRules && (
           <RailSection title="Tool rules">
             <p className="text-xs text-muted-foreground">{toolRules}</p>
+          </RailSection>
+        )}
+
+        {/* #181 — push_rules counts, the same "policy has this section or it
+            doesn't" shape Tool rules above uses. pushRulesIsSet mirrors the
+            Go PushRulesSpec.IsSet() reader exactly, so a stored `{}` reads as
+            no section rather than "0 paths denied · 0 paths held for
+            review". */}
+        {pushRulesIsSet(pushRules) && (
+          <RailSection title={PUSH.RAIL_TITLE}>
+            <p className="text-xs text-muted-foreground">
+              {PUSH.RAIL_BODY(pushRules?.deny_paths?.length ?? 0, pushRules?.require_review_paths?.length ?? 0)}
+            </p>
+            {unattended && <p className="mt-1 text-xs text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>}
           </RailSection>
         )}
 

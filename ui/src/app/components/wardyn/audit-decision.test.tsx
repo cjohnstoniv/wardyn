@@ -14,6 +14,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
 import { ruleSourceLabel } from "../../lib/types";
 import { AuditDecision, RuleSourceChip, toolRuleDecision } from "./audit-decision";
+import { PUSH } from "./copy/push";
 
 function event(over: Partial<AuditEvent> = {}): AuditEvent {
   return {
@@ -150,6 +151,30 @@ describe("ruleSourceLabel", () => {
   it("negative control: no rule_source at all is null", () => {
     expect(ruleSourceLabel("")).toBeNull();
   });
+
+  // #181 — a push_rules refusal is never a held request (deny_paths refuses
+  // synchronously, before any approval row exists), and is labelled
+  // distinctly rather than falling into the generic "Brokered" bucket every
+  // other brokered:* source gets.
+  it("names each push_rules refusal distinctly, ahead of the generic 'Brokered' fallback", () => {
+    expect(ruleSourceLabel("brokered:git:push-rules")).toEqual({
+      label: "Push refused — path denied by policy",
+      tone: "danger",
+    });
+    expect(ruleSourceLabel("brokered:git:push-held-unattended")).toEqual({
+      label: "Push refused — unattended run, nobody to ask",
+      tone: "danger",
+    });
+    expect(ruleSourceLabel("brokered:git:push-held")).toEqual({ label: "Push refused after review", tone: "danger" });
+    expect(ruleSourceLabel("brokered:git:push-too-large")).toEqual({
+      label: "Push refused — too large to inspect",
+      tone: "danger",
+    });
+    expect(ruleSourceLabel("brokered:git:push-uninspectable")).toEqual({
+      label: "Push refused — could not be inspected",
+      tone: "danger",
+    });
+  });
 });
 
 describe("RuleSourceChip", () => {
@@ -214,5 +239,16 @@ describe("RuleSourceChip", () => {
   it("negative control: a tool-rule source renders nothing (it is AuditDecision's row)", () => {
     const { container } = renderChip({ data: { rule_source: "policy:tool-deny" } });
     expect(container).toBeEmptyDOMElement();
+  });
+
+  // #181 — a push_rules.deny_paths refusal carries NO cause text at all (the
+  // paths ride the structured log and the refusal body, never the decision
+  // log — push_rules.go's own doc), so the canned PUSH.DENIED_PATH_BODY
+  // sentence substitutes for the causeSpan every other refusal above gets
+  // from real data.
+  it("a push_rules refusal renders the distinct chip plus the canned 'nobody was asked' sentence", () => {
+    renderChip({ data: { rule_source: "brokered:git:push-rules" } });
+    expect(screen.getByText("Push refused — path denied by policy")).toBeInTheDocument();
+    expect(screen.getByText(PUSH.DENIED_PATH_BODY)).toBeInTheDocument();
   });
 });

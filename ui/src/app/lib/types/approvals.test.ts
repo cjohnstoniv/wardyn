@@ -4,7 +4,15 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { canDecideApproval, decisionArgs, isHeld, isStaleHold, type ApprovalKind, type ApprovalRequest } from "./approvals";
+import {
+  canDecideApproval,
+  decisionArgs,
+  isHeld,
+  isPushContentRequest,
+  isStaleHold,
+  type ApprovalKind,
+  type ApprovalRequest,
+} from "./approvals";
 
 const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
   id: "a1",
@@ -24,15 +32,16 @@ const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
 // clamped tool_call would self-authorize under the operator's own ceiling).
 describe("canDecideApproval", () => {
   it("an operator/admin may decide every kind", () => {
-    for (const kind of ["credential", "egress_domain", "tool_call"] as ApprovalKind[]) {
+    for (const kind of ["credential", "egress_domain", "tool_call", "push_content"] as ApprovalKind[]) {
       expect(canDecideApproval(true, kind)).toBe(true);
     }
   });
 
-  it("a member may decide egress_domain only", () => {
+  it("a member may decide egress_domain only — push_content stays admin-only, same as credential/tool_call", () => {
     expect(canDecideApproval(false, "egress_domain")).toBe(true);
     expect(canDecideApproval(false, "credential")).toBe(false);
     expect(canDecideApproval(false, "tool_call")).toBe(false);
+    expect(canDecideApproval(false, "push_content")).toBe(false);
   });
 });
 
@@ -79,17 +88,19 @@ describe("canDecideApproval — the re-auth kind", () => {
 // Both isHeld's callers (the runs board via board-groups.ts, and the run
 // cockpit's command bar via run-detail.tsx's `pending.some(isHeld)`) share
 // this one predicate, so pinning it here pins both call sites at once.
-describe("isHeld / isStaleHold — the 60-minute ceiling on tool_call/credential_reauth", () => {
-  it("a fresh tool_call is held; a fresh credential_reauth is held", () => {
+describe("isHeld / isStaleHold — the 60-minute ceiling on tool_call/credential_reauth/push_content", () => {
+  it("a fresh tool_call is held; a fresh credential_reauth is held; a fresh push_content is held", () => {
     expect(isHeld(approval({ kind: "tool_call" }))).toBe(true);
     expect(isHeld(approval({ kind: "credential_reauth" }))).toBe(true);
+    expect(isHeld(approval({ kind: "push_content" }))).toBe(true);
     expect(isStaleHold(approval({ kind: "tool_call" }))).toBe(false);
     expect(isStaleHold(approval({ kind: "credential_reauth" }))).toBe(false);
+    expect(isStaleHold(approval({ kind: "push_content" }))).toBe(false);
   });
 
-  it("a tool_call/credential_reauth row past 60 minutes is no longer held, and IS stale", () => {
+  it("a tool_call/credential_reauth/push_content row past 60 minutes is no longer held, and IS stale", () => {
     const old = new Date(Date.now() - 61 * 60_000).toISOString();
-    for (const kind of ["tool_call", "credential_reauth"] as const) {
+    for (const kind of ["tool_call", "credential_reauth", "push_content"] as const) {
       expect(isHeld(approval({ kind, requested_at: old }))).toBe(false);
       expect(isStaleHold(approval({ kind, requested_at: old }))).toBe(true);
     }
@@ -97,7 +108,7 @@ describe("isHeld / isStaleHold — the 60-minute ceiling on tool_call/credential
 
   it("a row well short of 60 minutes (past isHeld's unrelated 30s egress ceiling) is still held, not stale", () => {
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
-    for (const kind of ["tool_call", "credential_reauth"] as const) {
+    for (const kind of ["tool_call", "credential_reauth", "push_content"] as const) {
       expect(isHeld(approval({ kind, requested_at: fiveMinutesAgo }))).toBe(true);
       expect(isStaleHold(approval({ kind, requested_at: fiveMinutesAgo }))).toBe(false);
     }
@@ -119,5 +130,13 @@ describe("isHeld / isStaleHold — the 60-minute ceiling on tool_call/credential
     const held = approval({ kind: "egress_domain", requested_scope: { host: "h", mode: "wait_for_review" }, requested_at: past30s });
     expect(isHeld(held)).toBe(false); // still the pre-existing 30s behaviour
     expect(isStaleHold(held)).toBe(false); // not this arm at all — falls to passiveHold upstream
+  });
+});
+
+describe("isPushContentRequest (#181)", () => {
+  it("is true only for kind push_content", () => {
+    expect(isPushContentRequest(approval({ kind: "push_content" }))).toBe(true);
+    expect(isPushContentRequest(approval({ kind: "tool_call" }))).toBe(false);
+    expect(isPushContentRequest(approval({ kind: "egress_domain" }))).toBe(false);
   });
 });

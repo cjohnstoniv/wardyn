@@ -57,6 +57,7 @@ import type { AutonomyResolution } from "../../../lib/api/governance";
 import type {
   ModelCredential,
   PreflightResult,
+  PushRulesSpec,
   SCMAccess,
   SetupHarnessTool,
   SetupModelAccess,
@@ -130,6 +131,9 @@ function railTree(props: {
    *  actually clearing /setup/status (and unmounting the rail's own control),
    *  which is exactly the case S1's fix has to survive. */
   refreshTo?: SetupModelAccess;
+  /** #181 — undefined (the default) renders no Push rules section at all. */
+  pushRules?: PushRulesSpec;
+  unattended?: boolean;
 }) {
   const rail = (
     <RunRail
@@ -139,6 +143,8 @@ function railTree(props: {
       startup="It starts."
       showHoldNote={props.showHoldNote ?? false}
       toolRules={null}
+      pushRules={props.pushRules}
+      unattended={props.unattended ?? false}
       launch={{
         onLaunch: props.onLaunch ?? (() => {}),
         disabled: false,
