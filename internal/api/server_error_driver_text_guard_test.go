@@ -80,6 +80,16 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	// sentinel staying in the 501 body so the console/operator can tell this
 	// case apart from the no-runner-configured guard beside it.
 	"run_resources.go:201": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
+	// #445: the runner/substrate text in a failed dispatch's hint is
+	// deliberately operator-useful (ImagePullBackOff, a missing secret, a
+	// runtime's own refusal) and is not store/driver text;
+	// TestGetRun_TerminalStartupReasonSurvivesFailed pins that shape.
+	"runs_dispatch.go:549": "runner CreateSandbox text, operator-useful by design (#445)",
+	"runs_dispatch.go:710": "runner Exec text, operator-useful by design (#445)",
+	// adoscope.ScopesFor's only error is a fixed sentence naming the refused
+	// capability ("adoscope: %q is not a grantable capability ..."), never
+	// store/driver text.
+	"runs_dispatch_ado_inject.go:487": "fixed adoscope.ScopesFor refusal naming the capability (#445)",
 	// Every other site #173 found was FIXED, not allowlisted — a new entry
 	// here needs the same kind of justification (a named fixed sentinel or a
 	// design record, plus a pinning test) as these two, not just a passing
@@ -92,6 +102,10 @@ var serverErrorDriverTextAllowlist = map[string]string{
 // same "no dataflow analysis" limit is5xxStatusArg's doc describes — a
 // forwarder that received its status or message through a variable built
 // elsewhere is not something this guard can prove either way).
+//
+// statusArg < 0 means the forwarder carries no HTTP status: its message is a
+// run's failure hint, which the run's owner (a member) reads whatever went
+// wrong, so err.Error() in it is flagged unconditionally (#445).
 type serverErrorForwarder struct {
 	statusArg int
 	msgArg    int
@@ -106,6 +120,10 @@ type serverErrorForwarder struct {
 var serverErrorForwarders = map[string]serverErrorForwarder{
 	"refuseCapture": {statusArg: 3, msgArg: 5}, // s.refuseCapture(w, r, claims, status, reason, msg, scope)
 	"uiFail":        {statusArg: 1, msgArg: 2}, // uiFail(ctx, status, msg)
+	// #445: the member-visible run failure hint (run.FailureHint), which
+	// refuseADOEntraDispatch also copies into the run.create audit detail.
+	"failAndRevoke":          {statusArg: -1, msgArg: 3}, // s.failAndRevoke(ctx, runID, from, hint)
+	"refuseADOEntraDispatch": {statusArg: -1, msgArg: 3}, // s.refuseADOEntraDispatch(ctx, run, reason, detail)
 }
 
 // calleeName returns a CallExpr's called function or method name, or "" for
@@ -226,7 +244,7 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 				if fwd.msgArg > maxArg {
 					maxArg = fwd.msgArg
 				}
-				if len(node.Args) > maxArg && is5xxStatusArg(node.Args[fwd.statusArg]) && callsErrorMethod(node.Args[fwd.msgArg]) {
+				if len(node.Args) > maxArg && (fwd.statusArg < 0 || is5xxStatusArg(node.Args[fwd.statusArg])) && callsErrorMethod(node.Args[fwd.msgArg]) {
 					pos := fset.Position(node.Pos())
 					key := fmt.Sprintf("%s:%d", name, pos.Line)
 					found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
@@ -259,7 +277,7 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		if _, ok := serverErrorDriverTextAllowlist[k]; ok {
 			continue
 		}
-		t.Errorf("%s builds a 5xx body from err.Error(): %s\n"+
+		t.Errorf("%s builds a 5xx body or a run failure hint from err.Error(): %s\n"+
 			"use writeServerError(w, r, \"<action>\", err) for a 500, or "+
 			"writeError(w, code, loggedMsg(ctx, \"<action>\", err)) for another 5xx — "+
 			"see internal/api/writeservererror.go. If this is deliberately modelled "+

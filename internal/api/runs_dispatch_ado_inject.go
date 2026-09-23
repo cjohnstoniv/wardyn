@@ -43,6 +43,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -556,25 +557,31 @@ func (s *Server) createADOEntraGrants(ctx context.Context, run types.AgentRun,
 			"snapshot":    snapshot,
 		})
 		if merr != nil {
-			return nil, s.refuseADOEntraDispatch(ctx, run, "grant_scope",
-				"could not author the Azure DevOps credential injection: "+merr.Error())
+			return nil, s.refuseADOEntraGrant(ctx, run, "grant_scope", "could not author the Azure DevOps credential injection", merr)
 		}
 		grantID := uuid.New()
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: adoEntraGrantTTLSeconds},
 		}); gerr != nil {
-			return nil, s.refuseADOEntraDispatch(ctx, run, "grant_write",
-				"could not author the Azure DevOps credential injection: "+gerr.Error())
+			return nil, s.refuseADOEntraGrant(ctx, run, "grant_write", "could not record the Azure DevOps credential grant", gerr)
 		}
 		rule, derr := injectionRuleFromScope(scope)
 		if derr != nil {
-			return nil, s.refuseADOEntraDispatch(ctx, run, "grant_scope",
-				"could not author the Azure DevOps credential injection: "+derr.Error())
+			return nil, s.refuseADOEntraGrant(ctx, run, "grant_scope", "could not author the Azure DevOps credential injection", derr)
 		}
 		out = append(out, runner.InjectionGrant{GrantID: grantID, Rule: rule})
 	}
 	return out, true
+}
+
+// refuseADOEntraGrant refuses a run whose grant could not be authored. The
+// hint becomes the member-visible failure hint and the audit detail, so it is
+// a fixed sentence; err (store/driver text) goes to the log only.
+func (s *Server) refuseADOEntraGrant(ctx context.Context, run types.AgentRun, reason, hint string, err error) bool {
+	slog.ErrorContext(ctx, "wardynd: "+hint,
+		slog.String("run_id", run.ID.String()), slog.String("reason", reason), slog.Any("err", err))
+	return s.refuseADOEntraDispatch(ctx, run, reason, hint)
 }
 
 // refuseADOEntraDispatch marks the run FAILED and records why. It always
