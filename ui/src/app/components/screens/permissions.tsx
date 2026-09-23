@@ -55,6 +55,7 @@ import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
+import { useUserTypes } from "../../lib/use-user-types";
 
 // The audit actor a bare admin-bearer caller is recorded as (actorFromRequest,
 // internal/api/runs_policy.go) — a machine lane, never a member.
@@ -70,14 +71,52 @@ const ADMIN_TOKEN_PRINCIPAL = "admin-token";
 // disagreeing about what "Everyone signed in" means. ONE home, beside the
 // control that renders it.
 //
-// The add forms don't offer a user type yet: a user_type row is written through
-// the API, and the tables render it through SUBJECT_LABEL.
-export type PickableSubjectType = Exclude<CapabilitySubjectType, "user_type">;
+// UT-7a: the add forms now offer a user type too — the picker below renders a
+// closed <Select> of the org's types rather than free text (a type is a
+// bounded, admin-authored set, never something to spell out or search a
+// directory for). "all" stays excluded from PickableSubjectType-as-a-typed-in
+// value on purpose: it carries no subject text at all (SUBJECTS below still
+// lists it), so the type alone is `CapabilitySubjectType`.
+export type PickableSubjectType = CapabilitySubjectType;
 export const SUBJECTS: { value: PickableSubjectType; label: string; hint: string }[] = [
   { value: "user", label: PERM.SUBJECT_USER, hint: PERM.HINT_USER },
   { value: "group", label: PERM.SUBJECT_GROUP, hint: PERM.HINT_GROUP },
+  { value: "user_type", label: PERM.SUBJECT_USER_TYPE, hint: PERM.HINT_USER_TYPE },
   { value: "all", label: PERM.SUBJECT_ALL, hint: PERM.HINT_ALL },
 ];
+
+// The "Who" input for a user_type subject — a closed <Select> of the org's
+// types, never free text: a type is a bounded, admin-authored set (unlike a
+// user or a group, which the directory search assists but never enumerates).
+// Exported for the SAME reason Segmented/SUBJECTS are: the governance
+// assignments block and the drive allocations block need this exact control
+// too, and a third hand-rolled copy is how the three forms disagree about
+// what picking "a user type" looks like.
+export function UserTypeSubjectSelect({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+}) {
+  const { userTypes } = useUserTypes();
+  return (
+    <Select value={value} onValueChange={onChange} disabled={disabled || userTypes.length === 0}>
+      <SelectTrigger aria-label={PERM.FIELD_WHO}>
+        <SelectValue placeholder={PERM.SUBJECT_USER_TYPE} />
+      </SelectTrigger>
+      <SelectContent>
+        {userTypes.map((t) => (
+          <SelectItem key={t.id} value={t.id}>
+            {t.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 export const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
   user: PERM.SUBJECT_USER,
@@ -578,15 +617,19 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
               disabled={disabled}
               options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
             />
-            {subjectType !== "all" && (
-              <Input
-                aria-label={PERM.FIELD_WHO}
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                disabled={disabled}
-                className="font-mono"
-                autoComplete="off"
-              />
+            {subjectType === "user_type" ? (
+              <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
+            ) : (
+              subjectType !== "all" && (
+                <Input
+                  aria-label={PERM.FIELD_WHO}
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  disabled={disabled}
+                  className="font-mono"
+                  autoComplete="off"
+                />
+              )
             )}
           </div>
         </Field>

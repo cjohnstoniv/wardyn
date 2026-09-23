@@ -16,6 +16,12 @@ vi.mock("../../../../lib/api/runs", () => ({
   },
 }));
 
+// UT-7a: IdentityWidget's "Ran as" row resolves run.user_type against this list.
+const listUserTypesMock = vi.fn();
+vi.mock("../../../../lib/api/user-types", () => ({
+  userTypes: { listUserTypes: () => listUserTypesMock() },
+}));
+
 import { HttpError } from "../../../../lib/api/core";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { EgressWidget } from "./egress";
@@ -27,6 +33,9 @@ import { IdentityWidget } from "./identity";
 beforeEach(() => {
   getFilesMock.mockReset();
   getResourcesMock.mockReset();
+  listUserTypesMock.mockReset().mockResolvedValue([
+    { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
+  ]);
 });
 
 describe("SandboxWidget", () => {
@@ -225,5 +234,24 @@ describe("IdentityWidget", () => {
     render(<IdentityWidget run={{ ...run, task: "", description: "" }} />);
     expect(screen.queryByText("Task")).not.toBeInTheDocument();
     expect(screen.queryByText("Why")).not.toBeInTheDocument();
+  });
+
+  // UT-7a — "Ran as {type}", resolved by id against the loaded list.
+  it("shows Ran as with the type's name when the run carries one", async () => {
+    render(<IdentityWidget run={{ ...run, user_type: "portfolio-manager" }} />);
+    expect(await screen.findByText("Portfolio manager")).toBeInTheDocument();
+    expect(screen.getByText("Ran as")).toBeInTheDocument();
+  });
+
+  it("renders no row for a run with no stamped type", () => {
+    render(<IdentityWidget run={run} />);
+    expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
+  });
+
+  it("renders no row for a type id the list no longer holds — never the raw id", async () => {
+    render(<IdentityWidget run={{ ...run, user_type: "deleted-type" }} />);
+    await screen.findByText(run.spiffe_id);
+    expect(screen.queryByText("Ran as")).not.toBeInTheDocument();
+    expect(screen.queryByText("deleted-type")).not.toBeInTheDocument();
   });
 });

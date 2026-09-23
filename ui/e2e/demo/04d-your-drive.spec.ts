@@ -705,7 +705,9 @@ test("V04d act 3 — the member writes a note, and ends the run", async () => {
   await dexSignIn(page, MEMBER);
   await page.waitForURL(/\/(runs|setup)/, { timeout: 60_000 });
 
-  await expect(page.getByText(GS.SUBTITLE)).toBeVisible({ timeout: 30_000 });
+  // This session's user (MEMBER, a member-role-desktop.md fixture) carries no
+  // stamped user type, so SUBTITLE falls back to its no-type sentence.
+  await expect(page.getByText(GS.SUBTITLE())).toBeVisible({ timeout: 30_000 });
   // The chip beside the barrier and the sign-in: which drive is allocated to
   // you is a fact about this deployment, in BARRIER_CHIP's own `Label · value`
   // shape.

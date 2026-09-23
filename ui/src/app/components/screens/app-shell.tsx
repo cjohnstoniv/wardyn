@@ -23,19 +23,21 @@ import {
   ShieldCheck,
   UserCog,
   Users,
+  UsersRound,
 } from "lucide-react";
 import { SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { SidebarSettingsLink } from "./sidebar-settings-link";
-// GOVERNANCE_NAV_TITLE is ONE string for two places — this nav label and the
-// governance screen's own heading (governance-copy.ts's GOVERNANCE.TITLE reads
-// the same constant) — the way every other nav entry already works. There is
-// no second "Governance profiles" label (governance-prompt.md §7.2). Imported
-// from nav-copy.ts rather than governance-copy.ts itself so the eager sidebar
-// doesn't drag the whole §7.2-§7.9 screen-only canon table into the entry
-// chunk (#498) for one string.
-import { GOVERNANCE_NAV_TITLE } from "../../lib/nav-copy";
+// GOVERNANCE_NAV_TITLE and USER_TYPES_NAV_TITLE are each ONE string for two
+// places — this nav label and the screen's own heading (governance-copy.ts's
+// GOVERNANCE.TITLE and user-types-copy.ts's USER_TYPES.TITLE each read the
+// same constant) — the way every other nav entry already works. There is no
+// second "Governance profiles" label (governance-prompt.md §7.2). Imported
+// from nav-copy.ts rather than the screen's own copy module so the eager
+// sidebar doesn't drag a whole screen-only canon table into the entry chunk
+// (#498) for one string.
+import { GOVERNANCE_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -46,6 +48,7 @@ import {
   OperatorProvider,
   RoleProvider,
   type Role,
+  type UserTypeMeta,
 } from "../wardyn/operator-context";
 import { health as api, type MeUserDrive } from "../../lib/api/health";
 import { TopBar } from "./top-bar";
@@ -117,6 +120,9 @@ export interface ShellMeta {
   // default as the two above: an unresolved or failed /me reads as "" —
   // nothing is claimed about a drive that is also null.
   userDriveUnavailable: string;
+  // 0.8 (UT-7a) — the caller's own user type, the same /me body every other
+  // field here comes from. See operator-context.tsx's UserTypeContext.
+  userType: UserTypeMeta | null;
   /** 0.7.4 "view as member" — an admin whose role is paused for this session. */
   memberMode: boolean;
   /** 0.7.5 — WHICH posture of that mode: the no-credential preview, in which
@@ -159,6 +165,7 @@ function useMeta(): [ShellMeta, () => void] {
     userDrive: null,
     userDriveDeniedByProfile: "",
     userDriveUnavailable: "",
+    userType: null,
     memberMode: false,
     memberModeNoCredential: false,
     memberPreviewAvailable: false,
@@ -193,6 +200,7 @@ function useMeta(): [ShellMeta, () => void] {
           userDrive: me?.user_drive ?? null,
           userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
           userDriveUnavailable: me?.user_drive_unavailable ?? "",
+          userType: me?.user_type ?? null,
           memberMode: me?.member_mode ?? false,
           memberModeNoCredential: me?.member_mode_no_credential ?? false,
           memberPreviewAvailable: me?.member_preview_available ?? false,
@@ -291,6 +299,10 @@ const NAV_ITEMS: NavItem[] = [
   // admin-only — deliberately NOT in MEMBER_NAV_PATHS below, and every route
   // behind it is operatorOnly server-side.
   { to: "/permissions", label: "Permissions", icon: Users },
+  // User types (0.8, UT-7a) sits beside Permissions and Governance — the
+  // subject the other two name. securityOps server-side, same tier as
+  // Governance; not in MEMBER_NAV_PATHS below, and there is no member route.
+  { to: "/user-types", label: USER_TYPES_NAV_TITLE, icon: UsersRound },
   { to: "/secrets", label: "Secrets", icon: Lock },
   { to: "/audit", label: "Audit", icon: ScrollText },
   { to: "/recordings", label: "Recordings", icon: Play },
@@ -563,6 +575,7 @@ export function AppShell({
       userDrive={meta.userDrive}
       userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
       userDriveUnavailable={meta.userDriveUnavailable}
+      userType={meta.userType}
       confinementPosture={confinementPosture}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>

@@ -17,10 +17,18 @@
 import { Fingerprint } from "lucide-react";
 import type { AgentRun } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
+import { useUserTypes, userTypeById } from "../../../../lib/use-user-types";
 import { CopyButton } from "../../../wardyn/copy-button";
 import { WidgetCard } from "../../../wardyn/primitives";
 
 export function IdentityWidget({ run }: { run: AgentRun }) {
+  // UT-7a: "Ran as {type}" — resolves run.user_type's id against the loaded
+  // list. Renders nothing for either a run with no stamped type (a pre-0.8
+  // row, or a system run with no human creator) or an id the list no longer
+  // holds (a deleted type) — never the raw id as a fallback guess.
+  const { userTypes } = useUserTypes();
+  const ranAs = run.user_type ? userTypeById(userTypes, run.user_type)?.name : undefined;
+
   return (
     <WidgetCard title="Identity" Icon={Fingerprint} grow>
       {/* The command bar's h1 is the run's TITLE now, and it truncates to one
@@ -101,6 +109,13 @@ export function IdentityWidget({ run }: { run: AgentRun }) {
         <dd className="min-w-0 truncate text-right text-foreground">
           {absoluteTime(run.created_at)} · {run.created_by}
         </dd>
+
+        {ranAs && (
+          <>
+            <dt className="text-muted-foreground">Ran as</dt>
+            <dd className="min-w-0 truncate text-right text-foreground">{ranAs}</dd>
+          </>
+        )}
       </dl>
     </WidgetCard>
   );

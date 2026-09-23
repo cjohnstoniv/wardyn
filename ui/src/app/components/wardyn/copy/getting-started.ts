@@ -8,7 +8,16 @@
 // the sole reader.
 export const MEMBER_GETTING_STARTED = {
   TITLE: "Getting started",
-  SUBTITLE: "You're a member of this Wardyn. Your admin set the ceiling; you run inside it.",
+  // UT-7a: introduces the caller's own user type by name, once /me carries
+  // one. name/description are the SESSION's stamped type (health.ts's Me
+  // .user_type) — undefined for a caller with none (the admin token, local
+  // mode, or a pre-0.8 daemon), which falls back to the original sentence
+  // rather than naming a type that wasn't sent. An empty description reads
+  // the same as none: not every type has one.
+  SUBTITLE: (typeName?: string, typeDescription?: string): string =>
+    typeName
+      ? `You're a ${typeName}${typeDescription ? ` — ${typeDescription}` : ""}. Your admin set the ceiling; you run inside it.`
+      : "You're a member of this Wardyn. Your admin set the ceiling; you run inside it.",
   UNREACHABLE_TITLE: "Couldn't reach Wardyn.",
   UNREACHABLE_BODY:
     "Nothing below is marked done until it can be checked — a broken connection is not a finished step.",

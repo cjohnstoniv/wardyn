@@ -60,6 +60,13 @@ vi.mock("../../../lib/api/directory", async () => {
   return { ...actual, directory: { search: (...a: unknown[]) => directorySearchMock(...a) } };
 });
 
+// UT-7a: the allocation form's "User type" branch — permissions.tsx's shared
+// UserTypeSubjectSelect, a closed picker rather than the DirectoryCombobox.
+const listUserTypesMock = vi.fn();
+vi.mock("../../../lib/api/user-types", () => ({
+  userTypes: { listUserTypes: () => listUserTypesMock() },
+}));
+
 import { HttpError } from "../../../lib/api/core";
 import type { UserDriveListItem, UserDrivesSnapshot } from "../../../lib/api/drives";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
@@ -132,6 +139,9 @@ beforeEach(() => {
   previewDriveMock.mockResolvedValue({});
   directorySearchMock.mockReset();
   directorySearchMock.mockResolvedValue(null);
+  listUserTypesMock.mockReset().mockResolvedValue([
+    { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
+  ]);
 });
 
 describe("DrivesScreen — allocations", () => {
@@ -238,6 +248,29 @@ describe("DrivesScreen — allocations", () => {
     await userEvent.click(screen.getByRole("button", { name: DRIVES.ADD_CTA }));
     expect(await screen.findByText(DRIVES.ADD_TITLE)).toBeInTheDocument();
     expect(screen.queryByText(DRIVES.ALLOC_REPLACED)).not.toBeInTheDocument();
+  });
+
+  // UT-7a: a user type is a bounded, admin-authored set — no directory search,
+  // a closed picker of the org's types instead, and its priority stays
+  // disabled (meaningful only inside the group tier).
+  it("User type swaps the Who field for UserTypeSubjectSelect and disables priority", async () => {
+    upsertGrantMock.mockResolvedValueOnce({ grant: {}, replaced: false });
+    renderScreen();
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+
+    await userEvent.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
+    expect(screen.queryByRole("textbox", { name: PERM.FIELD_WHO })).toBeNull();
+    expect(screen.getByLabelText(GOV.FIELD_PRIORITY)).toBeDisabled();
+    await userEvent.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
+    await userEvent.click(await screen.findByRole("option", { name: "Portfolio manager" }));
+
+    await userEvent.click(screen.getByRole("combobox", { name: DRIVES.FIELD_DRIVE }));
+    await userEvent.click(await screen.findByRole("option", { name: SCRATCH.name }));
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.ADD_CTA }));
+
+    expect(upsertGrantMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager", drive_id: SCRATCH.id }),
+    );
   });
 
   it("Remove is outline and reversible: it confirms with the frozen sentence and deletes no data", async () => {

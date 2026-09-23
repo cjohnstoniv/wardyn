@@ -63,6 +63,13 @@ vi.mock("../../../lib/api/directory", async () => {
   return { ...actual, directory: { search: (...a: unknown[]) => directorySearchMock(...a) } };
 });
 
+// UT-7a: the assignment form's "User type" branch — permissions.tsx's shared
+// UserTypeSubjectSelect, a closed picker rather than the DirectoryCombobox.
+const listUserTypesMock = vi.fn();
+vi.mock("../../../lib/api/user-types", () => ({
+  userTypes: { listUserTypes: () => listUserTypesMock() },
+}));
+
 import { HttpError } from "../../../lib/api/core";
 import type { DirectoryEntry } from "../../../lib/api/directory";
 import type { GovernanceProfile, GovernanceSnapshot } from "../../../lib/api/governance";
@@ -145,6 +152,9 @@ beforeEach(() => {
   previewGovernanceMock.mockResolvedValue({});
   directorySearchMock.mockReset();
   directorySearchMock.mockResolvedValue(null);
+  listUserTypesMock.mockReset().mockResolvedValue([
+    { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
+  ]);
 });
 
 describe("GovernanceScreen — states", () => {
@@ -437,6 +447,27 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
       profile_id: PLATFORM.id,
       priority: 0,
     });
+  });
+
+  // UT-7a: a user type is a bounded, admin-authored set — no directory search,
+  // a closed picker of the org's types instead.
+  it("User type swaps the Who field for UserTypeSubjectSelect", async () => {
+    upsertAssignmentMock.mockResolvedValue(undefined);
+    renderScreen();
+    await screen.findByText(GOV.ASSIGN_TITLE);
+
+    await userEvent.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
+    expect(screen.queryByRole("textbox", { name: PERM.FIELD_WHO })).toBeNull();
+    await userEvent.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
+    await userEvent.click(await screen.findByRole("option", { name: "Portfolio manager" }));
+
+    await userEvent.click(screen.getByRole("combobox", { name: GOV.FIELD_PROFILE }));
+    await userEvent.click(await screen.findByRole("option", { name: PLATFORM.name }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
+
+    expect(upsertAssignmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager", profile_id: PLATFORM.id }),
+    );
   });
 
   it("the preview takes CLAIMS (the People step's own field) and names the matching row's tier", async () => {

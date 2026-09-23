@@ -33,6 +33,13 @@ vi.mock("../../lib/api/permissions", () => ({
 const listRunsMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({ runs: { listRuns: () => listRunsMock() } }));
 
+// UT-7a: the add form's "User type" branch — a closed picker of the org's
+// types (UserTypeSubjectSelect), never free text.
+const listUserTypesMock = vi.fn();
+vi.mock("../../lib/api/user-types", () => ({
+  userTypes: { listUserTypes: () => listUserTypesMock() },
+}));
+
 import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT } from "../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
@@ -69,6 +76,7 @@ beforeEach(() => {
   deleteGrantMock.mockReset();
   putEnforcementMock.mockReset();
   listRunsMock.mockReset().mockResolvedValue([]);
+  listUserTypesMock.mockReset().mockResolvedValue([]);
 });
 
 describe("PermissionsScreen — fresh install (every kind off, zero grants)", () => {
@@ -387,6 +395,34 @@ describe("PermissionsScreen — add a grant", () => {
     await user.click(screen.getByRole("button", { name: PERM.SUBJECT_ALL }));
     expect(screen.getByText(PERM.HINT_ALL)).toBeInTheDocument();
     expect(screen.queryByLabelText(PERM.FIELD_WHO)).toBeNull();
+  });
+
+  // UT-7a: a user type is a bounded, admin-authored set — the Who field
+  // switches from free text to a closed picker of the org's types, and the
+  // submitted subject is the picked type's id.
+  it("User type swaps the Who input for a closed picker of the org's types", async () => {
+    listUserTypesMock.mockResolvedValue([
+      { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
+    ]);
+    upsertGrantMock.mockResolvedValue({ grant: grant(), updated: false });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(PERM.ADD_TITLE);
+    await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
+    expect(screen.getByText(PERM.HINT_USER_TYPE)).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: PERM.FIELD_WHO })).toBeNull();
+
+    await user.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
+    await user.click(await screen.findByRole("option", { name: "Portfolio manager" }));
+    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
+
+    await waitFor(() =>
+      expect(upsertGrantMock).toHaveBeenCalledWith(
+        expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager" }),
+      ),
+    );
   });
 
   it("submits the natural key + effect, and says so when the upsert only updated one", async () => {

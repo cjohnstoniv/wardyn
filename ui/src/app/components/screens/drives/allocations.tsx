@@ -66,7 +66,14 @@ import { Field, Switch } from "../../wardyn/form-primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TruncatedNote } from "../../wardyn/states";
-import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText, type PickableSubjectType } from "../permissions";
+import {
+  SUBJECTS,
+  SUBJECT_LABEL,
+  Segmented,
+  UserTypeSubjectSelect,
+  subjectText,
+  type PickableSubjectType,
+} from "../permissions";
 import { Note, enforcementGloss, modeText, modeTone, question, sizeText } from "./display";
 
 // PREVIEW_RESULT's {tier}, frozen in §7.3's table rather than in prose.
@@ -385,15 +392,21 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
               options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
             />
             {/* Free text with suggestions ON TOP, never instead of; with no
-                directory configured this is the plain input it has always been. */}
-            {subjectType !== "all" && (
-              <DirectoryCombobox
-                label={PERM.FIELD_WHO}
-                value={subject}
-                onChange={setSubject}
-                kind={subjectType}
-                disabled={disabled}
-              />
+                directory configured this is the plain input it has always
+                been. A user type is a bounded, admin-authored set instead —
+                permissions.tsx's UserTypeSubjectSelect. */}
+            {subjectType === "user_type" ? (
+              <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
+            ) : (
+              subjectType !== "all" && (
+                <DirectoryCombobox
+                  label={PERM.FIELD_WHO}
+                  value={subject}
+                  onChange={setSubject}
+                  kind={subjectType}
+                  disabled={disabled}
+                />
+              )
             )}
           </div>
         </Field>

@@ -167,6 +167,14 @@ export interface AgentRun {
   // (#99 is types/storage/mirrors only); this field exists so the console has
   // somewhere to read it the day #93 renders it.
   autonomy_level?: AutonomyLevel;
+  // internal/types/types.go's AgentRun.UserType (0.8, migration 0072, UT-13) —
+  // the user type the run's creator resolved as at create time: the chosen
+  // type in the user view, the stamped one otherwise. Empty for a run with no
+  // human creator (admin token, local mode) or created before the migration.
+  // The run header's Identity widget resolves this id to a display name
+  // against the loaded user-types list; it renders nothing when either is
+  // absent, never the raw id.
+  user_type?: string;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
