@@ -25,6 +25,8 @@
 #   8. docker-compose.yaml's WARDYN_OIDC_ROLE_MAP stays a plain passthrough,
 #      and deploy/compose/.env.example still seeds the demo/member pair for a
 #      fresh install (R-03).
+#  10. no Go name OPERATIONS.md's "Renamed in 0.8" table retires is still cited
+#      outside that table, CHANGELOG.md or docs/design/ (#617).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -248,6 +250,21 @@ if grep -qE '^WARDYN_OIDC_ROLE_MAP=demo@wardyn\.local=admin,member@wardyn\.local
 else
     bad "deploy/compose/.env.example no longer carries an UNCOMMENTED WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=user row — a fresh compose stack would lose the second identity the member-mode rider added, and this is the ONLY safe place for it (R-03: a docker-compose.yaml runtime default would apply to upgrades too)"
 fi
+
+# ── 10. retired 0.8 Go names stay retired (#617) ────────────────────────────
+# The names come from the table's own "| Go:" rows (Pre-0.8 column), so a row
+# added there is guarded without touching this script. docs/design/ is a
+# point-in-time planning record and CHANGELOG.md is history; both keep them.
+retired="$(awk -F'|' '/^## Renamed in 0.8/{f=1;next} f&&/^## /{exit} f&&$2~/^ Go:/{print $3}' docs/OPERATIONS.md \
+    | grep -oE '`[A-Za-z_.]+`' | tr -d '`' | sed 's/.*\.//' | sort -u)"
+[ -n "$retired" ] || bad "docs/OPERATIONS.md's 'Renamed in 0.8' table has no Go: rows — guard 10 is pointing at nothing"
+stale=0
+for name in $retired; do
+    hits="$(git grep -nw "$name" -- ':!CHANGELOG.md' ':!docs/design/' | grep -v '^docs/OPERATIONS.md:[0-9]*:| Go:' || true)"
+    [ -z "$hits" ] || { stale=1; bad "retired 0.8 name '$name' is still cited (see docs/OPERATIONS.md 'Renamed in 0.8'):
+$hits"; }
+done
+if [ -n "$retired" ] && [ "$stale" = 0 ]; then ok "no retired 0.8 Go name is cited outside the rename table, CHANGELOG.md or docs/design/"; fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

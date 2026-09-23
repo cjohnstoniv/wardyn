@@ -982,7 +982,7 @@ shipped behavior; none is scheduled.
   member may author an `inline_policy`, but its api_key/git_pat/ssh_key grant is
   clamped to grant KINDS the operator allows and then its {host, secret} pairing
   is dropped unless the operator eligible-listed that exact pairing
-  (`filterMemberGrants`, `internal/api/inline_policy.go` — the secret-exfil
+  (`filterUserGrants`, `internal/api/inline_policy.go` — the secret-exfil
   guard: a member must not pair an arbitrary stored secret with an allowlisted
   host). A run's real model-access grant is re-added at launch by
   `foldRunIntegration` (an operator integration) or `applyWorkspaceRequirements`
@@ -995,7 +995,7 @@ shipped behavior; none is scheduled.
   left no trace; 0.6 closed that: every drop now also records an
   `authz.denied` audit event with reason `grant_pairing_not_eligible`,
   aggregated one event per reason at launch (never on a preflight dry-run) and
-  carrying the pairings that went (`auditMemberPolicyDrops`, same file). No
+  carrying the pairings that went (`auditUserPolicyDrops`, same file). No
   preview lane disagrees with launch: preflight is the only one, and it
   resolves through the same `resolveRunPolicy` chokepoint and the same
   `resolveRunLLMAccess` verdict the create path uses (`internal/api/preflight.go`),

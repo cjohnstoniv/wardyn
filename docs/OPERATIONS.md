@@ -4616,8 +4616,8 @@ is still correct until its own PR lands:
   family, `WARDYN_ALLOW_MEMBER_ENV_SECRET`) — #616, aliased one minor after it
   lands, same pattern as the `member` role alias below.
 - `docs/MEMBERS.md`, the People/Getting-Started copy, and the rest of this
-  file's own "view as member" prose (the section right above, "Exercising
-  member mode as an admin") — #620, the docs pass.
+  file's own "view as member" prose ([Exercising member mode as an
+  admin](#exercising-member-mode-as-an-admin)) — #620, the docs pass.
 - The console's own "View as member" control names and copy (`MemberModeBanner`,
   `MemberModeMenuItem`, the `MEMBER_MODE` strings) — mock-gated, #618 (UT-7a).
 - `oidc.LegacyRoleMember`/`oidc.LegacyRoleMemberWarning` and the `member`
