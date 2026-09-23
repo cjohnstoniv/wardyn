@@ -403,35 +403,56 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		return
 	}
 
-	t.Run("a truncated laptop table is a visible chain reset and ingest resumes", func(t *testing.T) {
+	// purge is a superuser's reset of the laptop's audit table followed by five
+	// new rows: the organisation must record it as a chain reset and hold every
+	// new row, and both cursors must name the new head. reusesSeqs is the case
+	// where the reset restarts seq, so the new rows reuse seqs the organisation
+	// already recorded and matching on seq alone would drop them as re-sends.
+	purge := func(t *testing.T, stmt string, reusesSeqs bool, resets, heldBefore int) {
+		t.Helper()
+		cursorBefore := laptopCursor(t, laptop)
 		asSuperuser(t, laptop, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `TRUNCATE audit_events`)
+			_, err := tx.Exec(ctx, stmt)
 			return err
 		})
 		newHead := writeLaptopRows(t, laptop, 5, "after-purge")
+		want := laptopChain(t, laptop)
+		if len(want) != 5 || want[0].prevHash != "" || (newHead < cursorBefore) != reusesSeqs {
+			t.Fatalf("precondition: 5 rows from a genesis, head %d vs cursor %d reusing seqs=%v: %+v",
+				newHead, cursorBefore, reusesSeqs, want)
+		}
 		forward(t, h.srv.URL, laptop, cred, func(s federation.Status) bool {
 			return s.AckedSeq == newHead && s.LastError == ""
 		})
 
-		if n := orgAuditCount(t, org, "device.audit.chain_reset", cred.DeviceID, "success", ""); n != 1 {
-			t.Fatalf("organisation recorded %d chain resets, want 1", n)
+		if n := orgAuditCount(t, org, "device.audit.chain_reset", cred.DeviceID, "success", ""); n != resets {
+			t.Fatalf("organisation recorded %d chain resets, want %d", n, resets)
 		}
-		want, got := laptopChain(t, laptop), orgOrigins(t, org, cred.DeviceID)
-		if len(want) != 5 || want[0].prevHash != "" {
-			t.Fatalf("precondition: the laptop should hold 5 rows starting at a genesis: %+v", want)
-		}
-		if len(got) != fedRows+5 {
-			t.Fatalf("organisation holds %d rows for the device, want %d", len(got), fedRows+5)
+		got := orgOrigins(t, org, cred.DeviceID)
+		if len(got) != heldBefore+5 {
+			t.Fatalf("organisation holds %d rows for the device, want %d", len(got), heldBefore+5)
 		}
 		for i, w := range want {
-			if got[fedRows+i] != w {
-				t.Fatalf("post-purge row %d: organisation holds %+v, laptop chained %+v", i, got[fedRows+i], w)
+			if got[heldBefore+i] != w {
+				t.Fatalf("post-purge row %d: organisation holds %+v, laptop chained %+v", i, got[heldBefore+i], w)
 			}
 		}
 		if c := laptopCursor(t, laptop); c != newHead {
 			t.Fatalf("laptop cursor = %d, want %d", c, newHead)
 		}
+		if d := orgDevice(t, h, cred.DeviceID); d.LastSeq != newHead || d.LastRowHash != want[4].rowHash {
+			t.Fatalf("organisation's recorded cursor = (%d, %s), want (%d, %s)", d.LastSeq, d.LastRowHash, newHead, want[4].rowHash)
+		}
 		requireChainOK(t, "laptop", laptop, 5)
-		requireChainOK(t, "organisation", org, fedRows+5)
+		requireChainOK(t, "organisation", org, int64(heldBefore+5))
+	}
+
+	if !t.Run("a truncated laptop table is a visible chain reset and ingest resumes", func(t *testing.T) {
+		purge(t, `TRUNCATE audit_events`, false, 1, fedRows)
+	}) {
+		return
+	}
+	t.Run("a truncate that restarts the laptop's seq is a chain reset, never rows dropped as re-sends", func(t *testing.T) {
+		purge(t, `TRUNCATE audit_events RESTART IDENTITY`, true, 2, fedRows+5)
 	})
 }
