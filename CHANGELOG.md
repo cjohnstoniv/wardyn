@@ -191,7 +191,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (the principal the push acts for, or `operator` for a shared PAT) are stamped by the control
   plane from the run's own grants, and a raise that sends either is refused — and it is the dedup
   key: a retry git repacks carries the same commits and is forwarded on the approval already
-  given, and a denial refuses the same commits again without asking. Admins decide; a member
+  given for that repository and branch (the same commits to another repository or branch are asked
+  about again), and a denial refuses the same push again without asking. Admins decide; a member
   cannot, even on their own run. An unattended (non-interactive) run refuses at once with no
   approval raised (`brokered:git:push-held-unattended`). Both lanes that enforce deny paths hold:
   the GitHub App lane and the `git_pat` lane (Azure DevOps over a PAT included); the Azure DevOps

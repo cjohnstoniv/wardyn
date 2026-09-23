@@ -946,9 +946,10 @@ match always wins: a path both lists match is refused and nothing is asked.
   and a SHA-256 over **every** matched path, sorted and NUL-terminated. The
   scope is the dedup key — two identical pushes are one request — and commits
   are content addresses, so a retry git repacks carries the same commits in
-  different bytes and is let through on the approval already given. A denial
-  sticks for the rest of the run: the same commits are refused without asking
-  again. A request that expires or is cancelled undecided is forgotten, and the
+  different bytes and is let through on the approval already given. The key is
+  the whole scope: the same commits pushed to another repository or branch are
+  a new request and are held again. A denial sticks for the rest of the run:
+  the same push is refused without asking again. A request that expires or is cancelled undecided is forgotten, and the
   next push of those commits asks afresh.
 - **Bounded.** At most 16 pushes are held at once and 256 different pushes are
   remembered per run; past either the push is refused.

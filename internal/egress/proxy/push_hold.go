@@ -12,15 +12,18 @@ package proxy
 // egress hold (approvals.go); git waits on the open request, which it does not
 // abort unless http.lowSpeedLimit and http.lowSpeedTime are set.
 //
-// THE KEY. A push is identified by the commits it sets its refs to and a
-// digest of every path a review rule matched — not by its pack bytes, which a
-// retry repacks. The control plane deduplicates PENDING rows on the whole
-// scope, and pushHolds maps the same key to the row's id and its outcome, so:
+// THE KEY. A push is identified by its repository, the refs it updates, the
+// commits it sets them to and a digest of every path a review rule matched —
+// not by its pack bytes, which a retry repacks. The control plane deduplicates
+// PENDING rows on the whole scope, and pushHolds maps the same key to the
+// row's id and its outcome, so:
 //
 //   - an approved push is forwarded, and so is every later push of the same
-//     commits (git's retry after the hold, or after a failed forward) without
-//     a second question — identical commits are identical content;
-//   - a denied push stays denied for the rest of the run: the same commits are
+//     commits to the same repository and branch (git's retry after the hold,
+//     or after a failed forward) without a second question — identical commits
+//     are identical content. The same commits to ANOTHER repository or branch
+//     are another question, and are held again;
+//   - a denied push stays denied for the rest of the run: the same push is
 //     refused at once, without asking again;
 //   - a hold that times out leaves its row PENDING, and a retry waits on that
 //     same row instead of raising a second one;
@@ -142,7 +145,9 @@ func pushScope(paths []string, cmds []gitpack.Command, t pushTarget) (types.Push
 		Commits:     slices.Compact(commits),
 		PathsDigest: hex.EncodeToString(h.Sum(nil)),
 	}
-	return s, s.PathsDigest + "|" + strings.Join(s.Commits, ",")
+	// The WHOLE question, as the control plane dedups it: an approval of these
+	// commits for one repository and branch says nothing about another.
+	return s, strings.Join([]string{s.Repo, s.Branch, s.PathsDigest, strings.Join(s.Commits, ",")}, "\x00")
 }
 
 // holdPush decides a push the review rules matched: forwarded (true) once an
