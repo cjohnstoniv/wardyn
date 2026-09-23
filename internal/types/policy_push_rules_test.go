@@ -85,7 +85,8 @@ func TestPushRulesSpecRoundTrip(t *testing.T) {
 func TestRunPolicySpecClone_DeepCopiesPushRules(t *testing.T) {
 	orig := RunPolicySpec{
 		MinConfinementClass: CC2,
-		PushRules:           &PushRulesSpec{DenyPaths: []string{".github/workflows/**"}, MaxInspectPackMiB: 4},
+		PushRules: &PushRulesSpec{DenyPaths: []string{".github/workflows/**"}, MaxInspectPackMiB: 4,
+			RequireReviewPaths: []string{"infra/**"}},
 	}
 	clone := orig.Clone()
 	if clone.PushRules == orig.PushRules {
@@ -95,6 +96,10 @@ func TestRunPolicySpecClone_DeepCopiesPushRules(t *testing.T) {
 	clone.PushRules.MaxInspectPackMiB = 99
 	if orig.PushRules.DenyPaths[0] != ".github/workflows/**" {
 		t.Error("mutating the clone's DenyPaths leaked into the original — Clone aliased the backing array")
+	}
+	clone.PushRules.RequireReviewPaths[0] = "mutated"
+	if orig.PushRules.RequireReviewPaths[0] != "infra/**" {
+		t.Error("mutating the clone's RequireReviewPaths leaked into the original — Clone aliased the backing array")
 	}
 	if orig.PushRules.MaxInspectPackMiB != 4 {
 		t.Error("mutating the clone's MaxInspectPackMiB leaked into the original")
@@ -132,5 +137,17 @@ func TestDenyPathSegments(t *testing.T) {
 		if got, err := DenyPathSegments(pattern); err == nil {
 			t.Errorf("DenyPathSegments(%q) = %q, want a refusal", pattern, got)
 		}
+	}
+}
+
+// TestPushRulesIsSetCountsReviewPaths: a spec carrying only review paths is a
+// rule — the broker must buffer, inspect and advertise no-thin for it — while
+// a hold with nothing to hold reads as absent.
+func TestPushRulesIsSetCountsReviewPaths(t *testing.T) {
+	if !(&PushRulesSpec{RequireReviewPaths: []string{"a/**"}}).IsSet() {
+		t.Error("require_review_paths alone reads as no rule")
+	}
+	if (&PushRulesSpec{HoldSeconds: 60}).IsSet() {
+		t.Error("hold_seconds alone reads as a rule, but there is nothing to hold")
 	}
 }

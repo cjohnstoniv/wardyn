@@ -227,6 +227,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and before the secret store exists, so a secret-store reference cannot be
   resolved here. The file's mode must be `0600` or tighter, and boot refuses if
   both vars are set rather than picking one silently. See `docs/ENV.md`.
+- **A push that touches a reviewed path is held for an admin's decision (#180).** `push_rules`
+  gains `require_review_paths` — deny_paths' pattern language and write-time checks — and
+  `hold_seconds` (default 120, at most 600). A brokered push no deny path refuses, but which
+  introduces a path a review pattern matches, is held open on its connection while a new
+  `push_content` approval asks an admin; approved, the buffered bytes go to the forge unchanged,
+  and denied, undecided within `hold_seconds`, or closed undecided, the push is refused
+  (`403`, `brokered:git:push-held`). A deny match always wins. The approval's `requested_scope`
+  is `{repo, branch, acts_as, paths, paths_total, commits, paths_digest}` — at most ten paths, the
+  exact count, the sorted commit ids and a SHA-256 over every matched path — and it is the dedup
+  key: a retry git repacks carries the same commits and is forwarded on the approval already
+  given, and a denial refuses the same commits again without asking. Admins decide; a member
+  cannot, even on their own run. An unattended (non-interactive) run refuses at once with no
+  approval raised (`brokered:git:push-held-unattended`). Both lanes that enforce deny paths hold:
+  the GitHub App lane and the `git_pat` lane (Azure DevOps over a PAT included); the Azure DevOps
+  Entra lane applies no content rules yet. Migration `0069_approval_push_content` adds the kind
+  to the `approvals.kind` CHECK.
 
 - **A brokered push that touches a denied path, cannot be inspected, or is too large is refused.**
   `push_rules` is enforcement now, not storage. When a run's policy carries content rules, both

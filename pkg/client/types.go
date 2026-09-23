@@ -65,9 +65,14 @@ type (
 	WorkspaceMount = types.WorkspaceMount
 
 	// PushRulesSpec declares content rules for a run's brokered git pushes,
-	// carried in RunPolicySpec.PushRules. Phase one only: deny_paths and
-	// max_inspect_pack_mib are stored and validated; nothing reads them yet.
+	// carried in RunPolicySpec.PushRules: deny_paths refuse, and
+	// require_review_paths hold the push for an admin's decision for up to
+	// hold_seconds.
 	PushRulesSpec = types.PushRulesSpec
+
+	// PushContentScope is a push_content approval's requested_scope: the
+	// held push's repository, refs, credential, matched paths and commits.
+	PushContentScope = types.PushContentScope
 
 	// ApprovalRequest is a human-in-the-loop approval gate. Returned by
 	// ListApprovals, Approve, and Deny.
@@ -280,6 +285,7 @@ const (
 	ApprovalCredential   = types.ApprovalCredential
 	ApprovalEgressDomain = types.ApprovalEgressDomain
 	ApprovalToolCall     = types.ApprovalToolCall
+	ApprovalPushContent  = types.ApprovalPushContent
 )
 
 // ActorType values.

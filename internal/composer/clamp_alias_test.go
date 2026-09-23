@@ -199,7 +199,8 @@ func TestCloneProposal_SharesNothingWithItsInput(t *testing.T) {
 		WorkspaceSecretValues: []string{"resolved-at-dispatch-only"},
 		ClassifiedMarkers:     []string{"WARDYN-CONFIDENTIAL"},
 	}
-	orig.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}, MaxInspectPackMiB: 8}
+	orig.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}, MaxInspectPackMiB: 8,
+		RequireReviewPaths: []string{"infra/**"}}
 	beforeOrig := specJSON(t, orig)
 
 	clone := cloneProposal(orig)
@@ -219,6 +220,7 @@ func TestCloneProposal_SharesNothingWithItsInput(t *testing.T) {
 	clone.LLMInspection.ClassifiedMarkers[0] = "ignored"
 	clone.PushRules.DenyPaths[0] = "nothing/**"
 	clone.PushRules.MaxInspectPackMiB = 64
+	clone.PushRules.RequireReviewPaths[0] = "nothing/**"
 	if after := specJSON(t, orig); after != beforeOrig {
 		t.Errorf("mutating the copy changed its input (aliased):\n before %s\n after  %s", beforeOrig, after)
 	}

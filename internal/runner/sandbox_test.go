@@ -6,6 +6,7 @@ package runner
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -162,5 +163,22 @@ func TestBuildProxyConfig_TrustedCAPEM(t *testing.T) {
 	}
 	if _, present := raw["trusted_ca_pem"]; present {
 		t.Errorf("trusted_ca_pem key present with an empty ProxyConfig.TrustedCAPEM, want absent (omitempty)")
+	}
+}
+
+// TestBuildProxyConfig_Unattended: the flag reaches the sidecar's "unattended"
+// key, and a false one is omitted so an attended run's config is unchanged.
+func TestBuildProxyConfig_Unattended(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		b, err := BuildProxyConfig(uuid.New(), ProxyConfig{Unattended: want}, ProxyListenPort)
+		if err != nil {
+			t.Fatalf("BuildProxyConfig: %v", err)
+		}
+		if got := strings.Contains(string(b), `"unattended":true`); got != want {
+			t.Errorf("Unattended=%v marshals to %s", want, b)
+		}
+		if !want && strings.Contains(string(b), "unattended") {
+			t.Errorf("an attended run's config names the key: %s", b)
+		}
 	}
 }

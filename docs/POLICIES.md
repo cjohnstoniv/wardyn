@@ -786,8 +786,8 @@ content rules at all** — byte-identical to today's wire shape and behaviour.
 
 **What a run with content rules gets.** The broker buffers the receive-pack
 request up to the run's inspection ceiling, reads which paths the push would
-introduce, and answers one of three refusals or forwards the buffered bytes
-unchanged:
+introduce, and answers one of three refusals, holds it for an admin's review,
+or forwards the buffered bytes unchanged:
 
 | Refusal | Status | `rule_source` | Remedy |
 |---|---|---|---|
@@ -795,6 +795,8 @@ unchanged:
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
+| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403` | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
+| A path matched `require_review_paths` on an **unattended** run | `403` | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
 
 A refused push is **never forwarded**, and the refused request mints nothing
 itself — but it does not prevent a credential being issued. git sends
@@ -907,12 +909,54 @@ has every push refused rather than the entry ignored. A pattern that is not a
 valid Go pattern — an unterminated `[`, say — is compared literally rather than
 silently matching nothing.
 
-**Phase two** (`require_review_paths`, `deny_new_executables`,
-`max_file_size_mib`, `hold_seconds`, and the held `push_content` approval this
-type reserves) is a later change. Whoever adds a size rule must **decide** what
-an unmeasurable file means rather than compare it: the inspector reports `-1`
-for a blob the pack does not carry, and `-1` passes every "is it under the
-limit" test by accident.
+**Held for review: `require_review_paths`.** A path a review pattern matches
+— same pattern language, same forge comparison, a directory the push does not
+carry matched when a pattern could match beneath it — does not refuse the push:
+the broker holds the request open and raises a `push_content` approval for an
+admin, then forwards the buffered bytes unchanged if it is approved. A deny
+match always wins: a path both lists match is refused and nothing is asked.
+
+- **Admins decide, members do not** — not even on their own run. A member
+  approving their own run's workflow-file edit is the exfiltration the rule
+  exists to stop, so the member gate answers them the same `404` any other
+  non-egress kind gets. A decision carries no `decision_scope` (`400` if one is
+  sent): an approval covers exactly the commits it names.
+- **An unattended run does not hold.** A run with a task and nobody driving it
+  (not `interactive`) has nobody to ask, so a review match is refused at once
+  (`brokered:git:push-held-unattended`) and no approval is raised; the control
+  plane refuses such a raise as well.
+- **The hold lasts `hold_seconds`** (default 120, at most 600). git waits on
+  the open request — it only gives up early if `http.lowSpeedLimit` and
+  `http.lowSpeedTime` are set. Past the hold the push is refused and the
+  request stays in the console; pushing the same commits again waits on that
+  same request rather than raising another.
+- **What an approval covers.** The approval's `requested_scope` is
+  `{"repo","branch","acts_as","paths","paths_total","commits","paths_digest"}`:
+  the repository as the run's grant names it (`github.com/<owner>/<repo>`, or
+  `<host>/<path>` on the `git_pat` lane —
+  `dev.azure.com/<org>/<project>/_git/<repo>` for Azure DevOps); the ref the
+  push updates (several are joined by `, `); the credential it authenticates
+  with, as `<grant kind>:<grant id>`; the first ten matched paths, sorted, and
+  how many matched in all; the object ids the push sets its refs to, sorted;
+  and a SHA-256 over **every** matched path, sorted and NUL-terminated. The
+  scope is the dedup key — two identical pushes are one request — and commits
+  are content addresses, so a retry git repacks carries the same commits in
+  different bytes and is let through on the approval already given. A denial
+  sticks for the rest of the run: the same commits are refused without asking
+  again. A request that expires or is cancelled undecided is forgotten, and the
+  next push of those commits asks afresh.
+- **Bounded.** At most 16 pushes are held at once and 256 different pushes are
+  remembered per run; past either the push is refused.
+- **Where it applies.** Wherever a deny path would refuse: the GitHub App lane
+  and the `git_pat` lane (GitHub, GitLab, Azure DevOps over a PAT), whatever
+  either lane's branch switch says. The Azure DevOps **Entra** lane
+  (`/wardyn/git/` for a host the run's per-person Azure DevOps grant covers)
+  applies no content rules yet, so it neither refuses nor holds.
+
+`deny_new_executables` and `max_file_size_mib` are a later change. Whoever adds
+a size rule must **decide** what an unmeasurable file means rather than compare
+it: the inspector reports `-1` for a blob the pack does not carry, and `-1`
+passes every "is it under the limit" test by accident.
 
 **Unenforceable is a warning, not a refusal.** `push_rules` is enforced only on
 the brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no
@@ -920,24 +964,28 @@ broker seam. A policy that sets `push_rules` while `ssh_key` is the run's
 **only** git-capable grant is legal (never a `422` at write time) but the rules
 cannot be enforced; the Review rail's risk grade (`composer.Grade`) surfaces
 that as a **medium**-risk item so the operator is told rather than blocked. An
-all-zero `push_rules: {}` — nothing in `deny_paths`, `max_inspect_pack_mib`
-`0`/absent — reads as **absent**, the same as `null`: it never survives an
+all-zero `push_rules: {}` — nothing in `deny_paths` or `require_review_paths`,
+`max_inspect_pack_mib` `0`/absent — reads as **absent** (a `hold_seconds` with
+no review path to hold for does not count), the same as `null`: it never survives an
 operator ceiling into a member's clamped spec, and never grades the warning
 above.
 
 **Clamped as a floor, not a bare merge.** An operator ceiling's `push_rules`
 is inherited wholesale by a proposal that sets none, and unioned into one that
-does — `deny_paths` by **exact string**, never case- or whitespace-folded (a
+does — `deny_paths` and `require_review_paths` by **exact string**, never case- or whitespace-folded (a
 git path is case- and space-sensitive on Linux, unlike a DNS name), so a
 member re-typing the ceiling's own entry in different case adds a second
 entry rather than silently dropping the operator's. A ceiling that sets none
 leaves a proposal's own `push_rules` untouched — this field only narrows, so
-there is nothing here for a silent ceiling to protect against.
+there is nothing here for a silent ceiling to protect against. When both set
+`max_inspect_pack_mib` or `hold_seconds`, the smaller one applies.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above. Each entry at most **256 bytes**, no NUL or other control character; rejected (`400`) at write time. **No count cap** — deny-only lists narrow rather than widen, the same stance `denied_domains` takes, and a clamp-merged list can legitimately exceed what either the operator's ceiling or the member's own proposal authored on its own. The matcher therefore bounds its own work instead of assuming the list is short: a list long enough that matching it against a push would not finish in bounded time refuses that push (`brokered:git:push-uninspectable`) rather than being ground through. |
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
+| `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, no control character, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
+| `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |
 
 ## `llm_inspection` — `LLMInspectionSpec`
 
