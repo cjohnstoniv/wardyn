@@ -624,6 +624,10 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		CapturedAt:   now.UTC(),
 		Source:       adoEntraSourceSignIn,
 	}
+	// Under the per-owner lock a renewal holds from its read to its write, so
+	// the renewal cannot write its copy of the old sign-in over this one.
+	unlock := s.adoEntra.lock(subject, cfg.RowID)
+	defer unlock()
 	if err := s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob); err != nil {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": "store_error", "error": err.Error(), "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,

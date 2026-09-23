@@ -315,6 +315,26 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 	return env
 }
 
+// interactiveBootSeed returns the text an interactive run fires at sandbox
+// boot as WARDYN_INTERACTIVE_SEED, or "" when it fires nothing. ONE definition,
+// because two sides have to agree on it: applyDispatchModeEnv delivers the
+// seed, and resolveRunAutonomy grades it before the run exists — a gate with
+// its own copy of this predicate would refuse one set of runs while dispatch
+// seeded another.
+//
+// The reservedRunTasks exclusion is load-bearing, not defensive:
+// server-launched record/verify/login runs (runs_create_validate.go) are
+// INTERACTIVE runs that carry a non-empty, server-set Task ("workspace
+// record", etc.) — without it they would boot-seed `claude "workspace record"`
+// into what is supposed to be a plain record-mode sandbox, and the login box
+// would boot-seed over its own login flow.
+func interactiveBootSeed(interactive bool, task string) string {
+	if !interactive || reservedRunTasks[task] || strings.TrimSpace(task) == "" {
+		return ""
+	}
+	return task
+}
+
 // applyDispatchModeEnv sets dispatchRun's run-mode discriminator env vars
 // (scan-only / exec task mode / interactive-start / boot-seed / tool-approval
 // posture) plus the non-secret grant-id maps (WARDYN_GITHUB_GRANT_ID /
@@ -364,19 +384,12 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// session the human's attach later joins (interactiveStart above decides
 	// whether it reads as an initial prompt or a startup command; that
 	// interpretation lives entirely image-side, in agent-run's --boot-seed
-	// branch — nothing here needs to know which). The reservedRunTasks
-	// exclusion is load-bearing, not defensive: server-launched record/verify/
-	// login runs (runs_create_validate.go, same package) are INTERACTIVE runs
-	// that carry a non-empty, server-set Task ("workspace record", etc.) —
-	// without this guard they would boot-seed `claude "workspace record"` into
-	// what is supposed to be a plain record-mode sandbox, and the login box
-	// would boot-seed over its own login flow.
-	if p.Interactive && !reservedRunTasks[run.Task] {
-		if seed := strings.TrimSpace(run.Task); seed != "" {
-			sandboxEnv["WARDYN_INTERACTIVE_SEED"] = run.Task
-			if p.SeedAutoTools {
-				sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
-			}
+	// branch — nothing here needs to know which). See interactiveBootSeed for
+	// which tasks never seed.
+	if seed := interactiveBootSeed(p.Interactive, run.Task); seed != "" {
+		sandboxEnv["WARDYN_INTERACTIVE_SEED"] = seed
+		if p.SeedAutoTools {
+			sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
 		}
 	}
 	// Tool-approval posture: "hold" routes an AUTONOMOUS run's own

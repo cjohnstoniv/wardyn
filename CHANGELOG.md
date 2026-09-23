@@ -28,6 +28,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **A repository's own `.claude/settings.json` could approve tool calls on a `tool_approvals=hold`
+  run before Wardyn's approval gate was asked.** Claude Code resolves `permissions.allow` rules
+  before it consults `--permission-prompt-tool`, so a matching rule in the workspace (which the
+  agent can also write) ran the tool and `wardyn-toolgate` never saw it (#358). The hold lane in
+  the claude-code image's `agent-run` now passes `--setting-sources user`, so project and local
+  settings are not loaded; managed settings still are. This is an interim fix. The agent can still
+  write its own user-level `~/.claude/settings.json`; THREAT-MODEL.md §5 states that residual, and
+  #333's managed settings close it.
 - **An unauthenticated caller that rotated its source address wrote one `auth.failed` audit row per
   refused request.** The 0.7.2 coalescer keyed a streak on the peer IP, so every change of address
   closed the streak and opened a new one: a bad-token drip from ten addresses, one a second, recorded
@@ -62,6 +70,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
   status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
   while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
+- **Fourteen recovered nil-pointer panics in `internal/api`'s test suite were reported as passing
+  tests.** #323 fixed ten on the `/metrics` scrape path; the rest were the same class elsewhere — a
+  test double embeds `store.Store` as a nil interface to satisfy the wide type, a request reaches a
+  method the double never implemented, and chi's `Recoverer` turns the dereference into an
+  unremarkable 500 every assertion still matched. `rbacStore`, `tokenMemStore`, `pingStore`,
+  `apiTokenErrStore`, `driveStore`, `wsReadStore` and `recordTierStore` now answer `Ping`,
+  `LatestAuditEventByAction`, `GetSiteConfig`, `PutSiteConfig` and `ListRuns` where a request
+  legitimately reaches them instead of leaving them on the nil embed; `noGovernanceStore` — already
+  the shared "empty deployment" answer several of them embed — gained the store reads several
+  request paths (a scrape, a capability check) make regardless of what the test means to exercise.
+  The five `handleCreateRun` panics were a deliberate no-Store harness design ("a request accepted
+  past validation panics inside `CreateRun`, which chi turns into the 500 that proves it got there")
+  that the same class caught: `createRunUnconfiguredStore` now answers that same "accepted past
+  validation" 500 from a real `CreateRun` error instead of a crash, and the two tests that read that
+  sentinel now assert the 500 directly rather than only its side effects. The durable half needs no
+  production code: chi's `Recoverer` already calls `GetLogEntry(r).Panic(rvr, stack)` when the
+  request carries one instead of just printing the stack, a seam nothing outside `_test.go` uses, so
+  a new `panicFails` test helper attaches a catcher via `middleware.WithLogEntry` and fails the test
+  if `Panic` ran. Every `srv.Handler().ServeHTTP` and `httptest.NewServer(srv.Handler())` call site in
+  the package — about 55 of them — now wraps its handler with it, so no test path in the package can
+  read a recovered panic back as a passing test (#338). The one site whose panic IS the fixture
+  (#323's `/metrics` scrape) inverts the check with `panicIsTheFixture` rather than dropping it, so
+  it fails if nothing panics.
 - **An HTTP/2 answer to the egress proxy's HTTP/1.1 request is now recorded as
   `builtin:upstream-protocol-mismatch` with a plain cause, and answered with a 400 so SDKs stop
   retrying, instead of a `builtin:dial-failed` that was retried until the SDK gave up (#359).**
@@ -146,6 +177,72 @@ and does not yet follow semantic versioning (interfaces are not stable).
   when the chip appears.
 
 ### Added
+
+- **A brokered push that touches a denied path, cannot be inspected, or is too large is refused.**
+  `push_rules` is enforcement now, not storage. When a run's policy carries content rules, both
+  brokered git lanes buffer the receive-pack request up to the run's inspection ceiling, read which
+  paths the push would introduce, and answer one of three refusals — `403` for a path matching
+  `deny_paths`, `413` for a request past `max_inspect_pack_mib` (32 MiB when unset), `415` for a
+  push that cannot be read from its own bytes — or forward the buffered bytes unchanged. A refused
+  push is never forwarded; it does not stop a credential being issued, because git's
+  `GET info/refs?service=git-receive-pack` discovery precedes every push and mints it. An oversize
+  push is refused rather than held: holding would ask a person to approve a push nobody inspected.
+  **What the pack leaves out is compared with the commit the push builds on:** a pack omits every
+  tree the forge already stores wherever the new tree puts it, so a directory moved, staged by an
+  earlier push, or restored from an older revision onto a denied path looked exactly like one left
+  alone — and was skipped. Such a directory, and a symlink or submodule, is now matched when a deny
+  pattern could match anything beneath it, and compared with the same path in the commit the push
+  builds on, read from GitHub's REST API with the run's own credential (trees only, never file
+  contents): the same mode and object id passes, anything else refuses. So
+  `.github/workflows/**` on a repository that already has workflows refuses a push that changes,
+  adds, moves or restores one, and passes an edit to `src/`. A parent counts only when GitHub
+  places it in the current history of the default branch or of a branch the push updates, because
+  GitHub serves a fork network's objects through every repository in it; history a clone re-sends
+  after the default branch moved on is taken out the same way. A forge other than GitHub, or a read
+  that fails, is truncated, or runs past 64 requests or 20 seconds, keeps the refusal and says why.
+  Building on an older commit of the default branch keeps what that commit held at a denied path;
+  `docs/POLICIES.md` states it. A `deny_paths` entry with an empty, `.` or `..`
+  segment is refused at write time, a trailing `/` reads as `/**`, and inspection shares the proxy
+  sidecar's one inspection slot and retained-bytes budget with LLM request scanning, so concurrent
+  small pushes cannot inflate past its 256 MiB cap. Content rules are entered independently of branch-namespace confinement
+  on both lanes, so `git_push_any_branch: true` narrows where a push may land without switching off
+  what it may contain, and the `no-thin` advertisement now goes out on the token lane too, on the
+  same trigger, so a lane that enforces the rules also asks for a pack it can read. Offending paths
+  go to the sidecar's structured log and, at most ten of them, to the refusal response (git renders
+  a receive-pack `403` without its body, so the paths are read from the run's decision stream and
+  that log); they never ride the decision log's free-text fields, which stay reserved for
+  dial-shaped refusals. The
+  matcher bounds its own work — `deny_paths` carries no count cap, so a list too long to evaluate
+  against a push refuses it rather than being ground through.
+
+- **The broker advertises `no-thin`, so a push it must inspect arrives self-contained.** When a run's
+  policy sets `push_rules`, the brokered receive-pack reference advertisement relayed back to the
+  sandbox gains the `no-thin` capability. The agent images clone with `--depth 1`, so a real push's
+  root tree is normally a delta against a base object that stayed on the forge: the pack is *thin*,
+  and nothing in the request can resolve what it deltified against. `gitprotocol-capabilities` says a
+  client must not send a thin pack when the server advertises `no-thin`, so the client packs those
+  bases in and the content rules can read what they are being asked about instead of refusing every
+  legitimate push. An advertisement that is not exactly the expected shape is relayed byte for byte
+  and the push is left thin — corrupting one would break every push through the broker, while an
+  un-rewritten one is merely refused later, on its own terms. Only the push advertisement is
+  rewritten; fetch is untouched, and so is the POST that carries the pack.
+
+- **`push_rules` policy field: content rules for a brokered git push.** `RunPolicySpec` carries a new
+  `*PushRulesSpec` — `deny_paths` and `max_inspect_pack_mib` — alongside `git_push_any_branch`:
+  where that field says WHERE a run's push may land, this one says WHAT it may touch. `nil` (every
+  policy authored before this field existed) is byte-identical to today's behaviour. This change
+  stores and validates the field only; no matcher reads `deny_paths` yet — a policy that sets
+  `push_rules` while the run's only git-capable grant is `ssh_key` (which the broker cannot inspect)
+  grades a medium-risk warning on the Review rail rather than a write-time refusal.
+- **Settings is reachable from the sidebar, and a save conflict keeps your work.** Settings now sits
+  last in the sidebar, under a divider, beside the nine existing sections — it also keeps its
+  long-standing account-menu entry, so nobody's muscle memory breaks. The Providers screen and its
+  Agents tab share one navigation guard: leaving a dirty Git, Storage or Agents draft now raises a
+  blocking confirm ("Leave without saving?") instead of losing the edits silently, the console's first
+  use of this pattern. When a save collides with someone else's (a 412), the banner offers "Copy my
+  changes" — the changed fields as readable text, never the whole draft as JSON — before "Discard mine
+  and reload", which is no longer the only way out. A disabled Save now states its reason beside the
+  button, not only in a title tooltip.
 
 - **An organisation control plane can enrol managed laptops, list them, revoke one, and take in
   their audit rows** (#102). An admin mints a single-use enrolment token
@@ -259,6 +356,46 @@ and does not yet follow semantic versioning (interfaces are not stable).
   existing audit-chain advisory lock, recomputing each row's hash in SQL over the stored jsonb, refuses
   the whole batch on any mismatch, and accepts a genesis row as a recorded chain reset. Storage and the
   store seam only — no routes, CLI or forwarder yet.
+
+- **A run's autonomy level is now resolved once and enforced at launch and on Review.** With an
+  `autonomy_rubric` on the assigned governance profile, a run's posture — egress reach (`open` with
+  allow-all or any allowlisted host beyond the safe baseline, `reviewed` when first-use approval
+  escalates to a human, else `sealed`), secret power (`powerful` with a write-capable grant, an
+  `api_key` to a non-baseline host, or a `git_pat`/`ssh_key`/`env_secret`; `baseline` with any
+  grant; else `none`) and the ENFORCED confinement class — folds to the minimum level the rubric
+  permits. `L0` refuses an unattended run and seeded auto tools; `L1` additionally refuses
+  `task_mode=exec` and derives `tool_approvals=hold` on an unattended run, refusing it outright for
+  an agent with no tool-approval lane; `L2` refuses `task_mode=exec`; `L3` refuses nothing. An
+  interactive run's STARTUP COMMAND — a task with `interactive_start` unset or `shell`, which the
+  image runs as `bash -lc` at sandbox boot before anyone attaches — ranks with `task_mode=exec`
+  and is refused below `L3` (target `runs.interactive_start`); `interactive_start=agent`, which
+  hands the task to the agent as its first prompt under its own approval prompt, is unaffected.
+  Refusals reuse the existing member 403 and its `governance_profile` `authz.denied` row — the
+  closed reason enum is unchanged. The level is frozen on `agent_runs.autonomy_level`; the level,
+  the posture and `bound_by` — EVERY rubric field that tied at that level, not the first in a
+  fixed order, since raising one row of a tie does not move the level — ride the `run.create`
+  audit row and `POST /runs/preflight`'s new `autonomy` field, so Review and launch answer with
+  the same object from the same call (`resolveRunAutonomy`, `internal/api/runs_autonomy.go`; the arithmetic is pure, in
+  `internal/composer/autonomy.go`). A member with no assigned profile — and a profile with no
+  rubric, or one that caps nothing at this posture — is unchanged: no refusal, no derived field and
+  no `autonomy` key on either surface.
+  The posture is graded on the run's real egress envelope, not on the spec as each handler
+  happens to hold it: every lane `unionRunEgress` adds after the resolution is unioned in before
+  grading — the workspace registries and clone hosts; the site-config enterprise SCM hosts,
+  whenever the run declares a repo through `repo`, `workspace_repos` OR any `github_token`,
+  `git_pat` or `ssh_key` grant; a `git_pat`'s Azure DevOps bundle; and an `ssh_key`'s
+  SSH-over-443 endpoint — from the spec alone, so Review and launch compute it identically. The
+  grant lanes are graded BEFORE the launch-side provider-lane veto and codex-cli's missing SSH
+  lane, so the graded allowlist is a superset of the one `unionRunEgress` builds: a run that
+  reaches beyond the safe baseline through any of those lanes is always graded `open`, and a run
+  whose lane is later vetoed may be graded `open` on reach it will not get. The site config
+  those hosts come from is read ONCE per request and handed to both the resolution and the
+  union, so the level and the dispatched hosts cannot come from two reads; a read that fails
+  refuses the run with a 500, as provider admission and the grant-lane veto already do on theirs.
+  **Not in the posture:** the egress dispatch adds later still — the model-provider hosts it
+  resolves from global configuration, and the artifact-redirect substitution. A Bedrock run
+  whose region comes from global configuration therefore grades its egress without the Bedrock
+  hosts, where the same run with an integration row grades them.
 - **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
   profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
   secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`
@@ -268,6 +405,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **The Getting Started demo episodes can now be served from an air-gapped mirror.** `WARDYN_DEMO_VIDEO_BASE_URL`
+  re-points where the console downloads them from — `https://` only, no userinfo, query or fragment,
+  validated at boot the same way an internal model gateway base URL is. Unset (the default) is
+  byte-identical to today: the two hardcoded GitHub hosts. The console reads the configured base off
+  `/healthz` and the CSP's `media-src` is built from it (through the same host-sanitizing filter the
+  per-request `connect-src` uses) rather than being a fixed constant. An episode with no recorded tag
+  still resolves to no URL either way. A blocked/redirecting mirror now reads as the deployment's
+  media policy blocking the episode, not as a missing file.
+
 - **The configured Anthropic gateway (`WARDYN_ANTHROPIC_BASE_URL`) now also carries subscription
   and Wardyn-managed runs, not just the api-key lane.** Dispatch points those two lanes'
   `ANTHROPIC_BASE_URL` at the gateway when one is configured; the in-image `agent-run` launcher no
@@ -278,6 +424,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
   as it is sent to `api.anthropic.com` today. The harness-login (`claude setup-token`) lane is
   unaffected and always stays on the public host, since that flow mints the OAuth token itself.
   Unset is byte-identical to today.
+- **A configured Anthropic or OpenAI gateway can now be given its own injection header name and
+  value format**, instead of only ever the harness catalog's compile-time convention
+  (`x-api-key` bare / `Authorization: Bearer %s`). Four new boot settings —
+  `WARDYN_ANTHROPIC_GATEWAY_HEADER`, `WARDYN_ANTHROPIC_GATEWAY_FORMAT`, and the OpenAI pair —
+  are validated at boot (`ValidateLLMGateways`): the format must contain exactly one `%s` and no
+  other verb, and the header must be a valid HTTP header token; a malformed value refuses boot
+  naming the setting, rather than surfacing later as a confusing dial error. Each of the two
+  settings is independent and applies field-by-field in `(*Server).llmProviderFor`, the seam that
+  already resolves the gateway host. Unset (either or both) is byte-identical to today — the
+  vendor defaults are untouched.
+
+- **The autonomy rubric is now visible in the console: the profile editor, the profiles list, the New
+  Run rail and the run header.** The profile editor grows a Rubric section (`profile-rubric.tsx`) —
+  three posture groups, nine rows, one `No cap`/`L0`-`L3` select each — that round-trips through
+  `GovernanceLimits.autonomy_rubric`. The profiles list names the strictest cap on the chip itself
+  (`Autonomy: <level> at the strictest`), not merely that a rubric exists, since the detail is
+  unreadable in a tooltip on a phone or by keyboard. The New Run rail reads `preflight.result.autonomy`
+  and states the resolved level plus one sentence naming every rubric row that bound it — `bound_by`
+  is a list, and a tie at the resolved level names every tied cause, never just the first, so
+  loosening one of them without the others is never a false promise. The run header carries the same
+  level beside `ConfinementChip` from the frozen `agent_runs.autonomy_level`. Levels read Attended /
+  Gated / Unattended / Unrestricted on screen; the internal `L0`-`L3` codes stay in `title` only, the
+  same way `ConfinementChip` keeps `CC1`-`CC3` out of the visible label. New copy lives in
+  `governance-copy.ts` (`RUBRIC`, `LIMITS_CHIP`, `AUTONOMY_RAIL`, `AUTONOMY_BOUND`) and a new
+  `wardyn/autonomy-meta.ts` mirroring `cc-meta.ts`; the TypeScript mirror of `AutonomyResolution` /
+  `AutonomyPosture` is new too (`lib/api/governance.ts`), there being no prior console consumer of
+  either.
 
 ### Fixed
 

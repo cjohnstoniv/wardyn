@@ -55,6 +55,16 @@ type preflightResponse struct {
 	// per_user member who has not signed in, where there is no response body to
 	// carry it. That is exactly why the status row exists as the default path.
 	ModelCredential *modelCredentialFacts `json:"model_credential,omitempty"`
+	// Autonomy is what resolveRunAutonomy decided for this run — the same
+	// object launch puts on its `run.create` audit row, from the same call, so
+	// Review cannot show a level launch will not honour (0.8 #97).
+	//
+	// ABSENT rather than a zero value when nothing bound the run: no assigned
+	// profile, no rubric on it, or a rubric that leaves this posture's three
+	// fields unset. That is exactly the condition under which the audit row
+	// omits its own field, which is what makes "Review returns what launch
+	// audits" checkable instead of approximately true.
+	Autonomy *types.AutonomyResolution `json:"autonomy,omitempty"`
 	// GitCredential is THIS CALLER's Azure DevOps access state for THIS RUN's
 	// OWN repositories only (review finding F2; gitCredentialFactForRepos,
 	// scmaccess.go) — the per-user row (if any) that admits one of them, the
@@ -278,6 +288,20 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The SAME autonomy gate launch runs, in the same place in the order
+	// (runs.go) and on the same folded spec + enforced class — called, not
+	// re-implemented, because a Review that previewed a level launch then
+	// refused is the one lie this feature cannot afford. Its 403s are real
+	// refusals with real authz.denied rows, the same way the drive door's are.
+	// The derived tool_approvals write lands on this handler's own request
+	// copy and is discarded with it (preflight dispatches nothing); the 201
+	// warnings belong to the launch channel, and the site-config snapshot to
+	// launch's egress union, so both are dropped here too.
+	autonomy, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	if !ok {
+		return
+	}
+
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really
 	// run at (post-floor/raise), matching launch.
@@ -365,6 +389,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
+	}
+	// Published on exactly the condition the audit row publishes on — a level
+	// was actually resolved — so the two objects are comparable field for field.
+	if autonomy.Level != "" {
+		resp.Autonomy = &autonomy
 	}
 	// #386: the informational, PER-RUN git_credential fact (review finding
 	// F2) — never blocking (this handler's own contract, doc comment above),

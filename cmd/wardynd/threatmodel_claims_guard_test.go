@@ -244,7 +244,12 @@ func TestSecurityDocsCiteTheFileThatDeclaresSecurityHeaders(t *testing.T) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
 			continue
 		}
-		if strings.Contains(readRepoFile(t, "internal/api/"+e.Name()), "func securityHeaders(") {
+		src := readRepoFile(t, "internal/api/"+e.Name())
+		// F145: securityHeaders became a (*Server) method so it can read
+		// s.cfg.DemoVideoBaseURL for the CSP's media-src — match both the
+		// free-function and method-receiver declaration forms so this guard's
+		// anchor survives that shape change.
+		if strings.Contains(src, "func securityHeaders(") || strings.Contains(src, "func (s *Server) securityHeaders(") {
 			owner = "internal/api/" + e.Name()
 		}
 	}

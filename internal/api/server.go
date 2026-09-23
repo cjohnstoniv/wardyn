@@ -249,6 +249,17 @@ type Config struct {
 	// (`claude setup-token`) lane never consults it and always stays on the
 	// public host — that flow mints the OAuth token itself.
 	LLMGateways map[string]string
+	// LLMGatewayAuth maps the same public model-provider host key as
+	// LLMGateways to an operator-configured injection header/format override
+	// (WARDYN_<VENDOR>_GATEWAY_HEADER / _GATEWAY_FORMAT, validated by
+	// ValidateLLMGateways) — independent of whether that provider also has an
+	// LLMGateways entry. nil/empty (the default) => every provider keeps the
+	// harness catalog's compile-time convention (harness.go's Gateway field),
+	// byte-identical to today. Consulted by (*Server).llmProviderFor, which
+	// applies Header/Format field-by-field onto the InjectionRule it builds —
+	// never onto the mint path directly, so a stored/proposed grant always
+	// reflects the resolved convention at proposal time.
+	LLMGatewayAuth map[string]LLMGatewayAuth
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".
@@ -667,6 +678,18 @@ type Config struct {
 	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
 	// cookie that cannot be signed must never be issued.
 	UISessionKey []byte
+	// DemoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL, validated at boot by
+	// ValidateDemoVideoBaseURL (same seven-rule shape as an internal model
+	// gateway: https://, no userinfo, no query/fragment). It re-points the
+	// Getting Started demo episodes at an operator-run mirror for an
+	// air-gapped deployment, where github.com is unreachable — both the
+	// download URL episodeUrl's /healthz-reading caller builds and the CSP's
+	// media-src this base's host is echoed into (cspMediaSrc,
+	// security_headers.go). Empty (the default) = the two hardcoded GitHub
+	// hosts, byte-identical to today. Control-plane-authored only, same trust
+	// boundary as TrustedCAPEM/LLMGateways above — never a SiteConfig field,
+	// never agent-reachable.
+	DemoVideoBaseURL string
 }
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime

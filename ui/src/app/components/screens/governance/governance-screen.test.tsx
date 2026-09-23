@@ -520,6 +520,7 @@ describe("Governance components render no copy of their own", () => {
   expectNoOwnCopy("src/app/components/screens/governance", [
     "governance-screen.tsx",
     "profile-editor.tsx",
+    "profile-rubric.tsx",
     "assignments.tsx",
     "display.tsx",
   ]);
@@ -661,6 +662,40 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
     renderScreen(snapshot({ profiles: [profile({ limits: { max_concurrent_runs: 1 } }), PLATFORM] }));
     await screen.findByText(GREENFIELD.name);
     expect(within(screen.getAllByRole("table")[0]).getByText(GOV.LIMIT_QUOTA_LABEL(1))).toBeInTheDocument();
+  });
+});
+
+// #93/#96 ruling 2: the chip names the STRICTEST cap, not merely that a
+// rubric exists — the detail belongs on screen, not behind a tooltip.
+describe("GovernanceScreen — the autonomy rubric's strictest-cap chip", () => {
+  it("names the lowest level among every set row, not the first one set", async () => {
+    renderScreen(
+      snapshot({
+        profiles: [
+          // secrets_powerful (L2) and confinement_cc1 (L1, set second) — the
+          // chip must read the LOWER of the two, L1 "Gated", proving the fold
+          // is a min() over every set row rather than "the first row set".
+          profile({ limits: { autonomy_rubric: { secrets_powerful: "L2", confinement_cc1: "L1" } } }),
+          PLATFORM,
+        ],
+      }),
+    );
+    await screen.findByText(GREENFIELD.name);
+    const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
+    const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.getByText("Autonomy: Gated at the strictest")).toBeInTheDocument();
+    // No claim that this profile bounds nothing — the rubric alone is enough
+    // to take it off LIMITS_NONE.
+    expect(row.queryByText(GOV.LIMITS_NONE)).toBeNull();
+  });
+
+  it("a profile with no rubric shows no autonomy chip and still reads None", async () => {
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    expect(screen.queryByText(/^Autonomy:/)).toBeNull();
+    const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
+    const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.getByText(GOV.LIMITS_NONE)).toBeInTheDocument();
   });
 });
 

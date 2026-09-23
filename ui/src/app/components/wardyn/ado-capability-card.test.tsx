@@ -177,6 +177,40 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(onDeny).toHaveBeenCalledWith([{ scope: "once" }]);
   });
 
+  // review finding F3: the scope options were plain <button>s inside a Radix
+  // DropdownMenuContent, whose own keydown handler swallows Tab
+  // (@radix-ui/react-menu's ContentImpl) and whose roving-focus manager only
+  // ever registers DropdownMenuItems — never these buttons. A keyboard-only
+  // admin could open the menu but never move focus onto "Once". This test
+  // drives the menu with the keyboard alone: no user.click ever lands on a
+  // scope option.
+  it("F3: the scope menu is reachable with the keyboard alone — Tab reaches Once, Enter picks it", async () => {
+    const onApprove = vi.fn();
+    renderCard(
+      <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={onApprove} onDeny={vi.fn()} />,
+    );
+    const card = await screen.findByTestId("ado-capability-card");
+    const user = userEvent.setup();
+    const caret = within(card).getByRole("button", { name: /more options/i });
+    caret.focus();
+    await user.keyboard("{Enter}");
+
+    const isOnceButton = () =>
+      document.activeElement?.tagName === "BUTTON" && !!document.activeElement.textContent?.includes("Once");
+    let reached = isOnceButton();
+    for (let i = 0; i < 6 && !reached; i++) {
+      await user.tab();
+      reached = isOnceButton();
+    }
+    expect(reached).toBe(true);
+
+    await user.keyboard("{Enter}");
+    expect(within(card).getByText("Scope: Once")).toBeInTheDocument();
+
+    await user.click(within(card).getByRole("button", { name: "Approve" }));
+    expect(onApprove).toHaveBeenCalledWith([{ scope: "once" }]);
+  });
+
   it("F1: the caret's Once/This run hints also use the capability's own noun", async () => {
     renderCard(
       <AdoCapabilityCard item={escalation()} securityOperator run={OWNER} busy={false} onApprove={vi.fn()} onDeny={vi.fn()} />,

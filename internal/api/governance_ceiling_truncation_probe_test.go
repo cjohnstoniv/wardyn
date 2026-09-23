@@ -196,7 +196,7 @@ func TestF2_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/api/v1/policies/default", nil)
 			r.Header.Set("Authorization", "Bearer "+st.tokenRaw)
 			w := httptest.NewRecorder()
-			srv.Handler().ServeHTTP(w, r)
+			panicFails(t, srv.Handler()).ServeHTTP(w, r)
 			return w
 		}
 		if w := call(); w.Code != http.StatusForbidden {

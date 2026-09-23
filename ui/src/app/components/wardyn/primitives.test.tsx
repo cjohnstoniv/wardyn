@@ -8,6 +8,7 @@ import { render, screen } from "@testing-library/react";
 import {
   RunStateBadge,
   ConfinementChip,
+  AutonomyChip,
   ActorTypeChip,
   OutcomeBadge,
   ApprovalKindChip,
@@ -21,6 +22,8 @@ import type {
   ApprovalKind,
   ApprovalState,
 } from "../../lib/types";
+import type { AutonomyLevel } from "../../lib/api/governance";
+import { AUTONOMY_META, AUTONOMY_NO_CAP_LABEL } from "./autonomy-meta";
 
 // Regression for the COMPLETED-state cluster + the "enum badges crash on
 // unmapped wire values" HIGH finding. Before the fix, a backend value the UI
@@ -144,6 +147,43 @@ describe("ConfinementChip tooltip honesty", () => {
     expect(container.textContent).not.toMatch(/gVisor|runc|Kata/i);
     // The visible barrier label IS the accessible name.
     expect(screen.getByText(/Fence|Wall|Vault/)).toBeInTheDocument();
+  });
+});
+
+// AutonomyChip (0.8 #93) — the same shape as ConfinementChip: a friendly
+// label on the face, the internal wire level (L0-L3) in the tooltip only
+// (docs/design/CONSOLE-RULES.md), and always `neutral`-toned because a cap is
+// not a run state.
+describe("AutonomyChip", () => {
+  function titleOf(level: AutonomyLevel | null | undefined): string {
+    const { container } = render(<AutonomyChip level={level} />);
+    return container.querySelector("[title]")?.getAttribute("title") ?? "";
+  }
+
+  it.each(["L0", "L1", "L2", "L3"] as AutonomyLevel[])("renders %s's friendly label, not the wire code", (level) => {
+    render(<AutonomyChip level={level} />);
+    expect(screen.getByText(AUTONOMY_META[level].label)).toBeInTheDocument();
+    expect(screen.queryByText(level)).not.toBeInTheDocument();
+  });
+
+  it("keeps the internal wire level in the tooltip ONLY, never in accessible content (D4)", () => {
+    const title = titleOf("L1");
+    expect(title).toMatch(/\bL1\b/);
+    expect(title).toMatch(AUTONOMY_META.L1.tagline);
+    const { container } = render(<AutonomyChip level="L1" />);
+    expect(container.textContent).not.toMatch(/\bL[0-3]\b/);
+  });
+
+  it("renders the no-cap label for null/undefined, with an explanatory tooltip", () => {
+    render(<AutonomyChip level={null} />);
+    expect(screen.getByText(AUTONOMY_NO_CAP_LABEL)).toBeInTheDocument();
+    expect(screen.queryByText(/^L[0-3]$/)).not.toBeInTheDocument();
+    expect(titleOf(undefined)).toMatch(/no autonomy rubric/i);
+  });
+
+  it("tolerates an unknown level rather than throwing", () => {
+    expect(() => render(<AutonomyChip level={"L9" as AutonomyLevel} />)).not.toThrow();
+    expect(screen.getByText("L9")).toBeInTheDocument();
   });
 });
 
