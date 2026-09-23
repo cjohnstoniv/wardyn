@@ -9,7 +9,7 @@
 -- restarts (TRUNCATE ... RESTART IDENTITY, or a restore) reuses those seqs, so
 -- its new rows were dropped as duplicates with no chain-reset row. A row is
 -- now skipped only when the organisation's newest ingested row at that device
--- seq carries the same row_hash (store.PG.heldDeviceRows), which reads this
+-- seq carries the same row_hash (store.PG.heldPrefix), which reads this
 -- index.
 --
 -- Text, not ::bigint: an index expression that can raise would make an audit

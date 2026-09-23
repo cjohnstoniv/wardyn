@@ -360,7 +360,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (looked up through migration `0070_audit_events_device_origin_idx`), so a laptop table reset that
   restarts its seq (`TRUNCATE … RESTART IDENTITY`, a restore) is a recorded `device.audit.chain_reset`
   with every new row ingested, never rows dropped as duplicates; a re-chained rewrite of a held row is
-  refused 422.
+  refused 422. Upgrading: migration 0070 builds its index inside the migration transaction, so audit
+  writes pause while it scans `audit_events` (seconds per million rows); raise `WARDYN_MIGRATE_TIMEOUT`
+  for a very large audit table.
 
 - **A run's autonomy level is now resolved once and enforced at launch and on Review.** With an
   `autonomy_rubric` on the assigned governance profile, a run's posture — egress reach (`open` with
