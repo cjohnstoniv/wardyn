@@ -12,8 +12,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **A red `build`/`test-pg` job named only `make: *** [Makefile:195: test-report] Error 1`, hiding
   which test failed or why the package didn't compile behind an artifact download.**
-  `scripts/test-report.sh` now prints the failing test names and, on a compile failure, the
-  compiler's own error text directly in the job log, with a script test pinning both. A new
+  `scripts/test-report.sh` now prints the failing test names, the compiler's own error text on a
+  compile failure, and the panic or last output lines of a package that failed outside any test (a
+  `-timeout`, a panic in `init`, `os.Exit` in `TestMain`) directly in the job log, with a script
+  test pinning all three. A new
   `make lint` gate (`scripts/check-workflow-artifacts.sh`) catches an `actions/upload-artifact`
   step with an empty `path` before it ships (#374's exact shape). `run-e2e-ssh-k8s.sh`'s
   no-cluster-installed skip now prints a greppable `SKIPPED no-install` marker for future nightly

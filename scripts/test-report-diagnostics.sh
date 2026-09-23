@@ -8,9 +8,10 @@
 # test-report] Error 1`, and the test-pg failure on dedaf234 hid a compile
 # error entirely).
 #
-# Runs the real script against a throwaway Go module with one failing test
-# and one package that fails to COMPILE, and asserts the failing test's name
-# and the compiler's own error text both land on stderr.
+# Runs the real script against a throwaway Go module with one failing test,
+# one package that fails to COMPILE, and two that fail with no test to name
+# (os.Exit in TestMain, a panic in init), and asserts the failing test's name,
+# the compiler's own error text and each package's cause all land on stderr.
 #
 # Daemon-free, network-free: no substrate beyond `go test` itself.
 set -euo pipefail
@@ -27,7 +28,7 @@ module reportfixture
 go 1.23
 EOF
 
-mkdir -p "$TMP/failpkg" "$TMP/buildbrokenpkg"
+mkdir -p "$TMP/failpkg" "$TMP/buildbrokenpkg" "$TMP/mainexitpkg" "$TMP/initpanicpkg"
 cat > "$TMP/failpkg/f_test.go" <<'EOF'
 package failpkg
 
@@ -46,6 +47,31 @@ func TestNeverRuns(t *testing.T) {
 	thisIdentifierDoesNotExist()
 }
 EOF
+cat > "$TMP/mainexitpkg/m_test.go" <<'EOF'
+package mainexitpkg
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+func TestMain(m *testing.M) {
+	fmt.Println("setup: cannot reach the fixture database")
+	os.Exit(1)
+}
+
+func TestNeverRuns(t *testing.T) {}
+EOF
+cat > "$TMP/initpanicpkg/i_test.go" <<'EOF'
+package initpanicpkg
+
+import "testing"
+
+var _ = func() int { panic("fixture init exploded") }()
+
+func TestNeverRuns(t *testing.T) {}
+EOF
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -61,3 +87,10 @@ echo "$OUT" | grep -q "thisIdentifierDoesNotExist" \
   || fail "stderr must surface the compiler's own error text — got:
 $OUT"
 echo "ok  surfaces the compile error"
+
+for want in "mainexitpkg" "setup: cannot reach the fixture database" "initpanicpkg" "panic: fixture init exploded"; do
+  echo "$OUT" | grep -qF "$want" \
+    || fail "stderr must name a package that failed outside any test and its cause ($want) — got:
+$OUT"
+done
+echo "ok  names a package that failed outside any test"
