@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -924,5 +925,178 @@ func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
 	launched, _ := autonomyCreateAudit(t, st2, audit2)["autonomy"].(map[string]any)
 	if got, _ := launched["level"].(string); got != "L9" {
 		t.Errorf("audited level = %q, want the stored value %q carried through verbatim", got, "L9")
+	}
+}
+
+// ─── the per-person Azure DevOps lane (#474) ──────────────────────────────────
+
+// TestAutonomyPostureGradesTheADOEntraCredentialAtCreate is the security
+// review's probe, kept: the posture graded at create for a run on the
+// per-person Azure DevOps lane, against the same run once dispatch has written
+// the api_key grants createADOEntraGrants authors for it.
+//
+// The two must fold to the SAME level, and the reason is the whole gate: the
+// level is frozen at create (resolveRunAutonomy) and the credential is
+// authored at dispatch (authorADOEntraLane), so a secrets axis reading
+// spec.EligibleGrants alone graded this run `none` — and launched it on the
+// autonomous rung while it carried the person's Entra bearer proxy-side.
+//
+// The rubric names the secrets rows apart from the egress one so a regression
+// shows up as a wrong LEVEL, not merely a wrong label: the workspace's own
+// clone host already makes this run `open`, and with every row at one level
+// the miss would be invisible.
+func TestAutonomyPostureGradesTheADOEntraCredentialAtCreate(t *testing.T) {
+	site := adoSite(adoEntraTestRow())
+	adoRun, ok := resolveADOEntraRun(site, []string{adoTestRepo}, adoTestOwner)
+	if !ok {
+		t.Fatalf("fixture: %q does not resolve to the per-person Azure DevOps lane", adoTestRepo)
+	}
+	grade := adoEntraGradedAs(adoRun, ok)
+	ws := types.Workspace{ID: uuid.New(), Name: "ado",
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: adoTestRepo}}}
+	spec := types.RunPolicySpec{
+		AllowedDomains: []string{"api.anthropic.com"},
+		WorkspaceRepos: []types.WorkspaceRepo{{Repo: adoTestRepo}},
+	}
+	rubric := types.AutonomyRubric{
+		EgressOpen: types.AutonomyL2, SecretsNone: types.AutonomyL2,
+		SecretsBaseline: types.AutonomyL2, SecretsPowerful: types.AutonomyL1,
+	}
+
+	graded := composer.AutonomyPostureOf(autonomyPostureSpec(spec, []types.Workspace{ws}, "", site, grade), types.CC2)
+	level, boundBy := composer.FoldAutonomy(rubric, graded)
+
+	// The same spec as dispatch leaves it: the grants the lane really writes.
+	dispatched := spec
+	dispatched.EligibleGrants = adoEntraPostureGrants("contoso")
+	after := composer.AutonomyPostureOf(autonomyPostureSpec(dispatched, []types.Workspace{ws}, "", site, grade), types.CC2)
+	afterLevel, afterBound := composer.FoldAutonomy(rubric, after)
+
+	if graded.Secrets != types.AutonomySecretsPowerful {
+		t.Errorf("posture.secrets at create = %q, want powerful: this run will hold an api_key to dev.azure.com, "+
+			"which is outside composer.safeBaselineDomains", graded.Secrets)
+	}
+	if level != afterLevel {
+		t.Errorf("level graded at create = %s (bound by %v), but the run carries the dispatch-written credential "+
+			"and grades %s (bound by %v)", level, boundBy, afterLevel, afterBound)
+	}
+	if level != types.AutonomyL1 {
+		t.Errorf("level = %s, want L1 — the rubric's secrets_powerful cap", level)
+	}
+}
+
+// TestAutonomyPostureIncludesTheADOEntraLaneAtBothDoors is the grant-lane
+// property for the one lane whose grant does not exist yet at either door.
+//
+// It sits beside TestAutonomyPostureIncludesGrantLanesAtBothDoors and asks a
+// strictly harder question. Those lanes are opened by a grant the REQUEST
+// carries, so both doors can see it; this one is opened by a provider row and
+// the caller's own identity, and the grant is written at dispatch. Review and
+// launch therefore agreed with each other on the understated posture, which is
+// exactly what a parity assertion alone cannot catch — so every row below
+// asserts the posture and the level as well as the parity.
+//
+// The second and third rows are the scope. A run whose Azure DevOps row is not
+// on the per-person lane, and a run on a deployment with no provider rows at
+// all, must be graded byte-for-byte what they were before this fold existed;
+// grading them powerful would cap ordinary runs on a credential they never get.
+func TestAutonomyPostureIncludesTheADOEntraLaneAtBothDoors(t *testing.T) {
+	sharedRow := adoEntraTestRow()
+	sharedRow.CredentialSource = types.CredentialSourceShared
+
+	for _, tc := range []struct {
+		name        string
+		site        types.SiteConfig
+		wantSecrets types.AutonomySecretsPosture
+		wantLevel   types.AutonomyLevel
+	}{
+		{
+			name:        "the per-person lane resolves, so the run is graded on the credential dispatch writes",
+			site:        adoSite(adoEntraTestRow()),
+			wantSecrets: types.AutonomySecretsPowerful,
+			wantLevel:   types.AutonomyL1,
+		},
+		{
+			name:        "an Azure DevOps row whose credential is shared authors no lane",
+			site:        adoSite(sharedRow),
+			wantSecrets: types.AutonomySecretsNone,
+			wantLevel:   types.AutonomyL2,
+		},
+		{
+			name:        "a deployment with no provider rows is graded exactly as before",
+			site:        types.SiteConfig{},
+			wantSecrets: types.AutonomySecretsNone,
+			wantLevel:   types.AutonomyL2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := govProfile("ado-entra")
+			p.Limits = types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{
+				EgressOpen: types.AutonomyL2, SecretsNone: types.AutonomyL2,
+				SecretsBaseline: types.AutonomyL2, SecretsPowerful: types.AutonomyL1,
+			}}
+			body := `{"agent":"claude-code","task":"t","confinement_class":"CC2","inline_policy":{"min_confinement_class":"CC2",` +
+				`"allowed_domains":["api.anthropic.com"],"workspace_repos":[{"repo":"` + adoTestRepo + `"}]}}`
+			workspaces := []types.Workspace{{ID: uuid.New(), Name: "ado",
+				Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: adoTestRepo}}}}
+			// The session subject IS the lane's owner: dispatch resolves the row
+			// from runIdentitySubject(run.CreatedBy), and this gate has to ask
+			// the identical question of the identical person.
+			member := func(t *testing.T) *http.Cookie { return govSession(t, adoTestOwner, []string{"eng"}, false) }
+			fixture := func() (*Server, *govEscapeStore, *recRecorder) {
+				srv, st, audit := govEscapeFixture(t, autonomyCapStore(p))
+				st.workspaces = workspaces
+				st.siteConfig = tc.site
+				return srv, st, audit
+			}
+
+			srv, _, _ := fixture()
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member(t), body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("preflight = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			var resp struct {
+				Autonomy map[string]any `json:"autonomy"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode preflight: %v", err)
+			}
+
+			srv2, st2, audit2 := fixture()
+			c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), body)
+			if c.Code != http.StatusCreated {
+				t.Fatalf("create = %d, want 201: %s", c.Code, c.Body.String())
+			}
+			launched, _ := autonomyCreateAudit(t, st2, audit2)["autonomy"].(map[string]any)
+
+			// The 201 warning has to NAME the credential when it is what graded
+			// powerful. The member's request declared no secret at all on this
+			// lane, so "narrow the run's secrets" is unactionable without the
+			// noun, and the admin has nothing to look up either.
+			if tc.wantSecrets == types.AutonomySecretsPowerful {
+				var created struct {
+					Warnings []string `json:"warnings"`
+				}
+				if err := json.Unmarshal(c.Body.Bytes(), &created); err != nil {
+					t.Fatalf("decode create: %v", err)
+				}
+				if !slices.ContainsFunc(created.Warnings, func(s string) bool { return strings.Contains(s, "contoso") }) {
+					t.Errorf("no 201 warning names the Azure DevOps organisation that graded this run powerful: %q", created.Warnings)
+				}
+			}
+
+			review, _ := json.Marshal(resp.Autonomy)
+			audited, _ := json.Marshal(launched)
+			if string(review) != string(audited) {
+				t.Errorf("Review and launch disagree:\n  review = %s\n  launch = %s", review, audited)
+			}
+			posture, _ := launched["posture"].(map[string]any)
+			if got, _ := posture["secrets"].(string); got != string(tc.wantSecrets) {
+				t.Errorf("posture.secrets = %q, want %q", got, tc.wantSecrets)
+			}
+			if got, _ := launched["level"].(string); got != string(tc.wantLevel) {
+				t.Errorf("level = %q, want %q", got, tc.wantLevel)
+			}
+		})
 	}
 }

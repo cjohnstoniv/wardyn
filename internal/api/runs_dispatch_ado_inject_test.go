@@ -311,7 +311,7 @@ func TestADOEntraLane_UnconfiguredDeploymentIsUnchanged(t *testing.T) {
 		env := map[string]string{"K": "V"}
 		in := []runner.InjectionGrant{{GrantID: uuid.New()}}
 		lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: uuid.New()}, ado, on,
-			dispatchLLMPlan{}, &policy, env, in)
+			adoEntraUngraded(), dispatchLLMPlan{}, &policy, env, in)
 		gotInj, mitm := lane.injections, lane.mitmHosts
 		if !ok || mitm != nil || lane.gate != nil || !reflect.DeepEqual(gotInj, in) ||
 			!reflect.DeepEqual(policy, types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}) ||
@@ -364,7 +364,7 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	policy := types.RunPolicySpec{}
 	runID := uuid.New()
 	lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: runID}, adoTestRun(t), true,
-		dispatchLLMPlan{mitmCACertPEM: string(certPEM), mitmCAKeyPEM: string(keyPEM)}, &policy, map[string]string{}, nil)
+		adoEntraUngraded(), dispatchLLMPlan{mitmCACertPEM: string(certPEM), mitmCAKeyPEM: string(keyPEM)}, &policy, map[string]string{}, nil)
 	if !ok {
 		t.Fatal("authoring refused")
 	}
