@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -65,21 +66,32 @@ import (
 // sshExecStreamErrorMessage callers in sshgateway_channels.go, a channel
 // stderr write that is not an HTTP 5xx body at all and this guard does not
 // watch) in one step.
+// serverErrorDriverTextAllowlist is keyed by driverTextGuardKey: file name,
+// the enclosing func/method the site lives in, and the site's own call/
+// literal source (whitespace-collapsed), never a line number. #723 re-keyed
+// it off the file:line scheme #295 shipped with — a line inserted ANYWHERE
+// above a site under the old scheme silently renumbered it out from under
+// its allowlist entry, turning a no-op edit into a spurious violation (and a
+// spurious "stale entry" on the line the edit vacated) with no connection to
+// the change that triggered it. The enclosing-symbol-plus-call shape survives
+// that: it only changes when the site itself moves to a different function or
+// its own source text changes, which is exactly when a human should be
+// looking at the entry again. See TestServerErrorDriverTextAllowlistKey_SurvivesLineInsertion.
 var serverErrorDriverTextAllowlist = map[string]string{
-	// handleInternalCredentialReauth's raise-failure arm is a
+	// holdOrRefuseCredentialReauth's raise-failure arm is a
 	// DELIBERATELY MODELLED body (docs/design/0.8/PLAN.md's AWS SSO lane):
 	// credentialReauthRaiseFailedBody is a frozen operator-facing sentence and
 	// aerr here is s.cfg.Approvals.Request's own error, never driver/substrate
 	// text. #173's DO NOT TOUCH names this site explicitly.
-	"injection_awssso.go:361": "modelled AWS SSO reauth-raise body; #173 DO NOT TOUCH",
-	// handleRunResourcesExecStream's unsupported arm is reached only after errors.Is(err,
-	// runner.ErrExecStreamUnsupported) just matched, so err.Error() here is
-	// always that sentinel's own fixed text ("runner: ExecStream not
-	// supported"), never driver/substrate text. Converting it would also
-	// break TestRunResources_ExecStreamUnsupported_Returns501, which pins the
-	// sentinel staying in the 501 body so the console/operator can tell this
-	// case apart from the no-runner-configured guard beside it.
-	"run_resources.go:201": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
+	`injection_awssso.go:Server.holdOrRefuseCredentialReauth:"writeError(w, http.StatusServiceUnavailable, credentialReauthRaiseFailedBody+aerr.Error())"`: "modelled AWS SSO reauth-raise body; #173 DO NOT TOUCH",
+	// handleRunResources's ExecStream-unsupported arm is reached only after
+	// errors.Is(err, runner.ErrExecStreamUnsupported) just matched, so
+	// err.Error() here is always that sentinel's own fixed text ("runner:
+	// ExecStream not supported"), never driver/substrate text. Converting it
+	// would also break TestRunResources_ExecStreamUnsupported_Returns501,
+	// which pins the sentinel staying in the 501 body so the console/operator
+	// can tell this case apart from the no-runner-configured guard beside it.
+	`run_resources.go:Server.handleRunResources:"writeError(w, http.StatusNotImplemented, runResourcesUnsupportedMsg+\": \"+err.Error())"`: "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
 	// Every other site #173 found was FIXED, not allowlisted — a new entry
 	// here needs the same kind of justification (a named fixed sentinel or a
 	// design record, plus a pinning test) as these two, not just a passing
@@ -169,6 +181,131 @@ var server5xxStatusIdents = map[string]bool{
 	"StatusNotExtended":             true, // 510
 }
 
+// findDriverTextLeaks parses one file's source and returns every site this
+// guard flags, keyed by driverTextGuardKey and valued by a trimmed source
+// snippet for a failure message. It is the guard's whole detection logic,
+// factored out of TestNoDriverTextInServerErrorBody so
+// TestServerErrorDriverTextAllowlistKey_SurvivesLineInsertion can run it
+// again against a deliberately mutated copy of a real file's source.
+func findDriverTextLeaks(name string, src []byte) (map[string]string, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, name, src, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	found := map[string]string{}
+	seen := map[string]int{} // dedup count per (file,symbol,call) before the key gets its #n suffix
+	record := func(pos token.Pos, snippetNode ast.Node) {
+		p := fset.Position(pos)
+		symbol := enclosingFuncName(file, pos)
+		call := normalizeSource(src, fset, snippetNode)
+		key := driverTextGuardKey(name, symbol, call, seen)
+		found[key] = strings.TrimSpace(exprSourceLine(src, p.Line))
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			// Direct shape: writeError(w, <5xx>, <msg with err.Error()>).
+			if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(node.Args) >= 3 {
+				if is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[2]) {
+					record(node.Pos(), node)
+				}
+				return true
+			}
+			// #295's one-hop shape: a call into a known forwarder that
+			// itself carries writeError's (status, msg) pair as ordinary
+			// arguments at fixed positions.
+			fwd, ok := serverErrorForwarders[calleeName(node)]
+			if !ok {
+				return true
+			}
+			maxArg := fwd.statusArg
+			if fwd.msgArg > maxArg {
+				maxArg = fwd.msgArg
+			}
+			if len(node.Args) > maxArg && is5xxStatusArg(node.Args[fwd.statusArg]) && callsErrorMethod(node.Args[fwd.msgArg]) {
+				record(node.Pos(), node)
+			}
+		case *ast.CompositeLit:
+			// #295's other one-hop shape: driveBindFailureHere /
+			// driveShareBindFailure answer with a *driveBindFailure
+			// literal instead of a writeError call, so the (status,
+			// message) pair lives in its fields, not call arguments.
+			status, member := driveBindFailureLitStatusMember(node)
+			if status != nil && member != nil && is5xxStatusArg(status) && callsErrorMethod(member) {
+				record(node.Pos(), node)
+			}
+		}
+		return true
+	})
+	return found, nil
+}
+
+// enclosingFuncName returns the func or method declaration containing pos,
+// named the way citedSymbolBodies (cmd/wardynd/guardkit_test.go) names one —
+// "Type.Method" for a method, the bare name for a plain func — or "" if pos
+// falls outside every top-level func's body (this guard only ever calls it
+// with a pos taken from inside one, since writeError/forwarder calls and
+// driveBindFailure literals only appear inside function bodies).
+func enclosingFuncName(file *ast.File, pos token.Pos) string {
+	for _, d := range file.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		if pos < fn.Body.Lbrace || pos > fn.Body.Rbrace {
+			continue
+		}
+		if fn.Recv != nil && len(fn.Recv.List) > 0 {
+			return receiverTypeName(fn.Recv.List[0].Type) + "." + fn.Name.Name
+		}
+		return fn.Name.Name
+	}
+	return ""
+}
+
+// receiverTypeName is the bare type name a method hangs off, whether the
+// receiver is a pointer or a value — the "Server" in "func (s *Server) foo()".
+func receiverTypeName(e ast.Expr) string {
+	if star, ok := e.(*ast.StarExpr); ok {
+		e = star.X
+	}
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
+// normalizeSource returns node's own source text from src, with runs of
+// whitespace (including the newlines a multi-line call can carry) collapsed
+// to a single space — so reformatting that does not change the call's
+// tokens does not change its key either.
+func normalizeSource(src []byte, fset *token.FileSet, node ast.Node) string {
+	a, b := fset.Position(node.Pos()).Offset, fset.Position(node.End()).Offset
+	if a < 0 || b > len(src) || a >= b {
+		return ""
+	}
+	return strings.Join(strings.Fields(string(src[a:b])), " ")
+}
+
+// driverTextGuardKey builds one allowlist/found-set key: the file, the
+// enclosing symbol, and the site's own (normalized) source — never a line
+// number, which #723 retired for the reason the allowlist's doc comment
+// above gives. seen counts prior keys sharing (name, symbol, call) in this
+// same scan so two textually-identical sites in one function still get
+// distinct keys instead of colliding.
+func driverTextGuardKey(name, symbol, call string, seen map[string]int) string {
+	base := fmt.Sprintf("%s:%s:%s", name, symbol, strconv.Quote(call))
+	n := seen[base]
+	seen[base] = n + 1
+	if n == 0 {
+		return base
+	}
+	return fmt.Sprintf("%s#%d", base, n+1)
+}
+
 // TestNoDriverTextInServerErrorBody walks internal/api's non-test sources and
 // fails on a writeError(w, <5xx>, ...) call whose message argument calls
 // err.Error() anywhere inside it — the pattern writeServerError/loggedMsg
@@ -184,8 +321,7 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		t.Fatalf("read %s: %v", wd, err)
 	}
 
-	found := map[string]string{} // "file.go:line" -> source snippet
-	fset := token.NewFileSet()
+	found := map[string]string{} // driverTextGuardKey(...) -> source snippet
 	scanned := 0
 	for _, e := range entries {
 		name := e.Name()
@@ -197,54 +333,14 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		if rerr != nil {
 			t.Fatalf("read %s: %v", name, rerr)
 		}
-		file, perr := parser.ParseFile(fset, path, src, 0)
+		leaks, perr := findDriverTextLeaks(name, src)
 		if perr != nil {
 			t.Fatalf("parse %s: %v", name, perr)
 		}
 		scanned++
-
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.CallExpr:
-				// Direct shape: writeError(w, <5xx>, <msg with err.Error()>).
-				if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(node.Args) >= 3 {
-					if is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[2]) {
-						pos := fset.Position(node.Pos())
-						key := fmt.Sprintf("%s:%d", name, pos.Line)
-						found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
-					}
-					return true
-				}
-				// #295's one-hop shape: a call into a known forwarder that
-				// itself carries writeError's (status, msg) pair as ordinary
-				// arguments at fixed positions.
-				fwd, ok := serverErrorForwarders[calleeName(node)]
-				if !ok {
-					return true
-				}
-				maxArg := fwd.statusArg
-				if fwd.msgArg > maxArg {
-					maxArg = fwd.msgArg
-				}
-				if len(node.Args) > maxArg && is5xxStatusArg(node.Args[fwd.statusArg]) && callsErrorMethod(node.Args[fwd.msgArg]) {
-					pos := fset.Position(node.Pos())
-					key := fmt.Sprintf("%s:%d", name, pos.Line)
-					found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
-				}
-			case *ast.CompositeLit:
-				// #295's other one-hop shape: driveBindFailureHere /
-				// driveShareBindFailure answer with a *driveBindFailure
-				// literal instead of a writeError call, so the (status,
-				// message) pair lives in its fields, not call arguments.
-				status, member := driveBindFailureLitStatusMember(node)
-				if status != nil && member != nil && is5xxStatusArg(status) && callsErrorMethod(member) {
-					pos := fset.Position(node.Pos())
-					key := fmt.Sprintf("%s:%d", name, pos.Line)
-					found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
-				}
-			}
-			return true
-		})
+		for k, v := range leaks {
+			found[k] = v
+		}
 	}
 	if scanned == 0 {
 		t.Fatal("scanned 0 files — the guard's directory listing is wrong")
@@ -275,6 +371,70 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		}
 	}
 	t.Logf("scanned %d files, %d allowlisted site(s), %d violation(s)", scanned, len(serverErrorDriverTextAllowlist), len(found)-len(serverErrorDriverTextAllowlist))
+}
+
+// TestServerErrorDriverTextAllowlistKey_SurvivesLineInsertion is the
+// mutation test #723 asks for: it takes run_resources.go's real source,
+// inserts a new line above its allowlisted site, and proves the site's
+// driverTextGuardKey — and so its allowlist entry — is unaffected, even
+// though every line number from the insertion point down has shifted. The
+// file:line keying this replaced would have failed this exact edit: the
+// site's key would have become "run_resources.go:202", found in neither the
+// allowlist (a spurious new violation) nor left behind as a stale entry
+// under the old key (which — bug on top of bug — would ALSO still exist,
+// unclaimed, at the original line number if some other line happened to
+// match it, or errored as stale if nothing did).
+func TestServerErrorDriverTextAllowlistKey_SurvivesLineInsertion(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	const file = "run_resources.go"
+	src, err := os.ReadFile(filepath.Join(wd, file))
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+
+	before, err := findDriverTextLeaks(file, src)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+	var key string
+	for k := range before {
+		if _, ok := serverErrorDriverTextAllowlist[k]; ok {
+			key = k
+			break
+		}
+	}
+	if key == "" {
+		t.Fatalf("%s has no allowlisted site to mutation-test — did the allowlist or the file change?", file)
+	}
+
+	lines := strings.Split(string(src), "\n")
+	idx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "runResourcesUnsupportedMsg") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("%s: could not find the allowlisted call to mutate above", file)
+	}
+	mutated := make([]string, 0, len(lines)+1)
+	mutated = append(mutated, lines[:idx]...)
+	mutated = append(mutated, "\t\t// mutation-inserted line: proves the guard's key does not depend on line numbers.")
+	mutated = append(mutated, lines[idx:]...)
+	mutatedSrc := []byte(strings.Join(mutated, "\n"))
+
+	after, err := findDriverTextLeaks(file, mutatedSrc)
+	if err != nil {
+		t.Fatalf("parse mutated %s: %v", file, err)
+	}
+	if _, ok := after[key]; !ok {
+		t.Errorf("inserting a line above the allowlisted site changed its key from %q — "+
+			"the allowlist is still line-number-sensitive", key)
+	}
 }
 
 // is5xxStatusArg reports whether arg is a status this guard recognizes as a
