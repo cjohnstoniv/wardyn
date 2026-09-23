@@ -37,7 +37,7 @@ import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { PROVIDERS_DRAFT } from "../../lib/workspace-providers-copy";
 import { SSO_SIGN_IN, TOKEN_HINT, TOKEN_LABEL, TOKEN_REJECTED } from "../screens/sign-in";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { usePrincipal } from "./operator-context";
+import { useOperatorResolved, usePrincipal } from "./operator-context";
 
 const SSO_LOGIN_URL = "/auth/login";
 const POLL_MS = 1500;
@@ -79,6 +79,13 @@ type Status = "idle" | "waiting" | "blocked" | "closed" | "unreachable" | "rejec
 export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const reauth = useReauth();
   const principal = usePrincipal();
+  // SF-29: whether `principal` is a settled fact rather than app-shell's
+  // still-loading "…" or its own fail-open "unknown" (health.ts's whoami()
+  // returns null, so identityResolved/operatorResolved stays false, for both
+  // cases — see OperatorResolvedContext's own R4-F110 precedent for this same
+  // class of bug). Comparing against either placeholder always differs from a
+  // real signed-in principal, so every re-sign-in read as "someone else".
+  const principalResolved = useOperatorResolved();
   const location = useLocation();
   const navigate = useNavigate();
   const [status, setStatus] = React.useState<Status>("idle");
@@ -119,7 +126,11 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     stopPoll();
     // Owner ruling (Q457-12): someone else signed in. Nothing of the first
     // person's page is shown, saved or submitted as them — it loads fresh.
-    if (me.principal !== principal) {
+    // SF-29: only once `principal` is a settled fact — an unresolved identity
+    // (principalResolved false) makes every re-sign-in look like a stranger,
+    // reloading the page and losing the draft this dialog just promised
+    // nothing here had lost.
+    if (principalResolved && me.principal !== principal) {
       reauth.reloadAs(roleCanReach(location.pathname, me.role) ? location.pathname + location.search : "/runs");
       return;
     }
