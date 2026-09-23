@@ -313,8 +313,6 @@ func (f *fakeRunner) KillSandbox(context.Context, string) error {
 	return nil
 }
 
-// stopCount returns the StopSandbox call count under the lock (race-clean read
-// for the test, which races the detached completion watcher).
 // specFor is the SandboxSpec dispatched for runID, if CreateSandbox saw one.
 func (f *fakeRunner) specFor(runID uuid.UUID) (runner.SandboxSpec, bool) {
 	f.mu.Lock()
@@ -327,6 +325,8 @@ func (f *fakeRunner) specFor(runID uuid.UUID) (runner.SandboxSpec, bool) {
 	return runner.SandboxSpec{}, false
 }
 
+// stopCount returns the StopSandbox call count under the lock (race-clean read
+// for the test, which races the detached completion watcher).
 func (f *fakeRunner) stopCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

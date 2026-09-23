@@ -66,6 +66,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The PR template now asks for a CHANGELOG entry explicitly.** A new checklist line —
+  "CHANGELOG entry or `no user-visible change` stated" — sits beside the existing docs-landing
+  and frozen-section lines, so a PR that adds neither has to say so instead of leaving the box
+  ambiguous (#730).
 - **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
   is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
   set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
