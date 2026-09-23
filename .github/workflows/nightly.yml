@@ -519,6 +519,153 @@ jobs:
             test/reports/e2e/kind-sso/**
           if-no-files-found: error
 
+  # ── Live Kubernetes Azure DevOps SSO walk (kind, ado profile) ───────────────
+  # #476: 0.7.10 shipped WARDYN_KIND_SSO_PROFILE=ado, but the job above only
+  # ever ran the default Dex profile, so an Azure DevOps regression — the
+  # per-login credential capture, the run's REST + `git ls-remote` through the
+  # broker — was found only by hand. This runs
+  # scripts/lib/kind-sso-walk-ado.sh, curl+jq only (no Playwright, no UI deps),
+  # which the walk's own header and deploy/kind/sso/README.md "The Azure DevOps
+  # profile" describe in full.
+  #
+  # Own cluster, image tag and port (wardyn-ado / kind-ado / :8580, the fake's
+  # one pinned callback — see overlay.sh and the walk script's own checks) so
+  # this job can never collide with kind-sso-walk above.
+  #
+  # WARDYN_KIND_SSO_REBUILD=1: same reasoning as the default profile's job —
+  # certify the tip this workflow checked out. overlay.sh's ado branch already
+  # rebuilds wardynd/proxy/the fake unconditionally, so this is belt-and-
+  # suspenders, not load-bearing, here.
+  #
+  # THE LOAD-BEARING CHECK, same shape as kind-sso-walk's: kind-sso-walk.sh
+  # exits 0 on both a genuine PASS and an unset WARDYN_TEST_K8S self-skip
+  # (the self-skip happens before the script dispatches to the ado profile, so
+  # the message names only "the AWS SSO walk" — that's expected, not a bug).
+  kind-sso-ado-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      WARDYN_QUICKSTART_CLUSTER: wardyn-ado
+      WARDYN_QUICKSTART_IMAGE_TAG: kind-ado
+      WARDYN_QUICKSTART_HTTP_PORT: "8580"
+      WARDYN_QUICKSTART_SSH_PORT: "2522"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Docker available
+        run: docker --version
+      - name: Bring up the kind quickstart cluster (ado profile's pinned ports — see deploy/kind/sso/README.md)
+        run: make kind-quickstart
+      - name: Add the Azure DevOps SSO overlay (fake Entra + fake Azure DevOps)
+        run: WARDYN_KIND_SSO_PROFILE=ado make kind-sso
+      - name: Live kind Azure DevOps SSO walk (member login capture + REST/git redemption)
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_KIND_SSO_PROFILE: ado
+          WARDYN_KIND_SSO_REBUILD: "1"
+          WARDYN_KIND_SSO_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-sso-ado
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          ./scripts/kind-sso-walk.sh 2>&1 | tee test/reports/e2e/kind-sso-ado-walk.log
+      # THE LOAD-BEARING CHECK — see kind-sso-walk's own comment above.
+      - name: Assert the walk actually ran (not a self-skip)
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/kind-sso-ado-walk.log
+          if grep -q 'set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)' "$log"; then
+            echo "::error::kind-sso-walk.sh self-skipped — WARDYN_TEST_K8S did not reach the walk step"
+            exit 1
+          fi
+          if ! grep -q '^kind-sso-walk (ado): PASS' "$log"; then
+            echo "::error::the ado walk never reached its own closing PASS line — see the uploaded log"
+            exit 1
+          fi
+      - name: Upload walk evidence (log + per-step evidence)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kind-sso-ado-walk-results
+          path: |
+            test/reports/e2e/kind-sso-ado-walk.log
+            test/reports/e2e/kind-sso-ado/**
+          if-no-files-found: error
+
+  # ── Compose role walk (both SSO-shaped deployments, hermetic) ───────────────
+  # #476: scripts/compose-sso-roles.sh (mprime + compose-sso, each signing
+  # every Dex identity — admin, allowlist-only operator, security admin, two
+  # members and one that matches no role — through the real console) never ran
+  # anywhere; role-map regressions on either shape were found only by hand. See
+  # the script's own header for the isolation guarantees (own compose project,
+  # own ports, `down -v` on exit, refuses to start beside another e2e backend).
+  #
+  # No kind cluster here — this is compose-only. It needs the SAME
+  # wardyn/wardynd:quickstart + wardyn/wardyn-proxy:quickstart tags
+  # kind-sso-walk builds, built fresh in this job (nightly jobs run on separate
+  # runners, so there is nothing to reuse from the job above).
+  compose-sso-roles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Docker available
+        run: docker --version
+      - name: Install UI deps (run-ui-e2e.sh drives Playwright directly from ui/)
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright chromium
+        working-directory: ui
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build wardynd + wardyn-proxy (:quickstart, the tag the script defaults to)
+        run: |
+          docker build -f deploy/compose/Dockerfile.wardynd -t wardyn/wardynd:quickstart .
+          docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:quickstart .
+      - name: Compose SSO role walk (mprime + compose-sso)
+        env:
+          WARDYN_TEST_SSO_ROLES: "1"
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          ./scripts/compose-sso-roles.sh 2>&1 | tee test/reports/e2e/compose-sso-roles.log
+      # THE LOAD-BEARING CHECK, same shape as kind-sso-walk's: the script exits
+      # 0 on both a genuine PASS and an unset WARDYN_TEST_SSO_ROLES self-skip.
+      - name: Assert the walk actually ran (not a self-skip)
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/compose-sso-roles.log
+          if grep -q 'set WARDYN_TEST_SSO_ROLES=1 to bring up the compose SSO role walk (skipping)' "$log"; then
+            echo "::error::compose-sso-roles.sh self-skipped — WARDYN_TEST_SSO_ROLES did not reach the walk step"
+            exit 1
+          fi
+          if ! grep -q '^compose-sso-roles: PASS' "$log"; then
+            echo "::error::the compose role walk never reached its own closing PASS line — see the uploaded log"
+            exit 1
+          fi
+      - name: Upload walk evidence (log + per-shape results)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: compose-sso-roles-results
+          path: |
+            test/reports/e2e/compose-sso-roles.log
+            local/evidence/compose-sso-roles/**
+          if-no-files-found: error
+
   # ── The notification this workflow never had ───────────────────────────────
   # Nothing in .github/workflows/ used `if: failure()`, opened an issue, or
   # notified anywhere, and no nightly job is a branch-protection context — so a
@@ -537,7 +684,7 @@ jobs:
   # A new lane joins this list; scripts/test-repo-guards.sh (in `make
   # test-scripts`) fails the build if one does not.
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, kind-sso-ado-walk, compose-sso-roles]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -558,7 +705,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build) or kind-sso-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, kind-sso-ado-walk or compose-sso-roles." \
               "" \
               "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
               "" \
