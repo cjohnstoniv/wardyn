@@ -57,6 +57,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: v
 import { RunDetailScreen } from "./run-detail";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../wardyn/copy";
+import { ADO } from "../../lib/ado-entra-copy";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -229,7 +230,7 @@ describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab (N1
 
     await screen.findByText(/Decided by/);
     expect(screen.queryByTestId("ado-consent-card")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Allow and continue" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: ADO.REQ_CONSENT_CTA })).not.toBeInTheDocument();
   });
 
   it("an ended run with an APPROVED escalation never says 'nothing to allow'", async () => {
