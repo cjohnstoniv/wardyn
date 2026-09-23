@@ -119,8 +119,9 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	r.PolicyID = &polID
 	r.ConfinementClass = types.CC3
 	r.SandboxRef = "container-" + r.ID.String()
-	r.AutoStopAfterSec = 900        // the effective idle cap persists on the run row
-	r.AgentExecID = "agent-exec-01" // the exec id persists for restart-safe liveness
+	r.AutoStopAfterSec = 900           // the effective idle cap persists on the run row
+	r.AgentExecID = "agent-exec-01"    // the exec id persists for restart-safe liveness
+	r.ModelProviderID = "corp-gateway" // the run's model-provider choice (#527) persists on the row
 	created := persistRun(t, ctx, pool, r)
 
 	// CreateRun returns the hydrated row.
@@ -163,6 +164,9 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	}
 	if got.AgentExecID != "agent-exec-01" {
 		t.Errorf("agent_exec_id = %q, want %q (exec id persists for restart-safe liveness)", got.AgentExecID, "agent-exec-01")
+	}
+	if got.ModelProviderID != "corp-gateway" {
+		t.Errorf("model_provider_id = %q, want %q (run's model-provider choice, #527)", got.ModelProviderID, "corp-gateway")
 	}
 	// SetRunAgentExecID scoped-writes the column post-create (the real path: the
 	// exec id is only known after Exec runs).

@@ -350,8 +350,10 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// grading residency from a second resolution would both cost another
 	// secret-store read and let the rail describe a lane the gate did not judge.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	// The model-provider choice, where launch makes it (runs.go).
-	if !s.enforceRunModelProvider(w, r, req, wsRefs) {
+	// The model-provider choice, where launch makes it (runs.go). Review has no
+	// run row to freeze the choice onto, so it discards it — Review's job is
+	// only to answer the refusal launch would.
+	if _, ok := s.enforceRunModelProvider(w, r, req, wsRefs); !ok {
 		return
 	}
 	var modelCred modelCredentialFacts

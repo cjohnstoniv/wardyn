@@ -244,6 +244,17 @@ type AgentRun struct {
 	// every run is empty until #97 lands. Migration 0065 adds the column NOT
 	// NULL DEFAULT ''.
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
+	// ModelProviderID freezes the id of the model provider chooseModelProvider
+	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
+	// at create time — multi-provider design §2.4 step 5, "Persist and
+	// revalidate". The KIND is NOT frozen here: a provider's kind can change
+	// later (a kind change mints a fresh UID, #521), and a column would then
+	// read a kind the id no longer has. The kind lives only on the run.create
+	// audit event's model_provider snapshot ({id, kind}, #527), taken at the
+	// moment of choice. Empty for a run under no provider block (today's path)
+	// and for every run created before this field existed. Migration 0069 adds
+	// the column NOT NULL DEFAULT ''.
+	ModelProviderID string `json:"model_provider_id,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the

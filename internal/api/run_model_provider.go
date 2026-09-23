@@ -132,12 +132,19 @@ func providerRefusal(id, state string) runProviderChoice {
 // Every provider this chooses is refused for now (providerKindDispatched), so
 // a run on a deployment that configured providers never reaches the legacy lane
 // chain with a choice it would not honour. Writes its own refusal and returns
-// false once it has.
-func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest, wsRefs []types.Workspace) bool {
+// ok=false once it has.
+//
+// The returned runProviderChoice is launch's (runs.go) only source for
+// AgentRun.ModelProviderID and the run.create audit snapshot (#527) — Review
+// discards it, since no run row exists to freeze it onto. choice.chosen is
+// false, with the zero runProviderChoice, on every "today's path" return
+// (no provider block, or a block that serves no provider for this agent):
+// that is not a choice, and callers must not treat a zero provider.ID as one.
+func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest, wsRefs []types.Workspace) (runProviderChoice, bool) {
 	ctx := r.Context()
 	if req.ModelProvider != "" && !modelProviderIDPattern.MatchString(req.ModelProvider) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(mpRunBadID, req.ModelProvider))
-		return false
+		return runProviderChoice{}, false
 	}
 	// Not llmMechanismGateApplies: that reads workspace_id without interactive
 	// as a scan, but this door never sets run.WorkspaceID (seedRequestWorkspace),
@@ -148,24 +155,24 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	if !needsModel || req.Task == harnessLoginTask || !isModelRun(req.TaskMode, nil, nil, req.Interactive) {
 		if req.ModelProvider != "" {
 			writeError(w, http.StatusBadRequest, mpRunNoModel)
-			return false
+			return runProviderChoice{}, false
 		}
-		return true
+		return runProviderChoice{}, true
 	}
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
 		var err error
 		if sc, err = s.cfg.Store.GetSiteConfig(ctx); err != nil {
 			writeServerError(w, r, "get site config", err)
-			return false
+			return runProviderChoice{}, false
 		}
 	}
 	if sc.ModelProviders == nil {
 		if req.ModelProvider != "" {
 			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpRunNoBlock, req.ModelProvider))
-			return false
+			return runProviderChoice{}, false
 		}
-		return true
+		return runProviderChoice{}, true
 	}
 	var pin string
 	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
@@ -177,16 +184,16 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	switch {
 	case err != nil:
 		writeServerError(w, r, "resolve capability", err)
-		return false
+		return runProviderChoice{}, false
 	case choice.notGranted:
 		s.denyMemberField(w, r, "runs.model_provider", "capability_model_provider", choice.refusal)
-		return false
+		return runProviderChoice{}, false
 	case choice.refusal != "":
 		writeError(w, http.StatusUnprocessableEntity, choice.refusal)
-		return false
+		return runProviderChoice{}, false
 	case choice.chosen && !providerKindDispatched[choice.provider.Kind]:
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpRunNotYet, choice.provider.ID))
-		return false
+		return runProviderChoice{}, false
 	}
-	return true
+	return choice, true
 }

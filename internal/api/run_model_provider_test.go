@@ -223,3 +223,74 @@ func TestRunModelProviderDoors(t *testing.T) {
 		}
 	})
 }
+
+// TestRunModelProviderPersistsOnTheRow is #527: once a provider's kind has a
+// dispatch arm (MP-7/8/9 — simulated here since none has landed yet, exactly
+// the way each of THOSE PRs will exercise this same plumbing), the run's
+// chosen provider freezes onto AgentRun.ModelProviderID (the id alone) and
+// onto the run.create audit event's model_provider snapshot ({id, kind} —
+// the kind is NOT on the row; see the field's doc on types.AgentRun).
+func TestRunModelProviderPersistsOnTheRow(t *testing.T) {
+	// The single candidate: no AgentProviders row at all, so the legacy
+	// declared-mechanism gate (enforceCreateLLMMechanism, unrelated to #527)
+	// sees no row for this agent and stays out of the way — exactly what
+	// TestChooseModelProvider's "the single candidate" case exercises.
+	provider := keyProvider("corp", "claude-code")
+	site := types.SiteConfig{ModelProviders: providerBlock(provider)}
+	srv := providerRunFixture(t, site, &capStore{}, nil)
+
+	// providerKindDispatched is empty until MP-7 lands its first arm; a real PR
+	// flips this bit permanently, a test flips it for the span of one call.
+	providerKindDispatched[provider.Kind] = true
+	defer delete(providerKindDispatched, provider.Kind)
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", admitAdminSession(t), `{"agent":"claude-code","task":"t"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var got types.AgentRun
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	if got.ModelProviderID != "corp" {
+		t.Errorf("run.model_provider_id = %q, want %q", got.ModelProviderID, "corp")
+	}
+
+	st, ok := srv.cfg.Store.(*integStore)
+	if !ok {
+		t.Fatalf("store = %T, want *integStore", srv.cfg.Store)
+	}
+	st.mu.Lock()
+	stored := st.runs[got.ID].ModelProviderID
+	st.mu.Unlock()
+	if stored != "corp" {
+		t.Errorf("stored model_provider_id = %q, want %q", stored, "corp")
+	}
+
+	rec, ok := srv.cfg.Audit.(*recRecorder)
+	if !ok {
+		t.Fatalf("audit recorder = %T, want *recRecorder", srv.cfg.Audit)
+	}
+	var snapshot map[string]any
+	for _, ev := range rec.snapshot() {
+		if ev.Action != "run.create" {
+			continue
+		}
+		var data struct {
+			ModelProvider map[string]any `json:"model_provider"`
+		}
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("unmarshal run.create data: %v", err)
+		}
+		snapshot = data.ModelProvider
+	}
+	if snapshot == nil {
+		t.Fatal("run.create carries no model_provider snapshot")
+	}
+	if snapshot["id"] != "corp" {
+		t.Errorf("model_provider.id = %v, want %q", snapshot["id"], "corp")
+	}
+	if snapshot["kind"] != string(provider.Kind) {
+		t.Errorf("model_provider.kind = %v, want %q", snapshot["kind"], provider.Kind)
+	}
+}

@@ -42,6 +42,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pin is not exempt. A run launched on a workspace by id (`workspace_id`, the CLI's `--workspace`)
   chooses like any other.
 
+- **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
+  `0069_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to
+  at create time, so every `scanRun`-bound reader — `GetRun`, `ListRuns`, the run detail and list
+  endpoints — sees it back. The run.create audit event gains a `model_provider: {id, kind}`
+  snapshot: the row freezes the id alone, because a provider's kind can change later (a kind change
+  mints a fresh UID, #521) and the row would then read a kind the id no longer has. Empty for a run
+  under no provider block, or one whose block serves no provider for the agent — today's path,
+  unchanged.
+
 - **Each person's own model-provider credential, strictly namespaced (#525).** `PUT` and
   `DELETE /model-providers/{id}/credential` store and remove the caller's own key or token for a
   key or endpoint provider, under `wardyn-provider-<uid>-key` in their own namespace — admins
