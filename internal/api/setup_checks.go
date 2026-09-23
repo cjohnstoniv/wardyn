@@ -452,13 +452,11 @@ func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
 }
 
 // ageKeyCheck warns when the secret store's age key is EPHEMERAL: a fresh
-// identity is minted on EVERY boot with none configured, so secret rows
-// written while an earlier ephemeral key was in use cannot be decrypted once
-// that key is lost at the next restart — there is no key to set afterwards
-// that recovers them (#755, 0.7.12 release review F3). Every other front door
-// that hits this trap (the Helm chart's render refusal and its values.yaml
-// comment, install.sh, scripts/up.sh, docs/ENV.md) already says so; this row
-// is where an operator sees it live.
+// identity is minted at every boot with none configured, so what is stored now
+// is lost at the next restart, and that boot refuses to start over the rows it
+// cannot decrypt (convertSecretStore). No earlier ephemeral key's rows can be
+// present while this row shows, since that same refusal kept them from booting;
+// the refusal is where the operator learns those are unrecoverable (#755).
 //
 // The Fix must never offer `helm: env.WARDYN_AGE_KEY` as the cluster
 // answer: it renders the secret store's MASTER key as a plaintext literal in
@@ -479,7 +477,7 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 	return SetupCheck{
 		ID: "age_key", Label: "Secret store durability", Status: "warn",
-		Detail: "The secret store uses an EPHEMERAL age key generated at boot; a fresh one is minted on EVERY restart, so stored secrets (API keys, GitHub App credentials) written while an earlier ephemeral key was in use cannot be decrypted once that key is lost — nothing set afterward recovers them.",
+		Detail: "The secret store uses an EPHEMERAL age key generated at boot: everything stored under it (API keys, GitHub App credentials) is lost at the next restart — no key set afterward can decrypt it — and the next boot refuses to start until those rows are deleted.",
 		Fix: "Generate a durable key with `wardynd -gen-age-key`, then wire it as WARDYN_AGE_KEY: " +
 			"on a host, -age-key or the env var; " +
 			"on Helm, keep it in a Secret — secrets.ageKeyFromSecret=true (an `age-key` entry in the Secret postgres.dsn.secretRef names) or secrets.ageKeySecretRef.name for a separate one. " +

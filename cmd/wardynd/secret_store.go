@@ -71,7 +71,10 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 			return err
 		}
 		if n > 0 {
-			return fmt.Errorf("refusing to start: WARDYN_AGE_KEY is unset, but %d stored secrets are sealed under an age key — an ephemeral key would make every one unreadable; set WARDYN_AGE_KEY to the key they were written with", n)
+			return fmt.Errorf("refusing to start: WARDYN_AGE_KEY is unset, but %d stored secrets are sealed under an age key — "+
+				"an ephemeral key would make every one unreadable; set WARDYN_AGE_KEY to the key they were written with. "+
+				"If they were written under an earlier ephemeral key, no such key exists and they are unrecoverable: "+
+				"delete them (DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%%') and boot with a persistent key from `wardynd -gen-age-key`", n)
 		}
 		return nil
 	}

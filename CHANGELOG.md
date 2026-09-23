@@ -10,14 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- **The setup checklist's ephemeral-age-key warning now says rows are unrecoverable, not just
-  "unreadable" (#755).** A fresh age identity is minted on every restart when none is configured,
-  so secret rows written while an earlier ephemeral key was in use cannot be decrypted once that
-  key is lost — no key set afterward recovers them. The console's "Secret store durability" row
-  said only that secrets "become unreadable after a restart", which read as a one-time future
-  event; it now states the consequence plainly, matching the wording every other front door for
-  this same trap (the Helm chart's render refusal, its values.yaml comment, `install.sh`,
-  `scripts/up.sh`, `docs/ENV.md`) already used.
+- **The ephemeral-age-key boot refusal names the rows no key can recover (#755).** With
+  `WARDYN_AGE_KEY` unset over age-sealed rows, wardynd told the operator to set the key the rows
+  were written with — but rows written under an earlier ephemeral key have no such key. The
+  refusal now says those rows are unrecoverable and gives the statement that deletes them. The
+  console's "Secret store durability" row now says what is stored under the ephemeral key is lost
+  at the next restart and that the next boot refuses to start, and the Helm values comment for
+  `secrets.ageKeyFromSecret` says no key set afterwards recovers the rows.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

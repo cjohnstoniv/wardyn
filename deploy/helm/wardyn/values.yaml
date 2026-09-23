@@ -182,7 +182,7 @@ secrets:
   # postgres.dsn.secretRef.name is set (persistent Postgres) — the chart refuses
   # to render otherwise, because at the default (false, ephemeral key) the pod
   # crash-loops on its SECOND restart, unable to decrypt what the first boot
-  # encrypted. Wiring the key through env/extraEnv counts too, and
+  # encrypted — and no key set afterwards recovers those rows. Wiring the key through env/extraEnv counts too, and
   # allowEphemeralAgeKey below is the deliberate opt-out. See README
   # "Database (DSN)".
   ageKeyFromSecret: false
