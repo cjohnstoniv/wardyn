@@ -160,40 +160,39 @@ test.describe("Runs board (default view)", () => {
     await openRuns(page);
 
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
-    await search.fill("e2e fixture 4");
 
     // Only the COMPLETED fixture-4 run should remain. The filter itself is
     // synchronous client-side state (runs.tsx's `filtered` is re-derived from
     // `runs` + `query` on every render — nothing async sits between the fill
-    // and the board reflecting it), but #469 (CI-flake): "synchronous" still
-    // has to be SCHEDULED — observed failing outright (0 retries locally;
-    // "Received: 9", i.e. the filter had not applied at all) on a
-    // CPU-starved host, where the fill's own React state update and re-paint
-    // can be starved of a scheduler tick same as anything else. Real slack,
-    // same reasoning as this file's other #469 fixes. The structural card
+    // and the board reflecting it). #469 (CI-flake): a loaded host still saw
+    // "Received: 9", the filter not applied at all, which fits a fill the input
+    // lost (a remount resets `query`), and no timeout brings a lost fill back.
+    // So the fill is retried with the count, not just waited on. The structural card
     // count is the stronger signal: `getByText("e2e fixture 0")` without
     // `exact` is a substring match, so it is provably watching the SAME "is
     // fixture 0 gone" fact as `run-card` count 1 — asserting both pins the
     // invariant two independent ways instead of leaning on one text query
     // alone.
-    await expect(page.getByText("e2e fixture 4")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId("run-card")).toHaveCount(1, { timeout: 15_000 });
-    await expect(page.getByText("e2e fixture 0", { exact: true })).toHaveCount(0, { timeout: 15_000 });
+    await expect(async () => {
+      await search.fill("e2e fixture 4");
+      await expect(page.getByTestId("run-card")).toHaveCount(1, { timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(page.getByText("e2e fixture 4")).toBeVisible();
+    await expect(page.getByText("e2e fixture 0", { exact: true })).toHaveCount(0);
   });
 
   test("a non-matching search shows the empty state, then recovers when cleared", async ({ page }) => {
     await openRuns(page);
 
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
-    await search.fill("zzz-no-such-run-zzz");
 
     // EmptyState for a query renders this copy (runs.tsx). #469 (CI-flake):
-    // the board's re-derivation of `filtered` is synchronous, but the render
-    // it produces still has to reach the DOM on a loaded CI host — observed
-    // timing out at the default 5s (the sibling "Clear filters" step below
-    // already carries the same real slack for the same reason).
-    await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("Try a different search term or facet.")).toBeVisible({ timeout: 15_000 });
+    // retried with the fill, for the same lost-fill reason as the test above.
+    await expect(async () => {
+      await search.fill("zzz-no-such-run-zzz");
+      await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(page.getByText("Try a different search term or facet.")).toBeVisible();
 
     // Clearing the filters restores the full board. The board's own 3s poll
     // can still be in flight when this re-render is checked.

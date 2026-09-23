@@ -384,19 +384,6 @@ test.describe("setup gate — forced on access, never a prison", () => {
 // "optional" list), and the barrier recommendation is derived from what the
 // host reports installed, never inferred from hardware or the OS.
 test.describe("setup counter and rail — three categories, not two (#213)", () => {
-  // #469 (CI-flake): phase-rail.tsx renders TWO <nav aria-label="Setup steps">
-  // landmarks unconditionally (a compact icon rail "hidden lg:flex xl:hidden"
-  // and the full rail "flex lg:hidden xl:flex"), and which one is actually in
-  // the accessibility tree depends on the viewport straddling Tailwind's xl
-  // (1280px) breakpoint. Playwright's "Desktop Chrome" device defaults to
-  // EXACTLY 1280x720 — the xl boundary itself — so the tests below (which
-  // pick the full rail via `.last()`) raced a rendering/layout tick at that
-  // exact edge and occasionally hung on a click to a nav that was not (yet)
-  // in the a11y tree, timing out at 30s. Pinning a width well inside the xl
-  // range removes the boundary race entirely; it does not change what the
-  // tests assert.
-  test.use({ viewport: { width: 1440, height: 900 } });
-
   test.afterEach(async ({ page }) => {
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
@@ -406,7 +393,10 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await skipHero(page);
     await page.goto("/");
     await page.waitForURL(/\/setup/);
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    // #469 (CI-flake): this heading is the first paint of the lazily loaded
+    // setup funnel, and on a loaded CI runner it has missed the default 5s
+    // (the retry then passes in ~1.5s). Same 15s as openPermissionsFromPeople.
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Step 1 of 4")).toBeVisible();
     // "3" (CONFIG_STEPS) is a constant; the demo count is derived live from
     // stepOrder(status), so it's asserted by pattern, not a hand-kept number.
@@ -450,7 +440,7 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await skipHero(page);
     await page.goto("/");
     await page.waitForURL(/\/setup/);
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
 
     // Scoped to the full rail's own landmark: "Required" is also a substring
     // of the step-counter's subline ("Required before a run can launch…"),
@@ -493,7 +483,7 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     });
     await skipHero(page);
     await page.goto("/setup");
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
     // exact: Playwright's default text match is substring + case-insensitive,
     // and the honest note below contains "recommended" as a lowercase word.
     await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);

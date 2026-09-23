@@ -10,16 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- **`ui-e2e` ran 2-3x faster and stopped flaking on three specs (#469).** `scripts/run-ui-e2e.sh`'s
-  default (all-spec) invocation now splits the suite round-robin across 2-3 concurrent lanes
-  (`WARDYN_E2E_LANES`), each its own isolated backend, database and Playwright report; an explicit
-  spec list keeps the original single-lane path. `setup-gate.spec.ts` pins the "setup counter and
-  rail" describe block's viewport off Tailwind's exact `xl` breakpoint (Playwright's default
-  1280x720 viewport straddled it, racing which of phase-rail.tsx's two `<nav>` landmarks was
-  actually in the DOM) and gives its lazy-chunk wait real slack; `episode-catalog.spec.ts`'s
-  multi-user-SSO test and `runs.spec.ts`'s empty-search-state assertions get the same real slack
-  their siblings already carried, instead of racing a loaded CI host at the default 5s/15s expect
-  timeout.
+- **`ui-e2e` runs its specs in three concurrent lanes and hardens four specs that flaked in CI
+  (#469).** `scripts/run-ui-e2e.sh`'s default (all-spec) invocation now runs three isolated backends
+  at once (`WARDYN_E2E_LANES`, 1-3), each with its own ports and database and each claiming the next
+  unclaimed spec, so every spec still gets a freshly seeded backend; an explicit spec list runs one
+  lane. Each spec keeps its own failure artifacts under `ui/test-results/<spec>/`, which is what CI
+  now uploads, and CI records video only on a retry. The first lazy-loaded paint in
+  `setup-gate.spec.ts` and `episode-catalog.spec.ts` gets more than the default expect timeout,
+  `runs.spec.ts` retries a search fill together with its assertion, and `workspaces.spec.ts`
+  unroutes before teardown so a poll in flight cannot fail a finished test.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
