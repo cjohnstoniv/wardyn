@@ -18,7 +18,9 @@ import {
   POSITIONING,
   RUBRIC,
   RUN_LIMITS,
+  runLimitUnit,
   runLimitsChip,
+  setsRunLimits,
 } from "./governance-copy";
 import { PEOPLE } from "./people-access-copy";
 import { AUTONOMY_RUBRIC_ROW_KEYS, type AutonomyRubricRowKey } from "./api/governance";
@@ -379,6 +381,38 @@ describe("runLimitsChip — the packet's Summary chip line", () => {
     expect(runLimitsChip({ max_end_ahead_sec: 86400 })).toBe("Ends within 1 day");
     expect(runLimitsChip({ max_wait_sec: 1800 })).toBe("waits up to 30 minutes");
     expect(runLimitsChip({ user_changes_limits: true })).toBe("people may change these");
+  });
+});
+
+describe("setsRunLimits — every one of the seven fields counts, not just the chip's three", () => {
+  it("is false for an empty or all-zero run limits", () => {
+    expect(setsRunLimits({})).toBe(false);
+    expect(setsRunLimits({ max_end_ahead_sec: 0, default_end_sec: 0, allow_no_end: false, pause_idle_after_sec: 0 })).toBe(
+      false,
+    );
+  });
+
+  it("is true for each field set alone", () => {
+    for (const l of [
+      { max_end_ahead_sec: 86400 },
+      { default_end_sec: 86400 },
+      { allow_no_end: true },
+      { max_wait_sec: 3600 },
+      { default_wait_sec: 3600 },
+      { user_changes_limits: true },
+      { pause_idle_after_sec: 1800 },
+    ]) {
+      expect(setsRunLimits(l), JSON.stringify(l)).toBe(true);
+    }
+  });
+});
+
+describe("runLimitUnit — the largest unit a value is a whole number of", () => {
+  it("picks days, hours, minutes, then seconds", () => {
+    expect(runLimitUnit(2 * 86400).many).toBe("days");
+    expect(runLimitUnit(36 * 3600).many).toBe("hours");
+    expect(runLimitUnit(1800).many).toBe("minutes");
+    expect(runLimitUnit(20).many).toBe("seconds");
   });
 });
 

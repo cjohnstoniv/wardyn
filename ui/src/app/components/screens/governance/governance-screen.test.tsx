@@ -719,6 +719,16 @@ describe("GovernanceScreen — the run-limits summary chip", () => {
     expect(row.queryByText(GOV.LIMITS_NONE)).toBeNull();
   });
 
+  // The chip names three of the seven fields; "None" must read all seven. A
+  // default-only profile still ends every run after a day (R4/F032's class).
+  it("a profile that sets only a default end does not read None", async () => {
+    renderScreen(snapshot({ profiles: [profile({ limits: { default_end_sec: 86400 } }), PLATFORM] }));
+    await screen.findByText(GREENFIELD.name);
+    const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
+    const row = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    expect(row.queryByText(GOV.LIMITS_NONE)).toBeNull();
+  });
+
   it("a profile with no run limits shows no chip and still reads None", async () => {
     renderScreen();
     await screen.findByText(GREENFIELD.name);

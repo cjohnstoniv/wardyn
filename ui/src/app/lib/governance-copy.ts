@@ -447,8 +447,6 @@ export const LIMITS_CHIP = {
 // plainly rather than naming a concept this console doesn't have yet.
 export const RUN_LIMITS = {
   SECTION_TITLE: "Run limits",
-  SECTION_LEAD:
-    "Bounds how long a run under this profile may last and how long it waits for a decision, and whether the people running it may change either. Extending within the limit never needs the gate.",
   MAX_END_LABEL: "Longest a run can be set to last",
   MAX_END_HINT: "Measured from now. People extend before it ends. Leave blank for no limit.",
   DEFAULT_END_LABEL: "Default end",
@@ -465,24 +463,50 @@ export const RUN_LIMITS = {
   PAUSE_IDLE_LABEL: "Pause a run nobody is using after",
   PAUSE_IDLE_HINT:
     "No typing, no network traffic (downloads in progress count), and a quiet CPU. Leave blank to pause only runs waiting for a decision.",
-  UNIT_DAYS: "days",
-  UNIT_HOURS: "hours",
-  UNIT_MINUTES: "minutes",
+  // The editor's unit picker has no visible label of its own; this is its
+  // accessible name, so it never shares the input's.
+  UNIT_PICKER_LABEL: (label: string) => `${label}: unit`,
 } as const;
 
-// humanizeRunLimitSec renders a seconds value the way the packet's own
-// examples do — "30 days", "8 hours", "30 minutes" — picking the largest whole
-// unit the value divides into evenly, falling back to seconds for whatever's
-// left (a value only the API or a future finer-grained control would produce).
-function humanizeRunLimitSec(sec: number): string {
-  if (sec % 86400 === 0) return pluralize(sec / 86400, "day");
-  if (sec % 3600 === 0) return pluralize(sec / 3600, "hour");
-  if (sec % 60 === 0) return pluralize(sec / 60, "minute");
-  return pluralize(sec, "second");
+// The units a run-limit duration is written in, largest first — the packet's
+// own examples ("30 days", "8 hours", "30 minutes"), plus seconds for a value
+// only the API can produce. The chip below and the editor's unit picker share
+// this one table.
+export const RUN_LIMIT_UNITS = [
+  { sec: 86400, one: "day", many: "days" },
+  { sec: 3600, one: "hour", many: "hours" },
+  { sec: 60, one: "minute", many: "minutes" },
+  { sec: 1, one: "second", many: "seconds" },
+] as const;
+
+export type RunLimitUnit = (typeof RUN_LIMIT_UNITS)[number];
+
+// runLimitUnit is the largest unit a seconds value is a whole number of — so
+// 1800 reads "30 minutes", never "1 hour" or "0 hours".
+export function runLimitUnit(sec: number): RunLimitUnit {
+  return RUN_LIMIT_UNITS.find((u) => sec % u.sec === 0)!;
 }
 
-function pluralize(n: number, unit: string): string {
-  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+function humanizeRunLimitSec(sec: number): string {
+  const u = runLimitUnit(sec);
+  const n = sec / u.sec;
+  return `${n} ${n === 1 ? u.one : u.many}`;
+}
+
+// setsRunLimits is whether a profile sets ANY of the seven run-limit fields —
+// not just the three runLimitsChip names. A profile with only a default end
+// still ends every run, so the Limits column must not read "None" for it (the
+// R4/F032 class: a limit that binds while the list says there is none).
+export function setsRunLimits(l: RunLimits): boolean {
+  return !!(
+    l.max_end_ahead_sec ||
+    l.default_end_sec ||
+    l.allow_no_end ||
+    l.max_wait_sec ||
+    l.default_wait_sec ||
+    l.user_changes_limits ||
+    l.pause_idle_after_sec
+  );
 }
 
 // runLimitsChip composes the profiles-list summary chip the packet's
@@ -490,9 +514,8 @@ function pluralize(n: number, unit: string): string {
 // people may change these") — the same "category · value" join MEMBER.GS_CHIP
 // uses. Only the fields actually SET contribute a clause (0/false is "no
 // limit" everywhere else in this module, and a clause claiming a bound that
-// doesn't exist would be a lie); null when the profile sets no run limit at
-// all, so the caller can fold it into the same "None" test the door/quota
-// chips already use.
+// doesn't exist would be a lie); null when the profile sets none of the three.
+// Whether the list reads "None" is setsRunLimits' call, not this one's.
 export function runLimitsChip(l: RunLimits | undefined): string | null {
   if (!l) return null;
   const parts: string[] = [];

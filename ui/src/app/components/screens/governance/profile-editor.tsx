@@ -22,7 +22,7 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api, isGrantBoundError, type GovernanceLimits, type GovernanceProfile } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
-import { GOVERNANCE as GOV, RUN_LIMITS as RL } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import type { RunPolicySpec } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
@@ -30,6 +30,7 @@ import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Mono } from "../../wardyn/code-block";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { POLICY_TEMPLATES, PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
@@ -217,13 +218,11 @@ export function ProfileEditor({
           and share one gate (user_changes_limits) none of the doors do. */}
       <section className="mt-6">
         <h4 className="text-body font-medium text-foreground">{RL.SECTION_TITLE}</h4>
-        <p className="mt-0.5 max-w-[82ch] text-body text-muted-foreground">{RL.SECTION_LEAD}</p>
         <LimitDurationRow
           id="governance-limit-max-end"
           label={RL.MAX_END_LABEL}
           hint={RL.MAX_END_HINT}
           unitSec={SEC_PER_DAY}
-          unitLabel={RL.UNIT_DAYS}
           valueSec={limits.max_end_ahead_sec}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, max_end_ahead_sec: v }))}
@@ -232,7 +231,6 @@ export function ProfileEditor({
           id="governance-limit-default-end"
           label={RL.DEFAULT_END_LABEL}
           unitSec={SEC_PER_DAY}
-          unitLabel={RL.UNIT_DAYS}
           valueSec={limits.default_end_sec}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, default_end_sec: v }))}
@@ -249,7 +247,6 @@ export function ProfileEditor({
           label={RL.MAX_WAIT_LABEL}
           hint={RL.MAX_WAIT_HINT}
           unitSec={SEC_PER_HOUR}
-          unitLabel={RL.UNIT_HOURS}
           valueSec={limits.max_wait_sec}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, max_wait_sec: v }))}
@@ -258,7 +255,6 @@ export function ProfileEditor({
           id="governance-limit-default-wait"
           label={RL.DEFAULT_WAIT_LABEL}
           unitSec={SEC_PER_HOUR}
-          unitLabel={RL.UNIT_HOURS}
           valueSec={limits.default_wait_sec}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, default_wait_sec: v }))}
@@ -275,7 +271,6 @@ export function ProfileEditor({
           label={RL.PAUSE_IDLE_LABEL}
           hint={RL.PAUSE_IDLE_HINT}
           unitSec={SEC_PER_MINUTE}
-          unitLabel={RL.UNIT_MINUTES}
           valueSec={limits.pause_idle_after_sec}
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, pause_idle_after_sec: v }))}
@@ -383,10 +378,13 @@ function LimitNumberRow({
 }
 
 // RL-14: one run-limit duration (0 = unlimited, the same rule LimitNumberRow's
-// three rows follow). The wire is seconds; the input shows and accepts the
-// caller's unit (days/hours/minutes, whichever the packet's own example for
-// that field used), converting on the way in and out. A hint is optional —
-// two of the seven rows (Default end, Default wait) are paired with a row
+// three rows follow). The wire is seconds; the input takes a whole number of
+// the unit picked beside it. The picker opens on the row's own unit (the
+// packet's example for that field) unless the stored value is not a whole
+// number of it — then on the largest unit it is (runLimitUnit, the chip's
+// rule), so the input never shows a rounded or blank value for a stored one.
+// Seconds are offered only when a stored value needs them. A hint is optional
+// — two of the seven rows (Default end, Default wait) are paired with a row
 // just above that already explains the pair.
 function LimitDurationRow({
   id,
@@ -394,7 +392,6 @@ function LimitDurationRow({
   hint,
   valueSec,
   unitSec,
-  unitLabel,
   disabled,
   onChange,
 }: {
@@ -403,10 +400,14 @@ function LimitDurationRow({
   hint?: React.ReactNode;
   valueSec: number | undefined;
   unitSec: number;
-  unitLabel: string;
   disabled: boolean;
   onChange: (nextSec: number) => void;
 }) {
+  const [unit, setUnit] = React.useState(() =>
+    valueSec && valueSec % unitSec !== 0 ? runLimitUnit(valueSec).sec : unitSec,
+  );
+  const [offerSeconds] = React.useState(unit === 1);
+  const count = valueSec ? valueSec / unit : undefined;
   return (
     <div className="mt-3 border-t border-border pt-3 first-of-type:border-t-0" data-testid={id}>
       <Field label={label} htmlFor={id} hint={hint} className="max-w-[28rem]">
@@ -417,10 +418,29 @@ function LimitDurationRow({
             min={0}
             className="max-w-[8rem] font-mono"
             disabled={disabled}
-            value={numberField(valueSec ? Math.round(valueSec / unitSec) : undefined)}
-            onChange={(e) => onChange(nonNegativeInt(e.target.value) * unitSec)}
+            value={numberField(count)}
+            onChange={(e) => onChange(nonNegativeInt(e.target.value) * unit)}
           />
-          <span className="text-body text-muted-foreground">{unitLabel}</span>
+          {/* Changing the unit keeps the number typed: "30", then minutes. */}
+          <Select
+            value={String(unit)}
+            disabled={disabled}
+            onValueChange={(v) => {
+              setUnit(Number(v));
+              if (count) onChange(count * Number(v));
+            }}
+          >
+            <SelectTrigger aria-label={RL.UNIT_PICKER_LABEL(label)} className="w-[8rem]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RUN_LIMIT_UNITS.filter((u) => u.sec > 1 || offerSeconds).map((u) => (
+                <SelectItem key={u.sec} value={String(u.sec)}>
+                  {u.many}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </Field>
     </div>

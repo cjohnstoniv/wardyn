@@ -16,7 +16,17 @@ import {
   sidebarLink,
   sql,
 } from "./fixtures";
-import { GOVERNANCE as GOV, LIMITS_CHIP, MEMBER, PEOPLE, PERM, PREVIEW, RUBRIC } from "../src/app/lib/governance-copy";
+import {
+  GOVERNANCE as GOV,
+  LIMITS_CHIP,
+  MEMBER,
+  PEOPLE,
+  PERM,
+  PREVIEW,
+  RUBRIC,
+  RUN_LIMITS as RL,
+  runLimitsChip,
+} from "../src/app/lib/governance-copy";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import type { Page } from "@playwright/test";
@@ -844,6 +854,92 @@ test.describe("governance — the two storage ceilings round-trip through the ed
     const cleared = snap2.profiles.find((p: { name: string }) => p.name === name);
     expect(cleared.limits.max_ephemeral_disk_mib ?? 0).toBe(0);
     expect(cleared.limits.max_drive_size_mib ?? 0).toBe(0);
+  });
+});
+
+// RL-14 (0.8, #579): the seven run limits. The editor shows days, hours and
+// minutes and the wire is seconds, so only a real save and a real read-back
+// prove the conversion — and the default-past-max refusal is the SERVER's
+// (runLimitsRefusal), so only this backend proves an admin is shown it.
+test.describe("governance — the run limits round-trip through the editor (RL-14)", () => {
+  test("durations save as seconds, reopen in their units, and a default past its max is refused", async ({
+    page,
+  }) => {
+    const name = `run-limits-${randomUUID().slice(0, 8)}`;
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const stored = async () => {
+      const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
+      const p = snap.profiles.find((x: { name: string }) => x.name === name);
+      expect(p, `profile ${name} missing — did the save land?`).toBeTruthy();
+      return p.limits;
+    };
+    const unitPicker = (label: string) =>
+      page.getByRole("combobox", { name: RL.UNIT_PICKER_LABEL(label), exact: true });
+
+    await gotoConsole(page);
+    await navTo(page, "Governance");
+    await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
+    const editor = page.getByTestId("governance-profile-editor");
+    await page.locator("#governance-profile-name").fill(name);
+
+    await page.locator("#governance-limit-max-end").fill("14");
+    await page.locator("#governance-limit-default-end").fill("1");
+    await page.locator("#governance-limit-max-wait").fill("8");
+    // A sub-hour wait in the hours row: the number, then the unit.
+    await page.locator("#governance-limit-default-wait").fill("30");
+    await unitPicker(RL.DEFAULT_WAIT_LABEL).click();
+    await page.getByRole("option", { name: "minutes", exact: true }).click();
+    await page.locator("#governance-limit-pause-idle").fill("30");
+    await editor.getByRole("switch", { name: RL.ALLOW_NO_END_LABEL, exact: true }).click();
+    await editor.getByRole("switch", { name: RL.USER_CHANGES_LABEL, exact: true }).click();
+    await page.getByRole("button", { name: GOV.SAVE, exact: true }).click();
+    await expect(editor).toHaveCount(0);
+
+    const limits = await stored();
+    expect(limits.max_end_ahead_sec).toBe(1209600);
+    expect(limits.default_end_sec).toBe(86400);
+    expect(limits.max_wait_sec).toBe(28800);
+    expect(limits.default_wait_sec).toBe(1800);
+    expect(limits.pause_idle_after_sec).toBe(1800);
+    expect(limits.allow_no_end).toBe(true);
+    expect(limits.user_changes_limits).toBe(true);
+
+    // The list names what was stored, and no longer reads None.
+    const row = profilesTable(page).getByRole("row").filter({ hasText: name });
+    await expect(row.getByText(runLimitsChip(limits)!, { exact: true })).toBeVisible();
+    await expect(row.getByText(GOV.LIMITS_NONE, { exact: true })).toHaveCount(0);
+
+    // Reopened from the stored row: each value in its unit — 1800s in the
+    // hours row reads 30 minutes, never 1 hour or blank.
+    await page.getByRole("button", { name: `${GOV.EDIT} ${name}` }).click();
+    for (const [id, label, value, unit] of [
+      ["#governance-limit-max-end", RL.MAX_END_LABEL, "14", "days"],
+      ["#governance-limit-default-end", RL.DEFAULT_END_LABEL, "1", "days"],
+      ["#governance-limit-max-wait", RL.MAX_WAIT_LABEL, "8", "hours"],
+      ["#governance-limit-default-wait", RL.DEFAULT_WAIT_LABEL, "30", "minutes"],
+      ["#governance-limit-pause-idle", RL.PAUSE_IDLE_LABEL, "30", "minutes"],
+    ] as const) {
+      await expect(page.locator(id)).toHaveValue(value);
+      await expect(unitPicker(label)).toHaveText(unit);
+    }
+    await expect(editor.getByRole("switch", { name: RL.ALLOW_NO_END_LABEL, exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(editor.getByRole("switch", { name: RL.USER_CHANGES_LABEL, exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+
+    // A default end past the longest end: the server refuses the write, the
+    // editor stays open showing its message, and the stored row is unchanged.
+    await page.locator("#governance-limit-default-end").fill("30");
+    await page.getByRole("button", { name: GOV.SAVE, exact: true }).click();
+    await expect(editor.getByRole("alert")).toContainText(
+      "limits.default_end_sec: 2592000 is past limits.max_end_ahead_sec (1209600)",
+    );
+    await expect(editor).toBeVisible();
+    expect((await stored()).default_end_sec).toBe(86400);
   });
 });
 
