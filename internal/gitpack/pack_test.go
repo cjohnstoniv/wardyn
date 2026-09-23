@@ -998,6 +998,31 @@ func TestPackTree_MaxChangesIsEnforced(t *testing.T) {
 	}
 }
 
+// highestMeasuredEntriesPerPath is the largest entries-per-path ratio found
+// measuring five real repository trees for #254 (see maxTreeNodes' comment in
+// pack.go: this repository, the Linux kernel, googleapis/googleapis,
+// spring-projects/spring-framework and kubernetes/kubernetes's vendor/). It is
+// a fact about real directory layouts, not a value this package derives, so
+// it is pinned here rather than computed.
+const highestMeasuredEntriesPerPath = 1.24
+
+// TestMaxTreeNodesHeadroomAgainstMeasuredRatio pins the #254 conclusion: at
+// the highest entries-per-path ratio measured across those five real
+// repositories, maxChanges refuses before maxTreeNodes does, with room to
+// spare. It exists so a future change to either ceiling has to reckon with
+// the measurement rather than silently eroding the margin the comment cites.
+func TestMaxTreeNodesHeadroomAgainstMeasuredRatio(t *testing.T) {
+	nodesAtMaxChanges := highestMeasuredEntriesPerPath * float64(maxChanges)
+	if nodesAtMaxChanges >= float64(maxTreeNodes) {
+		t.Fatalf("at the measured ratio %.2f, maxChanges (%d) would walk %.0f tree entries — at or past maxTreeNodes (%d)",
+			highestMeasuredEntriesPerPath, maxChanges, nodesAtMaxChanges, maxTreeNodes)
+	}
+	if margin := float64(maxTreeNodes) / nodesAtMaxChanges; margin < 2 {
+		t.Errorf("maxTreeNodes gives only a %.1fx margin over the measured ratio at maxChanges, want at least 2x",
+			margin)
+	}
+}
+
 // ─── hand-built hostile fixtures ────────────────────────────────────────────
 //
 // Only the fixtures a real git will never produce are assembled here.
