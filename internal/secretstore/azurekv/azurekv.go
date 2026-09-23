@@ -421,7 +421,7 @@ func (s *Store) Check(ctx context.Context, owner, name, ref string) error {
 		}
 	}
 	if latest == nil || !latest.enabled() {
-		return fmt.Errorf("Key Vault no longer holds this credential (%s)", sn)
+		return fmt.Errorf("refused: Key Vault no longer holds this credential (%s)", sn)
 	}
 	return bound(latest.Tags, owner, name)
 }
