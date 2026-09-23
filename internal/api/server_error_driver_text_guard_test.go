@@ -65,31 +65,38 @@ import (
 // sshExecStreamErrorMessage callers in sshgateway_channels.go, a channel
 // stderr write that is not an HTTP 5xx body at all and this guard does not
 // watch) in one step.
+// Keyed by "file:enclosing-symbol:call", not by line: a line number shifts
+// every time an unrelated edit lands above the site (three other PRs did
+// exactly that to these same files in the same review round), which made a
+// still-correct allowlist entry go stale for a reason that has nothing to do
+// with whether the site still leaks driver text. The enclosing func/method
+// name and the call being flagged (writeError, a named forwarder, or the
+// driveBindFailure literal) move only when the site itself is edited.
 var serverErrorDriverTextAllowlist = map[string]string{
-	// handleInternalCredentialReauth's raise-failure arm is a
+	// holdOrRefuseCredentialReauth's raise-failure arm is a
 	// DELIBERATELY MODELLED body (docs/design/0.8/PLAN.md's AWS SSO lane):
 	// credentialReauthRaiseFailedBody is a frozen operator-facing sentence and
 	// aerr here is s.cfg.Approvals.Request's own error, never driver/substrate
 	// text. #173's DO NOT TOUCH names this site explicitly.
-	"injection_awssso.go:361": "modelled AWS SSO reauth-raise body; #173 DO NOT TOUCH",
-	// handleRunResourcesExecStream's unsupported arm is reached only after errors.Is(err,
+	"injection_awssso.go:Server.holdOrRefuseCredentialReauth:writeError": "modelled AWS SSO reauth-raise body; #173 DO NOT TOUCH",
+	// handleRunResources' ExecStream-unsupported arm is reached only after errors.Is(err,
 	// runner.ErrExecStreamUnsupported) just matched, so err.Error() here is
 	// always that sentinel's own fixed text ("runner: ExecStream not
 	// supported"), never driver/substrate text. Converting it would also
 	// break TestRunResources_ExecStreamUnsupported_Returns501, which pins the
 	// sentinel staying in the 501 body so the console/operator can tell this
 	// case apart from the no-runner-configured guard beside it.
-	"run_resources.go:201": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
+	"run_resources.go:Server.handleRunResources:writeError": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
 	// #445: the runner/substrate text in a failed dispatch's hint is
 	// deliberately operator-useful (ImagePullBackOff, a missing secret, a
 	// runtime's own refusal) and is not store/driver text;
 	// TestGetRun_TerminalStartupReasonSurvivesFailed pins that shape.
-	"runs_dispatch.go:549": "runner CreateSandbox text, operator-useful by design (#445)",
-	"runs_dispatch.go:710": "runner Exec text, operator-useful by design (#445)",
+	"runs_dispatch.go:Server.dispatchRun:failAndRevoke":      "runner CreateSandbox text, operator-useful by design (#445)",
+	"runs_dispatch.go:Server.startAgentOrIdle:failAndRevoke": "runner Exec text, operator-useful by design (#445)",
 	// adoscope.ScopesFor's only error is a fixed sentence naming the refused
 	// capability ("adoscope: %q is not a grantable capability ..."), never
 	// store/driver text.
-	"runs_dispatch_ado_inject.go:487": "fixed adoscope.ScopesFor refusal naming the capability (#445)",
+	"runs_dispatch_ado_inject.go:Server.authorADOEntraInjection:refuseADOEntraDispatch": "fixed adoscope.ScopesFor refusal naming the capability (#445)",
 	// Every other site #173 found was FIXED, not allowlisted — a new entry
 	// here needs the same kind of justification (a named fixed sentinel or a
 	// design record, plus a pinning test) as these two, not just a passing
@@ -138,6 +145,25 @@ func calleeName(call *ast.CallExpr) string {
 	default:
 		return ""
 	}
+}
+
+// enclosingSymbolName names a top-level FuncDecl the way the allowlist keys
+// on it: the bare func name, or "Type.Method" for a method (every flagged
+// site so far hangs off *Server, but this reads the receiver rather than
+// assuming that). Used instead of a line number so the allowlist survives an
+// unrelated edit landing above the site.
+func enclosingSymbolName(fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
+		return fd.Name.Name
+	}
+	recv := fd.Recv.List[0].Type
+	if star, ok := recv.(*ast.StarExpr); ok {
+		recv = star.X
+	}
+	if id, ok := recv.(*ast.Ident); ok {
+		return id.Name + "." + fd.Name.Name
+	}
+	return fd.Name.Name
 }
 
 // driveBindFailureLitStatusMember reports the status and member field
@@ -190,8 +216,8 @@ var server5xxStatusIdents = map[string]bool{
 // TestNoDriverTextInServerErrorBody walks internal/api's non-test sources and
 // fails on a writeError(w, <5xx>, ...) call whose message argument calls
 // err.Error() anywhere inside it — the pattern writeServerError/loggedMsg
-// exist to replace. See the package doc comment above for scope and the
-// allowlist's one deliberate exception.
+// exist to replace. See the package doc comment above for scope and
+// serverErrorDriverTextAllowlist's deliberate exceptions.
 func TestNoDriverTextInServerErrorBody(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -221,48 +247,57 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		}
 		scanned++
 
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.CallExpr:
-				// Direct shape: writeError(w, <5xx>, <msg with err.Error()>).
-				if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(node.Args) >= 3 {
-					if is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[2]) {
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			symbol := enclosingSymbolName(fd)
+
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				switch node := n.(type) {
+				case *ast.CallExpr:
+					// Direct shape: writeError(w, <5xx>, <msg with err.Error()>).
+					if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(node.Args) >= 3 {
+						if is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[2]) {
+							pos := fset.Position(node.Pos())
+							key := fmt.Sprintf("%s:%s:writeError", name, symbol)
+							found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
+						}
+						return true
+					}
+					// #295's one-hop shape: a call into a known forwarder that
+					// itself carries writeError's (status, msg) pair as ordinary
+					// arguments at fixed positions.
+					callee := calleeName(node)
+					fwd, ok := serverErrorForwarders[callee]
+					if !ok {
+						return true
+					}
+					maxArg := fwd.statusArg
+					if fwd.msgArg > maxArg {
+						maxArg = fwd.msgArg
+					}
+					if len(node.Args) > maxArg && (fwd.statusArg < 0 || is5xxStatusArg(node.Args[fwd.statusArg])) && callsErrorMethod(node.Args[fwd.msgArg]) {
 						pos := fset.Position(node.Pos())
-						key := fmt.Sprintf("%s:%d", name, pos.Line)
+						key := fmt.Sprintf("%s:%s:%s", name, symbol, callee)
 						found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
 					}
-					return true
+				case *ast.CompositeLit:
+					// #295's other one-hop shape: driveBindFailureHere /
+					// driveShareBindFailure answer with a *driveBindFailure
+					// literal instead of a writeError call, so the (status,
+					// message) pair lives in its fields, not call arguments.
+					status, member := driveBindFailureLitStatusMember(node)
+					if status != nil && member != nil && is5xxStatusArg(status) && callsErrorMethod(member) {
+						pos := fset.Position(node.Pos())
+						key := fmt.Sprintf("%s:%s:driveBindFailure", name, symbol)
+						found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
+					}
 				}
-				// #295's one-hop shape: a call into a known forwarder that
-				// itself carries writeError's (status, msg) pair as ordinary
-				// arguments at fixed positions.
-				fwd, ok := serverErrorForwarders[calleeName(node)]
-				if !ok {
-					return true
-				}
-				maxArg := fwd.statusArg
-				if fwd.msgArg > maxArg {
-					maxArg = fwd.msgArg
-				}
-				if len(node.Args) > maxArg && (fwd.statusArg < 0 || is5xxStatusArg(node.Args[fwd.statusArg])) && callsErrorMethod(node.Args[fwd.msgArg]) {
-					pos := fset.Position(node.Pos())
-					key := fmt.Sprintf("%s:%d", name, pos.Line)
-					found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
-				}
-			case *ast.CompositeLit:
-				// #295's other one-hop shape: driveBindFailureHere /
-				// driveShareBindFailure answer with a *driveBindFailure
-				// literal instead of a writeError call, so the (status,
-				// message) pair lives in its fields, not call arguments.
-				status, member := driveBindFailureLitStatusMember(node)
-				if status != nil && member != nil && is5xxStatusArg(status) && callsErrorMethod(member) {
-					pos := fset.Position(node.Pos())
-					key := fmt.Sprintf("%s:%d", name, pos.Line)
-					found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
-				}
-			}
-			return true
-		})
+				return true
+			})
+		}
 	}
 	if scanned == 0 {
 		t.Fatal("scanned 0 files — the guard's directory listing is wrong")
