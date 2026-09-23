@@ -622,6 +622,23 @@ type Runner interface {
 	KillSandbox(ctx context.Context, ref string) error
 }
 
+// SandboxEnder is an OPTIONAL Runner capability: stop a sandbox and KEEP it
+// (the lease end, long-holds design rev 4). EndSandbox stops the agent without
+// removing it, so its files survive, and removes the proxy sidecar, so nothing
+// the agent could restart has a network path. StopSandbox/KillSandbox still
+// tear the kept sandbox down later. Idempotent on a missing sandbox.
+//
+// A substrate that cannot keep a stopped sandbox (Kubernetes: stopping a pod
+// deletes it) does not implement it, and a router in front of one returns
+// ErrEndUnsupported; the control plane then stops the run outright.
+type SandboxEnder interface {
+	EndSandbox(ctx context.Context, ref string) error
+}
+
+// ErrEndUnsupported is EndSandbox's answer from a router whose substrate for
+// ref cannot keep a stopped sandbox.
+var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
+
 // ImageChecker is an OPTIONAL Runner capability: a
 // substrate whose local image cache can go stale out from under a workspace's
 // cached image_ref (the docker driver — a pruned/removed local image; the

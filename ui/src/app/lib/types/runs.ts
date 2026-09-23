@@ -175,6 +175,11 @@ export interface AgentRun {
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   governance_profile_id?: string;
+  // Set when the run lost its sandbox but is kept (migration 0070, #568):
+  // "ended" = its end passed, so it is stopped with no network and its files
+  // stay for the ended-run grace. The run stays RUNNING meanwhile.
+  lost_at?: string;
+  lost_reason?: "ended";
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that

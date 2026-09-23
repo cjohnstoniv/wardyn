@@ -113,6 +113,13 @@ func (s RunState) IsTerminal() bool {
 // every constant scanned from this file, so the two cannot disagree.
 var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
+// LostReason says why a kept run lost its sandbox (AgentRun.LostReason).
+type LostReason string
+
+// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
+// and kept for the ended-run grace.
+const LostEnded LostReason = "ended"
+
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
 type ActorType string
@@ -259,6 +266,13 @@ type AgentRun struct {
 	// against these captured bounds, never against the profile's current ones.
 	RunLimits           RunLimits  `json:"run_limits"`
 	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
+	// LostAt / LostReason mark a run that lost its sandbox but is KEPT: its
+	// agent is stopped and its proxy gone, so it has no network, while its
+	// files stay. The run keeps its RunState (RUNNING, so it still holds a quota
+	// slot); only a kill or the ended-run grace makes it terminal. Nil / "" is a
+	// live run. Migration 0070.
+	LostAt     *time.Time `json:"lost_at,omitempty"`
+	LostReason LostReason `json:"lost_reason,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the

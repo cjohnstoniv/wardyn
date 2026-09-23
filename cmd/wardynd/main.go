@@ -378,6 +378,7 @@ func run() error {
 		// The wait ceiling a run's captured wait folds under; the approval
 		// sweeper (runApprovalSweeper) enforces the same value.
 		ApprovalExpiryAfter: *f.approvalExpiryAfter,
+		EndedRunGrace:       *f.endedRunGrace,
 		// Same minter, second use: the setup checklist asks it whether GitHub
 		// confines the App to the run branch namespace. nil when no App is
 		// configured, which omits the row.

@@ -132,6 +132,14 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			outcome = "failure"
 		}
 
+		// A run its lease ended is KEPT with its agent stopped on purpose: that
+		// stop is what ended this Wait, and finalizing here would tear down the
+		// files the run is kept for. The end marks the run before it stops the
+		// agent, so this read always sees it.
+		if cur, gerr := s.cfg.Store.GetRun(base, runID); gerr == nil && runIsKept(cur) {
+			return
+		}
+
 		// KILLED-race guard: transition ONLY from RUNNING. If a kill/stop already
 		// moved the run to a terminal state, applied is false and we leave it be.
 		applied, uerr := s.casRunState(base, runID, types.RunRunning, terminal)
@@ -294,7 +302,7 @@ func (s *Server) countPendingReauth(ctx context.Context, runID uuid.UUID) int {
 
 // CancelTerminalRunApprovals is cancelRunApprovals' exported seam for the THIRD
 // terminal writer: cmd/wardynd's idle reaper (lifecycleStopper.StopRun) is the
-// only writer of RunState=STOPPED, it lives outside this package, and before
+// then-only writer of RunState=STOPPED, it lives outside this package, and before
 // this it ran the revoke half of the cascade and none of the approval half — so
 // an idle-stopped run's PENDING approvals sat in the queue until the 24h
 // ExpireStale sweep, logged "nobody answered" rather than "the run stopped",
@@ -308,7 +316,8 @@ func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID
 
 // terminalCancelReason is the reason string stamped on a cancelled approval and
 // on its audit row: "run_killed", "run_completed", "run_failed", "run_stopped",
-// or (for an archived row, or a state the read could not resolve)
+// "run_ended" (the lease ran out: kept, or torn down at its end or after the
+// grace), or (for an archived row, or a state the read could not resolve)
 // "run_terminated" — never a guess that names the wrong transition.
 func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) string {
 	if s.cfg.Store == nil {
@@ -317,6 +326,9 @@ func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) stri
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		return "run_terminated"
+	}
+	if run.LostReason == types.LostEnded && run.State != types.RunKilled {
+		return "run_ended"
 	}
 	switch run.State {
 	case types.RunKilled:
@@ -526,14 +538,14 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		// failed dispatch that can only ever find nothing.
 		//
 		// The census of transitions that can strand an approval is four:
-		// finalizeRunTail's (the completion watcher, the boot reconciler and the
-		// probe reclaim all route through it), handleKillRun's,
-		// lifecycleStopper.StopRun's RUNNING->STOPPED in cmd/wardynd (the ONLY
-		// writer of STOPPED, which reaches the cascade through
+		// finalizeRunTail's (the completion watcher, the boot reconciler, the
+		// probe reclaim and the lease's stopEndedRun all route through it),
+		// handleKillRun's, lifecycleStopper.StopRun's RUNNING->STOPPED in
+		// cmd/wardynd (which reaches the cascade through
 		// CancelTerminalRunApprovals below — an idle-stopped run is typically idle
 		// BECAUSE its agent is parked on a wait_for_review hold), and this one on
 		// its RUNNING arm. TestTerminalRunStateWriterCensus (cmd/wardynd) freezes
-		// them so a fifth writer reds instead of silently stranding.
+		// them so a new writer reds instead of silently stranding.
 		if hint != "" {
 			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
 			// the ~30 test doubles that embed store.Store never implement it, so a

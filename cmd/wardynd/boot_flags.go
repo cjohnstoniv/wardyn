@@ -218,6 +218,7 @@ type bootFlags struct {
 
 	approvalExpiryInterval *time.Duration
 	approvalExpiryAfter    *time.Duration
+	endedRunGrace          *time.Duration
 	auditCoalesceWindow    *time.Duration
 
 	envbuild     *bool
@@ -388,6 +389,7 @@ func parseBootFlags() *bootFlags {
 
 		approvalExpiryInterval: flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (0 disables)"),
 		approvalExpiryAfter:    flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this are transitioned to EXPIRED"),
+		endedRunGrace:          flagDuration("ended-run-grace", "WARDYN_ENDED_RUN_GRACE", 7*24*time.Hour, "how long a run whose end has passed keeps its files — stopped, with no network and no broker credentials — before it is torn down (0 tears it down at its end)"),
 		// A maximum GAP between two IDENTICAL consecutive auth.failed rows, not a
 		// cap on how long a streak may run: the flood this bounds was one row a
 		// minute forever from one retrying sidecar, which the auth.failed rate

@@ -325,7 +325,7 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
 	`ends_at, wait_budget_sec, run_limits, governance_profile_id`
-const runCols = runInsertCols + `, failure_hint, status_detail`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason`
 
 // scanRun is the ONE reader for runCols, which is now the ONE spelling of the
 // agent_runs column list. A new column is APPENDED to runInsertCols (or to
@@ -335,7 +335,7 @@ const runCols = runInsertCols + `, failure_hint, status_detail`
 // set of pasted copies to keep in step by hand.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel string
+	var cc, state, autonomyLevel, lostReason string
 	var limitsRaw []byte
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
@@ -343,7 +343,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
 		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &autonomyLevel,
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID,
-		&r.FailureHint, &r.StatusDetail,
+		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -354,6 +354,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.ConfinementClass = types.ConfinementClass(cc)
 	r.State = types.RunState(state)
 	r.AutonomyLevel = types.AutonomyLevel(autonomyLevel)
+	r.LostReason = types.LostReason(lostReason)
 	if err := json.Unmarshal(limitsRaw, &r.RunLimits); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: unmarshal run limits: %w", err)
 	}

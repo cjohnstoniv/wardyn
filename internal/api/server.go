@@ -144,6 +144,10 @@ type Config struct {
 	// ceiling on how long any request waits for a decision. A run's captured
 	// wait (captureRunLimits) never exceeds it. 0 means unknown here.
 	ApprovalExpiryAfter time.Duration
+	// EndedRunGrace mirrors WARDYN_ENDED_RUN_GRACE: how long a run its lease
+	// ended keeps its files (stopped, no network) before it is torn down. 0
+	// tears a run down at its end.
+	EndedRunGrace time.Duration
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
 	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the
