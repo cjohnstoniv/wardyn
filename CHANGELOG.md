@@ -82,7 +82,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   PR whose prefix is at or below `origin/main`'s max, the binary search that
   isolates and drops a single bad PR out of several good ones, and the
   difference between a conflict under `internal/db/migrations` (fails the job)
-  and a union-mergeable conflict elsewhere, such as `CHANGELOG.md` (does not).
+  and one elsewhere (does not): a union-merged `CHANGELOG.md` edit and a real
+  `.go` conflict, which is listed but not fatal. It also checks that the gate
+  deletes its scratch refs and worktree.
 - **Migration-numbering collision gates (#667).** `make lint` now runs
   `scripts/check-migration-numbers.sh`: a new migration file must use a numeric
   prefix greater than every prefix already on the branch it targets

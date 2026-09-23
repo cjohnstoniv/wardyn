@@ -6,8 +6,8 @@
 # scripts/nightly-migration-merge-check.sh: the migration-prefix claim
 # checks, the binary search that isolates a single bad PR out of several
 # good ones, and the conflict handling that only fails the job on a
-# conflict under internal/db/migrations (a union-mergeable conflict
-# elsewhere must not).
+# conflict under internal/db/migrations (a union-mergeable edit or a real
+# conflict elsewhere must not).
 #
 # `gh` and `go` are both faked (a bin/ directory prepended to PATH):
 #   - fake gh answers `gh pr list ...` from a JSON file the case wrote.
@@ -90,6 +90,7 @@ new_case() {
   echo "# Changelog" >"$seed/CHANGELOG.md"
   echo >>"$seed/CHANGELOG.md"
   echo "- baseline" >>"$seed/CHANGELOG.md"
+  echo "package main" >"$seed/main.go"
   git -C "$seed" add -A
   git -C "$seed" commit --quiet -m seed
   git -C "$seed" remote add origin "$bare"
@@ -142,7 +143,7 @@ gh_prs_json() {
 run_gate() {
   local work="$1" summary="$2"
   : >"$summary"
-  ( cd "$work" && env -u GITHUB_BASE_REF -u GITHUB_REF_NAME \
+  ( cd "$work" && env -u GITHUB_BASE_REF -u GITHUB_REF_NAME -u WARDYN_TEST_PG \
       GH_TOKEN=fake-token GITHUB_STEP_SUMMARY="$summary" FAKE_GH_PRS="$FAKE_GH_PRS" \
       ./scripts/nightly-migration-merge-check.sh )
 }
@@ -215,7 +216,11 @@ case4() {
   grep -q "PR #42 breaks" "$summary" && fail "PR #42 must not be blamed: $(cat "$summary")"
   grep -q "2 of 3 PR(s) merged together" "$summary" \
     || fail "the other two PRs must still merge without the culprit: $(cat "$summary")"
-  echo "ok  binary search isolates and drops the one bad PR (#41), keeps #40/#42"
+  [ -z "$(git -C "$dir/work" for-each-ref refs/scratch)" ] \
+    || fail "the gate must delete its refs/scratch refs: $(git -C "$dir/work" for-each-ref refs/scratch)"
+  [ "$(git -C "$dir/work" worktree list | wc -l)" -eq 1 ] \
+    || fail "the gate must remove its scratch worktree: $(git -C "$dir/work" worktree list)"
+  echo "ok  binary search isolates and drops the one bad PR (#41), keeps #40/#42, cleans up"
 }
 add_0005_broken() { echo "-- new" >"$1/internal/db/migrations/0005_mid.sql"; : >"$1/VET_BROKEN"; }
 add_0006() { echo "-- new" >"$1/internal/db/migrations/0006_c.sql"; }
@@ -231,8 +236,8 @@ case5() {
   local summary="$dir/summary.md" out rc=0
   out="$(run_gate "$dir/work" "$summary" 2>&1)" || rc=$?
   [ "$rc" -ne 0 ] || fail "a conflict under internal/db/migrations must fail the job"
-  grep -q "under \`internal/db/migrations\`" "$summary" \
-    || fail "summary must name the migrations-dir conflict: $(cat "$summary")"
+  grep -qF '**#51** (under `internal/db/migrations`)' "$summary" \
+    || fail "summary must flag PR #51's migrations-dir conflict: $(cat "$summary")"
   echo "ok  a conflict under internal/db/migrations fails the job"
 }
 # both 50 and 51 replace 0001_seed.sql's only line with different content —
@@ -263,11 +268,32 @@ case6() {
 edit_changelog_a() { sed -i 's/^- baseline$/- baseline (60)/' "$1/CHANGELOG.md"; }
 edit_changelog_b() { sed -i 's/^- baseline$/- baseline (61)/' "$1/CHANGELOG.md"; }
 
+# ── 7. a real conflict outside internal/db/migrations is listed, not fatal ─
+case7() {
+  local dir="$TMP/case7"
+  new_case "$dir"
+  make_pr "$dir/seed" "$dir/origin.git" 70 edit_main_go_a
+  make_pr "$dir/seed" "$dir/origin.git" 71 edit_main_go_b
+  FAKE_GH_PRS="$(gh_prs_json "$dir" 70 71)"
+  export FAKE_GH_PRS
+  local summary="$dir/summary.md" out rc=0
+  out="$(run_gate "$dir/work" "$summary" 2>&1)" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a .go conflict outside the migrations dir must not fail the job: $out"
+  grep -qxF -- '- #71: main.go' "$summary" \
+    || fail "summary must list PR #71's main.go conflict: $(cat "$summary")"
+  grep -qF '**#' "$summary" && fail "a non-migrations conflict must not be flagged: $(cat "$summary")"
+  echo "ok  a .go conflict outside internal/db/migrations is listed, never fails the job"
+}
+# main.go is 'merge=text', so two different rewrites of its one line conflict.
+edit_main_go_a() { echo "package seventy" >"$1/main.go"; }
+edit_main_go_b() { echo "package seventyone" >"$1/main.go"; }
+
 case1
 case2
 case3
 case4
 case5
 case6
+case7
 
 echo "test-nightly-migration-merge-check: all cases passed"
