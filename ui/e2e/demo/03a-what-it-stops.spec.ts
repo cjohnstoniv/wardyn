@@ -42,8 +42,8 @@
  *     write-only-by-design drive (the retiring 04's beats 4-5), and the
  *     key-never drive (old-07 beat 7) (the plan retires those beats there:
  *     new-04 = old-04 MINUS its demo beat, new-07 = old-06 MINUS beats 6-8).
- *     Those lines are the owner's, already ratified in
- *     local/secrets-episodes-dialog-proposals.md — carried verbatim.
+ *     Those lines are the owner's, already ratified in the secrets-episodes
+ *     dialog proposal — carried verbatim.
  *   - The act-2 opener and the conclusion's detour pointer are
  *     [OWNER SLOT — drafted] in the take-3 proposal (in take order); an
  *     untracked stanza-check script fails if a spec string and a proposal
