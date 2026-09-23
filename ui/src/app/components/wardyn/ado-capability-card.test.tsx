@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
+import { ADO } from "../../lib/ado-entra-copy";
 
 const OWNER: AdoCardRun = { created_by: "dana@acme.example", state: "RUNNING" };
 const ENDED_RUN: AdoCardRun = { created_by: "dana@acme.example", state: "COMPLETED" };
@@ -372,7 +373,7 @@ describe("AdoCapabilityCard — the escalation states", () => {
       />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText("Only the run's owner, who started this run, or an admin can answer this.")).toBeInTheDocument();
+    expect(within(card).getByText(ADO.REQ_NOT_YOURS_BODY(ADO.REQ_OWNER_FALLBACK))).toBeInTheDocument();
   });
 
   // N2 — round-2 fix: the bold-labeled lead-in used to DUPLICATE the canon
@@ -533,7 +534,7 @@ describe("AdoCapabilityCard — the Entra-consent state", () => {
     // F8 — Acts as, from the consent row's own owner field.
     expect(within(card).getByText("Acts as")).toBeInTheDocument();
     expect(within(card).getByText("dana@acme.example")).toBeInTheDocument();
-    const cta = within(card).getByRole("link", { name: "Connect Azure DevOps" });
+    const cta = within(card).getByRole("link", { name: ADO.REQ_CONSENT_CTA });
     expect(cta).toHaveAttribute("href", "/settings#azure-devops");
   });
 
@@ -574,7 +575,7 @@ describe("AdoCapabilityCard — the mid-run sign-in state", () => {
     expect(within(card).getByText("Connection ended")).toBeInTheDocument();
     expect(within(card).getByText("Your Azure DevOps connection ended mid-run")).toBeInTheDocument();
     expect(within(card).getByText(/held while you sign in again/)).toBeInTheDocument();
-    expect(within(card).getByRole("link", { name: "Connect Azure DevOps" })).toHaveAttribute("href", "/settings#azure-devops");
+    expect(within(card).getByRole("link", { name: ADO.CONNECT_ADO })).toHaveAttribute("href", "/settings#azure-devops");
     expect(card.textContent).not.toMatch(/consent|four minutes/i);
   });
 

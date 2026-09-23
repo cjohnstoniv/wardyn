@@ -200,9 +200,10 @@ export function AdoCapabilityCard({
   // keep the real loading/error/ownership gates.
   ownershipScopedList?: boolean;
   // "approve" | "deny" while THAT decision is in flight, else null (#458):
-  // a single boolean spun BOTH buttons and disabled neither by itself,
-  // leaving the un-pressed one clickable mid-decide. Both are disabled
-  // whenever busy !== null; only the pressed one shows the spinner.
+  // the old single boolean correctly disabled BOTH buttons but ALSO spun
+  // BOTH of them, so a reader couldn't tell which action their click had
+  // actually started. Both are still disabled whenever busy !== null; now
+  // only the pressed one shows the spinner.
   busy: "approve" | "deny" | null;
   onApprove: (opts: [DecisionOptions]) => void;
   onDeny: (opts: [DecisionOptions]) => void;

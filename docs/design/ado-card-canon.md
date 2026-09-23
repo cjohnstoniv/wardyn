@@ -64,7 +64,17 @@ does.
   `TOAST_DENIED`, `TOAST_APPROVE_FAILED`, `TOAST_DENY_FAILED` (`ui/src/app/lib/approvals-copy.ts`,
   not `wardyn/copy.ts` — that module's own `APPROVAL` namespace is unrelated banner/scope copy).
   Every mount site (`screens/approvals.tsx`, `wardyn/live-approvals.tsx`, `screens/run-detail.tsx`)
-  reads from it instead of a hand-typed literal.
+  reads from it instead of a hand-typed literal. Two of the four (`TOAST_APPROVED`, `TOAST_DENIED`)
+  match what the code already said; `TOAST_APPROVE_FAILED`/`TOAST_DENY_FAILED` are the only wording
+  change — packet 6a's approval covers all four so the module has one settled home, not two
+  matching-by-accident strings plus two changed ones.
+
+| Key | String |
+|---|---|
+| `APPROVALS.TOAST_APPROVED` | Request approved |
+| `APPROVALS.TOAST_DENIED` | Request denied |
+| `APPROVALS.TOAST_APPROVE_FAILED` | Couldn't approve this request |
+| `APPROVALS.TOAST_DENY_FAILED` | Couldn't deny this request |
 
 ## Full string table
 

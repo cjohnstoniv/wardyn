@@ -115,6 +115,63 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
       const section = screen.getByText("Azure DevOps").closest("section")!;
       expect(document.activeElement).not.toBe(section);
     });
+
+    // PR #501 review F3 — a `.focus()` that follows a click (the consent
+    // door's own click, on the page this card navigates FROM) can lose the
+    // browser's focus-visible heuristic; force it instead of hoping.
+    it("F3: focus is forced visible (focusVisible: true), not left to the browser's own heuristic", () => {
+      const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+      try {
+        renderCard(
+          <AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />,
+          ["/settings#azure-devops"],
+        );
+        expect(focusSpy).toHaveBeenCalledWith({ focusVisible: true });
+      } finally {
+        focusSpy.mockRestore();
+      }
+    });
+
+    // PR #501 review F2 — the effect used to depend on the `access` OBJECT,
+    // which is a new reference after every Settings reload (Re-check, a
+    // secret save, a disconnect elsewhere on the page): it reran and yanked
+    // focus back here even though the reader had since focused something
+    // else and the URL never changed. It must depend on navigation
+    // (location.key) + row presence (a boolean), not on data identity.
+    it("F2: an equal-but-new status from a Settings reload does not steal focus back from elsewhere on the page", () => {
+      function Harness({ s }: { s: SetupStatus }) {
+        return (
+          <div>
+            <input data-testid="other-input" />
+            <AdoConnectionCard status={s} onChanged={vi.fn()} />
+          </div>
+        );
+      }
+      const initial = status({ state: "not_configured", cause: "row_is_newer" });
+      const { rerender } = render(
+        <MemoryRouter initialEntries={["/settings#azure-devops"]}>
+          <Harness s={initial} />
+        </MemoryRouter>,
+      );
+      const section = screen.getByText("Azure DevOps").closest("section")!;
+      expect(document.activeElement).toBe(section); // landed here first, as above
+
+      const input = screen.getByTestId("other-input");
+      input.focus();
+      expect(document.activeElement).toBe(input);
+
+      // A NEW object, same values, same route — exactly what a Settings
+      // reload's own load() hands this card. MemoryRouter is the SAME
+      // instance across this rerender (React matches it by type/position),
+      // so no navigation happens and location.key is unchanged.
+      const reloaded = status({ state: "not_configured", cause: "row_is_newer" });
+      rerender(
+        <MemoryRouter initialEntries={["/settings#azure-devops"]}>
+          <Harness s={reloaded} />
+        </MemoryRouter>,
+      );
+      expect(document.activeElement).toBe(input);
+    });
   });
 });
 

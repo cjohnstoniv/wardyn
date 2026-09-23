@@ -18,6 +18,7 @@ import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
 import type { AdoCardRun } from "./ado-capability-card";
 import { SECURITY_ONLY_REASON } from "./copy";
+import { ADO } from "../../lib/ado-entra-copy";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -174,7 +175,7 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
       mount({ principal: "dana@acme.example" });
       const card = await screen.findByTestId("ado-consent-card");
       expect(within(card).getByText("Needs your Microsoft consent")).toBeInTheDocument();
-      const cta = within(card).getByRole("link", { name: "Connect Azure DevOps" });
+      const cta = within(card).getByRole("link", { name: ADO.REQ_CONSENT_CTA });
       expect(cta).toBeInTheDocument();
       expect(cta).toHaveAttribute("href", "/settings#azure-devops");
     });
