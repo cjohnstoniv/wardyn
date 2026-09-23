@@ -14,11 +14,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (#469).** `scripts/run-ui-e2e.sh`'s default (all-spec) invocation now runs three isolated backends
   at once (`WARDYN_E2E_LANES`, 1-3), each with its own ports and database and each claiming the next
   unclaimed spec, so every spec still gets a freshly seeded backend; an explicit spec list runs one
-  lane. Each spec keeps its own failure artifacts under `ui/test-results/<spec>/`, which is what CI
-  now uploads, and CI records video only on a retry. The first lazy-loaded paint in
-  `setup-gate.spec.ts` and `episode-catalog.spec.ts` gets more than the default expect timeout,
-  `runs.spec.ts` retries a search fill together with its assertion, and `workspaces.spec.ts`
-  unroutes before teardown so a poll in flight cannot fail a finished test.
+  lane. CI's Playwright step took 241 s, against 581 s serially. Each spec keeps its own failure
+  artifacts under `ui/test-results/<spec>/`, which is what CI now uploads, and CI records video only
+  on a retry. The first lazy-loaded paint in `setup-gate.spec.ts` and `episode-catalog.spec.ts` gets
+  more than the default expect timeout, `runs.spec.ts` retries a search fill together with its
+  assertion, and `workspaces.spec.ts` unroutes before teardown so a poll in flight cannot fail a
+  finished test.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
