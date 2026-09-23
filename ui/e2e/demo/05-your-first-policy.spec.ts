@@ -41,11 +41,12 @@
  * The confinement-floor teaching, the create/save beat, the wall-vs-rules
  * distinction, and the floor-refuses beat are LIFTED VERBATIM from old-08
  * (the retired policies episode — deleted in the 0.7 cleanup; its 24 captions
- * with no counterpart here are held in local/episode-06-firstrun-proposal.md — whose material this
- * episode absorbs per Workstream C of the episode-06 planning note, an
- * untracked working note). Owner lines MOVE unchanged; the safety-meter beats, the panel/
- * template intro, the forward-looking reuse teaching, and the conclusion are
- * NEW, marked [OWNER SLOT — drafted] in local/episode-05-policy-proposal.md (untracked working note).
+ * with no counterpart here are held in the episode-06 proposal — whose
+ * material this episode absorbs per Workstream C of the episode-06 planning
+ * note, an untracked working note). Owner lines MOVE unchanged; the
+ * safety-meter beats, the panel/template intro, the forward-looking reuse
+ * teaching, and the conclusion are NEW, marked [OWNER SLOT — drafted] in the
+ * episode-05 proposal (an untracked working note).
  * The three B4 floor lines carry old-08's own DIALOG-STALE note (the refusal is
  * a STANDING form refusal now, before any launch request exists) — kept exactly
  * as old-08 shipped them, because new-05 films the identical on-form refusal.
@@ -87,9 +88,9 @@
  * Every literal below exists in ui/src today (re-read 2026-08-24 against
  * policies.tsx, policy-panel.tsx, safety-meter.tsx and new-run/new-run-screen.tsx).
  *
- * DIALOG FIDELITY: every caption()/act() narration string here is a stanza line
- * in local/episode-05-policy-proposal.md (take order); local/episode-05-stanza-
- * check.py holds them in lockstep.
+ * DIALOG FIDELITY: every caption()/act() narration string here is a stanza
+ * line in the episode-05 proposal (take order); an untracked stanza-check
+ * script holds them in lockstep.
  */
 
 import { test, expect, type Page } from "@playwright/test";

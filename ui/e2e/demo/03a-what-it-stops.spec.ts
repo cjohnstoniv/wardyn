@@ -45,9 +45,9 @@
  *     Those lines are the owner's, already ratified in
  *     local/secrets-episodes-dialog-proposals.md — carried verbatim.
  *   - The act-2 opener and the conclusion's detour pointer are
- *     [OWNER SLOT — drafted] in local/episode-03-mega-proposal.md (in take
- *     order). local/episode-03-stanza-check.py (untracked) fails if a spec string and a
- *     proposal stanza ever drift.
+ *     [OWNER SLOT — drafted] in the take-3 proposal (in take order); an
+ *     untracked stanza-check script fails if a spec string and a proposal
+ *     stanza ever drift.
  *
  * STAGING THIS FILE OWNS (off camera):
  *   1. NO RESET. `record-demo.sh --no-reset` against the same long-lived stack

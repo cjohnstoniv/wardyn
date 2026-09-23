@@ -1,6 +1,5 @@
 # kind cluster config for ci.yml's conformance-k8s job (and for the equivalent
-# LOCAL throwaway cluster the A3 lane's conformance run used — see
-# local/briefs/wave3-a3a4c4-conformance-helm-images.md).
+# LOCAL throwaway cluster the A3 lane's conformance run used).
 #
 # disableDefaultCNI: true swaps out kind's bundled kindnet — which does NOT
 # enforce NetworkPolicy — so a subsequent `kubectl apply` of a real CNI
