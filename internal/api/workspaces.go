@@ -97,6 +97,9 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRe
 	// it on every response anyway.
 	for i := range req.Sources {
 		req.Sources[i].Admitted = nil
+		if req.Sources[i].Type == types.WorkspaceSourceTypeRepo {
+			req.Sources[i].Source = canonicalRepoAddress(req.Sources[i].Source)
+		}
 	}
 
 	if len(req.Sources) > maxWorkspaceSources {
