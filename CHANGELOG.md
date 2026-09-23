@@ -35,6 +35,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   every door stores one spelling of the address, and approvals name the repository the same
   way on the REST and git paths. When two repositories in one run would clone into the same
   directory, the run's response now says which one was not cloned (#485).
+- **`wardynd`'s shutdown now waits for a run launch already under way (#749).** `POST /api/v1/runs`
+  answers 201 and then builds the image and dispatches the run in a detached goroutine. That
+  goroutine was not tracked, so a SIGTERM during `CreateSandbox` stopped the daemon partway through
+  dispatch, and the run stayed `STARTING` until the boot reconcile found it. The launch is now
+  tracked like the sign-in launch, and shutdown waits for it within the same bound.
 
 ### Changed
 
