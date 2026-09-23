@@ -192,9 +192,9 @@ func TestAuditedRefusesAReadWithNoPurpose(t *testing.T) {
 // row.Owner straight from secrets.owned_by (see convertSecretStore).
 func TestAuditedBoundsRowTextFromTheStore(t *testing.T) {
 	long := strings.Repeat("r", 4*auditTextMax)
-	row := Row{Store: "pg", Owner: "eve\nforged‮", Name: "k\r", Ref: long, Found: true}
+	row := Row{Store: "pg", Owner: "eve\nforged\u202e", Name: "k\r", Ref: long, Found: true}
 	rec := &recorded{}
-	RecordRead(t.Context(), rec, PurposeStatus, "eve\nforged‮"+long, row, nil)
+	RecordRead(t.Context(), rec, PurposeStatus, "eve\nforged\u202e"+long, row, nil)
 
 	d := dataOf(t, rec.got[0])
 	for _, s := range []string{d["row_owner"], d["ref"], d["owner"], rec.got[0].Target} {

@@ -205,9 +205,9 @@ func newCtxScope(info *types.Info, fd *ast.FuncDecl) *ctxScope {
 
 // class says where e, a context expression, comes from. A variable assigned
 // exactly once, from a mark, counts as marked; a variable assigned more than
-// once fails closed as ctxOther even when one of those assignments is a
-// mark, because a Get that reaches it can still run on whichever path
-// skipped the mark — the single-assignment idiom
+// once (a parameter's incoming value counts as one) fails closed as ctxOther
+// even when one of those assignments is a mark, because a Get that reaches
+// it can still run on whichever path skipped the mark — the single-assignment idiom
 // (rctx := secretstore.WithPurpose(...)) is the only shape this guard trusts.
 func (c *ctxScope) class(e ast.Expr, seen map[types.Object]bool) int {
 	switch a := ast.Unparen(e).(type) {
@@ -228,11 +228,15 @@ func (c *ctxScope) class(e ast.Expr, seen map[types.Object]bool) int {
 		}
 		seen[obj] = true
 		defer delete(seen, obj)
-		if len(c.assigns[obj]) > 1 {
+		out, isParam := c.params[obj]
+		n := len(c.assigns[obj])
+		if isParam {
+			n++ // the incoming value is an assignment too
+		}
+		if n > 1 {
 			return ctxOther
 		}
-		out, ok := c.params[obj]
-		if !ok {
+		if !isParam {
 			out = ctxNone
 		}
 		for _, rhs := range c.assigns[obj] {
@@ -535,6 +539,36 @@ func get(ctx int) {}
 	}
 	if got := sc.class(arg, map[types.Object]bool{}); got != ctxOther {
 		t.Errorf("class(rctx) = %d, want ctxOther (%d): a context marked on only one branch must not classify as marked", got, ctxOther)
+	}
+}
+
+// TestCtxScopeClassRejectsAParameterMarkedOnOnlyOneBranch is the parameter
+// form of the one-branch mutation: a context parameter reassigned from a mark
+// on one branch still carries its unmarked incoming value on the other, so it
+// must classify as ctxOther. The parameter's incoming value is an assignment
+// too; before the fix it was not counted, so the lone marked reassignment
+// made class() return ctxMarked.
+func TestCtxScopeClassRejectsAParameterMarkedOnOnlyOneBranch(t *testing.T) {
+	const src = `package p
+
+import "github.com/cjohnstoniv/wardyn/internal/secretstore"
+
+func f(ctx int, name string) {
+	if len(name) == 0 {
+		ctx = secretstore.WithPurpose(ctx, "x")
+	}
+	get(ctx)
+}
+
+func get(ctx int) {}
+`
+	sc, fd := classifyFixture(t, src, "f")
+	arg := callArg0(fd, "get")
+	if arg == nil {
+		t.Fatal("fixture has no get(...) call")
+	}
+	if got := sc.class(arg, map[types.Object]bool{}); got != ctxOther {
+		t.Errorf("class(ctx) = %d, want ctxOther (%d): a parameter marked on only one branch must not classify as marked", got, ctxOther)
 	}
 }
 
