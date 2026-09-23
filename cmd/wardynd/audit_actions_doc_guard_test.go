@@ -286,10 +286,23 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 		// A "kind.*" wildcard action (llm.scan.*, egress.*) is never the literal
 		// string on the wire — the real Action is "kind."+suffix — so match the
 		// prefix, not the asterisk.
-		searchTerm := strings.TrimSuffix(actionLiteral, "*")
+		prefix := strings.TrimSuffix(actionLiteral, "*")
+		searchTerm := prefix
+		if strings.HasSuffix(actionLiteral, "*") {
+			// The bare prefix ("egress.") is also the Go package qualifier, so
+			// strings.Contains(body, "egress.") is satisfied by a mere MENTION of
+			// the egress package — a comment saying "forging egress./..." passed
+			// this check with no emit anywhere nearby (docs/AUDIT-ACTIONS.md:238
+			// re-pointed at Server.handleGroundtruthEvents, whose only match was
+			// exactly that comment). Require the prefix to appear as an actual Go
+			// string literal, quote included: "egress."+string(dl.Decision) and
+			// "egress.allow" both contain `"egress.`, but a bare-word mention of
+			// the package never does.
+			searchTerm = `"` + prefix
+		}
 		// The names any constant holding this action goes by, so an emit that
 		// passes `ruleSourcePrivateIP` counts as spelling builtin:private-ip.
-		holders := constHolders[searchTerm]
+		holders := constHolders[prefix]
 
 		rowHasCitation := false
 		for _, cell := range cells {
