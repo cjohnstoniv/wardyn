@@ -28,7 +28,7 @@ type policyRequest = client.PolicyRequest
 // runs validatePolicySpec over the spec before any store write — policies are
 // admin-gated config and a bad spec must never be persisted. Any problem is
 // returned as a human-readable message the handler surfaces with HTTP 400.
-func decodePolicyRequest(w http.ResponseWriter, r *http.Request) (policyRequest, string) {
+func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoader) (policyRequest, string) {
 	var req policyRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
 		return policyRequest{}, msg
@@ -37,7 +37,11 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request) (policyRequest,
 	if req.Name == "" {
 		return policyRequest{}, "name is required"
 	}
-	canonicalizeWorkspaceRepos(req.Spec.WorkspaceRepos)
+	repos := make([]string, len(req.Spec.WorkspaceRepos))
+	for i, wr := range req.Spec.WorkspaceRepos {
+		repos[i] = wr.Repo
+	}
+	canonicalizeWorkspaceRepos(req.Spec.WorkspaceRepos, ado.forAddresses(repos...))
 	if err := validatePolicySpec(req.Spec); err != nil {
 		return policyRequest{}, "invalid policy spec: " + err.Error()
 	}
@@ -241,7 +245,7 @@ func redactScopeSecretRefs(scope json.RawMessage) json.RawMessage {
 // handleCreatePolicy validates the spec and persists a new policy. Returns 201
 // with the created policy, or 400 on an invalid body/spec.
 func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
-	req, msg := decodePolicyRequest(w, r)
+	req, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -300,7 +304,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, msg := decodePolicyRequest(w, r)
+	req, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return

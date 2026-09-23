@@ -107,22 +107,25 @@ func TestCanonicalRepoURL(t *testing.T) {
 		"https://tfs.corp.example/tfs/DefaultCollection/Payments Platform/_git/app":                 "https://tfs.corp.example/tfs/DefaultCollection/Payments%20Platform/_git/app",
 		"https://dev.azure.com/contoso/100%25%20Done/_git/app":                                      "https://dev.azure.com/contoso/100%25%20Done/_git/app",
 	} {
-		got, ok := CanonicalRepoURL(in)
+		got, ok := CanonicalRepoURL(in, []string{"tfs.corp.example"})
 		if !ok || got != want {
 			t.Errorf("CanonicalRepoURL(%q) = %q, %v; want %q", in, got, ok, want)
 		}
 	}
 	for _, in := range []string{
-		"https://github.com/acme/app",                    // another forge: untouched
-		"https://git.corp.example/group/app",             // no _git: not an Azure DevOps address
-		"acme/app",                                       // a bare slug
+		"https://github.com/acme/app",                   // another forge: untouched
+		"https://git.corp.example/group/_git/app",       // _git on a host nobody configured as Azure DevOps
+		"https://github.com/acme/_git/re po",            // _git on another forge's host
+		"https://a%0Ab@dev.azure.com/contoso/p/_git/r",  // an escape in the userinfo
+		"https://dev.azure.com%2Fevil/contoso/p/_git/r", // an escape in the host
+		"acme/app", // a bare slug
 		"https://dev.azure.com/contoso/p/_git/r?path=/x", // a query
 		"https://dev.azure.com/contoso/a%2Fb/_git/r",     // an encoded separator
 		"https://dev.azure.com/contoso/p/_git/a%252Fb",   // a doubly-encoded one
 		"https://dev.azure.com/contoso/100% Done/_git/r", // a bare "%" is not an escape
 		" https://dev.azure.com/contoso/p/_git/r",        // not a URL as written
 	} {
-		if got, ok := CanonicalRepoURL(in); ok {
+		if got, ok := CanonicalRepoURL(in, []string{"tfs.corp.example"}); ok {
 			t.Errorf("CanonicalRepoURL(%q) = %q, want not canonicalised", in, got)
 		}
 	}

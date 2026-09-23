@@ -944,7 +944,10 @@ in one spelling — `https://dev.azure.com/acme/Payments Platform/_git/Card Auth
 — and an escape that decodes to a separator, a dot segment or a control
 character is still refused. An `azure_devops` row may likewise be scoped to such
 a project (`https://tfs.corp.example/Payments Platform`); names compare as
-written, case included.
+written, case included. Such a row cannot name a project whose name holds
+``& ' $ ; | < > " ` `` (site-config values refuse them); scope the row to the
+organisation instead. An Azure DevOps Server host takes these names only when
+an `azure_devops` provider row names it.
 
 **On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
 `/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the

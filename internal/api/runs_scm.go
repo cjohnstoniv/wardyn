@@ -100,13 +100,13 @@ const repo400LocatorShape = "%s is not a repository address — a repository add
 // disagree about where a segment ends.
 // A locator with no path at all is not this function's business — it is
 // unclonable for other reasons and nothing about it traverses.
-func repoLocatorPathSafe(raw string) bool {
+func repoLocatorPathSafe(raw string, adoServerHosts []string) bool {
 	s := strings.TrimSpace(raw)
 	if strings.Contains(s, `\`) {
 		return false
 	}
 	if strings.Contains(s, "%") {
-		if c, ok := adoscope.CanonicalRepoURL(s); !ok || c != s {
+		if c, ok := adoscope.CanonicalRepoURL(s, adoServerHosts); !ok || c != s {
 			return false
 		}
 	}
@@ -139,8 +139,11 @@ func repoLocatorPathSafe(raw string) bool {
 // this before it validates, so every gate, the run row and WARDYN_REPOS read
 // one spelling; a value it cannot canonicalise keeps its spelling and meets the
 // same refusals it always did.
-func canonicalRepoAddress(s string) string {
-	if c, ok := adoscope.CanonicalRepoURL(s); ok {
+//
+// adoServerHosts are the Azure DevOps Server hosts this install's provider rows
+// name (adoServerHosts); the Azure DevOps service hosts need no listing.
+func canonicalRepoAddress(s string, adoServerHosts []string) string {
+	if c, ok := adoscope.CanonicalRepoURL(s, adoServerHosts); ok {
 		return c
 	}
 	return s
@@ -149,19 +152,26 @@ func canonicalRepoAddress(s string) string {
 // canonicalizeRunRepos puts every repository address a create-run body names
 // into its stored spelling, before any gate reads one. Both run doors (launch
 // and preflight) call it straight after decoding.
-func canonicalizeRunRepos(req *createRunRequest) {
-	req.Repo = canonicalRepoAddress(req.Repo)
-	req.DevcontainerRepo = canonicalRepoAddress(req.DevcontainerRepo)
+func canonicalizeRunRepos(req *createRunRequest, ado adoHostsLoader) {
+	values := []string{req.Repo, req.DevcontainerRepo}
 	if req.InlinePolicy != nil {
-		canonicalizeWorkspaceRepos(req.InlinePolicy.WorkspaceRepos)
+		for _, wr := range req.InlinePolicy.WorkspaceRepos {
+			values = append(values, wr.Repo)
+		}
+	}
+	adoServerHosts := ado.forAddresses(values...)
+	req.Repo = canonicalRepoAddress(req.Repo, adoServerHosts)
+	req.DevcontainerRepo = canonicalRepoAddress(req.DevcontainerRepo, adoServerHosts)
+	if req.InlinePolicy != nil {
+		canonicalizeWorkspaceRepos(req.InlinePolicy.WorkspaceRepos, adoServerHosts)
 	}
 }
 
 // canonicalizeWorkspaceRepos is canonicalRepoAddress over a spec's
 // workspace_repos, in place.
-func canonicalizeWorkspaceRepos(repos []types.WorkspaceRepo) {
+func canonicalizeWorkspaceRepos(repos []types.WorkspaceRepo, adoServerHosts []string) {
 	for i := range repos {
-		repos[i].Repo = canonicalRepoAddress(repos[i].Repo)
+		repos[i].Repo = canonicalRepoAddress(repos[i].Repo, adoServerHosts)
 	}
 }
 
@@ -240,12 +250,13 @@ func repoCloneURL(slug string) string {
 // Returns "" when there is nothing to clone.
 //
 // The SECOND return is the sentences for the drops a caller must say out loud
-// — one per repo dropped for a target this function refuses. Run create appends
-// them to the 201's warnings[]; dispatch discards them (the run is already
-// created by then, and the slog.Warn at the skip is the record there).
+// — one per repo dropped for a target this function refuses, or for a
+// directory another repository already took. Run create appends them to the
+// 201's warnings[]; dispatch discards them (the run is already created by
+// then, and the slog.Warn at the skip is the record there).
 func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, []string) {
 	const workRoot = "/home/agent/work"
-	seenDest := map[string]bool{}
+	seenDest := map[string]string{} // dest -> the slug that took it
 	var warnings []string
 	var b strings.Builder
 	add := func(slug, dest, ref string) {
@@ -311,19 +322,28 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 				slug, dest, terr))
 			return
 		}
-		if seenDest[dest] {
+		if first, taken := seenDest[dest]; taken {
 			// Loud, not silent — an unqualified caller (no explicit
 			// Target on either source, e.g. a raw API/CLI request that skips
 			// the wizard's own basename-collision disambiguation) can still
-			// reach here with two repos deriving the SAME default dest. A
-			// silently dropped clone is easy to miss until the agent goes
-			// looking for a repo that was never there; a warning at least
-			// makes it observable at run time.
+			// reach here with two repos deriving the SAME default dest, and
+			// two Azure DevOps names can derive one directory ("Card Auth" and
+			// "Card-Auth"). A silently dropped clone is easy to miss until the
+			// agent goes looking for a repo that was never there, so the 201
+			// says it as well as the log.
 			slog.Warn("wardynd: repo clone target collides with another repo in this run; dropping the later one",
 				slog.String("slug", slug), slog.String("dest", dest))
+			if first == slug {
+				// The same repository named twice — a workspace launch names its
+				// repo as the run's own repo too — is one clone, not a drop.
+				return
+			}
+			warnings = append(warnings, fmt.Sprintf(
+				"repository %s was NOT cloned: %s is already where %s is cloned — give one of them its own target and launch again",
+				slug, dest, first))
 			return
 		}
-		seenDest[dest] = true
+		seenDest[dest] = slug
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}

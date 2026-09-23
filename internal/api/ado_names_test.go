@@ -56,7 +56,7 @@ func TestADONames_WorkspaceDoorStoresOneSpelling(t *testing.T) {
 		for _, in := range adoNameSpellings(fx.project, fx.repo) {
 			body, _ := json.Marshal(map[string]any{"name": "ws", "sources": []map[string]string{{"type": "repo", "source": in}}})
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(string(body)))
-			req, msg := decodeWorkspaceRequest(httptest.NewRecorder(), r)
+			req, msg := decodeWorkspaceRequest(httptest.NewRecorder(), r, nil)
 			if msg != "" {
 				t.Errorf("%q refused: %s", in, msg)
 				continue
@@ -73,12 +73,13 @@ func TestADONames_WorkspaceDoorStoresOneSpelling(t *testing.T) {
 func TestADONames_SourceLibraryDoor(t *testing.T) {
 	for _, fx := range adoNameFixtures {
 		for _, in := range adoNameSpellings(fx.project, fx.repo) {
-			locator, _ := canonicalSourceIdentity(types.SourceRepo, in, "")
+			// handleCreateSource's order: the name rule, then the library's identity.
+			locator, _ := canonicalSourceIdentity(types.SourceRepo, canonicalRepoAddress(in, nil), "")
 			if locator != fx.canonical {
 				t.Errorf("%q stored as %q, want %q", in, locator, fx.canonical)
 			}
-			src := types.Source{Kind: types.SourceRepo, Locator: locator, Name: lastPathSegment(locator)}
-			if msg := validateSourceWrite(src); msg != "" {
+			src := types.Source{Kind: types.SourceRepo, Locator: locator, Name: lastPathSegment(locator, nil)}
+			if msg := validateSourceWrite(src, nil); msg != "" {
 				t.Errorf("%q refused: %s", in, msg)
 			}
 			if src.Name != fx.repo {
@@ -125,8 +126,8 @@ func TestADONames_RepoRecords(t *testing.T) {
 // under an admitted organisation resolves its lane like any other.
 func TestADONames_AdmissionAndEntraLane(t *testing.T) {
 	for _, fx := range adoNameFixtures {
-		if _, ok := parseCloneTarget(fx.canonical); !ok {
-			t.Errorf("parseCloneTarget(%q) refused it", fx.canonical)
+		if _, ok := parseCloneTarget(fx.canonical, nil); !ok {
+			t.Errorf("parseCloneTarget(%q, nil) refused it", fx.canonical)
 		}
 		if run, ok := resolveADOEntraRun(adoSite(adoEntraTestRow()), []string{fx.canonical}, adoTestOwner); !ok || run.org != "contoso" {
 			t.Errorf("%q: lane = %+v ok=%v, want organisation contoso", fx.canonical, run, ok)
@@ -176,14 +177,76 @@ func TestADONames_StructureStaysRefused(t *testing.T) {
 		"https://dev.azure.com/contoso/p%20/_git/r",
 		"https://dev.azure.com/contoso/p/_git/r%0A",
 		"https://github.com/acme/app%20x",
+		"https://github.com/acme/_git/re%20po",                  // _git on another forge: not an Azure DevOps address
+		"https://a%0Ab@dev.azure.com/contoso/p/_git/r",          // an escape outside the path
+		"https://tfs.corp.example/Payments%20Platform/_git/app", // a host no provider row names
 	} {
 		body, _ := json.Marshal(map[string]any{"name": "ws", "sources": []map[string]string{{"type": "repo", "source": in}}})
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(string(body)))
-		if _, msg := decodeWorkspaceRequest(httptest.NewRecorder(), r); msg == "" {
+		if _, msg := decodeWorkspaceRequest(httptest.NewRecorder(), r, nil); msg == "" {
 			t.Errorf("workspace door accepted %q", in)
 		}
-		if _, ok := parseCloneTarget(in); ok {
+		if _, ok := parseCloneTarget(in, nil); ok {
 			t.Errorf("parseCloneTarget accepted %q", in)
 		}
+	}
+}
+
+// AN AZURE DEVOPS SERVER HOST takes the name rule only when a provider row
+// names it: nothing on the wire tells a TFS host from any other forge, so the
+// row is the only fact available. Without one, its escapes are refused as
+// every other forge's are.
+func TestADONames_ServerHostsComeFromProviderRows(t *testing.T) {
+	sc := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{
+		{ID: "tfs", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://TFS.corp.example/tfs"}},
+		{ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com/acme"}},
+	}}}
+	hosts := adoServerHosts(sc)
+	if len(hosts) != 1 || hosts[0] != "tfs.corp.example" {
+		t.Fatalf("adoServerHosts = %v, want [tfs.corp.example]", hosts)
+	}
+	const (
+		typed     = "https://tfs.corp.example/tfs/DefaultCollection/Payments Platform/_git/Card Auth (v2).Service"
+		canonical = "https://tfs.corp.example/tfs/DefaultCollection/Payments%20Platform/_git/Card%20Auth%20(v2).Service"
+	)
+	decode := func(ado adoHostsLoader) (string, string) {
+		body, _ := json.Marshal(map[string]any{"name": "ws", "sources": []map[string]string{{"type": "repo", "source": typed}}})
+		req, msg := decodeWorkspaceRequest(httptest.NewRecorder(),
+			httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(string(body))), ado)
+		if msg != "" {
+			return "", msg
+		}
+		return req.Sources[0].Source, ""
+	}
+	if got, msg := decode(func() []string { return hosts }); got != canonical {
+		t.Errorf("with the row: stored %q (%s), want %q", got, msg, canonical)
+	}
+	if got, msg := decode(nil); msg == "" {
+		t.Errorf("with no row naming the host: stored %q, want a refusal", got)
+	}
+	if _, ok := providerFor(sc, canonical); !ok {
+		t.Errorf("the row's own host refused %q", canonical)
+	}
+	if _, ok := parseCloneTarget(canonical, nil); ok {
+		t.Errorf("parseCloneTarget admitted %q with no row naming its host", canonical)
+	}
+}
+
+// TWO REPOSITORIES ONE DIRECTORY: "Card Auth" and "Card-Auth" both clone to
+// Card-Auth, so the second is dropped — and the run's 201 names it.
+func TestADONames_CloneDirectoryCollisionIsAWarning(t *testing.T) {
+	const (
+		spaced = "https://dev.azure.com/contoso/p/_git/Card%20Auth"
+		dashed = "https://dev.azure.com/contoso/p/_git/Card-Auth"
+	)
+	if _, warns := buildRepoRecords(spaced, []types.WorkspaceRepo{{Repo: spaced}}); len(warns) != 0 {
+		t.Errorf("one repository named twice warned %q, want nothing to say", warns)
+	}
+	got, warns := buildRepoRecords("", []types.WorkspaceRepo{{Repo: spaced}, {Repo: dashed}})
+	if strings.Count(got, "\n") != 0 || !strings.HasPrefix(got, spaced+"\t/home/agent/work/Card-Auth\t") {
+		t.Errorf("records = %q, want only %s", got, spaced)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], dashed+" was NOT cloned") || !strings.Contains(warns[0], spaced) {
+		t.Errorf("warnings = %q, want one naming the dropped %s and the %s that kept the directory", warns, dashed, spaced)
 	}
 }

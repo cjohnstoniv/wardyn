@@ -15,7 +15,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Azure DevOps projects and repositories whose names carry spaces or other permitted characters
   (`Payments Platform`, `Card Auth (v2).Service`) now import, launch, clone, fetch and push:
   every door stores one spelling of the address, and approvals name the repository the same
-  way on the REST and git paths (#485).
+  way on the REST and git paths. When two repositories in one run would clone into the same
+  directory, the run's response now says which one was not cloned (#485).
 
 ### Added
 
@@ -869,7 +870,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Azure DevOps projects and repositories whose names carry spaces or other permitted characters
   (`Payments Platform`, `Card Auth (v2).Service`) now import, launch, clone, fetch and push:
   every door stores one spelling of the address, and approvals name the repository the same
-  way on the REST and git paths (#485).
+  way on the REST and git paths. When two repositories in one run would clone into the same
+  directory, the run's response now says which one was not cloned (#485).
 
 ### Changed
 

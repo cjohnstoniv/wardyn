@@ -49,7 +49,7 @@ func TestADONames_ImportLaunchCloneFetchPush(t *testing.T) {
 	remote := adoRemoteURLFromFake(t, fake, bearer)
 	body, _ := json.Marshal(map[string]any{"name": "payments", "sources": []map[string]string{{"type": "repo", "source": remote}}})
 	ws, msg := decodeWorkspaceRequest(httptest.NewRecorder(),
-		httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(string(body))))
+		httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(string(body))), nil)
 	if msg != "" {
 		t.Fatalf("import of %q refused: %s", remote, msg)
 	}

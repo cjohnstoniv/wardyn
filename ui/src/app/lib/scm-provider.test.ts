@@ -337,7 +337,6 @@ describe("adoRepoName", () => {
     ["https://contoso@dev.azure.com/contoso/Payments%20Platform/_git/Card%20Auth%20%28v2%29.Service", "Card Auth (v2).Service"],
     ["https://contoso.visualstudio.com/Caf%C3%A9/_git/%C3%9Cn%C3%AFcode%20Repo", "Ünïcode Repo"],
     ["git@ssh.dev.azure.com:v3/contoso/Payments%20Platform/Card%20Auth%20(v2).Service", "Card Auth (v2).Service"],
-    ["https://tfs.corp.example/tfs/DefaultCollection/Payments%20Platform/_git/app", "app"],
   ])("%s is named %s", (locator, name) => {
     expect(isADOAddress(locator)).toBe(true);
     expect(adoRepoName(locator)).toBe(name);
@@ -347,5 +346,8 @@ describe("adoRepoName", () => {
     expect(isADOAddress("https://github.com/acme/payments%20svc")).toBe(false);
     expect(adoRepoName("https://github.com/acme/payments%20svc")).toBeNull();
     expect(adoRepoName("acme/payments-service")).toBeNull();
+    // "_git" alone does not make a host Azure DevOps (a provider row does).
+    expect(adoRepoName("https://github.com/acme/_git/re%20po")).toBeNull();
+    expect(adoRepoName("https://tfs.corp.example/tfs/c/Payments%20Platform/_git/Card%20Auth")).toBeNull();
   });
 });
