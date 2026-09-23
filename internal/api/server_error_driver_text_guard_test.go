@@ -99,8 +99,8 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	"runs_dispatch_ado_inject.go:Server.authorADOEntraInjection:refuseADOEntraDispatch": "fixed adoscope.ScopesFor refusal naming the capability (#445)",
 	// Every other site #173 found was FIXED, not allowlisted — a new entry
 	// here needs the same kind of justification (a named fixed sentinel or a
-	// design record, plus a pinning test) as these two, not just a passing
-	// build.
+	// design record, plus a pinning test) as the entries above, not just a
+	// passing build.
 }
 
 // serverErrorForwarder names one hop this guard follows: a function or
@@ -213,6 +213,76 @@ var server5xxStatusIdents = map[string]bool{
 	"StatusNotExtended":             true, // 510
 }
 
+// scanFileForLeaks walks file's top-level function declarations for a
+// writeError(w, <5xx>, ...) call (or a one-hop forwarder/driveBindFailure
+// literal) whose message argument calls err.Error() anywhere inside it, and
+// returns every match keyed "file:enclosing-symbol:callee" -> that site's
+// trimmed source line. A key can hold MORE THAN ONE site: two distinct call
+// sites in the same function, through the same forwarder, produce the same
+// key, and it is TestNoDriverTextInServerErrorBody's job (not this scan) to
+// treat that as a problem when the key is allowlisted — see SD-4: an early
+// version kept found as a plain map[string]string, so a second site's
+// snippet silently overwrote the first's and allowlisting the key hid every
+// later leak added to the same function. Extracted from
+// TestNoDriverTextInServerErrorBody so the mutation tests below can run the
+// identical logic against a synthetic source string instead of a real file
+// on disk.
+func scanFileForLeaks(fset *token.FileSet, name string, file *ast.File, src []byte) map[string][]string {
+	found := map[string][]string{}
+	for _, decl := range file.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		symbol := enclosingSymbolName(fd)
+
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.CallExpr:
+				// Direct shape: writeError(w, <5xx>, <msg with err.Error()>).
+				if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(node.Args) >= 3 {
+					if is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[2]) {
+						pos := fset.Position(node.Pos())
+						key := fmt.Sprintf("%s:%s:writeError", name, symbol)
+						found[key] = append(found[key], strings.TrimSpace(exprSourceLine(src, pos.Line)))
+					}
+					return true
+				}
+				// #295's one-hop shape: a call into a known forwarder that
+				// itself carries writeError's (status, msg) pair as ordinary
+				// arguments at fixed positions.
+				callee := calleeName(node)
+				fwd, ok := serverErrorForwarders[callee]
+				if !ok {
+					return true
+				}
+				maxArg := fwd.statusArg
+				if fwd.msgArg > maxArg {
+					maxArg = fwd.msgArg
+				}
+				if len(node.Args) > maxArg && (fwd.statusArg < 0 || is5xxStatusArg(node.Args[fwd.statusArg])) && callsErrorMethod(node.Args[fwd.msgArg]) {
+					pos := fset.Position(node.Pos())
+					key := fmt.Sprintf("%s:%s:%s", name, symbol, callee)
+					found[key] = append(found[key], strings.TrimSpace(exprSourceLine(src, pos.Line)))
+				}
+			case *ast.CompositeLit:
+				// #295's other one-hop shape: driveBindFailureHere /
+				// driveShareBindFailure answer with a *driveBindFailure
+				// literal instead of a writeError call, so the (status,
+				// message) pair lives in its fields, not call arguments.
+				status, member := driveBindFailureLitStatusMember(node)
+				if status != nil && member != nil && is5xxStatusArg(status) && callsErrorMethod(member) {
+					pos := fset.Position(node.Pos())
+					key := fmt.Sprintf("%s:%s:driveBindFailure", name, symbol)
+					found[key] = append(found[key], strings.TrimSpace(exprSourceLine(src, pos.Line)))
+				}
+			}
+			return true
+		})
+	}
+	return found
+}
+
 // TestNoDriverTextInServerErrorBody walks internal/api's non-test sources and
 // fails on a writeError(w, <5xx>, ...) call whose message argument calls
 // err.Error() anywhere inside it — the pattern writeServerError/loggedMsg
@@ -228,7 +298,7 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		t.Fatalf("read %s: %v", wd, err)
 	}
 
-	found := map[string]string{} // "file.go:line" -> source snippet
+	found := map[string][]string{} // "file:symbol:callee" -> each matching site's source snippet
 	fset := token.NewFileSet()
 	scanned := 0
 	for _, e := range entries {
@@ -247,56 +317,8 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		}
 		scanned++
 
-		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			symbol := enclosingSymbolName(fd)
-
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				switch node := n.(type) {
-				case *ast.CallExpr:
-					// Direct shape: writeError(w, <5xx>, <msg with err.Error()>).
-					if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(node.Args) >= 3 {
-						if is5xxStatusArg(node.Args[1]) && callsErrorMethod(node.Args[2]) {
-							pos := fset.Position(node.Pos())
-							key := fmt.Sprintf("%s:%s:writeError", name, symbol)
-							found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
-						}
-						return true
-					}
-					// #295's one-hop shape: a call into a known forwarder that
-					// itself carries writeError's (status, msg) pair as ordinary
-					// arguments at fixed positions.
-					callee := calleeName(node)
-					fwd, ok := serverErrorForwarders[callee]
-					if !ok {
-						return true
-					}
-					maxArg := fwd.statusArg
-					if fwd.msgArg > maxArg {
-						maxArg = fwd.msgArg
-					}
-					if len(node.Args) > maxArg && (fwd.statusArg < 0 || is5xxStatusArg(node.Args[fwd.statusArg])) && callsErrorMethod(node.Args[fwd.msgArg]) {
-						pos := fset.Position(node.Pos())
-						key := fmt.Sprintf("%s:%s:%s", name, symbol, callee)
-						found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
-					}
-				case *ast.CompositeLit:
-					// #295's other one-hop shape: driveBindFailureHere /
-					// driveShareBindFailure answer with a *driveBindFailure
-					// literal instead of a writeError call, so the (status,
-					// message) pair lives in its fields, not call arguments.
-					status, member := driveBindFailureLitStatusMember(node)
-					if status != nil && member != nil && is5xxStatusArg(status) && callsErrorMethod(member) {
-						pos := fset.Position(node.Pos())
-						key := fmt.Sprintf("%s:%s:driveBindFailure", name, symbol)
-						found[key] = strings.TrimSpace(exprSourceLine(src, pos.Line))
-					}
-				}
-				return true
-			})
+		for k, v := range scanFileForLeaks(fset, name, file, src) {
+			found[k] = append(found[k], v...)
 		}
 	}
 	if scanned == 0 {
@@ -308,17 +330,34 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	violations := 0
 	for _, k := range keys {
-		if _, ok := serverErrorDriverTextAllowlist[k]; ok {
+		sites := found[k]
+		if why, ok := serverErrorDriverTextAllowlist[k]; ok {
+			// SD-4: an allowlisted key must name exactly one site. More than
+			// one distinct call collapsing onto it means allowlisting the
+			// first silently hid every later one added to the same
+			// function — the #445 leak class this guard exists to catch —
+			// so treat the collapse itself as a violation.
+			if len(sites) > 1 {
+				violations++
+				t.Errorf("%s is allowlisted (%s), but %d distinct sites share this key — "+
+					"an allowlisted key must name exactly one site; the new one is not "+
+					"covered by the existing justification and needs its own:\n%s",
+					k, why, len(sites), strings.Join(sites, "\n"))
+			}
 			continue
 		}
-		t.Errorf("%s builds a 5xx body or a run failure hint from err.Error(): %s\n"+
-			"use writeServerError(w, r, \"<action>\", err) for a 500, or "+
-			"writeError(w, code, loggedMsg(ctx, \"<action>\", err)) for another 5xx — "+
-			"see internal/api/writeservererror.go. If this is deliberately modelled "+
-			"(like injection_awssso.go's AWS reauth body), add it to "+
-			"serverErrorDriverTextAllowlist with the same kind of justification "+
-			"that entry carries.", k, found[k])
+		for _, snippet := range sites {
+			violations++
+			t.Errorf("%s builds a 5xx body or a run failure hint from err.Error(): %s\n"+
+				"use writeServerError(w, r, \"<action>\", err) for a 500, or "+
+				"writeError(w, code, loggedMsg(ctx, \"<action>\", err)) for another 5xx — "+
+				"see internal/api/writeservererror.go. If this is deliberately modelled "+
+				"(like injection_awssso.go's AWS reauth body), add it to "+
+				"serverErrorDriverTextAllowlist with the same kind of justification "+
+				"that entry carries.", k, snippet)
+		}
 	}
 	for k, why := range serverErrorDriverTextAllowlist {
 		if _, ok := found[k]; !ok {
@@ -327,7 +366,71 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 				"shrink the allowlist by removing it", k, why)
 		}
 	}
-	t.Logf("scanned %d files, %d allowlisted site(s), %d violation(s)", scanned, len(serverErrorDriverTextAllowlist), len(found)-len(serverErrorDriverTextAllowlist))
+	t.Logf("scanned %d files, %d allowlisted site(s), %d violation(s)", scanned, len(serverErrorDriverTextAllowlist), violations)
+}
+
+// TestScanFileForLeaks_DoesNotCollapseDistinctSitesOntoOneKey pins SD-4: two
+// distinct err.Error()-leaking call sites in the same function, through the
+// same forwarder, must both survive scanFileForLeaks under their shared key
+// rather than the second silently overwriting the first. Before the fix,
+// allowlisting the key (justified by the first site) also hid a brand-new
+// leak added later to the same function, undetected.
+func TestScanFileForLeaks_DoesNotCollapseDistinctSitesOntoOneKey(t *testing.T) {
+	const src = `package api
+
+func (s *Server) dispatchRun(ctx context.Context) {
+	s.failAndRevoke(ctx, run.ID, types.RunStarting, "first: "+err.Error())
+	s.failAndRevoke(ctx, run.ID, types.RunStarting, "second: "+err.Error())
+}
+`
+	fset := token.NewFileSet()
+	file, perr := parser.ParseFile(fset, "runs_dispatch.go", src, 0)
+	if perr != nil {
+		t.Fatalf("parse: %v", perr)
+	}
+	found := scanFileForLeaks(fset, "runs_dispatch.go", file, []byte(src))
+
+	const key = "runs_dispatch.go:Server.dispatchRun:failAndRevoke"
+	if got := len(found[key]); got != 2 {
+		t.Fatalf("want 2 distinct sites under %q, got %d: %v", key, got, found[key])
+	}
+}
+
+// TestScanFileForLeaks_KeyIsStableAcrossLineShifts pins the ledger's T-63: an
+// unrelated line landing above an allowlisted site (three other PRs did
+// exactly that to these same files in the same review round, per the
+// package doc comment) must not change the key scanFileForLeaks reports for
+// that site, since the key is what serverErrorDriverTextAllowlist matches
+// against.
+func TestScanFileForLeaks_KeyIsStableAcrossLineShifts(t *testing.T) {
+	const key = "runs_dispatch.go:Server.dispatchRun:failAndRevoke"
+	sources := map[string]string{
+		"base": `package api
+
+func (s *Server) dispatchRun(ctx context.Context) {
+	s.failAndRevoke(ctx, run.ID, types.RunStarting, "boom: "+err.Error())
+}
+`,
+		"shifted": `package api
+
+// an unrelated comment landing above the site, the way three other PRs did
+// in the same review round -- this must not change the site's key.
+func (s *Server) dispatchRun(ctx context.Context) {
+	s.failAndRevoke(ctx, run.ID, types.RunStarting, "boom: "+err.Error())
+}
+`,
+	}
+	for name, src := range sources {
+		fset := token.NewFileSet()
+		file, perr := parser.ParseFile(fset, "runs_dispatch.go", src, 0)
+		if perr != nil {
+			t.Fatalf("%s: parse: %v", name, perr)
+		}
+		found := scanFileForLeaks(fset, "runs_dispatch.go", file, []byte(src))
+		if got := len(found[key]); got != 1 {
+			t.Fatalf("%s: want exactly one site under %q, got %d: %v", name, key, got, found[key])
+		}
+	}
 }
 
 // is5xxStatusArg reports whether arg is a status this guard recognizes as a
