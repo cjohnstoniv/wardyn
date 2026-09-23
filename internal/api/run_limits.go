@@ -6,15 +6,17 @@ package api
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// maxRunLimitSec bounds every run-limit duration at 100 years: past any lease
-// anyone means, and well inside time.Duration, so created_at + limit never
-// wraps into the past.
-const maxRunLimitSec = 100 * 365 * 24 * 60 * 60
+// maxRunLimitSec bounds every run-limit duration at math.MaxInt32 seconds
+// (about 68 years): past any lease anyone means, well inside time.Duration, so
+// created_at + limit never wraps into the past, and within the 32-bit
+// agent_runs.wait_budget_sec a profile wait is captured into.
+const maxRunLimitSec = math.MaxInt32
 
 // runLimitsRefusal is the write boundary on a profile's run limits (long-holds
 // design rev 4, §2.2), or "" when they are writable. A default past its own

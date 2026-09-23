@@ -16,8 +16,9 @@ import (
 )
 
 // TestRunLimitsRefusal is the profile write boundary on the seven run limits
-// (#567): every duration is 0..100 years, and a default may not sit past its
-// own max. The 400 names the field.
+// (#567): every duration is 0..math.MaxInt32 seconds (the 32-bit
+// wait_budget_sec a profile wait is captured into), and a default may not sit
+// past its own max. The 400 names the field.
 func TestRunLimitsRefusal(t *testing.T) {
 	for _, tc := range []struct{ body, want string }{
 		{govLimitsBody(`"max_end_ahead_sec":-1`), "limits.max_end_ahead_sec"},
@@ -26,6 +27,8 @@ func TestRunLimitsRefusal(t *testing.T) {
 		{govLimitsBody(`"default_wait_sec":-1`), "limits.default_wait_sec"},
 		{govLimitsBody(`"pause_idle_after_sec":-1`), "limits.pause_idle_after_sec"},
 		{govLimitsBody(`"max_end_ahead_sec":9223372036`), "limits.max_end_ahead_sec"},
+		{govLimitsBody(`"default_wait_sec":2147483648`), "limits.default_wait_sec"},
+		{govLimitsBody(`"max_wait_sec":2147483648`), "limits.max_wait_sec"},
 		{govLimitsBody(`"max_end_ahead_sec":3600,"default_end_sec":7200`), "limits.default_end_sec: 7200 is past limits.max_end_ahead_sec (3600)"},
 		{govLimitsBody(`"max_wait_sec":600,"default_wait_sec":601`), "limits.default_wait_sec: 601 is past limits.max_wait_sec (600)"},
 	} {

@@ -58,7 +58,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Run limits on governance profiles (#567).** A profile's `limits` gains seven fields:
   `max_end_ahead_sec`, `default_end_sec`, `allow_no_end`, `max_wait_sec`, `default_wait_sec`,
   `user_changes_limits` and `pause_idle_after_sec`. A profile write now answers 400 for a negative
-  value, one past 100 years, or a default past its own max. Every new run captures its owner's run
+  value, one past 2147483647 seconds (about 68 years, the 32-bit `wait_budget_sec` column), or a
+  default past its own max. Every new run captures its owner's run
   limits, that profile's id, an end (`ends_at`, from the default end or else the max; `null` = no
   end) and a wait (`wait_budget_sec`, never past `WARDYN_APPROVAL_EXPIRY_AFTER`) — a security
   admin's run included; only a super admin's is bounded by the deployment alone. Approvals carry
