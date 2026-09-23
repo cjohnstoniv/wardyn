@@ -856,8 +856,8 @@ func TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes(t *testing.T) {
 
 			w := newWalker(idx)
 			err := w.walk("", root, 0)
-			if !errors.Is(err, ErrUninspectable) {
-				t.Fatalf("walk = %v, want ErrUninspectable", err)
+			if !errors.Is(err, ErrTooLarge) {
+				t.Fatalf("walk = %v, want ErrTooLarge", err)
 			}
 			// One charge covers a whole tree, so the count may overshoot by at
 			// most the widest tree in the pack — never by a multiple of it.
@@ -987,7 +987,7 @@ func TestPackTree_MaxChangesIsEnforced(t *testing.T) {
 
 	w := newWalker(idx)
 	err := w.walk("", root, 0)
-	if !errors.Is(err, ErrUninspectable) || !strings.Contains(err.Error(), "paths") {
+	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "paths") {
 		t.Fatalf("walk = %v, want the maxChanges refusal", err)
 	}
 	if len(w.out) != maxChanges {

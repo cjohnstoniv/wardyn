@@ -50,10 +50,13 @@
 //
 // Everything else that would make the answer a guess is a refusal:
 // ErrUninspectable for a pack that does not carry what an answer needs (a thin
-// pack's delta bases, a ref whose commit is not in the pack, more objects or
-// bytes than the ceilings below allow) or that git would read differently from
-// this package (a commit carrying a header git's own parser stops before), and
-// a plain error for a malformed or hostile one.
+// pack's delta bases, a ref whose commit is not in the pack) or that git would
+// read differently from this package (a commit carrying a header git's own
+// parser stops before); ErrTooLarge for a pack that carries everything an
+// answer needs but costs more objects, bytes, tree entries or changed paths
+// than the ceilings below allow — fixed by pushing fewer commits at a time,
+// not by a more complete clone; and a plain error for a malformed or hostile
+// one.
 //
 // # What one inspection costs
 //
@@ -143,6 +146,14 @@ const (
 // ordinary, and the broker answers it by advertising no-thin rather than by
 // fetching those bases.
 var ErrUninspectable = errors.New("gitpack: the push cannot be inspected from its own bytes")
+
+// ErrTooLarge reports that the request is well formed and, unlike
+// ErrUninspectable, carries everything an answer would need — but inspecting
+// it would walk, hold or report more than one of this package's ceilings
+// (maxObjects, maxInflatedBytes, maxTreeNodes, maxChanges) allows. Unlike a
+// thin pack or a missing delta base, the fix is on the sender's side: push
+// fewer commits at a time, not push from a more complete clone.
+var ErrTooLarge = errors.New("gitpack: the push exceeds an inspection ceiling")
 
 // Change is one path a push introduces, at the mode and size the pushed tree
 // gives it.
@@ -505,7 +516,7 @@ func parsePack(pack []byte, format hashFormat) (*index, error) {
 	count := binary.BigEndian.Uint32(pack[8:12])
 	if count > maxObjects {
 		return nil, fmt.Errorf("%w: the pack claims %d objects, more than the %d ceiling",
-			ErrUninspectable, count, maxObjects)
+			ErrTooLarge, count, maxObjects)
 	}
 	p := &packReader{
 		br: bytes.NewReader(body), idx: newIndex(format),
@@ -671,7 +682,7 @@ func (p *packReader) pos() int64 { return p.br.Size() - int64(p.br.Len()) }
 // overshot by at most one object — which maxObjectBytes bounds.
 func (p *packReader) charge(n int64) error {
 	if p.inflated += n; p.inflated > maxInflatedBytes {
-		return fmt.Errorf("%w: the pack inflates past the %d-byte ceiling", ErrUninspectable, int64(maxInflatedBytes))
+		return fmt.Errorf("%w: the pack inflates past the %d-byte ceiling", ErrTooLarge, int64(maxInflatedBytes))
 	}
 	return nil
 }

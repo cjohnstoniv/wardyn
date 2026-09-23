@@ -399,7 +399,7 @@ func newWalker(i *index) *walker {
 // charge accounts for n tree entries about to be walked.
 func (w *walker) charge(n int) error {
 	if w.nodes += n; w.nodes > maxTreeNodes {
-		return fmt.Errorf("%w: the push walks more than %d tree entries", ErrUninspectable, maxTreeNodes)
+		return fmt.Errorf("%w: the push walks more than %d tree entries", ErrTooLarge, maxTreeNodes)
 	}
 	return nil
 }
@@ -555,7 +555,7 @@ func (w *walker) record(c Change) error {
 		return nil
 	}
 	if len(w.out) >= maxChanges {
-		return fmt.Errorf("%w: the push touches more than %d paths", ErrUninspectable, maxChanges)
+		return fmt.Errorf("%w: the push touches more than %d paths", ErrTooLarge, maxChanges)
 	}
 	w.seen[c] = true
 	w.out = append(w.out, c)

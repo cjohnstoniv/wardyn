@@ -55,8 +55,8 @@ func TestPackCeiling_ObjectCountIsRefused(t *testing.T) {
 	for _, n := range []int{1 << 20, maxObjects + 1} {
 		body := minimalBlobPack(n)
 		res, err := Inspect(body)
-		if !errors.Is(err, ErrUninspectable) || !strings.Contains(err.Error(), "objects") {
-			t.Fatalf("%d objects (%d-byte body): err = %v, want ErrUninspectable naming the object ceiling",
+		if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "objects") {
+			t.Fatalf("%d objects (%d-byte body): err = %v, want ErrTooLarge naming the object ceiling",
 				n, len(body), err)
 		}
 		if res.idx != nil || len(res.Changes) != 0 {
