@@ -2432,7 +2432,7 @@ A run whose policy sets `push_rules` has its brokered git pushes inspected
 before they are forwarded: the broker buffers the receive-pack request, reads
 which paths the push would introduce, and refuses one that carries a denied
 path, that is larger than the run's inspection ceiling, or that cannot be read
-from its own bytes. Both brokered lanes enforce it, on the same trigger, and
+from its own bytes. Every brokered git lane enforces it (the GitHub App, `git_pat` and Azure DevOps Entra lanes), on the same trigger, and
 independently of branch-namespace confinement — a `git_push_any_branch`
 opt-out says where a push may land and does not switch off what it may
 contain. It governs what reaches the forge, not whether a credential is
@@ -2596,11 +2596,15 @@ residuals particular to holding:
   scans on the run's sidecar — an LLM request body, another push — cannot
   retain theirs and fail closed (refused, never forwarded unread) until the
   hold ends.
-- **The Azure DevOps Entra lane applies no content rules.** Pushes through the
-  per-person Azure DevOps lane (`Proxy.serveADOGit`) are governed by the
-  capability gate only; neither `deny_paths` nor `require_review_paths` reads
-  them yet. A git_pat grant for Azure DevOps goes through the token lane and is
-  covered.
+- **The Azure DevOps Entra lane runs the rules before its capability gate.**
+  `Proxy.serveADOGit` inspects a push that moves a ref (`applyPushRules`) before
+  `awaitADOCapability`, so nobody is asked for `code_write` or `policy_bypass`
+  on a push the rules refuse, and a review hold is decided before any capability
+  hold. Its refusals are the plain `403` the other lanes give, not the lane's
+  receive-pack-status refusal, so git prints `HTTP 403` there as elsewhere.
+  Azure DevOps' trees cannot be read (the forge comparison reads GitHub only),
+  so what the pack does not carry keeps the strict reading on this lane, as on
+  any non-GitHub forge.
 
 ### Hold-lane settings sources: user scope is still agent-writable
 

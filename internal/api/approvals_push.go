@@ -106,6 +106,9 @@ func (s *Server) admitPushContentRaise(w http.ResponseWriter, r *http.Request, c
 //   - git_pat: the run owner when the secret it names is in their own
 //     namespace (the one the broker reads first, internal/broker's ownerOf),
 //     otherwise the operator's shared secret, labelled PushActsAsOperator.
+//   - the Azure DevOps Entra lane's api_key grant (the one whose secret is the
+//     types.ADOEntraAccessTokenSecret sentinel): the person's own bearer,
+//     resolved for the run's owner, so the label is the run owner.
 //
 // ponytail: labels are principals as runs record them (AgentRun.CreatedBy);
 // resolve to a display name when a people directory exists to ask.
@@ -131,6 +134,10 @@ func (s *Server) pushActsAs(ctx context.Context, run types.AgentRun, subject str
 			}
 		}
 		return types.PushActsAsGitPAT, types.PushActsAsOperator, nil
+	case types.GrantAPIKey:
+		if rule, rerr := injectionRuleFromScope(grants[i].Spec.Scope); rerr == nil && rule.SecretName == types.ADOEntraAccessTokenSecret {
+			return types.PushActsAsADOEntra, run.CreatedBy, nil
+		}
 	}
 	return "", "", fmt.Errorf("acts_as %q is not a credential a push authenticates with", actsAs)
 }

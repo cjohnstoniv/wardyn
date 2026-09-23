@@ -96,6 +96,21 @@ func patPushTarget(host, rest string, g PATGrant) pushTarget {
 	return pushTarget{repo: host + "/" + repo, actsAs: string(types.GrantGitPAT) + ":" + g.GrantID.String()}
 }
 
+// adoPushTarget is the Azure DevOps Entra lane's: the person's injected
+// credential, named by the grant their bearer resolves from ("api_key:<id>").
+// The control plane recognises that grant as the lane's and labels it with the
+// person (internal/api's pushActsAs).
+func (p *Proxy) adoPushTarget(host, rest string) pushTarget {
+	t := patPushTarget(host, rest, PATGrant{})
+	t.actsAs = ""
+	if p.inject != nil {
+		if id, ok := p.inject.grantIDFor(host); ok {
+			t.actsAs = string(types.GrantAPIKey) + ":" + id.String()
+		}
+	}
+	return t
+}
+
 // pushReview is what the review rules matched in one push.
 type pushReview struct {
 	paths []string // every matched path, in match order

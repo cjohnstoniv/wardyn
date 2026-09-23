@@ -227,6 +227,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and before the secret store exists, so a secret-store reference cannot be
   resolved here. The file's mode must be `0600` or tighter, and boot refuses if
   both vars are set rather than picking one silently. See `docs/ENV.md`.
+- **Push rules cover the Azure DevOps Entra lane (#494).** A push through the per-person Azure
+  DevOps lane now gets the same `push_rules` step the GitHub App and `git_pat` lanes run —
+  `deny_paths` refuses (`brokered:git:push-rules`), `require_review_paths` holds for an admin
+  (`brokered:git:push-held`, `acts_as_kind: "ado_entra"`, labelled with the person whose sign-in the
+  push uses), an unattended run refuses (`brokered:git:push-held-unattended`) — and it runs
+  BEFORE the capability check, so nobody is asked to approve `code_write` or `policy_bypass` for a
+  push the rules refuse. The lane also advertises `no-thin` on the same trigger, so a shallow
+  clone's push arrives readable. A probe that moves no ref is untouched, and a run with no
+  `push_rules` behaves exactly as before.
 - **A push that touches a reviewed path is held for an admin's decision (#180).** `push_rules`
   gains `require_review_paths` — deny_paths' pattern language and write-time checks — and
   `hold_seconds` (default 120, at most 600). A brokered push no deny path refuses, but which
@@ -245,7 +254,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   cannot, even on their own run. An unattended (non-interactive) run refuses at once with no
   approval raised (`brokered:git:push-held-unattended`). Both lanes that enforce deny paths hold:
   the GitHub App lane and the `git_pat` lane (Azure DevOps over a PAT included); the Azure DevOps
-  Entra lane applies no content rules yet. Migration `0069_approval_push_content` adds the kind
+  Entra lane holds too (below). Migration `0069_approval_push_content` adds the kind
   to the `approvals.kind` CHECK.
 
 - **A brokered push that touches a denied path, cannot be inspected, or is too large is refused.**
