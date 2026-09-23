@@ -914,7 +914,7 @@ org→desktop channel MDM already delivers as `/etc/wardyn/site-config.json`
 new plumbing and no DDL. It also means **two doors write them**, and the grid
 below is what tells them apart.
 
-| | Dedicated endpoints (the console's `/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
+| | Dedicated endpoints (the console's `/admin/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
 |---|---|---|
 | **Route** | `GET`/`PUT /workspace-providers`, `GET`/`PUT /agent-providers` — both verbs admin-only, for the reason the tier table above gives: a base URL names corporate topology and an `sso_start_url` names the org's IdP | `PUT /site-config`, admin-only, a **full-document replace** of everything except integrations |
 | **Writes what** | exactly one block, replaced whole; `{}` is the clear form | the whole document, provider blocks included when the body NAMES them |
@@ -928,7 +928,7 @@ SSH clone URL carries no path a base URL can be compared against
 (`git@github.com:acme/x.git` is not `/acme/x`), so a row scoped to one org
 admits an SSH clone of ANY org on that host, with the deployment's
 `ssh-key-<host>` secret. That is a documented ceiling of 0.7.2, not an
-oversight, and it is never silent: the `/providers` screen says it under the
+oversight, and it is never silent: the `/admin/providers` screen says it under the
 row's lanes, and run create puts it on the 201 as a warning (with a
 `run.provider.ssh_host_level` audit row) whenever a path-scoped row admits an
 SSH repository. **The remedy is the row's own `lanes` list** — drop `ssh` from a
@@ -951,7 +951,7 @@ an `azure_devops` provider row names it.
 
 **On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
 `/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the
-developer IS the admin and can open `/providers` — an MDM file that NAMES a
+developer IS the admin and can open `/admin/providers` — an MDM file that NAMES a
 provider block overwrites a local console edit within five minutes, and one that
 omits it leaves the edit standing. See
 [DESKTOP.md § Posture switches are env vars, never site-config](DESKTOP.md#posture-switches-are-env-vars-never-site-config).
@@ -2670,10 +2670,10 @@ writable, though a row stored under an earlier release still loads, still sits i
 `azure_openai` is gone as a kind.
 
 **Settings** (account menu) is the one surface for these — a Model provider card,
-a radio group over concrete lanes; the standalone `/integrations` page is deleted
-and redirects there. **The Git host card retired in 0.7.2.** Its three git
+a radio group over concrete lanes; the standalone `/integrations` page is deleted.
+**The Git host card retired in 0.7.2.** Its three git
 credential lanes (GitHub App, PAT, SSH key) now render INSIDE the provider row
-they apply to, on the Workspace Providers screen (`/providers`); Settings keeps a
+they apply to, on the Workspace Providers screen (`/admin/providers`); Settings keeps a
 card in its place that summarizes the provider policy and links there. The lanes
 are the same radio group over the same concrete lanes — what changed is that
 "which git hosts this org clones from" and "how a run authenticates to them"

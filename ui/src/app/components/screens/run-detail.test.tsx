@@ -11,7 +11,7 @@
 // description now names that reason too (without disambiguating which case
 // applies — preserves the anti-enumeration property).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
@@ -671,6 +671,62 @@ describe("RunDetailScreen — open full Audit link", () => {
       "href",
       "/admin/audit?run_id=run-1",
     );
+  });
+
+  it("neg: a user gets no link — the full Audit screen is Admin view only", async () => {
+    getRunMock.mockResolvedValue(RUN);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} securityOperator={false} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    expect(await screen.findByRole("button", { name: /make a policy from this run/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /open full audit/i })).not.toBeInTheDocument();
+  });
+});
+
+// M-1b: the Recordings library is Admin view only and hidden from a security
+// admin until F1, so its link renders for an admin alone.
+describe("RunDetailScreen — Recordings library link", () => {
+  const CAST = { run_id: "run-1", header: { version: 2, width: 80, height: 24 }, events: [], cast: "" };
+
+  function renderAs(operator: boolean, securityOperator: boolean) {
+    getRunMock.mockResolvedValue({ ...RUN, state: "COMPLETED" });
+    getRecordingMock.mockResolvedValue(CAST);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={operator} securityOperator={securityOperator} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("an admin gets the link to /admin/recordings", async () => {
+    renderAs(true, true);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    expect(await screen.findByRole("link", { name: "Recordings library" })).toHaveAttribute("href", "/admin/recordings");
+  });
+
+  it("neg: a security admin and a user get no link", async () => {
+    for (const [op, sec] of [[false, true], [false, false]] as const) {
+      renderAs(op, sec);
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      await user.click(await screen.findByRole("tab", { name: /recording/i }));
+      expect(await screen.findByText(/Recorded when the run's runner supports session capture/)).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Recordings library" })).not.toBeInTheDocument();
+      cleanup();
+    }
   });
 });
 

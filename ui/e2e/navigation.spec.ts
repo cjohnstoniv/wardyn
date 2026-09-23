@@ -7,6 +7,7 @@ import { test, expect, gotoConsole, mockMemberRole, navTo, sidebarLink, type Nav
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { HEALTH_POLL_MS } from "../src/app/App";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
@@ -171,6 +172,35 @@ test.describe("navigation + shell", () => {
     await navTo(page, "Settings");
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
     await expect(page.getByText(/This host, what runs your agents/i)).toBeVisible();
+  });
+
+  // M-1b — /settings is deleted, and the two Settings doors split by role: an
+  // admin tier lands on the Admin view's /admin/settings, a user on their own
+  // /account. Both mount the same screen today, so the h1 alone can't tell
+  // them apart — the URL is the pin, and a user must never meet the refusal.
+  test("M-1b — as admin, the sidebar and account-menu Settings both land on /admin/settings", async ({ page }) => {
+    await gotoConsole(page);
+    await navTo(page, "Settings");
+    await expect(page).toHaveURL(/\/admin\/settings$/);
+    await navTo(page, "Runs");
+    await page.locator("header").getByRole("button").last().click();
+    await page.getByRole("menu").getByRole("menuitem", { name: "Settings" }).click();
+    await expect(page).toHaveURL(/\/admin\/settings$/);
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+  });
+
+  test("M-1b — as a user, the sidebar and account-menu Settings both land on /account, never the refusal", async ({ page }) => {
+    await mockMemberRole(page);
+    await gotoConsole(page);
+    await navTo(page, "Settings");
+    await expect(page).toHaveURL(/\/account$/);
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
+    await navTo(page, "Runs");
+    await page.locator("header").getByRole("button").last().click();
+    await page.getByRole("menu").getByRole("menuitem", { name: "Settings" }).click();
+    await expect(page).toHaveURL(/\/account$/);
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
   });
 
   // B1 — the sidebar itself is the surface the fail-open bug widened: a

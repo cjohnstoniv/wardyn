@@ -376,13 +376,13 @@ describe("where the strip is withheld", () => {
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
-  it.each([["/settings"], ["/providers"]])("not on %s for an OPERATOR — those pages mount the pane", (path) => {
+  it.each([["/admin/settings"], ["/admin/providers"], ["/account"]])("not on %s for an OPERATOR — those pages mount the pane", (path) => {
     renderStrip({ access: { state: "not_configured" }, path, operator: true });
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
-  it("but a MEMBER keeps it on /settings — the card's AWS button is admin-only there", () => {
-    renderStrip({ access: { state: "not_configured" }, path: "/settings" });
+  it("but a user keeps it on /account — the card's AWS button is admin-only there", () => {
+    renderStrip({ access: { state: "not_configured" }, path: "/account" });
     expect(screen.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 });
