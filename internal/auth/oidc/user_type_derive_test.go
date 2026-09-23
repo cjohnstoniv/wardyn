@@ -74,8 +74,16 @@ func TestDeriveUserType(t *testing.T) {
 			wantDenial: writoidc.DenialUserTypeUnknown, wantUnknown: []string{"contractor"}},
 		{name: "an admin records their type too", groups: []string{"wardyn.admin", "pm-group"}, wantRole: writoidc.RoleAdmin, wantType: "portfolio-manager"},
 		{name: "an admin with no type is on the built-in one", groups: []string{"wardyn.admin"}, wantRole: writoidc.RoleAdmin, wantType: types.UserTypeStandard},
+		{name: "an admin's tie falls to the built-in type", groups: []string{"wardyn.admin", "pm-group", "quant-group"},
+			wantRole: writoidc.RoleAdmin, wantType: types.UserTypeStandard, wantTied: []string{"analyst", "portfolio-manager"}},
+		{name: "an admin's missing type falls to the built-in type", groups: []string{"wardyn.admin", "ghost-group"},
+			wantRole: writoidc.RoleAdmin, wantType: types.UserTypeStandard, wantUnknown: []string{"contractor"}},
+		{name: "an admin under a default naming a missing type is on the built-in type", groups: []string{"wardyn.admin"}, defaultRole: "contractor",
+			wantRole: writoidc.RoleAdmin, wantType: types.UserTypeStandard, wantUnknown: []string{"contractor"}},
 		{name: "a security admin's tie refuses", groups: []string{"wardyn.security", "pm-group", "quant-group"},
 			wantDenial: writoidc.DenialUserTypeAmbiguous, wantTied: []string{"analyst", "portfolio-manager"}},
+		{name: "a security admin under a default naming a missing type refuses", groups: []string{"wardyn.security"}, defaultRole: "contractor",
+			wantDenial: writoidc.DenialUserTypeUnknown, wantUnknown: []string{"contractor"}},
 		{name: "a default role may name a type", groups: []string{"nobody"}, defaultRole: "developer", wantRole: writoidc.RoleUser, wantType: "developer", wantDefMatch: true},
 		{name: "a default user is the built-in type", groups: []string{"nobody"}, defaultRole: writoidc.RoleUser, wantRole: writoidc.RoleUser, wantType: types.UserTypeStandard, wantDefMatch: true},
 		{name: "a default naming a missing type refuses", groups: []string{"nobody"}, defaultRole: "contractor",
@@ -227,6 +235,27 @@ func TestCallbackRefusesOverTheUserType(t *testing.T) {
 				t.Errorf("reported = %v, want %v", reported, want)
 			}
 		})
+	}
+}
+
+// TestCallbackAdminNeverRefusedOverTheUserType: an operator-allowlist admin
+// whose values tie, under a default naming a missing type, still signs in, on
+// the built-in type, and nothing is reported as a type refusal.
+func TestCallbackAdminNeverRefusedOverTheUserType(t *testing.T) {
+	env := newIdPEnv(t)
+	roleMap := map[string]string{"pm-group": "portfolio-manager", "quant-group": "analyst"}
+	auth := env.newRoleMappingAuth(t, roleMap, "contractor", []string{"ops@corp.example"}, nil,
+		func(c *writoidc.Config) { c.UserTypes = &fakeUserTypeSource{list: orgTypes} })
+	var reported []string
+	env.buildIDTokenWithRoles(t, "sub-ops", "ops@corp.example", nil, []string{"pm-group", "quant-group"}, roleCallbackNonce, time.Now().Add(time.Hour))
+	_, sess := doCallbackVia(t, auth, auth.CallbackHandlerWithDenials(func(_ *http.Request, reason string) {
+		reported = append(reported, reason)
+	}))
+	if sess.Role != writoidc.RoleAdmin || sess.UserType != types.UserTypeStandard {
+		t.Errorf("session = role %q type %q, want admin on standard", sess.Role, sess.UserType)
+	}
+	if len(reported) != 0 {
+		t.Errorf("reported = %v, want no type refusal", reported)
 	}
 }
 

@@ -686,8 +686,9 @@ func parseDefaultRole(raw string) (string, error) {
 // warnUnknownUserTypes WARNs once per WARDYN_OIDC_ROLE_MAP value, and for
 // WARDYN_OIDC_DEFAULT_ROLE, that names a user type the store does not hold. A
 // WARN, not a refusal: the type may be created in the console after boot. Until
-// it exists, a sign-in that reaches the value is refused (user_type_unknown),
-// never given a wider default.
+// it exists, a user or security admin sign-in that reaches the value is
+// refused (user_type_unknown), never given a wider default; an admin sign-in
+// gets the built-in type instead (deriveRole).
 func warnUnknownUserTypes(ctx context.Context, src oidc.UserTypeSource, roleMap map[string]string, defaultRole string) {
 	named := map[string][]string{}
 	for k, v := range roleMap {
@@ -712,7 +713,7 @@ func warnUnknownUserTypes(ctx context.Context, src oidc.UserTypeSource, roleMap 
 	for _, id := range slices.Sorted(maps.Keys(named)) {
 		refs := named[id]
 		slices.Sort(refs)
-		slog.Warn("wardynd: the user type "+strconv.Quote(id)+" doesn't exist yet; sign-ins it decides are refused until it is created or the value is remapped",
+		slog.Warn("wardynd: the user type "+strconv.Quote(id)+" doesn't exist yet; user and security admin sign-ins it decides are refused until it is created or the value is remapped (admin sign-ins get the standard type)",
 			"named_by", refs)
 	}
 }

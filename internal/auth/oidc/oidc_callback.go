@@ -488,5 +488,9 @@ func (a *Authenticator) deriveLogin(r *http.Request, sub string, cc callbackClai
 		}
 		return d, d.Denial
 	}
+	if len(d.Tied) > 0 || len(d.Unknown) > 0 {
+		slog.Warn("oidc: admin sign-in put on the standard user type; the types the role map names for it tie or don't exist",
+			"sub", sub, "tied_user_types", d.Tied, "unknown_user_types", d.Unknown)
+	}
 	return d, ""
 }

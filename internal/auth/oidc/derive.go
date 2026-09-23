@@ -499,7 +499,8 @@ func (a *Authenticator) PreviewRoleAgainst(rows []RoleMapping, userTypes []types
 //  4. The type (pickUserType) comes from every type the matched values named,
 //     whatever the tier — it is the default of an admin's user view and bounds
 //     a security admin's runs. None named: the default role's type if it names
-//     one, else "standard".
+//     one, else "standard". A tie or a missing type refuses the sign-in,
+//     except on the admin tier, which falls to "standard" instead.
 //
 // Arm 1 is UNTOUCHED by the security_admin tier and must stay that way: a
 // deployment with no role map has no way to express the third tier at all, so
@@ -601,9 +602,16 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 	}
 	userType, denial, tied, unknown := pickUserType(named, userTypes)
 	if denial != "" {
-		return Derivation{Matches: matches, Denial: denial, Tied: tied, Unknown: unknown}
+		if best != RoleAdmin {
+			return Derivation{Matches: matches, Denial: denial, Tied: tied, Unknown: unknown}
+		}
+		// The admin tier is exempt from everything a type decides (isOperator),
+		// so refusing it here would lock out every admin, the operator
+		// allowlist included, over a setting that grants or withholds nothing
+		// for them. Security admins stay refused: their type bounds their runs.
+		userType = types.UserTypeStandard
 	}
-	return Derivation{Role: best, UserType: userType, Matches: matches}
+	return Derivation{Role: best, UserType: userType, Matches: matches, Tied: tied, Unknown: unknown}
 }
 
 // maxSessionGroupsBytes bounds what Session.Groups may contribute to the JSON

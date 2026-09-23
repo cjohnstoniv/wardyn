@@ -42,10 +42,10 @@ type Derivation struct {
 	Matches  []Match
 	Denial   string
 	// Tied is the custom types that tied at the top priority, sorted
-	// (DenialUserTypeAmbiguous only).
+	// (DenialUserTypeAmbiguous, or an admin whose type fell to "standard").
 	Tied []string
 	// Unknown is the named types that do not exist, sorted
-	// (DenialUserTypeUnknown only).
+	// (DenialUserTypeUnknown, or an admin whose type fell to "standard").
 	Unknown []string
 }
 

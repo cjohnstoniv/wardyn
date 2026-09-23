@@ -44,7 +44,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   priority wins and Standard user never wins against a custom type. Two custom types at the same
   top priority refuse the sign-in (`user_type_ambiguous`), and so does a type that doesn't exist
   (`user_type_unknown`, also warned at boot); both are `auth.failed` rows from
-  `wardyn/oidcCallback`. `POST /access/mappings` takes `user_type` on a user row and refuses a
+  `wardyn/oidcCallback`. An `admin` sign-in, the operator allowlist included, is never refused
+  over a type: it lands on Standard user with a warning. `POST /access/mappings` takes `user_type` on a user row and refuses a
   type that doesn't exist; `GET /access` names each row's type and lists the types; the People
   preview names the type, a tie and a missing type; `/me` reports `user_type: {id, name}`.
 - **The non-admin tier is renamed `member` → `user` (#608).** `/me.role`, a role-map value and

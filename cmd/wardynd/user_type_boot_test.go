@@ -41,7 +41,7 @@ func TestWarnUnknownUserTypes(t *testing.T) {
 	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, `the user type \"contractor\" doesn't exist yet`) {
 		t.Fatalf("want one WARN for contractor, got:\n%s", out)
 	}
-	for _, ref := range []string{`ghost-a=contractor`, `ghost-b=contractor`, "WARDYN_OIDC_DEFAULT_ROLE"} {
+	for _, ref := range []string{`ghost-a=contractor`, `ghost-b=contractor`, "WARDYN_OIDC_DEFAULT_ROLE", "admin sign-ins get the standard type"} {
 		if !strings.Contains(out, ref) {
 			t.Errorf("the WARN does not name %s:\n%s", ref, out)
 		}

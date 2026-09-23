@@ -461,9 +461,9 @@ func accessCandidateRows(existing []types.RoleMapping, id string, write oidc.Rol
 // silently allowed, since a snapshot too stale to verify a NO-OP write is
 // too stale to verify a real demotion either.
 //
-// A user type decides nothing here except by refusing: a candidate that makes
-// the acting admin's own sign-in ambiguous, or name a missing type, refuses
-// that sign-in, which is a lockout like any other.
+// A user type decides nothing here: a tie or a missing type never refuses an
+// admin-tier sign-in (deriveRole puts it on the built-in type), so it trips
+// neither side of this guard.
 func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping, candidate []oidc.RoleMapping, userTypes []types.UserType) error {
 	sub := oidcHumanFromContext(r.Context())
 	if sub == "" {
@@ -531,7 +531,7 @@ type roleMappingWriteRequest struct {
 // carry one.
 func accessMappingTarget(req roleMappingWriteRequest, value string, userTypes []types.UserType) (oidc.RoleMapping, string) {
 	if !oidc.ValidRole(req.Role) {
-		return oidc.RoleMapping{}, fmt.Sprintf("role: invalid %q (want %q, %q or %q)", req.Role, oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser)
+		return oidc.RoleMapping{}, fmt.Sprintf("The role %q isn't valid (want %q, %q or %q).", req.Role, oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser)
 	}
 	if req.Role != oidc.RoleUser {
 		if req.UserType != "" {
@@ -782,7 +782,9 @@ type accessPreviewResponse struct {
 	Matched  []oidc.Match `json:"matched"`
 	// Denial is why a refused sign-in is refused: no_role,
 	// user_type_ambiguous (Tied names the custom types at the top
-	// priority) or user_type_unknown (Unknown names the missing ids).
+	// priority) or user_type_unknown (Unknown names the missing ids). An
+	// admin sign-in is never refused over a type: it carries Tied or Unknown
+	// with no Denial and lands on the built-in type.
 	Denial  string   `json:"denial,omitempty"`
 	Tied    []string `json:"tied,omitempty"`
 	Unknown []string `json:"unknown,omitempty"`

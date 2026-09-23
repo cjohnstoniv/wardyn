@@ -48,7 +48,8 @@ func TestAccess_UpsertNamesAUserType(t *testing.T) {
 			`The user type "admin" isn't a valid id.`},
 		{"a malformed type id", `{"value":"x","role":"user","user_type":"Portfolio Manager"}`, http.StatusBadRequest, "",
 			`The user type "Portfolio Manager" isn't a valid id.`},
-		{"a type id as the role", `{"value":"x","role":"portfolio-manager"}`, http.StatusBadRequest, "", ""},
+		{"a type id as the role", `{"value":"x","role":"portfolio-manager"}`, http.StatusBadRequest, "",
+			`The role "portfolio-manager" isn't valid (want "admin", "security_admin" or "user").`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -200,9 +201,11 @@ func TestAccess_PreviewNamesTheTypeAndTheTie(t *testing.T) {
 	}
 }
 
-// TestAccess_LockoutGuardCountsATypeTie: a write that would make the acting
-// admin's own sign-in ambiguous refuses that sign-in, so it is a lockout.
-func TestAccess_LockoutGuardCountsATypeTie(t *testing.T) {
+// TestAccess_LockoutGuardAndAnAdminsTypeTie: a type tie never refuses an admin
+// sign-in, so it trips neither side of the lockout guard: a write that ties
+// the acting admin's types is saved, and so is a write made while they already
+// tie. A write that takes the admin tier away is still the lockout.
+func TestAccess_LockoutGuardAndAnAdminsTypeTie(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{userTypes: accessOrgTypes, rows: []types.RoleMapping{
 		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
@@ -211,12 +214,20 @@ func TestAccess_LockoutGuardCountsATypeTie(t *testing.T) {
 	srv := accessServer(t, auth, st)
 	admin := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, []string{"admins", "pm-group", "quant-group"})
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/access/mappings", admin, `{"value":"quant-group","role":"user","user_type":"analyst"}`)
+	for _, body := range []string{
+		`{"value":"quant-group","role":"user","user_type":"analyst"}`, // the write that ties them
+		`{"value":"eng-team","role":"user"}`,                          // a write while they tie
+	} {
+		if w := doSSO(t, srv, http.MethodPost, "/api/v1/access/mappings", admin, body); w.Code != http.StatusCreated {
+			t.Fatalf("POST %s = %d body=%s, want 201", body, w.Code, w.Body.String())
+		}
+	}
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/access/mappings", admin, `{"value":"admins","role":"user"}`)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "remove your own admin access") {
 		t.Fatalf("status = %d body=%s, want the lockout refusal", w.Code, w.Body.String())
 	}
-	if len(st.rows) != 2 {
-		t.Errorf("the refused write was stored: %+v", st.rows)
+	if len(st.rows) != 4 {
+		t.Errorf("rows = %+v, want the two saved writes and not the refused one", st.rows)
 	}
 }
 
