@@ -157,7 +157,12 @@ jobs:
           WARDYN_TEST_DOCKER: "1"
           WARDYN_TEST_REQUIRE_CLASS: CC2
         shell: bash # pipefail — see the e2e-live job above
+        # The conformance step above creates `wardyn-internal` itself, with no
+        # compose labels, and it outlives the test; compose then refuses to
+        # adopt it and postgres never starts. Only the conformance leftover is
+        # removed here — nothing else on this runner is attached to it.
         run: |
+          docker network rm wardyn-internal 2>/dev/null || true
           make test-e2e-live 2>&1 | tee test/reports/e2e/cc2-task-e2e.log
       - name: Upload CC2 results
         if: always()
