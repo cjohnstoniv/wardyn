@@ -192,7 +192,7 @@ describe("App — identity resolves before auth flips on re-auth (L4)", () => {
     // to boot at, safeReturnPath rewrites THAT to "/runs", and onSignIn's
     // `path === "/runs"` short-circuit skips whoami() entirely (a real path
     // is required to exercise the branch this pin is about).
-    window.history.pushState({}, "", "/drives");
+    window.history.pushState({}, "", "/admin/drives");
 
     const midSession401 = deferred<Response>();
     const reAuthWhoami = deferred<Response>();
@@ -242,7 +242,7 @@ describe("App — identity resolves before auth flips on re-auth (L4)", () => {
     expect(badgeCallsAfterClick).toBe(0);
     expect(screen.getByLabelText("Admin token")).toBeInTheDocument(); // still on the gate
 
-    // Resolved as a MEMBER (fails roleCanReach("/drives", "member")) so the
+    // Resolved as a MEMBER (fails roleCanReach("/admin/drives", "member")) so the
     // fallback lands on the stubbed Runs screen rather than a real,
     // unmocked DrivesScreen — this test is about ORDER, not destination
     // (M2/M3 already cover the destination).
@@ -262,8 +262,8 @@ describe("App — identity resolves before auth flips on re-auth (L4)", () => {
 
 describe("roleCanReach — pure (M2)", () => {
   it("a member cannot reach an operator-only route", () => {
-    expect(roleCanReach("/drives", "member")).toBe(false);
-    expect(roleCanReach("/providers", "member")).toBe(false);
+    expect(roleCanReach("/admin/drives", "member")).toBe(false);
+    expect(roleCanReach("/admin/providers", "member")).toBe(false);
   });
 
   it("an admin can reach an operator-only route; a security admin cannot", () => {

@@ -77,12 +77,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Console path re-point: the pre-split routes are deleted (#633).** `/policies`, `/governance`,
   `/permissions`, `/audit`, `/recordings`, `/drives`, `/providers`, `/settings` and
   `/integrations(/:id)` are gone, clean break, no alias — each lives only at its `/admin/*` twin
-  now (`/ssh-keys` stays until M-5). Every in-app link, the sidebar's Policies/Governance/
-  Permissions/Audit/Recordings entries, the account-menu and sidebar Settings links (which now
-  land on `/admin/settings` for an admin tier and `/account` for a member), the "New policy",
-  "Drives", "Providers", "open full Audit" and "Recordings library" links, and the Azure DevOps
-  connection anchor (`/account#azure-devops`) are re-pointed to match. A stale bookmark or link
-  falls through to the console's ordinary catch-all.
+  now (`/ssh-keys` stays until M-5, and `/demos` until M-6). Every in-app link, the sidebar's
+  Policies/Governance/Permissions/Audit/Recordings entries, the account-menu and sidebar Settings
+  links (which now land on `/admin/settings` for an admin tier and `/account` for a user), the
+  first-run model-provider "Connect →" doors (`/admin/settings`), the "New policy", "Drives",
+  "Providers", "open full Audit" and "Recordings library" links, and the Azure DevOps connection
+  anchor (`/account#azure-devops`) are re-pointed to match. "New policy", "open full Audit" and
+  "Recordings library" now render only for the tier whose Admin view screen they open, so a user
+  never gets a link to a page that refuses them. The operator docs' console-screen citations are
+  re-pointed too. A stale bookmark or link falls through to the console's ordinary catch-all.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
