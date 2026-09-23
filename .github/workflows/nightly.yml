@@ -257,15 +257,16 @@ jobs:
 
   # ── B7a: the BYOI wrap lane ────────────────────────────────────────────────
   # `make test-e2e-byoi` ran in NO workflow. It is also the lane that reproduces
-  # the `desktop-envelope` failure locally — the wrap producing an image that
-  # cannot pass its own agent-run --selftest kept that job red on EVERY run since
-  # it was added, and nothing scheduled would have caught the regression coming
-  # back.
+  # the old `desktop-envelope` job's failure locally — the wrap producing an
+  # image that cannot pass its own agent-run --selftest kept that job red on
+  # EVERY run since it was added, and nothing scheduled would have caught the
+  # regression coming back.
   #
   # Unlike ssh-e2e-live and ui-sandbox-e2e-live below, run-e2e-byoi.sh does NOT
   # start a control plane — its own header says so ("Requires a wardynd already
   # started with -envbuild and WARDYN_ENVBUILD_TOOLS_DIR"). So this job brings
-  # one up, the same way ci.yml's desktop-envelope does.
+  # one up, the same way ci.yml's helm-install-test does in its desktop-envelope
+  # half.
   byoi-e2e-live:
     runs-on: ubuntu-latest
     timeout-minutes: 30

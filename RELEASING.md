@@ -16,7 +16,7 @@ document is that process, written down.
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
   `envbuild-integration`, `test-pg`, `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
-  `license-headers`, `gitleaks`), `dco`, `desktop-envelope`,
+  `license-headers`, `gitleaks`), `dco`,
   `trivy`, and **`notices`** — the copyleft / unreviewed-dependency gate, which
   was missing from this list entirely. `sbom-stub` used to be named here and is
   **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*), so a
@@ -44,12 +44,12 @@ The live-service jobs are outside `make release-check`: `conformance`
 (`make test-conformance-k8s`, needs a kind/Calico cluster and the test images
 from that CI job), `envbuild-integration` (`make test-envbuild-integration`),
 `helm-install-test` (`make helm-install-test`, also needs a local `kind`
-cluster), the Playwright `ui-e2e` job, `desktop-envelope` (compose build +
-up), `trivy` (docker builds) and nightly's `buildx-smoke`. Their checks can run
-locally with the required services; follow `.github/workflows/ci.yml` for
-image builds, cluster setup, and environment variables. Run the Playwright
-lane with `scripts/run-ui-e2e.sh`. Without `WARDYN_TEST_PG` the Postgres
-suite prints a loud SKIPPED line.
+cluster; the same job then boots the desktop compose envelope), the
+Playwright `ui-e2e` job, `trivy` (docker builds) and nightly's `buildx-smoke`.
+Their checks can run locally with the required services; follow
+`.github/workflows/ci.yml` for image builds, cluster setup, and environment
+variables. Run the Playwright lane with `scripts/run-ui-e2e.sh`. Without
+`WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
 
 Screenshot freshness is advisory and CI-only. On a pull request, `ci.yml`'s
 `diagrams` job compares the PR diff and adds a warning annotation when the

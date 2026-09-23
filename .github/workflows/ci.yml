@@ -287,6 +287,9 @@ jobs:
   # here runs against a real device, and nothing in the install lane
   # (install.sh, the plist) executes — those are macOS/launchd-only and stay
   # covered by scripts/test-desktop-profile.sh's static checks above.
+  # Because the halves run in sequence, a red kind step skips every
+  # desktop-envelope assertion. #472 accepts that in exchange for building
+  # wardynd once.
   helm-install-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20

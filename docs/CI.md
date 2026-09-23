@@ -279,8 +279,8 @@ its entry says so:
   scripts below — starts no control plane of its own. That is setup this
   repo does not put on every PR, so it runs in `nightly.yml`'s `byoi-e2e-live`
   job (which boots the compose stack first, the way `ci.yml`'s
-  `desktop-envelope` does) rather than in `ci.yml`, and remains runnable by
-  hand. See RELEASING.md when re-validating BYOI.
+  `helm-install-test` job does in its desktop-envelope half) rather than in
+  `ci.yml`, and remains runnable by hand. See RELEASING.md when re-validating BYOI.
 - **`scripts/run-e2e-subscription.sh`** (`make test-e2e-subscription`) — live
   subscription proxy-injection proof. It needs a real operator
   `claude setup-token`; no repository secret carries one. Run by hand before a
@@ -373,8 +373,7 @@ measured maximum with a ten-minute floor. Minutes, successful runs only:
 | `conformance` | 60 | 4.2 | 4.7 | 45 |
 | `envbuild-integration` | 60 | 3.6 | 4.0 | 20 |
 | `gates (staticcheck)` | 60 | 2.7 | 2.9 | 15 |
-| `helm-install-test` | 60 | 2.6 | 3.2 | 15 |
-| `desktop-envelope` | 60 | 2.2 | 2.5 | 15 |
+| `helm-install-test` | – | pending | pending | 20 |
 | `trivy (wardynd)` | 60 | 1.8 | 2.0 | 40 |
 | `notices` | 60 | 1.5 | 1.9 | 15 |
 | `gates (licenses)` | 60 | 1.4 | 2.0 | 15 |
@@ -392,6 +391,11 @@ measured maximum with a ten-minute floor. Minutes, successful runs only:
 | `multi-arch build (agent-claude-code)`, nightly | 60 | 3.5 | 3.8 | 45 |
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
 | `multi-arch build (agent-aws-sso)`, nightly | 60 | 2.9 | 4.0 | 45 |
+
+`helm-install-test` now also runs the old `desktop-envelope` job's proof
+(#472). Before the merge the two took 3.2 and 2.5 minutes at most, so 20
+minutes clears twice their sum. Fill in its row once the merged job has about
+ten green runs.
 
 Re-measure (job name, runs, median and maximum over successful jobs):
 

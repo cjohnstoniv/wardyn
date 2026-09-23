@@ -289,10 +289,11 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   had no CLI-usable credential under SSO — **0.7 found that premise wrong** (the
   MDM-delivered admin token is already in the container and authenticates even
   with OIDC configured) and deleted the gate. `scripts/test-desktop-profile.sh`
-  (`make test-scripts`) and `ci.yml`'s `desktop-envelope` job (boots the real
-  compose profile and proves `/policies/default`, no-policy resolution and
-  Recording Mode synthesis all honor the managed ceiling) are the honesty
-  gates; a scripted smoke run against a real Mac is **still owed** — see
+  (`make test-scripts`) and `ci.yml`'s `helm-install-test` job (its
+  desktop-envelope half boots the real compose profile and proves
+  `/policies/default`, no-policy resolution and Recording Mode synthesis all
+  honor the managed ceiling) are the honesty gates; a scripted smoke run
+  against a real Mac is **still owed** — see
   [docs/DESKTOP.md](docs/DESKTOP.md) "Try it, once, on a real Mac". 0.7 did not
   close it: it needs hardware, not code.
 - **Extras.** The react-router advisory suppression is **deleted**:

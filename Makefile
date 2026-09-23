@@ -275,9 +275,10 @@ cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER
 # race detector over the concurrency proofs CI gates on). Still not a full CI
 # replica: the live-service jobs need a
 # daemon or service — conformance, conformance-k8s, envbuild-integration,
-# helm-install-test, the Playwright ui-e2e, desktop-envelope and trivy — and
-# run separately with those prerequisites; nightly.yml's multi-arch build
-# (buildx-smoke) too. See RELEASING.md and ci.yml for their local setup.
+# helm-install-test (with its desktop envelope), the Playwright ui-e2e and
+# trivy — and run separately with those prerequisites; nightly.yml's
+# multi-arch build (buildx-smoke) too. See RELEASING.md and ci.yml for their
+# local setup.
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \

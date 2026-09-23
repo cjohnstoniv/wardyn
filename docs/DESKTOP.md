@@ -466,12 +466,13 @@ Everything the plist and the wrapper do is exercised, machine-verifiable and
 daemon-free: `scripts/test-desktop-profile.sh` (wired into `make test-scripts`)
 checks the envelope parses, every variable it sets is a real documented one,
 the policy path and the compose mount agree, the plist is valid XML, and — where `systemd-analyze` is present — the rendered systemd units verify.
-`.github/workflows/ci.yml`'s `desktop-envelope` job goes further and actually
-boots the compose profile with this commit's example envelope, then proves the
-three things this document claims: `/policies/default` really does serve the
-managed file, a run naming no policy really does resolve to that ceiling, and
-a synthesized profile really is clamped to it (see "Tamper posture" above for
-what "clamped" does and does not mean once the caller is an admin).
+`.github/workflows/ci.yml`'s `helm-install-test` job (its desktop-envelope
+half) goes further and actually boots the compose profile with this commit's
+example envelope, then proves the three things this document claims:
+`/policies/default` really does serve the managed file, a run naming no policy
+really does resolve to that ceiling, and a synthesized profile really is
+clamped to it (see "Tamper posture" above for what "clamped" does and does not
+mean once the caller is an admin).
 
 ## Model access on m′
 
