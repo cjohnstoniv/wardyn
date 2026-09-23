@@ -94,3 +94,46 @@ for want in "mainexitpkg" "setup: cannot reach the fixture database" "initpanicp
 $OUT"
 done
 echo "ok  names a package that failed outside any test"
+
+# A package can have BOTH a named failing test and a -timeout panic (the
+# panic kills the package after the named failure is already recorded). The
+# panic must still be surfaced, not silently dropped because the package
+# already has a named failure. Isolated in its own module: -timeout=2s must
+# not apply to the fixtures above.
+TMP2="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$TMP2"' EXIT
+mkdir -p "$TMP2/scripts" "$TMP2/timeoutmixpkg"
+cp "$ROOT/scripts/test-report.sh" "$TMP2/scripts/"
+cat > "$TMP2/go.mod" <<'EOF'
+module timeoutmixfixture
+
+go 1.23
+EOF
+cat > "$TMP2/timeoutmixpkg/t_test.go" <<'EOF'
+package timeoutmixpkg
+
+import (
+	"testing"
+	"time"
+)
+
+func TestNamedFailure(t *testing.T) {
+	t.Fatal("this test always fails")
+}
+
+func TestHang(t *testing.T) {
+	time.Sleep(5 * time.Second)
+}
+EOF
+
+OUT2="$( (cd "$TMP2" && ./scripts/test-report.sh fixture -timeout=2s ./... 2>&1 >/dev/null) )" && \
+  fail "test-report.sh must exit non-zero when a package has both a named failure and a timeout panic"
+
+echo "$OUT2" | grep -q "timeoutmixpkg TestNamedFailure" \
+  || fail "stderr must still name the ordinary failing test — got:
+$OUT2"
+
+echo "$OUT2" | grep -qF "panic: test timed out after 2s" \
+  || fail "stderr must also surface the -timeout panic that killed the package, not just its named failure — got:
+$OUT2"
+echo "ok  names both the failing test and the -timeout panic in the same package"

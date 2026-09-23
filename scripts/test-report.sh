@@ -103,7 +103,8 @@ if build_fails:
         for out in lines:
             emit(out)
 
-unnamed = sorted(pkg_fails - {pkg for pkg, _ in fails})
+named_fail_pkgs = {pkg for pkg, _ in fails}
+unnamed = sorted(p for p in pkg_fails if p in panics or p not in named_fail_pkgs)
 if unnamed:
     print(">> failed outside any named test:")
     for pkg in unnamed:
