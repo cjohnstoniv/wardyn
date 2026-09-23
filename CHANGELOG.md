@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A red `build`/`test-pg` job named only `make: *** [Makefile:195: test-report] Error 1`, hiding
+  which test failed or why the package didn't compile behind an artifact download.**
+  `scripts/test-report.sh` now prints the failing test names and, on a compile failure, the
+  compiler's own error text directly in the job log, with a script test pinning both. A new
+  `make lint` gate (`scripts/check-workflow-artifacts.sh`) catches an `actions/upload-artifact`
+  step with an empty `path` before it ships (#374's exact shape). `run-e2e-ssh-k8s.sh`'s
+  no-cluster-installed skip now prints a greppable `SKIPPED no-install` marker for future nightly
+  wiring to assert on (#669).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
