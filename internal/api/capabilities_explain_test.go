@@ -171,6 +171,20 @@ func TestCapExplainOverlapAndEnforcement(t *testing.T) {
 	}
 }
 
+// TestCapExplainWideningNoAllow: image (the one widening kind) with no allow
+// row for this subject stays Admins only even when the subject holds a DENY
+// at some other value — the default reflects "no grant", not "a grant of the
+// opposite effect".
+func TestCapExplainWideningNoAllow(t *testing.T) {
+	grants := []types.CapabilityGrant{
+		grant(types.CapabilitySubjectGroup, "eng", capImage, "ghcr.io/evil/image", types.CapabilityDeny),
+	}
+	rows := explainGrid(t, grants, nil, "eng", []string{capImage})
+	if got := explainState(rows, capImage, capWildcard); got != capExplainAdminsOnly {
+		t.Errorf("wildcard row = %s, want %s", got, capExplainAdminsOnly)
+	}
+}
+
 // TestCapExplainUnknownKindSkipped: an unknown kind name is dropped rather
 // than producing a row — the HTTP handler is what validates kinds and refuses
 // the request.
