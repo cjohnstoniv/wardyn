@@ -929,7 +929,7 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 // permissionsPostureCheck grades the four capability-enforcement
 // switches (capabilityKinds — egress_host, secret, workspace, image;
 // capabilities.go) that gate member-narrowing/widening grants. An absent
-// switch is capEnforced's own documented default: FAIL-OPEN, i.e. that kind
+// switch is capBatch.enforced's own documented default: FAIL-OPEN, i.e. that kind
 // behaves exactly as an un-gated pre-0.6 deployment (capAllowed's doc
 // comment). That is a deliberate, upgrade-safe DEFAULT, not a
 // misconfiguration — a single-operator deployment may legitimately never
