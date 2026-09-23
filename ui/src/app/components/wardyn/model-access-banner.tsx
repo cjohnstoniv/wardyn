@@ -39,6 +39,7 @@ import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useModelAccessDoor } from "./model-access-context";
 import { usePrincipal } from "./operator-context";
+import { screenPath } from "./console-view";
 
 // Lazy, and that is a gate rather than a nicety: this strip is mounted by
 // app-shell.tsx, which is in the entry chunk, and the login pane drags xterm +
@@ -327,7 +328,9 @@ export function ModelAccessBanner() {
   const completed = React.useRef(false);
 
   const copy = modelAccessStripCopy(door, { operator }, door.claimed);
-  const under = (prefix: string) => pathname === prefix || pathname.startsWith(`${prefix}/`);
+  // The same screen in either view (the Admin view's /admin/setup is /setup).
+  const path = screenPath(pathname);
+  const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
   // Never on /setup — the page is the door. On /settings and /providers only
   // for an operator: those pages already mount the same pane for the same
   // states, and a second control named "Sign in to AWS" on one page is the U-13
