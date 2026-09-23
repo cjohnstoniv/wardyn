@@ -1068,16 +1068,21 @@ ui: ## Build the embedded web UI
 	@echo "Building embedded web UI..."
 	cd ui && pnpm install --frozen-lockfile && pnpm build
 
-ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live walk's spec files LOAD
+ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live/demo/screenshots spec files LOAD
 	@echo "Typechecking web UI (tsc --noEmit)..."
 	cd ui && pnpm install --frozen-lockfile && pnpm typecheck
 	@# tsc never evaluates an import, so a live spec that imports a constant from a
 	@# module reaching a stylesheet (AttachTerminal -> xterm.css) typechecks green and
 	@# then dies under Playwright's Node loader with "No tests found" — on a cluster
 	@# somebody spent ten minutes standing up (0.7.5's first walk). --list loads every
-	@# live spec file without a browser, a cluster or WARDYN_TEST_K8S, in seconds.
+	@# spec file without a browser, a live cluster, WARDYN_TEST_K8S or WARDYN_DEMO, in
+	@# seconds — cheap enough to do it for all three off-chromium projects.
 	@echo "Loading the live walk's spec files (playwright --list)..."
 	cd ui && pnpm exec playwright test --project=live --list >/dev/null
+	@echo "Loading the demo recording's spec files (playwright --list)..."
+	cd ui && pnpm exec playwright test --project=demo --list >/dev/null
+	@echo "Loading the screenshots' spec files (playwright --list)..."
+	cd ui && pnpm exec playwright test --project=screenshots --list >/dev/null
 
 ui-test: ## Web UI vitest unit/component tests + coverage
 	@echo "Running web UI unit/component tests (vitest + coverage)..."
