@@ -4738,6 +4738,9 @@ The same shape recurs one release later: `0067` adds `user_drives.object_scheme`
 and `user_drives` itself was `0054`'s table — created inside the already-shipped
 0.7 line, not this upgrade's own batch — so an install carried forward from a
 released 0.7.x hits the identical ownership requirement on its next upgrade.
+0.8 repeats it: `0070` renames the stored `member` tier to `user`, re-adding the
+role CHECK on `api_tokens` (`0045`'s table), moving the role default there and
+on `ssh_public_keys` (`0033`'s), and altering `role_mappings` (`0051`'s).
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does
