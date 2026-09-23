@@ -38,6 +38,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **One capability-grant resolver (#735), no behaviour change.** `capBatch` now answers every
+  capability question: `capAllowed`, `capGranted`, `capSeamAllowed` and `capScan` are one-value doors
+  onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
+  snapshot through a context memo. A build with no store now refuses a widening kind at every door.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
