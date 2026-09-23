@@ -439,6 +439,20 @@ func (o *Orchestrator) ReplaceProxy(ctx context.Context, ref string, cfgJSON []b
 	return rv.ReplaceProxy(ctx, ref, cfgJSON)
 }
 
+// StartSandbox forwards a kept agent's restart to ref's substrate when it can
+// start one again (runner.SandboxStarter). The route is kept.
+func (o *Orchestrator) StartSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	st, ok := s.(runner.SandboxStarter)
+	if !ok {
+		return runner.ErrReviveUnsupported
+	}
+	return st.StartSandbox(ctx, ref)
+}
+
 // FreezeSandbox forwards a pause to ref's substrate when it implements
 // runner.Freezer (Docker/runc today). The route is kept: the sandbox still
 // exists, paused, and Thaw/Stop/Kill must still find its substrate.

@@ -17,8 +17,9 @@ import (
 // TestPG_RunRevive pins migration 0072 through the revive surface: the sandbox
 // ref records the release that started the proxy; a revive claims a run lost
 // to an outage (clearing the mark and stamping a fresh token so the lapsed
-// sweep leaves it alone) or a live one, only as it read it (live or lost), but
-// never one lost to a reboot or its end, nor a terminal one; the claim leaves
+// sweep leaves it alone), one lost to a reboot (refreshing its watcher lease,
+// so the watcher sweep leaves its not-yet-started agent alone) or a live one,
+// only as it read it, but never one lost to its end, nor a terminal one; the claim leaves
 // the release alone until the new proxy runs; the listing carries every live
 // run with a sandbox.
 func TestPG_RunRevive(t *testing.T) {
@@ -28,7 +29,8 @@ func TestPG_RunRevive(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	outage, rebooted, live, finished := newRun(types.RunRunning), newRun(types.RunRunning), newRun(types.RunRunning), newRun(types.RunCompleted)
-	for _, r := range []types.AgentRun{outage, rebooted, live, finished} {
+	ended := newRun(types.RunRunning)
+	for _, r := range []types.AgentRun{outage, rebooted, live, finished, ended} {
 		persistRun(t, ctx, pool, r)
 		if err := pg.SetSandboxRef(ctx, r.ID, "wardyn-agent-"+r.ID.String()); err != nil {
 			t.Fatalf("SetSandboxRef: %v", err)
@@ -42,6 +44,12 @@ func TestPG_RunRevive(t *testing.T) {
 	}
 	if ok, err := pg.MarkRunLost(ctx, rebooted.ID, types.LostReboot, now, 0); err != nil || !ok {
 		t.Fatalf("MarkRunLost(reboot) = %v, %v", ok, err)
+	}
+	if ok, err := pg.MarkRunLost(ctx, ended.ID, types.LostEnded, now, 0); err != nil || !ok {
+		t.Fatalf("MarkRunLost(ended) = %v, %v", ok, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET watcher_heartbeat = now() - interval '1 hour' WHERE id=$1`, rebooted.ID); err != nil {
+		t.Fatalf("age the rebooted run's watcher lease: %v", err)
 	}
 
 	releases := func() map[string]string {
@@ -65,14 +73,27 @@ func TestPG_RunRevive(t *testing.T) {
 	}
 
 	for _, c := range []struct {
-		run      types.AgentRun
-		fromLost bool
-	}{{rebooted, true}, {finished, false}, {outage, false}, {live, true}} {
-		if ok, err := pg.MarkRunRevived(ctx, c.run.ID, c.fromLost); err != nil || ok {
-			t.Errorf("MarkRunRevived(%s, fromLost %v) = %v, %v; want false", c.run.State, c.fromLost, ok, err)
+		name string
+		run  types.AgentRun
+		from types.LostReason
+	}{
+		{"rebooted as outage", rebooted, types.LostOutage}, {"rebooted as live", rebooted, ""},
+		{"finished", finished, ""}, {"outage as live", outage, ""}, {"live as outage", live, types.LostOutage},
+		{"ended", ended, types.LostEnded}, {"ended as live", ended, ""},
+	} {
+		if ok, err := pg.MarkRunRevived(ctx, c.run.ID, c.from); err != nil || ok {
+			t.Errorf("MarkRunRevived(%s) = %v, %v; want false", c.name, ok, err)
 		}
 	}
-	if ok, err := pg.MarkRunRevived(ctx, outage.ID, true); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, rebooted.ID, types.LostReboot); err != nil || !ok {
+		t.Fatalf("MarkRunRevived(reboot) = %v, %v; want true", ok, err)
+	}
+	var leaseFresh bool
+	if err := pool.QueryRow(ctx, `SELECT lost_at IS NULL AND watcher_heartbeat > now() - interval '1 minute' FROM agent_runs WHERE id=$1`,
+		rebooted.ID).Scan(&leaseFresh); err != nil || !leaseFresh {
+		t.Errorf("revived rebooted run: live with a fresh watcher lease = %v (%v); want true, or the watcher sweep loses it again before its agent starts", leaseFresh, err)
+	}
+	if ok, err := pg.MarkRunRevived(ctx, outage.ID, types.LostOutage); err != nil || !ok {
 		t.Fatalf("MarkRunRevived(outage) = %v, %v; want true", ok, err)
 	}
 	run, err := pg.GetRun(ctx, outage.ID)
@@ -89,7 +110,7 @@ func TestPG_RunRevive(t *testing.T) {
 	if slices.ContainsFunc(lapsed, func(r types.AgentRun) bool { return r.ID == outage.ID }) {
 		t.Error("a revived run is listed as lapsed: its token stamp was not refreshed")
 	}
-	if ok, err := pg.MarkRunRevived(ctx, live.ID, false); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, live.ID, ""); err != nil || !ok {
 		t.Errorf("MarkRunRevived(live) = %v, %v; want true — a restart", ok, err)
 	}
 	if got := releases(); got[outage.ID.String()] != "" || got[live.ID.String()] != version.Version {

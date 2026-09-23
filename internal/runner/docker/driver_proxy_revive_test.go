@@ -111,3 +111,38 @@ func TestReplaceProxy_FailsClosed(t *testing.T) {
 		t.Error("ProxyConfig of a removed proxy succeeded")
 	}
 }
+
+// TestStartSandbox_OnlyBehindARunningProxy is revive after a reboot on Docker
+// (long-holds design rev 4 §4 row 3): a kept agent is started again only once
+// its proxy runs. A stopped proxy has given its address back, and an agent
+// started first could take the address its own hosts entry pins.
+func TestStartSandbox_OnlyBehindARunningProxy(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal"})
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if err := d.EndSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("EndSandbox: %v", err)
+	}
+	agent := f.containers[sb.Ref]
+	if err := d.StartSandbox(ctx, sb.Ref); err == nil || agent.state.Running {
+		t.Fatalf("StartSandbox behind a stopped proxy = %v, agent running %v; want a refusal and the agent left stopped", err, agent.state.Running)
+	}
+	cfg, err := d.ProxyConfig(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("ProxyConfig: %v", err)
+	}
+	if err := d.ReplaceProxy(ctx, sb.Ref, cfg); err != nil {
+		t.Fatalf("ReplaceProxy: %v", err)
+	}
+	if err := d.StartSandbox(ctx, sb.Ref); err != nil || !agent.state.Running || agent.removed {
+		t.Fatalf("StartSandbox behind the new proxy = %v, agent %+v; want the kept agent running", err, agent)
+	}
+	if err := d.StartSandbox(ctx, "wardyn-agent-not-a-run"); err == nil {
+		t.Error("StartSandbox of an unresolvable ref succeeded")
+	}
+}

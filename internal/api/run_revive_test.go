@@ -29,11 +29,11 @@ type reviveStore struct {
 	release  string
 }
 
-func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, fromLost bool) (bool, error) {
+func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, from types.LostReason) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	lost := s.run.LostAt != nil
-	if s.state != types.RunRunning || lost != fromLost || (lost && s.run.LostReason != types.LostOutage) {
+	if s.state != types.RunRunning || (s.run.LostAt != nil) != (from != "") || s.run.LostReason != from ||
+		(from != "" && from != types.LostOutage && from != types.LostReboot) {
 		return false, nil
 	}
 	s.run.LostAt, s.run.LostReason = nil, ""
@@ -223,7 +223,8 @@ func TestReviveRun_Refusals(t *testing.T) {
 			cfg["git_grants"] = map[string]string{"acme/app": uuid.NewString()}
 			f.rr.cfg, _ = json.Marshal(cfg)
 		}, http.StatusConflict},
-		"a reboot stopped its agent": {func(f *reviveFixture) { f.st.run.LostReason = types.LostReboot }, http.StatusConflict},
+		"a reboot stopped its agent and the runner cannot start it": {func(f *reviveFixture) { f.st.run.LostReason = types.LostReboot }, http.StatusConflict},
+		"it ended": {func(f *reviveFixture) { f.st.run.LostReason = types.LostEnded }, http.StatusConflict},
 		"it passed its end": {func(f *reviveFixture) {
 			end := f.now.Add(-time.Minute)
 			f.st.run.EndsAt = &end
@@ -307,7 +308,7 @@ func TestReviveRun_TheClaimIsOnTheRowAsRead(t *testing.T) {
 	f := newReviveFixture(t)
 	live := f.run
 	live.LostAt, live.LostReason = nil, ""
-	_, rerr := f.srv.reviveRunProxy(context.Background(), live, types.ActorHuman, "admin")
+	_, rerr := f.srv.reviveRunProxy(context.Background(), live, types.ActorHuman, "admin", true)
 	if rerr == nil || rerr.status != http.StatusConflict || len(f.rr.replaced) != 0 {
 		t.Fatalf("revive of a stale live row = %+v, %d replaces; want 409 and no replace", rerr, len(f.rr.replaced))
 	}

@@ -532,7 +532,7 @@ func TestOrchestrator_StopProxy(t *testing.T) {
 // revivingSubstrate is a fakeSubstrate that can replace a proxy in place.
 type revivingSubstrate struct {
 	*fakeSubstrate
-	replaced []string
+	replaced, started []string
 }
 
 func (r *revivingSubstrate) ProxyConfig(context.Context, string) ([]byte, error) {
@@ -544,9 +544,14 @@ func (r *revivingSubstrate) ReplaceProxy(_ context.Context, ref string, _ []byte
 	return nil
 }
 
-// TestOrchestrator_ProxyReviver: a proxy-only revive reaches a substrate that
-// can replace a proxy in place; one that cannot (Kubernetes) answers
-// ErrReviveUnsupported for both halves.
+func (r *revivingSubstrate) StartSandbox(_ context.Context, ref string) error {
+	r.rec(&r.started, ref)
+	return nil
+}
+
+// TestOrchestrator_ProxyReviver: a revive reaches a substrate that can replace
+// a proxy in place and start a kept agent; one that cannot (Kubernetes)
+// answers ErrReviveUnsupported for every part.
 func TestOrchestrator_ProxyReviver(t *testing.T) {
 	ctx := context.Background()
 	oci := &revivingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
@@ -564,6 +569,12 @@ func TestOrchestrator_ProxyReviver(t *testing.T) {
 	}
 	if err := k8s.ReplaceProxy(ctx, "wardyn-agent-y", nil); !errors.Is(err, runner.ErrReviveUnsupported) {
 		t.Errorf("ReplaceProxy on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	}
+	if err := o.StartSandbox(ctx, "wardyn-agent-x"); err != nil || len(oci.started) != 1 {
+		t.Errorf("StartSandbox: %v, started %v", err, oci.started)
+	}
+	if err := k8s.StartSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("StartSandbox on a substrate that cannot = %v, want ErrReviveUnsupported", err)
 	}
 }
 

@@ -121,13 +121,23 @@ start_boot_session() {
     fi
 }
 
+# A container that has booted before is being revived after a reboot (see
+# booted_before in agent-run-lib.sh): same prep over the kept files, and the
+# seed is never started again. Codex does not continue its last session here:
+# revive_markers clears agent-started, so the first attach starts a fresh codex
+# in the workspace (attach-bashrc.sh), as an unseeded run does.
+if [[ "${1:-}" == "--idle" ]] && booted_before; then
+    set -- --revive
+fi
+
 # ── idle mode (INTERACTIVE runs) ──────────────────────────────────────────────
 # Interactive counterpart to task mode: prepare the workspace (MITM CA, artifact
 # config, git-helper secret, CLONE the repo into ~/work) then hold open for
 # `wardyn attach`, so the attach shell isn't empty. (No SSH lane in the codex image.)
-if [[ "${1:-}" == "--idle" ]]; then
+if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     : "${HOME:=/home/agent}"; export HOME
-    start_boot_session  # BEFORE any prep — see the function for why
+    # BEFORE any prep — see start_boot_session for why; a revive never re-seeds.
+    if [[ "$1" == "--revive" ]]; then revive_markers; else start_boot_session; fi
     install_mitm_ca
     prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
     install_artifact_config

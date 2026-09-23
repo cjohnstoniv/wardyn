@@ -146,6 +146,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   teardown removes it with the rest of the sandbox. A new contract test pins the internal API the
   previous minor's proxy calls. Kubernetes cannot revive (the agent pins the proxy pod's IP).
   Migration `0072_agent_runs_proxy_release` adds `proxy_release`.
+- **A run lost to a reboot can be revived, and Claude Code continues its conversation (#576).**
+  `POST /api/v1/runs/{id}/revive` now also takes a run lost to a `reboot` (Docker): it gets the
+  same new proxy (a fresh run token, the owner's current profile denies), and only then is its
+  kept agent container started again (`docker start`), so the agent's first request goes through
+  the rewritten config. Docker refuses to start the agent unless its new proxy is running. An
+  agent that cannot be started leaves the run lost (`reboot`) again with its agent and proxy
+  stopped; audited as `run.revive` `from: reboot` with `agent_started`. The admin bulk restart
+  stays proxy-only and reports a rebooted run instead of starting it. Image side, a container
+  that has booted before takes `agent-run --revive`: the same prep over the kept files, and the
+  run's seed is never started again. Claude Code continues its last conversation
+  (`claude --continue`) when the run landed the human in the agent; codex-cli starts a fresh
+  session on the first attach; the aws-sso image re-runs its sign-in after this boot's prep.
+  Images built before this change re-seed a revived run. Running programs are not restored.
 - **`agent-vscode` and `agent-novnc`, the UI-sandbox relay's two images, join the
   publish matrix (#141).** `release.yml` gets a new `images-ui-sandbox` job that
   publishes both, each built `FROM` the `agent-base` image the same run just

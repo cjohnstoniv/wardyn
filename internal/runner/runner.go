@@ -690,6 +690,20 @@ var ErrReviveUnsupported = errors.New("runner: this substrate cannot replace a s
 // removed, the old proxy and did not start the new one.
 var ErrProxyReplaceFailed = errors.New("runner: the old proxy may be gone and the new one did not start")
 
+// SandboxStarter is an OPTIONAL Runner capability: start a kept sandbox's
+// stopped agent again (revive after a reboot, long-holds design rev 4 §4 row
+// 3). The agent comes back with its writable layer, so its files and the
+// harness transcript survive; its main process is re-run from the start, so
+// nothing that was running does. It never starts the proxy sidecar: the
+// caller replaces that first (ProxyReviver), and StartSandbox refuses unless
+// it is running, so the agent never runs behind the old proxy or without the
+// address its hosts entry pins. Idempotent on an agent already running. A
+// router in front of a substrate without it (Kubernetes: a stopped pod is
+// gone) returns ErrReviveUnsupported.
+type SandboxStarter interface {
+	StartSandbox(ctx context.Context, ref string) error
+}
+
 // Freezer is an OPTIONAL Runner capability: pause and resume the AGENT
 // container in place, without stopping it (runner Freeze/Thaw, long-holds
 // design rev 4 §3). FreezeSandbox pauses the agent process — its memory,

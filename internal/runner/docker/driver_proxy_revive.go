@@ -25,6 +25,7 @@ import (
 const proxyConfigEnv = "WARDYN_PROXY_CONFIG_JSON"
 
 var _ runner.ProxyReviver = (*Driver)(nil)
+var _ runner.SandboxStarter = (*Driver)(nil)
 
 // startProxy creates the wardyn-proxy sidecar for runID on the per-run
 // network, joins it to the control-plane-facing network and starts it. ip,
@@ -172,6 +173,34 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	}
 	if _, err := d.startProxy(ctx, id, labels, proxyEnvFromJSON(id, cfgJSON, cp.ControlPlaneURL), ip); err != nil {
 		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
+	}
+	return nil
+}
+
+// StartSandbox starts the agent ref's kept, stopped container again
+// (runner.SandboxStarter): `docker start`, which re-runs its main process
+// (`agent-run --idle`) over the writable layer the run left behind. It
+// refuses unless the run's proxy sidecar is running: a stopped proxy has given
+// its address back, and an agent started first could take the address its own
+// hosts entry pins as wardyn-proxy. The recording dirs are prepared again as
+// at create.
+func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
+	id, err := d.proxyRunID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	p, err := d.cli.ContainerInspect(ctx, proxyContainerName(id), client.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("docker: inspect proxy before starting the agent: %w", err)
+	}
+	if p.Container.State == nil || !p.Container.State.Running {
+		return fmt.Errorf("docker: the proxy of agent %s is not running; refusing to start the agent", ref)
+	}
+	if _, err := d.cli.ContainerStart(ctx, ref, client.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("docker: start agent: %w", err)
+	}
+	if d.cfg.Record {
+		d.prepareRecordingDirs(ctx, ref)
 	}
 	return nil
 }

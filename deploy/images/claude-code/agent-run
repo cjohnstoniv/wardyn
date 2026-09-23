@@ -4,6 +4,8 @@
 # CONTRACT (all agent images must implement this interface):
 #   Usage: agent-run "<task text>"
 #   Usage: agent-run --selftest
+#   Usage: agent-run --idle | --revive   (interactive main process; --idle on a
+#          container that has booted before IS --revive, see booted_before)
 #
 # Normal mode:
 #   If WARDYN_REPO_URL is set and ~/work has no git repo yet, shallow-clones it
@@ -435,6 +437,40 @@ start_boot_session() {
     fi
 }
 
+# ── revive session (a run lost to a reboot, started again) ──────────────────
+# The run's container was stopped under it and the control plane has started it
+# again behind a new proxy (long-holds design rev 4, §4 row 3). Its files and the
+# Claude Code transcript under CLAUDE_CONFIG_DIR survived in the writable layer;
+# nothing that was running did. When the run landed the human in the agent
+# (interactive_start=agent), continue that conversation in the `wardyn` session
+# instead of replaying the seed: `claude --continue` picks up the most recent
+# conversation in the workspace. Any other run gets its files back and a shell.
+#
+# The same create-or-take-over as the boot session, for the same race, and the
+# same marker rule: agent-started is written before the session so a first
+# attach does not start a second claude, and removed again if tmux refused both.
+start_revive_session() {
+    revive_markers
+    [[ "${WARDYN_INTERACTIVE_START:-}" == "agent" ]] || return 0
+    if ! command -v tmux >/dev/null 2>&1; then
+        echo "agent-run: WARNING no tmux in this image; the conversation cannot continue on its own (attach still works)" >&2
+        return 0
+    fi
+    mkdir -p "$HOME/.wardyn"
+    : > "$HOME/.wardyn/agent-started"
+    if start_wardyn_session "agent-run --continue"; then
+        echo "agent-run: revive — session ${WARDYN_SESSION_START} to continue the run's Claude Code conversation (attach joins it)" >&2
+    else
+        rm -f "$HOME/.wardyn/agent-started"
+        echo "agent-run: WARNING could not create the revive tmux session; the conversation will not continue on its own (attach still works)" >&2
+    fi
+}
+
+# A container that has booted before is being revived: same prep, no seed.
+if [[ "${1:-}" == "--idle" ]] && booted_before; then
+    set -- --revive
+fi
+
 # ── idle mode (INTERACTIVE runs) ──────────────────────────────────────────────
 # The interactive counterpart to task mode: prepare the workspace EXACTLY as task
 # mode does — install the MITM CA, artifact config, git-helper caller-auth secret,
@@ -442,9 +478,10 @@ start_boot_session() {
 # for `wardyn attach`. Without this, an interactive run came up with an EMPTY ~/work
 # (the human attached to a bare shell with no repo). The human then drives claude in
 # the attach shell; the repo is already there.
-if [[ "${1:-}" == "--idle" ]]; then
+if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     : "${HOME:=/home/agent}"; export HOME  # robust ~ even if launched with HOME unset
-    start_boot_session  # BEFORE any prep — see the function for why
+    # BEFORE any prep — see start_boot_session for why; a revive never re-seeds.
+    if [[ "$1" == "--revive" ]]; then start_revive_session; else start_boot_session; fi
     install_mitm_ca
     prepare_claude_config_dir  # writable CLAUDE_CONFIG_DIR (RO subscription mount)
     seed_claude_onboarding     # product onboarding only — the trust prompt stays
@@ -558,6 +595,37 @@ if [[ "${1:-}" == "--boot-seed" ]]; then
     # prep-done already written and the agent-started marker already set: it cd's
     # into the workspace and starts nothing.
     "${WARDYN_REC_WRAP[@]}" "${seed_argv[@]}" || true
+    exec bash
+fi
+
+# ── continue mode (the revive session's pane) ────────────────────────────────
+# Runs INSIDE the `wardyn` session start_revive_session created: waits for this
+# boot's prep as the boot-seed pane does, then continues the run's most recent
+# Claude Code conversation in the workspace, under the posture the run started
+# with (auto-tools only when the run opted in). No client text is involved: the
+# seed is not read here at all.
+#
+# Not wrapped in wardyn-rec: the boot cast is stored under the bare run id, and
+# an upload is an upsert, so this pane's cast would replace the one the run's
+# first session delivered. The attached span is recorded by the per-attach
+# recorder as before; the unattended span after a revive is not.
+if [[ "${1:-}" == "--continue" ]]; then
+    : "${HOME:=/home/agent}"; export HOME
+    boot_seed_wait_for_prep
+    recover_git_helper_secret
+    workdir="$(cat "$HOME/.wardyn/workdir" 2>/dev/null || true)"
+    [[ -n "$workdir" && -d "$workdir" ]] || workdir="${HOME}/work"
+    cd "$workdir" || cd "$HOME"
+    ANTHROPIC_MODE=""
+    apply_anthropic_mode
+    echo "agent-run: revive — continuing the run's Claude Code conversation (anthropic auth mode = $ANTHROPIC_MODE)" >&2
+    continue_argv=(claude --continue)
+    if [[ "${WARDYN_SEED_AUTO_TOOLS:-}" == "1" ]]; then
+        continue_argv+=(--dangerously-skip-permissions)
+    fi
+    # As the boot pane: a failed continue (no conversation to continue) leaves
+    # a live shell in the workspace, never a dead session.
+    "${continue_argv[@]}" || true
     exec bash
 fi
 
