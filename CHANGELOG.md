@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A run refused at dispatch for an Amazon Bedrock model-credential mismatch (`autonomy_grade_drift`)
+  or by the declared-mechanism gate no longer audits a `run.llm.bedrock` "success" row for a
+  credential it was never handed — that row is now recorded only once those gates have let the run
+  through. A roster read that fails at create/Review now refuses the run (500) instead of silently
+  admitting it ungraded, which used to surface later at dispatch with a misleading "the
+  configuration changed between then and now" detail (#518).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

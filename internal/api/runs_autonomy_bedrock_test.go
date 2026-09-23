@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -29,6 +30,39 @@ const (
 	bedrockLaneBearer bedrockLane = "bearer"
 	bedrockLaneKeys   bedrockLane = "keys"
 )
+
+// putOwnedAWSSSOBlob is putAWSSSOBlob for the PER-USER lane: it writes the
+// same shape of captured session, but into owner's OWN secret namespace
+// (memSecrets.For(owner)) rather than the operator's — the per_user
+// CredentialSource row resolves from awsSSOScopeFor's caller-subject scope, so
+// a capture stored under any other owner is invisible to it, exactly as a
+// capture in a real member's own login sandbox would be.
+func putOwnedAWSSSOBlob(t *testing.T, s *Server, owner string, expiresAt time.Time) {
+	t.Helper()
+	blob := awsSSOBlob{
+		AccessToken:  "sso-access-token-" + owner,
+		RefreshToken: "sso-refresh-token-" + owner,
+		ClientID:     "sso-client-id",
+		ClientSecret: "sso-client-secret-1234567890",
+		StartURL:     "https://acme.awsapps.com/start",
+		Region:       "us-east-1",
+		AccountID:    "123456789012",
+		RoleName:     "WardynBedrockRole",
+		ExpiresAt:    expiresAt,
+		CapturedAt:   awsSSOTestFixedNow.Add(-time.Hour),
+	}
+	raw, err := json.Marshal(blob)
+	if err != nil {
+		t.Fatalf("marshal owned SSO blob: %v", err)
+	}
+	sec, ok := s.cfg.Secrets.(*memSecrets)
+	if !ok {
+		t.Fatalf("fixture secrets are %T, not *memSecrets", s.cfg.Secrets)
+	}
+	if perr := sec.For(owner).Put(context.Background(), harnessCredSecretName(awsSSOProvider), raw); perr != nil {
+		t.Fatalf("put owned SSO blob for %q: %v", owner, perr)
+	}
+}
 
 func seedBedrockLane(t *testing.T, srv *Server, lane bedrockLane) {
 	t.Helper()
@@ -92,29 +126,71 @@ const bedrockAutonomyBody = `{"agent":"claude-code","task":"t","confinement_clas
 // The last two rows are the golden: a deployment with Bedrock configured and no
 // credential resolving, and one with no Bedrock at all, grade exactly what they
 // did before this fold existed.
+//
+// The per_user rows are #518's coverage gap: unionBedrockCredential folds
+// whichever lane resolveBedrockAuth actually picked, and the per_user
+// CredentialSource lane (awsSSOScopeFor) was never driven through this probe.
+// The member's OWN capture resolves and grades exactly like the operator-
+// namespace rows above; a capture that landed in a DIFFERENT member's
+// namespace is invisible to awsSSOScopeFor's caller-subject scope, so the run
+// gets no Bedrock credential at either door and is refused at create (422),
+// not merely graded `secrets=none`.
 func TestAutonomyGradesTheBedrockModelCredentialAtBothDoors(t *testing.T) {
-	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-bedrock", []string{"eng"}, false) }
+	const memberSub = "sub-bedrock"
+	member := func(t *testing.T) *http.Cookie { return govSession(t, memberSub, []string{"eng"}, false) }
 	for _, tc := range []struct {
 		name        string
 		configured  bool
 		lane        bedrockLane
 		proxyInject bool
-		wantSecrets types.AutonomySecretsPosture
-		wantLevel   types.AutonomyLevel
+		// perUserCaptureOwner, when set, installs a per_user (unpinned)
+		// bedrock_sso roster row instead of seeding the legacy operator-
+		// namespace lane, and stores the captured session under THIS owner
+		// rather than the requesting member's own sub — memberSub itself
+		// when the member's own capture is what should resolve.
+		perUserCaptureOwner string
+		wantRefused         bool
+		wantSecrets         types.AutonomySecretsPosture
+		wantLevel           types.AutonomyLevel
 	}{
-		{"captured AWS SSO session, proxy-injected", true, bedrockLaneSSO, true, types.AutonomySecretsPowerful, types.AutonomyL1},
-		{"captured AWS SSO session, resident in the sandbox", true, bedrockLaneSSO, false, types.AutonomySecretsPowerful, types.AutonomyL1},
-		{"Bedrock bearer key", true, bedrockLaneBearer, true, types.AutonomySecretsPowerful, types.AutonomyL1},
-		{"resident SigV4 keys", true, bedrockLaneKeys, true, types.AutonomySecretsPowerful, types.AutonomyL1},
-		{"Bedrock configured, no credential resolves", true, bedrockLaneNone, true, types.AutonomySecretsNone, types.AutonomyL3},
-		{"no Bedrock at all", false, bedrockLaneSSO, true, types.AutonomySecretsNone, types.AutonomyL3},
+		{"captured AWS SSO session, proxy-injected", true, bedrockLaneSSO, true, "", false, types.AutonomySecretsPowerful, types.AutonomyL1},
+		{"captured AWS SSO session, resident in the sandbox", true, bedrockLaneSSO, false, "", false, types.AutonomySecretsPowerful, types.AutonomyL1},
+		{"Bedrock bearer key", true, bedrockLaneBearer, true, "", false, types.AutonomySecretsPowerful, types.AutonomyL1},
+		{"resident SigV4 keys", true, bedrockLaneKeys, true, "", false, types.AutonomySecretsPowerful, types.AutonomyL1},
+		{"Bedrock configured, no credential resolves", true, bedrockLaneNone, true, "", false, types.AutonomySecretsNone, types.AutonomyL3},
+		{"no Bedrock at all", false, bedrockLaneSSO, true, "", false, types.AutonomySecretsNone, types.AutonomyL3},
+		{"per_user: the member's own AWS SSO capture", true, bedrockLaneNone, true, memberSub, false, types.AutonomySecretsPowerful, types.AutonomyL1},
+		{"per_user: another member's capture is invisible", true, bedrockLaneNone, true, "someone-elses-sub", true, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := govProfile("bedrock")
 			p.Limits = types.GovernanceLimits{AutonomyRubric: secretsOnlyRubric(types.AutonomyL1)}
 
-			srv, _, _ := bedrockAutonomyFixture(t, p, tc.configured, tc.lane, tc.proxyInject)
+			setUpPerUser := func(srv *Server, st *govEscapeStore) {
+				if tc.perUserCaptureOwner == "" {
+					return
+				}
+				st.siteConfig = pinnedPerUserRoster("", "")
+				putOwnedAWSSSOBlob(t, srv, tc.perUserCaptureOwner, awsSSOTestFixedNow.Add(time.Hour))
+			}
+
+			srv, st, _ := bedrockAutonomyFixture(t, p, tc.configured, tc.lane, tc.proxyInject)
+			setUpPerUser(srv, st)
 			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member(t), bedrockAutonomyBody)
+
+			srv2, st2, audit2 := bedrockAutonomyFixture(t, p, tc.configured, tc.lane, tc.proxyInject)
+			setUpPerUser(srv2, st2)
+			c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), bedrockAutonomyBody)
+
+			if tc.wantRefused {
+				if w.Code != http.StatusUnprocessableEntity {
+					t.Errorf("preflight = %d, want 422: %s", w.Code, w.Body.String())
+				}
+				if c.Code != http.StatusUnprocessableEntity {
+					t.Errorf("create = %d, want 422: %s", c.Code, c.Body.String())
+				}
+				return
+			}
 			if w.Code != http.StatusOK {
 				t.Fatalf("preflight = %d, want 200: %s", w.Code, w.Body.String())
 			}
@@ -125,8 +201,6 @@ func TestAutonomyGradesTheBedrockModelCredentialAtBothDoors(t *testing.T) {
 				t.Fatalf("decode preflight: %v", err)
 			}
 
-			srv2, st2, audit2 := bedrockAutonomyFixture(t, p, tc.configured, tc.lane, tc.proxyInject)
-			c := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", member(t), bedrockAutonomyBody)
 			if c.Code != http.StatusCreated {
 				t.Fatalf("create = %d, want 201: %s", c.Code, c.Body.String())
 			}
