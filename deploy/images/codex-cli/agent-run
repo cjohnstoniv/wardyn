@@ -48,6 +48,15 @@ set -euo pipefail
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
 
+# ── managed agent-side policy ────────────────────────────────────────────────
+# codex reads no managed-policy file — nothing in this image consults one — so
+# there is no agent-side half of a run's autonomy level to deliver here, and
+# inventing deny rules the CLI would not honour would be worse than saying so.
+# The level is enforced at the Wardyn boundary (the launch gate, the egress
+# proxy, the confinement class) and by nothing inside this container.  Said out
+# loud on every launch rather than left to be inferred from an absent file.
+echo "agent-run: no managed agent-side settings — codex reads no managed-policy file, so autonomy level ${WARDYN_AUTONOMY_LEVEL:-none} is enforced at the Wardyn boundary and not inside this sandbox" >&2
+
 # ── selftest ─────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--selftest" ]]; then
     echo "=== wardyn agent-run selftest (codex-cli) ==="

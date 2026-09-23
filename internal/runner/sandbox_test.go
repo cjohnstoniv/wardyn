@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 )
 
 func TestIsKnownNonVaultRuntime(t *testing.T) {
@@ -200,5 +203,35 @@ func TestAgentIdleScript_ExitsOnSIGTERM(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("idle script did not exit within 2s of SIGTERM")
+	}
+}
+
+// TestBuildProxyConfig_CarriesControlPlaneCA: the ONE sealed config both
+// substrates deliver (docker env, k8s Secret) carries wardynd's internal CA, and
+// the sidecar's strict decoder accepts it with an https control plane — the
+// shape dispatch produces on every non-local install.
+func TestBuildProxyConfig_CarriesControlPlaneCA(t *testing.T) {
+	blob, err := hoptls.NewCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		RunToken:          "tok",
+		ControlPlaneURL:   "https://wardynd:8443",
+		ControlPlaneCAPEM: string(ca.CertPEM),
+	}, ProxyListenPort)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	cfg, err := proxy.LoadConfigBytes(b)
+	if err != nil {
+		t.Fatalf("the sidecar must load dispatch's own config: %v", err)
+	}
+	if cfg.ControlPlaneCAPEM != string(ca.CertPEM) {
+		t.Fatal("control_plane_ca_pem did not reach the sidecar verbatim")
 	}
 }

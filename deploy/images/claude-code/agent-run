@@ -83,6 +83,20 @@ source /usr/local/bin/agent-run-lib.sh
 # codex-cli's boot pane prints the same two, and one sentence with two copies is
 # drift with extra steps.
 
+# ── managed agent-side policy ────────────────────────────────────────────────
+# wardynd generates /etc/claude-code/managed-settings.json from the run's
+# RESOLVED autonomy level and delivers it root-owned, so it is a ceiling this
+# agent cannot rewrite.  Say which state the sandbox is in, once, on every
+# launch path: an ABSENT file is the ordinary case (an unrestricted level, or a
+# deployment that has authored no autonomy rubric), and "is this run under a
+# managed layer or under its launch flags alone" is the one thing a reader of
+# this log must never have to infer.  Nothing below branches on it.
+if [[ -r /etc/claude-code/managed-settings.json ]]; then
+    echo "agent-run: managed settings present at /etc/claude-code/managed-settings.json (autonomy level ${WARDYN_AUTONOMY_LEVEL:-none})" >&2
+else
+    echo "agent-run: no managed settings at /etc/claude-code/managed-settings.json (autonomy level ${WARDYN_AUTONOMY_LEVEL:-none}) — this run's tool posture comes from its launch flags alone" >&2
+fi
+
 # ── anthropic auth-mode detection ─────────────────────────────────────────────
 # Decide how claude should authenticate to the model backend and wire the env
 # accordingly.  Echoes the chosen mode on stdout (callers capture it); also a
