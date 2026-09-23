@@ -259,3 +259,66 @@ sh -c "$5"
 		t.Fatalf("joined parts =\n%q\nwant the cast file\n%q", got, cast)
 	}
 }
+
+// TestTailUploader_SizeCutPartLeavesMaskingHeadroom models the control plane's
+// upload path (64 MiB before masking, the PG store's 64 MiB after it): a
+// registered secret shorter than the placeholder lengthens every part it is in,
+// so a part cut near the cap would be refused on every attempt and stall the
+// rest of the run's recording behind it.
+func TestTailUploader_SizeCutPartLeavesMaskingHeadroom(t *testing.T) {
+	const cpCap = 64 << 20
+	secret, mask := []byte("s3cr3t!!"), []byte("<secret-hidden>")
+	var (
+		mu       sync.Mutex
+		accepted int
+		got      int64
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, cpCap))
+		if err != nil {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		if len(bytes.ReplaceAll(b, secret, mask)) > cpCap {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		mu.Lock()
+		accepted++
+		got += int64(len(b) - len(tailHeader))
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+
+	line := `[1.5,"o","token s3cr3t!! printed by the agent"]` + "\n"
+	events := strings.Repeat(line, (cpCap+cpCap/4)/len(line))
+	cast := filepath.Join(t.TempDir(), "r.cast")
+	writeCast(t, cast, tailHeader+events)
+
+	tu := &tailUploader{cast: cast, url: srv.URL + "/rec", part: 1, due: time.Now().Add(time.Hour)}
+	if err := tu.flush(true); err != nil {
+		t.Fatalf("a size-cut part was refused after masking: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if got != int64(len(events)) || accepted < 2 {
+		t.Fatalf("delivered %d of %d event bytes in %d parts", got, len(events), accepted)
+	}
+}
+
+// TestTailUploader_OverCapLineWaitsBeforeRetry: an event line longer than a
+// part is not re-read on every poll either.
+func TestTailUploader_OverCapLineWaitsBeforeRetry(t *testing.T) {
+	shrinkParts(t, int64(len(tailHeader)+8))
+	ps := newPartServer(t)
+	cast := filepath.Join(t.TempDir(), "r.cast")
+	writeCast(t, cast, tailHeader+eventLines(1))
+	tu := &tailUploader{cast: cast, url: ps.srv.URL + "/rec", part: 1, due: time.Now().Add(time.Hour)}
+	if err := tu.flush(false); err == nil {
+		t.Fatal("an over-cap event line must report an error")
+	}
+	if !tu.retryAt.After(time.Now()) {
+		t.Fatalf("no retry wait after an over-cap line: retryAt %v", tu.retryAt)
+	}
+}

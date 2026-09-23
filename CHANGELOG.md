@@ -57,10 +57,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **A long run's session recording now reaches the control plane while the run is still going
   (#577).** `wardyn-rec` tails its own asciicast and uploads it in parts, every 24 hours or as soon
-  as 64 MiB is waiting: each part is the cast's header line followed by whole event lines, so each
-  is a valid asciicast v2 document and no event is split between two masked uploads. Part 1 is the
-  same request a short run has always made; part 2 onward goes through the proxy's recording route
-  as `PUT /wardyn/v1/recordings/{run}/parts/{n}` and is stored beside it. The replay and the
+  as 32 MiB is waiting (half the 64 MiB upload cap, leaving masking room to lengthen a part): each
+  part is the cast's header line followed by whole event lines, so each is a valid asciicast v2
+  document and no event is split between two masked uploads. Part 1 is the same request a short
+  run has always made; part 2 onward goes through the proxy's recording route as
+  `PUT /wardyn/v1/recordings/{run}/parts/{n}` and is stored beside it. The replay and the
   Recordings list join the parts into one cast; a part whose header differs from part 1's (an
   earlier cast of the same run) ends the join. A run past 64 MiB of terminal output used to lose
   its whole recording to a 413 at exit, and a run lost before exit lost all of it; now at most the

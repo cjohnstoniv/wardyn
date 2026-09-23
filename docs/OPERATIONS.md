@@ -4350,8 +4350,9 @@ Present only when a `RecordingStore` is configured and the runner advertises
 session recording; absent (never an empty string) otherwise.
 
 **Recording upload path on Kubernetes.** Every exec-mode run's task is wrapped by
-`wardyn-rec`, which PUTs the finished recording to the proxy pod
-(`http://wardyn-proxy:3128/wardyn/v1/recordings/<runID>`), which forwards it to
+`wardyn-rec`, which PUTs the recording to the proxy pod in parts while the run
+goes on and flushes the rest at exit
+(`http://wardyn-proxy:3128/wardyn/v1/recordings/<runID>`, then `…/parts/<n>`), which forwards it to
 `WARDYN_CONTROL_PLANE_URL` — the chart points this at the control plane's
 in-cluster Service FQDN. Delivery failure is deliberately non-fatal to the task
 but bounded (`cmd/wardyn-rec/main.go`'s upload client timeout), so it cannot hold

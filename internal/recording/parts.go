@@ -13,7 +13,7 @@ import (
 )
 
 // A long run's cast arrives in parts (RL-12): wardyn-rec tails its own cast and
-// uploads it every 24 h or 64 MiB, each part the cast's header line followed by
+// uploads it every 24 h or 32 MiB, each part the cast's header line followed by
 // whole event lines. Part 1 is stored under the bare run id — exactly where a
 // short run's single upload has always landed — and part n >= 2 under
 // CastKey(runID, PartSuffix(n)). OpenJoined and StatJoined put them back

@@ -18,7 +18,7 @@ import (
 // only when the agent exits (never, if the sandbox is lost first) and as one
 // PUT the control plane refuses past 64 MiB. So while asciinema records,
 // wardyn-rec tails the cast file and uploads it in parts: every partInterval,
-// or as soon as a part's worth is waiting. Each part is the cast's own header
+// or as soon as a part's worth (partMaxBytes) is waiting. Each part is the cast's own header
 // line followed by whole event lines, so each is a valid asciicast v2 document
 // and no event (nor a secret inside one) is split between two uploads, which
 // the control plane masks one at a time. Part 1 goes to the upload URL itself,
@@ -26,13 +26,16 @@ import (
 // <url>/parts/<n>, and the control plane joins them (recording.OpenJoined).
 // The cast file itself is left to grow; this only tracks how much of it is sent.
 var (
-	// partMaxBytes is the control plane's per-upload cap (maxRecordingUploadBytes
-	// in internal/api), header included.
-	partMaxBytes int64 = 64 << 20
+	// partMaxBytes is the most a part holds, header included: half the control
+	// plane's 64 MiB per-upload cap (maxRecordingUploadBytes in internal/api),
+	// because the PG store applies that cap again after masking, and a secret
+	// shorter than its placeholder lengthens a part. A part refused for size
+	// would be re-sent unchanged and stall every part behind it.
+	partMaxBytes int64 = 32 << 20
 	partInterval       = 24 * time.Hour
 	tailPoll           = 30 * time.Second
 	// tailRetry spaces the attempts after a refused part, so an unreachable
-	// control plane is not re-sent up to 64 MiB on every poll.
+	// control plane is not re-sent up to partMaxBytes on every poll.
 	tailRetry = 10 * time.Minute
 )
 
@@ -124,6 +127,7 @@ func (t *tailUploader) flush(final bool) error {
 			cut := bytes.LastIndexByte(body[len(t.header):], '\n') + 1
 			if cut == 0 {
 				if pending >= room {
+					t.retryAt = time.Now().Add(tailRetry)
 					return errors.New("an event line exceeds the upload cap")
 				}
 				return nil // only a partial line so far
