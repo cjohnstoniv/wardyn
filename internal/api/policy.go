@@ -11,7 +11,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -334,26 +333,12 @@ const (
 
 // validatePushRules enforces push_rules' structural invariants at write time.
 // It bounds the STRINGS and refuses an entry types.DenyPathSegments cannot
-// read — one that would match nothing; what they match is the broker's
+// read — one that would match nothing or is almost certainly a typo; what
+// they match is the broker's
 // (internal/egress/proxy/push_rules.go), which is also where the list's own
 // evaluation cost is bounded — deliberately not here, for the no-count-cap
 // reason above. nil is legal and validates as a no-op, keeping the field's
 // wire-identical-to-nothing contract for every policy that predates it.
-//
-// The four checks ahead of the byte/control-char bound (found reviewing #176,
-// #271) each refuse a shape a future glob matcher (#179) — working against
-// repo-relative paths — could never match: leading/trailing whitespace
-// (mirrors validateToolRules' same check), a leading "/" (deny_paths are
-// repo-relative, not absolute), a ".." substring (mirrors validateUIAppPath's
-// existing check; broader than DenyPathSegments' own per-segment ".." refusal,
-// so it also catches a "..'" that never forms its own segment, e.g.
-// "infra..x/**"), and invalid UTF-8. That last one matters because
-// controlCharFree is rune-based (unicode.IsControl) while the length bound
-// below is byte-based: a string that fails to decode as UTF-8 contains no rune
-// IsControl recognizes, so it would otherwise pass both checks by accident.
-// allowed_domains' own validation (ValidDomainEntry) already holds itself to
-// this bar; deny_paths now matches it, storing-and-validating (#176 phase one)
-// without ever storing an entry #179's matcher would silently never match.
 func validatePushRules(pr *types.PushRulesSpec) error {
 	if pr == nil {
 		return nil
@@ -361,18 +346,6 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 	for i, p := range pr.DenyPaths {
 		if p == "" {
 			return fmt.Errorf("push_rules.deny_paths[%d]: empty entry", i)
-		}
-		if strings.TrimSpace(p) != p {
-			return fmt.Errorf("push_rules.deny_paths[%d]: %q has leading or trailing whitespace; the match is exact, so it would never fire", i, p)
-		}
-		if strings.HasPrefix(p, "/") {
-			return fmt.Errorf("push_rules.deny_paths[%d]: %q is absolute; deny_paths patterns are repo-relative", i, p)
-		}
-		if strings.Contains(p, "..") {
-			return fmt.Errorf("push_rules.deny_paths[%d]: %q contains \"..\"", i, p)
-		}
-		if !utf8.ValidString(p) {
-			return fmt.Errorf("push_rules.deny_paths[%d]: not valid UTF-8", i)
 		}
 		if len(p) > maxPushRulesPathBytes {
 			return fmt.Errorf("push_rules.deny_paths[%d]: exceeds %d bytes", i, maxPushRulesPathBytes)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -326,8 +327,17 @@ func (s *PushRulesSpec) IsSet() bool {
 // .gitignore and CODEOWNERS spelling — so "infra/" reads as "infra/**". An
 // empty, "." or ".." segment is refused: git never stores a path containing
 // one, so "./infra/**" or "infra//**" would match nothing, and a deny rule that
-// silently matches nothing reads as enforcement that is not there.
+// silently matches nothing reads as enforcement that is not there. Invalid
+// UTF-8 is refused so validation's byte-length and rune-based control-character
+// bounds read the same well-formed string, and leading or trailing whitespace
+// is refused as almost certainly a typo.
 func DenyPathSegments(pattern string) ([]string, error) {
+	if !utf8.ValidString(pattern) {
+		return nil, fmt.Errorf("%q is not valid UTF-8", pattern)
+	}
+	if strings.TrimSpace(pattern) != pattern {
+		return nil, fmt.Errorf("%q has leading or trailing whitespace (almost certainly a typo)", pattern)
+	}
 	p := strings.TrimPrefix(pattern, "/")
 	if strings.HasSuffix(p, "/") {
 		p += "**"

@@ -111,7 +111,8 @@ func TestRunPolicySpecClone_DeepCopiesPushRules(t *testing.T) {
 // write-time validation and the broker's matcher share: a leading "/" is
 // dropped, a trailing "/" means everything beneath the directory, and an
 // empty, "." or ".." segment — which no git path contains, so the entry could
-// never match — is refused.
+// never match — is refused, as are invalid UTF-8 and leading or trailing
+// whitespace (#271). ".." inside a segment is an ordinary name git allows.
 func TestDenyPathSegments(t *testing.T) {
 	for pattern, want := range map[string]string{
 		"infra/**":  "infra|**",
@@ -121,6 +122,7 @@ func TestDenyPathSegments(t *testing.T) {
 		"infra":     "infra",
 		"**/*.pem":  "**|*.pem",
 		".github/":  ".github|**",
+		"infra..x/": "infra..x|**",
 	} {
 		got, err := DenyPathSegments(pattern)
 		if err != nil || strings.Join(got, "|") != want {
@@ -128,7 +130,7 @@ func TestDenyPathSegments(t *testing.T) {
 		}
 	}
 	for _, pattern := range []string{"", "/", "//infra", "./infra/**", "infra//**", "infra/./x",
-		"infra/../x", "..", ".", "infra//"} {
+		"infra/../x", "..", ".", "infra//", " infra/**", "infra/** ", "deploy/\xff\xfe"} {
 		if got, err := DenyPathSegments(pattern); err == nil {
 			t.Errorf("DenyPathSegments(%q) = %q, want a refusal", pattern, got)
 		}
