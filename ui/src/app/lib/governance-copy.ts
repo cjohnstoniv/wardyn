@@ -223,6 +223,9 @@ export const GOVERNANCE = {
   // ENFORCE_OFF_TITLE was.
   MATCHED_USER: "a user assignment",
   MATCHED_GROUP: "a group assignment",
+  // 0.8: the user type tier (user > group > user type > all), in the same
+  // shape as its neighbours. Not in §7.3's prose, which predates user types.
+  MATCHED_USER_TYPE: "a user type assignment",
   MATCHED_ALL: "the everyone assignment",
   PREVIEW_RESULT_DEFAULT: "These claims resolve to the deployment ceiling — no assignment matches them.",
   PREVIEW_RESULT_UNKNOWN: "Couldn't resolve this — try again.",

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -52,9 +53,29 @@ var errUserTypeUnknown = errors.New(userTypeUnknownMsg)
 const userTypeUnknownMsg = "Your user type no longer exists, so Wardyn can't tell what you may use. " +
 	"Ask an admin to give you another type, then sign in again."
 
+// userTypeRefusalKey carries the request's "user_type_unknown is audited" bit.
+// One request resolves the caller's subjects several times (a POST /runs asks
+// the capability batch, the image grant, the ceiling and the drive) and each
+// refuses, but it is one denial: the count its groups_snapshot_stale twin
+// gets through the ceiling memo. Installed beside that memo by
+// ceilingMemoMiddleware.
+type userTypeRefusalKey struct{}
+
+func withUserTypeRefusalOnce(ctx context.Context) context.Context {
+	return context.WithValue(ctx, userTypeRefusalKey{}, new(atomic.Bool))
+}
+
+// firstUserTypeRefusal reports whether this is the request's first
+// user_type_unknown refusal. A caller outside a request (a background job, a
+// unit test) audits every one.
+func firstUserTypeRefusal(ctx context.Context) bool {
+	once, ok := ctx.Value(userTypeRefusalKey{}).(*atomic.Bool)
+	return !ok || once.CompareAndSwap(false, true)
+}
+
 // callerSubjects resolves the caller's subjects for a control, failing closed
-// on a type that no longer exists (errUserTypeUnknown, audited once here as
-// authz.denied reason user_type_unknown).
+// on a type that no longer exists (errUserTypeUnknown, audited here once per
+// request as authz.denied reason user_type_unknown).
 //
 // A human with no stamped type is the built-in type. Every SSO session carries
 // a stamp (the session codec refuses one without), so the only unstamped
@@ -80,7 +101,7 @@ func (s *Server) callerSubjects(ctx context.Context) (callerSubjects, error) {
 	}
 	_, err := s.cfg.Store.GetUserType(ctx, c.userType)
 	if errors.Is(err, store.ErrNotFound) {
-		if s.cfg.Audit != nil && !isDisplayRead(ctx) {
+		if s.cfg.Audit != nil && !isDisplayRead(ctx) && firstUserTypeRefusal(ctx) {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
 				"authz.denied", "user_type", "denied",
 				mustJSON(map[string]any{"reason": "user_type_unknown", "user_type": c.userType})))

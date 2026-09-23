@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -156,20 +157,55 @@ func TestUnknownUserTypeRefusesEveryResolver(t *testing.T) {
 			t.Errorf("%s = %v, want errUserTypeUnknown", name, err)
 		}
 	}
-	denials := 0
-	for _, ev := range rec.snapshot() {
-		if ev.Action == "authz.denied" && strings.Contains(string(ev.Data), `"reason":"user_type_unknown"`) {
-			denials++
-		}
-	}
-	if denials != len(calls) {
-		t.Errorf("authz.denied user_type_unknown rows = %d, want %d (one per resolve)", denials, len(calls))
+	if denials := userTypeUnknownDenials(rec); denials != len(calls) {
+		t.Errorf("authz.denied user_type_unknown rows = %d, want %d (one per resolve outside a request)", denials, len(calls))
 	}
 	if _, err := srv.effectiveCeiling(withDisplayRead(ctx)); !errors.Is(err, errUserTypeUnknown) {
 		t.Fatalf("display read = %v, want errUserTypeUnknown", err)
 	}
 	if n := len(rec.snapshot()); n != len(calls) {
 		t.Errorf("a display read wrote an audit row (%d rows, want %d)", n, len(calls))
+	}
+}
+
+func userTypeUnknownDenials(rec *recRecorder) int {
+	n := 0
+	for _, ev := range rec.snapshot() {
+		if ev.Action == "authz.denied" && strings.Contains(string(ev.Data), `"reason":"user_type_unknown"`) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestUnknownUserTypeIsOneDenialPerRequest: one request that asks every
+// resolver (as a POST /runs does) is refused by each, and writes one
+// authz.denied row, like its groups_snapshot_stale twin.
+func TestUnknownUserTypeIsOneDenialPerRequest(t *testing.T) {
+	st := &capStore{userTypes: utKnown, enf: map[string]bool{capAgent: true}}
+	rec := &recRecorder{}
+	srv := &Server{cfg: Config{Store: st, Audit: rec, Now: time.Now, DefaultPolicy: govDeployment()}}
+
+	var errs []error
+	h := ceilingMemoMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		_, batchErr := srv.newCapBatch(ctx).allowed(ctx, capAgent, "claude-code")
+		_, grantErr := srv.capGranted(ctx, capAgent, "claude-code")
+		_, ceilingErr := srv.effectiveCeiling(ctx)
+		_, driveErr := srv.resolveUserDrive(ctx, 0)
+		errs = []error{batchErr, grantErr, ceilingErr, driveErr}
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).
+		WithContext(utCtx(oidc.RoleUser, "contractor", []string{}))
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	for i, err := range errs {
+		if !errors.Is(err, errUserTypeUnknown) {
+			t.Errorf("resolve %d = %v, want errUserTypeUnknown", i, err)
+		}
+	}
+	if n := userTypeUnknownDenials(rec); n != 1 {
+		t.Errorf("authz.denied user_type_unknown rows = %d, want 1 per request", n)
 	}
 }
 

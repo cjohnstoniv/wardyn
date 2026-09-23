@@ -966,11 +966,13 @@ func claimsFromContext(r *http.Request) (*identity.Claims, error) {
 	return c, nil
 }
 
-// ceilingMemoMiddleware installs the per-request ceiling memo. Separate from
-// humanOrAdminAuth's body only so the three auth modes (local, SSO, admin token)
-// cannot each forget it — it wraps the whole chain once, above the branch.
+// ceilingMemoMiddleware installs the per-request ceiling memo, and the bit that
+// keeps a user_type_unknown refusal to one audit row per request
+// (callerSubjects). Separate from humanOrAdminAuth's body only so the three
+// auth modes (local, SSO, admin token) cannot each forget it — it wraps the
+// whole chain once, above the branch.
 func ceilingMemoMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(withCeilingMemo(r.Context())))
+		next.ServeHTTP(w, r.WithContext(withUserTypeRefusalOnce(withCeilingMemo(r.Context()))))
 	})
 }

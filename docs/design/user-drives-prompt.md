@@ -711,6 +711,7 @@ With the switch off nothing else on the screen changes.
 | `PREVIEW_RESULT(drive, tier)` | "{drive}" via the {tier} allocation |
 | `PREVIEW_TIER_USER` | user |
 | `PREVIEW_TIER_GROUP` | group |
+| `PREVIEW_TIER_USER_TYPE` | user type |
 | `PREVIEW_TIER_ALL` | everyone |
 | `PREVIEW_OBJECT_LABEL` | Storage object |
 | `PREVIEW_OBJECT_HINT` | What the reclaim command names — copy it when someone leaves. |
@@ -751,8 +752,9 @@ not a person lookup; a truncated snapshot surfaces at the member's launch as
 `<dl>`: `FIELD_HOME` → the directory name (mono), `PREVIEW_OBJECT_LABEL` → the object name
 (mono, with `PREVIEW_OBJECT_HINT` — this is what the offboarding command needs),
 `COL_SIZE` → the size, `COL_MODE` → `MODE_RO` / `MODE_RW`, `PREVIEW_ENFORCEMENT_LABEL` → the
-`ENFORCEMENT_*` gloss. `{tier}` is one of the three `PREVIEW_TIER_*` words, frozen in the table
-rather than in prose (the governance round's `MATCHED_*` addition, learned from).
+`ENFORCEMENT_*` gloss. `{tier}` is one of the four `PREVIEW_TIER_*` words, frozen in the table
+rather than in prose (the governance round's `MATCHED_*` addition, learned from); 0.8 added
+`PREVIEW_TIER_USER_TYPE` for the user type tier (user > group > user type > everyone).
 
 **The `<dl>` above is FIVE ROWS AND THE ENDPOINT ANSWERS SEVEN FIELDS** — this section describes
 what the console renders today, and the two it drops are named here so the gap is a recorded

@@ -85,8 +85,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   included). For the governance ceiling and drives the type is a tier: user > group > user type >
   all. Writing a row against a type that doesn't exist is refused (`400`). A session whose type
   was deleted after sign-in is refused `403` wherever a control names a type, with an
-  `authz.denied` row (reason `user_type_unknown`). API tokens carry no type yet and answer as
-  Standard user. The governance and drive previews take an optional `user_type`.
+  `authz.denied` row (reason `user_type_unknown`), one per request. API tokens carry no type
+  until #611 stamps them, so until then a token answers as Standard user whatever its holder's
+  type. The governance and drive previews take an optional `user_type`, and the console's
+  Permissions, Governance and Drives tables show a type's rows as "User type".
 
 - **User types: the table and its API (#607).** Migration `0069_user_types` adds the `user_types`
   table and seeds the built-in `standard` type ("Standard user"), which is editable and can never

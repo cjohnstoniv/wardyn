@@ -69,7 +69,11 @@ const ADMIN_TOKEN_PRINCIPAL = "admin-token";
 // how a capability grant, a profile assignment and an allocation start
 // disagreeing about what "Everyone signed in" means. ONE home, beside the
 // control that renders it.
-export const SUBJECTS: { value: CapabilitySubjectType; label: string; hint: string }[] = [
+//
+// The add forms don't offer a user type yet: a user_type row is written through
+// the API, and the tables render it through SUBJECT_LABEL.
+export type PickableSubjectType = Exclude<CapabilitySubjectType, "user_type">;
+export const SUBJECTS: { value: PickableSubjectType; label: string; hint: string }[] = [
   { value: "user", label: PERM.SUBJECT_USER, hint: PERM.HINT_USER },
   { value: "group", label: PERM.SUBJECT_GROUP, hint: PERM.HINT_GROUP },
   { value: "all", label: PERM.SUBJECT_ALL, hint: PERM.HINT_ALL },
@@ -78,6 +82,7 @@ export const SUBJECTS: { value: CapabilitySubjectType; label: string; hint: stri
 export const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
   user: PERM.SUBJECT_USER,
   group: PERM.SUBJECT_GROUP,
+  user_type: PERM.SUBJECT_USER_TYPE,
   all: PERM.SUBJECT_ALL,
 };
 
@@ -526,7 +531,7 @@ function ConfirmEnforcement({
 // The add form. Wildcards are typed into Value, not a separate control — the
 // value field's label and hint are what change per kind.
 function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () => void }) {
-  const [subjectType, setSubjectType] = React.useState<CapabilitySubjectType>("user");
+  const [subjectType, setSubjectType] = React.useState<PickableSubjectType>("user");
   const [subject, setSubject] = React.useState("");
   const [kind, setKind] = React.useState<CapabilityKind>("egress_host");
   const [value, setValue] = React.useState("");
