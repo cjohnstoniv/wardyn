@@ -24,24 +24,26 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_ListGrantsByRunPage_LimitOffset proves the per-run grants page bounds
-// at LIMIT and walks forward with OFFSET — the contract GET /runs/{id}/grants'
-// ?limit=&offset= and X-Wardyn-Truncated disclosure depend on.
+// TestPG_ListGrantsByRunPage_LimitOffset proves the per-run grants page walks
+// forward with LIMIT/OFFSET without skipping or repeating a row — the contract
+// GET /runs/{id}/grants' ?limit=&offset= and X-Wardyn-Truncated depend on.
+//
+// Every grant carries the SAME created_at, as in production: POST /runs mints
+// all of a run's eligible grants with one `now` (runs_create.go). The walk
+// fetches Limit+1 and keeps Limit per page, exactly as servePage does, and
+// the concatenated pages must equal ListGrantsByRun — the fallback path's
+// order — with every grant exactly once.
 func TestPG_ListGrantsByRunPage_LimitOffset(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
 	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
 
-	// CreateGrant binds created_at to g.CreatedAt (not the database clock, unlike
-	// InsertAuditEvent), so each row needs a DISTINCT, strictly increasing
-	// timestamp here or the ORDER BY created_at the paged query relies on has no
-	// tiebreaker and ties sort arbitrarily.
-	base := time.Now().UTC()
-	const n = 5
+	now := time.Now().UTC()
+	const n = 40
 	for i := 0; i < n; i++ {
 		g := types.CredentialGrant{
-			ID: uuid.New(), RunID: run.ID, CreatedAt: base.Add(time.Duration(i) * time.Millisecond),
+			ID: uuid.New(), RunID: run.ID, CreatedAt: now,
 			Spec: types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["o/r"]}`)},
 		}
 		if _, err := pg.CreateGrant(ctx, g); err != nil {
@@ -49,28 +51,43 @@ func TestPG_ListGrantsByRunPage_LimitOffset(t *testing.T) {
 		}
 	}
 
-	all, err := pg.ListGrantsByRunPage(ctx, run.ID, store.Page{})
+	all, err := pg.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
-		t.Fatalf("unbounded: %v", err)
+		t.Fatalf("unpaged: %v", err)
 	}
 	if len(all) != n {
-		t.Fatalf("unbounded len = %d, want %d", len(all), n)
+		t.Fatalf("unpaged len = %d, want %d", len(all), n)
 	}
 
-	page1, err := pg.ListGrantsByRunPage(ctx, run.ID, store.Page{Limit: 2})
-	if err != nil {
-		t.Fatalf("limit page: %v", err)
-	}
-	if len(page1) != 2 || page1[0].ID != all[0].ID || page1[1].ID != all[1].ID {
-		t.Fatalf("limit=2 = %+v, want first 2 of %+v", page1, all[:2])
+	const limit = 7
+	var walked []types.CredentialGrant
+	for off := 0; ; off += limit {
+		rows, err := pg.ListGrantsByRunPage(ctx, run.ID, store.Page{Limit: limit + 1, Offset: off})
+		if err != nil {
+			t.Fatalf("page at offset %d: %v", off, err)
+		}
+		walked = append(walked, rows[:min(limit, len(rows))]...)
+		if len(rows) <= limit {
+			break
+		}
 	}
 
-	page2, err := pg.ListGrantsByRunPage(ctx, run.ID, store.Page{Limit: 2, Offset: 2})
-	if err != nil {
-		t.Fatalf("offset page: %v", err)
+	seen := map[uuid.UUID]int{}
+	for _, g := range walked {
+		seen[g.ID]++
 	}
-	if len(page2) != 2 || page2[0].ID != all[2].ID || page2[1].ID != all[3].ID {
-		t.Fatalf("limit=2 offset=2 = %+v, want middle 2 of %+v", page2, all)
+	for _, g := range all {
+		if seen[g.ID] != 1 {
+			t.Errorf("grant %s seen %d times across the pages, want exactly 1", g.ID, seen[g.ID])
+		}
+	}
+	if len(walked) != n {
+		t.Fatalf("walked %d rows, want %d", len(walked), n)
+	}
+	for i := range all {
+		if walked[i].ID != all[i].ID {
+			t.Fatalf("walked[%d] = %s, want %s (paged order differs from ListGrantsByRun)", i, walked[i].ID, all[i].ID)
+		}
 	}
 }
 

@@ -476,7 +476,7 @@ func (s PG) CreateGrant(ctx context.Context, g types.CredentialGrant) (types.Cre
 
 // ListGrantsByRun returns all grants for a run.
 func (s PG) ListGrantsByRun(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
-	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at`
+	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`
 	return collect(ctx, s.Pool, "list", "grants", q, []any{runID}, scanGrant)
 }
 

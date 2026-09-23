@@ -8,19 +8,26 @@
 // internal/store/store_pagination_657_pg_test.go; these tests exercise the
 // HANDLER wiring (parseListPage, the store.*Pager type-assert + fallback, and —
 // for the three wrapped-object responses — that the wrapper shape survives
-// windowing) through fakes that do NOT implement the new scoped pager
-// interfaces, so every one of these takes the SAME fallback (fetch-all +
-// pageWindow) path a store that has not yet implemented the interface would.
+// windowing).
+//
+// Two paths: TestHandleListGrants_Paginated and TestHandleListAPITokens_PagedScope
+// run on pgHarness (real Postgres, which implements the scoped pagers), so they
+// take the pageFn path; every other test here runs on a fake that does NOT
+// implement them, so it takes the fallback (fetch-all + pageWindow) path.
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -75,6 +82,15 @@ func TestHandleListGrants_Paginated(t *testing.T) {
 	}
 	if w.Header().Get("X-Wardyn-Truncated") == "true" {
 		t.Error("X-Wardyn-Truncated = true on the last page, want false")
+	}
+	// POST /runs mints every grant with one timestamp, so the pages hold three
+	// DISTINCT grants only if the ordering breaks that tie.
+	ids := map[uuid.UUID]bool{}
+	for _, g := range append(page, tail...) {
+		ids[g.ID] = true
+	}
+	if len(ids) != 3 {
+		t.Errorf("pages hold %d distinct grants, want 3 (a grant was repeated across pages)", len(ids))
 	}
 }
 
@@ -146,6 +162,74 @@ func TestHandleListAPITokens_Paginated(t *testing.T) {
 	}
 	if w.Header().Get("X-Wardyn-Truncated") != "true" {
 		t.Error("X-Wardyn-Truncated = false, want true (5 tokens seeded, limit=2)")
+	}
+}
+
+// TestHandleListAPITokens_PagedScope walks GET /me/tokens on real Postgres —
+// the APITokensByPrincipalPager (pageFn) path — as one principal while another
+// principal also holds tokens, and asserts the pages hold exactly the caller's
+// own tokens: a handler that fed the wrong principal into the paged query
+// would serve someone else's credentials inventory.
+func TestHandleListAPITokens_PagedScope(t *testing.T) {
+	srv, pool := pgHarness(t)
+	if _, ok := srv.cfg.Store.(store.APITokensByPrincipalPager); !ok {
+		t.Fatal("pgHarness store does not implement store.APITokensByPrincipalPager; this test would not reach the pageFn path")
+	}
+	ctx := t.Context()
+	pg := store.NewPG(pool)
+	notTruncated := false
+	seed := func(principal string, n int) (ids map[uuid.UUID]bool, bearer string) {
+		ids = map[uuid.UUID]bool{}
+		for i := 0; i < n; i++ {
+			raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
+			tok, err := pg.CreateAPIToken(ctx, types.APIToken{
+				ID: uuid.New(), Principal: principal, Role: oidc.RoleMember,
+				GroupsTruncated: &notTruncated, Name: fmt.Sprintf("ci-%d", i),
+			}, raw)
+			if err != nil {
+				t.Fatalf("seed token %d for %s: %v", i, principal, err)
+			}
+			ids[tok.ID] = true
+			bearer = raw
+			t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM api_tokens WHERE id=$1`, tok.ID) })
+		}
+		return ids, bearer
+	}
+	caller := "tokens-page-caller-" + uuid.NewString()
+	other := "tokens-page-other-" + uuid.NewString()
+	mine, bearer := seed(caller, 5)
+	theirs, _ := seed(other, 3)
+
+	seen := map[uuid.UUID]int{}
+	for off := 0; ; off += 2 {
+		w := do(t, srv, http.MethodGet, fmt.Sprintf("/api/v1/me/tokens?limit=2&offset=%d", off), bearer, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("offset=%d: code = %d, want 200; body=%s", off, w.Code, w.Body.String())
+		}
+		var page []types.APIToken
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatalf("offset=%d: decode: %v", off, err)
+		}
+		for _, tok := range page {
+			if tok.Principal != caller || theirs[tok.ID] {
+				t.Fatalf("offset=%d: page served token %s of principal %q to caller %q", off, tok.ID, tok.Principal, caller)
+			}
+			seen[tok.ID]++
+		}
+		if w.Header().Get("X-Wardyn-Truncated") != "true" {
+			break
+		}
+		if off > 10 {
+			t.Fatal("X-Wardyn-Truncated never cleared on a 5-token principal")
+		}
+	}
+	if len(seen) != len(mine) {
+		t.Fatalf("pages held %d distinct tokens, want the caller's %d", len(seen), len(mine))
+	}
+	for id := range mine {
+		if seen[id] != 1 {
+			t.Errorf("caller token %s seen %d times across the pages, want exactly 1", id, seen[id])
+		}
 	}
 }
 

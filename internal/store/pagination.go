@@ -436,7 +436,7 @@ var _ GrantsByRunPager = PG{}
 
 // ListGrantsByRunPage is ListGrantsByRun bounded by p.
 func (s PG) ListGrantsByRunPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.CredentialGrant, error) {
-	q, args := p.appendTo(`SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at`, []any{runID})
+	q, args := p.appendTo(`SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`, []any{runID})
 	return collect(ctx, s.Pool, "list", "grants", q, args, scanGrant)
 }
 
@@ -452,7 +452,7 @@ var _ SSHKeysByPrincipalPager = PG{}
 
 // ListSSHKeysByPrincipalPage is ListSSHKeysByPrincipal bounded by p.
 func (s PG) ListSSHKeysByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.SSHPublicKey, error) {
-	q, args := p.appendTo(`SELECT `+sshKeyCols+` FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC`, []any{principal})
+	q, args := p.appendTo(`SELECT `+sshKeyCols+` FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC, fingerprint`, []any{principal})
 	return collect(ctx, s.Pool, "list", "ssh keys", q, args, scanSSHKey)
 }
 
@@ -468,7 +468,7 @@ var _ APITokensByPrincipalPager = PG{}
 
 // ListAPITokensByPrincipalPage is ListAPITokensByPrincipal bounded by p.
 func (s PG) ListAPITokensByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.APIToken, error) {
-	q, args := p.appendTo(`SELECT `+apiTokenCols+` FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC`, []any{principal})
+	q, args := p.appendTo(`SELECT `+apiTokenCols+` FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC, id`, []any{principal})
 	return queryAPITokens(ctx, s, q, args...)
 }
 
