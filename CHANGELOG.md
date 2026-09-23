@@ -98,6 +98,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `-deadline` 15 minutes under it, so the gate's deny still wins the race no matter how high the
   ceiling is raised. `wardyn-toolgate` also polls once more after its deadline, catching a
   decision that landed while its last poll interval slept past it.
+- The Azure DevOps per-user setup guide moved from `docs/adoption/azure-devops-entra.md` (a
+  point-in-time field report location) to `docs/AZURE-DEVOPS.md`, indexed in `docs/README.md`
+  alongside a new `docs/LIVE-TESTS.md` row, and gained a request-flow sequence diagram (#465).
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and

@@ -903,7 +903,7 @@ a row above or a filed entry here.
 
 On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
 can be set to per-user sign-in instead of one shared PAT — see
-[docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
+[docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the
 row's fields, and what a member sees.
 
 A deployment carries at most **one enabled** row on the `entra` lane: each person signs in to one
