@@ -112,8 +112,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Every FLAG-ONLY boot-time posture rule (UI-sandbox gateway, HYBRID BOOT's
-	// org control plane — issue #100) validates here, beside validateConfig and
+	// The flag-only posture refusals (UI-sandbox gateway, HYBRID BOOT's org
+	// control plane — issue #100) validate here, beside validateConfig and
 	// before connectAndMigrate, rather than waiting for the daemon to stand up
 	// migration, secrets, identity, the broker and the runner first. See
 	// validateBootPosture's own doc comment (boot_posture.go) for why

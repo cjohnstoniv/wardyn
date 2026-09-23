@@ -367,10 +367,12 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 	return nil
 }
 
-// validateBootPosture runs every FLAG-ONLY boot-time validator — one that
-// depends on nothing db.Migrate, secrets, identity, the broker or the runner
-// resolve — in one call, right beside validateConfig in run() and before
-// connectAndMigrate. Folded into one function, not one `if err != nil` branch
+// validateBootPosture runs the flag-only posture refusals (UI-sandbox gateway,
+// hybrid org control plane) — neither depends on anything db.Migrate, secrets,
+// identity, the broker or the runner resolve — in one call, right beside
+// validateConfig in run() and before connectAndMigrate. Other flag-only checks
+// (validateModelEndpoints, validateOIDCRedirectURL, the demo-video URL) still
+// run after migration. Folded into one function, not one `if err != nil` branch
 // per validator, for the same reason the deleted checkMemberAndHybridBootPosture
 // wrapper existed: run()'s gocyclo budget (.golangci.yml) is already at its
 // ceiling, and a misconfigured posture belongs at the FIRST validation step,

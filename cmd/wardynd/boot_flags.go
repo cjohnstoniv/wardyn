@@ -305,8 +305,8 @@ func parseBootFlags() *bootFlags {
 	f := &bootFlags{
 		dsn:            flagEnv("dsn", "WARDYN_PG_DSN", "", "Postgres connection string (required)"),
 		migrateDSN:     flagEnv("migrate-dsn", "WARDYN_PG_MIGRATE_DSN", "", "Postgres DSN for a migrator role, used only to run migrations; when set, the main DSN is used only for the least-privilege runtime pool. Empty (default) runs migrations on the main DSN directly"),
-		migrateTimeout: flagDuration("migrate-timeout", "WARDYN_MIGRATE_TIMEOUT", 5*time.Minute, "how long db.Migrate may run before boot fails closed (duration, default 5m)"),
-		listen:         flagEnv("listen", "WARDYN_LISTEN", defaultListenAddr, "HTTP listen address (default :8080)"),
+		migrateTimeout: flagDuration("migrate-timeout", "WARDYN_MIGRATE_TIMEOUT", 5*time.Minute, "how long db.Migrate may run before boot fails closed (duration)"),
+		listen:         flagEnv("listen", "WARDYN_LISTEN", defaultListenAddr, "HTTP listen address"),
 		tlsCert:        flagEnv("tls-cert", "WARDYN_TLS_CERT", "", "path to the TLS certificate PEM file; enables built-in TLS together with -tls-key"),
 		tlsKey:         flagEnv("tls-key", "WARDYN_TLS_KEY", "", "path to the TLS private key PEM file; enables built-in TLS together with -tls-cert"),
 		tlsTerminated:  flagBool("tls-terminated", "WARDYN_TLS_TERMINATED", false, "set when TLS terminates at an upstream reverse proxy; marks session cookies Secure even though wardynd itself serves plain HTTP (default false)"),
@@ -318,7 +318,7 @@ func parseBootFlags() *bootFlags {
 		adminToken:              flagEnv("admin-token", "WARDYN_ADMIN_TOKEN", "", "admin bearer token gating the public API"),
 		localMode:               flagBool("local-mode", "WARDYN_LOCAL_MODE", false, "bypass public-API auth (no SSO/token) and attribute actions to the local operator; single-developer localhost use only, refused on a publicly-routable bind. Auto-enabled when no auth is configured and the bind is loopback (default false)"),
 		localOperator:           flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default local:<os-user>)"),
-		localTrustFwd:           flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer instead of requiring a loopback TCP peer; safe only when the port is published loopback-only, e.g. 127.0.0.1:PORT (default false)"),
+		localTrustFwd:           flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer instead of requiring a loopback TCP peer; safe only when the port is published loopback-only, e.g. 127.0.0.1:PORT; never set on a directly-bound host-mode wardynd, which re-opens no-auth LAN access (default false)"),
 		allowLocalModeWithOIDC:  flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, which disables the configured SSO/RBAC deployment; normally refused (default false)"),
 		allowSharedSubscription: flagBool("allow-shared-subscription", "WARDYN_ALLOW_SHARED_SUBSCRIPTION", false, "allow one operator's Anthropic subscription credential to be injected into runs on a deployment that is not -local-mode, e.g. the compose demo stack. Does not waive the refusals for the k8s runner or a configured OIDC issuer (default false)"),
 		memberMode:              flagBool("member-mode", "WARDYN_MEMBER_MODE", false, "assert that the human using this daemon is a MEMBER and operator authority lives elsewhere, e.g. an org IdP/MDM; refuses to start unless -local-mode is off and OIDC is configured (default false)"),
@@ -332,15 +332,15 @@ func parseBootFlags() *bootFlags {
 		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered"),
 		ssoOnly:                 flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
-		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate, e.g. "docker" in -tags docker builds (default "none")`),
+		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate, e.g. "docker" in -tags docker builds`),
 		runnerTargetOverride:    flagEnv("runner-target", "WARDYN_RUNNER_TARGET", "", `substrate name stored objects validate against when -runner is "none" ("docker" or "k8s"); test harnesses only, ignored whenever a runner is configured. Empty (default) refuses every drive backend`),
-		identitySel:             flagEnv("identity", "WARDYN_IDENTITY", "embedded", `identity provider (default "embedded")`),
-		secretStoreSel:          flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", `secret store (default "pg")`),
-		recordingSel:            flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `session recording store: "pg" (default, Postgres-backed, visible to every replica), "fs" (per-pod on-disk store) or "off" (no recording, no replay)`),
+		identitySel:             flagEnv("identity", "WARDYN_IDENTITY", "embedded", "identity provider"),
+		secretStoreSel:          flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", "secret store"),
+		recordingSel:            flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `session recording store: "pg" (Postgres-backed, visible to every replica), "fs" (per-pod on-disk store) or "off" (no recording, no replay)`),
 		confinementMap:          flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
 		trustDomain:             flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
-		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars (default http://wardynd:8080)"),
-		policyPath:              flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON (default examples/policies/default.json)"),
+		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
+		policyPath:              flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		trustedCAFile:           flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
 		daemonProxyURL:          flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:           flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
@@ -355,14 +355,14 @@ func parseBootFlags() *bootFlags {
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
-		recordingDir: flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); used only by the "fs" recording store (default ./data/recordings)`),
+		recordingDir: flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); used only by the "fs" recording store`),
 		// OFF by default (0 = keep forever): a session recording is the governance
 		// evidence this product exists to produce, so nothing deletes one unless
 		// the operator asks for a retention window.
 		recordingRetention: flagIntEnv("recording-retention-days", "WARDYN_RECORDING_RETENTION_DAYS", 0, "delete stored session recordings older than N days (default 0, keep forever)"),
 		auditSinks:         flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout"),
 		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", `optional static string stamped as an extra "source" field on every audit event a sink serializes, so one SIEM index can tell multiple wardynd instances apart. Empty (default) adds no stamp`),
-		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails (default ./data/audit-spool.jsonl; empty disables)"),
+		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
 
 		oidcIssuer:         flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
 		oidcInternalIss:    flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
@@ -384,15 +384,15 @@ func parseBootFlags() *bootFlags {
 		dirClientID: flagEnv("directory-client-id", "WARDYN_DIRECTORY_CLIENT_ID", "", "client id of the dedicated directory app registration. Empty (default) reuses -oidc-client-id; all three of tenant/client-id/secret are set together or not at all"),
 		dirSecret:   flagEnv("directory-client-secret", "WARDYN_DIRECTORY_CLIENT_SECRET", "", "client secret of the dedicated directory app registration. Empty (default) reuses -oidc-client-secret"),
 
-		autoStopInterval: flagDuration("autostop-interval", "WARDYN_AUTOSTOP_INTERVAL", time.Minute, "how often the lifecycle reaper scans for idle runs (duration, default 1m; 0 disables)"),
+		autoStopInterval: flagDuration("autostop-interval", "WARDYN_AUTOSTOP_INTERVAL", time.Minute, "how often the lifecycle reaper scans for idle runs (duration; 0 disables)"),
 
-		approvalExpiryInterval: flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (duration, default 10m; 0 disables)"),
-		approvalExpiryAfter:    flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this transition to EXPIRED (duration, default 24h)"),
+		approvalExpiryInterval: flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (duration; 0 disables)"),
+		approvalExpiryAfter:    flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this transition to EXPIRED (duration)"),
 		// A maximum GAP between two IDENTICAL consecutive auth.failed rows, not a
 		// cap on how long a streak may run: the flood this bounds was one row a
 		// minute forever from one retrying sidecar, which the auth.failed rate
 		// limiter (1/sec) never trips. 0 disables it — every refusal is its own row.
-		auditCoalesceWindow: flagDuration("audit-coalesce-window", "WARDYN_AUDIT_COALESCE_WINDOW", 5*time.Minute, "fold identical consecutive auth.failed audit rows into one summary row when the gap between them is under this window (duration, default 5m; 0 disables folding)"),
+		auditCoalesceWindow: flagDuration("audit-coalesce-window", "WARDYN_AUDIT_COALESCE_WINDOW", 5*time.Minute, "fold identical consecutive auth.failed audit rows into one summary row when the gap between them is under this window (duration; 0 disables folding)"),
 
 		envbuild:     flagBool("envbuild", "WARDYN_ENVBUILD", false, "enable devcontainer image builds for create-run; requires -tags docker (default false)"),
 		envbuildImg:  flagEnv("envbuild-image", "WARDYN_ENVBUILD_IMAGE", "", "envbuilder OCI image override. Empty (default) uses the upstream default"),
@@ -415,8 +415,8 @@ func parseBootFlags() *bootFlags {
 		// higher-trust posture (repo content is reviewed, or the exfil risk
 		// inline_policy.go's filterMemberGrants comment names matters more than
 		// the convenience) opts in here.
-		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead (default true)"),
-		gitPATBroker:       flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", "never-resident git_pat lane: `on` (default) mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; `off` mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite"),
+		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
+		gitPATBroker:       flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
 
 		// Bedrock: an enterprise Anthropic transport (no direct Anthropic egress,
 		// billed via AWS). Both must be set to enable it; the AWS credentials
@@ -470,11 +470,11 @@ func parseBootFlags() *bootFlags {
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address, e.g. ":8081". Empty (default) disables the gateway entirely; must differ from -listen`),
 		uiAdvertise:      flagEnv("ui-sandbox-advertise", "WARDYN_UI_SANDBOX_ADVERTISE", "", "externally-reachable base URL of the UI-sandbox gateway, published on /healthz for the console's Open button; advisory only"),
-		uiSessionTTL:     flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, "how long a UI-sandbox relay session cookie stays usable (duration, default 8h)"),
+		uiSessionTTL:     flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, "how long a UI-sandbox relay session cookie stays usable (duration)"),
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
 
 		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn ssh" refuses`),
-		sshRoleTTL:   flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration, default 24h)"),
+		sshRoleTTL:   flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
 	}
 	flag.Parse()
 
