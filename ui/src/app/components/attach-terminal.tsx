@@ -609,11 +609,11 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       };
     };
 
-    // Take-over evicts, it does not promote (handleAttachTakeover). After the
-    // POST returns 200 the old holder's socket is closed, but ours is still the
-    // read-only one the server admitted — the server has no mid-stream "you may
-    // now type" message, and inventing one on both ends buys nothing over the
-    // reconnect this component already does. So: drop our socket and
+    // Only for `promoted:false` (handleAttachTakeover) — the taker had no
+    // observer socket, so the slot was freed rather than promoted into; see
+    // doTakeover, which skips this on `promoted:true`. After the POST returns
+    // 200 the old holder's socket is closed, but ours is still the read-only
+    // one the server admitted (or we had none) — so: drop our socket and
     // attach again; the fresh attach registers as holder. Between the eviction
     // and that attach the holder endpoint honestly reports held:false.
     reclaimRef.current = () => {
@@ -758,8 +758,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const doTakeover = React.useCallback(async () => {
     setConfirmTakeover(false);
     setTakeoverErr("");
+    let promoted = false;
     try {
-      await runs.takeoverAttach(runId);
+      ({ promoted } = await runs.takeoverAttach(runId));
     } catch (e) {
       // A 409 means the server says NOBODY holds it — the holder left while we
       // sat here as an observer, and nothing told us: the attach-mode frame is
@@ -778,6 +779,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       return;
     }
     setTakenOverBy(null);
+    if (promoted) {
+      // Our socket was flipped to writer IN PLACE — the server's promotion
+      // notice is already on its way down it (see lastReadOnly above).
+      // Reconnecting would close that socket and hand the slot to the oldest
+      // queued bystander instead, landing the taker read-only (#507).
+      return;
+    }
     setMode(null);
     reclaimRef.current(); // evict-then-reconnect; see reclaimRef's assignment
   }, [runId]);

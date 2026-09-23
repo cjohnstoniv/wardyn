@@ -592,6 +592,7 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 		})))
 
 	prev.displace(attachTakeoverReason(principal))
+	promoted := promote != nil
 	if promote != nil {
 		// Off this goroutine and after the displacement: the notice goes to the
 		// taker's OTHER socket, whose write can block for attachWriteTimeout,
@@ -603,5 +604,11 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 		"taken_over":      true,
 		"previous_holder": prev.principal,
 		"previous_source": prev.source,
+		// promoted: the taker already had an observer socket on this run and
+		// it was flipped to writer IN PLACE (announceAttachPromotion's notify
+		// sends that socket a fresh attach-mode frame). The caller must NOT
+		// reconnect on this answer — see doTakeover in attach-terminal.tsx,
+		// which evicts-then-reconnects only when this is false.
+		"promoted": promoted,
 	})
 }

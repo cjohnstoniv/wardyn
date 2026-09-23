@@ -329,8 +329,13 @@ export const runs = {
   // POST /api/v1/runs/{id}/attach/takeover — displace the current holder and
   // become the writer. Audited server-side (session.takeover, naming the actor
   // and the previous holder) because it ends someone else's live session.
-  async takeoverAttach(runId: string): Promise<void> {
+  // `promoted` is true when the caller's own queued observer socket on this
+  // run was flipped to writer IN PLACE (attach_holder.go's
+  // announceAttachPromotion) — the caller must not evict-then-reconnect on
+  // that answer, only on `promoted:false`.
+  async takeoverAttach(runId: string): Promise<{ promoted: boolean }> {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/takeover`, { method: "POST" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<{ promoted: boolean }>(res);
   },
 };
