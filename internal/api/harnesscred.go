@@ -377,18 +377,20 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 	if s.cfg.Secrets == nil {
 		return fmt.Errorf("no secret store configured")
 	}
-	st := s.cfg.Secrets
+	st, owner := s.cfg.Secrets, ""
 	if scope.perUser {
 		if !scope.namespaced() {
 			return fmt.Errorf("a per-user aws sso credential has no owner to store it under")
 		}
-		st = st.For(scope.owner)
+		st, owner = st.For(scope.owner), scope.owner
 	}
 	raw, err := json.Marshal(blob)
 	if err != nil {
 		return fmt.Errorf("marshal aws sso credential blob: %w", err)
 	}
-	return st.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
+	err = st.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
+	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, harnessCredSecretName(awsSSOProvider))
+	return err
 }
 
 // Login run launch
@@ -784,6 +786,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
 	raw, _ := json.Marshal(blob)
 	if err := s.cfg.Secrets.Put(r.Context(), hl.secretName, raw); err != nil { // operator-wide route (operatorOnly), not per-principal
+		s.auditRowNotWritten(r.Context(), err, actorTypeFromRequest(r), principalFromRequest(r), "", hl.secretName)
 		writeServerError(w, r, "store managed credential", err)
 		return
 	}

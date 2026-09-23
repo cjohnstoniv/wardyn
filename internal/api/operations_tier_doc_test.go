@@ -136,6 +136,10 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/governance/assignments", "`/governance` profile and assignment routes"},
 	{"DELETE /api/v1/governance/assignments/{id}", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/governance/preview", "`/governance` profile and assignment routes"},
+	{"GET /api/v1/user-types", "the `/user-types` routes"},
+	{"POST /api/v1/user-types", "the `/user-types` routes"},
+	{"PUT /api/v1/user-types/{id}", "the `/user-types` routes"},
+	{"DELETE /api/v1/user-types/{id}", "the `/user-types` routes"},
 	{"POST /api/v1/permissions/grants", "the `/permissions` routes below"},
 	{"DELETE /api/v1/permissions/grants/{id}", "the `/permissions` routes below"},
 
@@ -156,6 +160,8 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/admin/devices/enrolment-tokens", "`POST /admin/devices/enrolment-tokens`"},
 	{"GET /api/v1/admin/devices", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
+	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
+	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each

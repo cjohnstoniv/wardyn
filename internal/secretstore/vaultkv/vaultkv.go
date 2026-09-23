@@ -8,7 +8,7 @@
 //
 // Path scheme, under the mount and a per-install prefix:
 //
-//	<prefix>/platform/<name>              owner "" and a boot key (PlatformNames)
+//	<prefix>/platform/<name>              owner "" and a boot key (secretstore.PlatformNames)
 //	<prefix>/operator/<name>              owner "" (operator-namespace credentials)
 //	<prefix>/people/<owner-b32>/<name>    every other owner
 //
@@ -40,17 +40,6 @@ import (
 
 // Name is the registered store name and the kek_id prefix.
 const Name = "vaultkv"
-
-// PlatformNames are the boot keys wardynd mints and reads at every boot
-// (cmd/wardynd loadOrCreateSecret). They live under platform/ so the org can
-// audit, filter and (with a second role) restrict them apart from people's
-// credentials (design §2.13).
-var PlatformNames = map[string]bool{
-	"wardyn-signing-key":    true,
-	"wardyn-session-key":    true,
-	"wardyn-ui-session-key": true,
-	"wardyn-ssh-host-key":   true,
-}
 
 // The custom_metadata keys that bind a value to its row.
 const (
@@ -152,16 +141,7 @@ func validSegments(p string) error {
 	return nil
 }
 
-func kind(owner, name string) string {
-	switch {
-	case owner != "":
-		return "people"
-	case PlatformNames[name]:
-		return "platform"
-	default:
-		return "operator"
-	}
-}
+func kind(owner, name string) string { return secretstore.Kind(owner, name) }
 
 // rel is the path under the mount DERIVED from the row. It is the only way
 // this store ever computes where a value lives.
@@ -183,7 +163,8 @@ func (s *Store) rel(owner, name string) (string, error) {
 func (s *Store) ref(rel string) string { return s.mount + "/" + rel }
 
 // Ref implements secretstore.External: the ref DERIVED from (owner, name).
-func (s *Store) Ref(owner, name string) (string, error) {
+// The recorded ref plays no part.
+func (s *Store) Ref(owner, name, _ string) (string, error) {
 	rel, err := s.rel(owner, name)
 	if err != nil {
 		return "", err
@@ -353,7 +334,7 @@ func (s *Store) Check(ctx context.Context, owner, name, ref string) error {
 		return err
 	}
 	if !found || !m.live() {
-		return fmt.Errorf("Vault no longer holds this credential at %s", ref)
+		return fmt.Errorf("refused: Vault no longer holds this credential at %s", ref)
 	}
 	return bound(m.CustomMetadata, owner, name)
 }

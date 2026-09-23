@@ -33,13 +33,15 @@ package main
 // rule as a Get: the context must be marked. And inside the pg store, every
 // function that can reach a value-opening primitive (a local envelope's
 // kek.Open, a legacy row's age.Decrypt, or the external store's Get, vaultkv's
-// included) must be reached only from Get or those two bulk readers, so a new
+// and azurekv's included) must be reached only from Get or those two bulk readers, so a new
 // way to open a value fails here until it is classified. Reconcile is not a
 // read: it calls the external store's Check and Walk, which read metadata only.
 //
 // A Get (or bulk reader) taken as a method value or passed as a function value
 // fails: the call its context reaches cannot be followed. And External.Get is
-// the pg store's alone: any use of it elsewhere fails.
+// the pg store's alone: any use of it elsewhere fails, a direct call of an
+// external store's own Get (vaultkv's, azurekv's) included, since each of those
+// stores implements External.
 
 import (
 	"encoding/json"
@@ -91,6 +93,14 @@ var guardPGReadEntries = map[string]bool{
 	guardPGStore + ".Migrate":   true,
 }
 
+// guardExternalStores are the store-mode backends. Their Get is External.Get,
+// so the scan flags a read of one outside the pg store only while their Store
+// implements secretstore.External.
+var guardExternalStores = []string{
+	guardStorePkg + "/vaultkv",
+	guardStorePkg + "/azurekv",
+}
+
 type listedPkg struct {
 	ImportPath, Dir, Export string
 	GoFiles                 []string
@@ -130,6 +140,7 @@ type secretReadScan struct {
 	purposes  int
 	pgCallers map[string][]string // inside the pg store: callee -> its callers
 	extGets   []string            // External.Get used outside the pg store
+	externals map[string]bool     // guardExternalStores -> its Store implements External
 }
 
 // newSecretReadScan returns an empty scan against store, the secretstore
@@ -144,6 +155,7 @@ func newSecretReadScan(fset *token.FileSet, store *types.Package) *secretReadSca
 		siteMarks: map[string]string{},
 		emitters:  map[string]bool{},
 		pgCallers: map[string][]string{},
+		externals: map[string]bool{},
 	}
 }
 
@@ -435,6 +447,14 @@ func scanSecretReads(t *testing.T, root string) *secretReadScan {
 		t.Fatalf("import %s: %v", guardStorePkg, err)
 	}
 	s := newSecretReadScan(fset, ss)
+	for _, path := range guardExternalStores {
+		p, err := imp.Import(path)
+		if err != nil {
+			t.Fatalf("import %s: %v", path, err)
+		}
+		st := p.Scope().Lookup("Store")
+		s.externals[path] = st != nil && s.implements(st.Type(), s.extType)
+	}
 
 	for _, p := range pkgs {
 		pgStore := p.ImportPath == guardPGPkg
@@ -862,6 +882,11 @@ func TestEverySecretReadIsAuditedOnce(t *testing.T) {
 	}
 	for _, fn := range unclassified {
 		t.Errorf("%s can open a stored value but is neither Get nor a bulk reader the guard checks (%v): route the read through Get, or add it to guardBulkReaders and guardPGReadEntries with a marked context at every call", fn, slices.Sorted(maps.Keys(guardBulkReaders)))
+	}
+	for _, path := range guardExternalStores {
+		if !s.externals[path] {
+			t.Errorf("%s.Store no longer implements secretstore.External: a read of it outside the pg store would not be flagged", path)
+		}
 	}
 	for _, pos := range s.extGets {
 		t.Errorf("secretstore.External.Get used at %s: External.Get is the pg store's alone; route the read through Store.Get", pos)

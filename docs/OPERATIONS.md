@@ -868,6 +868,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, the one model-access lane each may use, whether that credential is shared or captured per person, and the AWS access portal every person signs in against. Both verbs, for the sibling row's reason: the block names the org's model-provider choices and its identity provider. A member is served a narrower document instead — the `enabled`/`mechanism`/`credential_source` fields on `GET /setup/status`'s harness rows, which carry no portal URL | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
@@ -875,6 +876,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
+| `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
@@ -901,7 +903,7 @@ a row above or a filed entry here.
 
 On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
 can be set to per-user sign-in instead of one shared PAT — see
-[docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
+[docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the
 row's fields, and what a member sees.
 
 A deployment carries at most **one enabled** row on the `entra` lane: each person signs in to one
@@ -920,7 +922,7 @@ org→desktop channel MDM already delivers as `/etc/wardyn/site-config.json`
 new plumbing and no DDL. It also means **two doors write them**, and the grid
 below is what tells them apart.
 
-| | Dedicated endpoints (the console's `/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
+| | Dedicated endpoints (the console's `/admin/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
 |---|---|---|
 | **Route** | `GET`/`PUT /workspace-providers`, `GET`/`PUT /agent-providers` — both verbs admin-only, for the reason the tier table above gives: a base URL names corporate topology and an `sso_start_url` names the org's IdP | `PUT /site-config`, admin-only, a **full-document replace** of everything except integrations |
 | **Writes what** | exactly one block, replaced whole; `{}` is the clear form | the whole document, provider blocks included when the body NAMES them |
@@ -934,7 +936,7 @@ SSH clone URL carries no path a base URL can be compared against
 (`git@github.com:acme/x.git` is not `/acme/x`), so a row scoped to one org
 admits an SSH clone of ANY org on that host, with the deployment's
 `ssh-key-<host>` secret. That is a documented ceiling of 0.7.2, not an
-oversight, and it is never silent: the `/providers` screen says it under the
+oversight, and it is never silent: the `/admin/providers` screen says it under the
 row's lanes, and run create puts it on the 201 as a warning (with a
 `run.provider.ssh_host_level` audit row) whenever a path-scoped row admits an
 SSH repository. **The remedy is the row's own `lanes` list** — drop `ssh` from a
@@ -957,7 +959,7 @@ an `azure_devops` provider row names it.
 
 **On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
 `/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the
-developer IS the admin and can open `/providers` — an MDM file that NAMES a
+developer IS the admin and can open `/admin/providers` — an MDM file that NAMES a
 provider block overwrites a local console edit within five minutes, and one that
 omits it leaves the edit standing. See
 [DESKTOP.md § Posture switches are env vars, never site-config](DESKTOP.md#posture-switches-are-env-vars-never-site-config).
@@ -2257,8 +2259,10 @@ longer unboundedly so. The same TTL is why **an admin upgrading from 0.5 (or pre
 does not get the override on the key they already have until it is refreshed**:
 `0043` backfills every pre-existing row as `member` (fail-closed) and `0046`
 backfills `role_checked_at` as `NULL`, which `sshAuth` treats as infinitely
-stale. A member's key never satisfies the override (`docs/SSH.md`'s Bounds
-section; `threatmodel/THREAT-MODEL.md` residual #15). See
+stale. A member's key never satisfies the override, and neither does a key an
+admin registered while in the user view, which is stored capped (migration
+`0070_ssh_key_view_capped`; `docs/SSH.md`'s Bounds section;
+`threatmodel/THREAT-MODEL.md` residual #15). See
 [ROADMAP.md](../ROADMAP.md) for what's queued.
 
 **None of this governance is a paid tier.** The admin/member split, the capability
@@ -2342,11 +2346,17 @@ else. Everything outside model access is untouched too: `GET /me` still returns
 the admin's own user-drive allocation, and their own runs, workspaces and
 secrets are still theirs (ceilings 1 and 2).
 
-Two doors REFUSE instead of clamping, both with `409`: minting an API token
-(`POST /me/tokens`) and registering an SSH key (`POST /me/ssh-keys`). Both
-credentials carry a role stamp that is re-derived from your REAL role at your
-next sign-in, so one minted "as a member" would quietly become an admin
+Minting an API token (`POST /me/tokens`) REFUSES instead of clamping, with
+`409`: a token carries a role stamp that is re-derived from your REAL role at
+your next sign-in, so one minted "as a member" would quietly become an admin
 credential that outlives the mode. Exit first.
+
+Registering an SSH key (`POST /me/ssh-keys`) is allowed in the mode, and the key
+is stored **capped** (migration `0070_ssh_key_view_capped`): it is a member key
+for good. Your sign-in re-stamp leaves its role at `member`, and the SSH
+gateway never grants it the admin override, even while you are an admin. It
+reaches your own runs and nothing else. A break-glass key that reaches other
+people's runs is registered outside the mode.
 
 > **It shows you what a member SEES. It is not proof that a member is
 > REFUSED.** Four ceilings, all deliberate:
@@ -2361,8 +2371,8 @@ credential that outlives the mode. Exit first.
 >    member mode still holds the admin override on other people's runs over SSH.
 >    By the identical argument, any `wdn_` API token you already hold keeps its
 >    own stamped role (the token lane replays the DB row, never the session), as
->    does the deployment admin bearer token. The `409` mint doors stop NEW
->    credentials; they cannot reach into old ones. Your browser session is
+>    does the deployment admin bearer token. The `409` token door and the
+>    capped key door stop NEW credentials; they cannot reach into old ones. Your browser session is
 >    clamped; another credential of yours is a different session.
 > 3. **Rolling upgrades.** The flag rides the existing session cookie with no
 >    codec bump (a bump would sign every live session out mid-rollout, which is
@@ -2706,10 +2716,10 @@ writable, though a row stored under an earlier release still loads, still sits i
 `azure_openai` is gone as a kind.
 
 **Settings** (account menu) is the one surface for these — a Model provider card,
-a radio group over concrete lanes; the standalone `/integrations` page is deleted
-and redirects there. **The Git host card retired in 0.7.2.** Its three git
+a radio group over concrete lanes; the standalone `/integrations` page is deleted.
+**The Git host card retired in 0.7.2.** Its three git
 credential lanes (GitHub App, PAT, SSH key) now render INSIDE the provider row
-they apply to, on the Workspace Providers screen (`/providers`); Settings keeps a
+they apply to, on the Workspace Providers screen (`/admin/providers`); Settings keeps a
 card in its place that summarizes the provider policy and links there. The lanes
 are the same radio group over the same concrete lanes — what changed is that
 "which git hosts this org clones from" and "how a run authenticates to them"
@@ -4265,7 +4275,11 @@ token to the configured gateway proxy-side (TLS-MITM, exactly as it is sent to
 `api.anthropic.com` today) instead of only ever the public host — see
 [CHANGELOG.md](../CHANGELOG.md). The harness-login (`claude setup-token`) lane
 is exempt and always stays on the public host: that flow mints the OAuth token
-itself and must not be redirected.
+itself and must not be redirected. With a gateway configured, a resident
+subscription credential is mounted only when the run's own policy reaches the
+**gateway** (its host, or a `*.` wildcard covering it, judged as the proxy will
+judge the CONNECT); an `api.anthropic.com` or `*.anthropic.com` entry no longer
+counts, because the run never dials the vendor host.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`
@@ -4939,7 +4953,7 @@ while a daemon serves; idempotent and resumable.
 #    WARDYN_AGE_KEY set, and restart: new writes go to Vault, old rows still read.
 # 2. Move the rest:
 wardynd -migrate-secrets -to=vaultkv
-#    INFO wardynd: stored secrets migrated to=vaultkv moved=7
+#    INFO wardynd: stored secrets migrated to=vaultkv moved=7 soft_deleted=0
 # 3. Unset WARDYN_AGE_KEY and restart. Boot refuses, naming the command above,
 #    while any local row remains.
 ```
@@ -4960,6 +4974,119 @@ produces one; neither leaks a value to anyone.
 versions); what survives is your Vault storage's own snapshots and backups,
 under your retention. **Backup** in store mode is the Postgres dump plus your
 Vault's own backup: the dump alone holds pointers, not values.
+
+## Store mode: credentials in Azure Key Vault
+
+With `WARDYN_SECRET_STORE=azurekv`, every stored credential's value lives in
+your organisation's Azure Key Vault as a secret, and Wardyn keeps only a
+pointer row in Postgres (`enc_version` 2, `kek_id`
+`azurekv:<vault-host>/<secret name>#<n>`, no ciphertext). Everything the Vault
+section above says about pointer rows, the boot keys, `-migrate-secrets` (here
+`-to=azurekv|local`), `-reconcile`, and transient versus definitive failures
+applies unchanged. No Azure SDK is involved: the Entra token exchange and the
+Key Vault calls are plain HTTPS. One external store is configured at a time;
+to move from Vault to Key Vault, migrate to local first.
+
+**Use a vault dedicated to Wardyn** (Microsoft's "a vault per application"
+advice), and give wardynd's identity **Key Vault Secrets Officer** on it and
+nothing else. Every read is a `SecretGet` in the vault's `AuditEvent` log, with
+wardynd's identity and the secret's URI. Secrets Officer also grants backup,
+restore and recover, which Wardyn never calls; the least-privilege alternative
+is a custom role with exactly these `dataActions`:
+
+```
+Microsoft.KeyVault/vaults/secrets/getSecret/action
+Microsoft.KeyVault/vaults/secrets/setSecret/action
+Microsoft.KeyVault/vaults/secrets/readMetadata/action
+Microsoft.KeyVault/vaults/secrets/update/action
+Microsoft.KeyVault/vaults/secrets/delete
+Microsoft.KeyVault/vaults/secrets/purge/action
+```
+
+Leave out `purge/action` to withhold purge (see "Removing a credential" below).
+
+**Names, versions and the owner check.** Key Vault names cannot hold `/`, `@`,
+`.` or `_`, so a secret's name is derived from its row, one per owner and name:
+
+```
+<prefix>-<platform|operator|people>-<32 hex of SHA-256(owner, name)>-g<generation>
+```
+
+`<prefix>` is `WARDYN_AZURE_KV_PREFIX` (the chart sets the release namespace).
+Each value is the base64 of the bytes (content type
+`application/octet-stream;base64`, at most 18 KiB) with tags `wardyn-owner`,
+`wardyn-name`, `wardyn-kind` and `wardyn-format`. A read derives the name from
+the row's owner and name and refuses a row that points to any other name or
+vault, then refuses a value whose tags name another row. A replace is a new
+**version** of the same name, and every earlier version is **disabled**: Key
+Vault cannot delete old versions. A write lists the versions before it writes
+and disables only those, so it never disables a newer one, and writes to one
+credential wait for each other across replicas. Once the name holds
+`WARDYN_AZURE_KV_MAX_VERSIONS` versions (default 100, well under the 500 at
+which Key Vault's backup of a secret fails; the vault's own count decides, not
+the pointer row), the next write starts a new generation, a fresh name, and
+the old generation is deleted. A read that loaded the row just before such a
+write committed can find the old name already deleted: it is refused once, with
+no grace, and the next read follows the row to the new name. Each write is one transaction in the vault's
+secret-create limit (300 per 10 seconds, shared with key and certificate
+imports), plus a version listing and one update per version it disables.
+
+**Authentication.** There is no client secret, by design.
+
+- *Workload identity* on AKS (`WARDYN_AZURE_AUTH=workload-identity`, the
+  default). With `secretStore.azure.*` set, the chart labels the pod
+  `azure.workload.identity/use: "true"` and annotates the service account with
+  `azure.workload.identity/client-id`; the webhook projects a token and sets
+  `AZURE_FEDERATED_TOKEN_FILE`, which wardynd re-reads at every exchange.
+  Add a federated credential for the chart's service account:
+
+  ```sh
+  az identity federated-credential create --name wardyn \
+      --identity-name <identity> --resource-group <group> \
+      --issuer "$(az aks show -n <cluster> -g <group> --query oidcIssuerProfile.issuerUrl -o tsv)" \
+      --subject system:serviceaccount:<namespace>:<the chart's service account> \
+      --audience api://AzureADTokenExchange
+  az role assignment create --role "Key Vault Secrets Officer" \
+      --assignee <the identity's client id> --scope <the vault's resource id>
+  ```
+- *Managed identity* on a VM (`WARDYN_AZURE_AUTH=managed-identity`): the
+  instance metadata service, never through a proxy. `WARDYN_AZURE_CLIENT_ID`
+  selects a user-assigned identity.
+
+wardynd gets a token at boot and **refuses to start if it cannot**, then keeps
+it until five minutes before it expires. TLS uses `WARDYN_TRUSTED_CA_FILE`,
+else the system roots, in a TLS config of its own; `http://` is refused except
+to a loopback host. The default NetworkPolicy denies wardynd's egress: allow
+the vault and `login.microsoftonline.com` in `networkPolicy.egress.extra`.
+
+**When Key Vault is unavailable.** A 429, a 5xx, a timeout or any token
+endpoint failure is transient (each call retried three times first, honouring
+`Retry-After`). A token endpoint refusal is transient too: Entra answers
+`invalid_client` for passing conditions (`AADSTS700024`, a projected token
+outside its valid time while the kubelet refreshes it), so it rides the
+15-minute grace. A 401 fetches a new token at most once every 30 s; a 403, a
+secret that is gone or disabled, or a binding that does not match is
+definitive. Revoking wardynd's role at the vault bites at once; removing its
+federated credential bites when its cached token expires (within the hour) and
+the vault then refuses the call. A write, the wait for the credential's lock
+included, gives up after six times `WARDYN_SECRET_STORE_TIMEOUT` (30 s by
+default), so an outage never holds a database connection longer.
+
+**Removing a credential, and the erasure horizon.** Removal is a soft delete
+of the secret (every version), then, with `WARDYN_AZURE_KV_PURGE=auto` (the
+default), a purge. Withholding purge is your choice: purge protection on the
+vault, or a custom role without the purge permission. Then the purge is
+refused, the secret stays soft-deleted, and the `secret.delete` audit row says
+`purged: false` with `recoverable_days`, the vault's retention (7 to 90 days,
+fixed when the vault was created). `WARDYN_AZURE_KV_PURGE=never` never purges.
+Until then your organisation can recover the value; ask the vault's operators
+to purge it sooner. `wardynd -reconcile` lists each soft-deleted value no
+row points to, with the days until the vault purges it (a listing, not a
+failure), and `-migrate-secrets -to=local` counts the old copies it left
+soft-deleted (`soft_deleted` in its log line and `secret.migrate` row). Wardyn
+never recovers a deleted secret: a credential removed and added again within
+the retention reuses the name after a purge, or takes a new generation. After the purge, what survives is your vault's own
+backups. **Backup** in store mode is the Postgres dump plus the vault's.
 
 ## Upgrades
 
@@ -5148,13 +5275,14 @@ because PostgreSQL requires ownership for `ALTER TABLE` and for
 `CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade. Every 0.6.x release ships
 through `0049`, so this path applies `0050`–`0062`, and most of it is exactly
 this shape: `0050` (secrets), `0052` and `0060` (api_tokens, created back in
-`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065` (approvals and
+`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065`, `0072` (approvals and
 `agent_runs`, both created in `0001`) are
 `ALTER TABLE` on tables an earlier release created — `0050` also drops and
 re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
 (`0062` widens `approvals.state` with `CANCELLED`, `0064` widens
 `approvals.kind` with `credential_reauth`), `0063` adds the
-`agent_runs.status_detail` column and `0065` adds `agent_runs.autonomy_level` — and `0056`, `0057` and `0058` are three successive
+`agent_runs.status_detail` column, `0065` adds `agent_runs.autonomy_level` and `0072` adds the
+run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `governance_profile_id`) — and `0056`, `0057` and `0058` are three successive
 `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)
@@ -5162,7 +5290,8 @@ The same shape recurs one release later: `0067` adds `user_drives.object_scheme`
 and `user_drives` itself was `0054`'s table — created inside the already-shipped
 0.7 line, not this upgrade's own batch — so an install carried forward from a
 released 0.7.x hits the identical ownership requirement on its next upgrade —
-as does `0069`, which adds the envelope columns to `secrets` (`0001`'s table).
+as does `0069`, which adds the envelope columns to `secrets` (`0001`'s table),
+and `0070`, which adds `ssh_public_keys.capped` (`0033`'s table).
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does
@@ -6086,13 +6215,13 @@ driver, not a guess:
   at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed
   target prefixes). Nothing is mounted at `/home/agent` itself, because a volume there would
   shadow each image's baked `.bashrc`, swallow the reserved drive target `/home/agent/drive`, and
-  hide the read-only `~/.claude` bind the subscription path mounts. **Risk carried by the cache
-  volume specifically:** an `emptyDir` at `/home/agent/.cache` shadows the full image's
-  pre-created, agent-owned `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`) with a
-  fresh directory whose ownership the kubelet decides — `FSGroup` is only applied to a pod with a
-  drive attached (`internal/runner/k8s/drives.go`), so a run with `disk_mib` set and no drive can
-  get a root-owned mount the uid-1000 agent cannot write into; only the conformance "Cache" fill
-  target, run against a real cluster, catches this. **What the proof
+  hide the read-only `~/.claude` bind the subscription path mounts. **The cache volume starts
+  cold:** an `emptyDir` at `/home/agent/.cache` shadows the full image's pre-created
+  `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`), so the Go build cache is
+  rebuilt from empty. The mount is writable without `FSGroup`: the kubelet creates an `emptyDir`
+  root-owned but `0777`, the same mode `/tmp` and `/home/agent/work` have been written through by
+  the uid-1000 agent since 0.7.5; the conformance "Cache" fill target writes it against a real
+  cluster. **What the proof
   does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
   runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and
   Kata. The live kind SSO walk separately exercises a real `agent-run` boot — the aws-sso sign-in

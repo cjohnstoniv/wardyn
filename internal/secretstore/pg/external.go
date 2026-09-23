@@ -7,10 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -68,11 +72,25 @@ func extErr(ref string, err error) error {
 }
 
 // putExternal writes the value to the external store, then points the row at
-// it. If the row cannot be written, a value the row never pointed to is
-// removed again rather than orphaned.
+// it, holding the row's lock throughout: two Puts for one row never interleave
+// their store writes (with azurekv that could leave no version enabled). If
+// the row cannot be written, a value in an object the row never pointed to is
+// removed again rather than orphaned. When the row moves to a new object
+// (azurekv's generation rollover), the old one is removed after the row
+// points away from it.
 func (s *Store) putExternal(ctx context.Context, name string, value []byte) error {
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
 	ref := rowRef(s.owner, name)
-	prev, err := s.currentRef(ctx, name)
+	tx, err := beginReadCommitted(ctx, s.pool)
+	if err != nil {
+		return fmt.Errorf("pg secretstore: put %s: begin: %w", ref, err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := lockRow(ctx, tx, s.owner, name); err != nil {
+		return fmt.Errorf("pg secretstore: put %s: %w", ref, err)
+	}
+	prev, err := s.currentRef(ctx, tx, name)
 	if err != nil {
 		return err
 	}
@@ -80,7 +98,7 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s to %s: %w", ref, s.ext.Name(), err)
 	}
-	_, err = s.pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext)
 		VALUES ($1, $2, $3, $4, ''::bytea, ''::bytea)
 		ON CONFLICT (owned_by, name) DO UPDATE
@@ -88,21 +106,64 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 		s.owner, name, extVersion, s.ext.Name()+":"+loc,
 	)
 	if err == nil {
+		err = tx.Commit(ctx)
+	}
+	newObject := secretstore.RefObject(loc) != secretstore.RefObject(prev)
+	if err == nil {
+		if prev != "" && newObject {
+			s.removeOld(ctx, name, prev)
+		}
 		return nil
 	}
-	if loc != prev {
-		if derr := s.ext.Delete(context.WithoutCancel(ctx), s.owner, name, loc); derr != nil {
-			return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not (%w), and removing the value failed too (%v) — `wardynd -reconcile` lists it", ref, s.ext.Name(), err, derr)
-		}
+	if !newObject {
+		// The object the row already points to now holds the new value, and
+		// the row reads it: the write took effect behind a failure.
+		return fmt.Errorf("pg secretstore: put %s: the new value is live in %s (the row already points to it), but updating the row failed: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
 	}
-	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it was removed again: %w", ref, s.ext.Name(), err)
+	if derr := s.ext.Delete(context.WithoutCancel(ctx), s.owner, name, loc); derr != nil {
+		return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not (%w: %w), and removing the value failed too (%v) — `wardynd -reconcile` lists it", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err, derr)
+	}
+	return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it was removed again: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
+}
+
+// bounded bounds one store-mode write, the wait for the row's lock included,
+// at six times the per-call timeout: it holds a pooled connection and the lock
+// for its whole store conversation, which an outage (retries, Retry-After,
+// purge waits) would otherwise stretch to minutes.
+func (s *Store) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	t := s.extTimeout
+	if t <= 0 {
+		t = 5 * time.Second
+	}
+	return context.WithTimeout(ctx, 6*t)
+}
+
+// lockRow takes the row's store-mode write lock (db.SecretRowLockClass) for
+// the rest of tx. owner and name are text, which holds no NUL, so the key
+// bytes are unambiguous; a crc32 collision only serialises two rows.
+func lockRow(ctx context.Context, tx pgx.Tx, owner, name string) error {
+	key := int32(crc32.ChecksumIEEE([]byte(owner + "\x00" + name)))
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.SecretRowLockClass, key); err != nil {
+		return fmt.Errorf("lock the row: %w", err)
+	}
+	return nil
+}
+
+// removeOld removes the object a row pointed to before a Put moved it. The Put
+// has succeeded by then, so a failure is logged, not returned: the old object
+// is one `wardynd -reconcile` lists.
+func (s *Store) removeOld(ctx context.Context, name, prev string) {
+	if err := s.ext.Delete(context.WithoutCancel(ctx), s.owner, name, prev); err != nil {
+		slog.Warn("pg secretstore: a replaced value's old object was not removed; `wardynd -reconcile` lists it",
+			slog.String("secret", rowRef(s.owner, name)), slog.String("store", s.ext.Name()), slog.Any("err", err))
+	}
 }
 
 // currentRef is the ref this view's own row points to in the configured
 // external store, or "" when it has no such row.
-func (s *Store) currentRef(ctx context.Context, name string) (string, error) {
+func (s *Store) currentRef(ctx context.Context, tx pgx.Tx, name string) (string, error) {
 	var kekID string
-	err := s.pool.QueryRow(ctx,
+	err := tx.QueryRow(ctx,
 		`SELECT kek_id FROM secrets WHERE owned_by=$1 AND name=$2 AND enc_version=$3`,
 		s.owner, name, extVersion,
 	).Scan(&kekID)
@@ -148,27 +209,38 @@ func (s *Store) deleteExternal(ctx context.Context, name string) error {
 // MigrateLocal is the -migrate-secrets target that seals rows locally.
 const MigrateLocal = "local"
 
+// MigrateResult is what Migrate did.
+type MigrateResult struct {
+	// Moved is how many rows moved.
+	Moved int
+	// SoftDeleted is how many old external copies the store deleted but did
+	// not purge (azurekv, purge withheld or failed): the organisation can
+	// still recover them, and -reconcile lists them.
+	SoftDeleted int
+}
+
 // Migrate moves every row not already at target ("local", or the configured
-// external store's name) there, one row per transaction, and returns how many
-// it moved (design §2.3a.9). For each row it reads the value through the row's
-// current location, writes it to the target, flips the row, and removes the
-// old copy. onRead is called once per value read, for the audit.
+// external store's name) there, one row per transaction (design §2.3a.9). For
+// each row it reads the value through the row's current location, writes it
+// to the target, flips the row, and removes the old copy. onRead is called
+// once per value read, for the audit.
 //
 // Safe while a daemon serves: each row is locked while it moves, a row that
 // reached the target meanwhile is skipped, and an external write refuses to
 // overwrite a value already at the target path (a concurrent Put landing, or
 // an orphan -reconcile lists). Idempotent and resumable: it aborts on the
 // first row it cannot move, naming it, with every earlier row committed.
-func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, name string)) (int, error) {
+func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, name string)) (MigrateResult, error) {
+	var res MigrateResult
 	if target == MigrateLocal && s.kek == nil {
-		return 0, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY")
+		return res, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY")
 	}
 	if target != MigrateLocal && !s.reachable(target) {
-		return 0, fmt.Errorf("pg secretstore: migration target %q is not configured", target)
+		return res, fmt.Errorf("pg secretstore: migration target %q is not configured", target)
 	}
 	rows, err := s.pool.Query(ctx, `SELECT owned_by, name, enc_version, kek_id FROM secrets ORDER BY owned_by, name`)
 	if err != nil {
-		return 0, fmt.Errorf("pg secretstore: migrate select: %w", err)
+		return res, fmt.Errorf("pg secretstore: migrate select: %w", err)
 	}
 	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (envelope, error) {
 		var e envelope
@@ -176,23 +248,25 @@ func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, n
 		return e, err
 	})
 	if err != nil {
-		return 0, fmt.Errorf("pg secretstore: migrate scan: %w", err)
+		return res, fmt.Errorf("pg secretstore: migrate scan: %w", err)
 	}
-	moved := 0
 	for _, e := range all {
 		if s.atTarget(target, e) {
 			continue
 		}
-		ok, err := s.migrateRow(ctx, target, e.ownedBy, e.name, onRead)
+		ok, soft, err := s.migrateRow(ctx, target, e.ownedBy, e.name, onRead)
 		if err != nil {
-			return moved, fmt.Errorf("pg secretstore: migration to %s ABORTED at %s after moving %d rows (each moved row is committed; fix this row and re-run): %w",
-				target, rowRef(e.ownedBy, e.name), moved, err)
+			return res, fmt.Errorf("pg secretstore: migration to %s ABORTED at %s after moving %d rows (each moved row is committed; fix this row and re-run): %w",
+				target, rowRef(e.ownedBy, e.name), res.Moved, err)
 		}
 		if ok {
-			moved++
+			res.Moved++
+		}
+		if soft {
+			res.SoftDeleted++
 		}
 	}
-	return moved, nil
+	return res, nil
 }
 
 func (s *Store) atTarget(target string, e envelope) bool {
@@ -203,15 +277,21 @@ func (s *Store) atTarget(target string, e envelope) bool {
 	return e.version == extVersion && store == target
 }
 
-// migrateRow moves one row under a row lock. The old external copy is removed
-// only AFTER the row flip commits: a failure there leaves an orphan the error
-// names, never a row pointing at nothing.
-func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRead func(owner, name string)) (bool, error) {
+// migrateRow moves one row under the row's store-mode write lock and a row
+// lock. The old external copy is removed only AFTER the row flip commits: a
+// failure there leaves an orphan the error names, never a row pointing at
+// nothing. soft reports an old copy the store kept soft-deleted.
+func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRead func(owner, name string)) (moved, soft bool, err error) {
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
 	tx, err := beginReadCommitted(ctx, s.pool)
 	if err != nil {
-		return false, fmt.Errorf("begin: %w", err)
+		return false, false, fmt.Errorf("begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := lockRow(ctx, tx, owner, name); err != nil {
+		return false, false, err
+	}
 
 	e := envelope{ownedBy: owner, name: name}
 	err = tx.QueryRow(ctx,
@@ -219,46 +299,47 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 		owner, name,
 	).Scan(&e.version, &e.kekID, &e.wrapped, &e.ct)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && s.atTarget(target, e)) {
-		return false, nil // deleted, or moved by a concurrent Put
+		return false, false, nil // deleted, or moved by a concurrent Put
 	}
 	if err != nil {
-		return false, fmt.Errorf("lock: %w", err)
+		return false, false, fmt.Errorf("lock: %w", err)
 	}
 	if e.version == 0 {
-		return false, fmt.Errorf("is a pre-envelope (v0) row — boot this wardynd once to convert it, then re-run")
+		return false, false, fmt.Errorf("is a pre-envelope (v0) row — boot this wardynd once to convert it, then re-run")
 	}
 	plain, err := s.open(ctx, e)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	onRead(owner, name)
 
 	if target != MigrateLocal {
 		loc, err := s.ext.Put(ctx, owner, name, "", plain, true)
 		if err != nil {
-			return false, fmt.Errorf("write to %s: %w", target, err)
+			return false, false, fmt.Errorf("write to %s: %w", target, err)
 		}
 		if err := flipRow(ctx, tx, owner, name, extVersion, target+":"+loc, nil, nil); err != nil {
 			if derr := s.ext.Delete(context.WithoutCancel(ctx), owner, name, loc); derr != nil {
-				return false, fmt.Errorf("%w; the value written to %s could not be removed again (%v) — `wardynd -reconcile` lists it", err, target, derr)
+				return false, false, fmt.Errorf("%w; the value written to %s could not be removed again (%v) — `wardynd -reconcile` lists it", err, target, derr)
 			}
-			return false, err
+			return false, false, err
 		}
-		return true, nil
+		return true, false, nil
 	}
 
 	wrapped, ct, err := seal(ctx, s.kek, owner, name, plain)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if err := flipRow(ctx, tx, owner, name, encVersion, s.kek.ID(), wrapped, ct); err != nil {
-		return false, err
+		return false, false, err
 	}
 	store, loc := splitRef(e.kekID)
-	if err := s.ext.Delete(ctx, owner, name, loc); err != nil {
-		return false, fmt.Errorf("the row now holds the value locally, but its old copy in %s was not removed: %w — remove it there (`wardynd -reconcile` lists it)", store, err)
+	dctx, rep := secretstore.WithDeleteReport(ctx)
+	if err := s.ext.Delete(dctx, owner, name, loc); err != nil {
+		return false, false, fmt.Errorf("the row now holds the value locally, but its old copy in %s was not removed: %w — remove it there (`wardynd -reconcile` lists it)", store, err)
 	}
-	return true, nil
+	return true, rep.Store != "" && !rep.Purged, nil
 }
 
 // flipRow rewrites one locked row to its new location and commits.
@@ -278,7 +359,7 @@ func flipRow(ctx context.Context, tx pgx.Tx, owner, name string, version int16, 
 	return nil
 }
 
-// ReconcileReport is what -reconcile found. Neither list is ever acted on:
+// ReconcileReport is what -reconcile found. No list is ever acted on:
 // reconcile reports, an operator decides.
 type ReconcileReport struct {
 	// Checked is how many pointer rows were checked against the store.
@@ -288,6 +369,10 @@ type ReconcileReport struct {
 	Dangling []string
 	// Orphans are values in the store that no row points to.
 	Orphans []secretstore.ExternalEntry
+	// SoftDeleted are values the store deleted but can still recover, that no
+	// row points to: a removal whose purge was withheld or failed. Reported,
+	// not drift: nothing reads them, but the organisation can recover them.
+	SoftDeleted []secretstore.ExternalEntry
 }
 
 // Reconcile lists both sides of store mode and reports where they disagree
@@ -324,7 +409,7 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		// records: a forged pointer cannot hide another value from the orphan
 		// list. It claims it whether or not the value is live: a soft-deleted
 		// value behind a row is dangling, not an orphan as well.
-		if want, err := s.ext.Ref(e.ownedBy, e.name); err == nil {
+		if want, err := s.ext.Ref(e.ownedBy, e.name, loc); err == nil {
 			pointed[want] = true
 		}
 		err := s.ext.Check(ctx, e.ownedBy, e.name, loc)
@@ -340,7 +425,11 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		return rep, fmt.Errorf("pg secretstore: reconcile list %s: %w", s.ext.Name(), err)
 	}
 	for _, f := range found {
-		if !pointed[f.Ref] {
+		switch {
+		case pointed[secretstore.RefObject(f.Ref)]:
+		case f.SoftDeleted:
+			rep.SoftDeleted = append(rep.SoftDeleted, f)
+		default:
 			rep.Orphans = append(rep.Orphans, f)
 		}
 	}

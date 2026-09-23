@@ -70,10 +70,9 @@ package proxy
 // other outcome — a different or absent entry, no commit the repository's own
 // history vouches for, a forge that cannot be read — refuses, and says which.
 //
-// Phase one has no size rule, so nothing here compares gitpack.Change.Size.
-// Whoever adds max_file_size_mib must DECIDE what Size == -1 means rather than
-// compare it: -1 is "the pack does not carry this blob", and it passes every
-// "is it under the limit" test by accident.
+// Phase one has no size rule. Whoever adds max_file_size_mib decides with
+// gitpack.Change.Within, which refuses a size the pack does not carry, or reads
+// gitpack.Change.Size, whose pair cannot be compared until unknown is decided.
 
 import (
 	"bytes"
@@ -89,6 +88,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -104,6 +104,10 @@ const (
 	// ruleSourceGitPackBlind marks a brokered push refused because the
 	// inspector could not answer from the request's own bytes.
 	ruleSourceGitPackBlind = "brokered:git:push-uninspectable"
+	// ruleSourceGitForgeRead marks the broker's OWN credentialed reads of
+	// api.github.com on a push's behalf: one ALLOW row per push that read the
+	// forge at all, so an egress review of the run sees them.
+	ruleSourceGitForgeRead = "brokered:git:forge-read"
 	// defaultInspectPackMiB is the ceiling a run that sets push_rules without
 	// naming max_inspect_pack_mib gets. It sits BELOW the 0..64 range
 	// validatePushRules admits on purpose: raising the ceiling is the stated
@@ -493,6 +497,8 @@ func (p *Proxy) deniedPaths(r *http.Request, rules *pushRuleSet, res gitpack.Res
 		sample, total = claim(sample, total, c)
 	}
 	if forge != nil && forge.reads > 0 {
+		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: githubAPIHost, Port: 443,
+			Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
 		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
 			slog.String("run_id", p.runID.String()),
 			subject,

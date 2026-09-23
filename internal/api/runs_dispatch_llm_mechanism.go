@@ -95,15 +95,12 @@ const (
 	// case, as the nav item and the page title are.
 	llmMechanismRemedyPerUser = "sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page."
 
-	// llmMechanismRemedyShared is the ADMIN's destination, unchanged: under a
-	// shared row the one credential is theirs and Settings → Model provider is
-	// where they replace it.
-	llmMechanismRemedyShared = "sign in again under Settings → Model provider."
-
-	// llmMechanismRemedySharedFirst is the same destination without "again":
-	// "again" is a claim about the reader's past, and the not-configured arm is
-	// the one state that says nothing ever fired here.
-	llmMechanismRemedySharedFirst = "sign in under Settings → Model provider."
+	// llmMechanismRemedySharedFmt is the ADMIN's destination: under a shared row
+	// the one credential is theirs and Settings → Model provider is where they
+	// replace it. The one blank is "again" — a claim about the reader's past
+	// that the not-configured arm must not make, since that is the one state
+	// where nothing ever fired here.
+	llmMechanismRemedySharedFmt = "sign in%s under Settings → Model provider."
 
 	// llmDetailBedrockExpired is the brokered-LLM 404's detail for a
 	// half-configured Bedrock deployment (see llmUnavailableDetail). %s = the
@@ -228,14 +225,14 @@ const llmRefusalAuditReason = "model_credential"
 // `configured` is whether ANY lane fired — the one state where nothing ever
 // did is also the one where "again" would be false.
 func llmMechanismRemedy(perUser, configured bool) string {
-	switch {
-	case perUser:
+	if perUser {
 		return llmMechanismRemedyPerUser
-	case !configured:
-		return llmMechanismRemedySharedFirst
-	default:
-		return llmMechanismRemedyShared
 	}
+	again := " again"
+	if !configured {
+		again = ""
+	}
+	return fmt.Sprintf(llmMechanismRemedySharedFmt, again)
 }
 
 // llmMechanismRefusal is the sentence for a declared lane that is not carrying

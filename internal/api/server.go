@@ -140,6 +140,11 @@ type Config struct {
 	Identity identity.Provider
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
+	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
+	// ceiling on how long any request waits for a decision. A run's captured
+	// wait (captureRunLimits) never exceeds it. 0 means unknown here. Dispatch
+	// also mirrors it onto a hold-mode run's sandbox (approval_expiry.go, RL-1).
+	ApprovalExpiryAfter time.Duration
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
 	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the

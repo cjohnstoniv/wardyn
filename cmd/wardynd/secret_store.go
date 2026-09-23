@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/azurekv"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
 )
@@ -22,18 +24,18 @@ import (
 // openSecretStore builds the configured external store client (if any) and
 // the audited secret store over it (buildSecretStore), as a serving boot does.
 func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec audit.Recorder) (secretstore.Store, error) {
-	ext, err := buildExternalStore(ctx, f.vault, *f.trustedCAFile)
+	ext, err := buildExternalStore(ctx, f.vault, f.azure, *f.trustedCAFile)
 	if err != nil {
 		return nil, err
 	}
-	return buildSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, ext, rec)
+	return buildSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, ext, *f.vault.timeout, rec)
 }
 
 // buildSecretStore is newSecretStore wrapped in secretstore.Audited, in every
 // store mode, so every read through it is recorded once on rec, whatever the
 // backend holding the value.
-func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, ext secretstore.External, rec audit.Recorder) (secretstore.Store, error) {
-	s, err := newSecretStore(ctx, pool, ageKey, storeName, ext, rec)
+func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, ext secretstore.External, extTimeout time.Duration, rec audit.Recorder) (secretstore.Store, error) {
+	s, err := newSecretStore(ctx, pool, ageKey, storeName, ext, extTimeout, rec)
 	if err != nil {
 		return nil, err
 	}
@@ -47,11 +49,12 @@ func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName
 // readable). In store mode (an external store selected, design §2.3a.7) no key
 // is generated: every value lives in the organisation's store, and a missing
 // key only matters while local rows remain, which convertSecretStore refuses
-// by name. ext is the configured external client, or nil. The store is
+// by name. ext is the configured external client, or nil, and extTimeout
+// bounds each call to it. The store is
 // returned unwrapped: a serving boot reads through buildSecretStore, and only
 // the maintenance modes use it bare, for the pg store's Migrate and Reconcile,
 // which never Get (secretStoreMaintenance).
-func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, ext secretstore.External, rec audit.Recorder) (secretstore.Store, error) {
+func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, ext secretstore.External, extTimeout time.Duration, rec audit.Recorder) (secretstore.Store, error) {
 	storeMode := storeName != "" && storeName != "pg"
 	var id *age.X25519Identity
 	var err error
@@ -80,7 +83,7 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName s
 			return nil, fmt.Errorf("parse age identity: %w", err)
 		}
 	}
-	deps := secretstore.Deps{Pool: pool, External: ext}
+	deps := secretstore.Deps{Pool: pool, External: ext, ExternalTimeout: extTimeout}
 	if id != nil {
 		// A typed nil in the interface would read as "a key is configured".
 		deps.AgeIdentity = id
@@ -169,12 +172,51 @@ func registerVaultFlags() vaultFlags {
 	}
 }
 
+// azureFlags configure the Azure Key Vault external store (docs/ENV.md).
+// VaultURL empty means no Key Vault client at all.
+type azureFlags struct {
+	vaultURL, auth, tenantID, clientID, federatedTokenFile, authorityHost, prefix, purge *string
+	maxVersions                                                                          *int
+}
+
+func registerAzureFlags() azureFlags {
+	return azureFlags{
+		vaultURL:           flagEnv("azure-kv-url", "WARDYN_AZURE_KV_URL", "", "Azure Key Vault base URL for the azurekv secret store (https://<vault>.vault.azure.net). Empty = no Key Vault client"),
+		auth:               flagEnv("azure-auth", "WARDYN_AZURE_AUTH", azurekv.AuthWorkloadIdentity, `how wardynd gets its Entra token: "workload-identity" (a federated projected token) or "managed-identity" (a VM's instance metadata service)`),
+		tenantID:           flagEnv("azure-tenant-id", "WARDYN_AZURE_TENANT_ID", "", "Entra tenant id (workload identity)"),
+		clientID:           flagEnv("azure-client-id", "WARDYN_AZURE_CLIENT_ID", "", "client id of the app registration or user-assigned identity wardynd runs as"),
+		federatedTokenFile: flagEnv("azure-federated-token-file", "WARDYN_AZURE_FEDERATED_TOKEN_FILE", os.Getenv("AZURE_FEDERATED_TOKEN_FILE"), "path of the projected token exchanged for an Entra token; default: AZURE_FEDERATED_TOKEN_FILE, which the workload identity webhook sets. Re-read at every exchange"),
+		authorityHost:      flagEnv("azure-authority-host", "WARDYN_AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com", "Entra authority host (a sovereign cloud's, if not the public one)"),
+		prefix:             flagEnv("azure-kv-prefix", "WARDYN_AZURE_KV_PREFIX", "wardyn", "prefix of every secret name this install writes (the chart sets the release namespace)"),
+		maxVersions:        flagIntEnv("azure-kv-max-versions", "WARDYN_AZURE_KV_MAX_VERSIONS", 100, "versions a secret holds before the next write starts a new name and deletes the old one"),
+		purge:              flagEnv("azure-kv-purge", "WARDYN_AZURE_KV_PURGE", azurekv.PurgeAuto, `"auto": purge a deleted secret when the vault allows it; "never": leave it soft-deleted for the vault's retention`),
+	}
+}
+
 // buildExternalStore returns the configured external store client, or nil
 // when none is configured. Its token is kept alive for the life of ctx. A
-// client that cannot log in fails boot (design K11).
-func buildExternalStore(ctx context.Context, v vaultFlags, trustedCAFile string) (secretstore.External, error) {
+// client that cannot log in fails boot (design K11). At most one external
+// store is configured: a pointer row names one, and a migration between two
+// goes through local.
+func buildExternalStore(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile string) (secretstore.External, error) {
 	addr := strings.TrimSpace(*v.addr)
-	if addr == "" {
+	kvURL := strings.TrimSpace(*az.vaultURL)
+	switch {
+	case addr != "" && kvURL != "":
+		return nil, fmt.Errorf("refusing to start: both WARDYN_VAULT_ADDR and WARDYN_AZURE_KV_URL are set; configure one external secret store")
+	case kvURL != "":
+		s, err := azurekv.New(ctx, azurekv.Config{
+			VaultURL: kvURL, Auth: strings.TrimSpace(*az.auth), TenantID: strings.TrimSpace(*az.tenantID),
+			ClientID: strings.TrimSpace(*az.clientID), FederatedTokenFile: strings.TrimSpace(*az.federatedTokenFile),
+			AuthorityHost: strings.TrimSpace(*az.authorityHost), CACertFile: strings.TrimSpace(trustedCAFile),
+			Prefix: strings.TrimSpace(*az.prefix), MaxVersions: *az.maxVersions, Purge: strings.TrimSpace(*az.purge),
+			Timeout: *v.timeout,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("refusing to start: %w", err)
+		}
+		return s, nil
+	case addr == "":
 		return nil, nil
 	}
 	ca := strings.TrimSpace(*v.caCertFile)
