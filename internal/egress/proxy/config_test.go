@@ -18,9 +18,10 @@ import (
 func baseConfigJSON(t *testing.T, extra map[string]any) []byte {
 	t.Helper()
 	m := map[string]any{
-		"run_id":            uuid.New().String(),
-		"control_plane_url": "http://wardynd:8080",
-		"run_token":         "tok",
+		"run_id":               uuid.New().String(),
+		"control_plane_url":    "https://wardynd:8443",
+		"control_plane_ca_pem": testCPCAPEM,
+		"run_token":            "tok",
 	}
 	for k, v := range extra {
 		m[k] = v
@@ -207,7 +208,7 @@ func TestApplyDefaultsAndValidate_ADOGrantsRequireTheMITMCA(t *testing.T) {
 	base := func(cert, key string) *Config {
 		return &Config{
 			RunID:           uuid.New(),
-			ControlPlaneURL: "http://cp:8080",
+			ControlPlaneURL: "http://127.0.0.1:8080",
 			RunToken:        "tok",
 			MITMCACertPEM:   cert,
 			MITMCAKeyPEM:    key,

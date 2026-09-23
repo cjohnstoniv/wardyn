@@ -49,6 +49,7 @@ import {
 } from "../wardyn/operator-context";
 import { health as api, type MeUserDrive } from "../../lib/api/health";
 import { TopBar } from "./top-bar";
+import { ViewAccessProvider, viewAccess } from "../wardyn/console-view";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
@@ -140,6 +141,9 @@ export interface ShellMeta {
    *  mirror configured"; lib/demo-videos.ts's episodeUrl falls back to its
    *  own hardcoded GitHub base either way. */
   demoVideoBaseUrl: string | undefined;
+  /** /healthz's `sso`: OIDC is configured. With it, the admin token is not a
+   *  person and has no User view (console-view.tsx#viewAccess). */
+  sso: boolean;
 }
 
 /** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
@@ -171,6 +175,7 @@ function useMeta(): [ShellMeta, () => void] {
     runner: "",
     networkPolicy: "",
     demoVideoBaseUrl: undefined,
+    sso: false,
   });
   React.useEffect(() => {
     let alive = true;
@@ -207,6 +212,7 @@ function useMeta(): [ShellMeta, () => void] {
           networkPolicy: h.network_policy ?? "",
           // "" (unset) reads the same as absent: both mean "no mirror".
           demoVideoBaseUrl: h.demo_video_base_url || undefined,
+          sso: h.sso ?? false,
         });
       })
       .catch(() => {
@@ -383,6 +389,10 @@ const ModelAccessBanner = React.lazy(() =>
 // mock approval's third ruling.
 const ConfinementPostureBanner = React.lazy(() =>
   import("../wardyn/confinement-posture").then((m) => ({ default: m.ConfinementPostureBanner })),
+);
+// #484 — same lazy rationale; mounted between the two bands above.
+const EveryoneAdminBanner = React.lazy(() =>
+  import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
 );
 
 const navLinkClass = (isActive: boolean) =>
@@ -572,6 +582,7 @@ export function AppShell({
       demoVideoBaseUrl={meta.demoVideoBaseUrl}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
+        <ViewAccessProvider value={viewAccess(meta)}>
         <FocusContext.Provider value={focusValue}>
         {/* #217 — above BOTH the sidebar that can navigate away and every
           screen below it that can register a dirty form (lib/use-unsaved-guard.tsx). */}
@@ -677,6 +688,11 @@ export function AppShell({
               <React.Suspense fallback={null}>
                 <ModelAccessBanner />
               </React.Suspense>
+              {/* #484 — admins only: after the per-person credential block,
+              before the cluster-wide confinement note. */}
+              <React.Suspense fallback={null}>
+                <EveryoneAdminBanner />
+              </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are
               looking at, or block the very thing a run needs to start, and
@@ -731,6 +747,7 @@ export function AppShell({
           </div>
         </UnsavedGuardProvider>
         </FocusContext.Provider>
+        </ViewAccessProvider>
       </RoleProvider>
     </OperatorProvider>
   );
