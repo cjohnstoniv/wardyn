@@ -33,10 +33,13 @@ const (
 // providerKindDispatched is the kinds whose dispatch arm has landed
 // (resolveProviderTransport). A chosen provider of any other kind is refused
 // at create rather than dispatched down the legacy lane chain, which would
-// serve it from a credential it did not choose. ponytail: MP-7 (keys,
-// endpoint) and MP-9 (Bedrock) add the rest; MP-9 deletes the map.
+// serve it from a credential it did not choose. ponytail: the key and endpoint
+// kinds are MP-7's (#528); once it lands every kind has an arm, and this map and
+// mpRunNotYet are deleted.
 var providerKindDispatched = map[types.ModelProviderKind]bool{
 	types.ModelProviderAnthropicSubscription: true,
+	types.ModelProviderBedrockSSO:            true,
+	types.ModelProviderBedrockBearer:         true,
 }
 
 // runProviderChoice is chooseModelProvider's answer. chosen=false with no
@@ -200,6 +203,18 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		// The liveness dispatch re-checks, answered here too so a person who
 		// is not signed in is told before a run exists.
 		refusal, err := s.providerSubscriptionRefusal(ctx, choice.provider, runIdentitySubject(ctx, principalFromRequest(r)))
+		if err != nil {
+			writeServerError(w, r, "read model provider credential", err)
+			return runProviderChoice{}, false
+		}
+		if refusal != "" {
+			writeError(w, http.StatusUnprocessableEntity, refusal)
+			return runProviderChoice{}, false
+		}
+	case choice.chosen && choice.provider.Kind.IsBedrock():
+		// The same liveness, without renewal: a dry check never spends a
+		// one-use refresh token; dispatch renews.
+		_, refusal, err := s.providerBedrockRefusal(ctx, choice.provider, req.Agent, runIdentitySubject(ctx, principalFromRequest(r)), false)
 		if err != nil {
 			writeServerError(w, r, "read model provider credential", err)
 			return runProviderChoice{}, false

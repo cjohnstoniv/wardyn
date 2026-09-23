@@ -152,7 +152,14 @@ func (s *Server) resolveProviderTransport(ctx context.Context, run types.AgentRu
 	case !mp.Serves(run.Agent):
 		return fail(mp.Kind, providerRefusal(mp.ID, fmt.Sprintf(mpRunStateNotServing, run.Agent)).refusal)
 	}
+	// The host ~/.claude mount is the operator's credential: no provider's
+	// run carries it beside its own.
+	policy.WorkspaceMounts = slices.DeleteFunc(policy.WorkspaceMounts, func(m types.WorkspaceMount) bool {
+		return m.Target == claudeCredTarget || m.Target == claudeCredJSONTarget
+	})
 	switch mp.Kind {
+	case types.ModelProviderBedrockSSO, types.ModelProviderBedrockBearer:
+		return s.providerBedrockTransport(ctx, run, policy, sandboxEnv, mp, fail)
 	case types.ModelProviderAnthropicSubscription:
 		owner := runIdentitySubject(ctx, run.CreatedBy)
 		refusal, err := s.providerSubscriptionRefusal(ctx, mp, owner)
@@ -162,7 +169,7 @@ func (s *Server) resolveProviderTransport(ctx context.Context, run types.AgentRu
 		if refusal != "" {
 			return fail(mp.Kind, refusal)
 		}
-		return s.providerSubscriptionTransport(run, policy, sandboxEnv, chosenProvider{provider: mp, owner: owner}), true
+		return s.providerSubscriptionTransport(run, sandboxEnv, chosenProvider{provider: mp, owner: owner}), true
 	default:
 		return fail(mp.Kind, fmt.Sprintf(mpRunNotYet, mp.ID))
 	}
@@ -172,14 +179,10 @@ func (s *Server) resolveProviderTransport(ctx context.Context, run types.AgentRu
 // Claude subscription: the managed lane's wire posture (direct to the vendor or
 // the provider's route-through, over the tunnel, with a writable config dir and
 // inert sentinel creds delivered via env), with the owner's live token injected
-// proxy-side. The host ~/.claude mount is the operator's credential, so it is
-// removed from the spec rather than mounted beside the run's own.
-func (s *Server) providerSubscriptionTransport(run types.AgentRun, policy *types.RunPolicySpec,
+// proxy-side.
+func (s *Server) providerSubscriptionTransport(run types.AgentRun,
 	sandboxEnv map[string]string, c chosenProvider,
 ) llmTransport {
-	policy.WorkspaceMounts = slices.DeleteFunc(policy.WorkspaceMounts, func(m types.WorkspaceMount) bool {
-		return m.Target == claudeCredTarget || m.Target == claudeCredJSONTarget
-	})
 	sandboxEnv["ANTHROPIC_BASE_URL"] = providerSubscriptionBase(c.provider)
 	sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
 	sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
@@ -191,11 +194,12 @@ func (s *Server) providerSubscriptionTransport(run types.AgentRun, policy *types
 	return llmTransport{modelRun: true, provider: &c}
 }
 
-// providerSubscriptionSnapshot is what dispatch records on the grant it
-// authors: which provider's sentinel it is and whose sign-in backs it. It
-// grants nothing: the sink still requires the owner to be the run token's own
-// subject and the provider to be the run's, live.
-type providerSubscriptionSnapshot struct {
+// providerGrantSnapshot is what dispatch records on a provider grant it
+// authors (a Claude sign-in sentinel, a Bedrock key): which provider's
+// credential it is and whose. It grants nothing: the sink still requires the
+// owner to be the run token's own subject and the provider to be the run's,
+// live.
+type providerGrantSnapshot struct {
 	ProviderUID  string `json:"provider_uid"`
 	OwnerSubject string `json:"owner_subject"`
 }
@@ -222,25 +226,30 @@ func (s *Server) authorProviderSubscriptionInjection(ctx context.Context, run ty
 		source:   "provider",
 		detail:   "the run owner's own Claude sign-in injected proxy-side; sandbox holds only an inert sentinel delivered via env",
 		provider: c.provider.ID,
-		snapshot: providerSubscriptionSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner},
+		snapshot: providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner},
 	})
 	return injections, mitmHosts, ok
 }
 
-// dropUnauthoredProviderSignInInjections removes every injection naming a
-// per-person sign-in sentinel (wardyn-provider-<uid>-oauth / -sso), auditing
-// each. Their one author is dispatch, which runs after this; a stored, inline
-// or recorded policy's grant carries no record of whose sign-in it is, and the
-// sink refuses it — which would fail the proxy's startup.
-func (s *Server) dropUnauthoredProviderSignInInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant) []runner.InjectionGrant {
+// dropUnauthoredProviderInjections removes every injection naming a
+// per-person model-provider credential (wardyn-provider-<uid>-oauth / -sso /
+// -key), auditing each. Their one author is dispatch, which runs after this; a
+// stored, inline or recorded policy's grant carries no record of whose
+// credential it is, and the sink refuses it — which would fail the proxy's
+// startup.
+func (s *Server) dropUnauthoredProviderInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant) []runner.InjectionGrant {
 	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
-		if !providerSignInSecret(ig.Rule.SecretName) {
+		if !strings.HasPrefix(ig.Rule.SecretName, providerSecretPrefix) {
 			return false
+		}
+		reason := "provider_key_not_dispatch_authored"
+		if providerSignInSecret(ig.Rule.SecretName) {
+			reason = "provider_signin_not_dispatch_authored"
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.dropped",
 			ig.GrantID.String(), "denied", mustJSON(map[string]any{
 				"grant_id": ig.GrantID, "secret_name": ig.Rule.SecretName, "host": ig.Rule.Host,
-				"reason": "provider_signin_not_dispatch_authored",
+				"reason": reason,
 			})))
 		return true
 	})
@@ -280,7 +289,7 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 		writeError(w, status, body)
 		return true
 	}
-	var rec providerSubscriptionSnapshot
+	var rec providerGrantSnapshot
 	if !s.grantSnapshot(ctx, claims.RunID, grantID, &rec) || rec.ProviderUID != uid || rec.OwnerSubject == "" {
 		return fail(http.StatusForbidden, "missing_scope_snapshot", mpSubSinkNotRecorded)
 	}

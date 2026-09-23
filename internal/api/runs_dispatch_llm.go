@@ -62,7 +62,9 @@ type llmTransport struct {
 	injectBedrockSSO bool
 	// provider is the model provider this run chose and whose owner's own
 	// credential its arm authors (resolveProviderTransport); nil on the legacy
-	// lane chain, where every other field here decides instead.
+	// lane chain, where every other field here decides instead. A Bedrock
+	// provider's arm also fills the bedrock* fields above, so every consumer of
+	// those (mounts, the ceiling, the grant authors) reads it unchanged.
 	provider *chosenProvider
 	// secretEnvKeys are the sandboxEnv variables applyBedrockTransport filled
 	// with REAL credential material — the resident SigV4 keys, or the captured
@@ -71,6 +73,13 @@ type llmTransport struct {
 	// by dispatch's splitSecretEnv, which moves them onto SandboxSpec.SecretEnv
 	// so a substrate does not have to publish them in a readable pod spec.
 	secretEnvKeys []string
+}
+
+// providerSubscription reports whether this run chose a Claude subscription
+// provider — the provider arm whose sentinel grant and built-in-host MITM
+// authorProviderSubscriptionInjection authors.
+func (t llmTransport) providerSubscription() bool {
+	return t.provider != nil && t.provider.provider.Kind == types.ModelProviderAnthropicSubscription
 }
 
 // isModelRun reports whether a dispatch actually invokes the model. Two run
@@ -359,16 +368,20 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 		detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
 		mode = "aws-dir-mount"
 	}
+	data := map[string]any{
+		"region": b.region, "model": b.model, "hosts": b.egressHosts,
+		// The EFFECTIVE data-plane host — a WARDYN_BEDROCK_BASE_URL
+		// (PrivateLink) override's host, else the regional public one — so
+		// the record names where the call actually went rather than leaving
+		// an auditor to infer it from the region.
+		"endpoint": b.runtimeHost,
+		"mode":     mode, "detail": detail,
+	}
+	if run.ModelProviderID != "" {
+		data["provider"] = run.ModelProviderID
+	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
-		run.ID.String(), "success", mustJSON(map[string]any{
-			"region": b.region, "model": b.model, "hosts": b.egressHosts,
-			// The EFFECTIVE data-plane host — a WARDYN_BEDROCK_BASE_URL
-			// (PrivateLink) override's host, else the regional public one — so
-			// the record names where the call actually went rather than leaving
-			// an auditor to infer it from the region.
-			"endpoint": b.runtimeHost,
-			"mode":     mode, "detail": detail,
-		})))
+		run.ID.String(), "success", mustJSON(data)))
 	return secretEnvKeys
 }
 
@@ -548,12 +561,19 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 // refuses a grant without one — see resolveBedrockBearerInjection.
 func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.AgentRun, t llmTransport, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
 	mitmHosts := []string{net.JoinHostPort(t.bedrock.runtimeHost, strconv.Itoa(t.bedrock.runtimePort))}
+	secret, snapshot := bedrockAPIKeySecret, any(bedrockBearerSnapshotOf(t.bedrock.bearerNamespace))
+	if c := t.provider; c != nil {
+		// A chosen provider's key: its owner's own, under the provider's UID,
+		// resolved by resolveProviderBedrockKeyInjection.
+		secret = providerSecretName(c.provider.UID, providerKeyPart)
+		snapshot = providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner}
+	}
 	beScope, _ := json.Marshal(map[string]any{
 		"host":        t.bedrock.runtimeHost,
 		"header":      "Authorization",
 		"format":      "Bearer %s",
-		"secret_name": bedrockAPIKeySecret,
-		"snapshot":    bedrockBearerSnapshotOf(t.bedrock.bearerNamespace),
+		"secret_name": secret,
+		"snapshot":    snapshot,
 	})
 	beGrantID := uuid.New()
 	if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
@@ -712,6 +732,8 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		if llm, ok = s.resolveProviderTransport(ctx, run, p, policy, sandboxEnv, siteCfg, siteCfgOK); !ok {
 			return dispatchLLMPlan{}, false
 		}
+		// A Bedrock provider's session grant records this scope.
+		sso = llm.providerAWSScope()
 	} else {
 		// WHOSE credential, decided from a roster we could actually READ. A failed
 		// read yields a zero siteCfg — perUser=false, owner="" — which is the
@@ -753,7 +775,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// trust-store wiring.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.injectSub || llm.injectManaged || llm.provider != nil || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject {
+	if llm.injectSub || llm.injectManaged || llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject {
 		var ok bool
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
@@ -780,10 +802,10 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		}
 	}
 
-	// A per-person sign-in sentinel is injected only through the grant the
-	// run's own provider arm authors next, which records whose sign-in it is.
-	injections = s.dropUnauthoredProviderSignInInjections(ctx, run, injections)
-	if llm.provider != nil {
+	// A per-person provider credential is injected only through the grant the
+	// run's own provider arm authors next, which records whose it is.
+	injections = s.dropForeignModelInjections(ctx, run, llm, s.dropUnauthoredProviderInjections(ctx, run, injections))
+	if llm.providerSubscription() {
 		var ok bool
 		if injections, bedrockMITMHosts, ok = s.authorProviderSubscriptionInjection(ctx, run, llm, policy, injections); !ok {
 			return dispatchLLMPlan{}, false
@@ -839,6 +861,6 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
 		bedrockMITMHosts:     bedrockMITMHosts,
 		llmUnavailableDetail: unavailable,
-		mitmLLM:              llm.injectSub || llm.injectManaged || llm.provider != nil || mitmForInspect,
+		mitmLLM:              llm.injectSub || llm.injectManaged || llm.providerSubscription() || mitmForInspect,
 	}, true
 }

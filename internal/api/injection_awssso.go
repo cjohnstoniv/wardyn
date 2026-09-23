@@ -195,8 +195,17 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		// OPERATOR namespace — the exact substitution this arm refuses.
 		return fail(http.StatusServiceUnavailable, "roster_unreadable", credentialReauthScopeChangedRefusal, nil)
 	}
+	// A run that chose a model provider — or a grant naming one — resolves
+	// only from that provider's record and its owner's own session; the
+	// roster never decides it (providerSSOScopeAt).
 	scope := awsSSOScopeFor(siteCfg, run.Agent, claims.Sub)
-	if drift := snapshot.driftFrom(siteCfg, run.Agent, scope, claims.Sub); drift != "" {
+	drift := ""
+	if run.ModelProviderID != "" || snapshot.ProviderUID != "" {
+		scope, drift = providerSSOScopeAt(siteCfg, run, snapshot, claims.Sub)
+	} else {
+		drift = snapshot.driftFrom(siteCfg, run.Agent, scope, claims.Sub)
+	}
+	if drift != "" {
 		return fail(http.StatusForbidden, "scope_changed", credentialReauthScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
@@ -236,6 +245,16 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 			map[string]any{"host": minted.Injection.Host})
 	}
 
+	if reason != "" && scope.provider != "" {
+		// No hold: a provider's sign-in door, which a hold would wait on,
+		// arrives with MP-13. The run's next model call fails, naming it.
+		state, remedy := mpBRNotSignedIn, mpRunRemedySignIn
+		if reason == awsSSOReauthReasonUnavailable && blob.renewable(s.cfg.Now()) {
+			state, remedy = mpBRRenewing, mpBRRemedyRetry
+		}
+		return fail(http.StatusForbidden, "provider_signin_"+reason,
+			fmt.Sprintf(mpRunRefusal, run.ModelProviderID, state, remedy), nil)
+	}
 	if reason != "" {
 		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, reason)
 	}

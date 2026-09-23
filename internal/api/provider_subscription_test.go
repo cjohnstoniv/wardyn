@@ -147,10 +147,10 @@ func TestProviderSubscriptionDispatch(t *testing.T) {
 			t.Errorf("injection = %+v, want the provider's sentinel on api.anthropic.com", ig.Rule)
 		}
 		var scope struct {
-			Snapshot providerSubscriptionSnapshot `json:"snapshot"`
+			Snapshot providerGrantSnapshot `json:"snapshot"`
 		}
 		_ = json.Unmarshal(st.grants[0].Spec.Scope, &scope)
-		if scope.Snapshot != (providerSubscriptionSnapshot{ProviderUID: p.UID, OwnerSubject: subOwner}) {
+		if scope.Snapshot != (providerGrantSnapshot{ProviderUID: p.UID, OwnerSubject: subOwner}) {
 			t.Errorf("snapshot = %+v, want {%s %s}", scope.Snapshot, p.UID, subOwner)
 		}
 		if len(policy.WorkspaceMounts) != 0 {
@@ -300,7 +300,7 @@ func subScope(uid, owner string) json.RawMessage {
 	b, _ := json.Marshal(map[string]any{
 		"host": "api.anthropic.com", "header": "Authorization", "format": "Bearer %s",
 		"secret_name": providerSecretName(uid, providerOAuthPart),
-		"snapshot":    providerSubscriptionSnapshot{ProviderUID: uid, OwnerSubject: owner},
+		"snapshot":    providerGrantSnapshot{ProviderUID: uid, OwnerSubject: owner},
 	})
 	return b
 }

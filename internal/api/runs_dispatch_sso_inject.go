@@ -127,6 +127,10 @@ type awsSSOScopeSnapshot struct {
 	SSOAccountID     string `json:"sso_account_id"`
 	SSORoleName      string `json:"sso_role_name"`
 	Region           string `json:"region"`
+	// ProviderUID is the model provider whose session this is ("" on the
+	// roster's lanes): the sink then re-derives the scope from that provider
+	// record rather than the roster (providerSSOScopeAt).
+	ProviderUID string `json:"provider_uid,omitempty"`
 }
 
 // ssoPortalMITMEntry is the ONE spelling of a Phase-B TLS-MITM entry, and the
@@ -192,6 +196,7 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 			SSOAccountID:     t.bedrock.ssoAccountID,
 			SSORoleName:      t.bedrock.ssoRoleName,
 			Region:           t.bedrock.ssoRegion,
+			ProviderUID:      sso.provider,
 		},
 		// Production is TLS-only. The single exception is the deployment that
 		// already refused to boot without WARDYN_ALLOW_TEST_ENDPOINTS: the

@@ -92,6 +92,11 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 	if rerr != nil {
 		return fail(http.StatusServiceUnavailable, "run_unreadable", credentialReauthRunUnreadableBody)
 	}
+	if run.ModelProviderID != "" {
+		// A run that chose a model provider is credentialed by its arm alone
+		// (resolveProviderBedrockKeyInjection), never the roster's key.
+		return fail(http.StatusForbidden, "provider_run", bedrockBearerNotRecorded)
+	}
 	siteCfg, scErr := s.cfg.Store.GetSiteConfig(ctx)
 	if scErr != nil {
 		return fail(http.StatusServiceUnavailable, "roster_unreadable", credentialReauthStoreErrorBody)

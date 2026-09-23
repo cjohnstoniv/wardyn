@@ -136,6 +136,12 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if s.resolveProviderSubscriptionInjection(w, r, claims, minted, grantID) {
 		return
 	}
+	// A PER-PERSON BEDROCK KEY: wardyn-provider-<uid>-key resolves only from
+	// the run owner's own namespace, for the Bedrock provider the run chose,
+	// to that provider's own host — see resolveProviderBedrockKeyInjection.
+	if s.resolveProviderBedrockKeyInjection(w, r, claims, minted, grantID) {
+		return
+	}
 
 	// SUBSCRIPTION / MANAGED path: the sentinel secret name resolves to a LIVE
 	// Anthropic OAuth access token (the resident host token, or the Wardyn-managed

@@ -58,6 +58,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   recorded grant naming a sign-in sentinel is dropped at dispatch (`run.injection.dropped`, reason
   `provider_signin_not_dispatch_authored`), and Record Mode leaves one out of a profile. Nobody can
   sign in to a provider yet (#533), so until then such runs are refused at create.
+- **A run on a Bedrock model provider uses its owner's own AWS credential (#530).** A run that
+  chose a `bedrock_sso` or `bedrock_bearer` provider reaches Bedrock with the region, model and
+  base URL the provider names (never the boot `WARDYN_BEDROCK_*` values), on its owner's own AWS
+  sign-in (`wardyn-provider-<uid>-sso`) or own Bedrock API key (`wardyn-provider-<uid>-key`), read
+  strictly from their own namespace. The kind names the one lane: the operator's bearer, captured
+  session, host `~/.aws` mount and static SigV4 keys never credential it, and every other model
+  injection the run carries (the legacy sentinels, anything bound for `api.anthropic.com`) is
+  dropped (`run.injection.dropped`, reason `not_the_chosen_provider`). An AWS sign-in must match
+  the provider's access portal and, when set, its pinned account and role. Create, Review and
+  dispatch refuse, naming the provider, a run whose owner has not added their key or is not signed
+  in to AWS for it. The injection sinks re-read the provider on every resolve and serve only the
+  run token's own subject, on the provider's own host, while the run is still on that provider,
+  and the roster's Bedrock key and session never resolve on such a run. A lapsed provider sign-in
+  fails the run's next model call rather than holding it, until provider sign-in lands (#533).
+  The "not yet available" refusal is lifted for both Bedrock kinds.
 
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0069_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to

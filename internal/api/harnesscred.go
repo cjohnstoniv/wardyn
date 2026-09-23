@@ -302,18 +302,18 @@ const harnessTokenAging = 11 * 30 * 24 * time.Hour
 // for a usable credential. label names the credential in the log line and in
 // both error strings. st is always the operator-wide store (harness names are
 // RESERVED — secrets.go — never per-principal), so no caller scopes it by owner.
-func readHarnessBlob[T any](ctx context.Context, st secretstore.Store, provider, label string, usable func(T) bool) (T, bool, error) {
+func readHarnessBlob[T any](ctx context.Context, st secretstore.Store, name, label string, usable func(T) bool) (T, bool, error) {
 	var zero T
 	if st == nil {
 		return zero, false, nil
 	}
-	raw, err := st.Get(ctx, harnessCredSecretName(provider))
+	raw, err := st.Get(ctx, name)
 	if errors.Is(err, secretstore.ErrNotFound) {
 		return zero, false, nil // absent == not connected (not an error)
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: read "+label+" from secret store failed",
-			slog.String("provider", provider), slog.Any("err", err))
+			slog.String("secret", name), slog.Any("err", err))
 		return zero, false, fmt.Errorf("read %s: %w", label, err)
 	}
 	var blob T
@@ -329,7 +329,7 @@ func readHarnessBlob[T any](ctx context.Context, st secretstore.Store, provider,
 // readManagedBlob loads a provider's captured setup-token blob; usable = a
 // non-blank token.
 func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedCredBlob, bool, error) {
-	return readHarnessBlob(ctx, s.cfg.Secrets, provider, "managed credential",
+	return readHarnessBlob(ctx, s.cfg.Secrets, harnessCredSecretName(provider), "managed credential",
 		func(b managedCredBlob) bool { return strings.TrimSpace(b.Token) != "" })
 }
 
@@ -358,11 +358,11 @@ func (s *Server) readAWSSSOBlob(ctx context.Context, scope awsSSOScope) (awsSSOB
 		if lerr != nil {
 			return awsSSOBlob{}, false, fmt.Errorf("list own aws sso credential: %w", lerr)
 		}
-		if !slices.Contains(own, harnessCredSecretName(awsSSOProvider)) {
+		if !slices.Contains(own, scope.ssoSecret()) {
 			return awsSSOBlob{}, false, nil
 		}
 	}
-	return readHarnessBlob(ctx, st, awsSSOProvider, "aws sso credential", awsSSOBlob.valid)
+	return readHarnessBlob(ctx, st, scope.ssoSecret(), "aws sso credential", awsSSOBlob.valid)
 }
 
 // storeAWSSSOBlob persists a captured AWS SSO credential under the reserved
@@ -388,7 +388,7 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 	if err != nil {
 		return fmt.Errorf("marshal aws sso credential blob: %w", err)
 	}
-	return st.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
+	return st.Put(ctx, scope.ssoSecret(), raw)
 }
 
 // Login run launch
