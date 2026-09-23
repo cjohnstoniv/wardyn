@@ -60,8 +60,10 @@ for p in "${UP_PORT}" "${DEX_PORT}" "${PG_PORT}" "${REGISTRY_PORT}" "${SSH_PORT}
   _listen="$(ss -ltn "( sport = :${p} )")"
   grep -q LISTEN <<<"${_listen}" && die "port ${p} is taken — another stack? refusing to start"
 done
-_listen8088="$(ss -ltn "( sport = :8088 )")"
-grep -q LISTEN <<<"${_listen8088}" && die "the hermetic e2e backend (:8088) is up — one e2e backend at a time"
+# By process, not by port: run-ui-e2e.sh now picks a free port per run, so a
+# hermetic backend can be on any port, in any checkout. Its binary is always
+# .e2e-bin/wardynd; the runner covers the gap between two specs' backends.
+pgrep -f "[r]un-ui-e2e[.]sh|[.]e2e-bin/wardynd" >/dev/null && die "a hermetic e2e backend (run-ui-e2e.sh or .e2e-bin/wardynd) is running — one e2e backend at a time"
 pgrep -f "[k]ind-sso-walk.sh" >/dev/null && die "a kind SSO walk is running — one e2e backend at a time"
 for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}"; do
   docker image inspect "${img}" >/dev/null 2>&1 || die "${img} is not on ${DOCKER_HOST:-the default daemon} — build it from this tree (deploy/compose/Dockerfile.wardynd / Dockerfile.proxy)"

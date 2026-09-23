@@ -21,11 +21,13 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -114,57 +116,39 @@ func TestMigrateAppliesAndIsIdempotent(t *testing.T) {
 		t.Fatal("no embedded migrations; embed glob is broken")
 	}
 
-	// Assert by filename SET, not by a bare COUNT(*): pgPool migrates the
-	// database WARDYN_TEST_PG names, and on a local server that database is
-	// shared across worktrees/branches, each of which may carry its own extra
-	// migration files (#210). A COUNT(*) cannot tell "Migrate skipped one of
-	// ours" apart from "another branch's migration is also in here" — it just
-	// reports an off-by-N against the wrong culprit. Filtering to exactly our
-	// embedded filenames tolerates a foreign row while still catching a
-	// genuine miss or a genuine duplicate, and names which filename is which.
-	recordedCounts := func() map[string]int {
+	// Compare the recorded SET with the embedded one, filename by filename, so a
+	// failure names the file: one Migrate did not record, or a recorded one that
+	// no embedded migration accounts for. A row count could only say "off by one"
+	// (#210). filename is the table's primary key, so no name can be recorded
+	// twice.
+	assertRecordedSetIsEmbeddedSet := func(when string) {
 		t.Helper()
-		rows, err := pool.Query(ctx,
-			`SELECT filename, COUNT(*) FROM schema_migrations WHERE filename = ANY($1) GROUP BY filename`, names)
+		rows, err := pool.Query(ctx, `SELECT filename FROM schema_migrations ORDER BY filename`)
 		if err != nil {
-			t.Fatalf("count schema_migrations by filename: %v", err)
+			t.Fatalf("read schema_migrations: %v", err)
 		}
-		defer rows.Close()
-		counts := make(map[string]int, len(names))
-		for rows.Next() {
-			var filename string
-			var n int
-			if err := rows.Scan(&filename, &n); err != nil {
-				t.Fatalf("scan schema_migrations row: %v", err)
-			}
-			counts[filename] = n
+		recorded, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatalf("read schema_migrations: %v", err)
 		}
-		if err := rows.Err(); err != nil {
-			t.Fatalf("iterate schema_migrations: %v", err)
-		}
-		return counts
-	}
-	assertEachAppliedOnce := func(when string) {
-		t.Helper()
-		counts := recordedCounts()
 		for _, name := range names {
-			switch counts[name] {
-			case 0:
+			if !slices.Contains(recorded, name) {
 				t.Errorf("%s: %s is not recorded in schema_migrations", when, name)
-			case 1:
-				// expected
-			default:
-				t.Errorf("%s: %s is tracked %d times; Migrate is not idempotent", when, name, counts[name])
+			}
+		}
+		for _, name := range recorded {
+			if !slices.Contains(names, name) {
+				t.Errorf("%s: schema_migrations records %s, which is not an embedded migration", when, name)
 			}
 		}
 	}
-	assertEachAppliedOnce("after first Migrate")
+	assertRecordedSetIsEmbeddedSet("after first Migrate")
 
-	// Re-running Migrate() must be a clean no-op: same tracked set, no error.
+	// Re-running Migrate() must be a clean no-op: same recorded set, no error.
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("second Migrate (should be no-op): %v", err)
 	}
-	assertEachAppliedOnce("after second Migrate")
+	assertRecordedSetIsEmbeddedSet("after second Migrate")
 }
 
 // TestMigrateAdvisoryLockSerializesBoots proves N5: Migrate() takes the

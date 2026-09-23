@@ -47,12 +47,12 @@ wait_down() {
 }
 
 # pick_free_port — ask the OS for a free TCP port on 127.0.0.1 and print it.
-# Bind then immediately close: the same release-before-use trick
-# scripts/lib/up_doctor_ports_test.sh already uses to deterministically occupy
-# one, run in reverse. There is a small window where another process grabs the
-# port before the caller binds it, but not one worth a lockfile protocol for a
-# test harness — the caller (e2e-backend.sh) already retries once on a bind
-# failure. Requires python3, already relied on elsewhere under scripts/.
+# Bind then immediately close, so nothing holds the port afterwards: another
+# process can take it before the caller binds it. run-ui-e2e.sh accepts that
+# rather than run a lockfile protocol: its backend then fails to come up, and
+# it reports "backend up failed ... this is the backend, not the spec". Its
+# one retry reuses the same port, so it does not recover a stolen one.
+# Requires python3, already relied on elsewhere under scripts/.
 pick_free_port() {
   python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }

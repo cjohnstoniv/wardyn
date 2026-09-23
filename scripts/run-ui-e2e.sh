@@ -57,11 +57,13 @@ if [[ -z "${WARDYN_E2E_UI_ADDR:-}" ]]; then
   WARDYN_E2E_UI_ADDR=":${ui_port}"
 fi
 export WARDYN_E2E_ADDR WARDYN_E2E_UI_ADDR
+db_autonamed=""
 if [[ -z "${WARDYN_E2E_PG_DBNAME:-}" ]]; then
   # $$ (this script's own PID), not the picked port: two lanes racing to
   # provision the SAME never-before-seen database name would otherwise both
   # pass cmd_up's "CREATE DATABASE ... || true" and share one schema reset.
   WARDYN_E2E_PG_DBNAME="wardyn_e2e_$$"
+  db_autonamed=1
 fi
 
 PORT="${WARDYN_E2E_ADDR}"; PORT="${PORT#*:}"
@@ -123,8 +125,25 @@ fi
 # Playwright's exit code, which is 0 when every test in the file is
 # `test.skip()`-ed, so a guard that skips its whole file used to be counted as
 # "passed" here with nothing distinguishing it from a real pass.
-results_json="${REPO_ROOT}/test/reports/e2e/results.json"
+# Named per run, like the database: two runs from one checkout would otherwise
+# each read the other's report.
+results_json="${REPO_ROOT}/test/reports/e2e/results-$$.json"
 allow_all_skipped=" ${WARDYN_E2E_ALLOW_ALL_SKIPPED:-} "
+
+# On any exit, including an interrupted run: stop the backend, then drop an
+# auto-named database. That database is this run's alone, and nothing else
+# would ever drop it; a caller-named one is the caller's to keep.
+cleanup() {
+  rm -f "${results_json}"
+  [[ -n "${LIVE_BASE_URL}" ]] && return 0
+  ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
+  if [[ -n "${db_autonamed}" ]]; then
+    docker exec "${WARDYN_E2E_PG_CONTAINER}" psql -U wardyn -d wardyn \
+      -c "DROP DATABASE IF EXISTS \"${DB}\" WITH (FORCE)" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+trap cleanup EXIT
 
 pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=(); flaky_total=0
 for spec in "${specs[@]}"; do
@@ -210,7 +229,6 @@ for spec in "${specs[@]}"; do
   fi
 done
 
-[[ -n "${LIVE_BASE_URL}" ]] || ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
 echo
 log "UI e2e summary: ${pass} spec file(s) passed, ${fail} failed, ${skipped_total} test(s) skipped, ${flaky_total} test(s) flaky"
 if [[ ${#zero_executed_specs[@]} -gt 0 ]]; then

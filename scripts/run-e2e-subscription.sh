@@ -83,12 +83,21 @@ fi
 # an unrelated port (#210). Killing only the process bound to BASE's port
 # keeps the "reap a stray/foreign wardynd" property the pattern match was for,
 # without touching one bound elsewhere.
-BASE_PORT="${BASE##*:}"
+# The port is what follows the LAST colon of the host part, as e2e-backend.sh
+# splits its ADDR; the path is cut first so a trailing slash cannot ride along.
+BASE_PORT="${BASE#*://}"; BASE_PORT="${BASE_PORT%%/*}"; BASE_PORT="${BASE_PORT##*:}"
+if [[ ! "${BASE_PORT}" =~ ^[0-9]+$ ]]; then
+  warn "WARDYN_E2E_BASE_URL (${BASE}) names no port; this driver stops whatever holds that port, so it needs one"
+  exit 1
+fi
 stop_wardynd() {
+  local pids
   if command -v fuser >/dev/null 2>&1; then
     fuser -k "${BASE_PORT}/tcp" >/dev/null 2>&1 || true
   else
-    pkill -f 'bin/wardynd' >/dev/null 2>&1 || true
+    pids="$(ss -ltnpH "sport = :${BASE_PORT}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)"
+    # shellcheck disable=SC2086 # one PID per word
+    [[ -n "${pids}" ]] && kill ${pids} 2>/dev/null
   fi
   wait_down "${BASE}" || warn "a wardynd is still answering ${BASE} after stop"
 }
