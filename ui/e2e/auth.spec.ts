@@ -373,24 +373,30 @@ test.describe("outage vs. rejection (R4/F027)", () => {
   test("the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in", async ({ page }) => {
     // /healthz is down for the gate's FIRST read only. The one-shot mount fetch
     // this replaced read that as sso:false and never asked again.
+    //
+    // page.clock, not a real 10s wait: the gate's re-ask rides SSO_POLL_MS
+    // (sign-in.tsx), which the clock API fakes, so the second /healthz is
+    // fulfilled on demand by fast-forwarding instead of this test racing a
+    // real setInterval against a loaded CI host (the old `.poll(timeout:
+    // 30_000)` this replaced).
+    await page.clock.install();
     let served = 0;
     await page.route("**/healthz", async (route) => {
       served += 1;
       if (served === 1) return route.fulfill({ status: 503, body: "" });
-      return route.fallback();
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) });
     });
     await clearTokenInit(page);
     await page.goto("/");
     // #457: the FIRST read is the outage, so the screen is honestly
-    // "checking" until the next poll (SSO_POLL_MS) lands the real answer —
-    // longer than the default assertion timeout covers.
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+    // "checking" until the next poll (SSO_POLL_MS) lands the real answer.
+    await expect(signInToken(page)).toBeVisible();
 
     // What must NOT happen is the posture being frozen on the outage's
-    // answer — the gate has asked more than once.
-    await expect
-      .poll(() => served, { timeout: 30_000 })
-      .toBeGreaterThan(1);
+    // answer — fast-forward past SSO_POLL_MS and the gate must have asked
+    // again.
+    await page.clock.fastForward("00:11");
+    await expect.poll(() => served).toBeGreaterThan(1);
   });
 });
 
