@@ -651,7 +651,8 @@ func groundtruthRotatorLock(pool *pgxpool.Pool) func(context.Context) (func(), b
 
 // lifecycleStopper adapts the runner + store to lifecycle.Stopper. StopRun wins
 // the idle-guarded RUNNING->STOPPED transition FIRST (so a run touched after the
-// reaper's snapshot, or already moved terminal, is left alone), then gracefully
+// reaper's snapshot, already moved terminal, or with an open request still inside
+// its wait (store.openHoldSQL) is left alone), then gracefully
 // stops the sandbox and runs the revoke cascade, surfacing any teardown/revoke
 // failure to the reaper. It is idempotent: a missing sandbox or already-stopped
 // run is not an error (the runner's StopSandbox is itself idempotent).
@@ -694,8 +695,9 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	// `wardyn attach` TouchRun (which bumps updated_at, state stays RUNNING) between
 	// the scan and here means the run is NOT idle — the guarded CAS then no-ops
 	// (applied=false) and we tear nothing down and revoke nothing, preserving the
-	// keepalive. If a concurrent kill/complete already moved the run terminal, the
-	// CAS also no-ops and we leave that path's teardown/revocation untouched.
+	// keepalive. If a concurrent kill/complete already moved the run terminal, or
+	// an open request is still inside its wait (store.openHoldSQL), the CAS also
+	// no-ops and we leave the run and any teardown/revocation untouched.
 	applied, uerr := store.NewPG(l.pool).UpdateRunStateIfIdle(ctx, runID, types.RunRunning, types.RunStopped, notAfter)
 	if uerr != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle update state: %w", uerr)
@@ -714,7 +716,9 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	// APPROVALS FIRST, before the destructive teardown, for the same reason
 	// handleKillRun cancels before KillSandbox: a PENDING approval is the one
 	// piece of this cascade a human is looking at, and an idle-stopped run is
-	// typically idle BECAUSE its agent is parked on a wait_for_review hold. Run
+	// often idle BECAUSE its agent is parked on a hold — once that hold's wait
+	// has passed, since the CAS refuses while an open request is still inside
+	// its wait (store.openHoldSQL). Run
 	// AFTER the guarded CAS for the same reason the revokes are: a stop that lost
 	// the CAS must not cancel a still-live run's questions. Best-effort and
 	// non-blocking like the revokes (the server logs + audits its own failure);

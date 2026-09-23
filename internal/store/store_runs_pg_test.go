@@ -438,6 +438,46 @@ func TestPG_UpdateRunStateIfIdle_HoldAware(t *testing.T) {
 	if applied {
 		t.Error("idle CAS must NO-OP for a PENDING approval with no run-scoped expiry (NULL reads as open)")
 	}
+
+	// Case 4 — ends_at is the binding bound: a long wait, but the run's end has
+	// already passed, so min(requested_at+wait, ends_at) is in the past and the
+	// request is no longer open. The stop must APPLY.
+	past := time.Now().UTC().Add(-time.Minute)
+	endedHold := persistRun(t, ctx, pool, func() types.AgentRun {
+		r := newRun(types.RunRunning)
+		r.WaitBudgetSec = 3600
+		r.EndsAt = &past
+		return r
+	}())
+	if _, err := st.CreateApproval(ctx, newApproval(endedHold.ID, time.Now().UTC())); err != nil {
+		t.Fatalf("create ended-run approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, endedHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (ended-run hold): %v", err)
+	}
+	if !applied {
+		t.Error("idle CAS must APPLY when the run's ends_at has passed, even inside wait_budget_sec")
+	}
+
+	// Case 5 — ends_at alone bounds the request (no wait): the end is still in
+	// the future, so the request is open and the stop must NO-OP.
+	future := time.Now().UTC().Add(time.Hour)
+	endOnlyHold := persistRun(t, ctx, pool, func() types.AgentRun {
+		r := newRun(types.RunRunning)
+		r.EndsAt = &future
+		return r
+	}())
+	if _, err := st.CreateApproval(ctx, newApproval(endOnlyHold.ID, time.Now().UTC())); err != nil {
+		t.Fatalf("create end-only approval: %v", err)
+	}
+	applied, err = st.UpdateRunStateIfIdle(ctx, endOnlyHold.ID, types.RunRunning, types.RunStopped, notAfter)
+	if err != nil {
+		t.Fatalf("idle CAS (end-only hold): %v", err)
+	}
+	if applied {
+		t.Error("idle CAS must NO-OP while a PENDING approval is open before the run's ends_at")
+	}
 }
 
 // TestPG_ListRuns_ReaperCandidateQuery exercises the query shape the idle reaper
