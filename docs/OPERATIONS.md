@@ -2014,6 +2014,12 @@ in. A type change made in `WARDYN_OIDC_ROLE_MAP`
 has no People-page edit to act on, so it reaches a token only at its
 holder's next sign-in — revoke explicitly when that is too late. A user type
 a live token still carries cannot be deleted (`409`, naming the count).
+The type arm only compares the edited value's own before/after type against
+a token's stamp, so a holder whose effective type shifts because a
+different, higher-priority group is the one actually edited — or because
+the edited value's own prior derivation was empty rather than `standard` —
+keeps a stale stamp until that holder's next sign-in or an explicit revoke,
+the same as a `WARDYN_OIDC_ROLE_MAP` edit above.
 
 That matters most for the tier 0.7 added. A human demoted out of `security_admin`
 keeps, through any token they minted while they held it, exactly what the tier

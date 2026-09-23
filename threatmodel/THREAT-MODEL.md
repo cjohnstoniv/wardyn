@@ -1650,6 +1650,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     revoke. A boot-time diff of the chart map against a persisted copy would
     close it; none is built.
 
+    The type arm is also keyed on the edited value's own pre-edit type
+    against each token's stamp, not a per-token re-derivation the way the
+    tier arm (`tokenLosesTier`) is: a holder whose effective type shifts
+    because a DIFFERENT, higher-priority group was the one actually edited
+    keeps a stamp that never equalled the edited value's old type, so
+    nothing revokes it, and a value whose own prior derivation was empty
+    (a refused sign-in, not `standard`) revokes nothing even though the edit
+    now retypes a holder through it. Same shape as the chart-remap residual
+    above: it closes at the holder's next sign-in or an explicit revoke.
+
     **The remediation exists, is the only one, and has to be invoked
     deliberately.** `GET /api/v1/tokens` lists every live token with its owner
     and `last_used_at`; `DELETE /api/v1/tokens/{id}` revokes one; `POST

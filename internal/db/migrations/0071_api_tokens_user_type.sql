@@ -11,8 +11,10 @@
 --
 -- Every existing token is backfilled 'standard', the type the old member tier
 -- always meant; it learns its holder's real type at their next sign-in. The
--- CHECK refuses an empty stamp, so a mint or a re-stamp that forgot the type
--- fails instead of storing a token with no type at all.
+-- column keeps its DEFAULT so an insert that omits it still stamps
+-- 'standard' rather than failing; the Go mint and re-stamp paths always name
+-- the column explicitly, and the CHECK refuses an empty stamp, so only an
+-- omitted column, never an empty one, can produce a token with no real type.
 ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS user_type TEXT NOT NULL DEFAULT 'standard';
 
 ALTER TABLE api_tokens DROP CONSTRAINT IF EXISTS api_tokens_user_type_check;
