@@ -125,7 +125,6 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	}
 	data := map[string]any{"ends_at": run.EndsAt}
 	if _, canKeep := s.cfg.Runner.(runner.SandboxEnder); canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != "" {
-		s.leaseEnded.Store(run.ID, struct{}{})
 		err := s.endSandbox(ctx, run)
 		if err == nil {
 			// Cancel/revoke only once the end has actually succeeded: on failure
@@ -135,6 +134,7 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 			// whose SandboxEnder answers ErrEndUnsupported.
 			s.cancelRunApprovals(ctx, run.ID)
 			s.revokeRunBroker(ctx, run.ID)
+			s.leaseEnded.Store(run.ID, struct{}{})
 			data["kept"] = true
 			data["kept_until"] = now.Add(s.cfg.EndedRunGrace)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ended",

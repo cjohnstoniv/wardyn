@@ -24,6 +24,18 @@ type leaseStore struct {
 	*dispatchTestStore
 	warnFor *time.Time
 	warnSec int
+	casErr  error // returned once by UpdateRunStateIf
+}
+
+func (s *leaseStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	s.mu.Lock()
+	err := s.casErr
+	s.casErr = nil
+	s.mu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	return s.dispatchTestStore.UpdateRunStateIf(ctx, id, from, to)
 }
 
 func (s *leaseStore) ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error) {
@@ -242,6 +254,29 @@ func TestRunLease_EndFailsClosed(t *testing.T) {
 	ended := f.audit.eventsFor(f.run.ID, "run.ended")
 	if len(ended) != 1 || leaseAuditData(t, ended[0])["kept"] != false || leaseAuditData(t, ended[0])["end_error"] == nil {
 		t.Errorf("run.ended events = %+v, want one with kept:false and end_error", ended)
+	}
+}
+
+// TestRunLease_AFailedEndIsRevokedOnReassert: an end that fails and whose
+// fail-closed stop fails too (the same daemon down, or the pass out of time)
+// leaves the run claimed and RUNNING with its broker credentials live. The next
+// pass must revoke them; it must not read the failed end as already revoked.
+func TestRunLease_AFailedEndIsRevokedOnReassert(t *testing.T) {
+	f := newLeaseFixture(t, -time.Minute)
+	f.rn.endErr = context.DeadlineExceeded
+	f.st.casErr = context.DeadlineExceeded
+	f.sweep(t)
+	if f.st.State() != types.RunRunning || f.brk.count(f.run.ID) != 0 {
+		t.Fatalf("first pass: state %s, broker revocations %d; want RUNNING, 0 (end and stop both failed)",
+			f.st.State(), f.brk.count(f.run.ID))
+	}
+
+	f.rn.endErr = nil
+	f.now = f.now.Add(time.Minute)
+	f.sweep(t)
+	if f.brk.count(f.run.ID) != 1 {
+		t.Errorf("re-assert pass: broker revocations = %d, want 1 — the failed end's credentials were never revoked",
+			f.brk.count(f.run.ID))
 	}
 }
 

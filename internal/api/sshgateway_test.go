@@ -452,10 +452,6 @@ func sshDial(t *testing.T, h *sshTestHarness, username string, clientPriv ed2551
 
 // ─── tests ─────────────────────────────────────────────────────────────────
 
-// TestSSHGateway_AuthRejectAccept covers auth reject/accept: an unregistered
-// key is rejected, a registered key authenticating for a run it does NOT own
-// is rejected (owner-only), and the owner's registered key is accepted —
-// each rejection/acceptance is audited under ssh.auth.
 // TestSSHGateway_FreshRunRefusesAKeptRun: sshFreshRun re-checks the run on
 // every channel open; a run the lease ended is RUNNING with a live sandbox
 // ref but nothing to attach to, so it must be refused the same as the two
@@ -476,6 +472,10 @@ func TestSSHGateway_FreshRunRefusesAKeptRun(t *testing.T) {
 	}
 }
 
+// TestSSHGateway_AuthRejectAccept covers auth reject/accept: an unregistered
+// key is rejected, a registered key authenticating for a run it does NOT own
+// is rejected (owner-only), and the owner's registered key is accepted —
+// each rejection/acceptance is audited under ssh.auth.
 func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 	st := newSSHMemStore()
 	ownRun := uuid.New()
