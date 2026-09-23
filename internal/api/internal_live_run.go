@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -105,7 +106,7 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			s.auditInternalDenied(r, claims, "run_not_found", "")
+			s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "")
 			writeError(w, http.StatusForbidden, "run not found")
 			return false
 		}
@@ -127,7 +128,7 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	if internalUploadWithinGrace(r.URL.Path, run, s.cfg.Now().UTC()) {
 		return true
 	}
-	s.auditInternalDenied(r, claims, "run_terminal", string(run.State))
+	s.auditInternalDenied(r, claims, authz.ReasonRunTerminal, string(run.State))
 	writeError(w, http.StatusForbidden, "run is terminal")
 	return false
 }
@@ -191,13 +192,12 @@ func internalUploadWithinGrace(path string, run types.AgentRun, now time.Time) b
 // the enum docs/OPERATIONS.md publishes, and `run_terminal:KILLED` is not a
 // member of that enum — `run_terminal` is, with `run_state` saying which
 // terminal state was found. runState is "" for the reasons that have none.
-func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, reason, runState string) {
-	data := map[string]any{"reason": reason, "actor": internalAuthActor}
+func (s *Server) auditInternalDenied(r *http.Request, claims *identity.Claims, reason authz.Reason, runState string) {
+	d := authz.Deny(reason, r.URL.Path, "").OnRun(claims.RunID).With("actor", internalAuthActor)
 	if runState != "" {
-		data["run_state"] = runState
+		d = d.With("run_state", runState)
 	}
-	ev := s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"authz.denied", r.URL.Path, "denied", mustJSON(data))
+	ev := s.refusalEvent(r.Context(), types.ActorAgent, claims.SPIFFEID, r.Method, d)
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
 }

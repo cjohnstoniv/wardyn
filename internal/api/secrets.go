@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -297,7 +298,6 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		return s.secretOwnerFromRequest(r), true, true
 	}
 	if !s.isOperator(r.Context()) {
-		writeError(w, http.StatusForbidden, "?owner= is admin-only")
 		// Audited, because this is a member reaching for ANOTHER human's
 		// credential namespace and the row is the only trace it happened.
 		// docs/AUDIT-ACTIONS.md's contract is "every member denial that isn't a
@@ -308,14 +308,12 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		//
 		// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
 		// in-handler twin: reason from the closed vocabulary, target the path,
-		// method in the data — and the member-mode marker, which
-		// is why all four sites build the datum through the one
-		// authzDeniedDatum (membermode.go) rather than hand-rolling the map.
+		// method in the data — and the member-mode marker, which is why the
+		// row comes from refuse (authz.Datum) rather than a hand-rolled map.
 		// It names no namespace: the refusal is constant and runs before any
 		// lookup, so neither the response nor the row can say whether the
 		// principal ?owner= asked about exists.
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
+		s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, r.URL.Path, "?owner= is admin-only"))
 		return "", false, false
 	}
 	resolved, known, refusal := s.resolveSecretOwner(r.Context(), q)

@@ -10,6 +10,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- The `harness_login_not_per_user` refusal (a member's `POST /setup/harness-login` when the agent's
+  model credential is not per person) has written `authz.denied` rows since 0.7.2 under a reason the
+  documented closed enum did not list. It is now in `docs/OPERATIONS.md` and `docs/AUDIT-ACTIONS.md`,
+  and the enum is checked from the registry instead of a source scanner that missed it (#736).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
@@ -42,6 +46,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   capability question: `capAllowed`, `capGranted`, `capSeamAllowed` and `capScan` are one-value doors
   onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
   snapshot through a context memo. A build with no store now refuses a widening kind at every door.
+- **Every authorization refusal goes through one emitter and one registry (#736).** `internal/authz` holds the
+  closed `authz.denied` reason set, each reason's effect and status, and the serializable `Decision`
+  (schema `authz/v1`); every door refuses through one `refuse`, and a guard test fails on an
+  `authz.denied` row or a registered reason written by hand. Sentences and statuses are unchanged. Audit rows change additively:
+  the `member_mode` marker now also rides `groups_snapshot_stale` rows, and every row a request
+  produced carries `method`. A refusal naming an unregistered reason answers `500` instead of the door's
+  `403`. The reason codes are frozen as an append-only contract at the 0.8.0 tag.
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and

@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -490,14 +491,12 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 		if !s.isOperator(r.Context()) {
 			// Do not name the allowlist/role-map's members — the caller learns
 			// only that they are not an admin.
-			writeError(w, http.StatusForbidden, "requires admin role")
 			// authz.denied: a member denied a reachable admin surface. Low-noise
 			// by design (see the audit doc in runs_create.go's denyMemberRequest) —
 			// this is the ONE universal chokepoint every admin-gated route funnels
 			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
 			// one audit call here covers all of them.
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
+			s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, r.URL.Path, ""))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -596,9 +595,7 @@ func (s *Server) isSecurityOperator(ctx context.Context) bool {
 func (s *Server) requireSecurityOperator(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.isSecurityOperator(r.Context()) {
-			writeError(w, http.StatusForbidden, "requires admin role")
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "security_admin_surface", r.Method))))
+			s.refuse(w, r, authz.Deny(authz.ReasonSecurityAdminSurface, r.URL.Path, ""))
 			return
 		}
 		next.ServeHTTP(w, r)

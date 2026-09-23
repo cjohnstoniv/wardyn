@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -857,21 +858,13 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 		// Once per request, not once per seam, because effectiveCeiling memoizes
 		// (ceilingMemo): a create that asks three times is one denial, which is
 		// what an operator counting denials means.
-		// Guarded on the SINK, not merely handed to recordAudit's own nil check:
-		// auditEvent is evaluated as recordAudit's ARGUMENT, so a server with no
-		// recorder would still build the event — and stamp it from cfg.Now,
-		// which a Server assembled without New() does not have. Nothing records
-		// on such a build by definition, so the cheapest correct thing is not to
-		// build the row at all.
 		// Not for a display read (isDisplayRead, user_drives_resolve.go). GET
 		// /me resolves the ceiling to answer user_drive_denied_by_profile, which
 		// would otherwise write this row once per console poll for a member who
 		// never asked for a run — a denial count that grows with page views.
 		// Every enforcement caller reaches here unmarked and still records.
-		if s.cfg.Audit != nil && !isDisplayRead(ctx) {
-			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
-				"authz.denied", "governance.ceiling", "denied",
-				mustJSON(map[string]any{"reason": "groups_snapshot_stale"})))
+		if !isDisplayRead(ctx) {
+			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonGroupsSnapshotStale, "governance.ceiling", ""))
 		}
 		return governanceCeiling{}, errGroupsSnapshotStale
 	}

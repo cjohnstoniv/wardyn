@@ -1236,7 +1236,7 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 		// direction. The recorder was returned and thrown away here, so
 		// preflight could have audited every dry run, or none, and this test —
 		// the one test about preflight and the drive door — would not have
-		// noticed either way. It DOES audit: the door is denyMemberField from
+		// noticed either way. It DOES audit: the door is refuse from
 		// inside the shared path, so a refused dry run writes exactly the row a
 		// refused launch writes. That contradicts handlePreflightRun's own
 		// "persists nothing", which is now corrected rather than the behaviour,

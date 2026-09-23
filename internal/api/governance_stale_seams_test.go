@@ -48,7 +48,7 @@ import (
 func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 	// The two sites the design names, each of which emits authz.denied for the
 	// refusal it decides. An addition here is a claim that a THIRD place may
-	// decide this refusal, and it has to bring its own recordAudit with it —
+	// decide this refusal, and it has to bring its own recordRefusal with it —
 	// which the second half of this test then checks.
 	want := map[string]bool{
 		"ceilingWithUnusableGroups": true, // governance.go — target governance.ceiling
@@ -72,7 +72,7 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 				"source; re-point it at the new shape rather than deleting it", name)
 		}
 		if !records[name] {
-			t.Errorf("%s decides the groups_snapshot_stale refusal and no longer calls recordAudit: the "+
+			t.Errorf("%s decides the groups_snapshot_stale refusal and no longer calls recordRefusal: the "+
 				"denial stream is the operator's only view of who cannot use the product, and this is the "+
 				"site F227 put the row at", name)
 		}
@@ -80,7 +80,7 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 }
 
 // staleSentinelSites reports which internal/api functions RETURN
-// errGroupsSnapshotStale, and which of those also call recordAudit. errors.Is
+// errGroupsSnapshotStale, and which of those also call recordRefusal. errors.Is
 // matches are deliberately not counted: matching the sentinel is what the write
 // helpers do, and they are not deciding anything.
 func staleSentinelSites(t *testing.T) (raisers, records map[string]bool) {
@@ -107,7 +107,7 @@ func staleSentinelSites(t *testing.T) (raisers, records map[string]bool) {
 			}
 			if staleSentinelReturned(fn) {
 				raisers[fn.Name.Name] = true
-				if callsNamed(fn, "recordAudit") {
+				if callsNamed(fn, "recordRefusal") {
 					records[fn.Name.Name] = true
 				}
 			}

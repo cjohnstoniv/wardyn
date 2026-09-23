@@ -638,7 +638,7 @@ func TestMemberModelAccess_NotApplicablePassesThrough(t *testing.T) {
 // would land in the SAME namespace (owner == "admin-token") and overwrite the
 // last person's session. A shared row is unaffected: the admin token still
 // may connect it. S-07: the refusal is an authz.denied row — the sibling
-// refusals in authorizeHarnessLogin (denyMemberField/denyMemberCapability)
+// refusals in authorizeHarnessLogin (refuse/denyMemberCapability)
 // both audit, and this is the one refusal on the credential-capture route an
 // operator's own CI job hits with no error budget to notice it by otherwise.
 func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
