@@ -29,7 +29,7 @@ const WHO = "alice@corp.example";
 
 test.describe("permissions — the admin surface, end to end", () => {
   test("a fresh install: nothing enforced, no grants, and it says so", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await expect(page.getByRole("heading", { name: PERM.TITLE, level: 1 })).toBeVisible();
@@ -52,7 +52,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("adding a grant lands the row — amber, and advisory until the kind is enforced", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     // By ROLE + exact name: getByLabel is a substring match, and "Host" is
@@ -72,7 +72,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("enforcing a kind confirms first, then flips the chip and the consequence", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }).click();
@@ -95,7 +95,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("stop enforcing says denies still apply, and puts the off-state back", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }).click();
@@ -108,7 +108,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("removing the grant names who loses it, then empties the table", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("button", { name: `${PERM.REMOVE} ${KIND.egress_host.label} ${HOST}` }).click();
@@ -121,7 +121,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("enforcing with nothing granted is the lockout guard, and it is unmissable", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }).click();
@@ -145,7 +145,7 @@ test.describe("permissions — the seventh kind (workspace_provider) round-trips
   const GRANTEE = "bob@corp.example";
 
   test("granting a provider id lands the row under its own value column", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("textbox", { name: PERM.FIELD_WHO, exact: true }).fill(GRANTEE);
@@ -166,7 +166,7 @@ test.describe("permissions — the seventh kind (workspace_provider) round-trips
   test("enforcing workspace_provider flips its own chip and consequence, independent of the others", async ({
     page,
   }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace_provider.label}` }).click();
@@ -184,7 +184,7 @@ test.describe("permissions — the seventh kind (workspace_provider) round-trips
   });
 
   test("removing the grant returns workspace_provider to its unenforced consequence", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     // Stop enforcing first (the lockout guard refuses a grantless enforced
@@ -212,7 +212,7 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
     page,
   }) => {
     await page.route("**/api/v1/permissions", (route) => route.fulfill({ status: 503, body: "{}" }));
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     // The screen is honest about not knowing: a retry, not a posture.
@@ -238,7 +238,7 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
       (url) => url.pathname.endsWith("/api/v1/runs") && url.searchParams.get("limit") !== "1",
       (route) => route.fulfill({ status: 403, body: "{}" }),
     );
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }).click();
@@ -278,7 +278,7 @@ test.describe("permissions — an inert grant renders neutral, never live (F4-F5
         }),
       }),
     );
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     const table = page.getByRole("table");
@@ -336,7 +336,7 @@ test.describe("Permissions — a security admin actually uses the write surface,
 
   test("adds a grant and enforces the kind as security_admin, then cleans up", async ({ page }) => {
     await mockSecurityAdminRole(page);
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
     await expect(page.getByRole("heading", { name: PERM.TITLE, level: 1 })).toBeVisible();
 

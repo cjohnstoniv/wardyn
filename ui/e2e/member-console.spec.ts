@@ -34,7 +34,7 @@ test.describe("member console — nav absence (mocked /me role)", () => {
     }
   });
 
-  test("the account menu shows a quiet 'member' chip", async ({ page }) => {
+  test("the account menu shows a quiet 'user' chip", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
 
@@ -43,11 +43,12 @@ test.describe("member console — nav absence (mocked /me role)", () => {
     // DropdownMenuContent renders role="menu" once opened.
     await page.locator("header").getByRole("button").last().click();
     const menu = page.getByRole("menu");
-    await expect(menu.getByText("member", { exact: true })).toBeVisible();
+    // The non-admin side is a user (packet B, D6).
+    await expect(menu.getByText("user", { exact: true })).toBeVisible();
   });
 
-  test("admin (unmocked, today's default): the full nine-item nav", async ({ page }) => {
-    await gotoConsole(page);
+  test("admin (unmocked, today's default): the full nine-item nav in the Admin view", async ({ page }) => {
+    await gotoConsole(page, "admin");
     for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Secrets", "Audit", "Recordings"] as const) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
@@ -195,6 +196,6 @@ test.describe("member console — a redacted body is not a deployment fact", () 
     await expect(page.getByText("Runs you launch appear here")).toBeVisible();
     await expect(page.getByText("No runs yet")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "New run" })).toHaveAttribute("href", "/runs/new");
-    await expect(page.getByRole("link", { name: "Getting started" })).toHaveAttribute("href", "/setup");
+    await expect(page.getByRole("main").getByRole("link", { name: "Getting started" })).toHaveAttribute("href", "/setup");
   });
 });

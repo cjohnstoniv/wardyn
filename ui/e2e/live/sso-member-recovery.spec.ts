@@ -64,7 +64,7 @@
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
+import { USER_PREVIEW } from "../../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
 import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/capture-confirm";
 import { LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/login-pane-copy";
@@ -1098,10 +1098,10 @@ test("F (member-preview): an admin previews the state a member is in before they
   await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
 
-  // Into the preview.
-  await page.locator("header").getByRole("button").last().click();
-  await page.getByRole("menuitem", { name: MEMBER_MODE.MENU_NEW }).click();
-  await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeVisible({ timeout: 60_000 });
+  // Into the preview, from the Permissions header (M-2).
+  await page.goto("/admin/permissions");
+  await page.getByRole("button", { name: USER_PREVIEW.MENU_NEW }).click();
+  await expect(page.getByText(USER_PREVIEW.BANNER)).toBeVisible({ timeout: 60_000 });
   await expect.poll(async () => (await me(page)).member_mode_no_credential, { timeout: 30_000 }).toBe(true);
 
   // The state every new member is in, and the one the plain toggle structurally
@@ -1127,8 +1127,8 @@ test("F (member-preview): an admin previews the state a member is in before they
 
   // Nothing was deleted: the admin's session sits untouched in the store and
   // comes back the moment they exit.
-  await page.getByRole("button", { name: MEMBER_MODE.EXIT }).click();
-  await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeHidden({ timeout: 60_000 });
+  await page.getByRole("button", { name: USER_PREVIEW.EXIT }).click();
+  await expect(page.getByText(USER_PREVIEW.BANNER)).toBeHidden({ timeout: 60_000 });
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("live");
 });
 

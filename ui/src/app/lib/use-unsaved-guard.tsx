@@ -110,6 +110,21 @@ export function UnsavedGuardProvider({ children }: { children: React.ReactNode }
 
 let nextGuardId = 0;
 
+// Set by a control that has already asked through requestLeave and is about to
+// reload the page itself (console-view.tsx#switchView): the browser's own
+// beforeunload prompt would be a second question, and a "Stay" there would
+// strand work the first answer already agreed to leave.
+let unloadReleased = false;
+export function releaseUnloadGuard(released: boolean): void {
+  unloadReleased = released;
+}
+
+/** The shared guard's ask-first, for a control that leaves by other means than
+ *  a router navigation (the view switch reloads the page). */
+export function useRequestLeave(): (proceed: () => void) => void {
+  return React.useContext(GuardContext).requestLeave;
+}
+
 /** Called from a dirty-form screen (providers-screen.tsx, agents-tab.tsx —
  *  the actual OWNERS of a draft and its Save action, so the registration
  *  survives a Git/Storage tab switch inside the same screen). Registers
@@ -127,6 +142,7 @@ export function useUnsavedGuard(dirty: boolean): void {
   React.useEffect(() => {
     if (!dirty) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (unloadReleased) return;
       e.preventDefault();
       e.returnValue = "";
     };

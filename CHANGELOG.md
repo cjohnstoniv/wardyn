@@ -67,6 +67,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **The Console view switch, and per-view chrome (#634).** Beside the wordmark, an admin with both
+  views gets an **Admin view** | **User view** switch. On SSO it asks the unsaved-changes guard
+  first, flips the session's existing clamp (`POST /me/member-mode`), tells the other tabs, and
+  reloads into the other view; a failure says "Could not switch — try again." beside it. A
+  single-operator install switches by URL alone. Every SSO tab re-reads `/me` on focus, every
+  minute and after any `403`, and reloads into the session's view when another tab or device has
+  switched it. Each view has its own sidebar: the Admin view carries an "Admin view" eyebrow,
+  its own `/admin/*` links and Setup and Settings under the divider, and a security admin's shows
+  Drives and leaves out Secrets, Recordings, Setup and Settings; the User view lists Runs,
+  Approvals and Workspaces, then Getting started and Your account. New run is in the User view
+  only, the tab title reads "Wardyn admin" in the Admin view, and the avatar menu holds only
+  identity and Sign out. "View as member" and its amber band are retired in favour of the
+  switch; the no-credential preview is now **Preview as a new user** on the Permissions header,
+  and its band's way out reads **Exit preview**.
 - **Console view routing: the Admin view lives under `/admin/*` (#632).** Every admin screen is
   also mounted at `/admin/…`, and `/account` opens today's Settings. A user who opens an
   Admin-view page gets a refusal page instead of the screen; an SSO admin in the User view is

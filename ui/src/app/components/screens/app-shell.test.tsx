@@ -21,7 +21,7 @@ import { baseMeDrive } from "../../lib/test-fixtures";
 // role is the full three-valued union since 0.7. operator/securityOperator
 // mirror the server's two predicates exactly: "admin" is both, "security_admin"
 // is only the second, "member" is neither.
-function renderMobileNav(role: Role = "admin") {
+function renderMobileNav(role: Role = "admin", memberMode = false) {
   return render(
     <MemoryRouter>
       <MobileNav
@@ -44,7 +44,7 @@ function renderMobileNav(role: Role = "admin") {
           userDrive: null,
           userDriveDeniedByProfile: "",
           userDriveUnavailable: "",
-          memberMode: false,
+          memberMode,
           memberModeNoCredential: false,
           memberPreviewAvailable: false,
           runner: "",
@@ -524,9 +524,50 @@ describe("SidebarNav (member role — B3)", () => {
   });
 });
 
-// Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
-// describe block above only drives the sidebar) is meaningless on a member's
-// own Getting Started, which has no /setup?step= deep link at all.
+// M-2 (packet M-A): two nav sets, the security-admin filter, the eyebrow and
+// the lower slot, and the switch at the top of the sheet.
+describe("SidebarNav — per view (M-2)", () => {
+  async function open(role: Role, memberMode = false) {
+    renderMobileNav(role, memberMode);
+    await userEvent.setup().click(screen.getByRole("button", { name: /open navigation menu/i }));
+    const sheet = screen.getByRole("dialog");
+    const labels = within(sheet)
+      .getAllByRole("link")
+      .map((el) => el.textContent?.replace(/\d+$/, "") ?? "");
+    return { sheet, labels };
+  }
+
+  it("an admin's Admin view: the eyebrow, the nine items, then Setup and Settings", async () => {
+    const { sheet, labels } = await open("admin");
+    expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
+    expect(labels).toEqual([
+      "Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions",
+      "Secrets", "Audit", "Recordings", "Setup", "Settings",
+    ]);
+    expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
+  });
+
+  it("a security admin's Admin view: Drives joins; Secrets, Recordings, Setup and Settings do not", async () => {
+    const { labels } = await open("security_admin");
+    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Drives", "Audit"]);
+  });
+
+  it("a user: no eyebrow, three items, then Getting started and Your account", async () => {
+    const { sheet, labels } = await open("member");
+    expect(within(sheet).queryByText("Admin view", { selector: ".label-eyebrow" })).toBeNull();
+    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    expect(within(sheet).queryByRole("group", { name: "Console view" })).toBeNull();
+  });
+
+  it("an admin in the User view gets the user's nav, and the switch tops the sheet", async () => {
+    const { sheet, labels } = await open("member", true);
+    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    const group = within(sheet).getByRole("group", { name: "Console view" });
+    expect(within(group).getByRole("button", { name: "User view" })).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+// TopBar, driven directly (the describe blocks above only drive the sidebar).
 function renderTopBar(role: Role) {
   return render(
     <MemoryRouter>
@@ -581,35 +622,37 @@ describe("TopBar — the header states no posture (0.7.3 F6)", () => {
   });
 });
 
-describe("TopBar — account-menu Demos entry (Phase 5)", () => {
-  it("member: no Demos item", async () => {
+// M-2 (packet M-A): the avatar menu is identity and Sign out only; the view is
+// the switch beside the wordmark, and New run is the User view's alone.
+describe("TopBar — the switch, New run and the slimmed avatar menu (M-2)", () => {
+  it.each(["admin", "security_admin", "member"] as Role[])("%s: the menu holds Sign out and nothing else", async (role) => {
+    const user = userEvent.setup();
+    renderTopBar(role);
+    await user.click(screen.getAllByRole("button").at(-1)!);
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent?.trim())).toEqual(["Sign out"]);
+  });
+
+  it("an SSO admin in the Admin view: the switch, Admin view pressed, no New run", () => {
+    renderTopBar("admin");
+    const group = screen.getByRole("group", { name: "Console view" });
+    expect(within(group).getByRole("button", { name: "Admin view" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: "Admin view" })).toHaveAttribute("aria-disabled", "true");
+    expect(within(group).getByRole("button", { name: "User view" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
+  });
+
+  it("a user: no switch, and New run", () => {
+    renderTopBar("member");
+    expect(screen.queryByRole("group", { name: "Console view" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New run" })).toBeInTheDocument();
+  });
+
+  it("the role chip calls the non-admin side a user", async () => {
     const user = userEvent.setup();
     renderTopBar("member");
     await user.click(screen.getAllByRole("button").at(-1)!);
-    const menu = screen.getByRole("menu");
-    expect(within(menu).queryByText("Demos")).toBeNull();
-  });
-
-  // The item deep-links to /setup?step=sealed-box, which only the SUPER
-  // admin's SetupScreen honours. A security admin's /setup/status is redacted
-  // on the same !isOperator predicate a member's is (internal/api/setup.go), so
-  // they land where a member lands — a Getting Started that ignores ?step — and
-  // the item is a dead invitation for them too. `role !== "admin"`, matching
-  // setupGateActive and GettingStarted.
-  it("security admin: no Demos item — the deep link is as dead for them as for a member", async () => {
-    const user = userEvent.setup();
-    renderTopBar("security_admin");
-    await user.click(screen.getAllByRole("button").at(-1)!);
-    const menu = screen.getByRole("menu");
-    expect(within(menu).queryByText("Demos")).toBeNull();
-  });
-
-  it("admin: Demos item present", async () => {
-    const user = userEvent.setup();
-    renderTopBar("admin");
-    await user.click(screen.getAllByRole("button").at(-1)!);
-    const menu = screen.getByRole("menu");
-    expect(within(menu).getByText("Demos")).toBeInTheDocument();
+    expect(within(screen.getByRole("menu")).getByText("user", { exact: true })).toBeInTheDocument();
   });
 });
 

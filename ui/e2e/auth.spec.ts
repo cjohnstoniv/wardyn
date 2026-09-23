@@ -207,8 +207,8 @@ test.describe("auth / sign-in gate", () => {
 
     // Open the user menu (top-right trigger holds the principal + chevron) and
     // sign out. The trigger has no role="button" semantics distinct from the
-    // nav, so reach it via the principal label rendered inside it ("admin").
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    // nav, so reach it as the header's one menu trigger (the view switch sits beside it).
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await expect(userMenuTrigger).toBeVisible();
     await userMenuTrigger.click();
 
@@ -228,7 +228,7 @@ test.describe("auth / sign-in gate", () => {
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await expect(userMenuTrigger).toBeVisible();
     await userMenuTrigger.click();
     const signOut = page.getByRole("menuitem", { name: "Sign out" });
@@ -618,7 +618,7 @@ test.describe("R4-F107 — a failed sign-out is surfaced, not swallowed", () => 
       route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }),
     );
 
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await userMenuTrigger.click();
     await page.getByRole("menuitem", { name: "Sign out" }).click();
 
