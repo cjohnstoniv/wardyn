@@ -536,8 +536,53 @@ jobs:
   # CI home of the guided first-run and of scripts/test-reset-all-sandbox-reap.sh.
   # A new lane joins this list; scripts/test-repo-guards.sh (in `make
   # test-scripts`) fails the build if one does not.
+  # T-07: the collision scripts/check-migration-numbers.sh (make lint) cannot
+  # see — two PRs open at once, each picking the next free migration number
+  # off origin/main as it stood when THAT PR's own gate ran, both green in
+  # isolation. This merges every open, mergeable, main-targeted PR together
+  # (git's real octopus strategy, one `git merge` of every head at once) in a
+  # throwaway worktree and runs go vet (all tag sets), `go test ./internal/db
+  # -run Migrat`, and the internal/api AST guards over the result; on
+  # failure it falls back to merging the same PRs one at a time, in number
+  # order, to name the first PR whose addition broke it. Also flags any open
+  # PR stacked on a branch that is no longer open (merged/closed) and so
+  # should have been retargeted to main.
+  #
+  # Informational: it never merges or pushes anything for real, only reports.
+  # No measured baseline yet (new job) — 180 min budgets for the worst case,
+  # every open PR conflicting and a full one-at-a-time bisection; re-measure
+  # and tighten once nightly runs exist (docs/CI.md).
+  migration-merge-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      pull-requests: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: wardyn
+          POSTGRES_DB: wardyn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Octopus scratch merge + stacked-base retarget check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+        run: ./scripts/nightly-migration-merge-check.sh
+
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, migration-merge-check]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -558,7 +603,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build) or kind-sso-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk or migration-merge-check." \
               "" \
               "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
               "" \

@@ -479,7 +479,7 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
+lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering gates
 	@echo "Running go vet (default + docker + k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
@@ -490,6 +490,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 	./scripts/check-file-size.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
+	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
+	./scripts/check-migration-numbers.sh
 
 # The shell half of the test suite: each of these pins a fixed regression in
 # scripts/ that no Go test can see (up.sh's reset warnings, the compose
@@ -510,6 +512,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
+	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
