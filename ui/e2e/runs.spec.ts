@@ -216,7 +216,7 @@ test.describe("Run detail (/runs/:id)", () => {
     // Clicking the run card navigates to the addressable /runs/:id page (the old
     // slide-over Sheet is gone).
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     // The command bar carries the task (h1) + the RUNNING badge.
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
@@ -261,7 +261,7 @@ test.describe("Run detail (/runs/:id)", () => {
   test("detail of a COMPLETED run renders and has a disabled Kill button", async ({ page }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 4").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
     await expect(page.getByText("Completed", { exact: true })).toBeVisible();
@@ -280,7 +280,7 @@ test.describe("Run detail (/runs/:id)", () => {
   }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 4").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
     const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
@@ -355,7 +355,7 @@ test.describe("Run detail (/runs/:id)", () => {
     });
 
     await page.getByText("e2e fixture 6").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText("Failed", { exact: true })).toBeVisible();
 
     const header = page.getByTestId("run-summary-header");
@@ -454,7 +454,7 @@ test.describe("Run header — the autonomy chip (#93/#97)", () => {
     });
 
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     const header = page.getByTestId("run-summary-header");
     await expect(header.getByText(AUTONOMY_META.L1.label, { exact: true })).toBeVisible();
     // The internal wire level stays out of accessible content (D4) — same
@@ -465,7 +465,7 @@ test.describe("Run header — the autonomy chip (#93/#97)", () => {
   test("an ordinary run (empty autonomy_level) renders no autonomy chip at all", async ({ page }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     const header = page.getByTestId("run-summary-header");
     for (const meta of Object.values(AUTONOMY_META)) {
       await expect(header.getByText(meta.label, { exact: true })).toHaveCount(0);
@@ -499,7 +499,7 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport (
     });
     await openRuns(page);
     await page.getByText("e2e fixture 1").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     const header = page.getByTestId("run-summary-header");
     await expect(header.getByText("Starting", { exact: true })).toBeVisible();
@@ -524,7 +524,7 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport (
     });
     await openRuns(page);
     await page.getByText("e2e fixture 1").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     const header = page.getByTestId("run-summary-header");
     await expect(header.getByText(CHIP_IMAGE_PULL_FAILED)).toBeVisible();
@@ -547,7 +547,7 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport (
     });
 
     await page.getByText("e2e fixture 6").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText("Failed", { exact: true })).toBeVisible();
 
     await page.setViewportSize({ width: 420, height: 720 });
@@ -593,7 +593,7 @@ test.describe("Run header — PENDING's own queued sentence (#125)", () => {
     });
     await openRuns(page);
     await page.getByText("e2e fixture 0").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     const header = page.getByTestId("run-summary-header");
     await expect(header.getByText("Pending", { exact: true })).toBeVisible();
@@ -651,7 +651,7 @@ test.describe("Run detail — a login sandbox says what it is", () => {
 
     // A different fixture first: the note must not be a banner every run grew.
     await page.getByText("e2e fixture 5").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByTestId("run-summary-header")).toBeVisible();
     await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);
 
@@ -659,13 +659,13 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     // here is false on all three of its clauses.
     await openRuns(page);
     await page.getByText("e2e fixture 4").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByTestId("run-summary-header")).toBeVisible();
     await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);
 
     await openRuns(page);
     await page.getByText("e2e fixture 6").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     const note = page.getByTestId("login-sandbox-note");
     await expect(note).toBeVisible();
     await expect(note).toContainText(LOGIN_SANDBOX_NOTE);
@@ -699,7 +699,7 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     });
 
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     const note = page.getByTestId("login-sandbox-note");
     await expect(note).toBeVisible();
     await expect(note).toContainText(LOGIN_SANDBOX_NOTE);
@@ -736,7 +736,7 @@ test.describe("Run detail — a login sandbox says what it is", () => {
         await route.fulfill({ response, json });
       });
       await page.getByText("e2e fixture 2").click();
-      await expect(page).toHaveURL(/\/runs\/.+/);
+      await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
       await expect(page.getByTestId("run-summary-header")).toBeVisible();
       await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);
       await page.unrouteAll({ behavior: "ignoreErrors" });
@@ -812,7 +812,7 @@ test.describe("Killing an active run", () => {
 
     await openRuns(page);
     await page.getByText(victim!.task).click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText(badge, { exact: true })).toBeVisible();
 
     const killBtn = page.getByRole("button", { name: "Kill", exact: true });
@@ -868,7 +868,7 @@ test.describe("Run detail — approvals are scoped on the wire", () => {
 
     await openRuns(page);
     await page.getByText("e2e fixture 2").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
 
     const runId = new URL(page.url()).pathname.split("/").pop() ?? "";
@@ -901,7 +901,7 @@ test.describe("Run cockpit — the layout catalog offers no dead controls", () =
 
     await openRuns(page);
     await page.getByText("e2e fixture 4").click(); // Completed
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
 
     await page.getByRole("button", { name: "Edit layout" }).click();
@@ -948,7 +948,7 @@ test.describe("Run detail — a failing side fetch is not an outage", () => {
     );
 
     await page.getByText("e2e fixture 2").click(); // RUNNING
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
     await expect(page.getByText(STATES.ERROR_DEFAULT)).toHaveCount(0);
@@ -971,7 +971,7 @@ test.describe("Run cockpit — the failure block sizes to its content, not to ha
   test("a killed run keeps its replay pane", async ({ page }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 7").click(); // KILLED — always gets the block
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByRole("heading", { name: "e2e fixture 7", level: 1 })).toBeVisible();
 
     const block = page.getByTestId("run-failure-block");
@@ -1026,7 +1026,7 @@ test.describe("Attach card — a failing /healthz claims nothing about the deplo
     );
 
     await page.getByText("e2e fixture 2").click(); // RUNNING — the card's gate
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     // The card still renders: the CLI lane needs no gateway at all.
     await expect(page.getByText("Attach from your terminal")).toBeVisible();
     await expect(page.getByText("Wardyn CLI")).toBeVisible();
@@ -1338,7 +1338,7 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
 
     await openRuns(page);
     await page.getByText("e2e fixture 6").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
     const block = page.getByTestId("run-failure-block");
     await expect(block).toHaveAttribute("data-ending", "credential");

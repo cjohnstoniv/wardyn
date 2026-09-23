@@ -237,7 +237,7 @@ test.describe("New run — B4b clone from a killed run", () => {
 
     await gotoConsole(page);
     await page.getByText("e2e fixture 7").click();
-    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText("Killed", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: RUN.CLONE_CTA }).click();
