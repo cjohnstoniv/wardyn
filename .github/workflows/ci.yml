@@ -5,6 +5,10 @@ on:
     branches: [main, master, 'release/**', 'feature/**']
   pull_request:
     branches: [main, master, 'release/**', 'feature/**']
+  # The merge queue tests each queued PR against the queue's head before it
+  # lands; the required checks must run on that event or the queue never moves.
+  merge_group:
+    types: [checks_requested]
 
 # Least-privilege default: CI only needs to read the repo — nothing here writes
 # back. Mirrors nightly.yml, which already sets this.
@@ -31,6 +35,13 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history with tags: the CHANGELOG freeze guard
+          # (cmd/wardynd/changelog_frozen_test.go) compares each released
+          # section against its tag or correcting commit, and skips any it
+          # cannot resolve.
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -78,11 +89,21 @@ jobs:
       # Covers every Go suite this job produced: unit/, docker/ (the -tags docker
       # suite, via cover-check) and union/ (the coverage floor's merged profile).
       - name: Upload Go test reports
+        id: upload_go_test_reports
         if: always()
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: go-test-reports
           path: test/reports/go/**
+      - name: Say so if go-test-reports did not upload
+        if: always() && steps.upload_go_test_reports.outcome == 'failure'
+        run: echo "::warning title=Reports missing::go-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
 
   # ── docs: mermaid diagram gate ────────────────────────────────────────────
   # Validate every fenced mermaid diagram in the public docs (syntax + label-
@@ -182,11 +203,21 @@ jobs:
       - name: Build UI bundle
         run: make ui
       - name: Upload UI test reports
+        id: upload_ui_test_reports
         if: always()
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ui-test-reports
           path: test/reports/ui/**
+      - name: Say so if ui-test-reports did not upload
+        if: always() && steps.upload_ui_test_reports.outcome == 'failure'
+        run: echo "::warning title=Reports missing::ui-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
 
   # ── web UI: Playwright e2e against a seeded none-runner backend ────────────
   # Real wardynd + Postgres + the `none` runner serving the built UI, seeded with
@@ -229,13 +260,23 @@ jobs:
       - name: Run Playwright UI e2e (fresh seed per spec)
         run: make test-e2e-ui
       - name: Upload Playwright report
+        id: upload_playwright_report
         if: always()
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: playwright-report
           path: |
             ui/playwright-report/**
             ui/test-results/**
+      - name: Say so if playwright-report did not upload
+        if: always() && steps.upload_playwright_report.outcome == 'failure'
+        run: echo "::warning title=Reports missing::playwright-report did not upload; this job's result stands on its tests, but the reports are not attached to this run."
 
   # ── deploy: Helm chart lint + render ──────────────────────────────────────
   # The Helm chart is one of the two blessed deploy paths; lint + template-render
@@ -449,6 +490,38 @@ jobs:
               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=wardyn/wardynd:local|' \
               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=wardyn/wardyn-proxy:local|' \
             deploy/desktop/wardyn.env.example | sudo tee /etc/wardyn/wardyn.env >/dev/null
+      - name: Assert boot refuses an org URL with member mode unset (issue #105)
+        # validateHybridPosture (cmd/wardynd/boot_posture.go) runs after
+        # connectAndMigrate AND after claimSingleInstance's Postgres advisory
+        # lock, so this runs BEFORE the real daemon boots: with it up, this
+        # process would die on the lock, never reaching the refusal.
+        # `docker compose run` brings up postgres/registry itself (depends_on)
+        # and publishes no ports. The WARDYN_MANAGED_DIR env matches the Boot
+        # step's, or /etc/wardyn is empty in the container and LoadPolicySpec
+        # fails first. `timeout` turns "the refusal was removed and the daemon
+        # now serves forever" into exit 124 within two minutes instead of the
+        # job timeout. `down -v` at the end: this boot persisted a signing key
+        # under an ephemeral age identity (the envelope leaves WARDYN_AGE_KEY
+        # to the launcher), which the real daemon's own ephemeral identity
+        # cannot decrypt — so the Boot step starts from an empty database.
+        env:
+          WARDYN_MANAGED_DIR: /etc/wardyn
+        run: |
+          set +e
+          out=$(timeout 120 docker compose --env-file /etc/wardyn/wardyn.env \
+            -f deploy/desktop/docker-compose.yaml -p wardyn-desk-ci \
+            run --rm -T --name wardyn-desk-ci-hybrid-refusal \
+            -e WARDYN_ORG_URL=https://org-controlplane.example.com -e WARDYN_MEMBER_MODE=false \
+            wardynd 2>&1)
+          code=$?
+          set -e
+          echo "${out}"
+          [ "${code}" -ne 0 ] \
+            || { echo "::error::wardynd booted (exit 0) with WARDYN_ORG_URL set and WARDYN_MEMBER_MODE unset — validateHybridPosture's refusal did not fire"; exit 1; }
+          echo "${out}" | grep -qF 'WARDYN_ORG_URL is set but WARDYN_MEMBER_MODE is not' \
+            || { echo "::error::wardynd exited ${code}, but not with the expected refusal (124 = still running after 120s, i.e. it booted): ${out}"; exit 1; }
+          docker compose --env-file /etc/wardyn/wardyn.env \
+            -f deploy/desktop/docker-compose.yaml -p wardyn-desk-ci down -v
       - name: Boot the desktop compose profile
         # WARDYN_MANAGED_DIR is what wardyn-desktop.sh exports on a real laptop;
         # the included stack mounts it read-only at /etc/wardyn in the container.
@@ -610,11 +683,21 @@ jobs:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
         run: make test-race-pg
       - name: Upload PG test reports
+        id: upload_pg_test_reports
         if: always()
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pg-test-reports
           path: test/reports/go/pg/**
+      - name: Say so if pg-test-reports did not upload
+        if: always() && steps.upload_pg_test_reports.outcome == 'failure'
+        run: echo "::warning title=Reports missing::pg-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
 
   # ── supply-chain: trivy image scan (OS + language packages) ───────────────
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
@@ -711,13 +794,19 @@ jobs:
   #     ACTUAL shipped builds (-tags docker: runner/docker + envbuild; -tags
   #     k8s: the k8s confinement substrate) are covered, not just the tagless
   #     subset that a default build sees.
-  #   gitleaks — scans the FULL git history (hence fetch-depth: 0, which the
-  #     other gates simply ignore). `make gitleaks` runs the gitleaks CLI, NOT
-  #     gitleaks-action: the action's default scan range is only the triggering
-  #     push/PR diff even with fetch-depth: 0, which silently made the "full
-  #     history" claim false. Do not swap back without fixing its scan range.
+  #   gitleaks — scans this branch's own FULL git history (hence fetch-depth: 0,
+  #     which the other gates simply ignore). `make gitleaks` runs the gitleaks
+  #     CLI, NOT gitleaks-action: the action's default scan range is only the
+  #     triggering push/PR diff even with fetch-depth: 0, which silently made
+  #     the "full history" claim false. Do not swap back without fixing its
+  #     scan range. `--log-opts="HEAD --full-history"` (Makefile:gitleaks) keeps
+  #     the scan to commits reachable from THIS branch — gitleaks' unscoped
+  #     default also walks every other fetched branch, so one branch's finding
+  #     used to red every unrelated PR and main alike (#372/G6).
   #     Accepted test/dev-fixture secrets are allowlisted by commit fingerprint
-  #     in .gitleaksignore (gitleaks' native mechanism), not by path/regex.
+  #     in .gitleaksignore (gitleaks' native mechanism); a fixture whose value
+  #     changes every commit (and so churns a fresh fingerprint each time) is
+  #     path-scoped in .gitleaks.toml's [allowlist] instead — see that file.
   #   licenses — asciinema is a subprocess tool, not a Go dep, so it is not
   #     checked here.
   # THIRD-PARTY-NOTICES.md + licenses/texts/ must match what regeneration produces.
@@ -775,7 +864,7 @@ jobs:
       # per-commit Signed-off-by check lives in `make dco`, single-sourced.
       - name: Check DCO sign-off (Signed-off-by on all commits)
         run: |
-          BASE=${{ github.event.pull_request.base.sha }}
+          BASE=${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           if [ -z "$BASE" ]; then
             # On push, check every commit the push introduced — `-1 HEAD`
             # checked only the tip, so a multi-commit direct push could land
@@ -792,8 +881,8 @@ jobs:
               make dco DCO_RANGE="-1 HEAD"
             fi
           else
-            # checkout@v4 on pull_request lands on the ephemeral auto-generated
-            # merge commit, whose message has no Signed-off-by. `make dco` uses
+            # checkout@v4 on pull_request (and on a merge_group, the queue's own
+            # merge commits) lands on an auto-generated merge commit, whose message has no Signed-off-by. `make dco` uses
             # --no-merges to exclude that synthetic commit so only real
             # contributor commits are checked (otherwise DCO fails on every PR).
             make dco DCO_RANGE="$BASE..HEAD"
