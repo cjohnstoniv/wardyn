@@ -1163,7 +1163,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       hiding a group DENY, and a deny beats an allow. The refusal is SCOPED to
       deployments that actually hold a group deny row of that kind, so an upgrade
       with no such rows still changes nothing, and it sits ABOVE the enforcement
-      switch (`capAllowed` evaluates deny before `capEnforced`), so an unenforced
+      switch (`capAllowed` evaluates deny before `capBatch.enforced`), so an unenforced
       kind no longer rescues the request. **What remains open** is the reachability,
       not the resolution: the caller still cannot USE their group grants until they
       sign in again or re-mint, the condition reports distinctly as

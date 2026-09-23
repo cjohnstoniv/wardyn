@@ -425,6 +425,8 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 	if s.isOperator(r.Context()) {
 		return governanceCeiling{}, false
 	}
+	// One capability snapshot for every field below (capBatch's ctx memo).
+	r = r.WithContext(withCapBatch(r.Context()))
 	if req.DevcontainerRepo != "" {
 		return governanceCeiling{}, s.denyMemberField(w, r, "runs.image", "byoi_member",
 			"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image")
