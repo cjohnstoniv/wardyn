@@ -228,7 +228,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// and stops on false; its warnings join the 201 list further down.
 	// scmSite is the one site-config snapshot the gate graded the SCM-host lane
 	// from; unionRunEgress below dispatches from the same value.
-	autonomy, autonomyWarns, scmSite, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	// adoGrade is what the gate RESOLVED about the per-person Azure DevOps lane;
+	// it rides to dispatch on the ceiling so the credential dispatch authors can
+	// only be the one this level was graded against (adoEntraGrade).
+	autonomy, autonomyWarns, scmSite, adoGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
 	if !ok {
 		return
 	}
@@ -298,6 +301,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// nothing reads back.
 		AutonomyLevel: autonomy.Level,
 	}
+	s.captureRunLimits(&run, ceiling)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		writeServerError(w, r, "create run", err)
@@ -414,7 +418,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", "/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
 	go s.finishCreateRunLaunch(context.WithoutCancel(ctx), createRunLaunch{
-		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling), gw: gw,
+		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade), gw: gw,
 		wsRefs: wsRefs, driveMount: driveMount, ephemeralDirs: ephemeralDirs,
 		bedrockRef: bedrockRef, runToken: id.Token, created: created,
 	})

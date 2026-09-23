@@ -75,6 +75,15 @@ type dispatchCeiling struct {
 	// authored on POLICIES (a refusal would break every stored policy the day an
 	// admin first writes a limit — internal/types/governance.go says so).
 	maxEphemeralDiskMiB int
+	// adoEntra is what the autonomy gate RESOLVED about this run's per-person
+	// Azure DevOps lane at create (adoEntraGrade, runs_dispatch_ado_inject.go).
+	//
+	// It rides HERE, on the required positional argument, for the reason the
+	// type comment above already argues: the gate freezes a level from one
+	// site-config read and dispatch authors the credential from a later one, so
+	// the resolution has to travel, and a dispatchParams field that a lane can
+	// silently leave unset is the defect class this struct exists to close.
+	adoEntra adoEntraGrade
 }
 
 // ceilingForDispatch is the ONE translation from a resolved ceiling into the
@@ -89,13 +98,20 @@ type dispatchCeiling struct {
 // earlier still, at effectiveCeiling's step 1. Either way the result is
 // resolved: "this principal has no profile" is an answer, and the zero value is
 // not.
-func ceilingForDispatch(c governanceCeiling) dispatchCeiling {
+//
+// ado is the SECOND thing every lane must now decide: what the autonomy gate
+// resolved about the per-person Azure DevOps lane for this run. It is a
+// parameter and not a field for the same reason the ceiling itself is — a lane
+// that could leave it unset would be back to authoring a credential nobody
+// graded — and adoEntraUngraded() is the honest answer for the four lanes that
+// run no gate, not a way of skipping the question.
+func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade) dispatchCeiling {
 	if c.Profile == nil {
-		return dispatchCeiling{resolved: true}
+		return dispatchCeiling{resolved: true, adoEntra: ado}
 	}
 	return dispatchCeiling{
 		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
-		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB,
+		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, adoEntra: ado,
 	}
 }
 
@@ -316,7 +332,10 @@ func (s *Server) resolveDispatchCeiling(ctx context.Context) (dispatchCeiling, g
 	if err != nil {
 		return dispatchCeiling{}, governanceCeiling{}, fmt.Errorf("resolve governance ceiling: %w", err)
 	}
-	return ceilingForDispatch(c), c, nil
+	// adoEntraUngraded: every lane that resolves its own ceiling here — the scan,
+	// the probe and the harness login — runs no autonomy gate, so no rubric
+	// capped the run and there is no grade for dispatch to be held to.
+	return ceilingForDispatch(c, adoEntraUngraded()), c, nil
 }
 
 // ceilingDenies reports whether the CEILING's deny list covers host — an exact

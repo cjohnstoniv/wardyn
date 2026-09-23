@@ -66,6 +66,7 @@ func TestBrokerCredentialPathIsBoundedByTheApprovalBudget(t *testing.T) {
 			ControlPlaneURL: "https://wardynd.test:8080",
 			RunToken:        newTokenSource("RUNTOK"),
 			TLSClientConfig: testInsecureTLSConfig,
+			ControlTLS:      testInsecureTLSConfig,
 			GitGrants:       map[string]uuid.UUID{"org/repo": grant},
 			PATGrants:       map[string]PATGrant{"gitlab.com": {GrantID: grant}},
 		})

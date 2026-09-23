@@ -22,7 +22,9 @@ THRESHOLD=1000
 # path -> frozen cap (lines at 2026-07-16 + headroom). Shrinking is always fine.
 declare -A ALLOWLIST=(
   ["./internal/workspacescan/detect.go"]=1340 # 1244 at freeze
-  ["./internal/runner/docker/driver.go"]=1230 # 1137 at freeze
+  # driver.go came OFF this list 2026-09-21: split by seam (driver_exec.go /
+  # driver_network.go) instead of raising its frozen cap for open PR headroom —
+  # it is gated at the plain 1000-line threshold like any other file now.
   ["./internal/api/workspace_run.go"]=1180 # 1092 at freeze
   ["./internal/api/setup.go"]=1120         # 1028 at freeze
   ["./ui/src/app/components/screens/setup/step-bodies.tsx"]=1150 # 1062 at freeze

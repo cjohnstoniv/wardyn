@@ -75,6 +75,7 @@ import { TerminalPlayer } from "../wardyn/terminal-player";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { APPROVALS } from "../../lib/approvals-copy";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
   RECORDING_DISABLED_DESC,
@@ -324,12 +325,12 @@ export function RunDetailScreen() {
       const args = decisionArgs(scope, until);
       if (decide.action === "approve") await approvalsApi.approve(decide.id, reason, ...args);
       else await approvalsApi.deny(decide.id, reason, ...args);
-      toast.success(decide.action === "approve" ? "Request approved" : "Request denied");
+      toast.success(decide.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       setDecide(null);
       load(false);
       return true;
     } catch (err) {
-      toast.error(decide.action === "approve" ? "Failed to approve" : "Failed to deny", {
+      toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
       return false;
@@ -347,10 +348,10 @@ export function RunDetailScreen() {
     try {
       if (approve) await approvalsApi.approve(id, "approved", ...opts);
       else await approvalsApi.deny(id, "denied", ...opts);
-      toast.success(approve ? "Request approved" : "Request denied");
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       load(false);
     } catch (err) {
-      toast.error(approve ? "Failed to approve" : "Failed to deny", { description: getErrorMessage(err) });
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(err) });
     }
   };
 
@@ -695,7 +696,10 @@ function ApprovalsTab({
   // for the security tier (approvals.go:392).
   const securityOperator = useSecurityOperator();
   const principal = usePrincipal();
-  const [adoBusyId, setAdoBusyId] = React.useState<string | null>(null);
+  // The id of the row currently deciding, and which of its two actions
+  // (#458) — see AdoCapabilityCard's own `busy` doc for why a single
+  // boolean isn't enough.
+  const [adoBusy, setAdoBusy] = React.useState<{ id: string; action: "approve" | "deny" } | null>(null);
   if (approvals.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card">
@@ -733,16 +737,16 @@ function ApprovalsTab({
               securityOperator={securityOperator}
               viewerPrincipal={principal}
               run={run}
-              busy={adoBusyId === a.id}
+              busy={adoBusy?.id === a.id ? adoBusy.action : null}
               onApprove={async (opts) => {
-                setAdoBusyId(a.id);
+                setAdoBusy({ id: a.id, action: "approve" });
                 await onAdoDecide(a.id, true, opts);
-                setAdoBusyId(null);
+                setAdoBusy(null);
               }}
               onDeny={async (opts) => {
-                setAdoBusyId(a.id);
+                setAdoBusy({ id: a.id, action: "deny" });
                 await onAdoDecide(a.id, false, opts);
-                setAdoBusyId(null);
+                setAdoBusy(null);
               }}
             />
           );

@@ -302,7 +302,7 @@ func TestB4F4_SourceCountIsCapped(t *testing.T) {
 	// NEGATIVE CONTROL: exactly N passes the validator (the handler behind it
 	// needs a store; what matters here is that the cap itself does not fire).
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body(maxWorkspaceSources)))
-	if _, msg := decodeWorkspaceRequest(httptest.NewRecorder(), r); msg != "" {
+	if _, msg := decodeWorkspaceRequest(httptest.NewRecorder(), r, nil); msg != "" {
 		t.Errorf("N sources rejected: %q", msg)
 	}
 }
@@ -487,12 +487,12 @@ func TestB4F8_RefIsValidatedAtBothDoors(t *testing.T) {
 	for _, ref := range bad {
 		if msg := validateWorkspaceSource(types.WorkspaceSource{
 			Type: types.WorkspaceSourceTypeRepo, Source: "acme/payments", Ref: ref,
-		}); msg == "" {
+		}, nil); msg == "" {
 			t.Errorf("workspace door accepted ref %q", ref)
 		}
 		if msg := validateSourceWrite(types.Source{
 			Kind: types.SourceRepo, Name: "payments", Locator: "acme/payments", Ref: ref,
-		}); msg == "" {
+		}, nil); msg == "" {
 			t.Errorf("library door accepted ref %q", ref)
 		}
 	}
@@ -500,12 +500,12 @@ func TestB4F8_RefIsValidatedAtBothDoors(t *testing.T) {
 	for _, ref := range good {
 		if msg := validateWorkspaceSource(types.WorkspaceSource{
 			Type: types.WorkspaceSourceTypeRepo, Source: "acme/payments", Ref: ref,
-		}); msg != "" {
+		}, nil); msg != "" {
 			t.Errorf("workspace door refused ref %q: %s", ref, msg)
 		}
 		if msg := validateSourceWrite(types.Source{
 			Kind: types.SourceRepo, Name: "payments", Locator: "acme/payments", Ref: ref,
-		}); msg != "" {
+		}, nil); msg != "" {
 			t.Errorf("library door refused ref %q: %s", ref, msg)
 		}
 	}

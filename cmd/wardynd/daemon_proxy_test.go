@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -284,12 +286,37 @@ func TestInstallDaemonProxy_ProxyReceivesAbsoluteURIRequest(t *testing.T) {
 // bootDaemonProxy/installBootTransport read — same construction pattern as
 // bedrock_plaintext_warn_test.go's capture helper.
 func testBootFlags(proxyURL, noProxy, ssoOverride, oidcInternalIss string) *bootFlags {
+	return testBootFlagsWithSecret(proxyURL, "", noProxy, ssoOverride, oidcInternalIss)
+}
+
+// testBootFlagsWithSecret is testBootFlags plus WARDYN_DAEMON_PROXY_SECRET,
+// for the tests that exercise the credentialed file path or the
+// both-set refusal.
+func testBootFlagsWithSecret(proxyURL, secretFile, noProxy, ssoOverride, oidcInternalIss string) *bootFlags {
 	return &bootFlags{
 		daemonProxyURL:         &proxyURL,
+		daemonProxySecretFile:  &secretFile,
 		daemonNoProxy:          &noProxy,
 		awsSSOEndpointOverride: &ssoOverride,
 		oidcInternalIss:        &oidcInternalIss,
 	}
+}
+
+// writeProxySecretFile writes contents to a fresh file under t.TempDir() at
+// the given mode, returning its path — the WARDYN_DAEMON_PROXY_SECRET shape
+// every credentialed-boot test below points at.
+func writeProxySecretFile(t *testing.T, contents string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "proxy-secret")
+	if err := os.WriteFile(path, []byte(contents), mode); err != nil {
+		t.Fatalf("os.WriteFile(%q): %v", path, err)
+	}
+	// os.WriteFile's mode is masked by umask; force the exact mode the test
+	// asks for so a permissive umask on the CI host can't produce a false pass.
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("os.Chmod(%q, %v): %v", path, mode, err)
+	}
+	return path
 }
 
 func TestBootDaemonProxy_UnsetIsNoop(t *testing.T) {
@@ -395,6 +422,126 @@ func TestInstallBootTransport_MalformedProxyRefusesBoot(t *testing.T) {
 	f := testBootFlags("not a url at all", "", "", "")
 	if err := installBootTransport(tr, nil, f); err == nil {
 		t.Fatal("installBootTransport(malformed proxy) succeeded, want a refusal")
+	}
+}
+
+// ─── WARDYN_DAEMON_PROXY_SECRET (credentialed file path) ────────────────────
+
+func TestInstallDaemonProxySecret_UnsetLeavesTransportUntouched(t *testing.T) {
+	tr := freshTransport()
+	before := tr.Proxy
+	eff, err := installDaemonProxySecret(tr, "", "")
+	if err != nil {
+		t.Fatalf("installDaemonProxySecret(unset) error: %v", err)
+	}
+	if eff != "" {
+		t.Fatalf("effective = %q, want empty", eff)
+	}
+	if !reflectSameFunc(before, tr.Proxy) {
+		t.Fatal("tr.Proxy was reassigned on an unset WARDYN_DAEMON_PROXY_SECRET")
+	}
+}
+
+func TestInstallDaemonProxySecret_CredentialedURLWired(t *testing.T) {
+	path := writeProxySecretFile(t, "http://alice:s3cr3t-token@proxy.corp.example:3128\n", 0o600)
+	tr := freshTransport()
+	eff, err := installDaemonProxySecret(tr, path, "")
+	if err != nil {
+		t.Fatalf("installDaemonProxySecret: %v", err)
+	}
+	if eff != "http://alice:s3cr3t-token@proxy.corp.example:3128" {
+		t.Fatalf("effective = %q, want the full credentialed URL (userinfo allowed here)", eff)
+	}
+	got, err := tr.Proxy(&http.Request{URL: mustParseURL(t, "https://sso-oidc.us-east-1.amazonaws.com/token")})
+	if err != nil || got == nil || got.Host != "proxy.corp.example:3128" {
+		t.Fatalf("Proxy(external) = %v, %v, want the configured proxy", got, err)
+	}
+	if got.User == nil || got.User.Username() != "alice" {
+		t.Fatalf("Proxy(external).User = %v, want alice's credential preserved", got.User)
+	}
+}
+
+func TestInstallDaemonProxySecret_MissingFileRefusesBoot(t *testing.T) {
+	tr := freshTransport()
+	_, err := installDaemonProxySecret(tr, filepath.Join(t.TempDir(), "does-not-exist"), "")
+	if err == nil {
+		t.Fatal("installDaemonProxySecret(missing file) succeeded, want a refusal")
+	}
+}
+
+func TestInstallDaemonProxySecret_WideModeRefusesBoot(t *testing.T) {
+	path := writeProxySecretFile(t, "http://alice:s3cr3t-token@proxy.corp.example:3128\n", 0o644)
+	tr := freshTransport()
+	_, err := installDaemonProxySecret(tr, path, "")
+	if err == nil {
+		t.Fatal("installDaemonProxySecret(mode 0644) succeeded, want a refusal")
+	}
+	if strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "s3cr3t-token") {
+		t.Fatalf("refusal echoes the raw credential: %q", err.Error())
+	}
+}
+
+func TestInstallDaemonProxySecret_EmptyFileRefusesBoot(t *testing.T) {
+	path := writeProxySecretFile(t, "\n  \n", 0o600)
+	tr := freshTransport()
+	_, err := installDaemonProxySecret(tr, path, "")
+	if err == nil {
+		t.Fatal("installDaemonProxySecret(empty file) succeeded, want a refusal")
+	}
+}
+
+func TestInstallDaemonProxySecret_GarbageContentRefusesBoot(t *testing.T) {
+	path := writeProxySecretFile(t, "not a url at all", 0o600)
+	tr := freshTransport()
+	_, err := installDaemonProxySecret(tr, path, "")
+	if err == nil {
+		t.Fatal("installDaemonProxySecret(garbage content) succeeded, want a refusal")
+	}
+	if strings.Contains(err.Error(), "not a url at all") {
+		t.Fatalf("refusal echoes the raw file content: %q", err.Error())
+	}
+}
+
+func TestBootDaemonProxy_BothSetRefusesBoot(t *testing.T) {
+	path := writeProxySecretFile(t, "http://alice:s3cr3t@proxy.corp.example:3128", 0o600)
+	tr := freshTransport()
+	f := testBootFlagsWithSecret("http://proxy.corp.example:3128", path, "", "", "")
+	err := bootDaemonProxy(tr, f)
+	if err == nil {
+		t.Fatal("bootDaemonProxy(both WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET set) succeeded, want a refusal")
+	}
+	if err.Error() != daemonProxyBothSetRefusal {
+		t.Fatalf("err = %q, want the exact daemonProxyBothSetRefusal constant", err.Error())
+	}
+}
+
+func TestBootDaemonProxy_SecretFileWiresCredentialedProxyAndLogsNoCredential(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	path := writeProxySecretFile(t, "http://alice:s3cr3t-token@proxy.corp.example:3128", 0o600)
+	tr := freshTransport()
+	f := testBootFlagsWithSecret("", path, "", "", "")
+	if err := bootDaemonProxy(tr, f); err != nil {
+		t.Fatalf("bootDaemonProxy: %v", err)
+	}
+
+	got, err := tr.Proxy(&http.Request{URL: mustParseURL(t, "https://sso-oidc.us-east-1.amazonaws.com/token")})
+	if err != nil || got == nil || got.Host != "proxy.corp.example:3128" || got.User == nil || got.User.Username() != "alice" {
+		t.Fatalf("Proxy(external) = %v, %v, want the configured credentialed proxy", got, err)
+	}
+
+	logged := buf.String()
+	if strings.Contains(logged, "alice") || strings.Contains(logged, "s3cr3t-token") {
+		t.Fatalf("boot log leaked the credential: %q", logged)
+	}
+	if !strings.Contains(logged, "proxy.corp.example:3128") {
+		t.Fatalf("boot log %q missing the proxy host", logged)
+	}
+	if !strings.Contains(logged, "WARDYN_DAEMON_PROXY_SECRET") {
+		t.Fatalf("boot log %q does not name WARDYN_DAEMON_PROXY_SECRET as the source", logged)
 	}
 }
 

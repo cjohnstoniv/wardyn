@@ -33,27 +33,7 @@ import (
 // a guard that silently skips its own subject passes vacuously forever.
 func readRepoFile(t *testing.T, rel string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash(rel)))
-	if err != nil {
-		t.Fatalf("read %s: %v", rel, err)
-	}
-	return string(b)
-}
-
-// funcBody returns the source of the named top-level func, from its `func` line
-// to the next top-level `func` (or EOF). Crude on purpose: these guards ask
-// "does this function mention X at all", which does not need an AST.
-func funcBody(t *testing.T, src, name string) string {
-	t.Helper()
-	start := strings.Index(src, "\nfunc "+name+"(")
-	if start < 0 {
-		t.Fatalf("func %s not found — the guard's anchor moved, so it is asserting nothing", name)
-	}
-	rest := src[start+1:]
-	if end := strings.Index(rest[1:], "\nfunc "); end >= 0 {
-		return rest[:end+1]
-	}
-	return rest
+	return readRepo(t, rel)
 }
 
 // numberWord spells a small count the way the prose does, so a guard can demand

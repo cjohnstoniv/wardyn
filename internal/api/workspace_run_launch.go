@@ -155,6 +155,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget,
 	}
+	s.captureRunLimits(&run, gov.ceiling)
 	if set != nil {
 		set(&run)
 	}
@@ -709,7 +710,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
 	var resolvedManaged bool
-	result := s.dispatchAndSettle(ctx, created, ceilingForDispatch(ceiling), dispatchParams{
+	// adoEntraUngraded: the record/verify session door runs no autonomy gate —
+	// it is operator-only and no rubric caps it — so there is no frozen grade
+	// for dispatch to hold the Azure DevOps lane to.
+	result := s.dispatchAndSettle(ctx, created, ceilingForDispatch(ceiling, adoEntraUngraded()), dispatchParams{
 		RunToken:           runToken,
 		Image:              image,
 		Policy:             policy,

@@ -110,6 +110,33 @@ test.describe("Add workspace dialog", () => {
     await expect(page.getByRole("row", { name: new RegExp(name) })).toBeVisible();
   });
 
+  // #485: Azure DevOps project and repository names carry spaces and most
+  // punctuation. The URL typed with its spaces is accepted, the Name pre-fills
+  // with the repository's own name (never its escapes), and the server stores
+  // the one canonical spelling the detail page then shows.
+  test("an Azure DevOps repository with spaces in its names is added as typed, named after the repository", async ({
+    page,
+  }) => {
+    const typed = "https://dev.azure.com/contoso/Payments Platform/_git/Card Auth (v2).Service";
+    const stored = "https://dev.azure.com/contoso/Payments%20Platform/_git/Card%20Auth%20(v2).Service";
+    const dlg = await openAddWorkspaceDialog(page);
+    await dlg.getByLabel("Repository URL").fill(typed);
+    await expect(dlg.getByLabel("Name")).toHaveValue("Card Auth (v2).Service");
+
+    const created = page.waitForResponse(
+      (r) => new URL(r.url()).pathname === "/api/v1/workspaces" && r.request().method() === "POST",
+    );
+    await dlg.getByRole("button", { name: "Add workspace" }).click();
+    const resp = await created;
+    expect(resp.status(), await resp.text()).toBeLessThan(300);
+    expect((await resp.json()).sources[0].source).toBe(stored);
+
+    await expect(page).toHaveURL(/\/workspaces\/[^/]+$/);
+    await expect(page.getByRole("heading", { name: "Card Auth (v2).Service" })).toBeVisible();
+    await expect(page.getByText(stored).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /^start a run$/i })).toBeEnabled();
+  });
+
   // F3-F8: the named 400x640 repro PASSED with Advanced collapsed (~560px
   // content) — it only reproduces once Advanced is expanded (~910px), which
   // this test does. ui/dialog.tsx's primitive-level max-h-[calc(100dvh-2rem)]
