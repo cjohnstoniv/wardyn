@@ -152,7 +152,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		slog.ErrorContext(ctx, "wardynd: storing the Azure DevOps credential this login earned failed; the person is signed in without one",
 			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "store_error", "error": err.Error(), "source": adoEntraSourceLogin,
+			"reason": "store_error", "source": adoEntraSourceLogin,
 			"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		return

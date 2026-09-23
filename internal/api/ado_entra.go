@@ -629,8 +629,12 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	unlock := s.adoEntra.lock(subject, cfg.RowID)
 	defer unlock()
 	if err := s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob); err != nil {
+		// The cause is logged, never put on the row: the trail and its SIEM
+		// export carry a fixed reason only, like every other store failure.
+		slog.ErrorContext(ctx, "wardynd: storing the captured Azure DevOps sign-in failed",
+			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "store_error", "error": err.Error(), "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": "store_error", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		http.Error(w, "storing the captured Azure DevOps sign-in failed", http.StatusInternalServerError)
 		return

@@ -68,6 +68,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
+  that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
+  sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the
+  concurrent burst that lock exists to serialize. The one arm that still proceeds, a database pool
+  too small to spare a connection for the hold (`pool_max_conns=2`), now writes an
+  `auth.signin_unserialized` audit row; a refused capture is `harness.credential.refused` with
+  reason `signin_busy`. The sandbox-facing AWS sign-in request route's 503 no longer appends the
+  approval store's error text to its body. A failed read of a persisted AWS SSO spent-token mark
+  is no longer cached as "not spent" for the rest of the process's life. The Azure DevOps
+  `scm.ado.signin.captured` `store_error` row no longer carries the raw store error (dropped
+  `error` field; the cause is in the daemon log).
 - **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
   near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
   object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's

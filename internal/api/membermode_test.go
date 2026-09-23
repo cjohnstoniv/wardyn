@@ -440,7 +440,7 @@ func TestMemberMode_SecurityAdminSurfaceDeniedToo(t *testing.T) {
 
 // TestMemberMode_RefusesTokenAndKeyMint: the two doors that must REFUSE rather
 // than clamp. OnLogin re-stamps every API token and SSH key of a principal to
-// their freshly derived role at the next sign-in (store.RefreshAPITokenRoles,
+// their freshly derived role at the next sign-in (store.RefreshAPITokenIdentity,
 // the ssh-key stamp refresh), so a credential minted "as a member" would
 // silently become admin — a credential that outlives the mode is the one thing
 // this feature must not leave behind.

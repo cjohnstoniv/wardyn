@@ -566,7 +566,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// A demotion made here is effective here. A role mapping decides the role a
 	// LOGIN derives; an outstanding wdn_ token carries a role stamped at MINT
 	// and read verbatim on every request until its owner's OWN next login
-	// re-stamps it (store.RefreshAPITokenRoles) — a real bound, but on their
+	// re-stamps it (store.RefreshAPITokenIdentity) — a real bound, but on their
 	// schedule rather than the operator's, and one that never arrives for
 	// someone who has left. So if this write takes a tier away from the value,
 	// the affected principals' tokens are revoked now rather than announced —

@@ -40,7 +40,7 @@ const (
 	// memberModeMintRefusal is the 409 both credential-mint doors answer with
 	// while the mode is on. ONE sentence for both, because it is one rule: a
 	// credential minted here would be re-stamped with the caller's REAL role at
-	// their next sign-in (store.RefreshAPITokenRoles and the SSH-key stamp
+	// their next sign-in (store.RefreshAPITokenIdentity and the SSH-key stamp
 	// refresh, both fired by OnLogin), so a "member" token would quietly become
 	// an admin one and outlive the mode that created it.
 	memberModeMintRefusal = "Exit member mode to mint a token or register a key."
