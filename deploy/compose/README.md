@@ -205,7 +205,11 @@ sensor (`tetragon`) exports kernel events as JSON, and a sidecar
 (`wardyn-tetragon-ingest`) correlates each to a Wardyn run (via the
 `wardyn.run-id` container label), maps a bounded subset to `kernel.*` audit
 events, and POSTs them to wardynd — where they are recorded append-only and fan
-to every SIEM sink, exactly like every other event.
+to every SIEM sink, exactly like every other event. The POSTs ride wardynd's
+internal TLS listener (`https://wardynd:8443`), pinned to wardynd's internal CA,
+which wardynd writes to the shared `groundtruth_token` volume as
+`control-plane-ca.pem`; the sidecar refuses to start on a non-loopback
+`http://` URL.
 
 This tier is **opt-in** (compose profile `groundtruth`) and **honestly
 degradable**: with it OFF, `wardynd`'s `/healthz` reports

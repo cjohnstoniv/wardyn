@@ -7,18 +7,60 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// controlPlaneClient is the ingest's end of wardynd's internal TLS hop
+// (internal/hoptls), under the proxy's rule: http:// only to a loopback host,
+// and https:// trusts wardynd's internal CA alone — never the system roots.
+// The bearer is audit-write-only, so what a plaintext hop would expose is
+// integrity: a captured token forges ground-truth events until it rotates.
+// caFile is the CA certificate wardynd writes beside
+// WARDYN_GROUNDTRUTH_TOKEN_FILE. ponytail: read once at boot; a CA rotation
+// (replace-at-boot, years apart) needs an ingest restart.
+func controlPlaneClient(controlURL, caFile string) (*http.Client, error) {
+	if err := hoptls.CheckURL(controlURL); err != nil {
+		return nil, err
+	}
+	var caPEM []byte
+	if u, _ := url.Parse(strings.TrimSpace(controlURL)); strings.EqualFold(u.Scheme, "https") {
+		if caFile == "" {
+			return nil, errors.New("an https control-plane URL needs wardynd's internal CA: set -control-plane-ca-file / WARDYN_CONTROL_PLANE_CA_FILE " +
+				"(wardynd writes control-plane-ca.pem beside WARDYN_GROUNDTRUTH_TOKEN_FILE)")
+		}
+		b, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read control-plane CA: %w", err)
+		}
+		if len(bytes.TrimSpace(b)) == 0 {
+			return nil, fmt.Errorf("control-plane CA file %s is empty", caFile)
+		}
+		caPEM = b
+	}
+	cfg, err := hoptls.ClientConfig(string(caPEM))
+	if err != nil {
+		return nil, err
+	}
+	// Proxy cleared: Clone keeps ProxyFromEnvironment, and the bearer has no
+	// business on a forward proxy's wire.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	tr.TLSClientConfig = cfg
+	return &http.Client{Timeout: 10 * time.Second, Transport: tr}, nil
+}
 
 // tokenSource yields the current host-sensor bearer token. It is an injectable
 // seam so the refresh-on-401 path is testable and so the token can be re-read or

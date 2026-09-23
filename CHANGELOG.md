@@ -155,6 +155,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **`wardyn-tetragon-ingest` posts over TLS, pinned to wardynd's internal CA (#606).** The
+  ground-truth sidecar sent its audit-write-only bearer (`aud=wardyn-groundtruth`) to wardynd's
+  console listener in plaintext (`http://wardynd:8080`), so a peer on the path could capture it and
+  forge ground-truth events until it rotated. It now defaults to the internal TLS listener
+  (`https://wardynd:8443`) and trusts wardynd's internal CA alone, read from the new
+  `WARDYN_CONTROL_PLANE_CA_FILE`. wardynd writes that certificate at boot as `control-plane-ca.pem`
+  beside `WARDYN_GROUNDTRUTH_TOKEN_FILE`, which compose already shares with the ingest. The ingest
+  applies the proxy's rule, refusing to start on `http://` to a non-loopback host or on `https://`
+  without a readable CA file. The chart no longer grants the runs namespace wardynd's `http` port:
+  since 0.7.12 proxies use the internal port. **Upgrading:** stop any run dispatched before 0.7.12
+  before you upgrade, because it has no route back afterwards. If you run the ingest outside
+  compose, set `WARDYN_CONTROL_PLANE_URL` to the internal listener and point
+  `WARDYN_CONTROL_PLANE_CA_FILE` at the published file. THREAT-MODEL B6 no longer lists a plaintext
+  residual for current-version callers.
 - **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
   view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
   The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `member`,
