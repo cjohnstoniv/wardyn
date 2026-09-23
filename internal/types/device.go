@@ -60,11 +60,12 @@ type DeviceEnrolmentToken struct {
 // computed, not the organisation's — plus Seq, that same local table's own
 // seq for the row.
 //
-// Seq is what idempotency rides on (store.PG.IngestDeviceAudit and
+// Seq positions the row (store.PG.IngestDeviceAudit and
 // ListAuditEventsAfterSeq): a device's audit_events.id is not unique across a
 // retried push (the forwarder re-reads and re-sends whatever is at or after
-// its durable cursor), but its local seq is monotonic and gapless, so it is
-// the only field a replayed batch can be deduplicated against.
+// its durable cursor), and its local seq is monotonic within one chain. It is
+// not identity on its own — a table reset can restart it — so a replayed row
+// is recognised by its seq together with its RowHash.
 type FederatedAuditEvent struct {
 	AuditEvent
 	Seq int64 `json:"seq"`

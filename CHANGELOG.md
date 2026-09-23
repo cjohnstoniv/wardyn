@@ -355,7 +355,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `IngestDeviceAudit`: it verifies a forwarded batch's claimed hash chain in one transaction under the
   existing audit-chain advisory lock, recomputing each row's hash in SQL over the stored jsonb, refuses
   the whole batch on any mismatch, and accepts a genesis row as a recorded chain reset. Storage and the
-  store seam only — no routes, CLI or forwarder yet.
+  store seam only — no routes, CLI or forwarder yet. A row at or before the device's recorded cursor is
+  skipped as a re-send only when it carries the hash of the row the organisation holds at that seq
+  (looked up through migration `0070_audit_events_device_origin_idx`), so a laptop table reset that
+  restarts its seq (`TRUNCATE … RESTART IDENTITY`, a restore) is a recorded `device.audit.chain_reset`
+  with every new row ingested, never rows dropped as duplicates; a re-chained rewrite of a held row is
+  refused 422.
 
 - **A run's autonomy level is now resolved once and enforced at launch and on Review.** With an
   `autonomy_rubric` on the assigned governance profile, a run's posture — egress reach (`open` with

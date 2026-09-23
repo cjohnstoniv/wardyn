@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -206,9 +207,9 @@ func (s PG) RevokeDevice(ctx context.Context, id uuid.UUID, now time.Time) (type
 
 // DeviceIngestResult reports what one IngestDeviceAudit call did. Accepted is
 // how many of the submitted rows were newly appended — 0 on any refusal,
-// since the whole batch is one transaction, and also 0 when every row was at
-// or before the device's already-recorded cursor (an idempotent retry:
-// nothing new to do, not a refusal). Reset is true when the accepted rows
+// since the whole batch is one transaction, and also 0 when every row is one
+// this organisation already holds (an idempotent retry: nothing new to do,
+// not a refusal). Reset is true when the accepted rows
 // began with a genesis (empty-PrevHash) row while the device already had a
 // recorded chain — the documented "device chain reset" case (a purge on the
 // device's own local table), which is accepted rather than refused.
@@ -292,12 +293,14 @@ func isJSONNull(data json.RawMessage) bool {
 //     concurrent pushes against each other before either reaches the chain
 //     lock. Deadlock-free: no transaction takes the chain lock and then a
 //     device row. A revoked device answers ErrDeviceRevoked.
-//  3. Idempotency rides the cursor, not audit_events.id: rows at or before the
-//     recorded LastSeq are skipped (the forwarder re-sends from its own durable
-//     cursor, which can lag what was committed here).
+//  3. Idempotency rides the cursor and the hash, not audit_events.id: rows at
+//     or before the recorded LastSeq that ARE the rows held here (heldPrefix)
+//     are skipped — the forwarder re-sends from its own durable cursor, which
+//     can lag what was committed here. A reused seq is not a re-send.
 //  4. The first NEW row's claimed PrevHash is either empty (a genesis row,
-//     accepted, and a chain reset when a chain was already recorded) or equal
-//     to the recorded LastRowHash; every later row's claimed PrevHash equals
+//     accepted, and a chain reset when a chain was already recorded, at any
+//     seq) or equal to the recorded LastRowHash with a seq past LastSeq;
+//     every later row's claimed PrevHash equals
 //     the preceding row's claimed RowHash. Otherwise ErrConflict.
 //  5. Only then the chain lock (db.AuditChainLockKey via lockAuditChainSQL),
 //     under the lock timeout every lock wait in this transaction obeys, and
@@ -354,9 +357,9 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer stri
 		return DeviceIngestResult{}, err
 	}
 
-	start := 0
-	for start < len(rows) && rows[start].Seq <= lastSeq {
-		start++
+	start, err := heldPrefix(ctx, tx, deviceID, lastSeq, rows)
+	if err != nil {
+		return DeviceIngestResult{}, err
 	}
 	if start == len(rows) {
 		// Every row was already ingested: an idempotent retry, not a refusal.
@@ -369,10 +372,13 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer stri
 	reset := false
 	if toIngest[0].PrevHash == "" {
 		reset = lastRowHash != ""
-	} else if toIngest[0].PrevHash != lastRowHash {
+	} else if toIngest[0].Seq <= lastSeq || toIngest[0].PrevHash != lastRowHash {
+		// At or before the cursor, a row that is not the one held here can
+		// only begin a new chain (a genesis, above); anything else rewrites
+		// history this organisation already holds.
 		return DeviceIngestResult{}, fmt.Errorf(
-			"store: ingest device audit: row seq %d claims prev_hash %q, device's recorded head is %q: %w",
-			toIngest[0].Seq, toIngest[0].PrevHash, lastRowHash, ErrConflict)
+			"store: ingest device audit: row seq %d claims prev_hash %q, device's recorded head is seq %d %q: %w",
+			toIngest[0].Seq, toIngest[0].PrevHash, lastSeq, lastRowHash, ErrConflict)
 	}
 	for i := 1; i < len(toIngest); i++ {
 		if toIngest[i].PrevHash != toIngest[i-1].RowHash {
@@ -410,6 +416,48 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer stri
 		return DeviceIngestResult{}, fmt.Errorf("store: commit device audit ingest: %w", err)
 	}
 	return DeviceIngestResult{Accepted: len(toIngest), Reset: reset}, nil
+}
+
+// heldPrefix counts the batch's leading rows this organisation already holds:
+// each at or before the recorded cursor AND carrying the row_hash of the
+// newest row ingested here at that device seq. Seq alone is not identity — a
+// laptop table reset so that its seq restarts (TRUNCATE ... RESTART IDENTITY,
+// a restore) reuses seqs — so matching on seq would drop a new chain's rows as
+// re-sends, silently. Rows for one device are only written under its device
+// row lock, which the caller holds, so this read cannot race an ingest.
+func heldPrefix(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, lastSeq int64, rows []types.FederatedAuditEvent) (int, error) {
+	var seqs []string
+	for _, r := range rows {
+		if r.Seq > lastSeq {
+			break
+		}
+		seqs = append(seqs, strconv.FormatInt(r.Seq, 10))
+	}
+	if len(seqs) == 0 {
+		return 0, nil
+	}
+	// Text comparison on both keys, matching audit_events_device_origin_idx
+	// (migration 0070): mergeDeviceOrigin wrote them as a uuid string and a
+	// JSON integer, whose ->> text is exactly FormatInt's.
+	res, err := tx.Query(ctx, `
+		SELECT DISTINCT ON (data->'device_origin'->>'seq') data->'device_origin'->>'seq', data->'device_origin'->>'row_hash'
+		FROM audit_events
+		WHERE data ? 'device_origin' AND data->'device_origin'->>'device_id' = $1
+		  AND data->'device_origin'->>'seq' = ANY($2::text[])
+		ORDER BY data->'device_origin'->>'seq', seq DESC`, deviceID.String(), seqs)
+	if err != nil {
+		return 0, fmt.Errorf("store: read held device rows: %w", err)
+	}
+	held := map[string]string{}
+	var seq, hash string
+	if _, err := pgx.ForEachRow(res, []any{&seq, &hash}, func() error { held[seq] = hash; return nil }); err != nil {
+		return 0, fmt.Errorf("store: read held device rows: %w", err)
+	}
+	n := 0
+	for n < len(seqs) && held[seqs[n]] == rows[n].RowHash {
+		n++
+	}
+	return n, nil
 }
 
 // verifyClaimedHashes recomputes every row's claimed RowHash IN SQL, from

@@ -57,7 +57,7 @@ func (s Status) Lag() int64 { return max(s.HeadSeq-s.AckedSeq, 0) }
 // Forwarder pushes this daemon's chained audit rows to the organisation from
 // the durable cursor in org_federation, one batch at a time — at-least-once:
 // the cursor moves only after the organisation acknowledged, and the
-// organisation deduplicates a re-sent row by its seq.
+// organisation recognises a re-sent row by its seq and row hash.
 type Forwarder struct {
 	client   *Client
 	store    Store

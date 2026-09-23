@@ -152,8 +152,12 @@ func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, pee
 	if d.RevokedAt != nil {
 		return store.DeviceIngestResult{}, store.ErrDeviceRevoked
 	}
+	held := map[int64]string{} // newest ingested row per device seq
+	for _, r := range f.ingested[id] {
+		held[r.Seq] = r.RowHash
+	}
 	start := 0
-	for start < len(rows) && rows[start].Seq <= d.LastSeq {
+	for start < len(rows) && rows[start].Seq <= d.LastSeq && held[rows[start].Seq] == rows[start].RowHash {
 		start++
 	}
 	fresh := rows[start:]
@@ -163,7 +167,7 @@ func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, pee
 	reset := false
 	if fresh[0].PrevHash == "" {
 		reset = d.LastRowHash != ""
-	} else if fresh[0].PrevHash != d.LastRowHash {
+	} else if fresh[0].Seq <= d.LastSeq || fresh[0].PrevHash != d.LastRowHash {
 		return store.DeviceIngestResult{}, store.ErrConflict
 	}
 	for i := 1; i < len(fresh); i++ {

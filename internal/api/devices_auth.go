@@ -340,8 +340,11 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		ev.SourceIP = r.RemoteAddr
 		s.recordAudit(r.Context(), ev)
 	}
+	// Every row of the batch is now held here — ingested, or recognised by its
+	// seq AND hash — so the ack is the batch's own end; an empty batch answers
+	// the recorded cursor, as a heartbeat does.
 	acked := d.LastSeq
-	if res.Accepted > 0 {
+	if len(rows) > 0 {
 		acked = rows[len(rows)-1].Seq
 	}
 	writeJSON(w, http.StatusOK, types.DeviceAck{AckedSeq: acked})

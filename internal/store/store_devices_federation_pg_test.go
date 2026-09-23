@@ -429,6 +429,67 @@ func TestPG_Devices_RowChainedOnASupersededHeadIsRefused(t *testing.T) {
 	}
 }
 
+// A laptop table reset that restarts its seq (TRUNCATE ... RESTART IDENTITY, a
+// restore) reuses seqs this organisation already recorded. The new chain is a
+// chain reset accepted in full, never rows dropped as a re-send; its own
+// re-send is still a no-op; and a rewrite of held history is refused even when
+// every hash in it verifies.
+func TestPG_Devices_AResetThatReusesSeqsIsAChainResetNotADroppedResend(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	d := federationDevice(t, st)
+	ingest := func(rows ...types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+		return st.IngestDeviceAudit(ctx, d.ID, testPeer, rows)
+	}
+	held := func() (n int) {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE data->'device_origin'->>'device_id' = $1`,
+			d.ID.String()).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	a1 := federationRow(t, pool, d, "", 1, "a1", json.RawMessage(`{}`))
+	a2 := federationRow(t, pool, d, a1.RowHash, 2, "a2", json.RawMessage(`{}`))
+	a3 := federationRow(t, pool, d, a2.RowHash, 3, "a3", json.RawMessage(`{}`))
+	if res, err := ingest(a1, a2, a3); err != nil || res.Accepted != 3 {
+		t.Fatalf("first chain: %+v %v", res, err)
+	}
+
+	b1 := federationRow(t, pool, d, "", 1, "b1", json.RawMessage(`{}`))
+	b2 := federationRow(t, pool, d, b1.RowHash, 2, "b2", json.RawMessage(`{}`))
+	if res, err := ingest(b1, b2); err != nil || res.Accepted != 2 || !res.Reset {
+		t.Fatalf("a new chain at reused seqs: %+v %v, want Accepted=2 Reset=true", res, err)
+	}
+	if n := held(); n != 5 {
+		t.Fatalf("organisation holds %d rows for the device, want 5", n)
+	}
+	var cur types.Device
+	if err := pool.QueryRow(ctx, `SELECT last_seq, last_row_hash FROM devices WHERE id = $1`, d.ID).
+		Scan(&cur.LastSeq, &cur.LastRowHash); err != nil {
+		t.Fatal(err)
+	}
+	if cur.LastSeq != 2 || cur.LastRowHash != b2.RowHash {
+		t.Fatalf("recorded head = (%d, %s), want (2, %s)", cur.LastSeq, cur.LastRowHash, b2.RowHash)
+	}
+
+	if res, err := ingest(b1, b2); err != nil || res.Accepted != 0 || res.Reset {
+		t.Fatalf("re-send of the new chain: %+v %v, want a no-op", res, err)
+	}
+	b3 := federationRow(t, pool, d, b2.RowHash, 3, "b3", json.RawMessage(`{}`))
+	if res, err := ingest(b1, b2, b3); err != nil || res.Accepted != 1 || res.Reset {
+		t.Fatalf("the new chain continuing past a seq the old one held: %+v %v, want Accepted=1", res, err)
+	}
+
+	rewritten := federationRow(t, pool, d, b1.RowHash, 2, "b2-rewritten", json.RawMessage(`{}`))
+	if _, err := ingest(b1, rewritten); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a re-chained rewrite of a held row: err = %v, want ErrConflict", err)
+	}
+	if n := held(); n != 6 {
+		t.Fatalf("organisation holds %d rows for the device, want 6", n)
+	}
+}
+
 // A retry whose already-ingested prefix was edited is refused: every claimed
 // hash is recomputed, the skipped prefix included.
 func TestPG_Devices_RetryWithAnEditedIngestedPrefixIsRefused(t *testing.T) {
