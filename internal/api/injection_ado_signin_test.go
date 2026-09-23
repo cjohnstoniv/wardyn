@@ -150,8 +150,8 @@ func TestADOSignIn_CountsTowardMaxReauthHolds(t *testing.T) {
 }
 
 // A raise that cannot even ask (the approval store errors) used to answer 503
-// with no audit trace at all — the one refusal in this lane that bypassed
-// fail(). #204 routes it through fail() like every sibling refusal, so it now
+// with no audit trace at all — it and its capability and consent siblings
+// bypassed fail(). #204 routes it through fail() like every other refusal, so it now
 // leaves the same secret.read failure row and carries reason on the wire.
 func TestADOSignIn_RaiseFailureIsAudited(t *testing.T) {
 	f := newADOSignInFixture(t)

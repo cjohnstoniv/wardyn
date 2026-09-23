@@ -150,7 +150,8 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 	})
 	if err != nil {
 		// Routed through fail (#204): every other refusal in this lane leaves a
-		// secret.read failure row; this raise used to be the one exception.
+		// secret.read failure row; this raise and the capability and consent
+		// raises (injection_ado_capability.go) used to be the exceptions.
 		return fail(http.StatusServiceUnavailable, "raise_failed", adoSignInRaiseFailedBody,
 			map[string]any{"owner": sn.OwnerSubject})
 	}

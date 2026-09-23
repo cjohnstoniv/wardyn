@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -351,6 +352,52 @@ func TestADOCapability_ConsentChainsAndTheSignInResolvesIt(t *testing.T) {
 	granted(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath))
 	if f.row(a).MintedJTI == "" {
 		t.Error("the once approval was not spent by the resolve that went through")
+	}
+}
+
+// A capability or consent hold the approval store cannot even raise used to
+// answer a bare 503 with no audit trace. #204 routes both through fail(), so
+// each leaves the lane's secret.read failure row and carries reason on the wire.
+func TestADOCapability_RaiseFailureIsAudited(t *testing.T) {
+	f := newADOCapFixture(t)
+	f.approvals.requestErr = errors.New("approvals store unavailable")
+	f.assertRaiseFailed(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath))
+}
+
+func TestADOCapability_ConsentRaiseFailureIsAudited(t *testing.T) {
+	f := newADOCapFixture(t)
+	a := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath), adoCapabilityPendingState)
+	f.decide(t, a, types.ApprovalApproved, types.ScopeOnce)
+	f.fake.SetConsentRequired(true)
+	f.approvals.requestErr = errors.New("approvals store unavailable")
+	f.assertRaiseFailed(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath))
+}
+
+// assertRaiseFailed: a 503, exactly one secret.read failure row, and reason
+// raise_failed on both that row and the wire.
+func (f *adoCapFixture) assertRaiseFailed(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d body %s, want 503", w.Code, w.Body.String())
+	}
+	failures := 0
+	for _, row := range f.audit.find("secret.read") {
+		if row.Outcome == "failure" {
+			failures++
+		}
+	}
+	if failures != 1 {
+		t.Fatalf("secret.read failure rows = %d, want exactly one", failures)
+	}
+	if got := f.failureReasonOf(t)["reason"]; got != "raise_failed" {
+		t.Errorf("audit reason = %v, want raise_failed", got)
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != "raise_failed" {
+		t.Errorf("wire reason = %q, want raise_failed", body.Reason)
 	}
 }
 

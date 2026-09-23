@@ -13,9 +13,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The per-person Azure DevOps injection lane's refusals now carry a machine `reason` on the
   wire, not just the audit row** — the proxy sidecar (and now the Go SDK, via the new
   `client.APIError.Reason` field) can branch on why a resolve, capability ask or sign-in hold
-  was refused instead of string-matching the human sentence. The one refusal in the lane that
-  bypassed its own audited refusal path (a sign-in hold that could not even raise its approval
-  request) now leaves the same `secret.read` failure row every sibling refusal does (#204).
+  was refused instead of string-matching the human sentence. The three refusals in the lane that
+  bypassed its own audited refusal path (a capability, consent or sign-in hold that could not even
+  raise its approval request) now leave the same `secret.read` failure row every sibling refusal
+  does (#204).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

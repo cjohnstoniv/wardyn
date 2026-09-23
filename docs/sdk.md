@@ -166,10 +166,12 @@ been converted yet". The Azure DevOps lane's reasons:
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. |
 | `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. |
 | `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. |
+| `token_mode` / `signin_unconfigured` / `signin_unreadable` | The organisation is in token mode, has no sign-in app registration configured, or its sign-in configuration could not be read (`adoEntraConfigFor`). |
 | `host-not-organisation` | The requested host is outside the snapshot's organisation. |
 | `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. |
 | `approval_mismatch` / `approvals_unreadable` / `once_unspendable` | The named approval does not match, could not be read, or was already spent. |
-| `signin_closed` / `signin_holds_exhausted` / `raise_failed` | The sign-in hold chain's refusals — see `injection_ado_signin.go`. `raise_failed` is the approval store itself erroring when raising a hold. |
+| `signin_closed` / `signin_holds_exhausted` | The sign-in hold chain's refusals — see `injection_ado_signin.go`. |
+| `raise_failed` | The approval store itself errored while raising a capability, consent or sign-in hold. |
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum (`internal/api/ado_entra_store.go`), carried through unchanged when the redemption classifies a renewal failure. |
 
 ## Local dev: principal override
