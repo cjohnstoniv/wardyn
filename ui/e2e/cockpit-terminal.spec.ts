@@ -233,7 +233,10 @@ test.describe("Run cockpit terminal", () => {
       // vacuous instead of a proof the chord itself is what stopped it.
       ws.send(attachModeFrame(false));
       ws.onMessage((msg) => {
-        if (Buffer.isBuffer(msg)) received.push(msg);
+        if (Buffer.isBuffer(msg)) {
+          received.push(msg);
+          ws.send(msg);
+        }
       });
     });
 
