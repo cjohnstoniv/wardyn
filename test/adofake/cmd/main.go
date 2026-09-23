@@ -170,6 +170,12 @@ func newFake(cfg config) (*fake, error) {
 		return nil, err
 	}
 	f.ado.RegisterRepo(cfg.org, cfg.project, cfg.repo, bare)
+	f.ado.AddProject(cfg.org, "", adofake.SpacedProject)
+	spaced, err := fixtureRepo(filepath.Join(cfg.repoDir, "spaced"), "spaced")
+	if err != nil {
+		return nil, err
+	}
+	f.ado.RegisterRepo(cfg.org, adofake.SpacedProject, adofake.SpacedRepo, spaced)
 
 	// THE REGISTRATION PATH: in-process only. A token is trusted by Azure
 	// DevOps exactly when the Entra fake minted it, with the scopes it minted it

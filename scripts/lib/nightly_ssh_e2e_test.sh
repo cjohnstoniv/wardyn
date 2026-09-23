@@ -14,7 +14,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKFLOW="${REPO_ROOT}/.github/workflows/nightly.yml"
 
-if grep -Ev '^[[:space:]]*#' "${WORKFLOW}" | grep -Eq 'make test-e2e-ssh|run-e2e-ssh\.sh'; then
+# CAPTURE, THEN MATCH — never `grep | grep -q` under `pipefail` (the law
+# kind-sso-walk.sh's own comment names for `kubectl logs | grep -q`): `grep -q`
+# exits on its first match while the upstream grep is still writing, the
+# upstream takes SIGPIPE, and pipefail reports the PIPELINE failed even though
+# the match was found.
+non_comment_lines="$(grep -Ev '^[[:space:]]*#' "${WORKFLOW}" || true)"
+if grep -Eq 'make test-e2e-ssh|run-e2e-ssh\.sh' <<<"${non_comment_lines}"; then
   echo "ok - nightly.yml invokes the live SSH gateway e2e"
 else
   echo "FAIL: no non-comment line in ${WORKFLOW} invokes 'make test-e2e-ssh' or run-e2e-ssh.sh (W18-S1-2)" >&2

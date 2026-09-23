@@ -184,7 +184,10 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// git_push_any_branch still opts out, and then the allow row says so
 	// (brokered:git:branch-ns-off) rather than reading like a confined push.
 	//
-	// A refusal happens BEFORE patToken, so a refused push never mints the PAT.
+	// A refusal happens BEFORE patToken, so the refused request mints nothing
+	// itself — but the push's own discovery (GET info/refs) came first and
+	// already did (push_rules.go), and a content-rules verdict that has to read
+	// the forge looks the credential up before it is reached.
 	var reqBody io.Reader = r.Body
 	allowSrc := ruleSourcePAT
 	if verb == "git-receive-pack" && PATBranchNSEnforced() {
@@ -199,6 +202,24 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 			reqBody = body
 		}
 	}
+	// CONTENT rules, on the SAME terms as the App lane and entered
+	// independently of the branch-namespace block above: this lane terminates
+	// and holds the whole request either way, so gating WHAT a push may carry
+	// on a WHERE switch the operator may never have turned on would leave a
+	// policy that reads as governed enforcing nothing (push_rules.go). A run
+	// that sets no push_rules buffers nothing and behaves exactly as it did.
+	// A refused push is never forwarded. What the pack does not carry is
+	// compared with the forge's own trees on github.com only (patForge).
+	if verb == "git-receive-pack" {
+		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
+			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
+			p.patForge(host, rest, grant))
+		defer release()
+		if !ok {
+			return
+		}
+		reqBody = body
+	}
 
 	token, username, err := p.patToken(r.Context(), grant)
 	if err != nil {
@@ -207,13 +228,32 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Content rules need a pack they can read, and a client only sends one when
+	// the server asks. The advertisement this lane relays gets the same no-thin
+	// rewrite the App lane's does, under the same condition, because this lane
+	// enforces the same rules — advertising on one lane only would make the
+	// rules a false-refusal machine on the other (push_advert.go). The header
+	// rides the lane's own authorize hook, which is where forwardBrokeredGit
+	// lets a lane touch the outbound request; the advertisement must be
+	// PARSEABLE to be rewritten, so identity is asked for explicitly rather
+	// than merely deleting the header.
+	noThin := p.noThinAdvert(r, verb)
 	resp, ok := p.forwardBrokeredGit(w, r, host, rest, reqBody, allowSrc, ruleSourcePATDenied,
-		func(out *http.Request) { out.SetBasicAuth(username, token) })
+		func(out *http.Request) {
+			if noThin {
+				out.Header.Set("Accept-Encoding", "identity")
+			}
+			out.SetBasicAuth(username, token)
+		})
 	if !ok {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if noThin {
+		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
+		return
+	}
 	relay(w, resp)
 }
 

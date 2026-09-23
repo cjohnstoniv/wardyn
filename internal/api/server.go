@@ -140,6 +140,10 @@ type Config struct {
 	Identity identity.Provider
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
+	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
+	// ceiling on how long any request waits for a decision. A run's captured
+	// wait (captureRunLimits) never exceeds it. 0 means unknown here.
+	ApprovalExpiryAfter time.Duration
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
 	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the
@@ -268,6 +272,10 @@ type Config struct {
 	// ControlPlaneURL is the externally-reachable base URL handed to sidecars
 	// (proxy config) so they can call the internal endpoints.
 	ControlPlaneURL string
+	// ControlPlaneCAPEM is wardynd's internal CA certificate (internal/hoptls),
+	// handed to every proxy as the only root it trusts for ControlPlaneURL.
+	// Empty only when ControlPlaneURL is loopback http (a local install).
+	ControlPlaneCAPEM string
 	// ProxyURL, when set, overrides the WARDYN_PROXY_URL injected into sandbox
 	// env. Defaults to "http://wardyn-proxy:3128" (the per-run proxy sidecar
 	// hostname set by the docker driver). Non-secret: it is a network address,
@@ -672,6 +680,18 @@ type Config struct {
 	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
 	// cookie that cannot be signed must never be issued.
 	UISessionKey []byte
+	// DemoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL, validated at boot by
+	// ValidateDemoVideoBaseURL (same seven-rule shape as an internal model
+	// gateway: https://, no userinfo, no query/fragment). It re-points the
+	// Getting Started demo episodes at an operator-run mirror for an
+	// air-gapped deployment, where github.com is unreachable — both the
+	// download URL episodeUrl's /healthz-reading caller builds and the CSP's
+	// media-src this base's host is echoed into (cspMediaSrc,
+	// security_headers.go). Empty (the default) = the two hardcoded GitHub
+	// hosts, byte-identical to today. Control-plane-authored only, same trust
+	// boundary as TrustedCAPEM/LLMGateways above — never a SiteConfig field,
+	// never agent-reachable.
+	DemoVideoBaseURL string
 }
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
@@ -850,6 +870,23 @@ type Server struct {
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.
 	adoEntraTokens adoEntraAccessCache
+	// bg tracks every goroutine spawned through goBackground — work detached
+	// from a request so the answering call does not wait for it
+	// (finishHarnessLoginLaunch, killTeardownTail's supersede caller).
+	// http.Server (cmd/wardynd/boot_serve.go) only waits for in-flight
+	// HANDLERS to return; these goroutines outlive their handler by design, so
+	// Shutdown alone would let a SIGTERM cut one off mid-teardown — a run left
+	// KILLED with its sandbox still up, its credentials unrevoked and no
+	// run.kill row. See WaitBackground, which cmd/wardynd calls after
+	// httpSrv.Shutdown so an orderly stop gives this work its own bounded
+	// window to finish. Zero value is ready to use.
+	bg sync.WaitGroup
+	// bgWaitBudget overrides backgroundShutdownBudget for THIS server only,
+	// same shape as keepaliveEvery/pingEvery above: a test proving WaitBackground
+	// actually gives up at its bound needs to do so in milliseconds, not the
+	// real ~35s budget. Zero (the default) means "use backgroundShutdownBudget".
+	// See background.go for goBackground/WaitBackground themselves.
+	bgWaitBudget time.Duration
 }
 
 // New constructs a Server and builds its router. It does not start listening.

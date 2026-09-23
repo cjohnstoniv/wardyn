@@ -104,7 +104,10 @@ type bootFlags struct {
 	confinementMap       *string
 	trustDomain          *string
 	controlURL           *string
-	policyPath           *string
+	// internalListen is the proxy-facing TLS listener (internal_tls.go); it
+	// runs whenever controlURL is https.
+	internalListen *string
+	policyPath     *string
 	// trustedCAFile is WARDYN_TRUSTED_CA_FILE (see trusted_ca.go): a PATH to a
 	// PEM bundle of additional roots a corporate TLS-inspecting middlebox signs
 	// with. Same shape as policyPath above (a path read once at boot, not a
@@ -123,6 +126,13 @@ type bootFlags struct {
 	// untouched, byte-identical to today.
 	daemonProxyURL *string
 	daemonNoProxy  *string
+	// daemonProxySecretFile is WARDYN_DAEMON_PROXY_SECRET (see
+	// installDaemonProxySecret, daemon_proxy.go): a PATH to a file holding one
+	// proxy URL that MAY embed user:pass@ — the credentialed form
+	// daemonProxyURL above refuses. Same shape as trustedCAFile: a path read
+	// once at boot, control-plane-authored only. Mutually exclusive with
+	// daemonProxyURL (bootDaemonProxy refuses boot if both are set).
+	daemonProxySecretFile *string
 	// anthropicBaseURL / openaiBaseURL are WARDYN_ANTHROPIC_BASE_URL /
 	// WARDYN_OPENAI_BASE_URL (see internal/api/llm_gateway.go's
 	// ValidateLLMGateways): an operator-set internal model gateway base URL
@@ -132,6 +142,15 @@ type bootFlags struct {
 	// above — never a SiteConfig field, never agent-reachable.
 	anthropicBaseURL *string
 	openaiBaseURL    *string
+	// demoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL (see
+	// internal/api/llm_gateway.go's ValidateDemoVideoBaseURL): an
+	// operator-run mirror re-pointing the Getting Started demo episodes for
+	// an air-gapped deployment, where github.com is unreachable. Empty
+	// (default) = the two hardcoded GitHub hosts, byte-identical to today.
+	// Same posture class as anthropicBaseURL/openaiBaseURL above —
+	// control-plane-authored, never a SiteConfig field, never
+	// agent-reachable.
+	demoVideoBaseURL *string
 	// anthropicGatewayHeader / anthropicGatewayFormat (WARDYN_ANTHROPIC_GATEWAY_HEADER
 	// / _FORMAT) and their OpenAI pair below are the injection header name and
 	// value format a gateway configured via anthropicBaseURL/openaiBaseURL wants
@@ -248,7 +267,7 @@ type bootFlags struct {
 	printGroundtruthToken *bool
 	genAgeKey             *bool
 	// rotateAgeKey is the one knob in this struct with NO WARDYN_* env pair, on
-	// purpose: it is a destructive maintenance mode that re-encrypts every
+	// purpose: it is a destructive maintenance mode that rewraps every
 	// stored secret, so it must be an explicit act on a command line. Its
 	// early-exit siblings above are print-and-quit and harmless if an env var
 	// turns them on; a stray WARDYN_ROTATE_AGE_KEY left in a compose .env would
@@ -323,13 +342,16 @@ func parseBootFlags() *bootFlags {
 		recordingSel:            flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `recording store (pluggable seam): "pg" (default; Postgres-backed, visible to every replica), "fs" (legacy per-pod on-disk store) or "off" (no recording, no replay)`),
 		confinementMap:          flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins making CC3 runtime-pluggable, e.g. "CC2=runsc;CC3=kata-qemu" (or "CC3=oci:kata-qemu"); empty = built-in defaults`),
 		trustDomain:             flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
-		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
+		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
+		internalListen:          flagEnv("internal-listen", "WARDYN_INTERNAL_LISTEN", ":8443", "listen address of the proxy-facing TLS listener (the /api/v1/internal/ routes and /healthz only), served with a certificate from wardynd's own internal CA. Runs whenever -control-plane-url is https"),
 		policyPath:              flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		trustedCAFile:           flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots (e.g. a corporate TLS-inspecting middlebox's CA), added to the system roots for wardynd's own outbound TLS, the proxy sidecar's forwarding transport, and every sandbox's CA trust. Empty (default) = system roots only, byte-identical to today"),
 		daemonProxyURL:          flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) wardynd's OWN outbound HTTP calls traverse: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO CreateToken renewal, and Entra directory sync. Empty (default) = http.DefaultTransport is left untouched (today's ProxyFromEnvironment behavior). Malformed ⇒ boot refused. See docs/ENV.md"),
 		daemonNoProxy:           flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-spelled bypass list for WARDYN_DAEMON_PROXY_URL (host, .suffix, CIDR, *). wardynd auto-appends three hosts: KUBERNETES_SERVICE_HOST, the WARDYN_AWS_SSO_ENDPOINT_OVERRIDE host, and the WARDYN_OIDC_INTERNAL_ISSUER host. Ignored when the proxy URL is unset"),
+		daemonProxySecretFile:   flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding ONE forward-proxy URL that MAY embed user:pass@ — the credentialed form of WARDYN_DAEMON_PROXY_URL, for an egress proxy that requires a credential. File mode must be 0600 or tighter. Refused at boot if WARDYN_DAEMON_PROXY_URL is ALSO set. Empty (default) = unused. See docs/ENV.md"),
 		anthropicBaseURL:        flagEnv("anthropic-base-url", "WARDYN_ANTHROPIC_BASE_URL", "", "operator-set internal model gateway base URL (https://, RFC1918/CGNAT literal allowed) re-pointing Anthropic's brokered upstream instead of api.anthropic.com. Empty (default) = the public host, byte-identical to today. Covers the api-key lane AND subscription/Wardyn-managed runs: setting this sends the operator's live OAuth token to the configured gateway instead of only ever api.anthropic.com. The harness-login (claude setup-token) lane is exempt and always stays on the public host"),
 		openaiBaseURL:           flagEnv("openai-base-url", "WARDYN_OPENAI_BASE_URL", "", "same as -anthropic-base-url, for OpenAI's api-key lane (api.openai.com)"),
+		demoVideoBaseURL:        flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "operator-run mirror base URL (https://, no userinfo, no query/fragment) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) = the two hardcoded GitHub hosts, byte-identical to today. Published on /healthz; the console reads it to build each episode's download URL and the CSP's media-src names its origin"),
 		anthropicGatewayHeader:  flagEnv("anthropic-gateway-header", "WARDYN_ANTHROPIC_GATEWAY_HEADER", "", "injection header name -anthropic-base-url's gateway wants instead of x-api-key. Empty (default) = x-api-key, byte-identical to today. Must be a valid HTTP header token; a malformed value refuses boot"),
 		anthropicGatewayFormat:  flagEnv("anthropic-gateway-format", "WARDYN_ANTHROPIC_GATEWAY_FORMAT", "", `value format -anthropic-base-url's gateway wants instead of the bare key ("%s"), e.g. "Bearer %s". Empty (default) = the bare key, byte-identical to today. Must contain exactly one %s and no other verb; a malformed value refuses boot`),
 		openaiGatewayHeader:     flagEnv("openai-gateway-header", "WARDYN_OPENAI_GATEWAY_HEADER", "", "same as -anthropic-gateway-header, for OpenAI's gateway (default Authorization)"),
@@ -446,7 +468,7 @@ func parseBootFlags() *bootFlags {
 		// flag.String, NOT flagEnv: no env pair by design — see the struct field.
 		// The backquoted word is deliberate: flag.PrintDefaults renders the first
 		// one in a usage string as the argument placeholder ("-rotate-age-key path").
-		rotateAgeKey: flag.String("rotate-age-key", "", "MAINTENANCE MODE, daemon must be STOPPED: mint a new age identity, re-encrypt every stored secret from WARDYN_AGE_KEY to it in ONE transaction, "+
+		rotateAgeKey: flag.String("rotate-age-key", "", "MAINTENANCE MODE, daemon must be STOPPED: mint a new age identity, rewrap every stored secret's data key from WARDYN_AGE_KEY's key to it in ONE transaction, "+
 			"replace the key file at `path` (previous kept as <path>.bak), then exit. Serves nothing. "+
 			"That file must already hold the CURRENT identity as a bare AGE-SECRET-KEY-... line (# comments allowed) — it is NOT an env file. See docs/OPERATIONS.md"),
 
@@ -490,6 +512,16 @@ func parseBootFlags() *bootFlags {
 	}
 	if *f.bedrockAWSProfile == "" {
 		*f.bedrockAWSProfile = envOr("AWS_PROFILE", "")
+	}
+
+	// <VAR>_FILE twins resolve here, with the rest of the flag/env reading,
+	// so every caller — -rotate-age-key included — sees one resolved value. A
+	// bad file is a malformed setting like a bad flag, so it exits here the way
+	// flag.Parse does, with main's own fatal line (run() has no cyclomatic
+	// budget left for another early return).
+	if err := resolveSecretFiles(secretFileSettings(f)); err != nil {
+		slog.Error("wardynd: fatal", slog.Any("err", err))
+		os.Exit(1)
 	}
 	return f
 }

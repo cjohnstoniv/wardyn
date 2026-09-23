@@ -7,9 +7,13 @@
 // table from docs/design/people-access-prompt.md §7, plus its Adjudication
 // section, transcribed verbatim. The People step's role-mappings editor
 // (setup/access-panel.tsx, step-bodies.tsx's DeploymentStep multi-user branch)
-// and the sign-in screen's reworded auth_error arms (sign-in.tsx) read these
-// instead of retyping the copy, so the shipped wording can't drift from the
-// reviewed mock (docs/design/people-access-mock/index.html).
+// reads these instead of retyping the copy, so the shipped wording can't
+// drift from the reviewed mock (docs/design/people-access-mock/index.html).
+//
+// The sign-in screen's own copy (including its three reworded auth_error
+// arms, formerly a SIGNIN export here under §7.7) moved to
+// ui/src/app/lib/sign-in-copy.ts in #457 (docs/design/
+// signin-first-contact-canon.md) — one screen's strings, one home.
 //
 // Pure TS — no React, no fetch, no DOM. Same discipline as permissions-copy.ts
 // (permissions.tsx:11-13): the component that consumes this adds NO copy of
@@ -173,18 +177,18 @@ export const ACCESS_STATE = {
   FETCH_FAILED_RETRY: "Retry",
 } as const;
 
-// §7.7 — SIGNIN, the reworded auth_error arms sign-in.tsx's authErrorMessage
-// renders. Only these three keys: the other auth_error codes are unchanged
-// and stay authored directly in sign-in.tsx (out of scope this round).
-export const SIGNIN = {
-  NO_ROLE:
-    "Your account has no Wardyn role assigned. Ask your Wardyn admin to add you to a role mapping (WARDYN_OIDC_ROLE_MAP or WARDYN_OIDC_OPERATOR_EMAILS, or the equivalent on the People step).",
-  EMAIL_VERIFIED_ABSENT:
-    "Your identity provider doesn't send an email_verified claim at all (common on Entra ID), so this console can't confirm the email on its own. Ask your Wardyn admin to map your role by App Role or group instead (WARDYN_OIDC_ROLE_MAP, or the People step).",
-  ROLE_CHECK_UNAVAILABLE: "Couldn't check your access — try again, or contact your admin.",
-  // DRAFT (M2 canon pending): role is three-valued (0.7 SSO Phase 3) — this
-  // sentence must name all three; naming only "admin or member" tells a
-  // security admin they'd sign in as one of the two when neither is true.
-  ROLE_SOURCE:
-    "Your role — admin, security admin or member — comes from your SSO role assignment. Everyone is an admin only when neither a role map nor the operator allowlist is set.",
-} as const;
+// #484 — the two pieces of the admin-written request-access help the SIGN-IN
+// page needs (the People-step card's own strings live in access-posture-copy.ts:
+// this module is in the entry chunk through sign-in.tsx, and the card is not).
+// The link's one fixed label (Q457-7), frozen in docs/design/admin-access-canon.md.
+export const SIGNIN_HELP_LINK_LABEL = "Request access";
+
+// Q457-6: the four auth_error codes (internal/auth/oidc's authError* consts)
+// that carry the admin's help — the refusals a person cannot clear alone.
+// Every other refusal (a timeout, a config error, the generic arm) gets none.
+export const SIGNIN_HELP_REFUSALS: ReadonlySet<string> = new Set([
+  "no_role",
+  "email_domain",
+  "claims_overage",
+  "email_verified_absent",
+]);

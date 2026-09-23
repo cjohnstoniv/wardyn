@@ -223,7 +223,12 @@ done
 }
 
 grep -q '_cid=$(compose ps -q wardynd 2>/dev/null || true)$' "${UP_SH}" || fail "cmd_up no longer reads the wardynd container id the way this guard expects"
-awk '/^  until \{ \[ -n "\$\{_cid\}"/,/^  done$/' "${UP_SH}" | grep -q 'compose ps -q wardynd'   || fail "cmd_up's health-wait loop never re-reads _cid — an empty first capture (slow daemon, right after \`compose up -d\`) wedges the wait on the host-curl arm for its whole budget (perf2-C1)"
+# CAPTURE, THEN MATCH — never `awk | grep -q` under `pipefail`: `grep -q`
+# exits on its first match while awk is still writing, awk takes SIGPIPE, and
+# pipefail reports the pipeline failed even when the match was found.
+_health_wait_loop="$(awk '/^  until \{ \[ -n "\$\{_cid\}"/,/^  done$/' "${UP_SH}")"
+grep -q 'compose ps -q wardynd' <<<"${_health_wait_loop}" \
+  || fail "cmd_up's health-wait loop never re-reads _cid — an empty first capture (slow daemon, right after \`compose up -d\`) wedges the wait on the host-curl arm for its whole budget (perf2-C1)"
 
 # Behavioural proof against a real stalled peer: a listener that ACCEPTS and
 # never replies. wait_healthy must return within its own budget, not hang.

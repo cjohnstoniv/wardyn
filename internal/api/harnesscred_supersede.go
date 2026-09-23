@@ -146,35 +146,70 @@ func (s *Server) supersedeCallerLoginRuns(ctx context.Context, actor, agent stri
 	}
 }
 
-// supersedeOneLoginRun runs the kill cascade over one orphaned login run,
-// re-reading on a lost CAS: the run may be mid-dispatch (PENDING->STARTING), and
-// a supersede that shrugged at a lost CAS would leave exactly the run it exists
-// to end.
+// supersedeOneLoginRun claims the kill cascade's KILLED transition over one
+// orphaned login run, re-reading on a lost CAS: the run may be mid-dispatch
+// (PENDING->STARTING), and a supersede that shrugged at a lost CAS would leave
+// exactly the run it exists to end.
+//
+// It calls claimKillTransition — not killRunCascade — SYNCHRONOUSLY: this
+// runs inside the sign-in launch POST (launchHarnessLoginRun), and the CAS
+// re-read loop below needs to see each attempt land before deciding whether to
+// retry. Once an attempt WINS, the slow half (KillSandbox under
+// killCascadeTimeout, both revocations, the run.kill row — killTeardownTail)
+// hands off to a goroutine tracked by goBackground (server.go) so the POST
+// answers without waiting for the old sandbox to actually go away, and an
+// orderly daemon shutdown still waits for it instead of cutting it off
+// mid-teardown. context.WithoutCancel because the request this loop runs in
+// answers, and its context dies with it, long before the teardown is done.
+// Panic-safe (recover + log), the same idiom finishHarnessLoginLaunch's
+// detached worker uses (harnesscred_launch.go): a bug in the teardown must not
+// take the daemon down with it.
 func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, actor string, newRunID uuid.UUID) {
+	// WHO is attributed on the eventual run.kill row: the server, not the
+	// person. They asked for a new sign-in, not for a kill — `superseded_for`
+	// names whose sandbox it was, `superseded_by_run` the sign-in that replaced
+	// it, so the row answers both "why did my box disappear" and "which one
+	// took over" without a join back through harness.login.started.
+	extra := map[string]any{
+		"reason":            supersedeReasonNewLogin,
+		"superseded_for":    actor,
+		"superseded_by_run": newRunID.String(),
+	}
 	for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
-		applied, killData, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd",
-			// WHO is attributed: the server, not the person. They asked for a new
-			// sign-in, not for a kill — `superseded_for` names whose sandbox it was,
-			// `superseded_by_run` the sign-in that replaced it, so the row answers
-			// both "why did my box disappear" and "which one took over" without a
-			// join back through harness.login.started.
-			map[string]any{
-				"reason":            supersedeReasonNewLogin,
-				"superseded_for":    actor,
-				"superseded_by_run": newRunID.String(),
-			})
+		// claimKillTransition takes ctx as given (its own doc comment), so THIS
+		// call site owns the detach+bound: the launch POST's own context, which
+		// must not let a closed tab cancel a CAS already in flight.
+		claimCtx, claimCancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+		applied, err := s.claimKillTransition(claimCtx, run)
+		claimCancel()
 		if err != nil {
 			slog.WarnContext(ctx, "wardynd: could not supersede a live sign-in sandbox",
 				slog.String("run_id", run.ID.String()), slog.Any("error", err))
 			return
 		}
 		if applied {
-			if len(killData) > 0 {
-				// The state is KILLED and the row already carries the failing step;
-				// the new sign-in PROCEEDS — the upload belt is what makes that safe.
-				slog.WarnContext(ctx, "wardynd: superseded sign-in sandbox was not fully torn down",
-					slog.String("run_id", run.ID.String()), slog.Any("errors", killData))
-			}
+			detached := context.WithoutCancel(ctx)
+			run := run
+			s.goBackground(func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						slog.ErrorContext(detached, "wardynd: superseded sign-in teardown panicked",
+							slog.String("run_id", run.ID.String()), slog.Any("panic", rec))
+					}
+				}()
+				// killTeardownTail also takes ctx as given, so THIS goroutine — the
+				// one place this cascade half runs — owns its own killCascadeTimeout
+				// bound, same as claimKillTransition's above.
+				tailCtx, tailCancel := context.WithTimeout(detached, killCascadeTimeout)
+				defer tailCancel()
+				killData := s.killTeardownTail(tailCtx, run, types.ActorSystem, "wardynd", extra)
+				if len(killData) > 0 {
+					// The state is KILLED and the row already carries the failing step;
+					// the new sign-in PROCEEDS — the upload belt is what makes that safe.
+					slog.WarnContext(detached, "wardynd: superseded sign-in sandbox was not fully torn down",
+						slog.String("run_id", run.ID.String()), slog.Any("errors", killData))
+				}
+			})
 			return
 		}
 		// Lost the CAS to a forward transition. Re-read and try from the state it

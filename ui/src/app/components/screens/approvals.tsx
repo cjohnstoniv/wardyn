@@ -49,6 +49,7 @@ import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAud
 import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
 import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
 import { ADO } from "../../lib/ado-entra-copy";
+import { APPROVALS } from "../../lib/approvals-copy";
 import {
   APPROVAL,
   APPROVAL_BANNER_LABEL,
@@ -404,7 +405,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       const args = decisionArgs(decisionScope, until);
       if (prompt.action === "approve") await api.approve(prompt.id, reason, ...args);
       else await api.deny(prompt.id, reason, ...args);
-      toast.success(prompt.action === "approve" ? "Request approved" : "Request denied");
+      toast.success(prompt.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       setPrompt(null);
       // F5-F11: load() would flip status back to "loading" first — the whole
       // queue would flash to a skeleton after every single decision, losing
@@ -419,7 +420,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       return true;
     } catch (err) {
       toast.error(
-        prompt.action === "approve" ? "Failed to approve request" : "Failed to deny request",
+        prompt.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED,
         { description: getErrorMessage(err) },
       );
       return false;
@@ -436,13 +437,13 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     try {
       if (approve) await api.approve(id, "approved", ...opts);
       else await api.deny(id, "denied", ...opts);
-      toast.success(approve ? "Request approved" : "Request denied");
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       fetchAll().catch(() => {
         /* transient refresh failure — the decide itself already succeeded */
       });
       onChanged?.();
     } catch (err) {
-      toast.error(approve ? "Failed to approve request" : "Failed to deny request", {
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
     }
@@ -644,7 +645,10 @@ function PendingCard({
   // on the wire), a plain identity comparison, not the model-access door's
   // own audience predicate.
   const principal = usePrincipal();
-  const [adoBusy, setAdoBusy] = React.useState(false);
+  // "approve" | "deny" while that decision is in flight, else null (#458) —
+  // see AdoCapabilityCard's own `busy` doc for why a single boolean isn't
+  // enough to spin only the pressed button.
+  const [adoBusy, setAdoBusy] = React.useState<"approve" | "deny" | null>(null);
   // N1 (round 2): PendingCard only ever receives PENDING rows today
   // (pendingItems is fetched via api.listApprovals("PENDING")), but the
   // state check is explicit here too — defense-in-depth against this
@@ -663,14 +667,14 @@ function PendingCard({
           run={run}
           busy={adoBusy}
           onApprove={async (opts) => {
-            setAdoBusy(true);
+            setAdoBusy("approve");
             await onAdoDecide(item.id, true, opts);
-            setAdoBusy(false);
+            setAdoBusy(null);
           }}
           onDeny={async (opts) => {
-            setAdoBusy(true);
+            setAdoBusy("deny");
             await onAdoDecide(item.id, false, opts);
-            setAdoBusy(false);
+            setAdoBusy(null);
           }}
         />
       </div>

@@ -4,7 +4,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,9 +70,5 @@ func TestEgressDenyCounterDocClosesTheGatewayVetResidual(t *testing.T) {
 // one string to Contains regardless of how gofmt wrapped it.
 func readGoSource(t *testing.T, path string) string {
 	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return strings.Join(strings.Fields(string(b)), " ")
+	return strings.Join(strings.Fields(readRepo(t, path)), " ")
 }

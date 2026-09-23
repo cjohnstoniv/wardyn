@@ -338,6 +338,7 @@ export function NewRunScreen() {
     launchDisabled,
     launchSpinning,
     error,
+    errorSeq,
     credentialRefused,
     launchWarnings,
     launchedRunId,
@@ -345,6 +346,7 @@ export function NewRunScreen() {
     preflighting,
     preflightResult,
     preflightError,
+    preflightErrorSeq,
     preflightIsCurrent,
     preflight,
   } = useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLaunchError: adoDoor.notifyLaunchError });
@@ -704,6 +706,7 @@ export function NewRunScreen() {
             inFlight: launching,
             problem,
             error,
+            errorSeq,
             credentialRefused,
             warnings: launchWarnings,
             onOpenRun: launchedRunId
@@ -712,8 +715,8 @@ export function NewRunScreen() {
           }}
           preflight={
             preflightIsCurrent
-              ? { error: preflightError, result: preflightResult }
-              : { error: null, result: null }
+              ? { error: preflightError, errorSeq: preflightErrorSeq, result: preflightResult }
+              : { error: null, errorSeq: preflightErrorSeq, result: null }
           }
           agentRow={isAgent ? harnesses?.find((h) => h.id === state.agent) : undefined}
           adoDialog={adoDoor.dialog}

@@ -28,10 +28,14 @@ import { SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { SidebarSettingsLink } from "./sidebar-settings-link";
-// GOVERNANCE.TITLE is ONE string for two places — this nav label and the
-// screen's own heading — the way every other nav entry already works. There is
-// no second "Governance profiles" label (governance-prompt.md §7.2).
-import { GOVERNANCE } from "../../lib/governance-copy";
+// GOVERNANCE_NAV_TITLE is ONE string for two places — this nav label and the
+// governance screen's own heading (governance-copy.ts's GOVERNANCE.TITLE reads
+// the same constant) — the way every other nav entry already works. There is
+// no second "Governance profiles" label (governance-prompt.md §7.2). Imported
+// from nav-copy.ts rather than governance-copy.ts itself so the eager sidebar
+// doesn't drag the whole §7.2-§7.9 screen-only canon table into the entry
+// chunk (#498) for one string.
+import { GOVERNANCE_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -45,6 +49,7 @@ import {
 } from "../wardyn/operator-context";
 import { health as api, type MeUserDrive } from "../../lib/api/health";
 import { TopBar } from "./top-bar";
+import { ViewAccessProvider, viewAccess } from "../wardyn/console-view";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
@@ -130,6 +135,9 @@ export interface ShellMeta {
    *  confirm" (a k8s daemon that omitted the verdict) apart. */
   runner: string;
   networkPolicy: string;
+  /** /healthz's `sso`: OIDC is configured. With it, the admin token is not a
+   *  person and has no User view (console-view.tsx#viewAccess). */
+  sso: boolean;
 }
 
 /** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
@@ -160,6 +168,7 @@ function useMeta(): [ShellMeta, () => void] {
     memberPreviewAvailable: false,
     runner: "",
     networkPolicy: "",
+    sso: false,
   });
   React.useEffect(() => {
     let alive = true;
@@ -194,6 +203,7 @@ function useMeta(): [ShellMeta, () => void] {
           memberPreviewAvailable: me?.member_preview_available ?? false,
           runner: h.runner ?? "",
           networkPolicy: h.network_policy ?? "",
+          sso: h.sso ?? false,
         });
       })
       .catch(() => {
@@ -281,7 +291,7 @@ const NAV_ITEMS: NavItem[] = [
   // it, then the grants layered inside one (mock Q1). Not in MEMBER_NAV_PATHS —
   // a member never sees it, and there is no member governance route; its own
   // routes are securityOps server-side.
-  { to: "/governance", label: GOVERNANCE.TITLE, icon: Scale },
+  { to: "/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
   // Permissioning (0.6 pillar 2) sits beside Policies: both answer "what is
   // allowed here", one for runs and one for the humans launching them. It is
   // admin-only — deliberately NOT in MEMBER_NAV_PATHS below, and every route
@@ -370,6 +380,10 @@ const ModelAccessBanner = React.lazy(() =>
 // mock approval's third ruling.
 const ConfinementPostureBanner = React.lazy(() =>
   import("../wardyn/confinement-posture").then((m) => ({ default: m.ConfinementPostureBanner })),
+);
+// #484 — same lazy rationale; mounted between the two bands above.
+const EveryoneAdminBanner = React.lazy(() =>
+  import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
 );
 
 const navLinkClass = (isActive: boolean) =>
@@ -569,6 +583,7 @@ export function AppShell({
       confinementPosture={confinementPosture}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
+        <ViewAccessProvider value={viewAccess(meta)}>
         <FocusContext.Provider value={focusValue}>
         {/* #217 — above BOTH the sidebar that can navigate away and every
           screen below it that can register a dirty form (lib/use-unsaved-guard.tsx). */}
@@ -674,6 +689,11 @@ export function AppShell({
               <React.Suspense fallback={null}>
                 <ModelAccessBanner />
               </React.Suspense>
+              {/* #484 — admins only: after the per-person credential block,
+              before the cluster-wide confinement note. */}
+              <React.Suspense fallback={null}>
+                <EveryoneAdminBanner />
+              </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are
               looking at, or block the very thing a run needs to start, and
@@ -728,6 +748,7 @@ export function AppShell({
           </div>
         </UnsavedGuardProvider>
         </FocusContext.Provider>
+        </ViewAccessProvider>
       </RoleProvider>
     </OperatorProvider>
   );

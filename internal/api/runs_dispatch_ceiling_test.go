@@ -83,12 +83,12 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 		firstGitHub = &gid
 		break
 	}
-	ceiling := ceilingForDispatch(governanceCeiling{})
+	ceiling := ceilingForDispatch(governanceCeiling{}, adoEntraUngraded())
 	if len(d.deny) > 0 {
 		ceiling = ceilingForDispatch(governanceCeiling{
 			Spec:    types.RunPolicySpec{DeniedDomains: d.deny},
 			Profile: &types.GovernanceProfile{Name: "walled"},
-		})
+		}, adoEntraUngraded())
 	}
 	srv.dispatchRun(context.Background(), run, ceiling, dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
@@ -328,7 +328,7 @@ func (s ceilingRecordStore) HasGroupTierAssignments(context.Context) (bool, erro
 // ceiling's denies have to ride into dispatch, where deny beats allow_all at
 // the proxy.
 //
-// Counterfactual: pass ceilingForDispatch(governanceCeiling{}) instead of the record
+// Counterfactual: pass ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()) instead of the record
 // lane's dispatchParams and the run comes up allow-all with the walled host
 // wide open — a create-time clamp cannot help, because this lane never passes
 // through one.

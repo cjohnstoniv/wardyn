@@ -114,6 +114,11 @@ run this suite: nothing here reads them.
    identities file as `member.api_token`.
 3. Set `WARDYN_LIVE_ADO_ORG`, `WARDYN_LIVE_ADO_PROJECT` and
    `WARDYN_LIVE_ADO_REPO` to a repository the member can read.
+4. In the same organisation, create a project named `Payments Platform` holding
+   a Git repository named `Card Auth (v2).Service`, and give the member read
+   access. LL2 runs a second time on it, because Azure DevOps names may carry
+   spaces and punctuation. To use other names, set
+   `WARDYN_LIVE_ADO_SPACED_PROJECT` and `WARDYN_LIVE_ADO_SPACED_REPO`.
 
 ### AWS (LL3, LL4)
 

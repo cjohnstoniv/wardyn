@@ -352,6 +352,13 @@ export const FIELD_HELP = {
     doc: "git_push_any_branch-the-per-run-opt-out",
     snippet: true,
   },
+  push_rules: {
+    what: "Content rules for this run's brokered git pushes — WHAT a push may touch, alongside git_push_any_branch's WHERE.",
+    values:
+      "deny_paths (glob-shaped patterns, e.g. \".github/workflows/**\") + max_inspect_pack_mib (0-64). Stored and validated only — no matcher reads deny_paths yet. Unenforceable (a warning, not a refusal) when this run's only git grant is ssh_key.",
+    doc: "push_rules--pushrulesspec",
+    snippet: { deny_paths: [".github/workflows/**"] },
+  },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;
 
 // Fields the RUN instance does not document: the Workspace card owns mounts

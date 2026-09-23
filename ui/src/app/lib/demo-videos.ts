@@ -72,11 +72,23 @@ export const EPISODES: Episode[] = [
 // for it.
 export const MEMBER_SECTION_IDS = ["workspace", "first-run", "approvals"] as const;
 
+// The default an episode downloads from when no operator mirror is
+// configured (WARDYN_DEMO_VIDEO_BASE_URL unset) — GitHub's own release-asset
+// download path. Exported so callers/tests can compose the exact default URL
+// without duplicating the literal.
+export const DEFAULT_DEMO_VIDEO_BASE_URL = "https://github.com/cjohnstoniv/wardyn/releases/download";
+
 // null tag = not recorded yet — never build a URL for a release that doesn't
-// exist.
-export function episodeUrl(e: Episode): string | null {
+// exist, mirror configured or not.
+//
+// `base` is /healthz's demo_video_base_url (use-demo-video-base-url.ts's
+// hook) — an air-gapped deployment's operator-run mirror. Defaults to
+// DEFAULT_DEMO_VIDEO_BASE_URL so every existing caller (and this file's own
+// tests) that never passes one keeps building the exact same GitHub URL as
+// before.
+export function episodeUrl(e: Episode, base: string = DEFAULT_DEMO_VIDEO_BASE_URL): string | null {
   if (e.tag === null) return null;
-  return `https://github.com/cjohnstoniv/wardyn/releases/download/${e.tag}/${e.file}`;
+  return `${base}/${e.tag}/${e.file}`;
 }
 
 export function releasePageUrl(tag: string): string {

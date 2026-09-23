@@ -156,6 +156,8 @@ export interface ProxyTestResult {
 // nothing).
 export interface SiteConfigSaveResult {
   siteConfig: SiteConfig;
+  /** The saved document's ETag, for the next If-Match. */
+  etag: string | null;
   danglingSecretRefs: string[];
   onboardingCompletedAtIgnored: boolean;
   appliesFrom: string;
@@ -172,6 +174,15 @@ export const health = {
     const res = await wfetch("/site-config", { method: "GET" });
     if (res.status === 404) return {};
     return asJson<SiteConfig>(res);
+  },
+
+  // The same read plus its ETag, for an editor that sends it back as If-Match
+  // (#484's People-step help card) so a stale save is refused 412 rather than
+  // spreading an old document over someone else's newer one.
+  async getSiteConfigSnapshot(): Promise<{ siteConfig: SiteConfig; etag: string | null }> {
+    const res = await wfetch("/site-config", { method: "GET" });
+    const siteConfig = await asJson<SiteConfig>(res);
+    return { siteConfig, etag: res.headers.get("ETag") };
   },
 
   // PUT /api/v1/site-config — REPLACES the whole document; callers must GET
@@ -191,10 +202,17 @@ export const health = {
   // the same bug and 400 every Corporate-network save once onboarding had
   // completed. The strip is driven by SERVER_OWNED_SITE_CONFIG_KEYS
   // (lib/types/site.ts), the one list a third such field gets added to.
-  async putSiteConfig(cfg: SiteConfig): Promise<SiteConfigSaveResult> {
+  //
+  // `etag` (optional) is sent as If-Match; absent keeps last-writer-wins, the
+  // behaviour every older caller relies on.
+  async putSiteConfig(cfg: SiteConfig, etag?: string | null): Promise<SiteConfigSaveResult> {
     const body: Record<string, unknown> = { ...cfg };
     for (const k of SERVER_OWNED_SITE_CONFIG_KEYS) delete body[k];
-    const res = await wfetch("/site-config", { method: "PUT", body: JSON.stringify(body) });
+    const res = await wfetch("/site-config", {
+      method: "PUT",
+      ...(etag ? { headers: { "If-Match": etag } } : {}),
+      body: JSON.stringify(body),
+    });
     const parsed = await asJson<
       SiteConfig & {
         dangling_secret_refs?: string[];
@@ -210,6 +228,7 @@ export const health = {
       parsed;
     return {
       siteConfig,
+      etag: res.headers.get("ETag"),
       danglingSecretRefs: dangling_secret_refs ?? [],
       onboardingCompletedAtIgnored: onboarding_completed_at_ignored ?? false,
       appliesFrom: applies_from ?? "",
@@ -295,9 +314,10 @@ export const health = {
     token_login?: boolean;
     // sso_only mirrors WARDYN_SSO_ONLY (cmd/wardynd's validateSSOOnlyPosture):
     // true only when OIDC is configured and every other way in is refused at
-    // boot, so the sign-in screen can safely drop SIGNIN.ROLE_SOURCE's
-    // "everyone is an admin" caveat. Absent on an older daemon, which must
-    // read the same as `false`.
+    // boot. #457 dropped the sign-in screen's only client-side reader of this
+    // field (a role-source caveat, removed entirely); kept as the wire
+    // mirror — token_login already folds it into whether the token form
+    // shows. Absent on an older daemon, which must read the same as `false`.
     sso_only?: boolean;
     // SSH gateway discovery (run-detail's "Connect via SSH" pane): absent /
     // undefined on a deployment with the gateway off (WARDYN_SSH_LISTEN
@@ -323,6 +343,19 @@ export const health = {
     // has to be answerable pre-auth). Wire mirror only; not read client-side
     // yet. Absent on an older daemon.
     version?: string;
+    // #484 — the admin-written help the sign-in screen shows under the four
+    // refusals a person cannot clear alone. Public by design; the server drops
+    // a stored value that no longer passes its check. Absent when unset, and
+    // on an older daemon.
+    sign_in_help_text?: string;
+    sign_in_help_url?: string;
+    // WARDYN_DEMO_VIDEO_BASE_URL (internal/api/healthz.go), already validated
+    // at boot: the operator-run mirror the Getting Started demo episodes
+    // stream from on an air-gapped deployment, where github.com is
+    // unreachable. "" (the default, unset) or absent (an older daemon) both
+    // mean "no mirror" — lib/demo-videos.ts's episodeUrl falls back to its
+    // own hardcoded GitHub base either way.
+    demo_video_base_url?: string;
   }> {
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call

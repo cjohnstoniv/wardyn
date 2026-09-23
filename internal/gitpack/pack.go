@@ -5,17 +5,19 @@
 // request: which paths would this push change, with what file modes and sizes?
 //
 // It is a pure library. It opens no sockets, reads no configuration and talks to
-// no part of the control plane: the whole point is that the proxy can judge a
-// push WITHOUT fetching the base objects a thin pack refers to, because fetching
-// them would put the proxy on the network on the run's behalf — the thing the
-// git broker exists to prevent. Enforcement — which rules apply, what a refusal
-// says — belongs to the caller.
+// no part of the control plane: it never fetches the base objects a thin pack
+// refers to, so a push is judged from its own bytes. Enforcement — which rules
+// apply, what a refusal says, and whether to ask the forge about what the pack
+// leaves out or re-sends — belongs to the caller.
 //
 // # What the answer is worth
 //
 // A pack carries exactly the objects the receiving side does not already have,
-// so an object missing from it is one the receiving side already stores. Three
-// consequences, all of them deliberate, and two of them one-sided the safe way:
+// so an object missing from it is one the receiving side already stores —
+// somewhere. Which path it stood at is exactly what the pack does not say: the
+// sender chooses what to leave out, and an object the receiving side holds is
+// left out whatever path the new tree gives it. Three consequences, all of them
+// deliberate, and all of them one-sided the safe way:
 //
 //   - When a new commit's parent is not in the pack — the normal shape of a push
 //     to a new branch — there is no pre-image to diff against, so the whole tree
@@ -24,13 +26,24 @@
 //     directory reports that directory's other files too. Over-reporting is safe
 //     for a deny rule and under-reporting is not, which is why it is the
 //     fallback.
-//   - A directory whose tree object is not in the pack is skipped rather than
-//     refused. Its contents are byte for byte a tree the receiving side already
-//     stores, so the push introduces nothing under it, and refusing every push
-//     that leaves a directory untouched would refuse nearly every real push. The
-//     residual: a push that resurrects a directory wholesale from the receiving
-//     side's own history — the same tree object, made reachable from a new ref —
-//     is not reported as changing those paths.
+//   - A directory whose tree object is not in the pack is reported as ONE
+//     opaque entry at its own path (Change.Opaque), never skipped. Its contents
+//     are a tree the receiving side stores, but nothing in the pack
+//     distinguishes a directory the push left alone from one it moved onto that
+//     path, copied there from an earlier push, or restored from an older
+//     revision — and skipping it let any of those place anything at any path
+//     unread. Only a diff against a parent the pack carries skips a subtree,
+//     because only there does an unchanged object id at the same name prove it
+//     untouched. Everywhere else the entry carries its object id (Change.OID)
+//     and the answer names the commits the push builds on (Result.Bases), so a
+//     caller that can read those commits' trees from the receiving side can
+//     prove an entry unchanged the same way.
+//   - A pack is not always only what is new. git leaves out what is reachable
+//     from the tips the receiving side advertises that the sender also has, so
+//     a sender holding none of them — a clone taken before its branch moved on
+//     — re-sends its history, and that history's first commit is enumerated
+//     whole. Result.Settle takes out the commits a caller says the receiving
+//     side already holds.
 //   - A removal is invisible. The enumerated case has no pre-image to compare
 //     against, so this package reports what a push INTRODUCES, not what it takes
 //     away.
@@ -41,6 +54,18 @@
 // bytes than the ceilings below allow) or that git would read differently from
 // this package (a commit carrying a header git's own parser stops before), and
 // a plain error for a malformed or hostile one.
+//
+// # What one inspection costs
+//
+// The ceilings below bound one inspection's heap, beyond the body the caller
+// buffered: inflated objects up to maxInflatedBytes (128 MiB), with every
+// blob's content released when the parse ends, so a Result keeps only trees,
+// commits and tags; bookkeeping of at most 160 bytes an object (115 measured),
+// about 30 MiB at maxObjects; and a change set of at most maxChanges entries,
+// measured at 36 MiB with the tree that names them, plus up to maxObjectBytes
+// for one delta result built before it is charged. About 232 MiB in all, most
+// of it the inflation ceiling. How many inspections run at once is the
+// caller's to cap; the egress proxy runs one at a time (its scanSlots).
 package gitpack
 
 import (
@@ -71,7 +96,11 @@ const (
 	// maxObjects bounds the object count the pack header claims. It caps both a
 	// lying header's allocation and the per-object bookkeeping — an offset, an
 	// object id and the object itself — that parsing keeps for the whole pack.
-	maxObjects = 1 << 20
+	// Real pushes sit far below it: a single-commit push of a large monorepo's
+	// whole tree is under 100,000 objects, and 200,000 objects inside the 64 MiB
+	// body ceiling average 335 compressed bytes each, so what the ceiling refuses
+	// is a pack of near-empty objects shaped to cost bookkeeping (#250).
+	maxObjects = 200_000
 	// maxObjectBytes bounds one inflated object, and with it one delta result.
 	maxObjectBytes = 32 << 20
 	// maxInflatedBytes bounds every inflated object together. A 64 MiB pack of
@@ -110,17 +139,45 @@ var ErrUninspectable = errors.New("gitpack: the push cannot be inspected from it
 // Change is one path a push introduces, at the mode and size the pushed tree
 // gives it.
 type Change struct {
-	// Path is slash-separated and relative to the repository root.
+	// Path is slash-separated and relative to the repository root. It is ""
+	// only for an uncarried root tree: a commit whose whole tree the receiving
+	// side already stores.
 	Path string
 	// Mode is the tree entry's mode verbatim — "100644", "100755" for an
 	// executable, "120000" for a symlink, "160000" for a submodule pointer — so a
-	// caller can act on the difference.
+	// caller can act on the difference. A directory the pack does not carry is
+	// reported as ModeUncarried; see Opaque.
 	Mode string
-	// Size is the blob's size in bytes, or -1 when the pack does not carry the
-	// blob: a submodule pointer, or content the receiving side already stores.
-	// A size rule must DECIDE what -1 means rather than compare it, because -1
-	// passes every "is this under the limit" test by accident.
-	Size int64
+	// size is the blob's size in bytes, or -1 when the pack does not carry the
+	// blob: a submodule pointer, an uncarried directory, or content the
+	// receiving side already stores. It is unexported because -1 passes every
+	// "is this under the limit" test by accident, and an ordinary second push
+	// and every submodule pointer produce it. A caller reads it through Size,
+	// which cannot be compared without deciding what unknown means, or Within.
+	size int64
+	// OID is the object id the tree entry names — the blob, the submodule's
+	// commit, or for an uncarried directory its tree. Object ids are content
+	// addresses, so an entry whose mode and OID match the ones the same path
+	// held in a commit the push builds on is unchanged, everything beneath a
+	// directory included.
+	OID string
+}
+
+// Carried reports whether the pack holds the object c names. One it does not
+// hold is content the receiving side already stores, at some path.
+func (c Change) Carried() bool { return c.size >= 0 }
+
+// Size is the blob's size in bytes, and false when the pack does not carry the
+// blob, so the size is unknown. It returns a pair so that a comparison against
+// a limit does not compile until the caller has decided what unknown means.
+func (c Change) Size() (int64, bool) { return c.size, c.size >= 0 }
+
+// Within reports whether c's blob is known to be at most limit bytes. An
+// unknown size is never within: a size rule refuses what it cannot measure
+// rather than admitting it.
+func (c Change) Within(limit int64) bool {
+	n, known := c.Size()
+	return known && n <= limit
 }
 
 // Command is one ref update from the request's command section.
@@ -139,6 +196,18 @@ type Result struct {
 	Commands []Command
 	// Changes are the paths the push introduces, sorted and deduplicated.
 	Changes []Change
+	// Bases are the commits the push builds on: every parent a commit in the
+	// pack names that the pack does not carry, sorted and deduplicated. The
+	// receiving side holds them if the push is to succeed — but a commit may
+	// name ANY object id as its parent, so a caller must establish for itself
+	// that a base belongs to the history it trusts before comparing against it.
+	// After Settle, a carried commit the caller said the receiving side holds
+	// is a base too.
+	Bases []string
+
+	// idx is the parsed pack, kept so Settle can answer again without reading
+	// the body twice.
+	idx *index
 }
 
 // objectType is a pack object's wire type.
@@ -218,9 +287,10 @@ func Inspect(body []byte) (Result, error) {
 	if err := idx.coverCommands(cmds); err != nil {
 		return Result{}, err
 	}
-	if res.Changes, err = idx.changes(); err != nil {
+	if res.Changes, res.Bases, err = idx.changes(nil); err != nil {
 		return Result{}, err
 	}
+	res.idx = idx
 	return res, nil
 }
 
@@ -330,9 +400,12 @@ func objectFormat(caps string) (hashFormat, error) {
 	return sha1Format, nil
 }
 
-// object is one resolved pack object: its type and its inflated bytes.
+// object is one resolved pack object: its type, its inflated size, and its
+// inflated bytes — which a blob gives up once the pack is parsed, because after
+// that only its size is ever read (dropBlobContent).
 type object struct {
 	typ  objectType
+	size int64
 	data []byte
 }
 
@@ -356,18 +429,31 @@ func (i *index) put(typ objectType, data []byte) string {
 	_, _ = h.Write(data)
 	oid := hex.EncodeToString(h.Sum(nil))
 	if _, dup := i.byOID[oid]; !dup {
-		i.byOID[oid] = object{typ: typ, data: data}
+		i.byOID[oid] = object{typ: typ, size: int64(len(data)), data: data}
 	}
 	return oid
 }
 
 // blobSize is the size of the blob oid names, or -1 when the pack does not carry
-// it. See Change.Size.
+// it. See Change.size.
 func (i *index) blobSize(oid string) int64 {
 	if o, ok := i.byOID[oid]; ok && o.typ == objBlob {
-		return int64(len(o.data))
+		return o.size
 	}
 	return -1
+}
+
+// dropBlobContent releases every blob's bytes once no delta can need them as a
+// base. A Result outlives the parse — the caller holds it across its forge
+// reads — and without this it kept up to maxInflatedBytes of file content live
+// that nothing reads again.
+func (i *index) dropBlobContent() {
+	for oid, o := range i.byOID {
+		if o.typ == objBlob {
+			o.data = nil
+			i.byOID[oid] = o
+		}
+	}
 }
 
 // packReader walks a packfile. The reader is a *bytes.Reader so that inflating
@@ -379,10 +465,10 @@ type packReader struct {
 	idx      *index
 	zr       io.ReadCloser
 	inflated int64
-	// starts is every offset an object header began at, so an offset delta can
-	// only name a base the pack actually laid out there.
-	starts map[int64]bool
-	// atOffset maps a resolved object's start offset to its object id.
+	// atOffset holds every offset an object header began at, so an offset delta
+	// can only name a base the pack actually laid out there, and maps it to the
+	// object's id once resolved — "" until then. One map rather than two: it is
+	// per-object bookkeeping, which maxObjects multiplies.
 	atOffset map[int64]string
 	// pending are deltas whose base is not resolved yet, and the two indexes
 	// that wake them: a ref delta may name a base that appears LATER in the pack,
@@ -429,8 +515,8 @@ func parsePack(pack []byte, format hashFormat) (*index, error) {
 	}
 	p := &packReader{
 		br: bytes.NewReader(body), idx: newIndex(format),
-		starts: map[int64]bool{}, atOffset: map[int64]string{},
-		waitOID: map[string][]int{}, waitOff: map[int64][]int{},
+		atOffset: map[int64]string{},
+		waitOID:  map[string][]int{}, waitOff: map[int64][]int{},
 	}
 	if _, err := p.br.Seek(12, io.SeekStart); err != nil {
 		return nil, err
@@ -449,6 +535,7 @@ func parsePack(pack []byte, format hashFormat) (*index, error) {
 	if err := p.unresolved(); err != nil {
 		return nil, err
 	}
+	p.idx.dropBlobContent()
 	return p.idx, nil
 }
 
@@ -456,7 +543,7 @@ func parsePack(pack []byte, format hashFormat) (*index, error) {
 // either files it or queues it behind the base it deltas against.
 func (p *packReader) object() error {
 	off := p.pos()
-	p.starts[off] = true
+	p.atOffset[off] = ""
 	typ, size, err := p.header()
 	if err != nil {
 		return err
@@ -474,7 +561,7 @@ func (p *packReader) object() error {
 			return err
 		}
 		base := off - back
-		if back <= 0 || base < 12 || !p.starts[base] {
+		if _, begun := p.atOffset[base]; back <= 0 || base < 12 || !begun {
 			return fmt.Errorf("gitpack: the delta at %d names a base at %d, where no object begins", off, base)
 		}
 		data, err := p.inflate(off, size)
@@ -482,7 +569,7 @@ func (p *packReader) object() error {
 			return err
 		}
 		p.park(pendingDelta{off: off, baseOff: base, delta: data})
-		if oid, ok := p.atOffset[base]; ok {
+		if oid := p.atOffset[base]; oid != "" {
 			return p.settle(base, oid)
 		}
 		return nil
@@ -519,8 +606,8 @@ func (p *packReader) park(d pendingDelta) {
 // baseOID names the object a delta needs, once that object is resolved.
 func (p *packReader) baseOID(d pendingDelta) (string, bool) {
 	if d.baseOff >= 0 {
-		oid, ok := p.atOffset[d.baseOff]
-		return oid, ok
+		oid := p.atOffset[d.baseOff]
+		return oid, oid != ""
 	}
 	_, ok := p.idx.byOID[d.baseOID]
 	return d.baseOID, ok
@@ -663,15 +750,25 @@ func (p *packReader) inflate(off, declared int64) ([]byte, error) {
 	} else if err := p.zr.(zlib.Resetter).Reset(p.br, nil); err != nil {
 		return nil, fmt.Errorf("gitpack: the object at %d does not open a zlib stream: %w", off, err)
 	}
-	// declared+1 so that an over-long stream is caught rather than truncated into
-	// something that looks right.
-	data, err := io.ReadAll(io.LimitReader(p.zr, declared+1))
-	if err != nil {
+	// Exactly declared bytes, allocated once: io.ReadAll's minimum buffer is
+	// 512 bytes, and a pack of near-empty objects kept one per object (#250).
+	// charge has already booked declared against maxInflatedBytes.
+	data := make([]byte, declared)
+	if n, err := io.ReadFull(p.zr, data); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("gitpack: the object at %d declared %d bytes and inflated to %d", off, declared, n)
+		}
 		return nil, fmt.Errorf("gitpack: inflating the object at %d: %w", off, err)
 	}
-	if int64(len(data)) != declared {
-		return nil, fmt.Errorf("gitpack: the object at %d declared %d bytes and inflated to %d",
-			off, declared, len(data))
+	// The stream must END here: a byte more means the next object's header is not
+	// where the pack said it is, and reading to EOF is what checks the stream's
+	// own checksum.
+	var extra [1]byte
+	switch n, err := io.ReadFull(p.zr, extra[:]); {
+	case n > 0:
+		return nil, fmt.Errorf("gitpack: the object at %d inflates past the %d bytes it declared", off, declared)
+	case !errors.Is(err, io.EOF):
+		return nil, fmt.Errorf("gitpack: inflating the object at %d: %w", off, err)
 	}
 	return data, nil
 }
