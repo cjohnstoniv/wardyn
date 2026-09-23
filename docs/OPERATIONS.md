@@ -4840,6 +4840,136 @@ is the **only** key that reads the store. Save it before doing anything else.
 Whatever you do, **back the key up off-host.** Rotation re-encrypts what is there;
 it cannot recover a key you have already lost.
 
+## Store mode: credentials in Vault
+
+With `WARDYN_SECRET_STORE=vaultkv`, every stored credential's value lives in
+your organisation's Vault KV v2 engine (OpenBao is a supported, API-compatible
+endpoint), and Wardyn keeps only a pointer row in Postgres: owner, name, when,
+and where in Vault (`enc_version` 2, `kek_id` `vaultkv:<mount>/<path>`, no
+ciphertext). Wardyn does no at-rest cryptography for such a row, and holds no
+key: once every row is in Vault, `WARDYN_AGE_KEY` is unset. Every read is one
+Vault read, so it appears in your Vault audit device (with the path and the
+token's entity; values HMAC'd) as well as in Wardyn's audit log. Wardyn's own
+boot keys (signing, session, UI-session, SSH host) live there too.
+
+**Paths.** Under the mount (`WARDYN_VAULT_KV_MOUNT`, default `wardyn`) and the
+install's prefix (`WARDYN_VAULT_KV_PREFIX`; the chart sets the release
+namespace):
+
+```
+<prefix>/platform/<name>               Wardyn's boot keys
+<prefix>/operator/<name>               operator-namespace credentials
+<prefix>/people/<owner>/<name>         a person's credentials; <owner> is the
+                                       principal in base32hex, lowercase, unpadded
+```
+
+Each value is `{"value": "<base64>"}` with `custom_metadata`
+`wardyn-owner`, `wardyn-name`, `wardyn-kind` and `wardyn-format`, and
+`max_versions` `WARDYN_VAULT_KV_MAX_VERSIONS` (default 1, so a replaced value
+does not linger). A read derives the path from the row's owner and name and
+refuses a row that points anywhere else, then refuses a value whose metadata
+names another row: a pointer moved by a database writer reads nothing.
+Removing a credential is `DELETE metadata/<path>`, every version at once.
+Paths carry the owner and name, so they reach your Vault audit log.
+
+**Policy.** Least privilege, templated so another install in another namespace
+cannot read this one's paths. There is no `destroy/` or `undelete/` stanza and
+no `delete` on `data/`: Wardyn never calls any of them. `read` on
+`wardyn/config` lets wardynd check at boot that a KV v2 engine is mounted at
+`WARDYN_VAULT_KV_MOUNT`: a mistyped mount, or an engine not yet enabled, fails
+boot instead of the first write.
+
+```hcl
+# <accessor> is the Kubernetes auth mount's accessor (vault auth list)
+path "wardyn/config" {
+  capabilities = ["read"]
+}
+path "wardyn/data/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
+  capabilities = ["create", "update", "read"]
+}
+path "wardyn/metadata/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
+  capabilities = ["create", "update", "read", "delete", "list"]
+}
+```
+
+With token-file authentication (compose, VMs) there is no Kubernetes alias to
+template on: write the install's `WARDYN_VAULT_KV_PREFIX` literally, as
+`wardyn/data/<prefix>/*` and `wardyn/metadata/<prefix>/*`, and give each
+install its own policy.
+
+Until a second role for the boot keys lands (`WARDYN_VAULT_ROLE_PLATFORM`,
+CS-12b), one role writes both `platform/` and `people/`: whoever holds
+Wardyn's Vault token can create, update and delete the boot keys and every
+person's credentials alike.
+
+**Authentication.** There is no Vault token in an environment variable, by
+design.
+
+- *Kubernetes* (`WARDYN_VAULT_AUTH=kubernetes`, the default). The chart
+  projects a dedicated service-account token with audience `vault` at
+  `/var/run/secrets/wardyn-vault/token` (`secretStore.vault.*` in
+  `values.yaml`). Configure the role to match:
+
+  ```sh
+  vault write auth/kubernetes/role/wardyn \
+      bound_service_account_names=<the chart's service account> \
+      bound_service_account_namespaces=<the release namespace> \
+      audience=vault policies=wardyn-kv token_ttl=1h
+  ```
+- *Token file* (`WARDYN_VAULT_AUTH=token-file`), for compose and VMs: a
+  Vault Agent sink or a CSI file at `WARDYN_VAULT_TOKEN_FILE`, re-read
+  when Vault answers 403. `deploy/compose/docker-compose.vault.yaml` is
+  the compose overlay.
+
+wardynd logs in at boot and **refuses to start if it cannot**, renews its token
+at two thirds of its TTL, and logs in again if a renewal fails. TLS uses
+`WARDYN_VAULT_CACERT_FILE`, else `WARDYN_TRUSTED_CA_FILE`, else the system
+roots, in a TLS config of its own; `http://` is refused except to a loopback
+host.
+
+**When Vault is unavailable.** A sealed, throttled or unreachable Vault (a 429, a
+5xx, a timeout; each call retried three times first) is *transient*: the
+credential sink answers the proxy 503, "Wardyn couldn't reach the service that
+holds this run's credential", distinct from a missing credential's 424. (No
+last-good grace period rides out a transient failure yet.)
+A 401 or 403, a value that is gone, or a binding that does not match is
+*definitive*: revoking Wardyn's Vault role bites at once. (A 401 or 403 makes
+wardynd log in again, or re-read its token file, at most once every 30 s.)
+**Do not restart wardynd during a Vault outage**: its boot keys are in Vault,
+so it will wait for Vault rather than boot.
+
+**Moving an install to Vault, and back.** Online, one row per transaction, safe
+while a daemon serves; idempotent and resumable.
+
+```sh
+# 0. Boot this version once with your WARDYN_AGE_KEY (it converts any
+#    pre-envelope rows), and take the Postgres dump (see Backup).
+# 1. Configure WARDYN_VAULT_* and WARDYN_SECRET_STORE=vaultkv, keep
+#    WARDYN_AGE_KEY set, and restart: new writes go to Vault, old rows still read.
+# 2. Move the rest:
+wardynd -migrate-secrets -to=vaultkv
+#    INFO wardynd: stored secrets migrated to=vaultkv moved=7
+# 3. Unset WARDYN_AGE_KEY and restart. Boot refuses, naming the command above,
+#    while any local row remains.
+```
+
+`-to=local` moves every row back (it needs `WARDYN_AGE_KEY`); each value is
+removed from Vault once its row holds it locally. Each run writes one
+`secret.migrate` audit row and one `secret.read` per value it moved. A
+migration never overwrites a value already at the target path: if one is there
+(a write landing at the same moment, or a leftover), it stops and names the row.
+
+**Checking both sides.** `wardynd -reconcile` lists the pointer rows and the
+Vault paths side by side and reports pointers whose value is gone and values no
+row points to. It reads metadata only, deletes nothing, and exits non-zero when
+it finds either. A crash between the two writes of a Put or a Delete is what
+produces one; neither leaks a value to anyone.
+
+**Erasure horizon.** A removed credential is gone from Vault at once (all
+versions); what survives is your Vault storage's own snapshots and backups,
+under your retention. **Backup** in store mode is the Postgres dump plus your
+Vault's own backup: the dump alone holds pointers, not values.
+
 ## Upgrades
 
 Migrations are **forward-only**. `internal/db` records each applied filename in

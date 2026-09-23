@@ -27,6 +27,9 @@ import (
 // lost. That makes it idempotent (a converted store has no v0 rows) and
 // resumable (an abort committed nothing; fix the row or the key and boot again).
 func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) (int, error) {
+	if s.kek == nil {
+		return 0, fmt.Errorf("pg secretstore: convert: no local key is configured")
+	}
 	tx, err := beginReadCommitted(ctx, s.pool)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: convert begin: %w", err)

@@ -29,7 +29,6 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
@@ -99,8 +98,10 @@ func run() error {
 	// purpose: those rules (TLS posture, bind routability, plaintext listen) all
 	// govern SERVING, and a rotation run under the deployment's own environment
 	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
-	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
-		return rotateAgeKeyMode(f, p)
+	// -migrate-secrets / -reconcile (store mode) are early exits for the same
+	// reason; maintenanceMode (migrate_secrets.go) dispatches all three.
+	if ran, err := maintenanceMode(f); ran {
+		return err
 	}
 
 	// Validate + derive the TLS/DSN posture from the resolved flag/env values.
@@ -203,7 +204,7 @@ func run() error {
 	// rows). Returned only after its v0 rows are converted, so the boot-key
 	// reads below never see one. rootCtx, not bootCtx: the conversion is one
 	// all-or-nothing transaction over the whole table.
-	secrets, err := buildSecretStore(rootCtx, pool, *f.ageKey, *f.secretStoreSel)
+	secrets, err := openSecretStore(rootCtx, pool, f)
 	if err != nil {
 		return err
 	}
@@ -452,7 +453,8 @@ func run() error {
 		// subscription-inject escape hatch.
 		DisableGitPATBroker: strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
-		AgeKeyDurable:         strings.TrimSpace(*f.ageKey) != "",
+		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
+		SecretStoreExternal:   storesExternally(secrets),
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
@@ -713,7 +715,7 @@ type secretKeyStore interface {
 // SECURITY (boot-key destruction): the previous per-key logic treated ANY
 // Get error as "key not present" and then generated + Put a fresh key,
 // OVERWRITING whatever ciphertext was already there. The pg secret store
-// distinguishes a TRUE not-found (it wraps pgx.ErrNoRows) from an age-decrypt
+// distinguishes a TRUE not-found (secretstore.ErrNotFound) from an age-decrypt
 // failure (a generic error). Conflating the two meant a single transient/
 // permanent decrypt error silently rotated the key, invalidating every issued
 // SVID and every active session cookie. We now regenerate ONLY when the key is
@@ -741,8 +743,10 @@ func loadOrCreateSecret(
 		// Present but unusable (e.g. a legacy too-short session key): fall
 		// through to regenerate. This is safe — the stored value cannot serve
 		// its purpose anyway.
-	case errors.Is(err, pgx.ErrNoRows):
-		// TRUE not-found (first boot): generate + persist below.
+	case errors.Is(err, secretstore.ErrNotFound):
+		// TRUE not-found (first boot): generate + persist below. Only an
+		// absent ROW is not-found: a pointer row whose external value is gone
+		// is a refusal, so a lost boot key is never minted over.
 	default:
 		// Decrypt failure or any other Get error: FAIL CLOSED. Do NOT generate
 		// or Put — overwriting here would destroy the existing key.

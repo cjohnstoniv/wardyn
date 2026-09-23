@@ -208,6 +208,44 @@ secrets:
   # losing every stored secret on restart is genuinely fine.
   allowEphemeralAgeKey: false
 
+# Store mode (docs/OPERATIONS.md "Store mode: credentials in Vault"): every
+# stored credential's value lives in your organisation's Vault KV v2 engine
+# (OpenBao is a supported endpoint), and Postgres keeps only a pointer row.
+# wardynd then holds no key: with backend vaultkv the age-key refusal above does
+# not apply, and WARDYN_AGE_KEY is needed only until `wardynd -migrate-secrets
+# -to=vaultkv` has moved the existing rows. The default NetworkPolicy denies
+# wardynd's egress: add a rule for Vault to networkPolicy.egress.extra.
+secretStore:
+  # "pg" (sealed in Postgres under the age key) or "vaultkv" (store mode).
+  backend: pg
+  vault:
+    # https:// address of Vault. Required for vaultkv; set with backend pg it
+    # lets this install READ rows written in store mode (a migration back).
+    addr: ""
+    # Vault Enterprise/HCP namespace (X-Vault-Namespace); empty = none.
+    namespace: ""
+    # "kubernetes": the chart projects a DEDICATED service-account token with
+    # the audience below at /var/run/secrets/wardyn-vault/token (independent of
+    # serviceAccount.automount, which stays false). "token-file": point
+    # tokenFile at a Vault Agent sink or CSI file you mount (podAnnotations for
+    # the Agent injector, for example). There is no token-in-env option.
+    auth: kubernetes
+    authMount: kubernetes
+    # Kubernetes-auth role; bind it to this chart's service account and the
+    # release namespace, with audience = tokenAudience.
+    role: ""
+    tokenAudience: vault
+    tokenExpirationSeconds: 3600
+    tokenFile: ""
+    # KV v2 mount and this install's path prefix (empty = the release
+    # namespace, which the documented policy is templated on).
+    kvMount: wardyn
+    kvPrefix: ""
+    # max_versions on each secret (1: a replaced value does not linger).
+    maxVersions: 1
+    # The Vault client trusts the system roots plus trustedCA (below), in a
+    # TLS config of its own.
+
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
 # policy (WARDYN_DEFAULT_POLICY), etc. See cmd/wardynd/main.go for the full list.

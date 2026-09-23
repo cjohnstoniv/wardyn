@@ -4,10 +4,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -286,11 +288,30 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// namespace, unchanged, for every pre-0.7 deployment.
 	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
 	if err != nil {
-		// Fail closed; the proxy refuses to start without its injections.
+		// Fail closed; the proxy refuses to start without its injections. The
+		// reason tells a store outage from a credential that is gone or refused.
+		reason := "refused"
+		switch {
+		case errors.Is(err, secretstore.ErrUnavailable):
+			reason = "store-unavailable"
+		case errors.Is(err, secretstore.ErrNotFound):
+			reason = "not-found"
+		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", minted.Injection.SecretName, "failure", nil))
-		writeError(w, http.StatusFailedDependency,
-			"secret "+minted.Injection.SecretName+" is not in the store (set it with `wardyn secret set`)")
+			"secret.read", minted.Injection.SecretName, "failure",
+			mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
+		if reason == "store-unavailable" {
+			// Transient: the organisation's store did not answer. A distinct
+			// status, so it is never mistaken for a credential that is gone.
+			writeError(w, http.StatusServiceUnavailable,
+				"Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment.")
+			return
+		}
+		msg := "secret " + minted.Injection.SecretName + " is not in the store (set it with `wardyn secret set`)"
+		if reason == "refused" { // the row exists: re-setting it would overwrite what an operator may need to inspect
+			msg = "secret " + minted.Injection.SecretName + " exists but could not be used: the store refused it (its value is gone, or bound to another row). Nothing was substituted; ask an admin to check it."
+		}
+		writeError(w, http.StatusFailedDependency, msg)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
