@@ -93,38 +93,100 @@ func TestPushContentAdminDecides(t *testing.T) {
 	}
 }
 
+// grantStore is authzStore with a run's grants, which authzStore leaves empty.
+type grantStore struct {
+	*authzStore
+	grants []types.CredentialGrant
+}
+
+func (g grantStore) ListGrantsByRun(_ context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
+	var out []types.CredentialGrant
+	for _, gr := range g.grants {
+		if gr.RunID == runID {
+			out = append(out, gr)
+		}
+	}
+	return out, nil
+}
+
+// withActsAs is pushContentScopeJSON naming a different credential.
+func withActsAs(t *testing.T, actsAs string) string {
+	t.Helper()
+	var sc map[string]any
+	if err := json.Unmarshal([]byte(pushContentScopeJSON(t)), &sc); err != nil {
+		t.Fatal(err)
+	}
+	sc["acts_as"] = actsAs
+	return string(mustJSON(sc))
+}
+
 // TestInternalPushContentRaise drives the sidecar's raise: an attended run's
-// well-formed scope becomes a row; an unattended run's, or a malformed one,
-// does not.
+// well-formed scope becomes a row, stamped server-side with who the push acts
+// as; an unattended run's, a malformed one, one naming a grant the run does not
+// hold, or one carrying its own label, does not.
 func TestInternalPushContentRaise(t *testing.T) {
 	h := newHarness(t)
 	ast := newAuthzStore()
+	attended, unattended, other := uuid.New(), uuid.New(), uuid.New()
+	const owner = "alice@example.com" // mintRunToken's subject
+	app, ownPAT, sharedPAT, foreign := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	patScope := func(secret string) json.RawMessage {
+		return json.RawMessage(`{"host":"gitlab.com","secret_name":"` + secret + `"}`)
+	}
+	st := grantStore{authzStore: ast, grants: []types.CredentialGrant{
+		{ID: app, RunID: attended, Spec: types.GrantSpec{Kind: types.GrantGitHubToken}},
+		{ID: ownPAT, RunID: attended, Spec: types.GrantSpec{Kind: types.GrantGitPAT, Scope: patScope("alice-pat")}},
+		{ID: sharedPAT, RunID: attended, Spec: types.GrantSpec{Kind: types.GrantGitPAT, Scope: patScope("team-pat")}},
+		{ID: foreign, RunID: other, Spec: types.GrantSpec{Kind: types.GrantGitHubToken}},
+	}}
+	secrets := &memSecrets{m: map[string][]byte{"team-pat": []byte("x"), "alice-pat": []byte("x")}}
+	if err := secrets.For(owner).Put(context.Background(), "alice-pat", []byte("y")); err != nil {
+		t.Fatal(err)
+	}
 	aap := newAuthzApprovals(ast)
-	cfg := baseTestConfig(h, ast)
+	cfg := baseTestConfig(h, st)
 	cfg.Approvals = aap
+	cfg.Secrets = secrets
 	srv := New(cfg)
 
-	attended, unattended := uuid.New(), uuid.New()
 	ast.mu.Lock()
-	ast.runs[attended] = types.AgentRun{ID: attended, State: types.RunRunning, Interactive: true}
-	ast.runs[unattended] = types.AgentRun{ID: unattended, State: types.RunRunning}
+	ast.runs[attended] = types.AgentRun{ID: attended, State: types.RunRunning, Interactive: true, CreatedBy: owner}
+	ast.runs[unattended] = types.AgentRun{ID: unattended, State: types.RunRunning, CreatedBy: owner}
 	ast.mu.Unlock()
-	raise := func(runID uuid.UUID, scope string) *http.Response {
+	raise := func(runID uuid.UUID, scope string) int {
 		w := do(t, srv, http.MethodPost, "/api/v1/internal/approvals", h.mintRunToken(t, runID),
 			`{"kind":"push_content","requested_scope":`+scope+`}`)
-		return w.Result()
+		return w.Code
 	}
-	rows := func() int {
+	stored := func() map[string]types.PushContentScope {
 		aap.mu.Lock()
 		defer aap.mu.Unlock()
-		return len(aap.byID)
+		out := map[string]types.PushContentScope{}
+		for _, ap := range aap.byID {
+			var sc types.PushContentScope
+			if err := json.Unmarshal(ap.RequestedScope, &sc); err != nil {
+				t.Fatal(err)
+			}
+			out[sc.ActsAs] = sc
+		}
+		return out
 	}
 
-	if got := raise(attended, pushContentScopeJSON(t)).StatusCode; got != http.StatusCreated {
-		t.Fatalf("attended raise: status = %d, want 201", got)
+	want := map[string][2]string{
+		"github_token:" + app.String():  {types.PushActsAsGitHubApp, owner},
+		"git_pat:" + ownPAT.String():    {types.PushActsAsGitPAT, owner},
+		"git_pat:" + sharedPAT.String(): {types.PushActsAsGitPAT, types.PushActsAsOperator},
 	}
-	if rows() != 1 {
-		t.Fatalf("rows = %d after an attended raise, want 1", rows())
+	for actsAs := range want {
+		if got := raise(attended, withActsAs(t, actsAs)); got != http.StatusCreated {
+			t.Fatalf("attended raise acting as %s: status = %d, want 201", actsAs, got)
+		}
+	}
+	rows := stored()
+	for actsAs, kl := range want {
+		if sc := rows[actsAs]; sc.ActsAsKind != kl[0] || sc.ActsAsLabel != kl[1] {
+			t.Errorf("%s stored as kind %q label %q, want %q %q", actsAs, sc.ActsAsKind, sc.ActsAsLabel, kl[0], kl[1])
+		}
 	}
 
 	for name, c := range map[string]struct {
@@ -132,17 +194,21 @@ func TestInternalPushContentRaise(t *testing.T) {
 		scope string
 		want  int
 	}{
-		"unattended run":   {unattended, pushContentScopeJSON(t), http.StatusForbidden},
-		"unknown field":    {attended, strings.Replace(pushContentScopeJSON(t), `{`, `{"host":"x",`, 1), http.StatusBadRequest},
-		"eleven paths":     {attended, strings.Replace(pushContentScopeJSON(t), `"paths":[".github/workflows/ci.yml"]`, `"paths":["a","b","c","d","e","f","g","h","i","j","k"]`, 1), http.StatusBadRequest},
-		"not an object id": {attended, strings.Replace(pushContentScopeJSON(t), strings.Repeat("a", 40), "HEAD", 1), http.StatusBadRequest},
+		"unattended run":      {unattended, withActsAs(t, "github_token:"+app.String()), http.StatusForbidden},
+		"unknown field":       {attended, strings.Replace(pushContentScopeJSON(t), `{`, `{"host":"x",`, 1), http.StatusBadRequest},
+		"eleven paths":        {attended, strings.Replace(pushContentScopeJSON(t), `"paths":[".github/workflows/ci.yml"]`, `"paths":["a","b","c","d","e","f","g","h","i","j","k"]`, 1), http.StatusBadRequest},
+		"not an object id":    {attended, strings.Replace(pushContentScopeJSON(t), strings.Repeat("a", 40), "HEAD", 1), http.StatusBadRequest},
+		"another run's grant": {attended, withActsAs(t, "github_token:"+foreign.String()), http.StatusBadRequest},
+		"grant kind mismatch": {attended, withActsAs(t, "git_pat:"+app.String()), http.StatusBadRequest},
+		"sidecar-sent label":  {attended, strings.Replace(withActsAs(t, "github_token:"+app.String()), `{`, `{"acts_as_label":"root@evil",`, 1), http.StatusBadRequest},
+		"sidecar-sent kind":   {attended, strings.Replace(withActsAs(t, "github_token:"+app.String()), `{`, `{"acts_as_kind":"git_pat",`, 1), http.StatusBadRequest},
 	} {
-		if got := raise(c.run, c.scope).StatusCode; got != c.want {
+		if got := raise(c.run, c.scope); got != c.want {
 			t.Errorf("%s: status = %d, want %d", name, got, c.want)
 		}
 	}
-	if rows() != 1 {
-		t.Errorf("rows = %d, want still 1: a refused raise must write nothing", rows())
+	if n := len(stored()); n != len(want) {
+		t.Errorf("rows = %d, want still %d: a refused raise must write nothing", n, len(want))
 	}
 }
 

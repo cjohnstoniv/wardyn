@@ -185,8 +185,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `push_content` approval asks an admin; approved, the buffered bytes go to the forge unchanged,
   and denied, undecided within `hold_seconds`, or closed undecided, the push is refused
   (`403`, `brokered:git:push-held`). A deny match always wins. The approval's `requested_scope`
-  is `{repo, branch, acts_as, paths, paths_total, commits, paths_digest}` — at most ten paths, the
-  exact count, the sorted commit ids and a SHA-256 over every matched path — and it is the dedup
+  is `{repo, branch, acts_as, acts_as_kind, acts_as_label, paths, paths_total, commits,
+  paths_digest}` — at most ten paths, the exact count, the sorted commit ids and a SHA-256 over
+  every matched path; `acts_as_kind` (`github_app`, `git_pat`, `ado_entra`) and `acts_as_label`
+  (the principal the push acts for, or `operator` for a shared PAT) are stamped by the control
+  plane from the run's own grants, and a raise that sends either is refused — and it is the dedup
   key: a retry git repacks carries the same commits and is forwarded on the approval already
   given, and a denial refuses the same commits again without asking. Admins decide; a member
   cannot, even on their own run. An unattended (non-interactive) run refuses at once with no

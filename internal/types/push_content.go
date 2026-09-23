@@ -47,7 +47,27 @@ type PushContentScope struct {
 	// PathsDigest is the lower-case hex SHA-256 over every review-matched path,
 	// sorted, each followed by a NUL byte (a git path cannot contain one).
 	PathsDigest string `json:"paths_digest"`
+
+	// ActsAsKind and ActsAsLabel are SERVER-SET: the control plane resolves
+	// ActsAs against the run's own grants and stamps them before the row is
+	// stored, and refuses a raise that carries either (a sidecar's word on who
+	// a push acts as is not taken). ActsAsKind is one of the PushActsAs*
+	// constants; ActsAsLabel is the principal the console names.
+	ActsAsKind  string `json:"acts_as_kind,omitempty"`
+	ActsAsLabel string `json:"acts_as_label,omitempty"`
 }
+
+// The PushContentScope.ActsAsKind values: which lane's credential a held push
+// authenticates with, so the console can word the card.
+const (
+	PushActsAsGitHubApp = "github_app"
+	PushActsAsGitPAT    = "git_pat"
+	PushActsAsADOEntra  = "ado_entra"
+)
+
+// PushActsAsOperator is the ActsAsLabel of a git_pat whose secret is the
+// operator's shared one rather than the run owner's own: no person owns it.
+const PushActsAsOperator = "operator"
 
 // Validate checks the shape the proxy writes, so a row the console renders
 // can be trusted to be one: every bound here is one the sidecar already
