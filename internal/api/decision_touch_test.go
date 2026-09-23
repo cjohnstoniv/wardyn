@@ -74,11 +74,10 @@ func TestInternalDecisionTouchesRun(t *testing.T) {
 	}
 
 	// credential:reauth-timeout is the proxy's OWN signal that a re-auth hold's
-	// wait ran out with nobody there (RL-5) — not real agent activity. Touching
-	// on it would fight the hold-aware idle reaper (store.openHoldSQL): the run
-	// would look freshly active at the exact moment its open request stopped
-	// being open. It must never touch, even well past the debounce window and
-	// even as a DENY (which every other rule_source's DENY still touches).
+	// wait ran out with nobody there (RL-5) — it reports that nobody answered,
+	// not real agent activity, so it must never touch, even well past the
+	// debounce window and even as a DENY (which every other rule_source's DENY
+	// still touches).
 	srv.lastTouchMu.Lock()
 	srv.lastTouch[runID] = srv.lastTouch[runID].Add(-2 * touchDebounce)
 	srv.lastTouchMu.Unlock()
