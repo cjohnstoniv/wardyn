@@ -48,7 +48,7 @@ import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
 import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
-import { OpenInUserView, useConsoleMode } from "../wardyn/console-view";
+import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import {
@@ -812,13 +812,14 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
   // 0 §6) — undefined for EXPIRED (ExpireStale deliberately writes no scope:
   // an expiry is a sweep nobody decided) and for every other kind.
   const scopeBadge = approvalScopeBadge(item);
+  const view = useConsoleMode();
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
       <Link
-        to={`/runs/${encodeURIComponent(item.run_id)}`}
+        to={runPath(view, item.run_id)}
         className="font-mono text-xs text-muted-foreground hover:text-foreground"
         title={`Open run ${item.run_id}`}
       >

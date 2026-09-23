@@ -110,6 +110,18 @@ export function viewHome(view: ConsoleView): string {
   return view === "admin" ? "/admin" : "/runs";
 }
 
+// A run's own detail path in the given view — the Admin monitor's link
+// target everywhere a run is opened FROM the Admin view (board card, table
+// row, the approvals queue's run link), so that link never doubles as an
+// unannounced view switch (ViewGate's TWIN rule sends the plain /runs/:id
+// path to the User view for a "url"-access install, and refuses it for an
+// admin-only token — see viewVerdict). OpenInUserView is the one deliberate
+// exception: it always targets the User-view path, since crossing views is
+// its whole job.
+export function runPath(view: ConsoleView, id: string): string {
+  return view === "admin" ? `/admin/runs/${encodeURIComponent(id)}` : `/runs/${encodeURIComponent(id)}`;
+}
+
 // Where a tab lands once its session is found in the other view (§2.4): the
 // same object in that view when it has a twin, else that view's home. `rest`
 // is the search and hash, kept on a twin as ViewGate's own redirect keeps them.

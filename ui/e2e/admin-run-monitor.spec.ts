@@ -73,8 +73,13 @@ test.describe("the admin run monitor (M-7)", () => {
       await expect(page.getByRole("menuitem", { name: RUN.CLONE_CTA })).toHaveCount(0);
       await page.keyboard.press("Escape");
 
-      // The monitor for that run carries no relaunch either…
-      await page.goto(`/admin/runs/${mine}`);
+      // The monitor for that run carries no relaunch either — reached by
+      // CLICKING the card, not page.goto: a goto would reach the monitor
+      // even if the card's own link pointed at the wrong view (review
+      // finding — every board/table link must stay in the Admin view via
+      // ViewGate's TWIN rule, not just the URL typed directly).
+      await mineCard.click();
+      await expect(page).toHaveURL(new RegExp(`/admin/runs/${mine}$`));
       await expect(page.getByRole("heading", { name: mineTask, level: 1 })).toBeVisible();
       await expect(page.getByRole("button", { name: RUN.CLONE_CTA })).toHaveCount(0);
 

@@ -32,7 +32,7 @@ import {
 } from "../../ui/dropdown-menu";
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primitives";
 import { usePrincipal } from "../../wardyn/operator-context";
-import { OpenInUserView, useConsoleMode } from "../../wardyn/console-view";
+import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
@@ -183,7 +183,7 @@ export function RunCard({
             the card; stopPropagation here just keeps the click from firing
             twice. */}
         <Link
-          to={`/runs/${encodeURIComponent(run.id)}`}
+          to={runPath(view, run.id)}
           onClick={(e) => e.stopPropagation()}
           className="min-w-0 flex-1 truncate text-body font-medium leading-snug text-foreground hover:underline"
         >

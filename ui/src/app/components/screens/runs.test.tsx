@@ -617,6 +617,44 @@ describe("RunsScreen — a run opens from a link (#215)", () => {
   });
 });
 
+// Review finding on #638: every link off the Admin monitor must stay in the
+// Admin view (/admin/runs/:id) — ViewGate's TWIN rule sends the plain
+// /runs/:id path to the User view for a "url"-access install, and refuses it
+// outright for an admin-only SSO token, so a board that ever linked there
+// made the monitor reachable only by typing its URL.
+describe("RunsScreen — admin board/table links stay in the Admin view (review finding, M-7)", () => {
+  function LocationProbe() {
+    const location = useLocation();
+    return <span data-testid="path">{location.pathname}</span>;
+  }
+
+  it("the board card's title targets /admin/runs/:id when the board is /admin/runs", async () => {
+    renderScreen(undefined, "/admin/runs");
+    const link = await screen.findByRole("link", { name: "Fix flaky auth tests" });
+    expect(link).toHaveAttribute("href", "/admin/runs/run-1");
+  });
+
+  it("the table row's title targets /admin/runs/:id too", async () => {
+    const user = userEvent.setup();
+    renderScreen(undefined, "/admin/runs");
+    await user.click(await screen.findByRole("button", { name: /^table$/i }));
+    const link = await screen.findByRole("link", { name: "Fix flaky auth tests" });
+    expect(link).toHaveAttribute("href", "/admin/runs/run-1");
+  });
+
+  it("clicking a card on /admin/runs navigates to /admin/runs/:id, not /runs/:id", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/admin/runs"]}>
+        <RunsScreen />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByTestId("run-card"));
+    await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/admin/runs/run-1"));
+  });
+});
+
 // mock M2: the pinned "Needs you" lane
 // Held approvals and failures must not flatten into one amber treatment.
 // They are not one thing: an approval is a REQUEST (someone is waiting on

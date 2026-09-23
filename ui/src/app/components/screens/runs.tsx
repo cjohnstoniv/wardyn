@@ -37,7 +37,7 @@ import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/prim
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { usePrincipal, useRole } from "../wardyn/operator-context";
-import { OpenInUserView, useConsoleMode } from "../wardyn/console-view";
+import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { ownerLabel } from "../wardyn/copy/console-view";
 import { cn } from "../ui/utils";
 import { BoardSkeleton, CardGrid, RunActions, RunCard, SectionHeading } from "./runs/run-card";
@@ -298,7 +298,16 @@ export function RunsScreen() {
     lane.length > 0 ? visible.filter((r) => !needsYou(r, signals)) : visible,
   );
 
-  const openRun = (id: string) => navigate(`/runs/${encodeURIComponent(id)}`);
+  // The description is keyed on the VIEW (M-7, admin-member-modes-design.md
+  // §6, RUNS.DESCRIPTION_ADMIN/USER), not the viewer's role: an admin reading
+  // /runs in the user view sees the same "Your runs" line a member does — the
+  // list itself is already scoped server-side either way (handleListRuns's
+  // creator-pager branch), so this is copy only.
+  const view = useConsoleMode();
+  // Every row/card click opens the SAME view's own run path (runPath) — the
+  // Admin board must never double as an unannounced switch into the User
+  // view's owner cockpit (ViewGate's TWIN rule; see runPath's comment).
+  const openRun = (id: string) => navigate(runPath(view, id));
 
   const clearFilters = () => {
     setQuery("");
@@ -308,12 +317,6 @@ export function RunsScreen() {
   };
 
   const role = useRole();
-  // The description is keyed on the VIEW (M-7, admin-member-modes-design.md
-  // §6, RUNS.DESCRIPTION_ADMIN/USER), not the viewer's role: an admin reading
-  // /runs in the user view sees the same "Your runs" line a member does — the
-  // list itself is already scoped server-side either way (handleListRuns's
-  // creator-pager branch), so this is copy only.
-  const view = useConsoleMode();
   const description =
     view === "admin" ? "Every run, live — each confined behind its own barrier." : `Your runs · ${runs.length}`;
 
@@ -458,8 +461,9 @@ export function RunsScreen() {
            too, and through the two-valued form this tier read every withheld
            field as a fact. Same three-valued shape as setupGateActive and
            GettingStarted, and for the same stated reason. The count line above
-           stays `=== "member"`: handleListRuns scopes by creator on
-           isSecurityOperator, so a security admin really does see every run. */
+           stays keyed on the console VIEW (M-7), not this role check:
+           handleListRuns scopes by creator on isSecurityOperator, so a
+           security admin really does see every run. */
         <RunsMemberEmpty />
       ) : trueEmpty ? (
         <RunsFirstRun
@@ -659,7 +663,7 @@ function RunsTable({
                         anywhere else in the row; stopPropagation here just
                         keeps the click from firing twice. */}
                     <Link
-                      to={`/runs/${encodeURIComponent(run.id)}`}
+                      to={runPath(view, run.id)}
                       onClick={(e) => e.stopPropagation()}
                       className="block max-w-[320px] truncate text-sm font-medium text-foreground hover:underline"
                     >
