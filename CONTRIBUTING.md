@@ -110,9 +110,10 @@ request, and reviewed before it reaches `main`.
 - Branch from `main`, keep it short-lived, name it `<kind>/<issue#>-<slug>`:
   `feat/57-push-content-rules-deny`, `fix/123-comparable-mount`,
   `docs/73-working-practice`.
-- `main` is always releasable and is protected: required CI contexts plus a
-  review. Nobody pushes to it directly except the maintainer's release commit
-  (see [RELEASING.md](./RELEASING.md)).
+- `main` is always releasable and is protected: required CI contexts (review is
+  agentic, not a branch-protection approval count). Nobody pushes to it
+  directly except the maintainer's release commit (see
+  [RELEASING.md](./RELEASING.md)).
 - Dependent work stacks: branch from the previous PR's branch, write
   `Depends on #N` in the PR body, retarget to `main` after #N merges.
 - A database migration takes the next free number at rebase time, never a
