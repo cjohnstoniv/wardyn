@@ -909,10 +909,10 @@ silently matching nothing.
 
 **Phase two** (`require_review_paths`, `deny_new_executables`,
 `max_file_size_mib`, `hold_seconds`, and the held `push_content` approval this
-type reserves) is a later change. Whoever adds a size rule must **decide** what
-an unmeasurable file means rather than compare it: the inspector reports `-1`
-for a blob the pack does not carry, and `-1` passes every "is it under the
-limit" test by accident.
+type reserves) is a later change. Whoever adds a size rule decides with
+`gitpack.Change.Within`, which refuses a size the pack does not carry (a
+submodule pointer, an unchanged file on a second push); `Size()` returns
+`(bytes, known)`, so a bare comparison against a limit does not compile.
 
 **Unenforceable is a warning, not a refusal.** `push_rules` is enforced only on
 the brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no
