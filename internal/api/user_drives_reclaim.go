@@ -166,7 +166,7 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get user drive: "+err.Error())
+		writeServerError(w, r, "get user drive", err)
 		return
 	}
 	if code, msg := driveReclaimableHere(d, s.cfg.RunnerTarget); msg != "" {
@@ -201,12 +201,17 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 		Target:       runner.DriveTarget,
 	})
 	if err != nil {
-		status, recorded := http.StatusInternalServerError, driveReclaimOutcomeFailed
 		if errors.Is(err, runner.ErrDriveInUse) || errors.Is(err, runner.ErrDriveNotReclaimable) {
-			status, recorded = http.StatusConflict, driveReclaimOutcomeRefused
+			// These are OUR OWN sentinel errors (runner.ErrDriveInUse /
+			// ErrDriveNotReclaimable), never driver/substrate text — the same
+			// justification run_resources.go:201's allowlisted sentinel carries.
+			// err.Error() here is always one of their two fixed strings.
+			s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeRefused, false)
+			writeError(w, http.StatusConflict, "reclaim refused: "+err.Error())
+			return
 		}
-		s.auditDriveReclaim(r, d, g, object, recorded, false)
-		writeError(w, status, "reclaim refused: "+err.Error())
+		s.auditDriveReclaim(r, d, g, object, driveReclaimOutcomeFailed, false)
+		writeServerError(w, r, "reclaim drive", err)
 		return
 	}
 	s.auditDriveReclaim(r, d, g, object, string(outcome), true)
@@ -269,7 +274,7 @@ func driveReclaimableHere(d types.UserDrive, runnerTarget string) (int, string) 
 func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g types.UserDriveGrant) (string, int, string) {
 	grants, err := s.cfg.Store.ListUserDriveGrants(ctx)
 	if err != nil {
-		return "", http.StatusInternalServerError, "list user drive allocations: " + err.Error()
+		return "", http.StatusInternalServerError, loggedMsg(ctx, "list user drive allocations", err)
 	}
 	override := ""
 	for _, existing := range grants {

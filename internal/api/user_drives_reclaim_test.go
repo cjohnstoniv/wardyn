@@ -236,6 +236,11 @@ func TestReclaimUserDriveAuditsASubstrateFailure(t *testing.T) {
 	if ev.Outcome != "failure" || data["outcome"] != driveReclaimOutcomeFailed {
 		t.Errorf("event=%q data outcome=%v, want failure/%q", ev.Outcome, data["outcome"], driveReclaimOutcomeFailed)
 	}
+	// SF-13: the substrate's own error text is audited/logged, never handed to
+	// the member in the 500 body.
+	if strings.Contains(w.Body.String(), "persistentvolumeclaims is forbidden") {
+		t.Errorf("500 body must not carry the substrate's error text, got %s", w.Body.String())
+	}
 }
 
 // TestReclaimUserDriveRefusesATierThatNamesNoSingleObject: a group or `all`
@@ -388,6 +393,11 @@ func TestReclaimUserDriveFailsClosedWhenTheAllocationCannotBeRead(t *testing.T) 
 	}
 	if len(audit.events) != 0 {
 		t.Errorf("a call that addressed no object wrote %v", driveAuditActions(audit))
+	}
+	// SF-13: the store's own error text (here, a plain driver message, but a
+	// real one is pgx/driver text) is logged, never handed to the member.
+	if strings.Contains(w.Body.String(), "connection reset") {
+		t.Errorf("500 body must not carry the store's error text, got %s", w.Body.String())
 	}
 }
 
