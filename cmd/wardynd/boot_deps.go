@@ -286,6 +286,9 @@ type optionalFeatures struct {
 	// set. nil is the ABSENT mode all the way down: the search endpoint answers
 	// its distinct 503 and every "who" field stays free text.
 	dir directory.Directory
+	// hop is the control-plane to proxy TLS (internal_tls.go); nil only on a
+	// loopback-http local install.
+	hop *hopTLS
 }
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
@@ -546,6 +549,12 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			slog.Warn("wardynd: ui-sandbox gateway is in SHARED-ORIGIN mode — every run's app is served from one origin, separated only by a path-scoped cookie; set WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE (wildcard DNS) to give each run its own origin")
 		}
 	}
+
+	hop, herr := loadHopTLS(bootCtx, secrets, *f.controlURL)
+	if herr != nil {
+		return of, herr
+	}
+	of.hop = hop
 
 	return of, nil
 }

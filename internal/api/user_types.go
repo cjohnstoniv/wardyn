@@ -24,7 +24,7 @@ const (
 	maxUserTypeIDLen          = 63
 )
 
-// userTypeIDRe is the slug shape migration 0069_user_types CHECKs.
+// userTypeIDRe is the slug shape migration 0071_user_types CHECKs.
 var userTypeIDRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // reservedUserTypeIDs are the words a role-map value already means: a type

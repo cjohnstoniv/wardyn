@@ -777,7 +777,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
-	// User types (migration 0069_user_types): defining a type is the same
+	// User types (migration 0071_user_types): defining a type is the same
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.
 	s.mountUserTypeRoutes(securityOps)

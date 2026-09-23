@@ -367,7 +367,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/governance/assignments":        {class: classSecurity},
 	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
 	"POST /api/v1/governance/preview":            {class: classSecurity},
-	// User types (migration 0069_user_types): defining a type is the security
+	// User types (migration 0071_user_types): defining a type is the security
 	// tier's duty, like a profile. Who IS a type is the /access routes'
 	// (classAdmin). A member reads their own type from /me, never this list.
 	"GET /api/v1/user-types":         {class: classSecurity},
@@ -1729,7 +1729,7 @@ func (s *authzStore) ListRoleMappings(context.Context) ([]types.RoleMapping, err
 	return nil, nil
 }
 
-// ─── user types (migration 0069_user_types) ──────────────────────────────
+// ─── user types (migration 0071_user_types) ──────────────────────────────
 //
 // The same honest empty state: the matrix exercises the tier on /user-types,
 // not the rows behind it.

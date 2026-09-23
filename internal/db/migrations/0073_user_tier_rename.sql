@@ -12,8 +12,10 @@
 --
 -- api_tokens, ssh_public_keys, attach_tickets: role snapshots taken at mint
 -- or registration. The first two also move their fail-closed column default
--- ('member' since 0045 and 0043). Only admin-vs-not is read from the last two,
--- and neither carries a CHECK (0034, 0043).
+-- ('member' since 0045 and 0043). Only admin-vs-not is read from the last two;
+-- attach_tickets carries no CHECK (0034), and ssh_public_keys carries only
+-- 0070's cap, which pins a capped key to the non-admin tier by name, so it is
+-- re-created here under the new name.
 
 ALTER TABLE role_mappings DROP CONSTRAINT IF EXISTS role_mappings_role_check;
 
@@ -36,8 +38,16 @@ ALTER TABLE api_tokens
     ADD CONSTRAINT api_tokens_role_check
     CHECK (role IN ('admin', 'security_admin', 'user'));
 
+ALTER TABLE ssh_public_keys DROP CONSTRAINT IF EXISTS ssh_public_keys_capped_member;
+
 UPDATE ssh_public_keys SET role = 'user' WHERE role = 'member';
 
 ALTER TABLE ssh_public_keys ALTER COLUMN role SET DEFAULT 'user';
+
+ALTER TABLE ssh_public_keys DROP CONSTRAINT IF EXISTS ssh_public_keys_capped_user;
+
+ALTER TABLE ssh_public_keys
+    ADD CONSTRAINT ssh_public_keys_capped_user
+    CHECK (NOT capped OR role = 'user');
 
 UPDATE attach_tickets SET role = 'user' WHERE role = 'member';
