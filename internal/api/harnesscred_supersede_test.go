@@ -991,6 +991,7 @@ func TestHarnessLogin_UnenforceableClassRefusalPrecedesTheSupersede(t *testing.T
 type gatedKillRunner struct {
 	*fakeRunner
 	gate        chan struct{}
+	gateOnce    sync.Once
 	entered     chan struct{}
 	enteredOnce sync.Once
 }
@@ -1001,6 +1002,14 @@ func (g *gatedKillRunner) KillSandbox(ctx context.Context, ref string) error {
 	return g.fakeRunner.KillSandbox(ctx, ref)
 }
 
+// openGate opens the gate, idempotently — safe to call both from the test body
+// (to observe what happens once KillSandbox unblocks) and from a t.Cleanup (so
+// a case that fails BEFORE opening it does not leak the detached goroutine
+// parked on <-g.gate for the rest of the test binary's run).
+func (g *gatedKillRunner) openGate() {
+	g.gateOnce.Do(func() { close(g.gate) })
+}
+
 // TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown is #122 itself: with
 // KillSandbox gated shut, the sign-in POST answers — and the superseded run
 // already reads KILLED — before the gate ever opens, and the run.kill row plus
@@ -1009,6 +1018,7 @@ func (g *gatedKillRunner) KillSandbox(ctx context.Context, ref string) error {
 // instead of passing in milliseconds.
 func TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown(t *testing.T) {
 	rnr := &gatedKillRunner{fakeRunner: &fakeRunner{}, gate: make(chan struct{}), entered: make(chan struct{})}
+	t.Cleanup(rnr.openGate)
 	f := newSupersedeFixture(t, nil, rnr)
 	srv, st, audit, idp := f.srv, f.store, f.audit, f.idp
 	sess := memberLoginSession(t)
@@ -1075,9 +1085,85 @@ func TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown(t *testing.T) {
 		t.Fatal("the run's identity was revoked before the teardown gate opened")
 	}
 
-	close(rnr.gate)
+	rnr.openGate()
 
 	// Only now — after the gate opens — does the rest of the tail land.
 	waitForKillRow(t, audit, first)
 	waitForRevoke(t, idp, uuid.MustParse(first))
+}
+
+// TestServer_WaitBackground_WaitsForKillTeardownTail is the shutdown half of
+// #122's review: httpSrv.Shutdown (cmd/wardynd/boot_serve.go) only waits for
+// in-flight HANDLERS, and the supersede's teardown is a goroutine that
+// deliberately outlives its handler. Without goBackground/WaitBackground, a
+// SIGTERM landing between the claim and the teardown would leave the
+// superseded run KILLED with its sandbox still up, its credentials unrevoked
+// and no run.kill row — the shutdown answers before the tail does. This pins
+// that WaitBackground actually blocks until the tail (run through goBackground
+// by supersedeOneLoginRun) finishes, and that the run.kill row is ALREADY
+// written by the moment it returns — not merely "eventually", which is what a
+// caller doing an orderly stop needs to be true.
+func TestServer_WaitBackground_WaitsForKillTeardownTail(t *testing.T) {
+	rnr := &gatedKillRunner{fakeRunner: &fakeRunner{}, gate: make(chan struct{}), entered: make(chan struct{})}
+	t.Cleanup(rnr.openGate)
+	f := newSupersedeFixture(t, nil, rnr)
+	srv, st, audit := f.srv, f.store, f.audit
+	sess := memberLoginSession(t)
+
+	first := launchLoginRun(t, srv, sess)
+	waitRunState(t, st, first, types.RunRunning)
+	launchLoginRun(t, srv, sess) // supersedes `first`; the tail blocks on rnr.gate
+
+	select {
+	case <-rnr.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the detached teardown never reached KillSandbox")
+	}
+
+	// WaitBackground, run on its own goroutine so the test can tell "still
+	// blocked" from "returned" without WaitBackground itself hanging the test.
+	waitDone := make(chan struct{})
+	go func() {
+		srv.WaitBackground()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		t.Fatal("WaitBackground returned while the teardown was still gated shut — shutdown must wait for it")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	rnr.openGate()
+
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitBackground never returned after the gate opened")
+	}
+
+	// The run.kill row must already be there — WaitBackground returning is the
+	// caller's signal that it is safe to close the audit sinks next.
+	if rows := audit.find("run.kill"); len(rows) == 0 {
+		t.Error("WaitBackground returned with no run.kill row written — the shutdown path would have raced the teardown")
+	}
+}
+
+// TestServer_WaitBackground_RespectsItsBudget is the other half: a detached
+// goroutine that never finishes (a genuinely wedged runner call) must not turn
+// an orderly shutdown into a hang. bgWaitBudget overrides the real ~35s budget
+// so this proves the bound in milliseconds.
+func TestServer_WaitBackground_RespectsItsBudget(t *testing.T) {
+	srv := New(baseTestConfig(newHarness(t), &integStore{govEscapeStore: newGovEscapeStore(&capStore{})}))
+	srv.bgWaitBudget = 50 * time.Millisecond
+
+	never := make(chan struct{})
+	t.Cleanup(func() { close(never) }) // let the leaked goroutine finish once the test is done
+	srv.goBackground(func() { <-never })
+
+	start := time.Now()
+	srv.WaitBackground()
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("WaitBackground took %s with a 50ms budget and a goroutine that never finishes — it did not respect its bound", elapsed)
+	}
 }

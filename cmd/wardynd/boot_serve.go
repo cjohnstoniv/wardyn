@@ -276,6 +276,18 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		return fmt.Errorf("shutdown: %w", err)
 	}
 
+	// httpSrv.Shutdown only waits for in-flight HANDLERS to return — it knows
+	// nothing about work a handler deliberately detached from itself (a sign-in
+	// launch's dispatch, a superseded sandbox's teardown: internal/api's
+	// goBackground/WaitBackground). Without this, a SIGTERM landing between a
+	// supersede's KILLED claim and its teardown would answer the sign-in POST
+	// (already done) but drop the run.kill row and both revocations on the
+	// floor — a run left KILLED with its sandbox still up and its credentials
+	// still live. WaitBackground carries its own bound (killCascadeTimeout plus
+	// a margin) and logs if it hits it, so this cannot turn an orderly stop
+	// into a hang.
+	srv.WaitBackground()
+
 	// BETWEEN the two, deliberately: the server has stopped accepting requests
 	// (so no new auth.failed can open a streak) and the sinks are still open (so
 	// the summary row this emits is actually delivered). Same slot the proxy

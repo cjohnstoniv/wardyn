@@ -647,11 +647,16 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 // start a new one — rather than a second, drifting copy of a cascade whose
 // ORDER is the security property.
 //
-// It is claimKillTransition then killTeardownTail, called back to back, so
-// handleKillRun (which needs both, synchronously, to answer with a single
-// outcome) is unchanged. supersedeOneLoginRun calls the two halves itself
-// instead of this function — see its own doc comment for why the split
-// matters to that caller.
+// It is claimKillTransition then killTeardownTail, called back to back UNDER
+// ONE SHARED context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+// — the same single killCascadeTimeout budget the undivided cascade always
+// gave the whole kill, claim and teardown together. Establishing it once here,
+// rather than letting each half detach+bound itself, is deliberate: a caller
+// that reaches both halves through THIS function (handleKillRun) must see the
+// exact same 30s window it always had, not two. Callers that reach the halves
+// SEPARATELY — supersedeOneLoginRun claims synchronously and later runs
+// killTeardownTail on its own detached goroutine — establish their own
+// bound at each call site instead; see their own doc comments.
 //
 // Returns whether the KILLED transition was ours (a lost CAS is `false`, with
 // nothing torn down) and the per-step error map, so the caller decides what a
@@ -659,6 +664,8 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 // the supersede logs and proceeds — a new sign-in must not be blocked because
 // the old run's revoke failed.
 func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) (bool, map[string]any, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
 	applied, serr := s.claimKillTransition(ctx, run)
 	if serr != nil {
 		return false, nil, serr
@@ -681,19 +688,21 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 // KILLED transition inline — its three-attempt CAS re-read loop needs to see
 // whether THIS attempt landed before deciding whether to retry — while handing
 // the slow half (killTeardownTail: KillSandbox, both revocations, the
-// run.kill row) to a detached goroutine. Moving the CAS out of this half would
+// run.kill row) to a tracked goroutine. Moving the CAS out of this half would
 // re-open the quota race the supersede exists to close: the concurrency slot
 // is not free until this returns applied==true.
 //
-// Detaches itself for the same reason killTeardownTail does (see that comment):
-// the login supersede runs on the launch POST's own context, and a person
-// closing that tab mid-launch must not cancel a CAS that has already started.
+// Takes ctx AS GIVEN — it does not detach or bound it itself. killRunCascade
+// wraps ONE shared context.WithTimeout(context.WithoutCancel(ctx),
+// killCascadeTimeout) around this call and killTeardownTail's together (its
+// own doc comment); supersedeOneLoginRun, which calls this alone, wraps its
+// own per-attempt bound at its call site — the login supersede runs on the
+// launch POST's own context, and a person closing that tab mid-launch must
+// not cancel a CAS that has already started.
 //
 // Returns whether the KILLED transition was ours (a lost CAS is `false`, with
 // nothing else touched).
 func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
-	defer cancel()
 	// Win the terminal transition first. Revoking before this CAS meant a
 	// kill that then LOST the CAS to a concurrent dispatch forward-transition
 	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
@@ -728,22 +737,25 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 // audit as a failure (and conjure a run.revoke row for a run that was torn
 // down correctly).
 //
-// Detaches itself — context.WithoutCancel plus its own killCascadeTimeout
-// bound — for the reason the undivided cascade always has: once a kill has
-// been claimed it must finish even if the caller's context dies, or a
-// half-applied kill strands exactly what a kill exists to remove — past the
-// CAS the row reads KILLED while KillSandbox is cancelled, retryQuick bails on
-// ctx.Done() without revoking the identity, and the run.kill row itself fails
-// to write. Nothing revisits that state: the idle reaper lists RUNNING and the
-// next supersede selects non-terminal runs only. It belongs HERE, not in each
-// caller: handleKillRun keeps its own detach around the whole cascade too — a
-// second WithoutCancel is a no-op, and its post-cascade run.revoke row needs a
-// live context regardless — while supersedeOneLoginRun runs this on an
-// explicitly detached goroutine (its own doc comment) so the sign-in POST does
-// not wait for it.
+// Takes ctx AS GIVEN — it does not detach or bound it itself; the CALLER
+// does, and has to: once a kill has been claimed this must finish even if the
+// caller's own context dies, or a half-applied kill strands exactly what a
+// kill exists to remove — past the CAS the row reads KILLED while KillSandbox
+// is cancelled, retryQuick bails on ctx.Done() without revoking the identity,
+// and the run.kill row itself fails to write. Nothing on the ordinary paths
+// revisits that state: the idle reaper lists RUNNING and the next supersede
+// selects non-terminal runs only — only SweepTerminalSandboxes (below) can
+// retry a stranded terminal run's teardown, and it is a primitive an operator
+// has to wire up, not something that runs on its own. killRunCascade wraps
+// ONE shared context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+// around this call and claimKillTransition's together, so handleKillRun's
+// synchronous cascade keeps the single 30s budget it always had; its
+// post-cascade run.revoke row needs a live context regardless, which the
+// caller's own WithoutCancel already guarantees. supersedeOneLoginRun instead
+// runs this alone, on a goroutine tracked by goBackground (server.go) with its
+// own detach+bound, so the sign-in POST does not wait for it and an orderly
+// shutdown still does.
 func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) map[string]any {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
-	defer cancel()
 	id := run.ID
 	killData := map[string]any{}
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.

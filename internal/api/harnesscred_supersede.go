@@ -153,16 +153,17 @@ func (s *Server) supersedeCallerLoginRuns(ctx context.Context, actor, agent stri
 //
 // It calls claimKillTransition — not killRunCascade — SYNCHRONOUSLY: this
 // runs inside the sign-in launch POST (launchHarnessLoginRun), and the CAS
-// re-read loop above needs to see each attempt land before deciding whether to
+// re-read loop below needs to see each attempt land before deciding whether to
 // retry. Once an attempt WINS, the slow half (KillSandbox under
-// killCascadeTimeout, both revocations, the run.kill row —
-// killRunCascade.killTeardownTail) hands off to a detached goroutine so the
-// POST answers without waiting for the old sandbox to actually go away.
-// context.WithoutCancel because the request this loop runs in answers, and
-// its context dies with it, long before the teardown is done. Panic-safe
-// (recover + log), the same idiom finishHarnessLoginLaunch's detached worker
-// uses (harnesscred_launch.go): a bug in the teardown must not take the
-// daemon down with it.
+// killCascadeTimeout, both revocations, the run.kill row — killTeardownTail)
+// hands off to a goroutine tracked by goBackground (server.go) so the POST
+// answers without waiting for the old sandbox to actually go away, and an
+// orderly daemon shutdown still waits for it instead of cutting it off
+// mid-teardown. context.WithoutCancel because the request this loop runs in
+// answers, and its context dies with it, long before the teardown is done.
+// Panic-safe (recover + log), the same idiom finishHarnessLoginLaunch's
+// detached worker uses (harnesscred_launch.go): a bug in the teardown must not
+// take the daemon down with it.
 func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, actor string, newRunID uuid.UUID) {
 	// WHO is attributed on the eventual run.kill row: the server, not the
 	// person. They asked for a new sign-in, not for a kill — `superseded_for`
@@ -175,7 +176,12 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 		"superseded_by_run": newRunID.String(),
 	}
 	for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
-		applied, err := s.claimKillTransition(ctx, run)
+		// claimKillTransition takes ctx as given (its own doc comment), so THIS
+		// call site owns the detach+bound: the launch POST's own context, which
+		// must not let a closed tab cancel a CAS already in flight.
+		claimCtx, claimCancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+		applied, err := s.claimKillTransition(claimCtx, run)
+		claimCancel()
 		if err != nil {
 			slog.WarnContext(ctx, "wardynd: could not supersede a live sign-in sandbox",
 				slog.String("run_id", run.ID.String()), slog.Any("error", err))
@@ -183,21 +189,27 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 		}
 		if applied {
 			detached := context.WithoutCancel(ctx)
-			go func(run types.AgentRun) {
+			run := run
+			s.goBackground(func() {
 				defer func() {
 					if rec := recover(); rec != nil {
 						slog.ErrorContext(detached, "wardynd: superseded sign-in teardown panicked",
 							slog.String("run_id", run.ID.String()), slog.Any("panic", rec))
 					}
 				}()
-				killData := s.killTeardownTail(detached, run, types.ActorSystem, "wardynd", extra)
+				// killTeardownTail also takes ctx as given, so THIS goroutine — the
+				// one place this cascade half runs — owns its own killCascadeTimeout
+				// bound, same as claimKillTransition's above.
+				tailCtx, tailCancel := context.WithTimeout(detached, killCascadeTimeout)
+				defer tailCancel()
+				killData := s.killTeardownTail(tailCtx, run, types.ActorSystem, "wardynd", extra)
 				if len(killData) > 0 {
 					// The state is KILLED and the row already carries the failing step;
 					// the new sign-in PROCEEDS — the upload belt is what makes that safe.
 					slog.WarnContext(detached, "wardynd: superseded sign-in sandbox was not fully torn down",
 						slog.String("run_id", run.ID.String()), slog.Any("errors", killData))
 				}
-			}(run)
+			})
 			return
 		}
 		// Lost the CAS to a forward transition. Re-read and try from the state it
