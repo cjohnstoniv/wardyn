@@ -394,6 +394,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolution lands; every existing and new run reads `""` until then. This is the types, validation,
   storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
   enforces one yet.
+- **The Getting Started demo episodes can now be served from an air-gapped mirror.** `WARDYN_DEMO_VIDEO_BASE_URL`
+  re-points where the console downloads them from — `https://` only, no userinfo, query or fragment,
+  validated at boot the same way an internal model gateway base URL is. Unset (the default) is
+  byte-identical to today: the two hardcoded GitHub hosts. The console reads the configured base off
+  `/healthz` and the CSP's `media-src` is built from it (through the same host-sanitizing filter the
+  per-request `connect-src` uses) rather than being a fixed constant. An episode with no recorded tag
+  still resolves to no URL either way. A blocked/redirecting mirror now reads as the deployment's
+  media policy blocking the episode, not as a missing file.
+
 - **The configured Anthropic gateway (`WARDYN_ANTHROPIC_BASE_URL`) now also carries subscription
   and Wardyn-managed runs, not just the api-key lane.** Dispatch points those two lanes'
   `ANTHROPIC_BASE_URL` at the gateway when one is configured; the in-image `agent-run` launcher no

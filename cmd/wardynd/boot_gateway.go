@@ -4,6 +4,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -66,4 +68,20 @@ func validateModelEndpoints(f *bootFlags) (map[string]string, map[string]api.LLM
 		)
 	}
 	return llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, nil
+}
+
+// parseAgentImages decodes WARDYN_AGENT_IMAGES (a JSON object mapping agent
+// name to OCI image ref) and logs what it took. Empty is not an error: it
+// means "use the ghcr convention for every agent". A malformed value fails
+// closed at boot rather than silently falling back to the convention.
+func parseAgentImages(raw string) (map[string]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var images map[string]string
+	if err := json.Unmarshal([]byte(raw), &images); err != nil {
+		return nil, fmt.Errorf("parse WARDYN_AGENT_IMAGES: %w", err)
+	}
+	slog.Info("wardynd: agent image overrides", slog.Any("images", images))
+	return images, nil
 }
