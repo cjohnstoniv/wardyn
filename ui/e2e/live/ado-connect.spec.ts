@@ -8,14 +8,15 @@
  *
  * scripts/lib/kind-sso-walk-ado.sh is curl-only: every sign-in is three GETs
  * against the fake's picker, so nothing ever drove the console's own Azure
- * DevOps connect UI. #628 gave that connect flow (use-ado-connect.ts) a
- * client contract — the popup must never leave the person sitting on a blank
- * placeholder tab, and a BLOCKED popup must fall back to a plain link rather
- * than strand the dialog — and neither half of that contract had a browser
- * anywhere near a real backend to prove it against. This file is that
- * browser: a real Chromium, signed in through the SAME fake Entra tenant the
- * curl walk uses, driving the SAME /settings connect button the curl walk
- * never touches.
+ * DevOps connect UI. That connect flow (use-ado-connect.ts, #386) opens its
+ * popup on about:blank and must move it on at once, never leaving the
+ * person sitting on a blank placeholder tab; and a BLOCKED popup falls back
+ * to a plain link rather than strand the dialog (#386 review finding F9),
+ * worded since #628 as "Your browser blocked the connect popup." plus
+ * "Open Azure DevOps sign-in". Neither had a browser anywhere near a real
+ * backend to prove it against. This file is that browser: a real Chromium,
+ * signed in through the SAME fake Entra tenant the curl walk uses, driving
+ * the SAME /settings connect button the curl walk never touches.
  *
  * What only a live cluster proves that ui/e2e/ado-getting-started.spec.ts's
  * mocked popup case cannot: that the daemon's real redirect
@@ -101,6 +102,12 @@ async function entraSignIn(page: Page, email: string): Promise<void> {
  * Everything else in the response — model access, the workspace roster,
  * everything the member's real per-user rows say — stays exactly what the
  * daemon served.
+ *
+ * GET /me/scm-access is answered "no row" to match: the member's own
+ * browser sign-in in entraSignIn already captured their credential (the
+ * curl walk's step 5), so the real endpoint reads "live", and
+ * use-ado-connect.ts's poll closes the popup on its first "live" tick —
+ * which, left real, would race the popup's trip to the fake's picker.
  */
 async function mockScmAccess(page: Page, scm_access: Record<string, unknown>): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
@@ -109,6 +116,7 @@ async function mockScmAccess(page: Page, scm_access: Record<string, unknown>): P
     json.scm_access = scm_access;
     await route.fulfill({ response, json });
   });
+  await page.route("**/api/v1/me/scm-access", (route) => route.fulfill({ json: [] }));
 }
 
 const NOT_CONNECTED = { state: "not_configured", cause: "row_is_newer" };
@@ -130,21 +138,28 @@ test.describe("the ADO kind walk's browser leg (#751)", () => {
     const cta = page.getByRole("button", { name: ADO.CONNECT_ADO });
     await expect(cta).toBeVisible();
 
-    const [popup] = await Promise.all([context.waitForEvent("page"), cta.click()]);
     // use-ado-connect.ts's connect() opens about:blank FIRST, same tick, to
     // sever `opener` before navigating (the tabnabbing fix) — so the real
     // assertion is not "it never opens about:blank" but "it never SITS
-    // there": by the time anything could render on it, it has already moved.
-    await expect.poll(() => popup.url(), { timeout: 5_000, message: "popup never left about:blank" }).not.toBe(
-      "about:blank",
-    );
+    // there": the popup's first navigation, within a second of the click,
+    // is the console's own sign-in door. about:blank itself makes no
+    // request, so the first navigation request any page but this one makes
+    // is where the popup went next.
+    const popupNavs: string[] = [];
+    context.on("request", (req) => {
+      if (req.isNavigationRequest() && req.frame().page() !== page) popupNavs.push(req.url());
+    });
+    const [popup] = await Promise.all([context.waitForEvent("page"), cta.click()]);
+    await expect
+      .poll(() => popupNavs[0] ?? "", { timeout: 1_000, message: "popup sat on about:blank" })
+      .toMatch(/\/api\/v1\/scm\/azure-devops\/signin$/);
     // And it reached the real fake, not an address a mock never has to
     // resolve — the one thing only a live cluster proves.
     await popup.waitForURL(/login\.microsoftonline\.com/, { timeout: 30_000 });
     await popup.close();
   });
 
-  test("a blocked popup falls back to a plain link — the #628 client contract", async ({ page, context }) => {
+  test("a blocked popup falls back to the #628 blocked line and \"Open Azure DevOps sign-in\" link", async ({ page, context }) => {
     await entraSignIn(page, MEMBER_EMAIL);
     // Nothing outside a real browser process can make the OS popup blocker
     // fire, so this simulates the one thing it would do — the same
@@ -159,22 +174,15 @@ test.describe("the ADO kind walk's browser leg (#751)", () => {
     const cta = page.getByRole("button", { name: ADO.CONNECT_ADO });
     await expect(cta).toBeVisible();
 
-    let popupOpened = false;
-    context.on("page", () => {
-      popupOpened = true;
-    });
     await cta.click();
 
-    // The #628 fallback: the popup-blocked line, plus a plain link the
-    // person can open themselves — never a dialog stranded with no way
-    // forward.
+    // The fallback (#386 F9, #628's copy): the popup-blocked line, plus a
+    // plain link the person can open themselves — never a dialog stranded
+    // with no way forward.
     await expect(page.getByText(ADO.CONNECT_POPUP_BLOCKED)).toBeVisible();
-    const fallback = page.getByRole("link", { name: ADO.CONNECT_ADO });
+    const fallback = page.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
     await expect(fallback).toBeVisible();
     await expect(fallback).toHaveAttribute("href", /\/api\/v1\/scm\/azure-devops\/signin/);
-    // No stray popup: the blocked open() above answered null, so nothing
-    // Playwright would count as a new page ever opened.
-    expect(popupOpened).toBe(false);
 
     // The fallback link itself opens sign-in in a real tab the browser owns
     // (connectFallback's own poll, review follow-up N1) — following it

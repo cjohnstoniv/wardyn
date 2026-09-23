@@ -282,9 +282,9 @@ jq -e --arg a "${ADMIN_SUB}" '.callers | has($a) | not' "${EVIDENCE_DIR}/seen.js
 # Everything above is curl: no browser has ever driven the console's own
 # Azure DevOps connect UI against this cluster. ui/e2e/live/ado-connect.spec.ts
 # signs a real Chromium in through the same fake Entra picker, then asserts
-# the #628 client contract on the real /settings connect popup — that it
-# never leaves the person sitting on about:blank, and that a blocked popup
-# falls back to a plain link, not a stranded dialog. ${FAKE_LOCAL} is still
+# on the real /settings connect popup that it never leaves the person
+# sitting on about:blank, and that a blocked popup falls back to #628's
+# "Open Azure DevOps sign-in" link, not a stranded dialog. ${FAKE_LOCAL} is still
 # up (the port-forward opened in step 2 lives until this script's trap), so
 # it is the browser's route to "login.microsoftonline.com" too.
 step "running the browser leg (ui/e2e/live/ado-connect.spec.ts)"
