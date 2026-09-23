@@ -134,12 +134,14 @@ test.describe("the view switch", () => {
     await gotoConsole(page, "admin");
     const other = await context.newPage();
     await gotoConsole(other, "admin");
+    await navToRoute(other, "/admin/runs?keep=1#here");
     await expect(segment(other, CONSOLE_VIEW.ADMIN)).toHaveAttribute("aria-pressed", "true");
 
     await segment(page, CONSOLE_VIEW.USER).click();
     await expect(page).toHaveURL(/\/runs$/);
-    // /admin/runs has a twin, so tab B lands on the same object in the User view.
-    await expect(other).toHaveURL(/\/runs$/);
+    // /admin/runs has a twin, so tab B lands on the same object in the User
+    // view, search and hash kept as ViewGate's own twin redirect keeps them.
+    await expect(other).toHaveURL(/\/runs\?keep=1#here$/);
     await expect(other).not.toHaveURL(/\/admin\//);
     await expectUserChrome(other);
   });
@@ -180,7 +182,13 @@ test.describe("the view switch", () => {
     await expect(views(page)).toBeHidden();
     await expect(page.getByRole("button", { name: "New run" })).toBeVisible();
     await page.getByRole("button", { name: "Open navigation menu" }).click();
-    await expect(page.getByRole("dialog").getByRole("group", { name: CONSOLE_VIEW.GROUP })).toBeVisible();
+    const sheet = page.getByRole("dialog");
+    await expect(sheet.getByRole("group", { name: CONSOLE_VIEW.GROUP })).toBeVisible();
+    // Single-operator: the switch only navigates, so the sheet closes itself
+    // the way its links do.
+    await sheet.getByRole("button", { name: CONSOLE_VIEW.ADMIN }).click();
+    await expect(page).toHaveURL(/\/admin\/runs$/);
+    await expect(sheet).toBeHidden();
   });
 });
 

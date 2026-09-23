@@ -110,11 +110,12 @@ export function viewHome(view: ConsoleView): string {
 }
 
 // Where a tab lands once its session is found in the other view (§2.4): the
-// same object in that view when it has a twin, else that view's home.
-export function viewTarget(to: ConsoleView, path: string): string {
+// same object in that view when it has a twin, else that view's home. `rest`
+// is the search and hash, kept on a twin as ViewGate's own redirect keeps them.
+export function viewTarget(to: ConsoleView, path: string, rest = ""): string {
   const p = screenPath(path);
   if (!TWIN.test(p)) return viewHome(to);
-  return to === "admin" ? `/admin${p}` : p;
+  return `${to === "admin" ? `/admin${p}` : p}${rest}`;
 }
 
 // The fast path for other tabs (§2.4). One instance per page, used for both

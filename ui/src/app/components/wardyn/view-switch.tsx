@@ -60,10 +60,13 @@ export function ViewSwitch({
   access,
   view,
   className,
+  onNavigate,
 }: {
   access: ViewAccess;
   view: ConsoleView;
   className?: string;
+  /** Called after a URL-only switch, so the mobile sheet can close itself. */
+  onNavigate?: () => void;
 }) {
   const requestLeave = useRequestLeave();
   const navigate = useNavigate();
@@ -73,7 +76,11 @@ export function ViewSwitch({
     if (to === view || busy) return;
     requestLeave(() => {
       // A single-operator install has one authority in both views (D1).
-      if (access === "url") return navigate(viewHome(to));
+      if (access === "url") {
+        navigate(viewHome(to));
+        onNavigate?.();
+        return;
+      }
       setBusy(true);
       setFailed(false);
       switchView(to, viewHome(to)).catch(() => {
@@ -132,7 +139,8 @@ export function useViewResync(access: ViewAccess, loadedMemberMode: boolean): vo
     try {
       const me = await health.whoami();
       if (!me || isSwitching() || (me.member_mode ?? false) === loadedMemberMode) return;
-      window.location.assign(viewTarget(me.member_mode ? "user" : "admin", window.location.pathname));
+      const { pathname, search, hash } = window.location;
+      window.location.assign(viewTarget(me.member_mode ? "user" : "admin", pathname, `${search}${hash}`));
     } finally {
       inFlight.current = false;
     }

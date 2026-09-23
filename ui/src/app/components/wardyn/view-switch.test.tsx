@@ -116,5 +116,7 @@ describe("the view a page is in, and where a follower tab lands", () => {
     expect(viewTarget("admin", "/workspaces/w1")).toBe("/admin/workspaces/w1");
     expect(viewTarget("admin", "/runs/new")).toBe("/admin");
     expect(viewTarget("admin", "/account")).toBe("/admin");
+    expect(viewTarget("user", "/admin/runs/abc", "?tab=recording#t")).toBe("/runs/abc?tab=recording#t");
+    expect(viewTarget("user", "/admin/policies", "?x=1")).toBe("/runs");
   });
 });

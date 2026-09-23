@@ -413,7 +413,7 @@ function SidebarNav({
     <>
       {/* Below sm the switch leaves the top bar for the top of this sheet, so
           New run and the avatar stay on screen (F7-F2). */}
-      {onNavigate && hasSwitch && <ViewSwitch access={access} view={view} className="mb-3 sm:hidden" />}
+      {onNavigate && hasSwitch && <ViewSwitch access={access} view={view} onNavigate={onNavigate} className="mb-3 sm:hidden" />}
       {view === "admin" && items.length > 0 && (
         <div className="label-eyebrow mb-2 px-2.5">{CONSOLE_VIEW.EYEBROW_ADMIN}</div>
       )}

@@ -2263,10 +2263,12 @@ identically, and carry no marker.)
 
 **Both admin tiers get the switch** — a `security_admin` as well as a super
 admin — and both clamp to `member`, because the clamp knows only one direction;
-exiting restores whichever tier you were actually signed in as. It is offered
-over SSO only: the admin token, local mode and a deployment with no identity
-provider are one shared credential with no per-person role to pause, so there is
-nothing to pause and the route answers those callers `400`.
+exiting restores whichever tier you were actually signed in as. The switch is
+shown on every install that has both views. On a single-operator install (local
+mode, or the admin token with no identity provider) it only changes the URL:
+that is one shared credential with no per-person role to pause, so nothing is
+clamped or POSTed, and `POST /me/member-mode` answers those callers `400` if
+called directly.
 
 **The no-credential preview — "Preview as a new user".** The Permissions page
 header offers **Preview as a new user**. It is the User view plus one thing: your OWN captured AWS SSO session reads as
