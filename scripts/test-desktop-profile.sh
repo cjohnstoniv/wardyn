@@ -197,6 +197,25 @@ grep -q 'secret\.env' "${MPRIME}" \
 grep -q 'WARDYN_ADMIN_TOKEN' "${MPRIME}" \
   || fail "m-prime envelope never mentions WARDYN_ADMIN_TOKEN at all — an operator following it ships the published demo-admin-token to every laptop"
 
+# (e) The org control-plane hybrid posture (issue #105) is NAMED, so an
+#     operator wiring a device to an org control plane has both var names to
+#     find. grep for the NAME, not env_get: env_get only reads UNCOMMENTED
+#     assignments, and (f) below asserts this one must NOT be uncommented.
+grep -q 'WARDYN_ORG_URL' "${MPRIME}" \
+  || fail "m-prime envelope never mentions WARDYN_ORG_URL — an operator wiring this device to an org control plane has no pointer to the hybrid posture (issue #105, validateHybridPosture in cmd/wardynd/boot_posture.go)"
+grep -q 'WARDYN_ORG_ENROLMENT_TOKEN' "${MPRIME}" \
+  || fail "m-prime envelope never mentions WARDYN_ORG_ENROLMENT_TOKEN — an operator has no pointer to where the device's enrolment token ships (secret.env)"
+
+# (f) ...and it must stay COMMENTED. Section 2b's vars-forwarded loop and
+#     compose's own vars-set check only ever look at UNCOMMENTED `^VAR=`
+#     lines, so an uncommented WARDYN_ORG_URL here would silently make every
+#     laptop that copies this file hybrid — a posture m' does not default to.
+if grep -qE '^WARDYN_ORG_URL=' "${MPRIME}"; then
+  fail "m-prime envelope SETS WARDYN_ORG_URL uncommented — it must stay a commented example, or every fleet that copies this file becomes hybrid by default (issue #105)"
+fi
+if grep -qE '^WARDYN_ORG_ENROLMENT_TOKEN=' "${MPRIME}"; then
+  fail "m-prime envelope SETS WARDYN_ORG_ENROLMENT_TOKEN uncommented in the 0644 wardyn.env — it must ship in /etc/wardyn/secret.env at 0600, and only as a commented pointer here"
+fi
 
 # ── 7b. the listeners the tier's own promise depends on ────────────────────
 # Both listener vars default to EMPTY in the included stack, and empty means

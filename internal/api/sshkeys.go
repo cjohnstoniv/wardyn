@@ -54,15 +54,6 @@ func (s *Server) handleListSSHKeys(w http.ResponseWriter, r *http.Request) {
 // so validation here fails closed: unparseable input, private-key material,
 // and more-than-one-key input are all refused (422), never stored.
 func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
-	// Member mode refuses, it does not clamp. A key registered here
-	// carries a role STAMP (migration 0046) that OnLogin re-derives from the
-	// human's real role at their next sign-in — so a key registered "as a
-	// member" would come back admin and outlive the mode that made it. See
-	// internal/api/membermode.go.
-	if oidc.MemberModeFromContext(r.Context()) {
-		writeError(w, http.StatusConflict, memberModeMintRefusal)
-		return
-	}
 	var req addSSHKeyRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -119,8 +110,15 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// tier — the asymmetry the three-tier model exists to express
 	// (internal/auth/oidc's RoleSecurityAdmin). A ladder here would put an
 	// interactive shell in every developer's sandbox.
+	//
+	// A key registered in the user view (member mode) is CAPPED (migration
+	// 0070): the mode's clamp already makes isOperator false, and the cap keeps
+	// it that way. OnLogin re-stamps every key from the human's REAL role, so
+	// without the cap this key would come back admin at the next sign-in and
+	// outlive the view that made it.
+	capped := oidc.MemberModeFromContext(r.Context())
 	role := oidc.RoleMember
-	if s.isOperator(r.Context()) {
+	if s.isOperator(r.Context()) && !capped {
 		role = oidc.RoleAdmin
 	}
 	// now is both CreatedAt and RoleCheckedAt: registration IS a role check —
@@ -139,6 +137,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		PublicKey:     strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(pk)), "\n"),
 		Role:          role,
 		RoleCheckedAt: &now,
+		Capped:        capped,
 		CreatedAt:     now,
 	}
 	added, err := s.cfg.Store.AddSSHKey(r.Context(), k)
@@ -157,8 +156,14 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "add ssh key", err)
 		return
 	}
+	// capped is a marker, present only on a capped key, so every row a key
+	// registered outside the user view writes stays byte-identical.
+	datum := map[string]any{"name": added.Name}
+	if added.Capped {
+		datum["capped"] = true
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principal,
-		"ssh_key.add", added.Fingerprint, "success", mustJSON(map[string]any{"name": added.Name})))
+		"ssh_key.add", added.Fingerprint, "success", mustJSON(datum)))
 	writeJSON(w, http.StatusCreated, added)
 }
 

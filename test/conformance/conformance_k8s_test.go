@@ -187,10 +187,10 @@ func testAgentCannotReachAPIServer(t *testing.T, r runner.Runner, agentImage str
 		// ProxyConfig ("control_plane_url is required", proxy.LoadConfigBytes)
 		// — confirmed empirically: every OTHER subtest here never notices
 		// because none of them ever dial the proxy, only this one does.
-		// ControlPlaneURL only needs to be non-empty to satisfy startup, not
-		// reachable — Injection stays empty, so nothing tries to actually
-		// call it.
-		ProxyConfig: runner.ProxyConfig{ControlPlaneURL: "http://wardynd:8080", RunToken: "conformance"},
+		// ControlPlaneURL only needs to pass startup, not be reachable —
+		// Injection stays empty, so nothing tries to actually call it. Loopback,
+		// because the proxy refuses plaintext to any other host (hoptls.CheckURL).
+		ProxyConfig: runner.ProxyConfig{ControlPlaneURL: "http://127.0.0.1:9", RunToken: "conformance"},
 	}
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err != nil {
