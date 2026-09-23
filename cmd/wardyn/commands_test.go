@@ -1572,7 +1572,9 @@ func TestRecordSynthesizeCmd_JSON(t *testing.T) {
 		t.Fatalf("record synthesize --json returned error: %v", err)
 	}
 	got := srv.last()
-	want := "/api/v1/runs/" + runID.String() + "/profile"
+	// /profile/synthesize is the 0.8 name (issue #658); pkg/client.SynthesizeProfile
+	// calls it directly, /profile stays mounted server-side only as a chi alias.
+	want := "/api/v1/runs/" + runID.String() + "/profile/synthesize"
 	if got.method != http.MethodPost || got.path != want {
 		t.Errorf("got %s %s, want POST %s", got.method, got.path, want)
 	}

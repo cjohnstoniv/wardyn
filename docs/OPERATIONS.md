@@ -5504,7 +5504,8 @@ pre-provision by sight. Stamping `wardyn.subject=<the preview's subject
 digest>` on a claim you pre-create makes the runner refuse to bind it for
 anyone else.
 
-**RBAC is two verbs.** `userDrives.enabled=true` adds exactly
+**RBAC is two verbs.** `drives.enabled=true` (renamed from `userDrives.enabled`
+in 0.8) adds exactly
 `persistentvolumeclaims: ["get","create"]` to the namespaced runner Role
 (`deploy/helm/wardyn/templates/rbac.yaml`): `get` because a claim is always
 resolved by name first, and is all a share ever needs; `create` for a managed

@@ -258,7 +258,7 @@ export interface AttachModeMsg {
   holder?: AttachHolder;
 }
 
-// Who currently holds the run's shared tmux PTY (GET /runs/{id}/attach-holder).
+// Who currently holds the run's shared tmux PTY (GET /runs/{id}/attach/holder).
 // Attach is a SHARED session: without this, opening the run page while a CLI
 // holds it silently competes for the same PTY.
 export interface AttachHolder {

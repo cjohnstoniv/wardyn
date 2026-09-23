@@ -691,8 +691,9 @@ label-less volume would turn a restore into an outage.
 
 **On Kubernetes there is no host path at all, and two verbs.** Every backend is a
 PersistentVolumeClaim; `hostPath` is offered by none, and is forbidden by Pod
-Security Standards at Baseline and Restricted anyway. `userDrives.enabled` adds
-exactly `persistentvolumeclaims: ["get","create"]` to the namespaced runner Role
+Security Standards at Baseline and Restricted anyway. `drives.enabled` (renamed
+from `userDrives.enabled` in 0.8) adds exactly
+`persistentvolumeclaims: ["get","create"]` to the namespaced runner Role
 (`deploy/helm/wardyn/templates/rbac.yaml`) — `get` because a claim is always
 resolved BY NAME (nothing lists or watches), `create` for a managed drive's first
 use, and deliberately **no `delete`/`deletecollection`**: a drive outlives every

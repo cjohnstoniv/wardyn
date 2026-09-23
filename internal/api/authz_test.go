@@ -527,8 +527,14 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
-	"POST /api/v1/runs/{id}/kill":             {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
-	"POST /api/v1/runs/{id}/profile":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// /attach/ticket, /attach/holder and /profile/synthesize (below) are the
+	// 0.8 route names (#658); the dash/bare forms above and below are the chi
+	// aliases kept for one minor — same handler, same classification, both
+	// rows required so chi.Walk's discovery of BOTH registrations stays pinned.
+	"POST /api/v1/runs/{id}/attach/ticket":      {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/kill":               {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"POST /api/v1/runs/{id}/profile":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"POST /api/v1/runs/{id}/profile/synthesize": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// The run cockpit's live evidence reads. classOwner, same gate as GET
 	// /runs/{id} above: each names a run in its path and each exposes something
 	// about a LIVE sandbox — the workspace's diff, its resource usage, and who
@@ -536,6 +542,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/files":         {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/resources":     {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/attach-holder": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/attach/holder": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// Take-over ends another human's live terminal session. Still classOwner
 	// (an owner may reclaim their own run's PTY, and the act is audited as
 	// session.takeover) — NOT classMember, which would let anyone displace
@@ -1093,11 +1100,15 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		}
 		// Every owner-scoped route is probed, not a subset: the count is what
 		// catches a route that silently leaves classOwner.
-		// 17 since F287 moved GET /workspaces/{id}/env-as-code here from
+		// 20 since #658 added the three 0.8 route names (attach/ticket,
+		// attach/holder, profile/synthesize) ALONGSIDE the dash/bare aliases
+		// they replace — both registrations are still classOwner, so the probe
+		// count grows by exactly the three new patterns (17 -> 20). 17 was set
+		// when F287 moved GET /workspaces/{id}/env-as-code here from
 		// classMember (its emitted files are the operator's authored
 		// environment, and its write twin was already operatorOnly).
-		if probed != 17 {
-			t.Errorf("probed %d classOwner routes, want 17 — a route that left classOwner takes its tier "+
+		if probed != 20 {
+			t.Errorf("probed %d classOwner routes, want 20 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

@@ -54,9 +54,9 @@ canary,driver}.go. In particular:
   - runtimeclasses: get ONLY (cluster-scoped, below) — driver.go's
     runtimeClassHandler resolves a RuntimeClass by NAME (Get); nothing in
     this substrate lists them.
-  - persistentvolumeclaims: get + create, and ONLY when userDrives.enabled —
+  - persistentvolumeclaims: get + create, and ONLY when drives.enabled —
     drives.go's ensureDrivePVC. Absent from a stock install: a deployment that
-    allocates no user drive never touches a claim.
+    allocates no drive never touches a claim.
 
 Namespaced (Role+RoleBinding, in runsNamespace|release namespace): every
 per-sandbox object the substrate creates/tears down (pods, ephemeral
@@ -102,13 +102,16 @@ through to true.
 */}}
 {{- $rbac := .Values.k8s.rbac | default dict -}}
 {{/*
-Same shape for userDrives: a `helm upgrade --reuse-values` from a release that
-PREDATES this block hands the templates a values map with no userDrives key at
-all, and a bare .Values.userDrives.enabled would kill that upgrade at render
-with a nil pointer (the failure mode the Makefile's own predates-the-0.6-blocks
-render exists to catch). `| default dict` makes an absent block read as off.
+Same shape for drives (renamed from userDrives in 0.8, issue #658): a
+`helm upgrade --reuse-values` from a release that PREDATES this block, OR one
+still carrying the OLD `userDrives` key, hands the templates a values map with
+no `drives` key at all, and a bare .Values.drives.enabled would kill that
+upgrade at render with a nil pointer (the failure mode the Makefile's own
+predates-the-0.6-blocks render exists to catch). `| default dict` makes an
+absent block read as off — including an unmigrated `userDrives` block, which
+this is a clean break from, not an alias for (docs/sdk.md "Renamed in 0.8").
 */}}
-{{- $userDrives := .Values.userDrives | default dict -}}
+{{- $drives := .Values.drives | default dict -}}
 {{- if or (not (hasKey $rbac "create")) $rbac.create -}}
 {{- if not .Values.k8s.runsNamespace }}
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,8 +151,8 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["create", "list", "delete", "deletecollection"]
-{{- if $userDrives.enabled }}
-  # User drives (drives.go's ensureDrivePVC), each verb justified:
+{{- if $drives.enabled }}
+  # Drives (drives.go's ensureDrivePVC), each verb justified:
   #   get    — a drive's claim is looked up BY NAME before anything else, and a
   #            k8s_pvc_static (share) drive is ONLY ever looked up: an admin
   #            provisioned that claim, so a missing one fails the run instead of

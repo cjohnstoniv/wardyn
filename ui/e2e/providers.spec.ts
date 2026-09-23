@@ -631,7 +631,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     }
 
     // review-1 S3: a REAL terminal, on the `-runner none` backend. The run
-    // read answers RUNNING (never PENDING) and the attach-ticket POST answers
+    // read answers RUNNING (never PENDING) and the attach/ticket POST answers
     // a ticket (member-getting-started.spec.ts:228's own precedent), then
     // `page.routeWebSocket` stands in for the daemon's attach socket — the
     // SAME two frame shapes AttachTerminal itself reads (attach-terminal.tsx):
@@ -645,7 +645,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
       await page.route(`**/api/v1/runs/${runId}`, async (route) =>
         route.fulfill({ json: { id: runId, task: "harness login", state: "RUNNING", interactive: true } }),
       );
-      await page.route(`**/api/v1/runs/${runId}/attach-ticket`, async (route) =>
+      await page.route(`**/api/v1/runs/${runId}/attach/ticket`, async (route) =>
         route.fulfill({ json: { ticket: "e2e-ticket" } }),
       );
       await page.routeWebSocket(/\/api\/v1\/runs\/[^/]+\/attach/, (ws) => {
@@ -752,7 +752,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
       await page.route(`**/api/v1/runs/${runId}`, async (route) =>
         route.fulfill({ json: { id: runId, task: "harness login", state: "RUNNING", interactive: true } }),
       );
-      await page.route(`**/api/v1/runs/${runId}/attach-ticket`, async (route) =>
+      await page.route(`**/api/v1/runs/${runId}/attach/ticket`, async (route) =>
         route.fulfill({ json: { ticket: "e2e-ticket" } }),
       );
       await page.routeWebSocket(/\/api\/v1\/runs\/[^/]+\/attach/, (ws) => {

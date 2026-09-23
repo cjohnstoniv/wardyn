@@ -515,11 +515,16 @@ persistence:
   size: 5Gi
   storageClass: ""
 
-# User drives: per-person storage a run can mount at /home/agent/drive. This
-# switch is ONLY the RBAC half — it adds `persistentvolumeclaims: get, create`
-# to the k8s-runner Role (templates/rbac.yaml). The drives themselves are
-# registered and allocated in the console, not here; nothing in this block
-# creates one.
+# Drives: per-person storage a run can mount at /home/agent/drive. This switch
+# is ONLY the RBAC half — it adds `persistentvolumeclaims: get, create` to the
+# k8s-runner Role (templates/rbac.yaml). The drives themselves are registered
+# and allocated in the console, not here; nothing in this block creates one.
+#
+# Renamed from `userDrives` in 0.8 (issue #658 — the wire route (/drives) and
+# the audit actions (drive.*) already said "drive"; this chart key was the one
+# holdout). A clean break, no alias: a `helm upgrade --reuse-values` that still
+# carries the old `userDrives` key renders with drives RBAC off until the
+# values are updated to `drives` — see docs/sdk.md "Renamed in 0.8".
 #
 # Two Kubernetes backends, both claim-based (a pod may not bind a host path, and
 # Pod Security Standards forbids hostPath at Baseline and Restricted alike):
@@ -547,7 +552,7 @@ persistence:
 # field in the console and rides the resolved mount to the runner, so a
 # chart-level one would be a second place to say it that nothing reads — which
 # is exactly what it was until this release removed it.
-userDrives:
+drives:
   enabled: false
 
 nodeSelector: {}

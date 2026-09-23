@@ -484,12 +484,14 @@ func buildWSURL(baseURL, runID, ticket string) string {
 	return u.String()
 }
 
-// mintAttachTicket POSTs /api/v1/runs/{id}/attach-ticket with the configured
-// token and returns the single-use ticket string. Deliberately a raw request,
-// not an sdk.Client method: pkg/client's doc comment and its three pinning
-// tests (TestClientCoversRouteFamilies / TestRouteFamiliesCoverEveryMethod /
+// mintAttachTicket POSTs /api/v1/runs/{id}/attach/ticket (renamed from
+// attach-ticket in 0.8 — docs/sdk.md "Renamed in 0.8"; the old path still
+// answers, as a chi alias, for one minor) with the configured token and
+// returns the single-use ticket string. Deliberately a raw request, not an
+// sdk.Client method: pkg/client's doc comment and its three pinning tests
+// (TestClientCoversRouteFamilies / TestRouteFamiliesCoverEveryMethod /
 // TestSDKCensusNamesEveryRouteFamily) enumerate the whole attach family —
-// attach, attach-ticket, attach-holder, attach/takeover — as DELIBERATELY
+// attach, attach/ticket, attach/holder, attach/takeover — as DELIBERATELY
 // unwrapped, so adding a method here would fight that pin rather than use it.
 //
 // Returns ("", nil) — NOT an error — in two cases the caller treats alike, by
@@ -504,7 +506,7 @@ func buildWSURL(baseURL, runID, ticket string) string {
 // non-2xx becomes *sdk.APIError (errors.As-able, same as every other SDK
 // call) for the caller to surface verbatim rather than mask with a fallback.
 func mintAttachTicket(ctx context.Context, c *sdk.Client, runID string) (string, error) {
-	target := strings.TrimRight(c.BaseURL, "/") + "/api/v1/runs/" + runID + "/attach-ticket"
+	target := strings.TrimRight(c.BaseURL, "/") + "/api/v1/runs/" + runID + "/attach/ticket"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
 	if err != nil {
 		return "", nil
