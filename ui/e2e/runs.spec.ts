@@ -1320,3 +1320,59 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
   });
 });
+
+// #214 — a host with no confinement barrier. The seeded backend runs with
+// `-runner none` (see new-run.spec.ts's own header), which New Run itself
+// reads as UNKNOWN availability rather than confirmed-absent (0.7.8) — but
+// every OTHER surface here (deriveReadiness, environment-step.tsx's own
+// noRunner) already reads an empty confinement_classes list as "no barrier",
+// so the real seeded backend already exercises the shell banner, the top
+// bar's route and the board's own readiness fact with no splicing needed for
+// THOSE. What genuinely needs splicing is a host that DOES report a driver
+// (so the SAME response also proves New Run's own Launch-disable, covered in
+// new-run.spec.ts) — done once here and reused by both files' route pattern.
+test.describe("#214 — no barrier: the shell banner and the top bar's route", () => {
+  test("the shell banner names the blocker and routes to the Environment step; New run stays reachable", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
+      await route.fulfill({ response, json });
+    });
+    await gotoConsole(page);
+
+    await expect(page.getByText("No barrier can be built on this host — runs can't launch.")).toBeVisible();
+    const routes = page.getByRole("link", { name: "Set up a barrier" });
+    await expect(routes).toHaveCount(2); // the shell banner + the top bar
+    for (const link of await routes.all()) {
+      await expect(link).toHaveAttribute("href", "/setup?step=environment");
+    }
+
+    // New run stays live — disabling it would hide the explanation behind
+    // the control that carries it.
+    const newRun = page.getByRole("button", { name: "New run" });
+    await expect(newRun).toBeEnabled();
+
+    // Any one of the routes lands on the Environment step.
+    await routes.first().click();
+    await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
+  });
+
+  // The seeded backend's own default (`-runner none`) already reads
+  // no-barrier for the shell (deriveReadiness counts confinement_classes,
+  // empty either way), so the negative case needs its own splice too — a
+  // real driver reporting at least one class.
+  test("stays silent when a barrier is available", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
+      await route.fulfill({ response, json });
+    });
+    await gotoConsole(page);
+    await expect(page.getByText("No barrier can be built on this host")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Set up a barrier" })).toHaveCount(0);
+  });
+});

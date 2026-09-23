@@ -499,7 +499,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-
+- **A host with no confinement barrier says so instead of a disabled Launch.** New Run's three barrier
+  cards used to render disabled while Launch stayed live, so a person was allowed to try and then
+  failed. Launch is now disabled too, with the reason stated beside it (not a tooltip) and a route to
+  the Environment step that fixes it. The same route rides on a new shell banner, an info link beside
+  New run in the top bar, and the Runs board's `Sandbox barrier` readiness row — four surfaces, one
+  sentence. `Finish setup` is now disabled on a host with no barrier, with its own gate and reason.
+  The Barrier control moved out of New Run's Policy card into its own section. A launch that fires and
+  fails anyway now names the stage, says the reason was recorded on the run, and carries the route
+  there, announced with `role="alert"` — today's bare failure line announced nothing.
 
 - **On Kubernetes, a run's Go and npm caches now count against `disk_mib`.** A third `emptyDir`
   (`wardyn-cache` at `/home/agent/.cache`) joins the existing `/tmp` and workdir scratch volumes

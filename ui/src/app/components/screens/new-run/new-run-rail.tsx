@@ -33,7 +33,7 @@ import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from 
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { NO_BARRIER, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
 import { MODEL_ACCESS_AGENT } from "../../../lib/model-access";
@@ -76,10 +76,19 @@ interface RunRailProps {
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
     error: string | null;
+    /** #214: `error` carries no server-composed message at all (the old
+     *  generic "Failed to launch run." case) — the one shape this rail
+     *  replaces with the named-stage failure card. Every OTHER `error` keeps
+     *  rendering verbatim, off the wire. */
+    genericFailure: boolean;
     /** The server refused this launch for the caller's own model credential (a
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
     credentialRefused: boolean;
+    /** #214: a settled probe reports this host can build no barrier at all —
+     *  Launch is disabled for it, with the reason stated here beside it
+     *  (not a tooltip) and a route to the step that fixes it. */
+    noBarrier: boolean;
     /** The 201's advisory `warnings[]`, once Launch has actually fired
      *  (§5c.8) — rendered here, inline, instead of a toast. */
     warnings: string[];
@@ -88,6 +97,9 @@ interface RunRailProps {
      *  Null on every other state. A timed redirect races every other
      *  navigation off the screen, so this must replace Launch instead. */
     onOpenRun: (() => void) | null;
+    /** #214: clears a failed launch's error/genericFailure state — the
+     *  failure card's own "Dismiss". */
+    onDismissError: () => void;
   };
   preflight: { error: string | null; result: PreflightResult | null };
   /**
@@ -571,8 +583,32 @@ export function RunRail({
         )}
       </div>
 
-      {launch.error && (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
+      {/* #214: a launch that fired and failed anyway. `genericFailure` is the
+          one shape with no server-composed reason (the old bare "Failed to
+          launch run." line, with no role, no route, and nothing to announce
+          it) — replaced by the named-stage card below. Every OTHER `error`
+          keeps rendering its own server text verbatim (new-run-screen.test.tsx
+          pins this — a refusal is composed server-side and shown, not
+          re-worded), now simply role="alert" so it is announced too. */}
+      {launch.error && launch.genericFailure && (
+        <div role="alert" className="mt-3 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2.5 text-xs">
+          <div className="flex items-start gap-1.5 font-medium text-foreground">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-danger" />
+            {RUN.LAUNCH_FAILED_TITLE}
+          </div>
+          <p className="mt-1 text-muted-foreground">{RUN.LAUNCH_FAILED_BODY}</p>
+          <div className="mt-1.5 flex items-center gap-3">
+            <Link to="/runs" className="font-medium text-info hover:underline">
+              {RUN.LAUNCH_FAILED_OPEN_RUN} →
+            </Link>
+            <button type="button" onClick={launch.onDismissError} className="font-medium text-muted-foreground hover:underline">
+              {RUN.LAUNCH_FAILED_DISMISS}
+            </button>
+          </div>
+        </div>
+      )}
+      {launch.error && !launch.genericFailure && (
+        <p role="alert" className="mt-3 flex items-start gap-1.5 text-xs text-danger">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
           {launch.error}
         </p>
@@ -622,6 +658,19 @@ export function RunRail({
           </Button>
         )}
       </div>
+      {/* #214 — the one control that cannot work says so beside itself, not
+          in a tooltip, with the route to the step that fixes it. Ahead of
+          `problem` below: a host that can build no barrier at all is the more
+          fundamental reason Launch is dead. */}
+      {launch.noBarrier && !launch.inFlight && (
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          {NO_BARRIER.LAUNCH_REASON}{" "}
+          <Link to={NO_BARRIER.ROUTE} className="font-medium text-info hover:underline">
+            {NO_BARRIER.CTA}
+          </Link>
+          .
+        </p>
+      )}
       {/* A disabled button that doesn't say why is a dead end: without
           client-side validation, an empty form would launch and the server's
           rejection would arrive after the fact. */}

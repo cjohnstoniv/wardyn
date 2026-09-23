@@ -40,5 +40,39 @@ export const RUN = {
   // confinement_class at all, so the server's own read decides.
   BARRIER_UNKNOWN:
     "Couldn't check which barriers this host has — leave this alone and Wardyn will use the strongest one it can, or pick one yourself.",
+  // #214 — a launch that fired and failed for a reason no preflight ruled out.
+  // Replaces the old bare "Failed to launch run." line, which named no stage,
+  // no reason and no route, and which nothing announced.
+  //
+  // SF-26: `genericFailure` is set whenever getErrorMessage(e) comes back
+  // empty. A timeout and a network failure both carry a message (core.ts
+  // turns a timeout into HttpError(TIMEOUT_STATUS, TIMEOUT_MESSAGE), and a
+  // network failure rethrows TypeError("Failed to fetch")), so use-launch.ts
+  // sets genericFailure=false for both and shows that text instead. What
+  // reaches this card is a response that carried no displayable reason (an
+  // empty body, or a non-JSON or markup body such as a proxy's HTML error
+  // page, core.ts#errEnvelope) with an empty statusText, as HTTP/2 always
+  // sends. Something answered, but not with a reason Wardyn composed, so the
+  // console cannot tell whether the run was created. This wording claims
+  // only that: Wardyn gave no answer, and a run may or may not exist.
+  LAUNCH_FAILED_TITLE: "Wardyn didn't answer the launch.",
+  LAUNCH_FAILED_BODY: "A run may or may not have started — check the Runs board before trying again.",
+  LAUNCH_FAILED_OPEN_RUN: "Open Runs",
+  LAUNCH_FAILED_DISMISS: "Dismiss",
+} as const;
+
+// #214 — a host where no confinement class can be enforced. The shell banner,
+// the top bar's route, New Run's disabled Launch and Setup's Finish gate all
+// name the SAME reason and point at the SAME fix, so an operator meets one
+// sentence and one route wherever this blocks them.
+export const NO_BARRIER = {
+  BANNER_TITLE: "No barrier can be built on this host — runs can't launch.",
+  BANNER_BODY:
+    "Wardyn confines every run. Until a container runtime answers, there is nothing to confine it with.",
+  CTA: "Set up a barrier",
+  ROUTE: "/setup?step=environment",
+  LAUNCH_REASON: "No barrier can be built on this host, so no run can be confined.",
+  FINISH_GATE_HEAD: "Setup can't finish without a barrier.",
+  FINISH_GATE_REASON: "Wardyn confines every run.",
 } as const;
 

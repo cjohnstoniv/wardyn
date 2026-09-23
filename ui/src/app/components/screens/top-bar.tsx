@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
 import { Chip } from "../wardyn/primitives";
+import { NO_BARRIER } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { Button } from "../ui/button";
 import {
@@ -59,12 +60,15 @@ export function TopBar({
   pendingApprovals,
   attentionCount,
   onNewRun,
+  noBarrier,
 }: {
   onSignOut: () => void;
   meta: ShellMeta;
   pendingApprovals: number;
   attentionCount: number;
   onNewRun: () => void;
+  /** #214 — see AppShell's own doc. */
+  noBarrier?: boolean;
 }) {
   // What the header calls "you": the IdP's display name, else the session
   // email, else the principal itself (an admin token or local mode has
@@ -110,6 +114,17 @@ export function TopBar({
       {/* F7-F2: min-w-0 lets this cluster actually shrink instead of forcing
           the header wider than the viewport (no flex-wrap/height change). */}
       <div className="ml-auto flex min-w-0 items-center gap-1.5">
+        {/* #214 — the top bar's own route to the Environment step. New run
+            itself stays live: disabling it would hide this explanation behind
+            the one control that carries it. */}
+        {noBarrier && (
+          <Link
+            to={NO_BARRIER.ROUTE}
+            className="hidden text-xs font-medium text-info hover:underline sm:inline"
+          >
+            {NO_BARRIER.CTA}
+          </Link>
+        )}
         <Button
           variant="ghost"
           size="icon"

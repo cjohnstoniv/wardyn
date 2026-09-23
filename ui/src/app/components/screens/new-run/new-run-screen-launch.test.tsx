@@ -53,7 +53,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
   };
 });
 // The REAL rail with its props recorded — this file pins only what the screen hands it.
-const railProps: Array<{ launch: { credentialRefused: boolean } }> = [];
+const railProps: Array<{ launch: { credentialRefused: boolean; genericFailure: boolean; onOpenRun: (() => void) | null } }> = [];
 vi.mock("./new-run-rail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./new-run-rail")>();
   return {
@@ -101,6 +101,7 @@ import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
 import { ADO } from "../../../lib/ado-entra-copy";
+import { RUN } from "../../wardyn/copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -443,6 +444,31 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
     await user.click(launch);
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
     expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+});
+
+// SF-26 (see #214's own genericFailure doc comment): the ONE case
+// createRun's caller cannot tell a server-composed refusal from a connection
+// that died with nothing to say — an HttpError whose message is genuinely ""
+// (a bodiless 5xx; main's own invariant is "no refusal can become a failed
+// run", so a REAL refusal always carries a body, and this is what a response
+// with none actually decodes to — see errEnvelope's res.statusText fallback,
+// which HTTP/2 leaves empty). Before this fix the card told the member a run
+// WAS created; the honest fact is that Wardyn never said either way.
+describe("NewRunScreen — the launch failure card never claims a run was created (SF-26)", () => {
+  const lastRail = () => railProps[railProps.length - 1];
+
+  it("createRun rejecting with no message at all never claims the run was created, and offers no Open run", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(502, ""));
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+
+    expect(await screen.findByText(RUN.LAUNCH_FAILED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(/was created/i)).toBeNull();
+    expect(lastRail().launch.genericFailure).toBe(true);
+    expect(lastRail().launch.onOpenRun).toBeNull();
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 });
 

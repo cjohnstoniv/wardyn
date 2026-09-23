@@ -109,6 +109,11 @@ function railTree(props: {
   launchError?: string | null;
   /** The server refused the launch for the caller's own model credential. */
   credentialRefused?: boolean;
+  /** #214: `error` carries no server-composed reason at all. */
+  genericFailure?: boolean;
+  /** #214: a settled probe reports this host can build no barrier at all. */
+  noBarrier?: boolean;
+  onDismissError?: () => void;
   gitCredential?: SCMAccess;
   adoDialogOpen?: boolean;
   adoConnecting?: boolean;
@@ -146,9 +151,12 @@ function railTree(props: {
         inFlight: false,
         problem: null,
         error: props.launchError ?? null,
+        genericFailure: props.genericFailure ?? false,
         credentialRefused: props.credentialRefused ?? false,
+        noBarrier: props.noBarrier ?? false,
         warnings: [],
         onOpenRun: null,
+        onDismissError: props.onDismissError ?? (() => {}),
       }}
       preflight={{
         error: null,

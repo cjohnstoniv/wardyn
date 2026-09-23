@@ -160,7 +160,7 @@ export { MEMBER_GETTING_STARTED, RUNS_MEMBER_EMPTY, RUNS_WAIT } from "./copy/get
 export { EPISODES_COPY, FIRST_RUN_DEMOS_SUBTITLE } from "./copy/episodes";
 export { PEOPLE_STEP, SITE } from "./copy/setup-steps";
 export { SHELL, UNSAVED_GUARD } from "./copy/shell";
-export { RUN } from "./copy/run-clone";
+export { RUN, NO_BARRIER } from "./copy/run-clone";
 
 // Moved to copy/terminal.ts (the target path for the later barrel split of
 // this file) — re-exported here so every existing `from "./copy"` import

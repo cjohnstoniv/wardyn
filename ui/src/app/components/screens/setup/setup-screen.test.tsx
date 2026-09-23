@@ -681,6 +681,34 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // the step and that gate are gone; "Finish setup" on Review is the one
   // completion, covered above.
 
+  // #214 — the decision the maintainer was most warned about: Setup cannot
+  // finish on a host that can build no barrier at all. Deliberate, and the
+  // reason (and its route back to Environment) is stated beside the disabled
+  // button, the same fact and the same route the shell banner, the top bar
+  // and the Runs board's readiness row all carry.
+  it("#214: disables 'Finish setup' on a host with no barrier, with its reason and route", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "docker", confinement_classes: [] } }),
+    );
+    renderScreen(<SetupScreen onDone={vi.fn()} />);
+    await screen.findByText("No sandbox runner — runs can't launch.");
+
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+    await user.click(screen.getByRole("button", { name: /^Review —/ }));
+
+    expect(screen.getByText("Setup can't finish without a barrier.")).toBeInTheDocument();
+    const finishBtn = screen.getByRole("button", { name: /^finish setup$/i });
+    expect(finishBtn).toBeDisabled();
+    const route = screen.getByRole("link", { name: /set up a barrier/i });
+    expect(route).toHaveAttribute("href", "/setup?step=environment");
+
+    await user.click(finishBtn);
+    expect(setupDismissed()).toBe(false);
+  });
+
   // The fast-path banner was REMOVED (it duplicated the Launch step and talked
   // over the step being configured). Launching early still works — from the
   // Launch step — so that behavior keeps its coverage here.

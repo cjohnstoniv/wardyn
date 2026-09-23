@@ -36,6 +36,7 @@ export function SetupLayout({
   onSelect,
   onFinish,
   nextGate,
+  finishGate,
   backOverride,
   order = STEP_ORDER,
   refuseNext,
@@ -76,6 +77,13 @@ export function SetupLayout({
     nextLabel?: string;
     onNext?: () => void;
   };
+  // #214 — Setup cannot finish on a host with no barrier: `Finish setup`
+  // (the button below, rendered only once there is no further `next`) is
+  // disabled and the reason is stated beside it, with a route back to the
+  // Environment step. ReactNode reason (not string, unlike nextGate's own)
+  // because this one carries that route as a link. undefined leaves the
+  // button exactly as it was.
+  finishGate?: { head: string; reason: ReactNode };
   // When set, Back is enabled and calls this instead of stepping to the
   // previous step — the mirror of nextGate.onNext (Egress redirection's Back
   // returns to Host proxy).
@@ -285,10 +293,24 @@ export function SetupLayout({
                 )}
               </>
             ) : (
-              <Button onClick={onFinish}>
-                Finish setup
-                <ArrowRight className="size-4" aria-hidden />
-              </Button>
+              <>
+                {/* #214 — same visual shape as the nextGate dot+head+reason
+                    above, for the one gate this footer can carry with no
+                    `next` step left to render it beside. */}
+                {finishGate && (
+                  <div role="status" aria-live="polite" className="min-w-0 max-w-md space-y-0.5">
+                    <p className="flex items-start gap-1.5 text-body font-medium leading-snug text-warning">
+                      <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-warning" />
+                      {finishGate.head}
+                    </p>
+                    <p className="pl-3.5 text-xs leading-snug text-muted-foreground">{finishGate.reason}</p>
+                  </div>
+                )}
+                <Button onClick={onFinish} disabled={!!finishGate}>
+                  Finish setup
+                  <ArrowRight className="size-4" aria-hidden />
+                </Button>
+              </>
             )}
           </footer>
           )}
