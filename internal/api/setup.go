@@ -535,8 +535,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	checks = append(checks, secretStoreCheck(s.cfg.SecretStoreExternal, s.cfg.AgeKeyDurable),
-		hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
+	checks = append(checks, secretStoreRows(s.cfg.SecretStoreExternal, s.cfg.AgeKeyDurable, s.cfg.PlatformKeySeparate)...)
+	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
 	// conditional check gates on its own applicability).

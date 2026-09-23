@@ -23,11 +23,49 @@ import (
 // openSecretStore builds the configured external store client (if any) and
 // the secret store over it, as a serving boot and every maintenance mode do.
 func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags) (secretstore.Store, error) {
+	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
+	if err != nil {
+		return nil, err
+	}
 	ext, err := buildExternalStore(ctx, f.vault, f.azure, *f.trustedCAFile)
 	if err != nil {
 		return nil, err
 	}
-	return buildSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, ext, *f.vault.timeout)
+	return buildSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, ext, *f.vault.timeout)
+}
+
+// readPlatformKey parses WARDYN_PLATFORM_KEY_FILE (design §2.13 c), or returns
+// nil when it is unset. It is a second age identity for the boot keys alone,
+// so it must be a durable key of its own: it is refused without a
+// WARDYN_AGE_KEY (store mode keeps the boot keys in the organisation's store;
+// an ephemeral age key would strand the rows beside them), when it is the age
+// key itself, or when it is a published one.
+func readPlatformKey(path, ageKey string) (*age.X25519Identity, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	if strings.TrimSpace(ageKey) == "" {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE is set but WARDYN_AGE_KEY is not — the platform key separates the boot keys from a durable age key; in store mode they already live in the organisation's store, so unset it")
+	}
+	key, err := readAgeKeyFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE: %w", err)
+	}
+	if key == "" {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE %s does not exist or holds no age identity — mint one with `wardynd -gen-age-key`", path)
+	}
+	if isKnownPublicAgeKey(key) {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE holds a publicly-known key (published in this repo's git history); mint your own with `wardynd -gen-age-key`")
+	}
+	id, err := age.ParseX25519Identity(key)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE: %w", err)
+	}
+	if ageID, err := age.ParseX25519Identity(strings.TrimSpace(ageKey)); err == nil && ageID.String() == id.String() {
+		return nil, fmt.Errorf("refusing to start: WARDYN_PLATFORM_KEY_FILE holds the same key as WARDYN_AGE_KEY, which separates nothing; mint a second one with `wardynd -gen-age-key`")
+	}
+	return id, nil
 }
 
 // buildSecretStore constructs the secret store and readies its rows
@@ -36,9 +74,10 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags) (sec
 // across restarts to keep prior ciphertext readable). In store mode (an
 // external store selected, design §2.3a.7) no key is generated: every value
 // lives in the organisation's store, and a missing key only matters while
-// local rows remain, which convertSecretStore refuses by name. ext is the
+// local rows remain, which convertSecretStore refuses by name. platform is
+// the separate platform identity (readPlatformKey), or nil. ext is the
 // configured external client, or nil.
-func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName string, ext secretstore.External, extTimeout time.Duration) (secretstore.Store, error) {
+func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, platform *age.X25519Identity, storeName string, ext secretstore.External, extTimeout time.Duration) (secretstore.Store, error) {
 	storeMode := storeName != "" && storeName != "pg"
 	var id *age.X25519Identity
 	var err error
@@ -68,9 +107,12 @@ func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey, storeName
 		}
 	}
 	deps := secretstore.Deps{Pool: pool, External: ext, ExternalTimeout: extTimeout}
+	// A typed nil in the interface would read as "a key is configured".
 	if id != nil {
-		// A typed nil in the interface would read as "a key is configured".
 		deps.AgeIdentity = id
+	}
+	if platform != nil {
+		deps.PlatformIdentity = platform
 	}
 	s, err := secretstore.New(storeName, deps)
 	if err != nil {
@@ -129,10 +171,10 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 // setting: the token comes from a projected service-account login or a file
 // (design rule 20).
 type vaultFlags struct {
-	addr, namespace, auth, authMount, role, k8sTokenFile, tokenFile, caCertFile *string
-	kvMount, kvPrefix                                                           *string
-	maxVersions                                                                 *int
-	timeout                                                                     *time.Duration
+	addr, namespace, auth, authMount, role, rolePlatform, k8sTokenFile, tokenFile, caCertFile *string
+	kvMount, kvPrefix                                                                         *string
+	maxVersions                                                                               *int
+	timeout                                                                                   *time.Duration
 }
 
 func registerVaultFlags() vaultFlags {
@@ -142,6 +184,7 @@ func registerVaultFlags() vaultFlags {
 		auth:         flagEnv("vault-auth", "WARDYN_VAULT_AUTH", vaultkv.AuthKubernetes, `Vault auth method: "kubernetes" (a projected service-account token) or "token-file" (a Vault Agent sink or CSI file)`),
 		authMount:    flagEnv("vault-auth-mount", "WARDYN_VAULT_AUTH_MOUNT", "kubernetes", "mount path of Vault's Kubernetes auth method"),
 		role:         flagEnv("vault-role", "WARDYN_VAULT_ROLE", "", "Vault Kubernetes-auth role wardynd logs in as"),
+		rolePlatform: flagEnv("vault-role-platform", "WARDYN_VAULT_ROLE_PLATFORM", "", "optional second Kubernetes-auth role wardynd reads and writes its own signing, session and SSH host keys as (the <prefix>/platform/ paths); WARDYN_VAULT_ROLE then serves only the credentials. Empty = one role for both. Recommended; see docs/OPERATIONS.md"),
 		k8sTokenFile: flagEnv("vault-k8s-token-file", "WARDYN_VAULT_K8S_TOKEN_FILE", "", "path of the projected service-account token (audience vault) for Kubernetes auth; re-read at every login"),
 		tokenFile:    flagEnv("vault-token-file", "WARDYN_VAULT_TOKEN_FILE", "", "path of a file holding a Vault token (WARDYN_VAULT_AUTH=token-file); re-read on every 403"),
 		caCertFile:   flagEnv("vault-cacert-file", "WARDYN_VAULT_CACERT_FILE", "", "PEM bundle added to the system roots for the Vault client only; empty = WARDYN_TRUSTED_CA_FILE, else system roots"),
@@ -206,6 +249,7 @@ func buildExternalStore(ctx context.Context, v vaultFlags, az azureFlags, truste
 	s, err := vaultkv.New(ctx, vaultkv.Config{
 		Addr: addr, Namespace: strings.TrimSpace(*v.namespace),
 		Auth: strings.TrimSpace(*v.auth), AuthMount: strings.TrimSpace(*v.authMount), Role: strings.TrimSpace(*v.role),
+		RolePlatform: strings.TrimSpace(*v.rolePlatform),
 		K8sTokenFile: strings.TrimSpace(*v.k8sTokenFile), TokenFile: strings.TrimSpace(*v.tokenFile), CACertFile: ca,
 		Mount: strings.TrimSpace(*v.kvMount), Prefix: strings.TrimSpace(*v.kvPrefix),
 		MaxVersions: *v.maxVersions, Timeout: *v.timeout,

@@ -553,6 +553,30 @@ func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
 	}
 }
 
+// TestSecretStoreRows_PlatformShared is SETUP_CHECK.PLATFORM_SHARED (design
+// §3): amber in local mode while the age key protects the boot keys too, gone
+// once they have a key of their own or live in the organisation's store.
+func TestSecretStoreRows_PlatformShared(t *testing.T) {
+	rows := secretStoreRows("", true, false)
+	if len(rows) != 2 || rows[0].ID != "age_key" {
+		t.Fatalf("local mode, one key = %+v, want the age-key row then platform_shared", rows)
+	}
+	chk := rows[1]
+	if chk.ID != "platform_shared" || chk.Status != "warn" ||
+		chk.Detail != "Wardyn's own signing and session keys are protected by the same key as people's credentials." ||
+		!strings.Contains(chk.Fix, "WARDYN_PLATFORM_KEY_FILE") || !strings.Contains(chk.Fix, "wardynd -rewrap") {
+		t.Fatalf("platform_shared = %+v", chk)
+	}
+	for label, c := range map[string]struct {
+		external string
+		separate bool
+	}{"a separate platform key": {"", true}, "store mode": {"Vault at vault.example:8200", false}} {
+		if rows := secretStoreRows(c.external, true, c.separate); len(rows) != 1 {
+			t.Errorf("%s: rows %+v, want only the store's own row", label, rows)
+		}
+	}
+}
+
 func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	if fix := ageKeyCheck(true).Fix; fix != "" {
 		t.Errorf("durable arm carries a Fix (%q) — an ok row has nothing to fix", fix)
@@ -723,7 +747,7 @@ var setupCheckBlockingStatus = map[string]string{
 // Blocking decision recorded here must fail the build, not default quietly
 // to non-blocking.
 var setupCheckNeverBlocks = map[string]bool{
-	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true,
+	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_shared": true,
 	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
@@ -794,6 +818,9 @@ func TestSetupCheckBlocking(t *testing.T) {
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
 	assertSetupCheckBlocking(t, secretStoreCheck("Vault at vault.example:8200", true))
+	for _, chk := range secretStoreRows("", true, false) {
+		assertSetupCheckBlocking(t, chk)
+	}
 
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{}, nil))
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{UpstreamProxySecretRef: "x"}, map[string]bool{}))

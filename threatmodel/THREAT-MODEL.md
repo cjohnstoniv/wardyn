@@ -1897,6 +1897,24 @@ hiding them would repeat the failure mode we are designed to avoid.
     **Metadata stays in the clear:** who holds which named credential, and since
     when, is readable to anyone who can read the table.
 
+49. **One age key protects everything by default (0.8, credential-storage F10).** In local mode
+    the `secrets` table holds people's credentials AND wardynd's own boot keys (the run-identity
+    signing key, the console and UI-sandbox session keys, the SSH host key), and by default one
+    `WARDYN_AGE_KEY` protects both. One compromise of that key together with the database forges
+    run identities (and so every `/internal/*` route, the credential-injection sink included),
+    forges console sessions of any role, impersonates the SSH host, and opens every credential.
+    What narrows it: (a) **local mode:** `WARDYN_PLATFORM_KEY_FILE` supplies a second age identity
+    from which alone the boot keys' key-encryption key is derived (`local/platform:` vs
+    `local/cred:` on each row); once it is set, no key the age key derives opens a boot key row,
+    so a stolen age key forges nothing. It is optional, the move onto it is `wardynd -rewrap`, and
+    that move is the one moment the age key still vouches for the boot keys. Unset, the residual
+    stands and `/setup/status` shows `platform_shared`. (b) **store mode:** the boot keys live
+    under `platform/` in the organisation's store; with ONE Vault role that separates audit and
+    filtering only (the one token reaches both), and the recommended second role
+    (`WARDYN_VAULT_ROLE_PLATFORM`) separates the privilege. Azure Key Vault has no per-name
+    policy, so there the split is tags and audit only. In store mode the organisation's vault
+    operators hold the boot keys too (design K11), and can forge what (a) lists.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto. Raised

@@ -238,6 +238,10 @@ spec:
               value: {{ .vault.authMount | quote }}
             - name: WARDYN_VAULT_ROLE
               value: {{ .vault.role | quote }}
+            {{- with .vault.rolePlatform }}
+            - name: WARDYN_VAULT_ROLE_PLATFORM
+              value: {{ . | quote }}
+            {{- end }}
             - name: WARDYN_VAULT_K8S_TOKEN_FILE
               value: "/var/run/secrets/wardyn-vault/token"
             {{- else }}

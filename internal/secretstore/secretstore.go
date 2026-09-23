@@ -117,7 +117,8 @@ type External interface {
 // PlatformNames are the boot keys wardynd mints and reads at every boot
 // (cmd/wardynd loadOrCreateSecret). An external store files them under their
 // own kind, so the org can audit, filter and (with a second identity)
-// restrict them apart from people's credentials (design §2.13).
+// restrict them apart from people's credentials; local mode wraps them under
+// a KEK of their own (design §2.13).
 var PlatformNames = map[string]bool{
 	"wardyn-signing-key":    true,
 	"wardyn-session-key":    true,

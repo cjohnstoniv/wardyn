@@ -98,7 +98,7 @@ func TestPG_ConvertV0_ConvertsEveryRowOnceThenIsANoOp(t *testing.T) {
 	after := rawRows(t, pool)
 	for _, f := range v0Fixture {
 		r := after[rowRef(f.owner, f.name)]
-		if r.version != encVersion || r.kekID != s.kek.ID() || len(r.wrapped) == 0 || bytes.HasPrefix(r.ct, []byte("age-encryption.org")) {
+		if r.version != encVersion || r.kekID != s.writer(f.owner, f.name).ID() || len(r.wrapped) == 0 || bytes.HasPrefix(r.ct, []byte("age-encryption.org")) {
 			t.Errorf("%s after conversion: enc_version=%d kek_id=%q — not a v1 envelope", rowRef(f.owner, f.name), r.version, r.kekID)
 		}
 		got, err := s.For(f.owner).Get(ctx, f.name)
@@ -325,7 +325,7 @@ func TestPG_UnknownEncVersionIsRefusedEverywhere(t *testing.T) {
 	if n, err := s.ConvertV0(ctx, id); err != nil || n != 0 {
 		t.Fatalf("ConvertV0 = (%d, %v); an enc_version 3 row is not a v0 row and must be left alone", n, err)
 	}
-	n, err := Rekey(ctx, pool, id, mustIdentity(t))
+	n, err := Rekey(ctx, pool, id, mustIdentity(t), nil)
 	if err == nil || n != 0 || !strings.Contains(err.Error(), want) {
 		t.Fatalf("Rekey over an enc_version 3 row = (%d, %v), want an abort that says %q", n, err, want)
 	}

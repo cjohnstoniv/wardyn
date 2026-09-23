@@ -538,6 +538,10 @@ type Config struct {
 	// or "" in local mode. Set, /setup/status shows store_external instead of
 	// the age-key row.
 	SecretStoreExternal string
+	// PlatformKeySeparate reports whether WARDYN_PLATFORM_KEY_FILE gives the
+	// boot keys a key of their own in local mode. False there, /setup/status
+	// shows platform_shared (design §2.13 c).
+	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
 	// posture. Computed at boot in cmd/wardynd (listenIsLoopback).

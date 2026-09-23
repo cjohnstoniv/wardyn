@@ -24,10 +24,14 @@ import (
 )
 
 // maintenanceMode runs the one-shot maintenance mode the flags select, if any
-// (-rotate-age-key, -migrate-secrets, -reconcile), and reports whether one ran.
+// (-rotate-age-key, -rewrap, -migrate-secrets, -reconcile), and reports whether
+// one ran.
 func maintenanceMode(f *bootFlags) (bool, error) {
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
 		return true, rotateAgeKeyMode(f, p)
+	}
+	if *f.rewrap {
+		return true, rewrapMode(f)
 	}
 	if *f.migrateSecrets || *f.reconcile {
 		return true, secretStoreMaintenance(f)
