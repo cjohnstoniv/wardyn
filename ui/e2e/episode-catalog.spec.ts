@@ -77,6 +77,13 @@ test.describe("episode catalog — Shape C path grouping", () => {
   test("multi-user (SSO) install: the deployment group swaps and member rows are chipped", async ({
     page,
   }) => {
+    // #469 (CI-flake): the 15s slack below (already CI-flake-hardened once)
+    // still wasn't enough on a sufficiently loaded runner — observed timing
+    // out at exactly 15000ms, 4x. test.setTimeout gives the WHOLE test more
+    // budget (the project default is 30s) so a longer assertion timeout
+    // actually has room to matter instead of being capped by the outer test
+    // timeout first.
+    test.setTimeout(45_000);
     await mockFreshInstall(page, { sso: true });
     await page.goto("/");
     await page.waitForURL(/\/setup/);
@@ -85,7 +92,7 @@ test.describe("episode catalog — Shape C path grouping", () => {
     // round trip landing — both still outstanding at this point. The first
     // paint-dependent assertion after the navigate is what has to absorb that
     // on a loaded CI host; real slack via Playwright's own retry, not a sleep.
-    await expect(page.getByText("Your deployment — multi-user")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Your deployment — multi-user")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("Your deployment — single-user")).toHaveCount(0);
     await expect(page.getByText(/^The single-user path — \d+ episodes$/)).toBeVisible();
     // The multi path's member-audience episodes carry the chip. DERIVED from

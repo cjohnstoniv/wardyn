@@ -109,8 +109,12 @@ async function openPermissionsFromPeople(page: Page): Promise<void> {
   // step's multi-user branch kicks off) are done. Without this the People
   // click below is the first thing to notice the rail isn't there yet, which
   // reads as "the button never appeared" rather than "the funnel is still
-  // loading".
-  await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible();
+  // loading". #469 (CI-flake): the default 5s expect timeout was too tight
+  // for the lazy chunk on a loaded CI host — observed repeatedly as "1
+  // flaky" exits with "element(s) not found" here specifically. Real slack,
+  // the same pattern episode-catalog.spec.ts already uses for its own
+  // lazy-chunk wait.
+  await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible({ timeout: 15_000 });
   // The rail's steps are buttons; "Open Permissions" is a Link (role=link).
   await page.getByRole("button", { name: /^People/ }).click();
   await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible();
@@ -380,6 +384,19 @@ test.describe("setup gate — forced on access, never a prison", () => {
 // "optional" list), and the barrier recommendation is derived from what the
 // host reports installed, never inferred from hardware or the OS.
 test.describe("setup counter and rail — three categories, not two (#213)", () => {
+  // #469 (CI-flake): phase-rail.tsx renders TWO <nav aria-label="Setup steps">
+  // landmarks unconditionally (a compact icon rail "hidden lg:flex xl:hidden"
+  // and the full rail "flex lg:hidden xl:flex"), and which one is actually in
+  // the accessibility tree depends on the viewport straddling Tailwind's xl
+  // (1280px) breakpoint. Playwright's "Desktop Chrome" device defaults to
+  // EXACTLY 1280x720 — the xl boundary itself — so the tests below (which
+  // pick the full rail via `.last()`) raced a rendering/layout tick at that
+  // exact edge and occasionally hung on a click to a nav that was not (yet)
+  // in the a11y tree, timing out at 30s. Pinning a width well inside the xl
+  // range removes the boundary race entirely; it does not change what the
+  // tests assert.
+  test.use({ viewport: { width: 1440, height: 900 } });
+
   test.afterEach(async ({ page }) => {
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });

@@ -66,6 +66,11 @@ var envDocAllow = map[string]bool{
 	// F061: run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
 	// file, and screenshots.sh's own self-set gate for docs.spec.ts.
 	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
+	// #469: run-ui-e2e.sh's concurrent-lane count, and the per-lane reporter
+	// path suffix it sets (read by ui/playwright.config.ts, which is outside
+	// envDocE2EShellFiles' curated .sh list, but the var is shell-set and
+	// shell-only in spirit — same bucket as its siblings above).
+	"WARDYN_E2E_LANES": true, "WARDYN_E2E_REPORT_SUFFIX": true,
 	// 0.7.4: run-ui-e2e.sh's LIVE mode — the external base URL that points the
 	// `live` Playwright project (ui/e2e/live/) at a real cluster instead of the
 	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps

@@ -231,8 +231,12 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: playwright-report
+          # #469: run-ui-e2e.sh's default (all-spec) path now runs 2-3 lanes
+          # concurrently, each with its own report dir (playwright-report-lane0,
+          # -lane1, ...) — the wildcard catches those as well as the unsuffixed
+          # single-lane path's plain playwright-report/.
           path: |
-            ui/playwright-report/**
+            ui/playwright-report*/**
             ui/test-results/**
 
   # ── deploy: Helm chart lint + render ──────────────────────────────────────

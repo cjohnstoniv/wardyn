@@ -29,6 +29,18 @@ import { defineConfig, devices } from "@playwright/test";
 // avoids colliding with a developer's local compose stack on the default port.
 const baseURL = process.env.WARDYN_E2E_BASE_URL || "http://localhost:8088";
 
+// #469: scripts/run-ui-e2e.sh runs 2-3 lanes CONCURRENTLY (separate `playwright
+// test` processes, each single-spec-at-a-time), so the html/junit reporters'
+// FIXED output paths below would otherwise collide — two lanes writing the
+// same playwright-report/ dir and junit.xml at once. WARDYN_E2E_REPORT_SUFFIX
+// (set per-lane by run-ui-e2e.sh, e.g. "-lane0") keeps each lane's report
+// files apart; empty by default, so every other caller (a bare `pnpm e2e`,
+// the single-lane path) is byte-identical to before. The json reporter's own
+// path here is unused by run-ui-e2e.sh — it always overrides via the
+// PLAYWRIGHT_JSON_OUTPUT_NAME env var the json reporter itself honors — so it
+// stays suffixed too, only for a caller driving Playwright directly.
+const reportSuffix = process.env.WARDYN_E2E_REPORT_SUFFIX || "";
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -37,9 +49,9 @@ export default defineConfig({
   workers: process.env.CI ? 2 : undefined,
   reporter: [
     ["list"],
-    ["html", { outputFolder: "../test/reports/e2e/playwright-report", open: "never" }],
-    ["junit", { outputFile: "../test/reports/e2e/junit.xml" }],
-    ["json", { outputFile: "../test/reports/e2e/results.json" }],
+    ["html", { outputFolder: `../test/reports/e2e/playwright-report${reportSuffix}`, open: "never" }],
+    ["junit", { outputFile: `../test/reports/e2e/junit${reportSuffix}.xml` }],
+    ["json", { outputFile: `../test/reports/e2e/results${reportSuffix}.json` }],
   ],
   use: {
     baseURL,
