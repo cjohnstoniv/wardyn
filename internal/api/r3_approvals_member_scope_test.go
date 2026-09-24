@@ -105,7 +105,7 @@ func TestMemberApprovalListIsOwnershipScoped(t *testing.T) {
 		srv := New(cfg)
 
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/approvals",
-			ssoSession(t, mine, "owner@corp.example", oidc.RoleMember), "")
+			ssoSession(t, mine, "owner@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("member GET /approvals = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
@@ -131,7 +131,7 @@ func TestMemberApprovalListIsOwnershipScoped(t *testing.T) {
 		srv := New(cfg)
 
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/approvals",
-			ssoSession(t, mine, "owner@corp.example", oidc.RoleMember), "")
+			ssoSession(t, mine, "owner@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("member GET /approvals on an unscopable backend = %d, want 500; body=%s", w.Code, w.Body.String())
 		}
