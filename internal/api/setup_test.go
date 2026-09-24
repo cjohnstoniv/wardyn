@@ -60,7 +60,7 @@ func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
 		t.Fatalf("admin: checks unexpectedly empty — the fixture is not exercising the signal this test needs")
 	}
 
-	memberCode, memberSt := decodeSetupSSO(t, srv, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember))
+	memberCode, memberSt := decodeSetupSSO(t, srv, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser))
 	if memberCode != http.StatusOK {
 		t.Fatalf("member: code = %d, want 200 (redaction is never a 403/401)", memberCode)
 	}
@@ -156,7 +156,7 @@ func TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring(t *testing.T) {
 	if err := srv.storeAWSSSOBlob(context.Background(), scope, blob); err != nil {
 		t.Fatalf("store per-user aws sso blob: %v", err)
 	}
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	code, before := decodeSetupSSO(t, srv, member)
 	if code != http.StatusOK {

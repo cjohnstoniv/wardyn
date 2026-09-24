@@ -154,7 +154,7 @@ func TestSecurityAdminOnForeignWorkspace(t *testing.T) {
 
 	const memberSub = "sub-ws-owner"
 	secSess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
-	memberSess := ssoSession(t, memberSub, "wsowner@corp.example", oidc.RoleMember)
+	memberSess := ssoSession(t, memberSub, "wsowner@corp.example", oidc.RoleUser)
 	adminSess := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	for key := range derived {
@@ -266,7 +266,7 @@ func TestSecurityAdminForeignWorkspaceProbeIsNotVacuous(t *testing.T) {
 
 	// GET /workspaces/{id} is classOwner: getWorkspaceReadable scopes it, so a
 	// DIFFERENT member gets the byte-identical 404 this file's assertions read.
-	other := ssoSession(t, "sub-someone-else", "else@corp.example", oidc.RoleMember)
+	other := ssoSession(t, "sub-someone-else", "else@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, fmt.Sprintf("/api/v1/workspaces/%s", wsID), other, "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("an ownership-scoped route gave %d for a foreign workspace, want 404 — the 404 the sibling test "+

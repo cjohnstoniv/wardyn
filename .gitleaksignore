@@ -108,3 +108,8 @@ c9a5f79ea091ced42f46f019867a970ce41dc4ac:internal/runner/k8s/sandbox_test.go:aws
 #   - the runbook's quoted public age recipient and the
 #     `secrets.allowEphemeralAgeKey` flag name in docs/OPERATIONS.md and the
 #     Helm chart's fail message (6 entries).
+# PR #929 (#926): generic-api-key false positive on deploy/azure-entra-sso/02-app.sh's
+# Azure DevOps resource app id — Microsoft's public, well-known first-party app id,
+# also quoted in docs/adoption/azure-devops-entra.md, not a secret. Commit-scoped to
+# the commit that introduced it.
+7546c7724e0989c757d626b14889ad413d966a41:deploy/azure-entra-sso/02-app.sh:generic-api-key:109

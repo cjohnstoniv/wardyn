@@ -48,6 +48,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -427,7 +428,7 @@ func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.Approval
 	}
 	// Generation: only a sign-in captured AFTER the raise answers it, and only
 	// one no renewal has since found ended.
-	blob, found, err := s.readADOEntraBlob(ctx, sc.Owner, sc.ProviderID)
+	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sc.Owner, sc.ProviderID)
 	if err != nil || !found || !blob.CapturedAt.After(ap.RequestedAt) || blob.signInEnded() {
 		return ap
 	}

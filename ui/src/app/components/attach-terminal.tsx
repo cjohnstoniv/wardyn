@@ -42,6 +42,7 @@ import "@xterm/xterm/css/xterm.css";
 // NONE of the fontsource subsets; those already come from the OS fallback).
 import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-ext-400.css";
+import { decideKey } from "./attach-terminal-keys";
 import { getToken, HttpError } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
@@ -662,32 +663,24 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // Alt+Enter sequence (ESC + CR) which Claude Code and similar TUIs treat as
     // "newline". (Plain Enter still submits; "\\" + Enter also works in Claude.)
     term.attachCustomKeyEventHandler((e) => {
-      // R4-F144 — WCAG 2.1.2 (No Keyboard Trap). xterm takes Tab, Shift+Tab and
-      // Escape into the PTY, which is right for a terminal and means a keyboard
-      // user who focuses this panel cannot leave the page without a pointer.
-      // 2.1.2 permits a non-standard exit only if it is ADVISED ON ENTRY — the
-      // title bar and the grid's aria-description carry that, and copy.ts's
-      // TERMINAL block holds the why-this-chord; this is the binding behind it.
-      // Focus lands on the panel (tabIndex -1 below) so the next Tab continues
-      // in document order, and `false` keeps xterm from ALSO forwarding the
-      // chord — it would otherwise leave the terminal AND type into it.
-      if (e.type === "keydown" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key === "]") {
-        panelRef.current?.focus();
-        return false;
+      // R4-F144 (WCAG 2.1.2 No Keyboard Trap) + #133 (chord must be typeable
+      // on every layout): decideKey (attach-terminal-keys.ts, table-tested)
+      // carries the why. `false` below stops xterm from ALSO forwarding the
+      // key — an escape must not also type, and a newline must not also CR.
+      if (e.type !== "keydown") return true;
+      switch (decideKey(e)) {
+        case "escape":
+          panelRef.current?.focus(); // tabIndex -1: next Tab continues in document order
+          return false;
+        case "newline":
+          send(new TextEncoder().encode("\x1b\r"));
+          return false;
+        case "paste":
+          navigator.clipboard?.readText?.().then(sendPaste).catch(() => {});
+          return false;
+        default:
+          return true;
       }
-      if (e.type === "keydown" && e.key === "Enter" && (e.shiftKey || e.ctrlKey)) {
-        send(new TextEncoder().encode("\x1b\r"));
-        return false; // don't let xterm also send a plain CR
-      }
-      // Ctrl+V / Cmd+V (NOT Ctrl+Shift+V): read the clipboard and paste RAW.
-      // Otherwise xterm sends a literal ^V and never pastes. Ctrl+Shift+V /
-      // right-click go through the native paste event below; sendPaste coalesces
-      // so a key + event pair never double-pastes.
-      if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "v" || e.key === "V")) {
-        navigator.clipboard?.readText?.().then(sendPaste).catch(() => {});
-        return false;
-      }
-      return true;
     });
 
     // Native paste (Ctrl+Shift+V, right-click, Cmd+V) → send RAW and STOP xterm's
@@ -918,7 +911,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           // the root also renders the title-bar Redraw/Fullscreen buttons and
           // the footer's Take-over button, and stealing focus back from a
           // just-pressed button on every click would be its own bug; the root
-          // also owns the tabIndex={-1} landing pad the Ctrl+] chord targets.
+          // also owns the tabIndex={-1} landing pad the escape chord targets.
           onMouseDown={(e) => {
             e.stopPropagation();
             termRef.current?.focus();

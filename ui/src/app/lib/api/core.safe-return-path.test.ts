@@ -27,9 +27,11 @@ describe("safeReturnPath (H2)", () => {
     expect(safeReturnPath("https://evil.com/x")).toBe("/runs");
   });
 
-  it("rejects the two landing-decision paths (root and /setup) and absent/empty input", () => {
+  it("rejects the landing-decision paths (root and setup, in either view) and absent/empty input", () => {
     expect(safeReturnPath("/")).toBe("/runs");
     expect(safeReturnPath("/setup")).toBe("/runs");
+    expect(safeReturnPath("/admin")).toBe("/runs");
+    expect(safeReturnPath("/admin/setup")).toBe("/runs");
     expect(safeReturnPath(null)).toBe("/runs");
     expect(safeReturnPath(undefined)).toBe("/runs");
     expect(safeReturnPath("")).toBe("/runs");
