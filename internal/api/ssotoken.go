@@ -161,8 +161,13 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// Taken FIRST, before the per-scope mutex below, and that order is fixed:
 	// creator key, then scope key, everywhere both are held. Inverting it here
 	// would be the only place in the tree that did, which is how a deadlock gets
-	// written. Fails open exactly as the launch's does.
-	releaseLoginLock := s.lockLoginSupersede(r.Context(), run.CreatedBy)
+	// written. Refuses exactly as the launch's does when the lock cannot be
+	// taken: nothing is stored, and the person signs in again.
+	releaseLoginLock, lerr := s.lockLoginSupersede(r.Context(), run.CreatedBy, claims.RunID)
+	if lerr != nil {
+		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, refuseReasonSignInBusy, signInBusyRefusal, &scope)
+		return
+	}
 	defer releaseLoginLock()
 
 	// Serialised per scope, because the once-only guard below is a read-then-put

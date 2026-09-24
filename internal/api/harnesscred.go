@@ -470,10 +470,14 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// supersede pass, the insert, and the SECOND pass after it are independent
 	// statements, and two launches interleaving through them leave two live
 	// sandboxes each holding a captured AWS SSO session. lockLoginSupersede
-	// carries the interleaving and why the lock fails open; released on every
-	// path, including the refusals and the error returns between here and the
-	// second pass.
-	releaseLoginLock := s.lockLoginSupersede(ctx, actor)
+	// carries the interleaving and why a lock that cannot be taken refuses
+	// (errSignInBusy) before anything is superseded or created; released on
+	// every path, including the refusals and the error returns between here and
+	// the second pass.
+	releaseLoginLock, lerr := s.lockLoginSupersede(ctx, actor, runID)
+	if lerr != nil {
+		return types.AgentRun{}, harnessLoginDispatch{}, lerr
+	}
 	defer releaseLoginLock()
 	// One live sign-in sandbox per person, and it happens HERE — before
 	// newStepRun, where the concurrency quota is counted — so a member capped at

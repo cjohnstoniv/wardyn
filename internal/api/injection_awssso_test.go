@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1033,5 +1034,37 @@ func TestResolveAWSSSOInjection_ARaiseThatLostTheRaceAuditsNothing(t *testing.T)
 	}
 	if after := reauthCount(t, f.srv, "requested"); after != before {
 		t.Errorf("outcome=requested moved %s -> %s for a request this caller did not raise", before, after)
+	}
+}
+
+// failingRaiseApprovals answers every Request the way approval.RequestApproval
+// does when its store insert fails: the pgx error, wrapped.
+type failingRaiseApprovals struct{ ApprovalService }
+
+const reauthRaiseDriverText = `failed to connect to host=pg.internal user=wardyn database=wardyn: SQLSTATE 57P01`
+
+func (failingRaiseApprovals) Request(context.Context, types.ApprovalRequest) (types.ApprovalRequest, error) {
+	return types.ApprovalRequest{}, fmt.Errorf("approval: create: %w", errors.New(reauthRaiseDriverText))
+}
+
+// A raise that fails answers the fixed 503 sentence and nothing else. The
+// reader is the run's own sandbox — the adversary #173 names — and the raise
+// error wraps the approval store's, so appending it handed the sandbox the
+// database host, user and SQLSTATE (#505 F3).
+func TestResolveAWSSSOInjection_RaiseFailureBodyCarriesNoDriverText(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.putBlob(t, "alice@example.com", deadSSOBlob())
+	f.srv.cfg.Approvals = failingRaiseApprovals{ApprovalService: f.srv.cfg.Approvals}
+
+	w := f.resolve(t)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("resolve = %d, want 503. body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "pg.internal") || strings.Contains(body, "SQLSTATE") || strings.Contains(body, "approval: create") {
+		t.Fatalf("the 503 body carries the store's error text to the sandbox: %s", body)
+	}
+	if !strings.Contains(body, credentialReauthRaiseFailedBody) {
+		t.Fatalf("the 503 body = %s, want the fixed sentence %q", body, credentialReauthRaiseFailedBody)
 	}
 }

@@ -168,10 +168,10 @@ func (s PG) ActiveRunsByCreator(ctx context.Context, createdBy, task, agent stri
 // A capability interface for ActiveRunsByCreatorReader's reasons (widening
 // Store would make every double and embedding in the tree implement a lock they
 // are not about), and its ABSENCE is handled the same way that neighbour's is:
-// the call site takes NO fallback and proceeds UNLOCKED. That is deliberate
-// and it is the whole failure model — a store that cannot lock is exactly as
-// serialized as 0.7.8 was, which is to say not at all, and nobody is refused a
-// sign-in over it. PG is the production store and implements it.
+// the call site takes NO fallback and proceeds UNLOCKED — a store that cannot
+// lock is exactly as serialized as 0.7.8 was. PG is the production store and
+// implements it, so this arm is reached only by test doubles. A lock that
+// EXISTS but cannot be taken in time is a refusal, not this.
 //
 // Keyed by ACTOR — the login run's creator — not by the credential scope: under
 // the `shared` roster every sign-in resolves to the same empty scope owner, so
@@ -184,6 +184,12 @@ type LoginLocker interface {
 // Compile-time assertion: PG satisfies LoginLocker.
 var _ LoginLocker = PG{}
 
+// ErrLoginLockNoCapacity is the one LockLoginSupersede error a caller may
+// proceed unlocked on: the pool cannot spare a connection for the hold (always
+// true at the documented pool floor). Any other error is a wait that expired
+// or a database fault, and the caller refuses rather than run unserialized.
+var ErrLoginLockNoCapacity = db.ErrAdvisoryLockNoCapacity
+
 // LockLoginSupersede holds db.LoginSupersedeLockClass keyed to actor for up to
 // db.LoginSupersedeLockWait. Session-scoped, not transaction-scoped: the work it
 // guards is several independent statements (two supersede passes around a run
@@ -193,7 +199,8 @@ var _ LoginLocker = PG{}
 // where an operator sizing pool_max_conns can find it: one connection for the
 // duration of one hold, at most one per process at a time, and none at all
 // when the pool cannot spare two (db.AdvisoryLockKeyed). An error means the
-// lock was not taken and the caller proceeds unlocked.
+// lock was not taken; see ErrLoginLockNoCapacity for which one a caller may
+// proceed on.
 func (s PG) LockLoginSupersede(ctx context.Context, actor string) (func(), error) {
 	return db.AdvisoryLockKeyed(ctx, s.Pool, db.LoginSupersedeLockClass, loginLockObject(actor), db.LoginSupersedeLockWait)
 }

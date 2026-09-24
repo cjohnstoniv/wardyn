@@ -66,12 +66,6 @@ import (
 // stderr write that is not an HTTP 5xx body at all and this guard does not
 // watch) in one step.
 var serverErrorDriverTextAllowlist = map[string]string{
-	// handleInternalCredentialReauth's raise-failure arm is a
-	// DELIBERATELY MODELLED body (docs/design/0.8/PLAN.md's AWS SSO lane):
-	// credentialReauthRaiseFailedBody is a frozen operator-facing sentence and
-	// aerr here is s.cfg.Approvals.Request's own error, never driver/substrate
-	// text. #173's DO NOT TOUCH names this site explicitly.
-	"injection_awssso.go:365": "modelled AWS SSO reauth-raise body; #173 DO NOT TOUCH",
 	// handleRunResourcesExecStream's unsupported arm is reached only after errors.Is(err,
 	// runner.ErrExecStreamUnsupported) just matched, so err.Error() here is
 	// always that sentinel's own fixed text ("runner: ExecStream not
@@ -82,7 +76,7 @@ var serverErrorDriverTextAllowlist = map[string]string{
 	"run_resources.go:201": "fixed ErrExecStreamUnsupported sentinel, not driver text; pinned by TestRunResources_ExecStreamUnsupported_Returns501",
 	// Every other site #173 found was FIXED, not allowlisted — a new entry
 	// here needs the same kind of justification (a named fixed sentinel or a
-	// design record, plus a pinning test) as these two, not just a passing
+	// design record, plus a pinning test) as this one, not just a passing
 	// build.
 }
 
@@ -173,7 +167,7 @@ var server5xxStatusIdents = map[string]bool{
 // fails on a writeError(w, <5xx>, ...) call whose message argument calls
 // err.Error() anywhere inside it — the pattern writeServerError/loggedMsg
 // exist to replace. See the package doc comment above for scope and the
-// allowlist's one deliberate exception.
+// allowlist's deliberate exception.
 func TestNoDriverTextInServerErrorBody(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -263,7 +257,7 @@ func TestNoDriverTextInServerErrorBody(t *testing.T) {
 			"use writeServerError(w, r, \"<action>\", err) for a 500, or "+
 			"writeError(w, code, loggedMsg(ctx, \"<action>\", err)) for another 5xx — "+
 			"see internal/api/writeservererror.go. If this is deliberately modelled "+
-			"(like injection_awssso.go's AWS reauth body), add it to "+
+			"(like run_resources.go's fixed ErrExecStreamUnsupported sentinel), add it to "+
 			"serverErrorDriverTextAllowlist with the same kind of justification "+
 			"that entry carries.", k, found[k])
 	}
