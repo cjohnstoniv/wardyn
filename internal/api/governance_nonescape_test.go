@@ -178,8 +178,9 @@ func govSession(t *testing.T, sub string, groups []string, truncated bool) *http
 	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
 		V: oidc.SessionCodecVersion, Sub: sub, Email: sub + "@corp.example",
-		Role: oidc.RoleMember, Expiry: time.Now().UTC().Add(time.Hour),
-		Groups: groups, GroupsTruncated: truncated,
+		Role: oidc.RoleUser, Expiry: time.Now().UTC().Add(time.Hour),
+		UserType: "standard",
+		Groups:   groups, GroupsTruncated: truncated,
 	})
 	if err != nil {
 		t.Fatalf("marshal session: %v", err)
@@ -536,7 +537,7 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		st.tokenRaw = apiTokenPrefix + "deadbeef"
 		st.token = &types.APIToken{
 			ID: uuid.New(), Principal: "sub-legacy-token", Email: "legacy@corp.example",
-			Role: oidc.RoleMember, Groups: []string{"a-team"},
+			Role: oidc.RoleUser, Groups: []string{"a-team"},
 			GroupsTruncated: nil, // the NULL marker: minted before 0.7
 			Name:            "legacy",
 		}

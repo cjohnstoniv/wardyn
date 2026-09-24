@@ -138,6 +138,39 @@ type GovernanceLimits struct {
 	// rubric": resolveRunAutonomy (#97) treats it exactly like a member with no
 	// assigned profile at all.
 	AutonomyRubric *AutonomyRubric `json:"autonomy_rubric,omitempty"`
+	// RunLimits is embedded, so its seven fields sit flat on the limits wire
+	// object beside the ones above: ONE field set, the same one a run captures
+	// at create (AgentRun.RunLimits).
+	RunLimits
+}
+
+// RunLimits bound how long a run lives and how long it waits for a decision
+// (long-holds design rev 4, §2.2). Zero values keep today's behaviour: no end,
+// the deployment's approval expiry as the wait, no idle pause.
+//
+// They bind every run under a profile, a security admin's included; only a
+// super admin's run skips them, because effectiveCeiling resolves no profile
+// for an operator.
+type RunLimits struct {
+	// MaxEndAheadSec is the furthest ahead of NOW a run's end may be set. 0 is
+	// no limit. Extending within it never needs UserChangesLimits: extending
+	// is the lease.
+	MaxEndAheadSec int `json:"max_end_ahead_sec,omitempty"`
+	// DefaultEndSec is a new run's end, from create. 0 means MaxEndAheadSec;
+	// when both are 0 a run has no end.
+	DefaultEndSec int `json:"default_end_sec,omitempty"`
+	// AllowNoEnd offers "No end" to a user who may change limits.
+	AllowNoEnd bool `json:"allow_no_end,omitempty"`
+	// MaxWaitSec / DefaultWaitSec are the longest and the default wait for a
+	// decision. 0 is the deployment's approval expiry, which also caps both.
+	MaxWaitSec     int `json:"max_wait_sec,omitempty"`
+	DefaultWaitSec int `json:"default_wait_sec,omitempty"`
+	// UserChangesLimits is the one gate: the user may shorten the end, set No
+	// end, or change the wait.
+	UserChangesLimits bool `json:"user_changes_limits,omitempty"`
+	// PauseIdleAfterSec pauses a run nobody is using after this long. 0 pauses
+	// only runs waiting for a decision.
+	PauseIdleAfterSec int `json:"pause_idle_after_sec,omitempty"`
 }
 
 // AutonomyLevel is one rung on the autonomy ladder a governance profile's
