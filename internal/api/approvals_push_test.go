@@ -56,7 +56,7 @@ func (f *scopeFixture) seedPushContent(t *testing.T) uuid.UUID {
 // stops.
 func TestPushContentMemberCannotDecide(t *testing.T) {
 	f := newScopeFixture(t)
-	owner := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember)
+	owner := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser)
 
 	for _, verb := range []string{"approve", "deny"} {
 		t.Run(verb, func(t *testing.T) {

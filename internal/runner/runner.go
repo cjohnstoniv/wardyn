@@ -276,6 +276,10 @@ type ProxyConfig struct {
 	RunToken string
 	// ControlPlaneURL is where sidecars stream decisions/recordings.
 	ControlPlaneURL string
+	// ControlPlaneCAPEM is wardynd's internal CA (internal/hoptls): the only
+	// root the sidecar trusts for ControlPlaneURL. Public; empty with a
+	// loopback http URL only.
+	ControlPlaneCAPEM string
 	// Policy is the run's egress policy, handed verbatim to the wardyn-proxy
 	// sidecar (default-deny domain allowlist, method rules, first-use flag).
 	// Drivers MUST deliver it to the sidecar at launch: a proxy without a
@@ -314,9 +318,9 @@ type ProxyConfig struct {
 	// forge's PAT is minted proxy-side and never enters the sandbox. Empty => no
 	// host brokered. See proxy.Config.PATGrants.
 	PATGrants map[string]proxy.PATGrant
-	// ADOGrants is the run's per-person Azure DevOps grant for the proxy's REST
-	// gate. See proxy.Config.ADOGrants.
-	ADOGrants []proxy.ADOGrantConfig
+	// ADOGrant is the run's per-person Azure DevOps grant for the proxy's REST
+	// gate. See proxy.Config.ADOGrant.
+	ADOGrant *proxy.ADOGrantConfig
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar chains
 	// egress through (http://[user:pass@]host[:port] — https-to-proxy is rejected
 	// by the sidecar's own config validation, parseUpstreamProxy). Threaded
@@ -330,8 +334,8 @@ type ProxyConfig struct {
 	// resolveUpstreamProxyURL and its audit event run.upstream_proxy.resolve.
 	UpstreamProxyURL string
 	// TrustedCAPEM is the operator's corporate CA bundle (WARDYN_TRUSTED_CA_FILE,
-	// api.Config.TrustedCAPEM), forwarded verbatim so the sidecar's own outbound
-	// TLS additionally trusts it. Threaded to the proxy via proxy.Config's
+	// api.Config.TrustedCAPEM), forwarded verbatim so the sidecar's egress TLS
+	// additionally trusts it (never its control-plane calls). Threaded to the proxy via proxy.Config's
 	// identically-named field (WARDYN_PROXY_CONFIG_JSON, BuildProxyConfig below).
 	// Control-plane-authored, same trust boundary as MITMCACertPEM/MITMCAKeyPEM
 	// above; empty => system roots only, byte-identical to today.
@@ -625,6 +629,23 @@ type Runner interface {
 	// plane cascades identity + credential revocation around this call.
 	KillSandbox(ctx context.Context, ref string) error
 }
+
+// SandboxEnder is an OPTIONAL Runner capability: stop a sandbox and KEEP it
+// (the lease end, long-holds design rev 4). EndSandbox stops the agent without
+// removing it, so its files survive, and removes the proxy sidecar, so nothing
+// the agent could restart has a network path. StopSandbox/KillSandbox still
+// tear the kept sandbox down later. Idempotent on a missing sandbox.
+//
+// A substrate that cannot keep a stopped sandbox (Kubernetes: stopping a pod
+// deletes it) does not implement it, and a router in front of one returns
+// ErrEndUnsupported; the control plane then stops the run outright.
+type SandboxEnder interface {
+	EndSandbox(ctx context.Context, ref string) error
+}
+
+// ErrEndUnsupported is EndSandbox's answer from a router whose substrate for
+// ref cannot keep a stopped sandbox.
+var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
 
 // ImageChecker is an OPTIONAL Runner capability: a
 // substrate whose local image cache can go stale out from under a workspace's

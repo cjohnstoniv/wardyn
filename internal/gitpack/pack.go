@@ -50,10 +50,13 @@
 //
 // Everything else that would make the answer a guess is a refusal:
 // ErrUninspectable for a pack that does not carry what an answer needs (a thin
-// pack's delta bases, a ref whose commit is not in the pack, more objects or
-// bytes than the ceilings below allow) or that git would read differently from
-// this package (a commit carrying a header git's own parser stops before), and
-// a plain error for a malformed or hostile one.
+// pack's delta bases, a ref whose commit is not in the pack) or that git would
+// read differently from this package (a commit carrying a header git's own
+// parser stops before); ErrTooLarge for a pack that carries everything an
+// answer needs but costs more objects, bytes, tree entries or changed paths
+// than the ceilings below allow — fixed by pushing fewer commits at a time,
+// not by a more complete clone; and a plain error for a malformed or hostile
+// one.
 //
 // # What one inspection costs
 //
@@ -116,13 +119,21 @@ const (
 	// maxTreeDepth does not: trees are a DAG, so d levels that each name the
 	// level below b times describe b^d paths in a few kilobytes of objects.
 	// Entries rather than expansions, so that a wide tree costs what its width
-	// says. The headroom over maxChanges is a factor, not an order: git cannot
-	// store an empty directory, so an ordinary repository spends a few entries
-	// per path it reports — binary fan-out with one file per leaf directory is
-	// the dense case, near three — and maxChanges refuses first. What reaches
-	// this ceiling instead is a shape spending many entries per path, which
-	// means long single-child chains.
-	maxTreeNodes = 5 * maxChanges
+	// says.
+	//
+	// An honest push's charge follows its commits, not the paths it reports.
+	// Each commit is compared against every parent the pack carries, and each
+	// comparison charges the full width of both trees at every directory on a
+	// changed path; a comparison repeated under the same path is charged once
+	// (walker.diffed). That comes to about two to four entries for every tree
+	// entry the pack carries, and maxInflatedBytes bounds those, so this
+	// ceiling is set against that one. Replaying real history (#254, recorded
+	// in docs/design/0.8/PLAN.md), the densest trees reach the two at about the
+	// same push size and trees of larger files reach maxInflatedBytes first. It
+	// is not set higher because the walk's memos hold a key for every entry it
+	// charges. An honest push refused here goes through as fewer commits at a
+	// time.
+	maxTreeNodes = 1_000_000
 	// maxPeel bounds tag-to-tag chasing when a push updates a tag ref.
 	maxPeel = 8
 	// maxVarintBytes bounds the length of a pack's variable-length integers.
@@ -136,6 +147,14 @@ const (
 // fetching those bases.
 var ErrUninspectable = errors.New("gitpack: the push cannot be inspected from its own bytes")
 
+// ErrTooLarge reports that the request is well formed and, unlike
+// ErrUninspectable, carries everything an answer would need — but inspecting
+// it would walk, hold or report more than one of this package's ceilings
+// (maxObjects, maxInflatedBytes, maxTreeNodes, maxChanges) allows. Unlike a
+// thin pack or a missing delta base, the fix is on the sender's side: push
+// fewer commits at a time, not push from a more complete clone.
+var ErrTooLarge = errors.New("gitpack: the push exceeds an inspection ceiling")
+
 // Change is one path a push introduces, at the mode and size the pushed tree
 // gives it.
 type Change struct {
@@ -148,12 +167,13 @@ type Change struct {
 	// caller can act on the difference. A directory the pack does not carry is
 	// reported as ModeUncarried; see Opaque.
 	Mode string
-	// Size is the blob's size in bytes, or -1 when the pack does not carry the
+	// size is the blob's size in bytes, or -1 when the pack does not carry the
 	// blob: a submodule pointer, an uncarried directory, or content the
-	// receiving side already stores.
-	// A size rule must DECIDE what -1 means rather than compare it, because -1
-	// passes every "is this under the limit" test by accident.
-	Size int64
+	// receiving side already stores. It is unexported because -1 passes every
+	// "is this under the limit" test by accident, and an ordinary second push
+	// and every submodule pointer produce it. A caller reads it through Size,
+	// which cannot be compared without deciding what unknown means, or Within.
+	size int64
 	// OID is the object id the tree entry names — the blob, the submodule's
 	// commit, or for an uncarried directory its tree. Object ids are content
 	// addresses, so an entry whose mode and OID match the ones the same path
@@ -164,7 +184,20 @@ type Change struct {
 
 // Carried reports whether the pack holds the object c names. One it does not
 // hold is content the receiving side already stores, at some path.
-func (c Change) Carried() bool { return c.Size >= 0 }
+func (c Change) Carried() bool { return c.size >= 0 }
+
+// Size is the blob's size in bytes, and false when the pack does not carry the
+// blob, so the size is unknown. It returns a pair so that a comparison against
+// a limit does not compile until the caller has decided what unknown means.
+func (c Change) Size() (int64, bool) { return c.size, c.size >= 0 }
+
+// Within reports whether c's blob is known to be at most limit bytes. An
+// unknown size is never within: a size rule refuses what it cannot measure
+// rather than admitting it.
+func (c Change) Within(limit int64) bool {
+	n, known := c.Size()
+	return known && n <= limit
+}
 
 // Command is one ref update from the request's command section.
 type Command struct {
@@ -421,7 +454,7 @@ func (i *index) put(typ objectType, data []byte) string {
 }
 
 // blobSize is the size of the blob oid names, or -1 when the pack does not carry
-// it. See Change.Size.
+// it. See Change.size.
 func (i *index) blobSize(oid string) int64 {
 	if o, ok := i.byOID[oid]; ok && o.typ == objBlob {
 		return o.size
@@ -497,7 +530,7 @@ func parsePack(pack []byte, format hashFormat) (*index, error) {
 	count := binary.BigEndian.Uint32(pack[8:12])
 	if count > maxObjects {
 		return nil, fmt.Errorf("%w: the pack claims %d objects, more than the %d ceiling",
-			ErrUninspectable, count, maxObjects)
+			ErrTooLarge, count, maxObjects)
 	}
 	p := &packReader{
 		br: bytes.NewReader(body), idx: newIndex(format),
@@ -663,7 +696,7 @@ func (p *packReader) pos() int64 { return p.br.Size() - int64(p.br.Len()) }
 // overshot by at most one object — which maxObjectBytes bounds.
 func (p *packReader) charge(n int64) error {
 	if p.inflated += n; p.inflated > maxInflatedBytes {
-		return fmt.Errorf("%w: the pack inflates past the %d-byte ceiling", ErrUninspectable, int64(maxInflatedBytes))
+		return fmt.Errorf("%w: the pack inflates past the %d-byte ceiling", ErrTooLarge, int64(maxInflatedBytes))
 	}
 	return nil
 }

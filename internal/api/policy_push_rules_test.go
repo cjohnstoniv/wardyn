@@ -60,6 +60,14 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 			"push_rules.deny_paths[1]: \"infra/../x\" has an empty"},
 		{"deny_paths entry that is only a separator", spec(&types.PushRulesSpec{DenyPaths: []string{"/"}}),
 			"push_rules.deny_paths[0]: \"/\" has an empty"},
+		// #271: refused by DenyPathSegments too, so the broker fails closed on
+		// a policy that bypassed this door.
+		{"deny_paths entry with leading whitespace", spec(&types.PushRulesSpec{DenyPaths: []string{" infra/**"}}),
+			"push_rules.deny_paths[0]: \" infra/**\" has leading or trailing whitespace"},
+		{"deny_paths entry with trailing whitespace", spec(&types.PushRulesSpec{DenyPaths: []string{"infra/** "}}),
+			"push_rules.deny_paths[0]: \"infra/** \" has leading or trailing whitespace"},
+		{"deny_paths entry that is not valid UTF-8", spec(&types.PushRulesSpec{DenyPaths: []string{"deploy/\xff\xfe"}}),
+			"push_rules.deny_paths[0]: \"deploy/\\xff\\xfe\" is not valid UTF-8"},
 		{"max_inspect_pack_mib negative", spec(&types.PushRulesSpec{MaxInspectPackMiB: -1}),
 			"push_rules.max_inspect_pack_mib must be between"},
 		{"max_inspect_pack_mib above the cap", spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB + 1}),

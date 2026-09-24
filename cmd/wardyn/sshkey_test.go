@@ -135,7 +135,7 @@ func newSSHKeyTestServer(t *testing.T, existing []sdk.SSHPublicKey, postStatus i
 				resp = sdk.SSHPublicKey{
 					Fingerprint: "SHA256:server-assigned", Principal: "p",
 					Name: body["name"], PublicKey: body["public_key"],
-					Role: "member", CreatedAt: time.Now().UTC(),
+					Role: "user", CreatedAt: time.Now().UTC(),
 				}
 			}
 			_ = json.NewEncoder(w).Encode(resp)
@@ -220,7 +220,7 @@ func TestSSHKeyEnsure_FingerprintAlreadyListed_NoPOST(t *testing.T) {
 	}
 	fp := ssh.FingerprintSHA256(pub)
 	srv := newSSHKeyTestServer(t, []sdk.SSHPublicKey{
-		{Fingerprint: fp, Principal: "p", Name: "already-here", PublicKey: "existing", Role: "member", CreatedAt: time.Now().UTC()},
+		{Fingerprint: fp, Principal: "p", Name: "already-here", PublicKey: "existing", Role: "user", CreatedAt: time.Now().UTC()},
 	}, 0, nil)
 
 	out, err := runSSHKeyEnsureCmd(t, srv.Server, "ensure", "--path", path, "--json")

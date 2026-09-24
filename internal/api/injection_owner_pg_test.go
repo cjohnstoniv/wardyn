@@ -123,7 +123,7 @@ func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning(t *testing.T
 	h, sec := newRunOwnerPGHarness(t)
 	ctx := context.Background()
 
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
 	// The member writes her OWN row through the real PUT /secrets handler
 	// (secretOwnerFromRequest stamps it under her own namespace, persisted to

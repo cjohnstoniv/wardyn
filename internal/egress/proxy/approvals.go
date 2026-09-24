@@ -171,9 +171,6 @@ var approvalCapWarnOnce sync.Once
 const approvalTTL = 60 * time.Second
 
 func newApprovalClient(base string, token *tokenSource, runID uuid.UUID, client *http.Client) *approvalClient {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
 	return &approvalClient{
 		base:        base,
 		token:       token,

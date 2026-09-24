@@ -157,7 +157,7 @@ const (
 	driveUnavailableGovernance = "governance_unavailable"
 )
 
-func writeDriveError(w http.ResponseWriter, err error) {
+func writeDriveError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errDrivesDisabled):
 		// The same bytes the launch door refuses with (seedRequestDrive composes
@@ -176,7 +176,7 @@ func writeDriveError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity,
 			strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	default:
-		writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), "resolve user drive", err))
+		writeServerError(w, r, "resolve user drive", err)
 	}
 }
 

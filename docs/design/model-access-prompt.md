@@ -92,9 +92,9 @@ two card CTAs never drift into four spellings of one control — this document d
 
 ### 3.3 Behaviour notes (not copy, but load-bearing for the next visual change)
 
-- Suppressed entirely on `/setup` (the page *is* the door); suppressed on `/settings` and
-  `/providers` for an operator only, since those pages mount their own sign-in pane for the same
-  states.
+- Suppressed entirely on `/setup` (the page *is* the door); suppressed on `/admin/settings`,
+  `/admin/providers` and `/account` for an operator only, since those pages mount their own
+  sign-in pane for the same states.
 - The first-run (`not_configured`) and the non-operator dead-shared-credential states are the only
   two a viewer may dismiss for the session (`sessionStorage`, keyed per-principal so a sign-out in
   the same tab cannot pre-dismiss it for the next person).

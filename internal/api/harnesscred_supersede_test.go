@@ -225,7 +225,7 @@ func newSupersedeFixture(t *testing.T, cs *capStore, rnr runner.Runner) supersed
 
 func memberLoginSession(t *testing.T) *http.Cookie {
 	t.Helper()
-	return ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	return ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 }
 
 // launchLoginRun POSTs one sign-in and returns its run id.

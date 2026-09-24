@@ -831,6 +831,9 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// 403, not 404: same reason as refuseTerminalRun — the caller's own
+			// presented token names claims.RunID, so a missing run is that
+			// token's authority gone, not a path a member could probe.
 			s.auditRenewDenied(r, claims, "run_not_found")
 			writeError(w, http.StatusForbidden, "run not found")
 			return
